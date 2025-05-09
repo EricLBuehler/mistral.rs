@@ -323,559 +323,561 @@
 <a href=#323 id=323 data-nosnippet>323</a>                aspect_ratio_ids_accum.push(aspect_ratio_ids.unwrap().unsqueeze(<span class="number">0</span>).unwrap());
 <a href=#324 id=324 data-nosnippet>324</a>                aspect_ratio_mask_accum.push(aspect_ratio_mask.unwrap().unsqueeze(<span class="number">0</span>).unwrap());
 <a href=#325 id=325 data-nosnippet>325</a>                num_tiles_accum.push(num_tiles.unwrap());
-<a href=#326 id=326 data-nosnippet>326</a>            }
-<a href=#327 id=327 data-nosnippet>327</a>
-<a href=#328 id=328 data-nosnippet>328</a>            <span class="comment">// Create cross attn mask
-<a href=#329 id=329 data-nosnippet>329</a>            </span><span class="kw">let </span>image_token_id = tokenizer
-<a href=#330 id=330 data-nosnippet>330</a>                .encode_fast(IMAGE_TOKEN, <span class="bool-val">false</span>)
-<a href=#331 id=331 data-nosnippet>331</a>                .unwrap()
-<a href=#332 id=332 data-nosnippet>332</a>                .get_ids()
-<a href=#333 id=333 data-nosnippet>333</a>                .to_vec();
-<a href=#334 id=334 data-nosnippet>334</a>            <span class="kw">let </span>image_token_id = <span class="kw">if </span>image_token_id.len() == <span class="number">1 </span>{
-<a href=#335 id=335 data-nosnippet>335</a>                image_token_id[<span class="number">0</span>]
-<a href=#336 id=336 data-nosnippet>336</a>            } <span class="kw">else </span>{
-<a href=#337 id=337 data-nosnippet>337</a>                <span class="macro">panic!</span>(<span class="string">"{IMAGE_TOKEN} encoding should be one token, got {image_token_id:?}"</span>);
-<a href=#338 id=338 data-nosnippet>338</a>            };
-<a href=#339 id=339 data-nosnippet>339</a>            <span class="kw">let </span>chunks = input.chunk(input.dim(<span class="number">0</span>).unwrap(), <span class="number">0</span>).unwrap();
-<a href=#340 id=340 data-nosnippet>340</a>            <span class="kw">let </span>cross_attention_token_mask = chunks
-<a href=#341 id=341 data-nosnippet>341</a>                .iter()
-<a href=#342 id=342 data-nosnippet>342</a>                .map(|token_ids| {
-<a href=#343 id=343 data-nosnippet>343</a>                    get_cross_attention_token_mask(
-<a href=#344 id=344 data-nosnippet>344</a>                        token_ids.squeeze(<span class="number">0</span>).unwrap().to_vec1::&lt;u32&gt;().unwrap(),
-<a href=#345 id=345 data-nosnippet>345</a>                        image_token_id,
-<a href=#346 id=346 data-nosnippet>346</a>                    )
-<a href=#347 id=347 data-nosnippet>347</a>                })
-<a href=#348 id=348 data-nosnippet>348</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#349 id=349 data-nosnippet>349</a>
-<a href=#350 id=350 data-nosnippet>350</a>            <span class="kw">let </span>cross_attn_mask = convert_sparse_cross_attention_mask_to_dense(
-<a href=#351 id=351 data-nosnippet>351</a>                cross_attention_token_mask,
-<a href=#352 id=352 data-nosnippet>352</a>                num_tiles_accum,
-<a href=#353 id=353 data-nosnippet>353</a>                <span class="self">self</span>.max_image_tiles
-<a href=#354 id=354 data-nosnippet>354</a>                    .read()
-<a href=#355 id=355 data-nosnippet>355</a>                    .unwrap()
-<a href=#356 id=356 data-nosnippet>356</a>                    .expect(<span class="string">"`max_image_tiles` must be set!"</span>),
-<a href=#357 id=357 data-nosnippet>357</a>                chunks
-<a href=#358 id=358 data-nosnippet>358</a>                    .iter()
-<a href=#359 id=359 data-nosnippet>359</a>                    .map(|input_ids| <span class="kw-2">*</span>input_ids.dims().last().unwrap())
-<a href=#360 id=360 data-nosnippet>360</a>                    .max()
-<a href=#361 id=361 data-nosnippet>361</a>                    .unwrap(),
-<a href=#362 id=362 data-nosnippet>362</a>                chunks[<span class="number">0</span>].device(),
-<a href=#363 id=363 data-nosnippet>363</a>            );
-<a href=#364 id=364 data-nosnippet>364</a>
-<a href=#365 id=365 data-nosnippet>365</a>            <span class="kw">let </span>cross_attn_mask = <span class="kw">match </span>cross_attn_mask {
-<a href=#366 id=366 data-nosnippet>366</a>                <span class="prelude-val">Ok</span>(v) =&gt; v,
-<a href=#367 id=367 data-nosnippet>367</a>                <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span>Box::new(std::iter::once(<span class="prelude-val">Err</span>(anyhow::Error::msg(e.to_string())))),
-<a href=#368 id=368 data-nosnippet>368</a>            };
-<a href=#369 id=369 data-nosnippet>369</a>
-<a href=#370 id=370 data-nosnippet>370</a>            (
-<a href=#371 id=371 data-nosnippet>371</a>                <span class="prelude-val">Some</span>(Tensor::cat(<span class="kw-2">&amp;</span>pixel_values_accum, <span class="number">0</span>).unwrap()),
-<a href=#372 id=372 data-nosnippet>372</a>                <span class="prelude-val">Some</span>(Tensor::cat(<span class="kw-2">&amp;</span>aspect_ratio_ids_accum, <span class="number">0</span>).unwrap()),
-<a href=#373 id=373 data-nosnippet>373</a>                <span class="prelude-val">Some</span>(Tensor::cat(<span class="kw-2">&amp;</span>aspect_ratio_mask_accum, <span class="number">0</span>).unwrap()),
-<a href=#374 id=374 data-nosnippet>374</a>                <span class="prelude-val">Some</span>(cross_attn_mask),
-<a href=#375 id=375 data-nosnippet>375</a>            )
-<a href=#376 id=376 data-nosnippet>376</a>        } <span class="kw">else </span>{
-<a href=#377 id=377 data-nosnippet>377</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
-<a href=#378 id=378 data-nosnippet>378</a>        };
-<a href=#379 id=379 data-nosnippet>379</a>
-<a href=#380 id=380 data-nosnippet>380</a>        <span class="kw">let </span>text_models_inputs_processor::InnerInputProcessorOutput {
-<a href=#381 id=381 data-nosnippet>381</a>            inputs:
-<a href=#382 id=382 data-nosnippet>382</a>                text_models_inputs_processor::InputMetadata {
-<a href=#383 id=383 data-nosnippet>383</a>                    input,
-<a href=#384 id=384 data-nosnippet>384</a>                    positions,
-<a href=#385 id=385 data-nosnippet>385</a>                    context_lens,
-<a href=#386 id=386 data-nosnippet>386</a>                    position_ids,
-<a href=#387 id=387 data-nosnippet>387</a>                    paged_attn_meta,
-<a href=#388 id=388 data-nosnippet>388</a>                    flash_meta,
-<a href=#389 id=389 data-nosnippet>389</a>                },
-<a href=#390 id=390 data-nosnippet>390</a>            seq_indices,
-<a href=#391 id=391 data-nosnippet>391</a>        } = <span class="kw">if </span>is_prompt {
-<a href=#392 id=392 data-nosnippet>392</a>            get_prompt_input(
-<a href=#393 id=393 data-nosnippet>393</a>                input_seqs
-<a href=#394 id=394 data-nosnippet>394</a>                    .iter()
-<a href=#395 id=395 data-nosnippet>395</a>                    .map(|seq| seq.get_toks())
-<a href=#396 id=396 data-nosnippet>396</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#397 id=397 data-nosnippet>397</a>                input_seqs,
-<a href=#398 id=398 data-nosnippet>398</a>                device,
-<a href=#399 id=399 data-nosnippet>399</a>                last_n_context_len,
-<a href=#400 id=400 data-nosnippet>400</a>                return_raw_logits,
-<a href=#401 id=401 data-nosnippet>401</a>                paged_attn_metadata.as_mut(),
-<a href=#402 id=402 data-nosnippet>402</a>                <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
-<a href=#403 id=403 data-nosnippet>403</a>                </span>mapper,
-<a href=#404 id=404 data-nosnippet>404</a>            )
-<a href=#405 id=405 data-nosnippet>405</a>            .nth(<span class="number">0</span>)
-<a href=#406 id=406 data-nosnippet>406</a>            .unwrap()
-<a href=#407 id=407 data-nosnippet>407</a>            .unwrap()
-<a href=#408 id=408 data-nosnippet>408</a>        } <span class="kw">else </span>{
-<a href=#409 id=409 data-nosnippet>409</a>            get_completion_input(
-<a href=#410 id=410 data-nosnippet>410</a>                input_seqs
-<a href=#411 id=411 data-nosnippet>411</a>                    .iter()
-<a href=#412 id=412 data-nosnippet>412</a>                    .map(|seq| seq.get_toks())
-<a href=#413 id=413 data-nosnippet>413</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#414 id=414 data-nosnippet>414</a>                input_seqs,
-<a href=#415 id=415 data-nosnippet>415</a>                device,
-<a href=#416 id=416 data-nosnippet>416</a>                no_kv_cache,
-<a href=#417 id=417 data-nosnippet>417</a>                last_n_context_len,
-<a href=#418 id=418 data-nosnippet>418</a>                return_raw_logits,
-<a href=#419 id=419 data-nosnippet>419</a>                paged_attn_metadata.as_mut(),
-<a href=#420 id=420 data-nosnippet>420</a>                <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
-<a href=#421 id=421 data-nosnippet>421</a>                </span>mapper,
-<a href=#422 id=422 data-nosnippet>422</a>            )
-<a href=#423 id=423 data-nosnippet>423</a>            .nth(<span class="number">0</span>)
-<a href=#424 id=424 data-nosnippet>424</a>            .unwrap()
-<a href=#425 id=425 data-nosnippet>425</a>            .unwrap()
-<a href=#426 id=426 data-nosnippet>426</a>        };
-<a href=#427 id=427 data-nosnippet>427</a>
-<a href=#428 id=428 data-nosnippet>428</a>        <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
-<a href=#429 id=429 data-nosnippet>429</a>            input_ids: input,
-<a href=#430 id=430 data-nosnippet>430</a>            seqlen_offsets: positions,
-<a href=#431 id=431 data-nosnippet>431</a>            context_lens,
-<a href=#432 id=432 data-nosnippet>432</a>            position_ids,
-<a href=#433 id=433 data-nosnippet>433</a>            pixel_values,
-<a href=#434 id=434 data-nosnippet>434</a>            model_specific_args: Box::new(MLlamaSpecificArgs {
-<a href=#435 id=435 data-nosnippet>435</a>                aspect_ratio_ids,
-<a href=#436 id=436 data-nosnippet>436</a>                aspect_ratio_mask,
-<a href=#437 id=437 data-nosnippet>437</a>                cross_attn_mask,
-<a href=#438 id=438 data-nosnippet>438</a>            }),
-<a href=#439 id=439 data-nosnippet>439</a>            paged_attn_meta,
-<a href=#440 id=440 data-nosnippet>440</a>            flash_meta,
-<a href=#441 id=441 data-nosnippet>441</a>        });
-<a href=#442 id=442 data-nosnippet>442</a>        Box::new(std::iter::once(<span class="prelude-val">Ok</span>(InputProcessorOutput {
-<a href=#443 id=443 data-nosnippet>443</a>            inputs,
-<a href=#444 id=444 data-nosnippet>444</a>            seq_indices,
-<a href=#445 id=445 data-nosnippet>445</a>        })))
-<a href=#446 id=446 data-nosnippet>446</a>    }
-<a href=#447 id=447 data-nosnippet>447</a>}
-<a href=#448 id=448 data-nosnippet>448</a>
-<a href=#449 id=449 data-nosnippet>449</a><span class="kw">fn </span>argmin&lt;T, I&gt;(iter: I) -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt;
-<a href=#450 id=450 data-nosnippet>450</a><span class="kw">where
-<a href=#451 id=451 data-nosnippet>451</a>    </span>T: PartialOrd,
-<a href=#452 id=452 data-nosnippet>452</a>    I: Iterator&lt;Item = T&gt;,
-<a href=#453 id=453 data-nosnippet>453</a>{
-<a href=#454 id=454 data-nosnippet>454</a>    iter.enumerate()
-<a href=#455 id=455 data-nosnippet>455</a>        .fold(<span class="prelude-val">None</span>, |min, (idx, item)| <span class="kw">match </span>min {
-<a href=#456 id=456 data-nosnippet>456</a>            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Some</span>((idx, item)),
-<a href=#457 id=457 data-nosnippet>457</a>            <span class="prelude-val">Some</span>((min_idx, min_item)) =&gt; {
-<a href=#458 id=458 data-nosnippet>458</a>                <span class="kw">if </span>item &lt; min_item {
-<a href=#459 id=459 data-nosnippet>459</a>                    <span class="prelude-val">Some</span>((idx, item))
-<a href=#460 id=460 data-nosnippet>460</a>                } <span class="kw">else </span>{
-<a href=#461 id=461 data-nosnippet>461</a>                    <span class="prelude-val">Some</span>((min_idx, min_item))
-<a href=#462 id=462 data-nosnippet>462</a>                }
-<a href=#463 id=463 data-nosnippet>463</a>            }
-<a href=#464 id=464 data-nosnippet>464</a>        })
-<a href=#465 id=465 data-nosnippet>465</a>        .map(|(min_idx, <span class="kw">_</span>)| min_idx)
-<a href=#466 id=466 data-nosnippet>466</a>}
-<a href=#467 id=467 data-nosnippet>467</a>
-<a href=#468 id=468 data-nosnippet>468</a><span class="kw">impl </span>MLlamaImageProcessor {
-<a href=#469 id=469 data-nosnippet>469</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/image_processing_mllama.py#L53
-<a href=#470 id=470 data-nosnippet>470</a>    </span><span class="kw">fn </span>get_all_supported_aspect_ratios(max_image_tiles: usize) -&gt; Vec&lt;(usize, usize)&gt; {
-<a href=#471 id=471 data-nosnippet>471</a>        (<span class="number">1</span>..max_image_tiles + <span class="number">1</span>)
-<a href=#472 id=472 data-nosnippet>472</a>            .flat_map(|width| {
-<a href=#473 id=473 data-nosnippet>473</a>                (<span class="number">1</span>..max_image_tiles + <span class="number">1</span>).filter_map(<span class="kw">move </span>|height| {
-<a href=#474 id=474 data-nosnippet>474</a>                    <span class="kw">if </span>width * height &lt;= max_image_tiles {
-<a href=#475 id=475 data-nosnippet>475</a>                        <span class="prelude-val">Some</span>((width, height))
-<a href=#476 id=476 data-nosnippet>476</a>                    } <span class="kw">else </span>{
-<a href=#477 id=477 data-nosnippet>477</a>                        <span class="prelude-val">None
-<a href=#478 id=478 data-nosnippet>478</a>                    </span>}
-<a href=#479 id=479 data-nosnippet>479</a>                })
-<a href=#480 id=480 data-nosnippet>480</a>            })
-<a href=#481 id=481 data-nosnippet>481</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#482 id=482 data-nosnippet>482</a>    }
-<a href=#483 id=483 data-nosnippet>483</a>
-<a href=#484 id=484 data-nosnippet>484</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/image_processing_mllama.py#L132
-<a href=#485 id=485 data-nosnippet>485</a>    </span><span class="kw">fn </span>get_optimal_tiled_canvas(
-<a href=#486 id=486 data-nosnippet>486</a>        image_height: u32,
-<a href=#487 id=487 data-nosnippet>487</a>        image_width: u32,
-<a href=#488 id=488 data-nosnippet>488</a>        max_image_tiles: usize,
-<a href=#489 id=489 data-nosnippet>489</a>        tile_size: usize,
-<a href=#490 id=490 data-nosnippet>490</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(usize, usize)&gt; {
-<a href=#491 id=491 data-nosnippet>491</a>        <span class="kw">let </span>possible_tile_arrangements = <span class="self">Self</span>::get_all_supported_aspect_ratios(max_image_tiles);
-<a href=#492 id=492 data-nosnippet>492</a>        <span class="kw">let </span>possible_canvas_sizes: (Vec&lt;<span class="kw">_</span>&gt;, Vec&lt;<span class="kw">_</span>&gt;) = possible_tile_arrangements
-<a href=#493 id=493 data-nosnippet>493</a>            .into_iter()
-<a href=#494 id=494 data-nosnippet>494</a>            .map(|(h, w)| (h * tile_size, w * tile_size))
-<a href=#495 id=495 data-nosnippet>495</a>            .unzip();
-<a href=#496 id=496 data-nosnippet>496</a>        <span class="comment">// Get all possible resolution heights/widths
-<a href=#497 id=497 data-nosnippet>497</a>        </span><span class="kw">let </span>(target_heights, target_widths) = possible_canvas_sizes;
-<a href=#498 id=498 data-nosnippet>498</a>
-<a href=#499 id=499 data-nosnippet>499</a>        <span class="comment">// Get scaling factors to resize the image without distortion
-<a href=#500 id=500 data-nosnippet>500</a>        </span><span class="kw">let </span>scale_h = target_heights
-<a href=#501 id=501 data-nosnippet>501</a>            .iter()
-<a href=#502 id=502 data-nosnippet>502</a>            .map(|h| <span class="kw-2">*</span>h <span class="kw">as </span>f32 / image_height <span class="kw">as </span>f32)
-<a href=#503 id=503 data-nosnippet>503</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#504 id=504 data-nosnippet>504</a>        <span class="kw">let </span>scale_w = target_widths
-<a href=#505 id=505 data-nosnippet>505</a>            .iter()
-<a href=#506 id=506 data-nosnippet>506</a>            .map(|w| <span class="kw-2">*</span>w <span class="kw">as </span>f32 / image_width <span class="kw">as </span>f32)
-<a href=#507 id=507 data-nosnippet>507</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#508 id=508 data-nosnippet>508</a>
-<a href=#509 id=509 data-nosnippet>509</a>        <span class="comment">// Get the min scale between width and height
-<a href=#510 id=510 data-nosnippet>510</a>        </span><span class="kw">let </span>scales = scale_h
-<a href=#511 id=511 data-nosnippet>511</a>            .into_iter()
-<a href=#512 id=512 data-nosnippet>512</a>            .zip(scale_w)
-<a href=#513 id=513 data-nosnippet>513</a>            .map(|(scale_h, scale_w)| <span class="kw">if </span>scale_w &gt; scale_h { scale_h } <span class="kw">else </span>{ scale_w })
-<a href=#514 id=514 data-nosnippet>514</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#515 id=515 data-nosnippet>515</a>
-<a href=#516 id=516 data-nosnippet>516</a>        <span class="comment">// Filter only scales that allow upscaling
-<a href=#517 id=517 data-nosnippet>517</a>        </span><span class="kw">let </span>upscaling_options = scales
-<a href=#518 id=518 data-nosnippet>518</a>            .iter()
-<a href=#519 id=519 data-nosnippet>519</a>            .copied()
-<a href=#520 id=520 data-nosnippet>520</a>            .filter(|scale| <span class="kw-2">*</span>scale &gt;= <span class="number">1.</span>)
-<a href=#521 id=521 data-nosnippet>521</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#522 id=522 data-nosnippet>522</a>        <span class="kw">let </span>selected_scale = <span class="kw">if </span>!upscaling_options.is_empty() {
-<a href=#523 id=523 data-nosnippet>523</a>            upscaling_options
-<a href=#524 id=524 data-nosnippet>524</a>                .into_iter()
-<a href=#525 id=525 data-nosnippet>525</a>                .min_by(|x, y| x.partial_cmp(y).expect(<span class="string">"No ordering!"</span>))
-<a href=#526 id=526 data-nosnippet>526</a>                .context(<span class="string">"No min, upscale"</span>)<span class="question-mark">?
-<a href=#527 id=527 data-nosnippet>527</a>        </span>} <span class="kw">else </span>{
-<a href=#528 id=528 data-nosnippet>528</a>            <span class="comment">// No upscaling possible, get min downscaling (max scale for scales&lt;1)
-<a href=#529 id=529 data-nosnippet>529</a>            </span><span class="kw">let </span>downscaling_options = scales
-<a href=#530 id=530 data-nosnippet>530</a>                .iter()
-<a href=#531 id=531 data-nosnippet>531</a>                .copied()
-<a href=#532 id=532 data-nosnippet>532</a>                .filter(|scale| <span class="kw-2">*</span>scale &lt; <span class="number">1.</span>)
-<a href=#533 id=533 data-nosnippet>533</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#534 id=534 data-nosnippet>534</a>            downscaling_options
-<a href=#535 id=535 data-nosnippet>535</a>                .into_iter()
-<a href=#536 id=536 data-nosnippet>536</a>                .max_by(|x, y| x.partial_cmp(y).expect(<span class="string">"No ordering!"</span>))
-<a href=#537 id=537 data-nosnippet>537</a>                .context(<span class="string">"No max, downscale"</span>)<span class="question-mark">?
-<a href=#538 id=538 data-nosnippet>538</a>        </span>};
-<a href=#539 id=539 data-nosnippet>539</a>
-<a href=#540 id=540 data-nosnippet>540</a>        <span class="comment">// Get all resolutions that support this scaling factor
-<a href=#541 id=541 data-nosnippet>541</a>        </span><span class="kw">let </span>chosen_canvas_h = target_heights
-<a href=#542 id=542 data-nosnippet>542</a>            .iter()
-<a href=#543 id=543 data-nosnippet>543</a>            .copied()
-<a href=#544 id=544 data-nosnippet>544</a>            .enumerate()
-<a href=#545 id=545 data-nosnippet>545</a>            .filter_map(|(i, h)| {
-<a href=#546 id=546 data-nosnippet>546</a>                <span class="kw">if </span>scales[i] == selected_scale {
-<a href=#547 id=547 data-nosnippet>547</a>                    <span class="prelude-val">Some</span>(h)
-<a href=#548 id=548 data-nosnippet>548</a>                } <span class="kw">else </span>{
-<a href=#549 id=549 data-nosnippet>549</a>                    <span class="prelude-val">None
-<a href=#550 id=550 data-nosnippet>550</a>                </span>}
-<a href=#551 id=551 data-nosnippet>551</a>            })
-<a href=#552 id=552 data-nosnippet>552</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#553 id=553 data-nosnippet>553</a>        <span class="kw">let </span>chosen_canvas_w = target_widths
-<a href=#554 id=554 data-nosnippet>554</a>            .iter()
-<a href=#555 id=555 data-nosnippet>555</a>            .copied()
-<a href=#556 id=556 data-nosnippet>556</a>            .enumerate()
-<a href=#557 id=557 data-nosnippet>557</a>            .filter_map(|(i, w)| {
-<a href=#558 id=558 data-nosnippet>558</a>                <span class="kw">if </span>scales[i] == selected_scale {
-<a href=#559 id=559 data-nosnippet>559</a>                    <span class="prelude-val">Some</span>(w)
-<a href=#560 id=560 data-nosnippet>560</a>                } <span class="kw">else </span>{
-<a href=#561 id=561 data-nosnippet>561</a>                    <span class="prelude-val">None
-<a href=#562 id=562 data-nosnippet>562</a>                </span>}
-<a href=#563 id=563 data-nosnippet>563</a>            })
-<a href=#564 id=564 data-nosnippet>564</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#565 id=565 data-nosnippet>565</a>
-<a href=#566 id=566 data-nosnippet>566</a>        <span class="macro">assert_eq!</span>(chosen_canvas_h.len(), chosen_canvas_w.len());
-<a href=#567 id=567 data-nosnippet>567</a>        <span class="kw">if </span>chosen_canvas_h.len() &gt; <span class="number">1 </span>{
-<a href=#568 id=568 data-nosnippet>568</a>            <span class="kw">let </span>optimal_idx = argmin(
-<a href=#569 id=569 data-nosnippet>569</a>                chosen_canvas_h
-<a href=#570 id=570 data-nosnippet>570</a>                    .iter()
-<a href=#571 id=571 data-nosnippet>571</a>                    .zip(<span class="kw-2">&amp;</span>chosen_canvas_w)
-<a href=#572 id=572 data-nosnippet>572</a>                    .map(|(h, w)| <span class="kw-2">*</span>h * <span class="kw-2">*</span>w),
-<a href=#573 id=573 data-nosnippet>573</a>            )
-<a href=#574 id=574 data-nosnippet>574</a>            .context(<span class="string">"No argmin"</span>)<span class="question-mark">?</span>;
-<a href=#575 id=575 data-nosnippet>575</a>            <span class="prelude-val">Ok</span>((chosen_canvas_h[optimal_idx], chosen_canvas_w[optimal_idx]))
-<a href=#576 id=576 data-nosnippet>576</a>        } <span class="kw">else </span>{
-<a href=#577 id=577 data-nosnippet>577</a>            <span class="prelude-val">Ok</span>((chosen_canvas_h[<span class="number">0</span>], chosen_canvas_w[<span class="number">0</span>]))
-<a href=#578 id=578 data-nosnippet>578</a>        }
-<a href=#579 id=579 data-nosnippet>579</a>    }
-<a href=#580 id=580 data-nosnippet>580</a>
-<a href=#581 id=581 data-nosnippet>581</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/image_processing_mllama.py#L82
-<a href=#582 id=582 data-nosnippet>582</a>    </span><span class="kw">fn </span>get_image_size_fit_to_canvas(
-<a href=#583 id=583 data-nosnippet>583</a>        image_height: u32,
-<a href=#584 id=584 data-nosnippet>584</a>        image_width: u32,
-<a href=#585 id=585 data-nosnippet>585</a>        canvas_height: usize,
-<a href=#586 id=586 data-nosnippet>586</a>        canvas_width: usize,
-<a href=#587 id=587 data-nosnippet>587</a>        tile_size: usize,
-<a href=#588 id=588 data-nosnippet>588</a>    ) -&gt; (usize, usize) {
-<a href=#589 id=589 data-nosnippet>589</a>        <span class="kw">let </span>target_width = (image_width <span class="kw">as </span>usize).clamp(tile_size, canvas_width);
-<a href=#590 id=590 data-nosnippet>590</a>        <span class="kw">let </span>target_height = (image_height <span class="kw">as </span>usize).clamp(tile_size, canvas_height);
-<a href=#591 id=591 data-nosnippet>591</a>
-<a href=#592 id=592 data-nosnippet>592</a>        <span class="kw">let </span>scale_h = (target_height <span class="kw">as </span>f32) / (image_height <span class="kw">as </span>f32);
-<a href=#593 id=593 data-nosnippet>593</a>        <span class="kw">let </span>scale_w = (target_width <span class="kw">as </span>f32) / (image_width <span class="kw">as </span>f32);
-<a href=#594 id=594 data-nosnippet>594</a>
-<a href=#595 id=595 data-nosnippet>595</a>        <span class="kw">if </span>scale_w &lt; scale_h {
-<a href=#596 id=596 data-nosnippet>596</a>            (
-<a href=#597 id=597 data-nosnippet>597</a>                target_height.min((image_height <span class="kw">as </span>f32 * scale_w).floor() <span class="kw">as </span>usize),
-<a href=#598 id=598 data-nosnippet>598</a>                target_width,
-<a href=#599 id=599 data-nosnippet>599</a>            )
-<a href=#600 id=600 data-nosnippet>600</a>        } <span class="kw">else </span>{
-<a href=#601 id=601 data-nosnippet>601</a>            (
-<a href=#602 id=602 data-nosnippet>602</a>                target_height,
-<a href=#603 id=603 data-nosnippet>603</a>                target_width.min((image_width <span class="kw">as </span>f32 * scale_h).floor() <span class="kw">as </span>usize),
-<a href=#604 id=604 data-nosnippet>604</a>            )
-<a href=#605 id=605 data-nosnippet>605</a>        }
-<a href=#606 id=606 data-nosnippet>606</a>    }
-<a href=#607 id=607 data-nosnippet>607</a>
-<a href=#608 id=608 data-nosnippet>608</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/image_processing_mllama.py#L796
-<a href=#609 id=609 data-nosnippet>609</a>    </span><span class="doccomment">/// Resizes an image to fit within a tiled canvas while maintaining its aspect ratio.
-<a href=#610 id=610 data-nosnippet>610</a>    /// The optimal canvas size is calculated based on the maximum number of tiles and the tile size.
-<a href=#611 id=611 data-nosnippet>611</a>    </span><span class="kw">fn </span>resize(
-<a href=#612 id=612 data-nosnippet>612</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#613 id=613 data-nosnippet>613</a>        image: DynamicImage,
-<a href=#614 id=614 data-nosnippet>614</a>        size: <span class="kw-2">&amp;</span>HashMap&lt;String, u32&gt;,
-<a href=#615 id=615 data-nosnippet>615</a>        max_image_tiles: usize,
-<a href=#616 id=616 data-nosnippet>616</a>        filter: FilterType,
-<a href=#617 id=617 data-nosnippet>617</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(DynamicImage, (usize, usize))&gt; {
-<a href=#618 id=618 data-nosnippet>618</a>        <span class="kw">let </span>image_height = image.height();
-<a href=#619 id=619 data-nosnippet>619</a>        <span class="kw">let </span>image_width = image.width();
-<a href=#620 id=620 data-nosnippet>620</a>        <span class="kw">let </span>tile_size = size[<span class="string">"height"</span>] <span class="kw">as </span>usize;
-<a href=#621 id=621 data-nosnippet>621</a>
-<a href=#622 id=622 data-nosnippet>622</a>        <span class="kw">let </span>(canvas_height, canvas_width) =
-<a href=#623 id=623 data-nosnippet>623</a>            <span class="self">Self</span>::get_optimal_tiled_canvas(image_height, image_width, max_image_tiles, tile_size)<span class="question-mark">?</span>;
-<a href=#624 id=624 data-nosnippet>624</a>        <span class="kw">let </span>num_tiles_height = canvas_height / tile_size;
-<a href=#625 id=625 data-nosnippet>625</a>        <span class="kw">let </span>num_tiles_width = canvas_width / tile_size;
-<a href=#626 id=626 data-nosnippet>626</a>
-<a href=#627 id=627 data-nosnippet>627</a>        <span class="kw">let </span>(new_height, new_width) = <span class="self">Self</span>::get_image_size_fit_to_canvas(
-<a href=#628 id=628 data-nosnippet>628</a>            image_height,
-<a href=#629 id=629 data-nosnippet>629</a>            image_width,
-<a href=#630 id=630 data-nosnippet>630</a>            canvas_height,
-<a href=#631 id=631 data-nosnippet>631</a>            canvas_width,
-<a href=#632 id=632 data-nosnippet>632</a>            tile_size,
-<a href=#633 id=633 data-nosnippet>633</a>        );
-<a href=#634 id=634 data-nosnippet>634</a>
-<a href=#635 id=635 data-nosnippet>635</a>        <span class="prelude-val">Ok</span>((
-<a href=#636 id=636 data-nosnippet>636</a>            image.resize_exact(new_width <span class="kw">as </span>u32, new_height <span class="kw">as </span>u32, filter),
-<a href=#637 id=637 data-nosnippet>637</a>            (num_tiles_height, num_tiles_width),
-<a href=#638 id=638 data-nosnippet>638</a>        ))
-<a href=#639 id=639 data-nosnippet>639</a>    }
-<a href=#640 id=640 data-nosnippet>640</a>
-<a href=#641 id=641 data-nosnippet>641</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/image_processing_mllama.py#L749
-<a href=#642 id=642 data-nosnippet>642</a>    </span><span class="doccomment">/// Pad an image to the `size` x `aspect_ratio`. For example, if size is {height: 224, width: 224} and aspect ratio is
-<a href=#643 id=643 data-nosnippet>643</a>    /// (1, 2), the image will be padded to 224x448.
-<a href=#644 id=644 data-nosnippet>644</a>    </span><span class="kw">fn </span>pad(
-<a href=#645 id=645 data-nosnippet>645</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#646 id=646 data-nosnippet>646</a>        image: <span class="kw-2">&amp;</span>Tensor,
-<a href=#647 id=647 data-nosnippet>647</a>        size: <span class="kw-2">&amp;</span>HashMap&lt;String, u32&gt;,
-<a href=#648 id=648 data-nosnippet>648</a>        aspect_ratio: (usize, usize),
-<a href=#649 id=649 data-nosnippet>649</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#650 id=650 data-nosnippet>650</a>        <span class="kw">let </span>(num_tiles_h, num_tiles_w) = aspect_ratio;
-<a href=#651 id=651 data-nosnippet>651</a>        <span class="kw">let </span>padded_height = num_tiles_h * size[<span class="string">"height"</span>] <span class="kw">as </span>usize;
-<a href=#652 id=652 data-nosnippet>652</a>        <span class="kw">let </span>padded_width = num_tiles_w * size[<span class="string">"width"</span>] <span class="kw">as </span>usize;
-<a href=#653 id=653 data-nosnippet>653</a>
-<a href=#654 id=654 data-nosnippet>654</a>        <span class="comment">// Add padding on bottom and right sides
-<a href=#655 id=655 data-nosnippet>655</a>        </span>mistralrs_vision::pad(image, padded_height, padded_width)
-<a href=#656 id=656 data-nosnippet>656</a>    }
-<a href=#657 id=657 data-nosnippet>657</a>
-<a href=#658 id=658 data-nosnippet>658</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/image_processing_mllama.py#L213
-<a href=#659 id=659 data-nosnippet>659</a>    </span><span class="doccomment">/// Split an image into a specified number of tiles along its width and height dimensions.
-<a href=#660 id=660 data-nosnippet>660</a>    </span><span class="kw">fn </span>split_to_tiles(
-<a href=#661 id=661 data-nosnippet>661</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#662 id=662 data-nosnippet>662</a>        image: <span class="kw-2">&amp;</span>Tensor,
-<a href=#663 id=663 data-nosnippet>663</a>        num_tiles_height: usize,
-<a href=#664 id=664 data-nosnippet>664</a>        num_tiles_width: usize,
-<a href=#665 id=665 data-nosnippet>665</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#666 id=666 data-nosnippet>666</a>        <span class="kw">let </span>(ch, h, w) = image.dims3()<span class="question-mark">?</span>;
-<a href=#667 id=667 data-nosnippet>667</a>        <span class="kw">let </span>tile_height = h / num_tiles_height;
-<a href=#668 id=668 data-nosnippet>668</a>        <span class="kw">let </span>tile_width = w / num_tiles_width;
-<a href=#669 id=669 data-nosnippet>669</a>
-<a href=#670 id=670 data-nosnippet>670</a>        <span class="kw">let </span><span class="kw-2">mut </span>image = image.reshape((
-<a href=#671 id=671 data-nosnippet>671</a>            ch,
-<a href=#672 id=672 data-nosnippet>672</a>            num_tiles_height,
-<a href=#673 id=673 data-nosnippet>673</a>            tile_height,
-<a href=#674 id=674 data-nosnippet>674</a>            num_tiles_width,
-<a href=#675 id=675 data-nosnippet>675</a>            tile_width,
-<a href=#676 id=676 data-nosnippet>676</a>        ))<span class="question-mark">?</span>;
-<a href=#677 id=677 data-nosnippet>677</a>
-<a href=#678 id=678 data-nosnippet>678</a>        <span class="comment">// Permute to (num_tiles_height, num_tiles_width, num_channels, tile_height, tile_width)
-<a href=#679 id=679 data-nosnippet>679</a>        </span>image = image.permute((<span class="number">1</span>, <span class="number">3</span>, <span class="number">0</span>, <span class="number">2</span>, <span class="number">4</span>))<span class="question-mark">?</span>;
-<a href=#680 id=680 data-nosnippet>680</a>
-<a href=#681 id=681 data-nosnippet>681</a>        <span class="comment">// Reshape into the desired output shape (num_tiles_width * num_tiles_height, num_channels, tile_height, tile_width)
-<a href=#682 id=682 data-nosnippet>682</a>        </span>image
-<a href=#683 id=683 data-nosnippet>683</a>            .reshape((
-<a href=#684 id=684 data-nosnippet>684</a>                num_tiles_width * num_tiles_height,
-<a href=#685 id=685 data-nosnippet>685</a>                ch,
-<a href=#686 id=686 data-nosnippet>686</a>                tile_height,
-<a href=#687 id=687 data-nosnippet>687</a>                tile_width,
-<a href=#688 id=688 data-nosnippet>688</a>            ))<span class="question-mark">?
-<a href=#689 id=689 data-nosnippet>689</a>            </span>.contiguous()
-<a href=#690 id=690 data-nosnippet>690</a>    }
-<a href=#691 id=691 data-nosnippet>691</a>
-<a href=#692 id=692 data-nosnippet>692</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/image_processing_mllama.py#L277
-<a href=#693 id=693 data-nosnippet>693</a>    </span><span class="doccomment">/// Returns
-<a href=#694 id=694 data-nosnippet>694</a>    /// - stacked and packed images
-<a href=#695 id=695 data-nosnippet>695</a>    /// - a list of lists containing the number of tiles for each image in each batch sample.
-<a href=#696 id=696 data-nosnippet>696</a>    ///   Padding uses 0
-<a href=#697 id=697 data-nosnippet>697</a>    </span><span class="kw">fn </span>pack_images(
-<a href=#698 id=698 data-nosnippet>698</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#699 id=699 data-nosnippet>699</a>        images: Vec&lt;Tensor&gt;,
-<a href=#700 id=700 data-nosnippet>700</a>        max_image_tiles: usize,
-<a href=#701 id=701 data-nosnippet>701</a>        (_bs, max_num_images): (usize, usize),
-<a href=#702 id=702 data-nosnippet>702</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Vec&lt;usize&gt;)&gt; {
-<a href=#703 id=703 data-nosnippet>703</a>        <span class="kw">let </span>(<span class="kw">_</span>, ch, tile_h, tile_w) = images[<span class="number">0</span>].dims4()<span class="question-mark">?</span>;
-<a href=#704 id=704 data-nosnippet>704</a>
-<a href=#705 id=705 data-nosnippet>705</a>        <span class="kw">let </span><span class="kw-2">mut </span>stacked_images = Tensor::zeros(
-<a href=#706 id=706 data-nosnippet>706</a>            (max_num_images, max_image_tiles, ch, tile_h, tile_w),
-<a href=#707 id=707 data-nosnippet>707</a>            images[<span class="number">0</span>].dtype(),
-<a href=#708 id=708 data-nosnippet>708</a>            images[<span class="number">0</span>].device(),
-<a href=#709 id=709 data-nosnippet>709</a>        )<span class="question-mark">?</span>;
-<a href=#710 id=710 data-nosnippet>710</a>        <span class="kw">let </span><span class="kw-2">mut </span>num_sample_tiles = Vec::new();
-<a href=#711 id=711 data-nosnippet>711</a>        <span class="kw">for </span>(i, image) <span class="kw">in </span>images.into_iter().enumerate() {
-<a href=#712 id=712 data-nosnippet>712</a>            <span class="kw">let </span>num_tiles = image.dim(<span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#713 id=713 data-nosnippet>713</a>            stacked_images = stacked_images
-<a href=#714 id=714 data-nosnippet>714</a>                .slice_assign(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>i, <span class="kw-2">&amp;</span>(..num_tiles), <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>..], <span class="kw-2">&amp;</span>image.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-<a href=#715 id=715 data-nosnippet>715</a>            num_sample_tiles.push(num_tiles)
-<a href=#716 id=716 data-nosnippet>716</a>        }
-<a href=#717 id=717 data-nosnippet>717</a>        <span class="prelude-val">Ok</span>((stacked_images, num_sample_tiles))
-<a href=#718 id=718 data-nosnippet>718</a>    }
-<a href=#719 id=719 data-nosnippet>719</a>
-<a href=#720 id=720 data-nosnippet>720</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/image_processing_mllama.py#L354
-<a href=#721 id=721 data-nosnippet>721</a>    </span><span class="doccomment">/// Convert aspect ratio tuples to unique ids.
-<a href=#722 id=722 data-nosnippet>722</a>    /// Padding uses 0
-<a href=#723 id=723 data-nosnippet>723</a>    </span><span class="kw">fn </span>convert_aspect_ratios_to_ids(
-<a href=#724 id=724 data-nosnippet>724</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#725 id=725 data-nosnippet>725</a>        aspect_ratios: Vec&lt;(usize, usize)&gt;,
-<a href=#726 id=726 data-nosnippet>726</a>        max_image_tiles: usize,
-<a href=#727 id=727 data-nosnippet>727</a>        (_bs, max_num_images): (usize, usize),
-<a href=#728 id=728 data-nosnippet>728</a>        device: <span class="kw-2">&amp;</span>Device,
-<a href=#729 id=729 data-nosnippet>729</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#730 id=730 data-nosnippet>730</a>        <span class="kw">let </span>supported_aspect_ratios = <span class="self">Self</span>::get_all_supported_aspect_ratios(max_image_tiles);
-<a href=#731 id=731 data-nosnippet>731</a>
-<a href=#732 id=732 data-nosnippet>732</a>        <span class="kw">let </span><span class="kw-2">mut </span>aspect_ratios_ids = <span class="macro">vec!</span>[<span class="number">0i64</span>; max_num_images];
-<a href=#733 id=733 data-nosnippet>733</a>        <span class="kw">for </span>(i, (num_tiles_h, num_tiles_w)) <span class="kw">in </span>aspect_ratios.iter().enumerate() {
-<a href=#734 id=734 data-nosnippet>734</a>            aspect_ratios_ids[i] = (supported_aspect_ratios
-<a href=#735 id=735 data-nosnippet>735</a>                .iter()
-<a href=#736 id=736 data-nosnippet>736</a>                .position(|(h, w)| <span class="kw-2">*</span>h == <span class="kw-2">*</span>num_tiles_h &amp;&amp; <span class="kw-2">*</span>w == <span class="kw-2">*</span>num_tiles_w)
-<a href=#737 id=737 data-nosnippet>737</a>                .context(<span class="string">"Could not find aspect ratio"</span>)<span class="question-mark">?
-<a href=#738 id=738 data-nosnippet>738</a>                </span>+ <span class="number">1</span>) <span class="kw">as </span>i64;
-<a href=#739 id=739 data-nosnippet>739</a>        }
-<a href=#740 id=740 data-nosnippet>740</a>
-<a href=#741 id=741 data-nosnippet>741</a>        Tensor::new(aspect_ratios_ids, device)
-<a href=#742 id=742 data-nosnippet>742</a>    }
-<a href=#743 id=743 data-nosnippet>743</a>
-<a href=#744 id=744 data-nosnippet>744</a>    <span class="kw">fn </span>build_aspect_ratio_mask(
-<a href=#745 id=745 data-nosnippet>745</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#746 id=746 data-nosnippet>746</a>        aspect_ratios: Vec&lt;(usize, usize)&gt;,
-<a href=#747 id=747 data-nosnippet>747</a>        max_image_tiles: usize,
-<a href=#748 id=748 data-nosnippet>748</a>        (_bs, max_num_images): (usize, usize),
-<a href=#749 id=749 data-nosnippet>749</a>        device: <span class="kw-2">&amp;</span>Device,
-<a href=#750 id=750 data-nosnippet>750</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#751 id=751 data-nosnippet>751</a>        <span class="kw">let </span><span class="kw-2">mut </span>aspect_ratio_mask =
-<a href=#752 id=752 data-nosnippet>752</a>            Tensor::zeros((max_num_images, max_image_tiles), DType::I64, device)<span class="question-mark">?</span>;
-<a href=#753 id=753 data-nosnippet>753</a>
-<a href=#754 id=754 data-nosnippet>754</a>        <span class="comment">// Set the first tile to 1 for all aspect ratios
-<a href=#755 id=755 data-nosnippet>755</a>        // because in the original implementation, aspect ratios are apdded with (1,1)
-<a href=#756 id=756 data-nosnippet>756</a>
-<a href=#757 id=757 data-nosnippet>757</a>        </span>aspect_ratio_mask = aspect_ratio_mask.slice_assign(
-<a href=#758 id=758 data-nosnippet>758</a>            <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span><span class="number">0</span>],
-<a href=#759 id=759 data-nosnippet>759</a>            <span class="kw-2">&amp;</span>Tensor::ones((max_num_images, <span class="number">1</span>), DType::I64, device)<span class="question-mark">?</span>,
-<a href=#760 id=760 data-nosnippet>760</a>        )<span class="question-mark">?</span>;
-<a href=#761 id=761 data-nosnippet>761</a>
-<a href=#762 id=762 data-nosnippet>762</a>        <span class="kw">for </span>(i, (num_tiles_h, num_tiles_w)) <span class="kw">in </span>aspect_ratios.iter().enumerate() {
-<a href=#763 id=763 data-nosnippet>763</a>            aspect_ratio_mask = aspect_ratio_mask.slice_assign(
-<a href=#764 id=764 data-nosnippet>764</a>                <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>i, <span class="kw-2">&amp;</span>(..<span class="kw-2">*</span>num_tiles_h * <span class="kw-2">*</span>num_tiles_w)],
-<a href=#765 id=765 data-nosnippet>765</a>                <span class="kw-2">&amp;</span>Tensor::ones((<span class="number">1</span>, <span class="kw-2">*</span>num_tiles_h * <span class="kw-2">*</span>num_tiles_w), DType::I64, device)<span class="question-mark">?</span>,
-<a href=#766 id=766 data-nosnippet>766</a>            )<span class="question-mark">?</span>;
-<a href=#767 id=767 data-nosnippet>767</a>        }
-<a href=#768 id=768 data-nosnippet>768</a>
-<a href=#769 id=769 data-nosnippet>769</a>        <span class="prelude-val">Ok</span>(aspect_ratio_mask)
-<a href=#770 id=770 data-nosnippet>770</a>    }
-<a href=#771 id=771 data-nosnippet>771</a>}
-<a href=#772 id=772 data-nosnippet>772</a>
-<a href=#773 id=773 data-nosnippet>773</a><span class="kw">impl </span>ImagePreProcessor <span class="kw">for </span>MLlamaImageProcessor {
-<a href=#774 id=774 data-nosnippet>774</a>    <span class="kw">const </span>DEFAULT_MEAN: [f64; <span class="number">3</span>] = [<span class="number">0.5</span>, <span class="number">0.5</span>, <span class="number">0.5</span>];
-<a href=#775 id=775 data-nosnippet>775</a>    <span class="kw">const </span>DEFAULT_STD: [f64; <span class="number">3</span>] = [<span class="number">0.5</span>, <span class="number">0.5</span>, <span class="number">0.5</span>];
-<a href=#776 id=776 data-nosnippet>776</a>
-<a href=#777 id=777 data-nosnippet>777</a>    <span class="kw">fn </span>preprocess(
-<a href=#778 id=778 data-nosnippet>778</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#779 id=779 data-nosnippet>779</a>        images: Vec&lt;DynamicImage&gt;,
-<a href=#780 id=780 data-nosnippet>780</a>        videos: Vec&lt;Vec&lt;DynamicImage&gt;&gt;,
-<a href=#781 id=781 data-nosnippet>781</a>        config: <span class="kw-2">&amp;</span>PreProcessorConfig,
-<a href=#782 id=782 data-nosnippet>782</a>        device: <span class="kw-2">&amp;</span>Device,
-<a href=#783 id=783 data-nosnippet>783</a>        (bs, max_num_images): (usize, usize),
-<a href=#784 id=784 data-nosnippet>784</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;PreprocessedImages&gt; {
-<a href=#785 id=785 data-nosnippet>785</a>        <span class="macro">assert!</span>(videos.is_empty());
-<a href=#786 id=786 data-nosnippet>786</a>
-<a href=#787 id=787 data-nosnippet>787</a>        <span class="kw">let </span><span class="kw-2">mut </span>sample_images = Vec::new();
-<a href=#788 id=788 data-nosnippet>788</a>        <span class="kw">let </span><span class="kw-2">mut </span>sample_aspect_ratios = Vec::new();
-<a href=#789 id=789 data-nosnippet>789</a>        <span class="kw">let </span>max_image_tiles = config
-<a href=#790 id=790 data-nosnippet>790</a>            .max_image_tiles
-<a href=#791 id=791 data-nosnippet>791</a>            .context(<span class="string">"`do_resize=false` is not supported, need `max_image_tiles`!"</span>)<span class="question-mark">?</span>;
-<a href=#792 id=792 data-nosnippet>792</a>        <span class="kw-2">*</span><span class="self">self</span>.max_image_tiles.write().unwrap() = <span class="prelude-val">Some</span>(max_image_tiles);
-<a href=#793 id=793 data-nosnippet>793</a>
-<a href=#794 id=794 data-nosnippet>794</a>        <span class="kw">for </span><span class="kw-2">mut </span>image <span class="kw">in </span>images {
-<a href=#795 id=795 data-nosnippet>795</a>            <span class="comment">// Convert to rgb, default to true
-<a href=#796 id=796 data-nosnippet>796</a>            </span><span class="kw">if </span>config.do_convert_rgb.unwrap_or(<span class="bool-val">true</span>) {
-<a href=#797 id=797 data-nosnippet>797</a>                image = DynamicImage::ImageRgb8(image.to_rgb8());
-<a href=#798 id=798 data-nosnippet>798</a>            }
-<a href=#799 id=799 data-nosnippet>799</a>
-<a href=#800 id=800 data-nosnippet>800</a>            <span class="kw">let </span>size = config
-<a href=#801 id=801 data-nosnippet>801</a>                .size
-<a href=#802 id=802 data-nosnippet>802</a>                .as_ref()
-<a href=#803 id=803 data-nosnippet>803</a>                .context(<span class="string">"`do_resize=false` is not supported, need `size`!"</span>)<span class="question-mark">?</span>;
-<a href=#804 id=804 data-nosnippet>804</a>
-<a href=#805 id=805 data-nosnippet>805</a>            <span class="kw">let </span>(image, aspect_ratio) =
-<a href=#806 id=806 data-nosnippet>806</a>                <span class="self">self</span>.resize(image, size, max_image_tiles, config.resampling.to_filter()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-<a href=#807 id=807 data-nosnippet>807</a>
-<a href=#808 id=808 data-nosnippet>808</a>            <span class="comment">// In transformers they rescale from [0, 255] to [0, 1]
-<a href=#809 id=809 data-nosnippet>809</a>            // at the end of resize:
-<a href=#810 id=810 data-nosnippet>810</a>            // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/image_transforms.py#L340
-<a href=#811 id=811 data-nosnippet>811</a>            </span><span class="kw">let </span>to_tensor_rescale = Transforms {
-<a href=#812 id=812 data-nosnippet>812</a>                input: <span class="kw-2">&amp;</span>ToTensorNoNorm,
-<a href=#813 id=813 data-nosnippet>813</a>                inner_transforms: <span class="kw-2">&amp;</span>[],
-<a href=#814 id=814 data-nosnippet>814</a>            };
-<a href=#815 id=815 data-nosnippet>815</a>            <span class="kw">let </span><span class="kw-2">mut </span>image = image.apply(to_tensor_rescale, device)<span class="question-mark">?</span>;
-<a href=#816 id=816 data-nosnippet>816</a>
-<a href=#817 id=817 data-nosnippet>817</a>            image = <span class="self">self</span>.pad(<span class="kw-2">&amp;</span>image, size, aspect_ratio)<span class="question-mark">?</span>;
+<a href=#326 id=326 data-nosnippet>326</a>
+<a href=#327 id=327 data-nosnippet>327</a>                seq.multimodal.has_changed_prompt = <span class="bool-val">true</span>;
+<a href=#328 id=328 data-nosnippet>328</a>            }
+<a href=#329 id=329 data-nosnippet>329</a>
+<a href=#330 id=330 data-nosnippet>330</a>            <span class="comment">// Create cross attn mask
+<a href=#331 id=331 data-nosnippet>331</a>            </span><span class="kw">let </span>image_token_id = tokenizer
+<a href=#332 id=332 data-nosnippet>332</a>                .encode_fast(IMAGE_TOKEN, <span class="bool-val">false</span>)
+<a href=#333 id=333 data-nosnippet>333</a>                .unwrap()
+<a href=#334 id=334 data-nosnippet>334</a>                .get_ids()
+<a href=#335 id=335 data-nosnippet>335</a>                .to_vec();
+<a href=#336 id=336 data-nosnippet>336</a>            <span class="kw">let </span>image_token_id = <span class="kw">if </span>image_token_id.len() == <span class="number">1 </span>{
+<a href=#337 id=337 data-nosnippet>337</a>                image_token_id[<span class="number">0</span>]
+<a href=#338 id=338 data-nosnippet>338</a>            } <span class="kw">else </span>{
+<a href=#339 id=339 data-nosnippet>339</a>                <span class="macro">panic!</span>(<span class="string">"{IMAGE_TOKEN} encoding should be one token, got {image_token_id:?}"</span>);
+<a href=#340 id=340 data-nosnippet>340</a>            };
+<a href=#341 id=341 data-nosnippet>341</a>            <span class="kw">let </span>chunks = input.chunk(input.dim(<span class="number">0</span>).unwrap(), <span class="number">0</span>).unwrap();
+<a href=#342 id=342 data-nosnippet>342</a>            <span class="kw">let </span>cross_attention_token_mask = chunks
+<a href=#343 id=343 data-nosnippet>343</a>                .iter()
+<a href=#344 id=344 data-nosnippet>344</a>                .map(|token_ids| {
+<a href=#345 id=345 data-nosnippet>345</a>                    get_cross_attention_token_mask(
+<a href=#346 id=346 data-nosnippet>346</a>                        token_ids.squeeze(<span class="number">0</span>).unwrap().to_vec1::&lt;u32&gt;().unwrap(),
+<a href=#347 id=347 data-nosnippet>347</a>                        image_token_id,
+<a href=#348 id=348 data-nosnippet>348</a>                    )
+<a href=#349 id=349 data-nosnippet>349</a>                })
+<a href=#350 id=350 data-nosnippet>350</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#351 id=351 data-nosnippet>351</a>
+<a href=#352 id=352 data-nosnippet>352</a>            <span class="kw">let </span>cross_attn_mask = convert_sparse_cross_attention_mask_to_dense(
+<a href=#353 id=353 data-nosnippet>353</a>                cross_attention_token_mask,
+<a href=#354 id=354 data-nosnippet>354</a>                num_tiles_accum,
+<a href=#355 id=355 data-nosnippet>355</a>                <span class="self">self</span>.max_image_tiles
+<a href=#356 id=356 data-nosnippet>356</a>                    .read()
+<a href=#357 id=357 data-nosnippet>357</a>                    .unwrap()
+<a href=#358 id=358 data-nosnippet>358</a>                    .expect(<span class="string">"`max_image_tiles` must be set!"</span>),
+<a href=#359 id=359 data-nosnippet>359</a>                chunks
+<a href=#360 id=360 data-nosnippet>360</a>                    .iter()
+<a href=#361 id=361 data-nosnippet>361</a>                    .map(|input_ids| <span class="kw-2">*</span>input_ids.dims().last().unwrap())
+<a href=#362 id=362 data-nosnippet>362</a>                    .max()
+<a href=#363 id=363 data-nosnippet>363</a>                    .unwrap(),
+<a href=#364 id=364 data-nosnippet>364</a>                chunks[<span class="number">0</span>].device(),
+<a href=#365 id=365 data-nosnippet>365</a>            );
+<a href=#366 id=366 data-nosnippet>366</a>
+<a href=#367 id=367 data-nosnippet>367</a>            <span class="kw">let </span>cross_attn_mask = <span class="kw">match </span>cross_attn_mask {
+<a href=#368 id=368 data-nosnippet>368</a>                <span class="prelude-val">Ok</span>(v) =&gt; v,
+<a href=#369 id=369 data-nosnippet>369</a>                <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span>Box::new(std::iter::once(<span class="prelude-val">Err</span>(anyhow::Error::msg(e.to_string())))),
+<a href=#370 id=370 data-nosnippet>370</a>            };
+<a href=#371 id=371 data-nosnippet>371</a>
+<a href=#372 id=372 data-nosnippet>372</a>            (
+<a href=#373 id=373 data-nosnippet>373</a>                <span class="prelude-val">Some</span>(Tensor::cat(<span class="kw-2">&amp;</span>pixel_values_accum, <span class="number">0</span>).unwrap()),
+<a href=#374 id=374 data-nosnippet>374</a>                <span class="prelude-val">Some</span>(Tensor::cat(<span class="kw-2">&amp;</span>aspect_ratio_ids_accum, <span class="number">0</span>).unwrap()),
+<a href=#375 id=375 data-nosnippet>375</a>                <span class="prelude-val">Some</span>(Tensor::cat(<span class="kw-2">&amp;</span>aspect_ratio_mask_accum, <span class="number">0</span>).unwrap()),
+<a href=#376 id=376 data-nosnippet>376</a>                <span class="prelude-val">Some</span>(cross_attn_mask),
+<a href=#377 id=377 data-nosnippet>377</a>            )
+<a href=#378 id=378 data-nosnippet>378</a>        } <span class="kw">else </span>{
+<a href=#379 id=379 data-nosnippet>379</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
+<a href=#380 id=380 data-nosnippet>380</a>        };
+<a href=#381 id=381 data-nosnippet>381</a>
+<a href=#382 id=382 data-nosnippet>382</a>        <span class="kw">let </span>text_models_inputs_processor::InnerInputProcessorOutput {
+<a href=#383 id=383 data-nosnippet>383</a>            inputs:
+<a href=#384 id=384 data-nosnippet>384</a>                text_models_inputs_processor::InputMetadata {
+<a href=#385 id=385 data-nosnippet>385</a>                    input,
+<a href=#386 id=386 data-nosnippet>386</a>                    positions,
+<a href=#387 id=387 data-nosnippet>387</a>                    context_lens,
+<a href=#388 id=388 data-nosnippet>388</a>                    position_ids,
+<a href=#389 id=389 data-nosnippet>389</a>                    paged_attn_meta,
+<a href=#390 id=390 data-nosnippet>390</a>                    flash_meta,
+<a href=#391 id=391 data-nosnippet>391</a>                },
+<a href=#392 id=392 data-nosnippet>392</a>            seq_indices,
+<a href=#393 id=393 data-nosnippet>393</a>        } = <span class="kw">if </span>is_prompt {
+<a href=#394 id=394 data-nosnippet>394</a>            get_prompt_input(
+<a href=#395 id=395 data-nosnippet>395</a>                input_seqs
+<a href=#396 id=396 data-nosnippet>396</a>                    .iter()
+<a href=#397 id=397 data-nosnippet>397</a>                    .map(|seq| seq.get_toks())
+<a href=#398 id=398 data-nosnippet>398</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#399 id=399 data-nosnippet>399</a>                input_seqs,
+<a href=#400 id=400 data-nosnippet>400</a>                device,
+<a href=#401 id=401 data-nosnippet>401</a>                last_n_context_len,
+<a href=#402 id=402 data-nosnippet>402</a>                return_raw_logits,
+<a href=#403 id=403 data-nosnippet>403</a>                paged_attn_metadata.as_mut(),
+<a href=#404 id=404 data-nosnippet>404</a>                <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
+<a href=#405 id=405 data-nosnippet>405</a>                </span>mapper,
+<a href=#406 id=406 data-nosnippet>406</a>            )
+<a href=#407 id=407 data-nosnippet>407</a>            .nth(<span class="number">0</span>)
+<a href=#408 id=408 data-nosnippet>408</a>            .unwrap()
+<a href=#409 id=409 data-nosnippet>409</a>            .unwrap()
+<a href=#410 id=410 data-nosnippet>410</a>        } <span class="kw">else </span>{
+<a href=#411 id=411 data-nosnippet>411</a>            get_completion_input(
+<a href=#412 id=412 data-nosnippet>412</a>                input_seqs
+<a href=#413 id=413 data-nosnippet>413</a>                    .iter()
+<a href=#414 id=414 data-nosnippet>414</a>                    .map(|seq| seq.get_toks())
+<a href=#415 id=415 data-nosnippet>415</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#416 id=416 data-nosnippet>416</a>                input_seqs,
+<a href=#417 id=417 data-nosnippet>417</a>                device,
+<a href=#418 id=418 data-nosnippet>418</a>                no_kv_cache,
+<a href=#419 id=419 data-nosnippet>419</a>                last_n_context_len,
+<a href=#420 id=420 data-nosnippet>420</a>                return_raw_logits,
+<a href=#421 id=421 data-nosnippet>421</a>                paged_attn_metadata.as_mut(),
+<a href=#422 id=422 data-nosnippet>422</a>                <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
+<a href=#423 id=423 data-nosnippet>423</a>                </span>mapper,
+<a href=#424 id=424 data-nosnippet>424</a>            )
+<a href=#425 id=425 data-nosnippet>425</a>            .nth(<span class="number">0</span>)
+<a href=#426 id=426 data-nosnippet>426</a>            .unwrap()
+<a href=#427 id=427 data-nosnippet>427</a>            .unwrap()
+<a href=#428 id=428 data-nosnippet>428</a>        };
+<a href=#429 id=429 data-nosnippet>429</a>
+<a href=#430 id=430 data-nosnippet>430</a>        <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
+<a href=#431 id=431 data-nosnippet>431</a>            input_ids: input,
+<a href=#432 id=432 data-nosnippet>432</a>            seqlen_offsets: positions,
+<a href=#433 id=433 data-nosnippet>433</a>            context_lens,
+<a href=#434 id=434 data-nosnippet>434</a>            position_ids,
+<a href=#435 id=435 data-nosnippet>435</a>            pixel_values,
+<a href=#436 id=436 data-nosnippet>436</a>            model_specific_args: Box::new(MLlamaSpecificArgs {
+<a href=#437 id=437 data-nosnippet>437</a>                aspect_ratio_ids,
+<a href=#438 id=438 data-nosnippet>438</a>                aspect_ratio_mask,
+<a href=#439 id=439 data-nosnippet>439</a>                cross_attn_mask,
+<a href=#440 id=440 data-nosnippet>440</a>            }),
+<a href=#441 id=441 data-nosnippet>441</a>            paged_attn_meta,
+<a href=#442 id=442 data-nosnippet>442</a>            flash_meta,
+<a href=#443 id=443 data-nosnippet>443</a>        });
+<a href=#444 id=444 data-nosnippet>444</a>        Box::new(std::iter::once(<span class="prelude-val">Ok</span>(InputProcessorOutput {
+<a href=#445 id=445 data-nosnippet>445</a>            inputs,
+<a href=#446 id=446 data-nosnippet>446</a>            seq_indices,
+<a href=#447 id=447 data-nosnippet>447</a>        })))
+<a href=#448 id=448 data-nosnippet>448</a>    }
+<a href=#449 id=449 data-nosnippet>449</a>}
+<a href=#450 id=450 data-nosnippet>450</a>
+<a href=#451 id=451 data-nosnippet>451</a><span class="kw">fn </span>argmin&lt;T, I&gt;(iter: I) -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt;
+<a href=#452 id=452 data-nosnippet>452</a><span class="kw">where
+<a href=#453 id=453 data-nosnippet>453</a>    </span>T: PartialOrd,
+<a href=#454 id=454 data-nosnippet>454</a>    I: Iterator&lt;Item = T&gt;,
+<a href=#455 id=455 data-nosnippet>455</a>{
+<a href=#456 id=456 data-nosnippet>456</a>    iter.enumerate()
+<a href=#457 id=457 data-nosnippet>457</a>        .fold(<span class="prelude-val">None</span>, |min, (idx, item)| <span class="kw">match </span>min {
+<a href=#458 id=458 data-nosnippet>458</a>            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Some</span>((idx, item)),
+<a href=#459 id=459 data-nosnippet>459</a>            <span class="prelude-val">Some</span>((min_idx, min_item)) =&gt; {
+<a href=#460 id=460 data-nosnippet>460</a>                <span class="kw">if </span>item &lt; min_item {
+<a href=#461 id=461 data-nosnippet>461</a>                    <span class="prelude-val">Some</span>((idx, item))
+<a href=#462 id=462 data-nosnippet>462</a>                } <span class="kw">else </span>{
+<a href=#463 id=463 data-nosnippet>463</a>                    <span class="prelude-val">Some</span>((min_idx, min_item))
+<a href=#464 id=464 data-nosnippet>464</a>                }
+<a href=#465 id=465 data-nosnippet>465</a>            }
+<a href=#466 id=466 data-nosnippet>466</a>        })
+<a href=#467 id=467 data-nosnippet>467</a>        .map(|(min_idx, <span class="kw">_</span>)| min_idx)
+<a href=#468 id=468 data-nosnippet>468</a>}
+<a href=#469 id=469 data-nosnippet>469</a>
+<a href=#470 id=470 data-nosnippet>470</a><span class="kw">impl </span>MLlamaImageProcessor {
+<a href=#471 id=471 data-nosnippet>471</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/image_processing_mllama.py#L53
+<a href=#472 id=472 data-nosnippet>472</a>    </span><span class="kw">fn </span>get_all_supported_aspect_ratios(max_image_tiles: usize) -&gt; Vec&lt;(usize, usize)&gt; {
+<a href=#473 id=473 data-nosnippet>473</a>        (<span class="number">1</span>..max_image_tiles + <span class="number">1</span>)
+<a href=#474 id=474 data-nosnippet>474</a>            .flat_map(|width| {
+<a href=#475 id=475 data-nosnippet>475</a>                (<span class="number">1</span>..max_image_tiles + <span class="number">1</span>).filter_map(<span class="kw">move </span>|height| {
+<a href=#476 id=476 data-nosnippet>476</a>                    <span class="kw">if </span>width * height &lt;= max_image_tiles {
+<a href=#477 id=477 data-nosnippet>477</a>                        <span class="prelude-val">Some</span>((width, height))
+<a href=#478 id=478 data-nosnippet>478</a>                    } <span class="kw">else </span>{
+<a href=#479 id=479 data-nosnippet>479</a>                        <span class="prelude-val">None
+<a href=#480 id=480 data-nosnippet>480</a>                    </span>}
+<a href=#481 id=481 data-nosnippet>481</a>                })
+<a href=#482 id=482 data-nosnippet>482</a>            })
+<a href=#483 id=483 data-nosnippet>483</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#484 id=484 data-nosnippet>484</a>    }
+<a href=#485 id=485 data-nosnippet>485</a>
+<a href=#486 id=486 data-nosnippet>486</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/image_processing_mllama.py#L132
+<a href=#487 id=487 data-nosnippet>487</a>    </span><span class="kw">fn </span>get_optimal_tiled_canvas(
+<a href=#488 id=488 data-nosnippet>488</a>        image_height: u32,
+<a href=#489 id=489 data-nosnippet>489</a>        image_width: u32,
+<a href=#490 id=490 data-nosnippet>490</a>        max_image_tiles: usize,
+<a href=#491 id=491 data-nosnippet>491</a>        tile_size: usize,
+<a href=#492 id=492 data-nosnippet>492</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(usize, usize)&gt; {
+<a href=#493 id=493 data-nosnippet>493</a>        <span class="kw">let </span>possible_tile_arrangements = <span class="self">Self</span>::get_all_supported_aspect_ratios(max_image_tiles);
+<a href=#494 id=494 data-nosnippet>494</a>        <span class="kw">let </span>possible_canvas_sizes: (Vec&lt;<span class="kw">_</span>&gt;, Vec&lt;<span class="kw">_</span>&gt;) = possible_tile_arrangements
+<a href=#495 id=495 data-nosnippet>495</a>            .into_iter()
+<a href=#496 id=496 data-nosnippet>496</a>            .map(|(h, w)| (h * tile_size, w * tile_size))
+<a href=#497 id=497 data-nosnippet>497</a>            .unzip();
+<a href=#498 id=498 data-nosnippet>498</a>        <span class="comment">// Get all possible resolution heights/widths
+<a href=#499 id=499 data-nosnippet>499</a>        </span><span class="kw">let </span>(target_heights, target_widths) = possible_canvas_sizes;
+<a href=#500 id=500 data-nosnippet>500</a>
+<a href=#501 id=501 data-nosnippet>501</a>        <span class="comment">// Get scaling factors to resize the image without distortion
+<a href=#502 id=502 data-nosnippet>502</a>        </span><span class="kw">let </span>scale_h = target_heights
+<a href=#503 id=503 data-nosnippet>503</a>            .iter()
+<a href=#504 id=504 data-nosnippet>504</a>            .map(|h| <span class="kw-2">*</span>h <span class="kw">as </span>f32 / image_height <span class="kw">as </span>f32)
+<a href=#505 id=505 data-nosnippet>505</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#506 id=506 data-nosnippet>506</a>        <span class="kw">let </span>scale_w = target_widths
+<a href=#507 id=507 data-nosnippet>507</a>            .iter()
+<a href=#508 id=508 data-nosnippet>508</a>            .map(|w| <span class="kw-2">*</span>w <span class="kw">as </span>f32 / image_width <span class="kw">as </span>f32)
+<a href=#509 id=509 data-nosnippet>509</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#510 id=510 data-nosnippet>510</a>
+<a href=#511 id=511 data-nosnippet>511</a>        <span class="comment">// Get the min scale between width and height
+<a href=#512 id=512 data-nosnippet>512</a>        </span><span class="kw">let </span>scales = scale_h
+<a href=#513 id=513 data-nosnippet>513</a>            .into_iter()
+<a href=#514 id=514 data-nosnippet>514</a>            .zip(scale_w)
+<a href=#515 id=515 data-nosnippet>515</a>            .map(|(scale_h, scale_w)| <span class="kw">if </span>scale_w &gt; scale_h { scale_h } <span class="kw">else </span>{ scale_w })
+<a href=#516 id=516 data-nosnippet>516</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#517 id=517 data-nosnippet>517</a>
+<a href=#518 id=518 data-nosnippet>518</a>        <span class="comment">// Filter only scales that allow upscaling
+<a href=#519 id=519 data-nosnippet>519</a>        </span><span class="kw">let </span>upscaling_options = scales
+<a href=#520 id=520 data-nosnippet>520</a>            .iter()
+<a href=#521 id=521 data-nosnippet>521</a>            .copied()
+<a href=#522 id=522 data-nosnippet>522</a>            .filter(|scale| <span class="kw-2">*</span>scale &gt;= <span class="number">1.</span>)
+<a href=#523 id=523 data-nosnippet>523</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#524 id=524 data-nosnippet>524</a>        <span class="kw">let </span>selected_scale = <span class="kw">if </span>!upscaling_options.is_empty() {
+<a href=#525 id=525 data-nosnippet>525</a>            upscaling_options
+<a href=#526 id=526 data-nosnippet>526</a>                .into_iter()
+<a href=#527 id=527 data-nosnippet>527</a>                .min_by(|x, y| x.partial_cmp(y).expect(<span class="string">"No ordering!"</span>))
+<a href=#528 id=528 data-nosnippet>528</a>                .context(<span class="string">"No min, upscale"</span>)<span class="question-mark">?
+<a href=#529 id=529 data-nosnippet>529</a>        </span>} <span class="kw">else </span>{
+<a href=#530 id=530 data-nosnippet>530</a>            <span class="comment">// No upscaling possible, get min downscaling (max scale for scales&lt;1)
+<a href=#531 id=531 data-nosnippet>531</a>            </span><span class="kw">let </span>downscaling_options = scales
+<a href=#532 id=532 data-nosnippet>532</a>                .iter()
+<a href=#533 id=533 data-nosnippet>533</a>                .copied()
+<a href=#534 id=534 data-nosnippet>534</a>                .filter(|scale| <span class="kw-2">*</span>scale &lt; <span class="number">1.</span>)
+<a href=#535 id=535 data-nosnippet>535</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#536 id=536 data-nosnippet>536</a>            downscaling_options
+<a href=#537 id=537 data-nosnippet>537</a>                .into_iter()
+<a href=#538 id=538 data-nosnippet>538</a>                .max_by(|x, y| x.partial_cmp(y).expect(<span class="string">"No ordering!"</span>))
+<a href=#539 id=539 data-nosnippet>539</a>                .context(<span class="string">"No max, downscale"</span>)<span class="question-mark">?
+<a href=#540 id=540 data-nosnippet>540</a>        </span>};
+<a href=#541 id=541 data-nosnippet>541</a>
+<a href=#542 id=542 data-nosnippet>542</a>        <span class="comment">// Get all resolutions that support this scaling factor
+<a href=#543 id=543 data-nosnippet>543</a>        </span><span class="kw">let </span>chosen_canvas_h = target_heights
+<a href=#544 id=544 data-nosnippet>544</a>            .iter()
+<a href=#545 id=545 data-nosnippet>545</a>            .copied()
+<a href=#546 id=546 data-nosnippet>546</a>            .enumerate()
+<a href=#547 id=547 data-nosnippet>547</a>            .filter_map(|(i, h)| {
+<a href=#548 id=548 data-nosnippet>548</a>                <span class="kw">if </span>scales[i] == selected_scale {
+<a href=#549 id=549 data-nosnippet>549</a>                    <span class="prelude-val">Some</span>(h)
+<a href=#550 id=550 data-nosnippet>550</a>                } <span class="kw">else </span>{
+<a href=#551 id=551 data-nosnippet>551</a>                    <span class="prelude-val">None
+<a href=#552 id=552 data-nosnippet>552</a>                </span>}
+<a href=#553 id=553 data-nosnippet>553</a>            })
+<a href=#554 id=554 data-nosnippet>554</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#555 id=555 data-nosnippet>555</a>        <span class="kw">let </span>chosen_canvas_w = target_widths
+<a href=#556 id=556 data-nosnippet>556</a>            .iter()
+<a href=#557 id=557 data-nosnippet>557</a>            .copied()
+<a href=#558 id=558 data-nosnippet>558</a>            .enumerate()
+<a href=#559 id=559 data-nosnippet>559</a>            .filter_map(|(i, w)| {
+<a href=#560 id=560 data-nosnippet>560</a>                <span class="kw">if </span>scales[i] == selected_scale {
+<a href=#561 id=561 data-nosnippet>561</a>                    <span class="prelude-val">Some</span>(w)
+<a href=#562 id=562 data-nosnippet>562</a>                } <span class="kw">else </span>{
+<a href=#563 id=563 data-nosnippet>563</a>                    <span class="prelude-val">None
+<a href=#564 id=564 data-nosnippet>564</a>                </span>}
+<a href=#565 id=565 data-nosnippet>565</a>            })
+<a href=#566 id=566 data-nosnippet>566</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#567 id=567 data-nosnippet>567</a>
+<a href=#568 id=568 data-nosnippet>568</a>        <span class="macro">assert_eq!</span>(chosen_canvas_h.len(), chosen_canvas_w.len());
+<a href=#569 id=569 data-nosnippet>569</a>        <span class="kw">if </span>chosen_canvas_h.len() &gt; <span class="number">1 </span>{
+<a href=#570 id=570 data-nosnippet>570</a>            <span class="kw">let </span>optimal_idx = argmin(
+<a href=#571 id=571 data-nosnippet>571</a>                chosen_canvas_h
+<a href=#572 id=572 data-nosnippet>572</a>                    .iter()
+<a href=#573 id=573 data-nosnippet>573</a>                    .zip(<span class="kw-2">&amp;</span>chosen_canvas_w)
+<a href=#574 id=574 data-nosnippet>574</a>                    .map(|(h, w)| <span class="kw-2">*</span>h * <span class="kw-2">*</span>w),
+<a href=#575 id=575 data-nosnippet>575</a>            )
+<a href=#576 id=576 data-nosnippet>576</a>            .context(<span class="string">"No argmin"</span>)<span class="question-mark">?</span>;
+<a href=#577 id=577 data-nosnippet>577</a>            <span class="prelude-val">Ok</span>((chosen_canvas_h[optimal_idx], chosen_canvas_w[optimal_idx]))
+<a href=#578 id=578 data-nosnippet>578</a>        } <span class="kw">else </span>{
+<a href=#579 id=579 data-nosnippet>579</a>            <span class="prelude-val">Ok</span>((chosen_canvas_h[<span class="number">0</span>], chosen_canvas_w[<span class="number">0</span>]))
+<a href=#580 id=580 data-nosnippet>580</a>        }
+<a href=#581 id=581 data-nosnippet>581</a>    }
+<a href=#582 id=582 data-nosnippet>582</a>
+<a href=#583 id=583 data-nosnippet>583</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/image_processing_mllama.py#L82
+<a href=#584 id=584 data-nosnippet>584</a>    </span><span class="kw">fn </span>get_image_size_fit_to_canvas(
+<a href=#585 id=585 data-nosnippet>585</a>        image_height: u32,
+<a href=#586 id=586 data-nosnippet>586</a>        image_width: u32,
+<a href=#587 id=587 data-nosnippet>587</a>        canvas_height: usize,
+<a href=#588 id=588 data-nosnippet>588</a>        canvas_width: usize,
+<a href=#589 id=589 data-nosnippet>589</a>        tile_size: usize,
+<a href=#590 id=590 data-nosnippet>590</a>    ) -&gt; (usize, usize) {
+<a href=#591 id=591 data-nosnippet>591</a>        <span class="kw">let </span>target_width = (image_width <span class="kw">as </span>usize).clamp(tile_size, canvas_width);
+<a href=#592 id=592 data-nosnippet>592</a>        <span class="kw">let </span>target_height = (image_height <span class="kw">as </span>usize).clamp(tile_size, canvas_height);
+<a href=#593 id=593 data-nosnippet>593</a>
+<a href=#594 id=594 data-nosnippet>594</a>        <span class="kw">let </span>scale_h = (target_height <span class="kw">as </span>f32) / (image_height <span class="kw">as </span>f32);
+<a href=#595 id=595 data-nosnippet>595</a>        <span class="kw">let </span>scale_w = (target_width <span class="kw">as </span>f32) / (image_width <span class="kw">as </span>f32);
+<a href=#596 id=596 data-nosnippet>596</a>
+<a href=#597 id=597 data-nosnippet>597</a>        <span class="kw">if </span>scale_w &lt; scale_h {
+<a href=#598 id=598 data-nosnippet>598</a>            (
+<a href=#599 id=599 data-nosnippet>599</a>                target_height.min((image_height <span class="kw">as </span>f32 * scale_w).floor() <span class="kw">as </span>usize),
+<a href=#600 id=600 data-nosnippet>600</a>                target_width,
+<a href=#601 id=601 data-nosnippet>601</a>            )
+<a href=#602 id=602 data-nosnippet>602</a>        } <span class="kw">else </span>{
+<a href=#603 id=603 data-nosnippet>603</a>            (
+<a href=#604 id=604 data-nosnippet>604</a>                target_height,
+<a href=#605 id=605 data-nosnippet>605</a>                target_width.min((image_width <span class="kw">as </span>f32 * scale_h).floor() <span class="kw">as </span>usize),
+<a href=#606 id=606 data-nosnippet>606</a>            )
+<a href=#607 id=607 data-nosnippet>607</a>        }
+<a href=#608 id=608 data-nosnippet>608</a>    }
+<a href=#609 id=609 data-nosnippet>609</a>
+<a href=#610 id=610 data-nosnippet>610</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/image_processing_mllama.py#L796
+<a href=#611 id=611 data-nosnippet>611</a>    </span><span class="doccomment">/// Resizes an image to fit within a tiled canvas while maintaining its aspect ratio.
+<a href=#612 id=612 data-nosnippet>612</a>    /// The optimal canvas size is calculated based on the maximum number of tiles and the tile size.
+<a href=#613 id=613 data-nosnippet>613</a>    </span><span class="kw">fn </span>resize(
+<a href=#614 id=614 data-nosnippet>614</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#615 id=615 data-nosnippet>615</a>        image: DynamicImage,
+<a href=#616 id=616 data-nosnippet>616</a>        size: <span class="kw-2">&amp;</span>HashMap&lt;String, u32&gt;,
+<a href=#617 id=617 data-nosnippet>617</a>        max_image_tiles: usize,
+<a href=#618 id=618 data-nosnippet>618</a>        filter: FilterType,
+<a href=#619 id=619 data-nosnippet>619</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(DynamicImage, (usize, usize))&gt; {
+<a href=#620 id=620 data-nosnippet>620</a>        <span class="kw">let </span>image_height = image.height();
+<a href=#621 id=621 data-nosnippet>621</a>        <span class="kw">let </span>image_width = image.width();
+<a href=#622 id=622 data-nosnippet>622</a>        <span class="kw">let </span>tile_size = size[<span class="string">"height"</span>] <span class="kw">as </span>usize;
+<a href=#623 id=623 data-nosnippet>623</a>
+<a href=#624 id=624 data-nosnippet>624</a>        <span class="kw">let </span>(canvas_height, canvas_width) =
+<a href=#625 id=625 data-nosnippet>625</a>            <span class="self">Self</span>::get_optimal_tiled_canvas(image_height, image_width, max_image_tiles, tile_size)<span class="question-mark">?</span>;
+<a href=#626 id=626 data-nosnippet>626</a>        <span class="kw">let </span>num_tiles_height = canvas_height / tile_size;
+<a href=#627 id=627 data-nosnippet>627</a>        <span class="kw">let </span>num_tiles_width = canvas_width / tile_size;
+<a href=#628 id=628 data-nosnippet>628</a>
+<a href=#629 id=629 data-nosnippet>629</a>        <span class="kw">let </span>(new_height, new_width) = <span class="self">Self</span>::get_image_size_fit_to_canvas(
+<a href=#630 id=630 data-nosnippet>630</a>            image_height,
+<a href=#631 id=631 data-nosnippet>631</a>            image_width,
+<a href=#632 id=632 data-nosnippet>632</a>            canvas_height,
+<a href=#633 id=633 data-nosnippet>633</a>            canvas_width,
+<a href=#634 id=634 data-nosnippet>634</a>            tile_size,
+<a href=#635 id=635 data-nosnippet>635</a>        );
+<a href=#636 id=636 data-nosnippet>636</a>
+<a href=#637 id=637 data-nosnippet>637</a>        <span class="prelude-val">Ok</span>((
+<a href=#638 id=638 data-nosnippet>638</a>            image.resize_exact(new_width <span class="kw">as </span>u32, new_height <span class="kw">as </span>u32, filter),
+<a href=#639 id=639 data-nosnippet>639</a>            (num_tiles_height, num_tiles_width),
+<a href=#640 id=640 data-nosnippet>640</a>        ))
+<a href=#641 id=641 data-nosnippet>641</a>    }
+<a href=#642 id=642 data-nosnippet>642</a>
+<a href=#643 id=643 data-nosnippet>643</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/image_processing_mllama.py#L749
+<a href=#644 id=644 data-nosnippet>644</a>    </span><span class="doccomment">/// Pad an image to the `size` x `aspect_ratio`. For example, if size is {height: 224, width: 224} and aspect ratio is
+<a href=#645 id=645 data-nosnippet>645</a>    /// (1, 2), the image will be padded to 224x448.
+<a href=#646 id=646 data-nosnippet>646</a>    </span><span class="kw">fn </span>pad(
+<a href=#647 id=647 data-nosnippet>647</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#648 id=648 data-nosnippet>648</a>        image: <span class="kw-2">&amp;</span>Tensor,
+<a href=#649 id=649 data-nosnippet>649</a>        size: <span class="kw-2">&amp;</span>HashMap&lt;String, u32&gt;,
+<a href=#650 id=650 data-nosnippet>650</a>        aspect_ratio: (usize, usize),
+<a href=#651 id=651 data-nosnippet>651</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#652 id=652 data-nosnippet>652</a>        <span class="kw">let </span>(num_tiles_h, num_tiles_w) = aspect_ratio;
+<a href=#653 id=653 data-nosnippet>653</a>        <span class="kw">let </span>padded_height = num_tiles_h * size[<span class="string">"height"</span>] <span class="kw">as </span>usize;
+<a href=#654 id=654 data-nosnippet>654</a>        <span class="kw">let </span>padded_width = num_tiles_w * size[<span class="string">"width"</span>] <span class="kw">as </span>usize;
+<a href=#655 id=655 data-nosnippet>655</a>
+<a href=#656 id=656 data-nosnippet>656</a>        <span class="comment">// Add padding on bottom and right sides
+<a href=#657 id=657 data-nosnippet>657</a>        </span>mistralrs_vision::pad(image, padded_height, padded_width)
+<a href=#658 id=658 data-nosnippet>658</a>    }
+<a href=#659 id=659 data-nosnippet>659</a>
+<a href=#660 id=660 data-nosnippet>660</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/image_processing_mllama.py#L213
+<a href=#661 id=661 data-nosnippet>661</a>    </span><span class="doccomment">/// Split an image into a specified number of tiles along its width and height dimensions.
+<a href=#662 id=662 data-nosnippet>662</a>    </span><span class="kw">fn </span>split_to_tiles(
+<a href=#663 id=663 data-nosnippet>663</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#664 id=664 data-nosnippet>664</a>        image: <span class="kw-2">&amp;</span>Tensor,
+<a href=#665 id=665 data-nosnippet>665</a>        num_tiles_height: usize,
+<a href=#666 id=666 data-nosnippet>666</a>        num_tiles_width: usize,
+<a href=#667 id=667 data-nosnippet>667</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#668 id=668 data-nosnippet>668</a>        <span class="kw">let </span>(ch, h, w) = image.dims3()<span class="question-mark">?</span>;
+<a href=#669 id=669 data-nosnippet>669</a>        <span class="kw">let </span>tile_height = h / num_tiles_height;
+<a href=#670 id=670 data-nosnippet>670</a>        <span class="kw">let </span>tile_width = w / num_tiles_width;
+<a href=#671 id=671 data-nosnippet>671</a>
+<a href=#672 id=672 data-nosnippet>672</a>        <span class="kw">let </span><span class="kw-2">mut </span>image = image.reshape((
+<a href=#673 id=673 data-nosnippet>673</a>            ch,
+<a href=#674 id=674 data-nosnippet>674</a>            num_tiles_height,
+<a href=#675 id=675 data-nosnippet>675</a>            tile_height,
+<a href=#676 id=676 data-nosnippet>676</a>            num_tiles_width,
+<a href=#677 id=677 data-nosnippet>677</a>            tile_width,
+<a href=#678 id=678 data-nosnippet>678</a>        ))<span class="question-mark">?</span>;
+<a href=#679 id=679 data-nosnippet>679</a>
+<a href=#680 id=680 data-nosnippet>680</a>        <span class="comment">// Permute to (num_tiles_height, num_tiles_width, num_channels, tile_height, tile_width)
+<a href=#681 id=681 data-nosnippet>681</a>        </span>image = image.permute((<span class="number">1</span>, <span class="number">3</span>, <span class="number">0</span>, <span class="number">2</span>, <span class="number">4</span>))<span class="question-mark">?</span>;
+<a href=#682 id=682 data-nosnippet>682</a>
+<a href=#683 id=683 data-nosnippet>683</a>        <span class="comment">// Reshape into the desired output shape (num_tiles_width * num_tiles_height, num_channels, tile_height, tile_width)
+<a href=#684 id=684 data-nosnippet>684</a>        </span>image
+<a href=#685 id=685 data-nosnippet>685</a>            .reshape((
+<a href=#686 id=686 data-nosnippet>686</a>                num_tiles_width * num_tiles_height,
+<a href=#687 id=687 data-nosnippet>687</a>                ch,
+<a href=#688 id=688 data-nosnippet>688</a>                tile_height,
+<a href=#689 id=689 data-nosnippet>689</a>                tile_width,
+<a href=#690 id=690 data-nosnippet>690</a>            ))<span class="question-mark">?
+<a href=#691 id=691 data-nosnippet>691</a>            </span>.contiguous()
+<a href=#692 id=692 data-nosnippet>692</a>    }
+<a href=#693 id=693 data-nosnippet>693</a>
+<a href=#694 id=694 data-nosnippet>694</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/image_processing_mllama.py#L277
+<a href=#695 id=695 data-nosnippet>695</a>    </span><span class="doccomment">/// Returns
+<a href=#696 id=696 data-nosnippet>696</a>    /// - stacked and packed images
+<a href=#697 id=697 data-nosnippet>697</a>    /// - a list of lists containing the number of tiles for each image in each batch sample.
+<a href=#698 id=698 data-nosnippet>698</a>    ///   Padding uses 0
+<a href=#699 id=699 data-nosnippet>699</a>    </span><span class="kw">fn </span>pack_images(
+<a href=#700 id=700 data-nosnippet>700</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#701 id=701 data-nosnippet>701</a>        images: Vec&lt;Tensor&gt;,
+<a href=#702 id=702 data-nosnippet>702</a>        max_image_tiles: usize,
+<a href=#703 id=703 data-nosnippet>703</a>        (_bs, max_num_images): (usize, usize),
+<a href=#704 id=704 data-nosnippet>704</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Vec&lt;usize&gt;)&gt; {
+<a href=#705 id=705 data-nosnippet>705</a>        <span class="kw">let </span>(<span class="kw">_</span>, ch, tile_h, tile_w) = images[<span class="number">0</span>].dims4()<span class="question-mark">?</span>;
+<a href=#706 id=706 data-nosnippet>706</a>
+<a href=#707 id=707 data-nosnippet>707</a>        <span class="kw">let </span><span class="kw-2">mut </span>stacked_images = Tensor::zeros(
+<a href=#708 id=708 data-nosnippet>708</a>            (max_num_images, max_image_tiles, ch, tile_h, tile_w),
+<a href=#709 id=709 data-nosnippet>709</a>            images[<span class="number">0</span>].dtype(),
+<a href=#710 id=710 data-nosnippet>710</a>            images[<span class="number">0</span>].device(),
+<a href=#711 id=711 data-nosnippet>711</a>        )<span class="question-mark">?</span>;
+<a href=#712 id=712 data-nosnippet>712</a>        <span class="kw">let </span><span class="kw-2">mut </span>num_sample_tiles = Vec::new();
+<a href=#713 id=713 data-nosnippet>713</a>        <span class="kw">for </span>(i, image) <span class="kw">in </span>images.into_iter().enumerate() {
+<a href=#714 id=714 data-nosnippet>714</a>            <span class="kw">let </span>num_tiles = image.dim(<span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#715 id=715 data-nosnippet>715</a>            stacked_images = stacked_images
+<a href=#716 id=716 data-nosnippet>716</a>                .slice_assign(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>i, <span class="kw-2">&amp;</span>(..num_tiles), <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>..], <span class="kw-2">&amp;</span>image.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+<a href=#717 id=717 data-nosnippet>717</a>            num_sample_tiles.push(num_tiles)
+<a href=#718 id=718 data-nosnippet>718</a>        }
+<a href=#719 id=719 data-nosnippet>719</a>        <span class="prelude-val">Ok</span>((stacked_images, num_sample_tiles))
+<a href=#720 id=720 data-nosnippet>720</a>    }
+<a href=#721 id=721 data-nosnippet>721</a>
+<a href=#722 id=722 data-nosnippet>722</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/image_processing_mllama.py#L354
+<a href=#723 id=723 data-nosnippet>723</a>    </span><span class="doccomment">/// Convert aspect ratio tuples to unique ids.
+<a href=#724 id=724 data-nosnippet>724</a>    /// Padding uses 0
+<a href=#725 id=725 data-nosnippet>725</a>    </span><span class="kw">fn </span>convert_aspect_ratios_to_ids(
+<a href=#726 id=726 data-nosnippet>726</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#727 id=727 data-nosnippet>727</a>        aspect_ratios: Vec&lt;(usize, usize)&gt;,
+<a href=#728 id=728 data-nosnippet>728</a>        max_image_tiles: usize,
+<a href=#729 id=729 data-nosnippet>729</a>        (_bs, max_num_images): (usize, usize),
+<a href=#730 id=730 data-nosnippet>730</a>        device: <span class="kw-2">&amp;</span>Device,
+<a href=#731 id=731 data-nosnippet>731</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#732 id=732 data-nosnippet>732</a>        <span class="kw">let </span>supported_aspect_ratios = <span class="self">Self</span>::get_all_supported_aspect_ratios(max_image_tiles);
+<a href=#733 id=733 data-nosnippet>733</a>
+<a href=#734 id=734 data-nosnippet>734</a>        <span class="kw">let </span><span class="kw-2">mut </span>aspect_ratios_ids = <span class="macro">vec!</span>[<span class="number">0i64</span>; max_num_images];
+<a href=#735 id=735 data-nosnippet>735</a>        <span class="kw">for </span>(i, (num_tiles_h, num_tiles_w)) <span class="kw">in </span>aspect_ratios.iter().enumerate() {
+<a href=#736 id=736 data-nosnippet>736</a>            aspect_ratios_ids[i] = (supported_aspect_ratios
+<a href=#737 id=737 data-nosnippet>737</a>                .iter()
+<a href=#738 id=738 data-nosnippet>738</a>                .position(|(h, w)| <span class="kw-2">*</span>h == <span class="kw-2">*</span>num_tiles_h &amp;&amp; <span class="kw-2">*</span>w == <span class="kw-2">*</span>num_tiles_w)
+<a href=#739 id=739 data-nosnippet>739</a>                .context(<span class="string">"Could not find aspect ratio"</span>)<span class="question-mark">?
+<a href=#740 id=740 data-nosnippet>740</a>                </span>+ <span class="number">1</span>) <span class="kw">as </span>i64;
+<a href=#741 id=741 data-nosnippet>741</a>        }
+<a href=#742 id=742 data-nosnippet>742</a>
+<a href=#743 id=743 data-nosnippet>743</a>        Tensor::new(aspect_ratios_ids, device)
+<a href=#744 id=744 data-nosnippet>744</a>    }
+<a href=#745 id=745 data-nosnippet>745</a>
+<a href=#746 id=746 data-nosnippet>746</a>    <span class="kw">fn </span>build_aspect_ratio_mask(
+<a href=#747 id=747 data-nosnippet>747</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#748 id=748 data-nosnippet>748</a>        aspect_ratios: Vec&lt;(usize, usize)&gt;,
+<a href=#749 id=749 data-nosnippet>749</a>        max_image_tiles: usize,
+<a href=#750 id=750 data-nosnippet>750</a>        (_bs, max_num_images): (usize, usize),
+<a href=#751 id=751 data-nosnippet>751</a>        device: <span class="kw-2">&amp;</span>Device,
+<a href=#752 id=752 data-nosnippet>752</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#753 id=753 data-nosnippet>753</a>        <span class="kw">let </span><span class="kw-2">mut </span>aspect_ratio_mask =
+<a href=#754 id=754 data-nosnippet>754</a>            Tensor::zeros((max_num_images, max_image_tiles), DType::I64, device)<span class="question-mark">?</span>;
+<a href=#755 id=755 data-nosnippet>755</a>
+<a href=#756 id=756 data-nosnippet>756</a>        <span class="comment">// Set the first tile to 1 for all aspect ratios
+<a href=#757 id=757 data-nosnippet>757</a>        // because in the original implementation, aspect ratios are apdded with (1,1)
+<a href=#758 id=758 data-nosnippet>758</a>
+<a href=#759 id=759 data-nosnippet>759</a>        </span>aspect_ratio_mask = aspect_ratio_mask.slice_assign(
+<a href=#760 id=760 data-nosnippet>760</a>            <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span><span class="number">0</span>],
+<a href=#761 id=761 data-nosnippet>761</a>            <span class="kw-2">&amp;</span>Tensor::ones((max_num_images, <span class="number">1</span>), DType::I64, device)<span class="question-mark">?</span>,
+<a href=#762 id=762 data-nosnippet>762</a>        )<span class="question-mark">?</span>;
+<a href=#763 id=763 data-nosnippet>763</a>
+<a href=#764 id=764 data-nosnippet>764</a>        <span class="kw">for </span>(i, (num_tiles_h, num_tiles_w)) <span class="kw">in </span>aspect_ratios.iter().enumerate() {
+<a href=#765 id=765 data-nosnippet>765</a>            aspect_ratio_mask = aspect_ratio_mask.slice_assign(
+<a href=#766 id=766 data-nosnippet>766</a>                <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>i, <span class="kw-2">&amp;</span>(..<span class="kw-2">*</span>num_tiles_h * <span class="kw-2">*</span>num_tiles_w)],
+<a href=#767 id=767 data-nosnippet>767</a>                <span class="kw-2">&amp;</span>Tensor::ones((<span class="number">1</span>, <span class="kw-2">*</span>num_tiles_h * <span class="kw-2">*</span>num_tiles_w), DType::I64, device)<span class="question-mark">?</span>,
+<a href=#768 id=768 data-nosnippet>768</a>            )<span class="question-mark">?</span>;
+<a href=#769 id=769 data-nosnippet>769</a>        }
+<a href=#770 id=770 data-nosnippet>770</a>
+<a href=#771 id=771 data-nosnippet>771</a>        <span class="prelude-val">Ok</span>(aspect_ratio_mask)
+<a href=#772 id=772 data-nosnippet>772</a>    }
+<a href=#773 id=773 data-nosnippet>773</a>}
+<a href=#774 id=774 data-nosnippet>774</a>
+<a href=#775 id=775 data-nosnippet>775</a><span class="kw">impl </span>ImagePreProcessor <span class="kw">for </span>MLlamaImageProcessor {
+<a href=#776 id=776 data-nosnippet>776</a>    <span class="kw">const </span>DEFAULT_MEAN: [f64; <span class="number">3</span>] = [<span class="number">0.5</span>, <span class="number">0.5</span>, <span class="number">0.5</span>];
+<a href=#777 id=777 data-nosnippet>777</a>    <span class="kw">const </span>DEFAULT_STD: [f64; <span class="number">3</span>] = [<span class="number">0.5</span>, <span class="number">0.5</span>, <span class="number">0.5</span>];
+<a href=#778 id=778 data-nosnippet>778</a>
+<a href=#779 id=779 data-nosnippet>779</a>    <span class="kw">fn </span>preprocess(
+<a href=#780 id=780 data-nosnippet>780</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#781 id=781 data-nosnippet>781</a>        images: Vec&lt;DynamicImage&gt;,
+<a href=#782 id=782 data-nosnippet>782</a>        videos: Vec&lt;Vec&lt;DynamicImage&gt;&gt;,
+<a href=#783 id=783 data-nosnippet>783</a>        config: <span class="kw-2">&amp;</span>PreProcessorConfig,
+<a href=#784 id=784 data-nosnippet>784</a>        device: <span class="kw-2">&amp;</span>Device,
+<a href=#785 id=785 data-nosnippet>785</a>        (bs, max_num_images): (usize, usize),
+<a href=#786 id=786 data-nosnippet>786</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;PreprocessedImages&gt; {
+<a href=#787 id=787 data-nosnippet>787</a>        <span class="macro">assert!</span>(videos.is_empty());
+<a href=#788 id=788 data-nosnippet>788</a>
+<a href=#789 id=789 data-nosnippet>789</a>        <span class="kw">let </span><span class="kw-2">mut </span>sample_images = Vec::new();
+<a href=#790 id=790 data-nosnippet>790</a>        <span class="kw">let </span><span class="kw-2">mut </span>sample_aspect_ratios = Vec::new();
+<a href=#791 id=791 data-nosnippet>791</a>        <span class="kw">let </span>max_image_tiles = config
+<a href=#792 id=792 data-nosnippet>792</a>            .max_image_tiles
+<a href=#793 id=793 data-nosnippet>793</a>            .context(<span class="string">"`do_resize=false` is not supported, need `max_image_tiles`!"</span>)<span class="question-mark">?</span>;
+<a href=#794 id=794 data-nosnippet>794</a>        <span class="kw-2">*</span><span class="self">self</span>.max_image_tiles.write().unwrap() = <span class="prelude-val">Some</span>(max_image_tiles);
+<a href=#795 id=795 data-nosnippet>795</a>
+<a href=#796 id=796 data-nosnippet>796</a>        <span class="kw">for </span><span class="kw-2">mut </span>image <span class="kw">in </span>images {
+<a href=#797 id=797 data-nosnippet>797</a>            <span class="comment">// Convert to rgb, default to true
+<a href=#798 id=798 data-nosnippet>798</a>            </span><span class="kw">if </span>config.do_convert_rgb.unwrap_or(<span class="bool-val">true</span>) {
+<a href=#799 id=799 data-nosnippet>799</a>                image = DynamicImage::ImageRgb8(image.to_rgb8());
+<a href=#800 id=800 data-nosnippet>800</a>            }
+<a href=#801 id=801 data-nosnippet>801</a>
+<a href=#802 id=802 data-nosnippet>802</a>            <span class="kw">let </span>size = config
+<a href=#803 id=803 data-nosnippet>803</a>                .size
+<a href=#804 id=804 data-nosnippet>804</a>                .as_ref()
+<a href=#805 id=805 data-nosnippet>805</a>                .context(<span class="string">"`do_resize=false` is not supported, need `size`!"</span>)<span class="question-mark">?</span>;
+<a href=#806 id=806 data-nosnippet>806</a>
+<a href=#807 id=807 data-nosnippet>807</a>            <span class="kw">let </span>(image, aspect_ratio) =
+<a href=#808 id=808 data-nosnippet>808</a>                <span class="self">self</span>.resize(image, size, max_image_tiles, config.resampling.to_filter()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+<a href=#809 id=809 data-nosnippet>809</a>
+<a href=#810 id=810 data-nosnippet>810</a>            <span class="comment">// In transformers they rescale from [0, 255] to [0, 1]
+<a href=#811 id=811 data-nosnippet>811</a>            // at the end of resize:
+<a href=#812 id=812 data-nosnippet>812</a>            // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/image_transforms.py#L340
+<a href=#813 id=813 data-nosnippet>813</a>            </span><span class="kw">let </span>to_tensor_rescale = Transforms {
+<a href=#814 id=814 data-nosnippet>814</a>                input: <span class="kw-2">&amp;</span>ToTensorNoNorm,
+<a href=#815 id=815 data-nosnippet>815</a>                inner_transforms: <span class="kw-2">&amp;</span>[],
+<a href=#816 id=816 data-nosnippet>816</a>            };
+<a href=#817 id=817 data-nosnippet>817</a>            <span class="kw">let </span><span class="kw-2">mut </span>image = image.apply(to_tensor_rescale, device)<span class="question-mark">?</span>;
 <a href=#818 id=818 data-nosnippet>818</a>
-<a href=#819 id=819 data-nosnippet>819</a>            <span class="kw">let </span>transforms = TensorTransforms {
-<a href=#820 id=820 data-nosnippet>820</a>                inner_transforms: <span class="kw-2">&amp;</span>[
-<a href=#821 id=821 data-nosnippet>821</a>                    <span class="kw-2">&amp;</span>config
-<a href=#822 id=822 data-nosnippet>822</a>                        .do_rescale
-<a href=#823 id=823 data-nosnippet>823</a>                        .is_some_and(|x| x)
-<a href=#824 id=824 data-nosnippet>824</a>                        .then_some(())
-<a href=#825 id=825 data-nosnippet>825</a>                        .map(|<span class="kw">_</span>| Rescale {
-<a href=#826 id=826 data-nosnippet>826</a>                            factor: config.rescale_factor,
-<a href=#827 id=827 data-nosnippet>827</a>                        }),
-<a href=#828 id=828 data-nosnippet>828</a>                    <span class="kw-2">&amp;</span>config
-<a href=#829 id=829 data-nosnippet>829</a>                        .do_normalize
-<a href=#830 id=830 data-nosnippet>830</a>                        .is_some_and(|x| x)
-<a href=#831 id=831 data-nosnippet>831</a>                        .then_some(())
-<a href=#832 id=832 data-nosnippet>832</a>                        .map(|<span class="kw">_</span>| Normalize {
-<a href=#833 id=833 data-nosnippet>833</a>                            mean: config.image_mean.unwrap_or(<span class="self">Self</span>::DEFAULT_MEAN).to_vec(),
-<a href=#834 id=834 data-nosnippet>834</a>                            std: config.image_std.unwrap_or(<span class="self">Self</span>::DEFAULT_STD).to_vec(),
-<a href=#835 id=835 data-nosnippet>835</a>                        }),
-<a href=#836 id=836 data-nosnippet>836</a>                ],
-<a href=#837 id=837 data-nosnippet>837</a>            };
-<a href=#838 id=838 data-nosnippet>838</a>            image = &lt;Tensor <span class="kw">as </span>ApplyTensorTransforms&gt;::apply(<span class="kw-2">&amp;</span>image, transforms, device)<span class="question-mark">?</span>;
-<a href=#839 id=839 data-nosnippet>839</a>
-<a href=#840 id=840 data-nosnippet>840</a>            <span class="kw">let </span>(num_tiles_height, num_tiles_width) = aspect_ratio;
-<a href=#841 id=841 data-nosnippet>841</a>            image = <span class="self">self</span>.split_to_tiles(<span class="kw-2">&amp;</span>image, num_tiles_height, num_tiles_width)<span class="question-mark">?</span>;
-<a href=#842 id=842 data-nosnippet>842</a>
-<a href=#843 id=843 data-nosnippet>843</a>            sample_images.push(image);
-<a href=#844 id=844 data-nosnippet>844</a>            sample_aspect_ratios.push((num_tiles_height, num_tiles_width));
-<a href=#845 id=845 data-nosnippet>845</a>        }
-<a href=#846 id=846 data-nosnippet>846</a>
-<a href=#847 id=847 data-nosnippet>847</a>        <span class="kw">let </span>(images, num_tiles) =
-<a href=#848 id=848 data-nosnippet>848</a>            <span class="self">self</span>.pack_images(sample_images, max_image_tiles, (bs, max_num_images))<span class="question-mark">?</span>;
-<a href=#849 id=849 data-nosnippet>849</a>
-<a href=#850 id=850 data-nosnippet>850</a>        <span class="kw">let </span>aspect_ratio_ids = <span class="self">self</span>.convert_aspect_ratios_to_ids(
-<a href=#851 id=851 data-nosnippet>851</a>            sample_aspect_ratios.clone(),
-<a href=#852 id=852 data-nosnippet>852</a>            max_image_tiles,
-<a href=#853 id=853 data-nosnippet>853</a>            (bs, max_num_images),
-<a href=#854 id=854 data-nosnippet>854</a>            device,
-<a href=#855 id=855 data-nosnippet>855</a>        )<span class="question-mark">?</span>;
-<a href=#856 id=856 data-nosnippet>856</a>        <span class="kw">let </span>aspect_ratio_mask = <span class="self">self</span>.build_aspect_ratio_mask(
-<a href=#857 id=857 data-nosnippet>857</a>            sample_aspect_ratios,
-<a href=#858 id=858 data-nosnippet>858</a>            max_image_tiles,
-<a href=#859 id=859 data-nosnippet>859</a>            (bs, max_num_images),
-<a href=#860 id=860 data-nosnippet>860</a>            device,
-<a href=#861 id=861 data-nosnippet>861</a>        )<span class="question-mark">?</span>;
-<a href=#862 id=862 data-nosnippet>862</a>
-<a href=#863 id=863 data-nosnippet>863</a>        <span class="prelude-val">Ok</span>(PreprocessedImages {
-<a href=#864 id=864 data-nosnippet>864</a>            pixel_values: images,
-<a href=#865 id=865 data-nosnippet>865</a>            pixel_attention_mask: <span class="prelude-val">None</span>,
-<a href=#866 id=866 data-nosnippet>866</a>            image_sizes: <span class="prelude-val">None</span>,
-<a href=#867 id=867 data-nosnippet>867</a>            num_img_tokens: <span class="prelude-val">None</span>,
-<a href=#868 id=868 data-nosnippet>868</a>            aspect_ratio_ids: <span class="prelude-val">Some</span>(aspect_ratio_ids),
-<a href=#869 id=869 data-nosnippet>869</a>            aspect_ratio_mask: <span class="prelude-val">Some</span>(aspect_ratio_mask),
-<a href=#870 id=870 data-nosnippet>870</a>            num_tiles: <span class="prelude-val">Some</span>(num_tiles),
-<a href=#871 id=871 data-nosnippet>871</a>            image_grid_thw: <span class="prelude-val">None</span>,
-<a href=#872 id=872 data-nosnippet>872</a>            video_grid_thw: <span class="prelude-val">None</span>,
-<a href=#873 id=873 data-nosnippet>873</a>            rows: <span class="prelude-val">None</span>,
-<a href=#874 id=874 data-nosnippet>874</a>            cols: <span class="prelude-val">None</span>,
-<a href=#875 id=875 data-nosnippet>875</a>            pixel_values_list: <span class="prelude-val">None</span>,
-<a href=#876 id=876 data-nosnippet>876</a>            tgt_sizes: <span class="prelude-val">None</span>,
-<a href=#877 id=877 data-nosnippet>877</a>            image_sizes_all: <span class="prelude-val">None</span>,
-<a href=#878 id=878 data-nosnippet>878</a>            num_crops: <span class="prelude-val">None</span>,
-<a href=#879 id=879 data-nosnippet>879</a>        })
-<a href=#880 id=880 data-nosnippet>880</a>    }
-<a href=#881 id=881 data-nosnippet>881</a>}</code></pre></div></section></main></body></html>
+<a href=#819 id=819 data-nosnippet>819</a>            image = <span class="self">self</span>.pad(<span class="kw-2">&amp;</span>image, size, aspect_ratio)<span class="question-mark">?</span>;
+<a href=#820 id=820 data-nosnippet>820</a>
+<a href=#821 id=821 data-nosnippet>821</a>            <span class="kw">let </span>transforms = TensorTransforms {
+<a href=#822 id=822 data-nosnippet>822</a>                inner_transforms: <span class="kw-2">&amp;</span>[
+<a href=#823 id=823 data-nosnippet>823</a>                    <span class="kw-2">&amp;</span>config
+<a href=#824 id=824 data-nosnippet>824</a>                        .do_rescale
+<a href=#825 id=825 data-nosnippet>825</a>                        .is_some_and(|x| x)
+<a href=#826 id=826 data-nosnippet>826</a>                        .then_some(())
+<a href=#827 id=827 data-nosnippet>827</a>                        .map(|<span class="kw">_</span>| Rescale {
+<a href=#828 id=828 data-nosnippet>828</a>                            factor: config.rescale_factor,
+<a href=#829 id=829 data-nosnippet>829</a>                        }),
+<a href=#830 id=830 data-nosnippet>830</a>                    <span class="kw-2">&amp;</span>config
+<a href=#831 id=831 data-nosnippet>831</a>                        .do_normalize
+<a href=#832 id=832 data-nosnippet>832</a>                        .is_some_and(|x| x)
+<a href=#833 id=833 data-nosnippet>833</a>                        .then_some(())
+<a href=#834 id=834 data-nosnippet>834</a>                        .map(|<span class="kw">_</span>| Normalize {
+<a href=#835 id=835 data-nosnippet>835</a>                            mean: config.image_mean.unwrap_or(<span class="self">Self</span>::DEFAULT_MEAN).to_vec(),
+<a href=#836 id=836 data-nosnippet>836</a>                            std: config.image_std.unwrap_or(<span class="self">Self</span>::DEFAULT_STD).to_vec(),
+<a href=#837 id=837 data-nosnippet>837</a>                        }),
+<a href=#838 id=838 data-nosnippet>838</a>                ],
+<a href=#839 id=839 data-nosnippet>839</a>            };
+<a href=#840 id=840 data-nosnippet>840</a>            image = &lt;Tensor <span class="kw">as </span>ApplyTensorTransforms&gt;::apply(<span class="kw-2">&amp;</span>image, transforms, device)<span class="question-mark">?</span>;
+<a href=#841 id=841 data-nosnippet>841</a>
+<a href=#842 id=842 data-nosnippet>842</a>            <span class="kw">let </span>(num_tiles_height, num_tiles_width) = aspect_ratio;
+<a href=#843 id=843 data-nosnippet>843</a>            image = <span class="self">self</span>.split_to_tiles(<span class="kw-2">&amp;</span>image, num_tiles_height, num_tiles_width)<span class="question-mark">?</span>;
+<a href=#844 id=844 data-nosnippet>844</a>
+<a href=#845 id=845 data-nosnippet>845</a>            sample_images.push(image);
+<a href=#846 id=846 data-nosnippet>846</a>            sample_aspect_ratios.push((num_tiles_height, num_tiles_width));
+<a href=#847 id=847 data-nosnippet>847</a>        }
+<a href=#848 id=848 data-nosnippet>848</a>
+<a href=#849 id=849 data-nosnippet>849</a>        <span class="kw">let </span>(images, num_tiles) =
+<a href=#850 id=850 data-nosnippet>850</a>            <span class="self">self</span>.pack_images(sample_images, max_image_tiles, (bs, max_num_images))<span class="question-mark">?</span>;
+<a href=#851 id=851 data-nosnippet>851</a>
+<a href=#852 id=852 data-nosnippet>852</a>        <span class="kw">let </span>aspect_ratio_ids = <span class="self">self</span>.convert_aspect_ratios_to_ids(
+<a href=#853 id=853 data-nosnippet>853</a>            sample_aspect_ratios.clone(),
+<a href=#854 id=854 data-nosnippet>854</a>            max_image_tiles,
+<a href=#855 id=855 data-nosnippet>855</a>            (bs, max_num_images),
+<a href=#856 id=856 data-nosnippet>856</a>            device,
+<a href=#857 id=857 data-nosnippet>857</a>        )<span class="question-mark">?</span>;
+<a href=#858 id=858 data-nosnippet>858</a>        <span class="kw">let </span>aspect_ratio_mask = <span class="self">self</span>.build_aspect_ratio_mask(
+<a href=#859 id=859 data-nosnippet>859</a>            sample_aspect_ratios,
+<a href=#860 id=860 data-nosnippet>860</a>            max_image_tiles,
+<a href=#861 id=861 data-nosnippet>861</a>            (bs, max_num_images),
+<a href=#862 id=862 data-nosnippet>862</a>            device,
+<a href=#863 id=863 data-nosnippet>863</a>        )<span class="question-mark">?</span>;
+<a href=#864 id=864 data-nosnippet>864</a>
+<a href=#865 id=865 data-nosnippet>865</a>        <span class="prelude-val">Ok</span>(PreprocessedImages {
+<a href=#866 id=866 data-nosnippet>866</a>            pixel_values: images,
+<a href=#867 id=867 data-nosnippet>867</a>            pixel_attention_mask: <span class="prelude-val">None</span>,
+<a href=#868 id=868 data-nosnippet>868</a>            image_sizes: <span class="prelude-val">None</span>,
+<a href=#869 id=869 data-nosnippet>869</a>            num_img_tokens: <span class="prelude-val">None</span>,
+<a href=#870 id=870 data-nosnippet>870</a>            aspect_ratio_ids: <span class="prelude-val">Some</span>(aspect_ratio_ids),
+<a href=#871 id=871 data-nosnippet>871</a>            aspect_ratio_mask: <span class="prelude-val">Some</span>(aspect_ratio_mask),
+<a href=#872 id=872 data-nosnippet>872</a>            num_tiles: <span class="prelude-val">Some</span>(num_tiles),
+<a href=#873 id=873 data-nosnippet>873</a>            image_grid_thw: <span class="prelude-val">None</span>,
+<a href=#874 id=874 data-nosnippet>874</a>            video_grid_thw: <span class="prelude-val">None</span>,
+<a href=#875 id=875 data-nosnippet>875</a>            rows: <span class="prelude-val">None</span>,
+<a href=#876 id=876 data-nosnippet>876</a>            cols: <span class="prelude-val">None</span>,
+<a href=#877 id=877 data-nosnippet>877</a>            pixel_values_list: <span class="prelude-val">None</span>,
+<a href=#878 id=878 data-nosnippet>878</a>            tgt_sizes: <span class="prelude-val">None</span>,
+<a href=#879 id=879 data-nosnippet>879</a>            image_sizes_all: <span class="prelude-val">None</span>,
+<a href=#880 id=880 data-nosnippet>880</a>            num_crops: <span class="prelude-val">None</span>,
+<a href=#881 id=881 data-nosnippet>881</a>        })
+<a href=#882 id=882 data-nosnippet>882</a>    }
+<a href=#883 id=883 data-nosnippet>883</a>}</code></pre></div></section></main></body></html>

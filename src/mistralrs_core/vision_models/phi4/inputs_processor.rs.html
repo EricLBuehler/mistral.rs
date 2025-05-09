@@ -364,7 +364,7 @@
 <a href=#364 id=364 data-nosnippet>364</a>
 <a href=#365 id=365 data-nosnippet>365</a>        <span class="comment">// Paste the original image into the center of the new image
 <a href=#366 id=366 data-nosnippet>366</a>        </span>new_image
-<a href=#367 id=367 data-nosnippet>367</a>            .copy_from(image, left, top)
+<a href=#367 id=367 data-nosnippet>367</a>            .copy_from(image, <span class="number">0</span>, <span class="number">0</span>)
 <a href=#368 id=368 data-nosnippet>368</a>            .expect(<span class="string">"Failed to copy image"</span>);
 <a href=#369 id=369 data-nosnippet>369</a>
 <a href=#370 id=370 data-nosnippet>370</a>        new_image
@@ -403,270 +403,284 @@
 <a href=#403 id=403 data-nosnippet>403</a>                best_ratio_diff = ratio_diff;
 <a href=#404 id=404 data-nosnippet>404</a>                best_ratio = ratio;
 <a href=#405 id=405 data-nosnippet>405</a>            } <span class="kw">else if </span>ratio_diff == best_ratio_diff
-<a href=#406 id=406 data-nosnippet>406</a>                &amp;&amp; area <span class="kw">as </span>f64 &gt; <span class="number">0.5 </span>* image_size <span class="kw">as </span>f64 * ratio.<span class="number">0 </span><span class="kw">as </span>f64 * ratio.<span class="number">1 </span><span class="kw">as </span>f64
-<a href=#407 id=407 data-nosnippet>407</a>            {
-<a href=#408 id=408 data-nosnippet>408</a>                best_ratio = ratio;
-<a href=#409 id=409 data-nosnippet>409</a>            }
-<a href=#410 id=410 data-nosnippet>410</a>        }
-<a href=#411 id=411 data-nosnippet>411</a>        best_ratio
-<a href=#412 id=412 data-nosnippet>412</a>    }
-<a href=#413 id=413 data-nosnippet>413</a>
-<a href=#414 id=414 data-nosnippet>414</a>    <span class="kw">fn </span>dynamic_preprocess(
-<a href=#415 id=415 data-nosnippet>415</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#416 id=416 data-nosnippet>416</a>        <span class="kw-2">mut </span>image: DynamicImage,
-<a href=#417 id=417 data-nosnippet>417</a>        min_num: usize,
-<a href=#418 id=418 data-nosnippet>418</a>        max_num: usize,
-<a href=#419 id=419 data-nosnippet>419</a>        image_size: usize,
-<a href=#420 id=420 data-nosnippet>420</a>        mask_size: usize,
-<a href=#421 id=421 data-nosnippet>421</a>        device: <span class="kw-2">&amp;</span>Device,
-<a href=#422 id=422 data-nosnippet>422</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(DynamicImage, Tensor)&gt; {
-<a href=#423 id=423 data-nosnippet>423</a>        <span class="kw">let </span>(orig_w, orig_h) = image.dimensions();
-<a href=#424 id=424 data-nosnippet>424</a>
-<a href=#425 id=425 data-nosnippet>425</a>        <span class="kw">let </span>w_crop_num = (orig_w <span class="kw">as </span>f64 / image_size <span class="kw">as </span>f64).ceil();
-<a href=#426 id=426 data-nosnippet>426</a>        <span class="kw">let </span>h_crop_num = (orig_h <span class="kw">as </span>f64 / image_size <span class="kw">as </span>f64).ceil();
-<a href=#427 id=427 data-nosnippet>427</a>        <span class="kw">let </span>(target_aspect_ratio, target_width, target_height) =
-<a href=#428 id=428 data-nosnippet>428</a>            <span class="kw">if </span>w_crop_num * h_crop_num &gt; max_num <span class="kw">as </span>f64 {
-<a href=#429 id=429 data-nosnippet>429</a>                <span class="kw">let </span>aspect_ratio = orig_w <span class="kw">as </span>f64 / orig_h <span class="kw">as </span>f64;
-<a href=#430 id=430 data-nosnippet>430</a>                <span class="kw">let </span>target_ratios = <span class="self">Self</span>::compute_target_ratios(min_num <span class="kw">as </span>u32, max_num <span class="kw">as </span>u32);
-<a href=#431 id=431 data-nosnippet>431</a>
-<a href=#432 id=432 data-nosnippet>432</a>                <span class="kw">let </span>target_aspect_ratio = <span class="self">Self</span>::find_closest_aspect_ratio(
-<a href=#433 id=433 data-nosnippet>433</a>                    aspect_ratio,
-<a href=#434 id=434 data-nosnippet>434</a>                    target_ratios,
-<a href=#435 id=435 data-nosnippet>435</a>                    orig_w,
-<a href=#436 id=436 data-nosnippet>436</a>                    orig_h,
-<a href=#437 id=437 data-nosnippet>437</a>                    image_size,
-<a href=#438 id=438 data-nosnippet>438</a>                );
-<a href=#439 id=439 data-nosnippet>439</a>
-<a href=#440 id=440 data-nosnippet>440</a>                <span class="kw">let </span>target_width = image_size * target_aspect_ratio.<span class="number">0 </span><span class="kw">as </span>usize;
-<a href=#441 id=441 data-nosnippet>441</a>                <span class="kw">let </span>target_height = image_size * target_aspect_ratio.<span class="number">1 </span><span class="kw">as </span>usize;
-<a href=#442 id=442 data-nosnippet>442</a>
-<a href=#443 id=443 data-nosnippet>443</a>                (
-<a href=#444 id=444 data-nosnippet>444</a>                    (target_aspect_ratio.<span class="number">0 </span><span class="kw">as </span>f64, target_aspect_ratio.<span class="number">1 </span><span class="kw">as </span>f64),
-<a href=#445 id=445 data-nosnippet>445</a>                    target_width,
-<a href=#446 id=446 data-nosnippet>446</a>                    target_height,
-<a href=#447 id=447 data-nosnippet>447</a>                )
-<a href=#448 id=448 data-nosnippet>448</a>            } <span class="kw">else </span>{
-<a href=#449 id=449 data-nosnippet>449</a>                <span class="kw">let </span>target_width = (image_size <span class="kw">as </span>f64 * w_crop_num) <span class="kw">as </span>usize;
-<a href=#450 id=450 data-nosnippet>450</a>                <span class="kw">let </span>target_height = (image_size <span class="kw">as </span>f64 * h_crop_num) <span class="kw">as </span>usize;
-<a href=#451 id=451 data-nosnippet>451</a>                <span class="kw">let </span>target_aspect_ratio = (w_crop_num, h_crop_num);
-<a href=#452 id=452 data-nosnippet>452</a>
-<a href=#453 id=453 data-nosnippet>453</a>                (target_aspect_ratio, target_width, target_height)
-<a href=#454 id=454 data-nosnippet>454</a>            };
-<a href=#455 id=455 data-nosnippet>455</a>
-<a href=#456 id=456 data-nosnippet>456</a>        <span class="kw">let </span>ratio_width = target_width <span class="kw">as </span>f64 / orig_w <span class="kw">as </span>f64;
-<a href=#457 id=457 data-nosnippet>457</a>        <span class="kw">let </span>ratio_height = target_height <span class="kw">as </span>f64 / orig_h <span class="kw">as </span>f64;
-<a href=#458 id=458 data-nosnippet>458</a>        <span class="kw">let </span>(new_size, padding_width, padding_height) = <span class="kw">if </span>ratio_width &lt; ratio_height {
-<a href=#459 id=459 data-nosnippet>459</a>            (
-<a href=#460 id=460 data-nosnippet>460</a>                (target_width, (orig_h <span class="kw">as </span>f64 * ratio_width) <span class="kw">as </span>usize),
-<a href=#461 id=461 data-nosnippet>461</a>                <span class="number">0_usize</span>,
-<a href=#462 id=462 data-nosnippet>462</a>                target_height - (orig_h <span class="kw">as </span>f64 * ratio_width) <span class="kw">as </span>usize,
-<a href=#463 id=463 data-nosnippet>463</a>            )
-<a href=#464 id=464 data-nosnippet>464</a>        } <span class="kw">else </span>{
-<a href=#465 id=465 data-nosnippet>465</a>            (
-<a href=#466 id=466 data-nosnippet>466</a>                ((orig_w <span class="kw">as </span>f64 * ratio_height) <span class="kw">as </span>usize, target_height),
-<a href=#467 id=467 data-nosnippet>467</a>                target_width - (orig_w <span class="kw">as </span>f64 * ratio_height) <span class="kw">as </span>usize,
-<a href=#468 id=468 data-nosnippet>468</a>                <span class="number">0_usize</span>,
-<a href=#469 id=469 data-nosnippet>469</a>            )
-<a href=#470 id=470 data-nosnippet>470</a>        };
-<a href=#471 id=471 data-nosnippet>471</a>
-<a href=#472 id=472 data-nosnippet>472</a>        <span class="kw">let </span><span class="kw-2">mut </span>attention_mask = Tensor::ones(
-<a href=#473 id=473 data-nosnippet>473</a>            (
-<a href=#474 id=474 data-nosnippet>474</a>                (mask_size <span class="kw">as </span>f64 * target_aspect_ratio.<span class="number">1</span>) <span class="kw">as </span>usize,
-<a href=#475 id=475 data-nosnippet>475</a>                (mask_size <span class="kw">as </span>f64 * target_aspect_ratio.<span class="number">0</span>) <span class="kw">as </span>usize,
-<a href=#476 id=476 data-nosnippet>476</a>            ),
-<a href=#477 id=477 data-nosnippet>477</a>            DType::U32,
-<a href=#478 id=478 data-nosnippet>478</a>            device,
-<a href=#479 id=479 data-nosnippet>479</a>        )<span class="question-mark">?</span>;
-<a href=#480 id=480 data-nosnippet>480</a>        <span class="kw">if </span>padding_width &gt;= <span class="number">14 </span>{
-<a href=#481 id=481 data-nosnippet>481</a>            attention_mask = attention_mask.slice_assign(
-<a href=#482 id=482 data-nosnippet>482</a>                <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>(attention_mask.dim(<span class="number">1</span>)<span class="question-mark">? </span>- padding_width / <span class="number">14</span>..)],
-<a href=#483 id=483 data-nosnippet>483</a>                <span class="kw-2">&amp;</span>Tensor::zeros(
-<a href=#484 id=484 data-nosnippet>484</a>                    (attention_mask.dim(<span class="number">0</span>)<span class="question-mark">?</span>, padding_width / <span class="number">14</span>),
-<a href=#485 id=485 data-nosnippet>485</a>                    DType::U32,
-<a href=#486 id=486 data-nosnippet>486</a>                    device,
-<a href=#487 id=487 data-nosnippet>487</a>                )<span class="question-mark">?</span>,
-<a href=#488 id=488 data-nosnippet>488</a>            )<span class="question-mark">?</span>;
-<a href=#489 id=489 data-nosnippet>489</a>        }
-<a href=#490 id=490 data-nosnippet>490</a>        <span class="kw">if </span>padding_height &gt;= <span class="number">14 </span>{
-<a href=#491 id=491 data-nosnippet>491</a>            attention_mask = attention_mask.slice_assign(
-<a href=#492 id=492 data-nosnippet>492</a>                <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>(attention_mask.dim(<span class="number">0</span>)<span class="question-mark">? </span>- padding_height / <span class="number">14</span>..), <span class="kw-2">&amp;</span>..],
-<a href=#493 id=493 data-nosnippet>493</a>                <span class="kw-2">&amp;</span>Tensor::zeros(
-<a href=#494 id=494 data-nosnippet>494</a>                    (padding_height / <span class="number">14</span>, attention_mask.dim(<span class="number">1</span>)<span class="question-mark">?</span>),
-<a href=#495 id=495 data-nosnippet>495</a>                    DType::U32,
-<a href=#496 id=496 data-nosnippet>496</a>                    device,
-<a href=#497 id=497 data-nosnippet>497</a>                )<span class="question-mark">?</span>,
-<a href=#498 id=498 data-nosnippet>498</a>            )<span class="question-mark">?</span>;
-<a href=#499 id=499 data-nosnippet>499</a>        }
-<a href=#500 id=500 data-nosnippet>500</a>
-<a href=#501 id=501 data-nosnippet>501</a>        image = image.resize_exact(new_size.<span class="number">0 </span><span class="kw">as </span>u32, new_size.<span class="number">1 </span><span class="kw">as </span>u32, FilterType::Nearest);
-<a href=#502 id=502 data-nosnippet>502</a>        image = <span class="self">Self</span>::pad_image(
-<a href=#503 id=503 data-nosnippet>503</a>            <span class="kw-2">&amp;</span>image,
-<a href=#504 id=504 data-nosnippet>504</a>            <span class="number">0</span>,
-<a href=#505 id=505 data-nosnippet>505</a>            padding_height <span class="kw">as </span>u32,
-<a href=#506 id=506 data-nosnippet>506</a>            padding_width <span class="kw">as </span>u32,
-<a href=#507 id=507 data-nosnippet>507</a>            <span class="number">0</span>,
-<a href=#508 id=508 data-nosnippet>508</a>            Rgba([<span class="number">255u8</span>, <span class="number">255</span>, <span class="number">255</span>, <span class="number">255</span>]),
-<a href=#509 id=509 data-nosnippet>509</a>        );
-<a href=#510 id=510 data-nosnippet>510</a>
-<a href=#511 id=511 data-nosnippet>511</a>        <span class="prelude-val">Ok</span>((image, attention_mask))
-<a href=#512 id=512 data-nosnippet>512</a>    }
-<a href=#513 id=513 data-nosnippet>513</a>}
+<a href=#406 id=406 data-nosnippet>406</a>                &amp;&amp; area <span class="kw">as </span>f64
+<a href=#407 id=407 data-nosnippet>407</a>                    &gt; <span class="number">0.5 </span>* image_size <span class="kw">as </span>f64 * image_size <span class="kw">as </span>f64 * ratio.<span class="number">0 </span><span class="kw">as </span>f64 * ratio.<span class="number">1 </span><span class="kw">as </span>f64
+<a href=#408 id=408 data-nosnippet>408</a>            {
+<a href=#409 id=409 data-nosnippet>409</a>                best_ratio = ratio;
+<a href=#410 id=410 data-nosnippet>410</a>            }
+<a href=#411 id=411 data-nosnippet>411</a>        }
+<a href=#412 id=412 data-nosnippet>412</a>        best_ratio
+<a href=#413 id=413 data-nosnippet>413</a>    }
+<a href=#414 id=414 data-nosnippet>414</a>
+<a href=#415 id=415 data-nosnippet>415</a>    <span class="kw">fn </span>dynamic_preprocess(
+<a href=#416 id=416 data-nosnippet>416</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#417 id=417 data-nosnippet>417</a>        <span class="kw-2">mut </span>image: DynamicImage,
+<a href=#418 id=418 data-nosnippet>418</a>        min_num: usize,
+<a href=#419 id=419 data-nosnippet>419</a>        max_num: usize,
+<a href=#420 id=420 data-nosnippet>420</a>        image_size: usize,
+<a href=#421 id=421 data-nosnippet>421</a>        mask_size: usize,
+<a href=#422 id=422 data-nosnippet>422</a>        device: <span class="kw-2">&amp;</span>Device,
+<a href=#423 id=423 data-nosnippet>423</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(DynamicImage, Tensor)&gt; {
+<a href=#424 id=424 data-nosnippet>424</a>        <span class="kw">let </span>(orig_w, orig_h) = image.dimensions();
+<a href=#425 id=425 data-nosnippet>425</a>
+<a href=#426 id=426 data-nosnippet>426</a>        <span class="kw">let </span>w_crop_num = (orig_w <span class="kw">as </span>f64 / image_size <span class="kw">as </span>f64).ceil();
+<a href=#427 id=427 data-nosnippet>427</a>        <span class="kw">let </span>h_crop_num = (orig_h <span class="kw">as </span>f64 / image_size <span class="kw">as </span>f64).ceil();
+<a href=#428 id=428 data-nosnippet>428</a>        <span class="kw">let </span>(target_aspect_ratio, target_width, target_height) =
+<a href=#429 id=429 data-nosnippet>429</a>            <span class="kw">if </span>w_crop_num * h_crop_num &gt; max_num <span class="kw">as </span>f64 {
+<a href=#430 id=430 data-nosnippet>430</a>                <span class="kw">let </span>aspect_ratio = orig_w <span class="kw">as </span>f64 / orig_h <span class="kw">as </span>f64;
+<a href=#431 id=431 data-nosnippet>431</a>                <span class="kw">let </span>target_ratios = <span class="self">Self</span>::compute_target_ratios(min_num <span class="kw">as </span>u32, max_num <span class="kw">as </span>u32);
+<a href=#432 id=432 data-nosnippet>432</a>
+<a href=#433 id=433 data-nosnippet>433</a>                <span class="kw">let </span>target_aspect_ratio = <span class="self">Self</span>::find_closest_aspect_ratio(
+<a href=#434 id=434 data-nosnippet>434</a>                    aspect_ratio,
+<a href=#435 id=435 data-nosnippet>435</a>                    target_ratios,
+<a href=#436 id=436 data-nosnippet>436</a>                    orig_w,
+<a href=#437 id=437 data-nosnippet>437</a>                    orig_h,
+<a href=#438 id=438 data-nosnippet>438</a>                    image_size,
+<a href=#439 id=439 data-nosnippet>439</a>                );
+<a href=#440 id=440 data-nosnippet>440</a>
+<a href=#441 id=441 data-nosnippet>441</a>                <span class="kw">let </span>target_width = image_size * target_aspect_ratio.<span class="number">0 </span><span class="kw">as </span>usize;
+<a href=#442 id=442 data-nosnippet>442</a>                <span class="kw">let </span>target_height = image_size * target_aspect_ratio.<span class="number">1 </span><span class="kw">as </span>usize;
+<a href=#443 id=443 data-nosnippet>443</a>
+<a href=#444 id=444 data-nosnippet>444</a>                (
+<a href=#445 id=445 data-nosnippet>445</a>                    (target_aspect_ratio.<span class="number">0 </span><span class="kw">as </span>f64, target_aspect_ratio.<span class="number">1 </span><span class="kw">as </span>f64),
+<a href=#446 id=446 data-nosnippet>446</a>                    target_width,
+<a href=#447 id=447 data-nosnippet>447</a>                    target_height,
+<a href=#448 id=448 data-nosnippet>448</a>                )
+<a href=#449 id=449 data-nosnippet>449</a>            } <span class="kw">else </span>{
+<a href=#450 id=450 data-nosnippet>450</a>                <span class="kw">let </span>target_width = (image_size <span class="kw">as </span>f64 * w_crop_num) <span class="kw">as </span>usize;
+<a href=#451 id=451 data-nosnippet>451</a>                <span class="kw">let </span>target_height = (image_size <span class="kw">as </span>f64 * h_crop_num) <span class="kw">as </span>usize;
+<a href=#452 id=452 data-nosnippet>452</a>                <span class="kw">let </span>target_aspect_ratio = (w_crop_num, h_crop_num);
+<a href=#453 id=453 data-nosnippet>453</a>
+<a href=#454 id=454 data-nosnippet>454</a>                (target_aspect_ratio, target_width, target_height)
+<a href=#455 id=455 data-nosnippet>455</a>            };
+<a href=#456 id=456 data-nosnippet>456</a>
+<a href=#457 id=457 data-nosnippet>457</a>        <span class="kw">let </span>ratio_width = target_width <span class="kw">as </span>f64 / orig_w <span class="kw">as </span>f64;
+<a href=#458 id=458 data-nosnippet>458</a>        <span class="kw">let </span>ratio_height = target_height <span class="kw">as </span>f64 / orig_h <span class="kw">as </span>f64;
+<a href=#459 id=459 data-nosnippet>459</a>        <span class="kw">let </span>(new_size, padding_width, padding_height) = <span class="kw">if </span>ratio_width &lt; ratio_height {
+<a href=#460 id=460 data-nosnippet>460</a>            (
+<a href=#461 id=461 data-nosnippet>461</a>                (target_width, (orig_h <span class="kw">as </span>f64 * ratio_width) <span class="kw">as </span>usize),
+<a href=#462 id=462 data-nosnippet>462</a>                <span class="number">0_usize</span>,
+<a href=#463 id=463 data-nosnippet>463</a>                target_height - (orig_h <span class="kw">as </span>f64 * ratio_width) <span class="kw">as </span>usize,
+<a href=#464 id=464 data-nosnippet>464</a>            )
+<a href=#465 id=465 data-nosnippet>465</a>        } <span class="kw">else </span>{
+<a href=#466 id=466 data-nosnippet>466</a>            (
+<a href=#467 id=467 data-nosnippet>467</a>                ((orig_w <span class="kw">as </span>f64 * ratio_height) <span class="kw">as </span>usize, target_height),
+<a href=#468 id=468 data-nosnippet>468</a>                target_width - (orig_w <span class="kw">as </span>f64 * ratio_height) <span class="kw">as </span>usize,
+<a href=#469 id=469 data-nosnippet>469</a>                <span class="number">0_usize</span>,
+<a href=#470 id=470 data-nosnippet>470</a>            )
+<a href=#471 id=471 data-nosnippet>471</a>        };
+<a href=#472 id=472 data-nosnippet>472</a>
+<a href=#473 id=473 data-nosnippet>473</a>        <span class="comment">// Guard against extreme aspect ratios resulting in too-small dimensions
+<a href=#474 id=474 data-nosnippet>474</a>        </span><span class="kw">if </span>new_size.<span class="number">1</span>.min(target_height) &lt; <span class="number">10 </span>|| new_size.<span class="number">0</span>.min(target_width) &lt; <span class="number">10 </span>{
+<a href=#475 id=475 data-nosnippet>475</a>            <span class="macro">candle_core::bail!</span>(
+<a href=#476 id=476 data-nosnippet>476</a>                <span class="string">"Image aspect ratio too extreme; resulting size below minimum threshold"</span>,
+<a href=#477 id=477 data-nosnippet>477</a>            );
+<a href=#478 id=478 data-nosnippet>478</a>        }
+<a href=#479 id=479 data-nosnippet>479</a>
+<a href=#480 id=480 data-nosnippet>480</a>        <span class="kw">let </span><span class="kw-2">mut </span>attention_mask = Tensor::ones(
+<a href=#481 id=481 data-nosnippet>481</a>            (
+<a href=#482 id=482 data-nosnippet>482</a>                (mask_size <span class="kw">as </span>f64 * target_aspect_ratio.<span class="number">1</span>) <span class="kw">as </span>usize,
+<a href=#483 id=483 data-nosnippet>483</a>                (mask_size <span class="kw">as </span>f64 * target_aspect_ratio.<span class="number">0</span>) <span class="kw">as </span>usize,
+<a href=#484 id=484 data-nosnippet>484</a>            ),
+<a href=#485 id=485 data-nosnippet>485</a>            DType::U32,
+<a href=#486 id=486 data-nosnippet>486</a>            device,
+<a href=#487 id=487 data-nosnippet>487</a>        )<span class="question-mark">?</span>;
+<a href=#488 id=488 data-nosnippet>488</a>        <span class="kw">if </span>padding_width &gt;= <span class="number">14 </span>{
+<a href=#489 id=489 data-nosnippet>489</a>            attention_mask = attention_mask.slice_assign(
+<a href=#490 id=490 data-nosnippet>490</a>                <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>(attention_mask.dim(<span class="number">1</span>)<span class="question-mark">? </span>- padding_width / <span class="number">14</span>..)],
+<a href=#491 id=491 data-nosnippet>491</a>                <span class="kw-2">&amp;</span>Tensor::zeros(
+<a href=#492 id=492 data-nosnippet>492</a>                    (attention_mask.dim(<span class="number">0</span>)<span class="question-mark">?</span>, padding_width / <span class="number">14</span>),
+<a href=#493 id=493 data-nosnippet>493</a>                    DType::U32,
+<a href=#494 id=494 data-nosnippet>494</a>                    device,
+<a href=#495 id=495 data-nosnippet>495</a>                )<span class="question-mark">?</span>,
+<a href=#496 id=496 data-nosnippet>496</a>            )<span class="question-mark">?</span>;
+<a href=#497 id=497 data-nosnippet>497</a>        }
+<a href=#498 id=498 data-nosnippet>498</a>        <span class="kw">if </span>padding_height &gt;= <span class="number">14 </span>{
+<a href=#499 id=499 data-nosnippet>499</a>            attention_mask = attention_mask.slice_assign(
+<a href=#500 id=500 data-nosnippet>500</a>                <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>(attention_mask.dim(<span class="number">0</span>)<span class="question-mark">? </span>- padding_height / <span class="number">14</span>..), <span class="kw-2">&amp;</span>..],
+<a href=#501 id=501 data-nosnippet>501</a>                <span class="kw-2">&amp;</span>Tensor::zeros(
+<a href=#502 id=502 data-nosnippet>502</a>                    (padding_height / <span class="number">14</span>, attention_mask.dim(<span class="number">1</span>)<span class="question-mark">?</span>),
+<a href=#503 id=503 data-nosnippet>503</a>                    DType::U32,
+<a href=#504 id=504 data-nosnippet>504</a>                    device,
+<a href=#505 id=505 data-nosnippet>505</a>                )<span class="question-mark">?</span>,
+<a href=#506 id=506 data-nosnippet>506</a>            )<span class="question-mark">?</span>;
+<a href=#507 id=507 data-nosnippet>507</a>        }
+<a href=#508 id=508 data-nosnippet>508</a>
+<a href=#509 id=509 data-nosnippet>509</a>        <span class="comment">// Ensure the attention mask is non-empty
+<a href=#510 id=510 data-nosnippet>510</a>        </span><span class="kw">let </span>mask_sum: u32 = attention_mask.sum_all()<span class="question-mark">?</span>.to_scalar::&lt;u32&gt;()<span class="question-mark">?</span>;
+<a href=#511 id=511 data-nosnippet>511</a>        <span class="kw">if </span>mask_sum == <span class="number">0 </span>{
+<a href=#512 id=512 data-nosnippet>512</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"dynamic_preprocess produced an attention mask with zero sum"</span>,);
+<a href=#513 id=513 data-nosnippet>513</a>        }
 <a href=#514 id=514 data-nosnippet>514</a>
-<a href=#515 id=515 data-nosnippet>515</a><span class="kw">impl </span>ImagePreProcessor <span class="kw">for </span>Phi4MMInputsProcessor {
-<a href=#516 id=516 data-nosnippet>516</a>    <span class="attr">#[allow(clippy::excessive_precision)]
-<a href=#517 id=517 data-nosnippet>517</a>    </span><span class="kw">const </span>DEFAULT_MEAN: [f64; <span class="number">3</span>] = [<span class="number">0.48145466</span>, <span class="number">0.4578275</span>, <span class="number">0.40821073</span>];
-<a href=#518 id=518 data-nosnippet>518</a>    <span class="attr">#[allow(clippy::excessive_precision)]
-<a href=#519 id=519 data-nosnippet>519</a>    </span><span class="kw">const </span>DEFAULT_STD: [f64; <span class="number">3</span>] = [<span class="number">0.26862954</span>, <span class="number">0.26130258</span>, <span class="number">0.27577711</span>];
-<a href=#520 id=520 data-nosnippet>520</a>
-<a href=#521 id=521 data-nosnippet>521</a>    <span class="kw">fn </span>preprocess(
-<a href=#522 id=522 data-nosnippet>522</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#523 id=523 data-nosnippet>523</a>        <span class="kw-2">mut </span>images: Vec&lt;DynamicImage&gt;,
-<a href=#524 id=524 data-nosnippet>524</a>        videos: Vec&lt;Vec&lt;DynamicImage&gt;&gt;,
-<a href=#525 id=525 data-nosnippet>525</a>        config: <span class="kw-2">&amp;</span>PreProcessorConfig,
-<a href=#526 id=526 data-nosnippet>526</a>        device: <span class="kw-2">&amp;</span>Device,
-<a href=#527 id=527 data-nosnippet>527</a>        (<span class="kw">_</span>, <span class="kw">_</span>): (usize, usize),
-<a href=#528 id=528 data-nosnippet>528</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;PreprocessedImages&gt; {
-<a href=#529 id=529 data-nosnippet>529</a>        <span class="comment">// If no images, will not call this.
-<a href=#530 id=530 data-nosnippet>530</a>        </span><span class="macro">assert!</span>(!images.is_empty());
-<a href=#531 id=531 data-nosnippet>531</a>        <span class="macro">assert!</span>(videos.is_empty());
-<a href=#532 id=532 data-nosnippet>532</a>
-<a href=#533 id=533 data-nosnippet>533</a>        <span class="comment">// If &gt;1 images, resize them all to the largest, potentially destroying aspect ratio
-<a href=#534 id=534 data-nosnippet>534</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>max_size = <span class="prelude-val">None</span>;
-<a href=#535 id=535 data-nosnippet>535</a>        <span class="kw">for </span>image <span class="kw">in </span>images.iter() {
-<a href=#536 id=536 data-nosnippet>536</a>            <span class="kw">if </span>max_size.is_none() {
-<a href=#537 id=537 data-nosnippet>537</a>                max_size = <span class="prelude-val">Some</span>((image.dimensions().<span class="number">0 </span><span class="kw">as </span>usize, image.dimensions().<span class="number">1 </span><span class="kw">as </span>usize))
-<a href=#538 id=538 data-nosnippet>538</a>            } <span class="kw">else if </span>max_size.is_some_and(|(x, <span class="kw">_</span>)| image.dimensions().<span class="number">0 </span><span class="kw">as </span>usize &gt; x) {
-<a href=#539 id=539 data-nosnippet>539</a>                max_size = <span class="prelude-val">Some</span>((image.dimensions().<span class="number">0 </span><span class="kw">as </span>usize, max_size.unwrap().<span class="number">1</span>));
-<a href=#540 id=540 data-nosnippet>540</a>            } <span class="kw">else if </span>max_size.is_some_and(|(<span class="kw">_</span>, y)| image.dimensions().<span class="number">1 </span><span class="kw">as </span>usize &gt; y) {
-<a href=#541 id=541 data-nosnippet>541</a>                max_size = <span class="prelude-val">Some</span>((max_size.unwrap().<span class="number">0</span>, image.dimensions().<span class="number">1 </span><span class="kw">as </span>usize));
-<a href=#542 id=542 data-nosnippet>542</a>            }
-<a href=#543 id=543 data-nosnippet>543</a>        }
-<a href=#544 id=544 data-nosnippet>544</a>        <span class="kw">let </span>(max_h, max_w) = max_size.unwrap();
-<a href=#545 id=545 data-nosnippet>545</a>        <span class="kw">for </span>image <span class="kw">in </span>images.iter_mut() {
-<a href=#546 id=546 data-nosnippet>546</a>            <span class="kw-2">*</span>image = image.resize_exact(max_w <span class="kw">as </span>u32, max_h <span class="kw">as </span>u32, FilterType::Nearest);
-<a href=#547 id=547 data-nosnippet>547</a>        }
-<a href=#548 id=548 data-nosnippet>548</a>
-<a href=#549 id=549 data-nosnippet>549</a>        <span class="kw">let </span><span class="kw-2">mut </span>image_sizes = Vec::new();
-<a href=#550 id=550 data-nosnippet>550</a>        <span class="kw">let </span><span class="kw-2">mut </span>padded_images = Vec::new();
-<a href=#551 id=551 data-nosnippet>551</a>        <span class="kw">let </span><span class="kw-2">mut </span>padded_masks = Vec::new();
-<a href=#552 id=552 data-nosnippet>552</a>        <span class="kw">let </span><span class="kw-2">mut </span>num_img_tokens = Vec::new();
-<a href=#553 id=553 data-nosnippet>553</a>        <span class="kw">for </span><span class="kw-2">mut </span>image <span class="kw">in </span>images {
-<a href=#554 id=554 data-nosnippet>554</a>            <span class="comment">// Convert to rgb, default to true
-<a href=#555 id=555 data-nosnippet>555</a>            </span><span class="kw">if </span>config.do_convert_rgb.unwrap_or(<span class="bool-val">true</span>) {
-<a href=#556 id=556 data-nosnippet>556</a>                image = DynamicImage::ImageRgb8(image.to_rgb8());
-<a href=#557 id=557 data-nosnippet>557</a>            }
-<a href=#558 id=558 data-nosnippet>558</a>
-<a href=#559 id=559 data-nosnippet>559</a>            <span class="kw">let </span>transforms = Transforms {
-<a href=#560 id=560 data-nosnippet>560</a>                input: <span class="kw-2">&amp;</span>ToTensor,
-<a href=#561 id=561 data-nosnippet>561</a>                inner_transforms: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>Normalize {
-<a href=#562 id=562 data-nosnippet>562</a>                    mean: <span class="macro">vec!</span>[<span class="number">0.5</span>, <span class="number">0.5</span>, <span class="number">0.5</span>],
-<a href=#563 id=563 data-nosnippet>563</a>                    std: <span class="macro">vec!</span>[<span class="number">0.5</span>, <span class="number">0.5</span>, <span class="number">0.5</span>],
-<a href=#564 id=564 data-nosnippet>564</a>                }],
-<a href=#565 id=565 data-nosnippet>565</a>            };
-<a href=#566 id=566 data-nosnippet>566</a>            <span class="comment">// Dynamic HD
-<a href=#567 id=567 data-nosnippet>567</a>            </span><span class="kw">let </span>dyhd_base_resolution = DYHD_BASE_RESOLUTION;
-<a href=#568 id=568 data-nosnippet>568</a>            <span class="kw">let </span>base_resolution = dyhd_base_resolution;
-<a href=#569 id=569 data-nosnippet>569</a>            <span class="comment">// over 384 and 448 resolution
-<a href=#570 id=570 data-nosnippet>570</a>            </span><span class="kw">let </span>mask_resolution = base_resolution / <span class="number">14</span>;
-<a href=#571 id=571 data-nosnippet>571</a>            <span class="kw">let </span>min_num = <span class="number">1</span>;
+<a href=#515 id=515 data-nosnippet>515</a>        image = image.resize_exact(new_size.<span class="number">0 </span><span class="kw">as </span>u32, new_size.<span class="number">1 </span><span class="kw">as </span>u32, FilterType::Nearest);
+<a href=#516 id=516 data-nosnippet>516</a>        image = <span class="self">Self</span>::pad_image(
+<a href=#517 id=517 data-nosnippet>517</a>            <span class="kw-2">&amp;</span>image,
+<a href=#518 id=518 data-nosnippet>518</a>            <span class="number">0</span>,
+<a href=#519 id=519 data-nosnippet>519</a>            padding_height <span class="kw">as </span>u32,
+<a href=#520 id=520 data-nosnippet>520</a>            <span class="number">0</span>,
+<a href=#521 id=521 data-nosnippet>521</a>            padding_width <span class="kw">as </span>u32,
+<a href=#522 id=522 data-nosnippet>522</a>            Rgba([<span class="number">255u8</span>, <span class="number">255</span>, <span class="number">255</span>, <span class="number">255</span>]),
+<a href=#523 id=523 data-nosnippet>523</a>        );
+<a href=#524 id=524 data-nosnippet>524</a>
+<a href=#525 id=525 data-nosnippet>525</a>        <span class="prelude-val">Ok</span>((image, attention_mask))
+<a href=#526 id=526 data-nosnippet>526</a>    }
+<a href=#527 id=527 data-nosnippet>527</a>}
+<a href=#528 id=528 data-nosnippet>528</a>
+<a href=#529 id=529 data-nosnippet>529</a><span class="kw">impl </span>ImagePreProcessor <span class="kw">for </span>Phi4MMInputsProcessor {
+<a href=#530 id=530 data-nosnippet>530</a>    <span class="attr">#[allow(clippy::excessive_precision)]
+<a href=#531 id=531 data-nosnippet>531</a>    </span><span class="kw">const </span>DEFAULT_MEAN: [f64; <span class="number">3</span>] = [<span class="number">0.48145466</span>, <span class="number">0.4578275</span>, <span class="number">0.40821073</span>];
+<a href=#532 id=532 data-nosnippet>532</a>    <span class="attr">#[allow(clippy::excessive_precision)]
+<a href=#533 id=533 data-nosnippet>533</a>    </span><span class="kw">const </span>DEFAULT_STD: [f64; <span class="number">3</span>] = [<span class="number">0.26862954</span>, <span class="number">0.26130258</span>, <span class="number">0.27577711</span>];
+<a href=#534 id=534 data-nosnippet>534</a>
+<a href=#535 id=535 data-nosnippet>535</a>    <span class="kw">fn </span>preprocess(
+<a href=#536 id=536 data-nosnippet>536</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#537 id=537 data-nosnippet>537</a>        <span class="kw-2">mut </span>images: Vec&lt;DynamicImage&gt;,
+<a href=#538 id=538 data-nosnippet>538</a>        videos: Vec&lt;Vec&lt;DynamicImage&gt;&gt;,
+<a href=#539 id=539 data-nosnippet>539</a>        config: <span class="kw-2">&amp;</span>PreProcessorConfig,
+<a href=#540 id=540 data-nosnippet>540</a>        device: <span class="kw-2">&amp;</span>Device,
+<a href=#541 id=541 data-nosnippet>541</a>        (<span class="kw">_</span>, <span class="kw">_</span>): (usize, usize),
+<a href=#542 id=542 data-nosnippet>542</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;PreprocessedImages&gt; {
+<a href=#543 id=543 data-nosnippet>543</a>        <span class="comment">// If no images, will not call this.
+<a href=#544 id=544 data-nosnippet>544</a>        </span><span class="macro">assert!</span>(!images.is_empty());
+<a href=#545 id=545 data-nosnippet>545</a>        <span class="macro">assert!</span>(videos.is_empty());
+<a href=#546 id=546 data-nosnippet>546</a>
+<a href=#547 id=547 data-nosnippet>547</a>        <span class="comment">// If &gt;1 images, resize them all to the largest, potentially destroying aspect ratio
+<a href=#548 id=548 data-nosnippet>548</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>max_size = <span class="prelude-val">None</span>;
+<a href=#549 id=549 data-nosnippet>549</a>        <span class="kw">for </span>image <span class="kw">in </span>images.iter() {
+<a href=#550 id=550 data-nosnippet>550</a>            <span class="kw">if </span>max_size.is_none() {
+<a href=#551 id=551 data-nosnippet>551</a>                max_size = <span class="prelude-val">Some</span>((image.dimensions().<span class="number">0 </span><span class="kw">as </span>usize, image.dimensions().<span class="number">1 </span><span class="kw">as </span>usize))
+<a href=#552 id=552 data-nosnippet>552</a>            } <span class="kw">else if </span>max_size.is_some_and(|(x, <span class="kw">_</span>)| image.dimensions().<span class="number">0 </span><span class="kw">as </span>usize &gt; x) {
+<a href=#553 id=553 data-nosnippet>553</a>                max_size = <span class="prelude-val">Some</span>((image.dimensions().<span class="number">0 </span><span class="kw">as </span>usize, max_size.unwrap().<span class="number">1</span>));
+<a href=#554 id=554 data-nosnippet>554</a>            } <span class="kw">else if </span>max_size.is_some_and(|(<span class="kw">_</span>, y)| image.dimensions().<span class="number">1 </span><span class="kw">as </span>usize &gt; y) {
+<a href=#555 id=555 data-nosnippet>555</a>                max_size = <span class="prelude-val">Some</span>((max_size.unwrap().<span class="number">0</span>, image.dimensions().<span class="number">1 </span><span class="kw">as </span>usize));
+<a href=#556 id=556 data-nosnippet>556</a>            }
+<a href=#557 id=557 data-nosnippet>557</a>        }
+<a href=#558 id=558 data-nosnippet>558</a>        <span class="kw">let </span>(max_w, max_h) = max_size.unwrap();
+<a href=#559 id=559 data-nosnippet>559</a>        <span class="kw">for </span>image <span class="kw">in </span>images.iter_mut() {
+<a href=#560 id=560 data-nosnippet>560</a>            <span class="kw-2">*</span>image = image.resize_exact(max_w <span class="kw">as </span>u32, max_h <span class="kw">as </span>u32, FilterType::Nearest);
+<a href=#561 id=561 data-nosnippet>561</a>        }
+<a href=#562 id=562 data-nosnippet>562</a>
+<a href=#563 id=563 data-nosnippet>563</a>        <span class="kw">let </span><span class="kw-2">mut </span>image_sizes = Vec::new();
+<a href=#564 id=564 data-nosnippet>564</a>        <span class="kw">let </span><span class="kw-2">mut </span>padded_images = Vec::new();
+<a href=#565 id=565 data-nosnippet>565</a>        <span class="kw">let </span><span class="kw-2">mut </span>padded_masks = Vec::new();
+<a href=#566 id=566 data-nosnippet>566</a>        <span class="kw">let </span><span class="kw-2">mut </span>num_img_tokens = Vec::new();
+<a href=#567 id=567 data-nosnippet>567</a>        <span class="kw">for </span><span class="kw-2">mut </span>image <span class="kw">in </span>images {
+<a href=#568 id=568 data-nosnippet>568</a>            <span class="comment">// Convert to rgb, default to true
+<a href=#569 id=569 data-nosnippet>569</a>            </span><span class="kw">if </span>config.do_convert_rgb.unwrap_or(<span class="bool-val">true</span>) {
+<a href=#570 id=570 data-nosnippet>570</a>                image = DynamicImage::ImageRgb8(image.to_rgb8());
+<a href=#571 id=571 data-nosnippet>571</a>            }
 <a href=#572 id=572 data-nosnippet>572</a>
-<a href=#573 id=573 data-nosnippet>573</a>            <span class="kw">let </span>(elem, attention_mask) = <span class="self">self</span>.dynamic_preprocess(
-<a href=#574 id=574 data-nosnippet>574</a>                image,
-<a href=#575 id=575 data-nosnippet>575</a>                min_num,
-<a href=#576 id=576 data-nosnippet>576</a>                config.dynamic_hd.unwrap(),
-<a href=#577 id=577 data-nosnippet>577</a>                base_resolution,
-<a href=#578 id=578 data-nosnippet>578</a>                mask_resolution,
-<a href=#579 id=579 data-nosnippet>579</a>                device,
-<a href=#580 id=580 data-nosnippet>580</a>            )<span class="question-mark">?</span>;
-<a href=#581 id=581 data-nosnippet>581</a>
-<a href=#582 id=582 data-nosnippet>582</a>            <span class="kw">let </span>hd_image = elem.apply(transforms, device)<span class="question-mark">?</span>;
-<a href=#583 id=583 data-nosnippet>583</a>            <span class="kw">let </span>(img_h, img_w) = (hd_image.dim(<span class="number">1</span>)<span class="question-mark">?</span>, hd_image.dim(<span class="number">2</span>)<span class="question-mark">?</span>);
-<a href=#584 id=584 data-nosnippet>584</a>            <span class="kw">let </span>(mask_h, mask_w) = (attention_mask.dim(<span class="number">0</span>)<span class="question-mark">?</span>, attention_mask.dim(<span class="number">1</span>)<span class="question-mark">?</span>);
-<a href=#585 id=585 data-nosnippet>585</a>
-<a href=#586 id=586 data-nosnippet>586</a>            <span class="comment">// Resize with bicubic interpolation
-<a href=#587 id=587 data-nosnippet>587</a>            </span><span class="kw">let </span>global_image = hd_image
-<a href=#588 id=588 data-nosnippet>588</a>                .unsqueeze(<span class="number">0</span>)<span class="question-mark">?
-<a href=#589 id=589 data-nosnippet>589</a>                </span>.interpolate2d(base_resolution, base_resolution)<span class="question-mark">?</span>;
-<a href=#590 id=590 data-nosnippet>590</a>            <span class="kw">let </span>global_attention_mask =
-<a href=#591 id=591 data-nosnippet>591</a>                Tensor::ones((<span class="number">1</span>, mask_resolution, mask_resolution), DType::U32, device)<span class="question-mark">?</span>;
-<a href=#592 id=592 data-nosnippet>592</a>
-<a href=#593 id=593 data-nosnippet>593</a>            <span class="kw">let </span>hd_image_reshape = hd_image
-<a href=#594 id=594 data-nosnippet>594</a>                .reshape((
-<a href=#595 id=595 data-nosnippet>595</a>                    <span class="number">1</span>,
-<a href=#596 id=596 data-nosnippet>596</a>                    <span class="number">3</span>,
-<a href=#597 id=597 data-nosnippet>597</a>                    (img_h <span class="kw">as </span>f32 / base_resolution <span class="kw">as </span>f32) <span class="kw">as </span>usize,
-<a href=#598 id=598 data-nosnippet>598</a>                    base_resolution,
-<a href=#599 id=599 data-nosnippet>599</a>                    (img_w <span class="kw">as </span>f32 / base_resolution <span class="kw">as </span>f32) <span class="kw">as </span>usize,
-<a href=#600 id=600 data-nosnippet>600</a>                    base_resolution,
-<a href=#601 id=601 data-nosnippet>601</a>                ))<span class="question-mark">?
-<a href=#602 id=602 data-nosnippet>602</a>                </span>.permute((<span class="number">0</span>, <span class="number">2</span>, <span class="number">4</span>, <span class="number">1</span>, <span class="number">3</span>, <span class="number">5</span>))<span class="question-mark">?
-<a href=#603 id=603 data-nosnippet>603</a>                </span>.reshape(((), <span class="number">3</span>, base_resolution, base_resolution))<span class="question-mark">?</span>;
-<a href=#604 id=604 data-nosnippet>604</a>
-<a href=#605 id=605 data-nosnippet>605</a>            <span class="kw">let </span>attention_mask_reshape = attention_mask
-<a href=#606 id=606 data-nosnippet>606</a>                .reshape((
-<a href=#607 id=607 data-nosnippet>607</a>                    <span class="number">1</span>,
-<a href=#608 id=608 data-nosnippet>608</a>                    (mask_h <span class="kw">as </span>f32 / mask_resolution <span class="kw">as </span>f32) <span class="kw">as </span>usize,
-<a href=#609 id=609 data-nosnippet>609</a>                    mask_resolution,
-<a href=#610 id=610 data-nosnippet>610</a>                    (mask_w <span class="kw">as </span>f32 / mask_resolution <span class="kw">as </span>f32) <span class="kw">as </span>usize,
-<a href=#611 id=611 data-nosnippet>611</a>                    mask_resolution,
-<a href=#612 id=612 data-nosnippet>612</a>                ))<span class="question-mark">?
-<a href=#613 id=613 data-nosnippet>613</a>                </span>.permute((<span class="number">0</span>, <span class="number">1</span>, <span class="number">3</span>, <span class="number">2</span>, <span class="number">4</span>))<span class="question-mark">?
-<a href=#614 id=614 data-nosnippet>614</a>                </span>.reshape(((), mask_resolution, mask_resolution))<span class="question-mark">?</span>;
-<a href=#615 id=615 data-nosnippet>615</a>
-<a href=#616 id=616 data-nosnippet>616</a>            <span class="kw">let </span>downsample_attention_mask = {
-<a href=#617 id=617 data-nosnippet>617</a>                <span class="kw">let </span>h_indices =
-<a href=#618 id=618 data-nosnippet>618</a>                    Tensor::arange_step(<span class="number">0</span>, attention_mask_reshape.dim(<span class="number">1</span>)<span class="question-mark">? </span><span class="kw">as </span>u32, <span class="number">2</span>, device)<span class="question-mark">?</span>;
-<a href=#619 id=619 data-nosnippet>619</a>                <span class="kw">let </span>w_indices =
-<a href=#620 id=620 data-nosnippet>620</a>                    Tensor::arange_step(<span class="number">0</span>, attention_mask_reshape.dim(<span class="number">2</span>)<span class="question-mark">? </span><span class="kw">as </span>u32, <span class="number">2</span>, device)<span class="question-mark">?</span>;
-<a href=#621 id=621 data-nosnippet>621</a>                <span class="kw">let </span>selected = attention_mask_reshape
-<a href=#622 id=622 data-nosnippet>622</a>                    .index_select(<span class="kw-2">&amp;</span>h_indices, <span class="number">1</span>)<span class="question-mark">?
-<a href=#623 id=623 data-nosnippet>623</a>                    </span>.index_select(<span class="kw-2">&amp;</span>w_indices, <span class="number">2</span>)<span class="question-mark">?</span>;
-<a href=#624 id=624 data-nosnippet>624</a>
-<a href=#625 id=625 data-nosnippet>625</a>                <span class="kw">let </span>mask = selected
-<a href=#626 id=626 data-nosnippet>626</a>                    .reshape((
-<a href=#627 id=627 data-nosnippet>627</a>                        <span class="number">1</span>,
-<a href=#628 id=628 data-nosnippet>628</a>                        mask_h / mask_resolution,
-<a href=#629 id=629 data-nosnippet>629</a>                        mask_w / mask_resolution,
-<a href=#630 id=630 data-nosnippet>630</a>                        mask_resolution / <span class="number">2 </span>+ mask_resolution % <span class="number">2</span>,
-<a href=#631 id=631 data-nosnippet>631</a>                        mask_resolution / <span class="number">2 </span>+ mask_resolution % <span class="number">2</span>,
-<a href=#632 id=632 data-nosnippet>632</a>                    ))<span class="question-mark">?
-<a href=#633 id=633 data-nosnippet>633</a>                    </span>.permute((<span class="number">0</span>, <span class="number">1</span>, <span class="number">3</span>, <span class="number">2</span>, <span class="number">4</span>))<span class="question-mark">?</span>;
-<a href=#634 id=634 data-nosnippet>634</a>                mask.reshape((mask.dim(<span class="number">1</span>)<span class="question-mark">? </span>* mask.dim(<span class="number">2</span>)<span class="question-mark">?</span>, mask.dim(<span class="number">3</span>)<span class="question-mark">? </span>* mask.dim(<span class="number">4</span>)<span class="question-mark">?</span>))<span class="question-mark">?
-<a href=#635 id=635 data-nosnippet>635</a>            </span>};
-<a href=#636 id=636 data-nosnippet>636</a>
-<a href=#637 id=637 data-nosnippet>637</a>            <span class="kw">let </span>img_tokens = <span class="number">256
-<a href=#638 id=638 data-nosnippet>638</a>                </span>+ <span class="number">1
-<a href=#639 id=639 data-nosnippet>639</a>                </span>+ downsample_attention_mask.sum_all()<span class="question-mark">?</span>.to_scalar::&lt;u32&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize
-<a href=#640 id=640 data-nosnippet>640</a>                + downsample_attention_mask
-<a href=#641 id=641 data-nosnippet>641</a>                    .i((.., <span class="number">0</span>))<span class="question-mark">?
-<a href=#642 id=642 data-nosnippet>642</a>                    </span>.sum_all()<span class="question-mark">?
-<a href=#643 id=643 data-nosnippet>643</a>                    </span>.to_scalar::&lt;u32&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize
-<a href=#644 id=644 data-nosnippet>644</a>                + <span class="number">16</span>;
-<a href=#645 id=645 data-nosnippet>645</a>
-<a href=#646 id=646 data-nosnippet>646</a>            <span class="kw">let </span>hd_image_reshape = Tensor::cat(<span class="kw-2">&amp;</span>[global_image, hd_image_reshape], <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#647 id=647 data-nosnippet>647</a>            <span class="kw">let </span>hd_mask_reshape = Tensor::cat(<span class="kw-2">&amp;</span>[global_attention_mask, attention_mask_reshape], <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#648 id=648 data-nosnippet>648</a>
-<a href=#649 id=649 data-nosnippet>649</a>            image_sizes.push((img_h <span class="kw">as </span>u32, img_w <span class="kw">as </span>u32));
-<a href=#650 id=650 data-nosnippet>650</a>            padded_images.push(hd_image_reshape);
-<a href=#651 id=651 data-nosnippet>651</a>            padded_masks.push(hd_mask_reshape);
-<a href=#652 id=652 data-nosnippet>652</a>            num_img_tokens.push(img_tokens);
-<a href=#653 id=653 data-nosnippet>653</a>        }
-<a href=#654 id=654 data-nosnippet>654</a>        <span class="prelude-val">Ok</span>(PreprocessedImages {
-<a href=#655 id=655 data-nosnippet>655</a>            pixel_values: Tensor::stack(<span class="kw-2">&amp;</span>padded_images, <span class="number">0</span>)<span class="question-mark">?</span>,
-<a href=#656 id=656 data-nosnippet>656</a>            pixel_attention_mask: <span class="prelude-val">Some</span>(Tensor::stack(<span class="kw-2">&amp;</span>padded_masks, <span class="number">0</span>)<span class="question-mark">?</span>),
-<a href=#657 id=657 data-nosnippet>657</a>            image_sizes: <span class="prelude-val">None</span>,
-<a href=#658 id=658 data-nosnippet>658</a>            num_img_tokens: <span class="prelude-val">Some</span>(num_img_tokens),
-<a href=#659 id=659 data-nosnippet>659</a>            aspect_ratio_ids: <span class="prelude-val">None</span>,
-<a href=#660 id=660 data-nosnippet>660</a>            aspect_ratio_mask: <span class="prelude-val">None</span>,
-<a href=#661 id=661 data-nosnippet>661</a>            num_tiles: <span class="prelude-val">None</span>,
-<a href=#662 id=662 data-nosnippet>662</a>            image_grid_thw: <span class="prelude-val">None</span>,
-<a href=#663 id=663 data-nosnippet>663</a>            video_grid_thw: <span class="prelude-val">None</span>,
-<a href=#664 id=664 data-nosnippet>664</a>            rows: <span class="prelude-val">None</span>,
-<a href=#665 id=665 data-nosnippet>665</a>            cols: <span class="prelude-val">None</span>,
-<a href=#666 id=666 data-nosnippet>666</a>            pixel_values_list: <span class="prelude-val">None</span>,
-<a href=#667 id=667 data-nosnippet>667</a>            tgt_sizes: <span class="prelude-val">None</span>,
-<a href=#668 id=668 data-nosnippet>668</a>            image_sizes_all: <span class="prelude-val">Some</span>(image_sizes),
-<a href=#669 id=669 data-nosnippet>669</a>            num_crops: <span class="prelude-val">None</span>,
-<a href=#670 id=670 data-nosnippet>670</a>        })
-<a href=#671 id=671 data-nosnippet>671</a>    }
-<a href=#672 id=672 data-nosnippet>672</a>}</code></pre></div></section></main></body></html>
+<a href=#573 id=573 data-nosnippet>573</a>            <span class="kw">let </span>transforms = Transforms {
+<a href=#574 id=574 data-nosnippet>574</a>                input: <span class="kw-2">&amp;</span>ToTensor,
+<a href=#575 id=575 data-nosnippet>575</a>                inner_transforms: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>Normalize {
+<a href=#576 id=576 data-nosnippet>576</a>                    mean: <span class="macro">vec!</span>[<span class="number">0.5</span>, <span class="number">0.5</span>, <span class="number">0.5</span>],
+<a href=#577 id=577 data-nosnippet>577</a>                    std: <span class="macro">vec!</span>[<span class="number">0.5</span>, <span class="number">0.5</span>, <span class="number">0.5</span>],
+<a href=#578 id=578 data-nosnippet>578</a>                }],
+<a href=#579 id=579 data-nosnippet>579</a>            };
+<a href=#580 id=580 data-nosnippet>580</a>            <span class="comment">// Dynamic HD
+<a href=#581 id=581 data-nosnippet>581</a>            </span><span class="kw">let </span>dyhd_base_resolution = DYHD_BASE_RESOLUTION;
+<a href=#582 id=582 data-nosnippet>582</a>            <span class="kw">let </span>base_resolution = dyhd_base_resolution;
+<a href=#583 id=583 data-nosnippet>583</a>            <span class="comment">// over 384 and 448 resolution
+<a href=#584 id=584 data-nosnippet>584</a>            </span><span class="kw">let </span>mask_resolution = base_resolution / <span class="number">14</span>;
+<a href=#585 id=585 data-nosnippet>585</a>            <span class="kw">let </span>min_num = <span class="number">1</span>;
+<a href=#586 id=586 data-nosnippet>586</a>
+<a href=#587 id=587 data-nosnippet>587</a>            <span class="kw">let </span>(elem, attention_mask) = <span class="self">self</span>.dynamic_preprocess(
+<a href=#588 id=588 data-nosnippet>588</a>                image,
+<a href=#589 id=589 data-nosnippet>589</a>                min_num,
+<a href=#590 id=590 data-nosnippet>590</a>                config.dynamic_hd.unwrap(),
+<a href=#591 id=591 data-nosnippet>591</a>                base_resolution,
+<a href=#592 id=592 data-nosnippet>592</a>                mask_resolution,
+<a href=#593 id=593 data-nosnippet>593</a>                device,
+<a href=#594 id=594 data-nosnippet>594</a>            )<span class="question-mark">?</span>;
+<a href=#595 id=595 data-nosnippet>595</a>
+<a href=#596 id=596 data-nosnippet>596</a>            <span class="kw">let </span>hd_image = elem.apply(transforms, device)<span class="question-mark">?</span>;
+<a href=#597 id=597 data-nosnippet>597</a>            <span class="kw">let </span>(img_h, img_w) = (hd_image.dim(<span class="number">1</span>)<span class="question-mark">?</span>, hd_image.dim(<span class="number">2</span>)<span class="question-mark">?</span>);
+<a href=#598 id=598 data-nosnippet>598</a>            <span class="kw">let </span>(mask_h, mask_w) = (attention_mask.dim(<span class="number">0</span>)<span class="question-mark">?</span>, attention_mask.dim(<span class="number">1</span>)<span class="question-mark">?</span>);
+<a href=#599 id=599 data-nosnippet>599</a>
+<a href=#600 id=600 data-nosnippet>600</a>            <span class="comment">// Resize with bicubic interpolation
+<a href=#601 id=601 data-nosnippet>601</a>            </span><span class="kw">let </span>global_image = hd_image
+<a href=#602 id=602 data-nosnippet>602</a>                .unsqueeze(<span class="number">0</span>)<span class="question-mark">?
+<a href=#603 id=603 data-nosnippet>603</a>                </span>.interpolate2d(base_resolution, base_resolution)<span class="question-mark">?</span>;
+<a href=#604 id=604 data-nosnippet>604</a>            <span class="kw">let </span>global_attention_mask =
+<a href=#605 id=605 data-nosnippet>605</a>                Tensor::ones((<span class="number">1</span>, mask_resolution, mask_resolution), DType::U32, device)<span class="question-mark">?</span>;
+<a href=#606 id=606 data-nosnippet>606</a>
+<a href=#607 id=607 data-nosnippet>607</a>            <span class="kw">let </span>hd_image_reshape = hd_image
+<a href=#608 id=608 data-nosnippet>608</a>                .reshape((
+<a href=#609 id=609 data-nosnippet>609</a>                    <span class="number">1</span>,
+<a href=#610 id=610 data-nosnippet>610</a>                    <span class="number">3</span>,
+<a href=#611 id=611 data-nosnippet>611</a>                    (img_h <span class="kw">as </span>f32 / base_resolution <span class="kw">as </span>f32) <span class="kw">as </span>usize,
+<a href=#612 id=612 data-nosnippet>612</a>                    base_resolution,
+<a href=#613 id=613 data-nosnippet>613</a>                    (img_w <span class="kw">as </span>f32 / base_resolution <span class="kw">as </span>f32) <span class="kw">as </span>usize,
+<a href=#614 id=614 data-nosnippet>614</a>                    base_resolution,
+<a href=#615 id=615 data-nosnippet>615</a>                ))<span class="question-mark">?
+<a href=#616 id=616 data-nosnippet>616</a>                </span>.permute((<span class="number">0</span>, <span class="number">2</span>, <span class="number">4</span>, <span class="number">1</span>, <span class="number">3</span>, <span class="number">5</span>))<span class="question-mark">?
+<a href=#617 id=617 data-nosnippet>617</a>                </span>.reshape(((), <span class="number">3</span>, base_resolution, base_resolution))<span class="question-mark">?</span>;
+<a href=#618 id=618 data-nosnippet>618</a>
+<a href=#619 id=619 data-nosnippet>619</a>            <span class="kw">let </span>attention_mask_reshape = attention_mask
+<a href=#620 id=620 data-nosnippet>620</a>                .reshape((
+<a href=#621 id=621 data-nosnippet>621</a>                    <span class="number">1</span>,
+<a href=#622 id=622 data-nosnippet>622</a>                    (mask_h <span class="kw">as </span>f32 / mask_resolution <span class="kw">as </span>f32) <span class="kw">as </span>usize,
+<a href=#623 id=623 data-nosnippet>623</a>                    mask_resolution,
+<a href=#624 id=624 data-nosnippet>624</a>                    (mask_w <span class="kw">as </span>f32 / mask_resolution <span class="kw">as </span>f32) <span class="kw">as </span>usize,
+<a href=#625 id=625 data-nosnippet>625</a>                    mask_resolution,
+<a href=#626 id=626 data-nosnippet>626</a>                ))<span class="question-mark">?
+<a href=#627 id=627 data-nosnippet>627</a>                </span>.permute((<span class="number">0</span>, <span class="number">1</span>, <span class="number">3</span>, <span class="number">2</span>, <span class="number">4</span>))<span class="question-mark">?
+<a href=#628 id=628 data-nosnippet>628</a>                </span>.reshape(((), mask_resolution, mask_resolution))<span class="question-mark">?</span>;
+<a href=#629 id=629 data-nosnippet>629</a>
+<a href=#630 id=630 data-nosnippet>630</a>            <span class="kw">let </span>downsample_attention_mask = {
+<a href=#631 id=631 data-nosnippet>631</a>                <span class="kw">let </span>h_indices =
+<a href=#632 id=632 data-nosnippet>632</a>                    Tensor::arange_step(<span class="number">0</span>, attention_mask_reshape.dim(<span class="number">1</span>)<span class="question-mark">? </span><span class="kw">as </span>u32, <span class="number">2</span>, device)<span class="question-mark">?</span>;
+<a href=#633 id=633 data-nosnippet>633</a>                <span class="kw">let </span>w_indices =
+<a href=#634 id=634 data-nosnippet>634</a>                    Tensor::arange_step(<span class="number">0</span>, attention_mask_reshape.dim(<span class="number">2</span>)<span class="question-mark">? </span><span class="kw">as </span>u32, <span class="number">2</span>, device)<span class="question-mark">?</span>;
+<a href=#635 id=635 data-nosnippet>635</a>                <span class="kw">let </span>selected = attention_mask_reshape
+<a href=#636 id=636 data-nosnippet>636</a>                    .index_select(<span class="kw-2">&amp;</span>h_indices, <span class="number">1</span>)<span class="question-mark">?
+<a href=#637 id=637 data-nosnippet>637</a>                    </span>.index_select(<span class="kw-2">&amp;</span>w_indices, <span class="number">2</span>)<span class="question-mark">?</span>;
+<a href=#638 id=638 data-nosnippet>638</a>
+<a href=#639 id=639 data-nosnippet>639</a>                <span class="kw">let </span>mask = selected
+<a href=#640 id=640 data-nosnippet>640</a>                    .reshape((
+<a href=#641 id=641 data-nosnippet>641</a>                        <span class="number">1</span>,
+<a href=#642 id=642 data-nosnippet>642</a>                        mask_h / mask_resolution,
+<a href=#643 id=643 data-nosnippet>643</a>                        mask_w / mask_resolution,
+<a href=#644 id=644 data-nosnippet>644</a>                        mask_resolution / <span class="number">2 </span>+ mask_resolution % <span class="number">2</span>,
+<a href=#645 id=645 data-nosnippet>645</a>                        mask_resolution / <span class="number">2 </span>+ mask_resolution % <span class="number">2</span>,
+<a href=#646 id=646 data-nosnippet>646</a>                    ))<span class="question-mark">?
+<a href=#647 id=647 data-nosnippet>647</a>                    </span>.permute((<span class="number">0</span>, <span class="number">1</span>, <span class="number">3</span>, <span class="number">2</span>, <span class="number">4</span>))<span class="question-mark">?</span>;
+<a href=#648 id=648 data-nosnippet>648</a>                mask.reshape((mask.dim(<span class="number">1</span>)<span class="question-mark">? </span>* mask.dim(<span class="number">2</span>)<span class="question-mark">?</span>, mask.dim(<span class="number">3</span>)<span class="question-mark">? </span>* mask.dim(<span class="number">4</span>)<span class="question-mark">?</span>))<span class="question-mark">?
+<a href=#649 id=649 data-nosnippet>649</a>            </span>};
+<a href=#650 id=650 data-nosnippet>650</a>
+<a href=#651 id=651 data-nosnippet>651</a>            <span class="kw">let </span>img_tokens = <span class="number">256
+<a href=#652 id=652 data-nosnippet>652</a>                </span>+ <span class="number">1
+<a href=#653 id=653 data-nosnippet>653</a>                </span>+ downsample_attention_mask.sum_all()<span class="question-mark">?</span>.to_scalar::&lt;u32&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize
+<a href=#654 id=654 data-nosnippet>654</a>                + downsample_attention_mask
+<a href=#655 id=655 data-nosnippet>655</a>                    .i((.., <span class="number">0</span>))<span class="question-mark">?
+<a href=#656 id=656 data-nosnippet>656</a>                    </span>.sum_all()<span class="question-mark">?
+<a href=#657 id=657 data-nosnippet>657</a>                    </span>.to_scalar::&lt;u32&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize
+<a href=#658 id=658 data-nosnippet>658</a>                + <span class="number">16</span>;
+<a href=#659 id=659 data-nosnippet>659</a>
+<a href=#660 id=660 data-nosnippet>660</a>            <span class="kw">let </span>hd_image_reshape = Tensor::cat(<span class="kw-2">&amp;</span>[global_image, hd_image_reshape], <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#661 id=661 data-nosnippet>661</a>            <span class="kw">let </span>hd_mask_reshape = Tensor::cat(<span class="kw-2">&amp;</span>[global_attention_mask, attention_mask_reshape], <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#662 id=662 data-nosnippet>662</a>
+<a href=#663 id=663 data-nosnippet>663</a>            image_sizes.push((img_h <span class="kw">as </span>u32, img_w <span class="kw">as </span>u32));
+<a href=#664 id=664 data-nosnippet>664</a>            padded_images.push(hd_image_reshape);
+<a href=#665 id=665 data-nosnippet>665</a>            padded_masks.push(hd_mask_reshape);
+<a href=#666 id=666 data-nosnippet>666</a>            num_img_tokens.push(img_tokens);
+<a href=#667 id=667 data-nosnippet>667</a>        }
+<a href=#668 id=668 data-nosnippet>668</a>        <span class="prelude-val">Ok</span>(PreprocessedImages {
+<a href=#669 id=669 data-nosnippet>669</a>            pixel_values: Tensor::stack(<span class="kw-2">&amp;</span>padded_images, <span class="number">0</span>)<span class="question-mark">?</span>,
+<a href=#670 id=670 data-nosnippet>670</a>            pixel_attention_mask: <span class="prelude-val">Some</span>(Tensor::stack(<span class="kw-2">&amp;</span>padded_masks, <span class="number">0</span>)<span class="question-mark">?</span>),
+<a href=#671 id=671 data-nosnippet>671</a>            image_sizes: <span class="prelude-val">None</span>,
+<a href=#672 id=672 data-nosnippet>672</a>            num_img_tokens: <span class="prelude-val">Some</span>(num_img_tokens),
+<a href=#673 id=673 data-nosnippet>673</a>            aspect_ratio_ids: <span class="prelude-val">None</span>,
+<a href=#674 id=674 data-nosnippet>674</a>            aspect_ratio_mask: <span class="prelude-val">None</span>,
+<a href=#675 id=675 data-nosnippet>675</a>            num_tiles: <span class="prelude-val">None</span>,
+<a href=#676 id=676 data-nosnippet>676</a>            image_grid_thw: <span class="prelude-val">None</span>,
+<a href=#677 id=677 data-nosnippet>677</a>            video_grid_thw: <span class="prelude-val">None</span>,
+<a href=#678 id=678 data-nosnippet>678</a>            rows: <span class="prelude-val">None</span>,
+<a href=#679 id=679 data-nosnippet>679</a>            cols: <span class="prelude-val">None</span>,
+<a href=#680 id=680 data-nosnippet>680</a>            pixel_values_list: <span class="prelude-val">None</span>,
+<a href=#681 id=681 data-nosnippet>681</a>            tgt_sizes: <span class="prelude-val">None</span>,
+<a href=#682 id=682 data-nosnippet>682</a>            image_sizes_all: <span class="prelude-val">Some</span>(image_sizes),
+<a href=#683 id=683 data-nosnippet>683</a>            num_crops: <span class="prelude-val">None</span>,
+<a href=#684 id=684 data-nosnippet>684</a>        })
+<a href=#685 id=685 data-nosnippet>685</a>    }
+<a href=#686 id=686 data-nosnippet>686</a>}</code></pre></div></section></main></body></html>
