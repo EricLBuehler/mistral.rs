@@ -681,7 +681,7 @@
 <a href=#681 id=681 data-nosnippet>681</a>                eos_tok: eos,
 <a href=#682 id=682 data-nosnippet>682</a>                kind: <span class="self">self</span>.kind.clone(),
 <a href=#683 id=683 data-nosnippet>683</a>                no_kv_cache: <span class="bool-val">false</span>,
-<a href=#684 id=684 data-nosnippet>684</a>                no_prefix_cache: <span class="bool-val">false</span>,
+<a href=#684 id=684 data-nosnippet>684</a>                no_prefix_cache: !<span class="self">self</span>.inner.supports_prefix_cacher(),
 <a href=#685 id=685 data-nosnippet>685</a>                activation_dtype: dtype,
 <a href=#686 id=686 data-nosnippet>686</a>                sliding_window,
 <a href=#687 id=687 data-nosnippet>687</a>                cache_config,
