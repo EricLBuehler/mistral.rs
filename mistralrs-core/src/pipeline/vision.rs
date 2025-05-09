@@ -681,7 +681,7 @@ impl Loader for VisionLoader {
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 no_kv_cache: false,
-                no_prefix_cache: false,
+                no_prefix_cache: !self.inner.supports_prefix_cacher(),
                 activation_dtype: dtype,
                 sliding_window,
                 cache_config,

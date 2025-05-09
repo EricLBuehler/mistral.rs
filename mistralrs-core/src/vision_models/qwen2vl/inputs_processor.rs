@@ -1,8 +1,4 @@
-use std::{
-    any::Any,
-    num::NonZeroUsize,
-    sync::{Arc, RwLock},
-};
+use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 use anyhow::Result;
 use candle_core::{Context, Device, IndexOp, Tensor};
@@ -33,8 +29,6 @@ use super::Qwen2VLVisionSpecificArgs;
 
 // Input processor
 struct Qwen2VLImageProcessor {
-    // To represent uninitialized, we do this. Should always be init by the time this is read.
-    merge_size: RwLock<Option<usize>>,
     max_edge: Option<u32>,
 }
 // Processor
@@ -57,7 +51,6 @@ impl Qwen2VLProcessor {
 impl Processor for Qwen2VLProcessor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         Arc::new(Qwen2VLImageProcessor {
-            merge_size: RwLock::new(None),
             max_edge: self.max_edge,
         })
     }
@@ -309,9 +302,14 @@ impl InputsProcessor for Qwen2VLImageProcessor {
 
             if is_prompt {
                 if let Some(ref image_grid_thw_accum) = image_grid_thw_accum {
-                    let merge_length = self.merge_size.read().unwrap().unwrap().pow(2);
-                    let mut index = 0;
-                    for (batch, text) in detok_seqs.iter_mut().enumerate() {
+                    let merge_length = config.merge_size.expect("Require `merge_size").pow(2);
+                    for ((batch, text), seq) in
+                        detok_seqs.iter_mut().enumerate().zip(input_seqs.iter_mut())
+                    {
+                        if seq.multimodal.has_changed_prompt {
+                            continue;
+                        }
+                        let mut index = 0;
                         while text.contains(Qwen2VLProcessor::IMAGE_PAD) {
                             *text = replace_first_occurrence(
                                 text,
@@ -336,9 +334,14 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 }
 
                 if let Some(ref video_grid_thw_accum) = video_grid_thw_accum {
-                    let merge_length = self.merge_size.read().unwrap().unwrap().pow(2);
+                    let merge_length = config.merge_size.expect("Require `merge_size").pow(2);
                     let mut index = 0;
-                    for (batch, text) in detok_seqs.iter_mut().enumerate() {
+                    for ((batch, text), seq) in
+                        detok_seqs.iter_mut().enumerate().zip(input_seqs.iter_mut())
+                    {
+                        if seq.multimodal.has_changed_prompt {
+                            continue;
+                        }
                         while text.contains(Qwen2VLProcessor::VIDEO_PAD) {
                             *text = replace_first_occurrence(
                                 text,
@@ -400,7 +403,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             let mut input_ids_searching = Vec::new();
             let mut image_nums = Vec::new();
             let mut video_nums = Vec::new();
-            for seq in input_seqs.iter() {
+            for (seq, ids) in input_seqs.iter().zip(&all_ids) {
                 let prompt = seq.get_initial_prompt();
                 let match_indices = find_substring_indices(prompt, Qwen2VLProcessor::VISION_START);
                 image_nums.push(
@@ -422,11 +425,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                         .count(),
                 );
 
-                let ids = tokenizer
-                    .encode_fast(prompt, false)
-                    .expect("Tokenization failed!");
-
-                input_ids_searching.push(ids.get_ids().to_vec());
+                input_ids_searching.push(ids.to_vec());
             }
 
             let mut all_ids_new = Vec::new();
@@ -470,10 +469,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
 
         let pixel_values = if is_prompt { pixel_values } else { None };
 
-        let seqlens = input_seqs
-            .iter()
-            .map(|seq| seq.prompt_tokens())
-            .collect::<Vec<_>>();
+        let seqlens = input_seqs.iter().map(|seq| seq.len()).collect::<Vec<_>>();
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
@@ -605,8 +601,6 @@ impl Qwen2VLImageProcessor {
             .context("Require `temporal_patch_size")?;
         let patch_size = config.patch_size.context("Require `patch_size")?;
         let merge_size = config.merge_size.context("Require `merge_size")?;
-        // Important to write it!
-        *self.merge_size.write().unwrap() = Some(merge_size);
         // Image
         if patches.dim(0)? == 1 {
             patches = patches.repeat((temporal_patch_size, 1, 1, 1))?;
