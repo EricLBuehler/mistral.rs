@@ -296,6 +296,9 @@ impl VisionModelLoader for Phi3VLoader {
     fn supports_paged_attention(&self) -> bool {
         true
     }
+    fn supports_prefix_cacher(&self) -> bool {
+        true
+    }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(Phi3VPrefixer)
     }
@@ -2576,6 +2579,9 @@ impl VisionModelLoader for Phi4MMLoader {
         Phi4MMProcessor::new_processor(processor_config, preprocessor_config)
     }
     fn supports_paged_attention(&self) -> bool {
+        true
+    }
+    fn supports_prefix_cacher(&self) -> bool {
         true
     }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
