@@ -183,46 +183,46 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 .expect("Detokenization failed!");
 
             for seq in input_seqs.iter_mut() {
-                let (pixel_values, image_grid_thw, video_grid_thw) =
-                    if let Some(cached_pixel_values) = &seq.multimodal.cached_pixel_values {
-                        (
-                            cached_pixel_values.clone(),
-                            seq.multimodal.cached_img_thw.clone(),
-                            seq.multimodal.cached_vid_thw.clone(),
+                let (pixel_values, image_grid_thw, video_grid_thw) = {
+                    // if let Some(cached_pixel_values) = &seq.multimodal.cached_pixel_values {
+                    //     (
+                    //         cached_pixel_values.clone(),
+                    //         seq.multimodal.cached_img_thw.clone(),
+                    //         seq.multimodal.cached_vid_thw.clone(),
+                    //     )
+                    // } else {
+                    let PreprocessedImages {
+                        pixel_values,
+                        pixel_attention_mask: _,
+                        image_sizes: _,
+                        num_img_tokens: _,
+                        aspect_ratio_ids: _,
+                        aspect_ratio_mask: _,
+                        num_tiles: _,
+                        image_grid_thw,
+                        video_grid_thw,
+                        rows: _,
+                        cols: _,
+                        pixel_values_list: _,
+                        tgt_sizes: _,
+                        image_sizes_all: _,
+                        num_crops: _,
+                    } = self
+                        .preprocess(
+                            seq.clone_images()
+                                .expect("Need to have images by this point."),
+                            vec![],
+                            config,
+                            device,
+                            (usize::MAX, usize::MAX), // Don't use it here...
                         )
-                    } else {
-                        let PreprocessedImages {
-                            pixel_values,
-                            pixel_attention_mask: _,
-                            image_sizes: _,
-                            num_img_tokens: _,
-                            aspect_ratio_ids: _,
-                            aspect_ratio_mask: _,
-                            num_tiles: _,
-                            image_grid_thw,
-                            video_grid_thw,
-                            rows: _,
-                            cols: _,
-                            pixel_values_list: _,
-                            tgt_sizes: _,
-                            image_sizes_all: _,
-                            num_crops: _,
-                        } = self
-                            .preprocess(
-                                seq.clone_images()
-                                    .expect("Need to have images by this point."),
-                                vec![],
-                                config,
-                                device,
-                                (usize::MAX, usize::MAX), // Don't use it here...
-                            )
-                            .expect("Preprocessing failed");
+                        .expect("Preprocessing failed");
 
-                        seq.multimodal.cached_pixel_values = Some(pixel_values.clone());
-                        seq.multimodal.cached_img_thw = image_grid_thw.clone();
-                        seq.multimodal.cached_vid_thw = video_grid_thw.clone();
-                        (pixel_values, image_grid_thw, video_grid_thw)
-                    };
+                    seq.multimodal.cached_pixel_values = Some(pixel_values.clone());
+                    seq.multimodal.cached_img_thw = image_grid_thw.clone();
+                    seq.multimodal.cached_vid_thw = video_grid_thw.clone();
+                    (pixel_values, image_grid_thw, video_grid_thw)
+                };
 
                 pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
                 image_grid_thw_accum.push(image_grid_thw);
@@ -358,7 +358,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
             let mut input_ids_searching = Vec::new();
             let mut image_nums = Vec::new();
             let mut video_nums = Vec::new();
-            for seq in input_seqs.iter() {
+            for (seq, ids) in input_seqs.iter().zip(&all_ids) {
                 let prompt = seq.get_initial_prompt();
                 let match_indices =
                     find_substring_indices(prompt, Qwen2_5VLProcessor::VISION_START);
@@ -381,11 +381,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                         .count(),
                 );
 
-                let ids = tokenizer
-                    .encode_fast(prompt, false)
-                    .expect("Tokenization failed!");
-
-                input_ids_searching.push(ids.get_ids().to_vec());
+                input_ids_searching.push(ids.to_vec());
             }
 
             let mut all_ids_new = Vec::new();
@@ -476,10 +472,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
 
         let pixel_values = if is_prompt { pixel_values } else { None };
 
-        let seqlens = input_seqs
-            .iter()
-            .map(|seq| seq.prompt_tokens())
-            .collect::<Vec<_>>();
+        let seqlens = input_seqs.iter().map(|seq| seq.len()).collect::<Vec<_>>();
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,

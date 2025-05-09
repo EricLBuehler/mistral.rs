@@ -236,7 +236,6 @@ impl Qwen2_5VLModel {
                 input_ids.device(),
             )?
             .unsqueeze(1)?;
-            dbg!(&mrope_position_deltas);
             Ok((position_ids, mrope_position_deltas))
         } else if let Some(attention_mask) = attention_mask {
             let position_ids = (attention_mask.to_dtype(DType::F32)?.cumsum(D::Minus1)? - 1f64)?;
@@ -246,7 +245,6 @@ impl Qwen2_5VLModel {
             let max_position_ids = position_ids.max(0)?.max_keepdim(D::Minus1)?;
             let mrope_position_deltas =
                 ((max_position_ids + 1.)? - attention_mask.dim(D::Minus1)? as f64)?;
-            dbg!(&mrope_position_deltas);
 
             Ok((
                 position_ids.to_dtype(DType::I64)?,
@@ -258,7 +256,6 @@ impl Qwen2_5VLModel {
                 .repeat((3, input_ids.dim(0)?, 1))?;
             let mrope_position_deltas =
                 Tensor::zeros((input_ids.dim(0)?, 1), DType::I64, input_ids.device())?;
-            dbg!(&mrope_position_deltas);
 
             Ok((position_ids, mrope_position_deltas))
         }
