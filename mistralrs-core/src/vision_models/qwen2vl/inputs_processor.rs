@@ -303,13 +303,13 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             if is_prompt {
                 if let Some(ref image_grid_thw_accum) = image_grid_thw_accum {
                     let merge_length = config.merge_size.expect("Require `merge_size").pow(2);
-                    let mut index = 0;
                     for ((batch, text), seq) in
                         detok_seqs.iter_mut().enumerate().zip(input_seqs.iter_mut())
                     {
                         if seq.multimodal.has_changed_prompt {
                             continue;
                         }
+                        let mut index = 0;
                         while text.contains(Qwen2VLProcessor::IMAGE_PAD) {
                             *text = replace_first_occurrence(
                                 text,
