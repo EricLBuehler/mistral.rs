@@ -364,7 +364,7 @@ impl Phi4MMInputsProcessor {
 
         // Paste the original image into the center of the new image
         new_image
-            .copy_from(image, left, top)
+            .copy_from(image, 0, 0)
             .expect("Failed to copy image");
 
         new_image
@@ -403,7 +403,8 @@ impl Phi4MMInputsProcessor {
                 best_ratio_diff = ratio_diff;
                 best_ratio = ratio;
             } else if ratio_diff == best_ratio_diff
-                && area as f64 > 0.5 * image_size as f64 * ratio.0 as f64 * ratio.1 as f64
+                && area as f64
+                    > 0.5 * image_size as f64 * image_size as f64 * ratio.0 as f64 * ratio.1 as f64
             {
                 best_ratio = ratio;
             }
@@ -541,7 +542,7 @@ impl ImagePreProcessor for Phi4MMInputsProcessor {
                 max_size = Some((max_size.unwrap().0, image.dimensions().1 as usize));
             }
         }
-        let (max_h, max_w) = max_size.unwrap();
+        let (max_w, max_h) = max_size.unwrap();
         for image in images.iter_mut() {
             *image = image.resize_exact(max_w as u32, max_h as u32, FilterType::Nearest);
         }

@@ -402,7 +402,7 @@ impl Phi3InputsProcessor {
 
         // Paste the original image into the center of the new image
         new_image
-            .copy_from(image, left, top)
+            .copy_from(image, 0, 0)
             .expect("Failed to copy image");
 
         new_image
@@ -503,7 +503,7 @@ impl ImagePreProcessor for Phi3InputsProcessor {
                 max_size = Some((max_size.unwrap().0, image.dimensions().1 as usize));
             }
         }
-        let (max_h, max_w) = max_size.unwrap();
+        let (max_w, max_h) = max_size.unwrap();
         for image in images.iter_mut() {
             *image = image.resize_exact(max_w as u32, max_h as u32, FilterType::Nearest);
         }
