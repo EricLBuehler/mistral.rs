@@ -403,7 +403,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             let mut input_ids_searching = Vec::new();
             let mut image_nums = Vec::new();
             let mut video_nums = Vec::new();
-            for seq in input_seqs.iter() {
+            for (seq, ids) in input_seqs.iter().zip(&all_ids) {
                 let prompt = seq.get_initial_prompt();
                 let match_indices = find_substring_indices(prompt, Qwen2VLProcessor::VISION_START);
                 image_nums.push(
@@ -425,11 +425,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                         .count(),
                 );
 
-                let ids = tokenizer
-                    .encode_fast(prompt, false)
-                    .expect("Tokenization failed!");
-
-                input_ids_searching.push(ids.get_ids().to_vec());
+                input_ids_searching.push(ids.to_vec());
             }
 
             let mut all_ids_new = Vec::new();
@@ -473,10 +469,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
 
         let pixel_values = if is_prompt { pixel_values } else { None };
 
-        let seqlens = input_seqs
-            .iter()
-            .map(|seq| seq.prompt_tokens())
-            .collect::<Vec<_>>();
+        let seqlens = input_seqs.iter().map(|seq| seq.len()).collect::<Vec<_>>();
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
