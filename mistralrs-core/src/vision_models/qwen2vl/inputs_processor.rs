@@ -1,8 +1,4 @@
-use std::{
-    any::Any,
-    num::NonZeroUsize,
-    sync::{Arc, RwLock},
-};
+use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 use anyhow::Result;
 use candle_core::{Context, Device, IndexOp, Tensor};
@@ -33,8 +29,6 @@ use super::Qwen2VLVisionSpecificArgs;
 
 // Input processor
 struct Qwen2VLImageProcessor {
-    // To represent uninitialized, we do this. Should always be init by the time this is read.
-    merge_size: RwLock<Option<usize>>,
     max_edge: Option<u32>,
 }
 // Processor
@@ -57,7 +51,6 @@ impl Qwen2VLProcessor {
 impl Processor for Qwen2VLProcessor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         Arc::new(Qwen2VLImageProcessor {
-            merge_size: RwLock::new(None),
             max_edge: self.max_edge,
         })
     }
@@ -309,7 +302,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
 
             if is_prompt {
                 if let Some(ref image_grid_thw_accum) = image_grid_thw_accum {
-                    let merge_length = self.merge_size.read().unwrap().unwrap().pow(2);
+                    let merge_length = config.merge_size.expect("Require `merge_size").pow(2);
                     let mut index = 0;
                     for (batch, text) in detok_seqs.iter_mut().enumerate() {
                         while text.contains(Qwen2VLProcessor::IMAGE_PAD) {
@@ -336,7 +329,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 }
 
                 if let Some(ref video_grid_thw_accum) = video_grid_thw_accum {
-                    let merge_length = self.merge_size.read().unwrap().unwrap().pow(2);
+                    let merge_length = config.merge_size.expect("Require `merge_size").pow(2);
                     let mut index = 0;
                     for (batch, text) in detok_seqs.iter_mut().enumerate() {
                         while text.contains(Qwen2VLProcessor::VIDEO_PAD) {
@@ -605,8 +598,6 @@ impl Qwen2VLImageProcessor {
             .context("Require `temporal_patch_size")?;
         let patch_size = config.patch_size.context("Require `patch_size")?;
         let merge_size = config.merge_size.context("Require `merge_size")?;
-        // Important to write it!
-        *self.merge_size.write().unwrap() = Some(merge_size);
         // Image
         if patches.dim(0)? == 1 {
             patches = patches.repeat((temporal_patch_size, 1, 1, 1))?;
