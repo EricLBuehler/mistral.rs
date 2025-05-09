@@ -364,7 +364,7 @@ impl Phi4MMInputsProcessor {
 
         // Paste the original image into the center of the new image
         new_image
-            .copy_from(image, left, top)
+            .copy_from(image, 0, 0)
             .expect("Failed to copy image");
 
         new_image
@@ -403,7 +403,8 @@ impl Phi4MMInputsProcessor {
                 best_ratio_diff = ratio_diff;
                 best_ratio = ratio;
             } else if ratio_diff == best_ratio_diff
-                && area as f64 > 0.5 * image_size as f64 * ratio.0 as f64 * ratio.1 as f64
+                && area as f64
+                    > 0.5 * image_size as f64 * image_size as f64 * ratio.0 as f64 * ratio.1 as f64
             {
                 best_ratio = ratio;
             }
@@ -469,6 +470,13 @@ impl Phi4MMInputsProcessor {
             )
         };
 
+        // Guard against extreme aspect ratios resulting in too-small dimensions
+        if new_size.1.min(target_height) < 10 || new_size.0.min(target_width) < 10 {
+            candle_core::bail!(
+                "Image aspect ratio too extreme; resulting size below minimum threshold",
+            );
+        }
+
         let mut attention_mask = Tensor::ones(
             (
                 (mask_size as f64 * target_aspect_ratio.1) as usize,
@@ -498,13 +506,19 @@ impl Phi4MMInputsProcessor {
             )?;
         }
 
+        // Ensure the attention mask is non-empty
+        let mask_sum: u32 = attention_mask.sum_all()?.to_scalar::<u32>()?;
+        if mask_sum == 0 {
+            candle_core::bail!("dynamic_preprocess produced an attention mask with zero sum",);
+        }
+
         image = image.resize_exact(new_size.0 as u32, new_size.1 as u32, FilterType::Nearest);
         image = Self::pad_image(
             &image,
             0,
             padding_height as u32,
-            padding_width as u32,
             0,
+            padding_width as u32,
             Rgba([255u8, 255, 255, 255]),
         );
 
@@ -541,7 +555,7 @@ impl ImagePreProcessor for Phi4MMInputsProcessor {
                 max_size = Some((max_size.unwrap().0, image.dimensions().1 as usize));
             }
         }
-        let (max_h, max_w) = max_size.unwrap();
+        let (max_w, max_h) = max_size.unwrap();
         for image in images.iter_mut() {
             *image = image.resize_exact(max_w as u32, max_h as u32, FilterType::Nearest);
         }

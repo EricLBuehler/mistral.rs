@@ -296,6 +296,9 @@ impl VisionModelLoader for Phi3VLoader {
     fn supports_paged_attention(&self) -> bool {
         true
     }
+    fn supports_prefix_cacher(&self) -> bool {
+        true
+    }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(Phi3VPrefixer)
     }
@@ -558,6 +561,9 @@ impl VisionModelLoader for Idefics2Loader {
         ))
     }
     fn supports_paged_attention(&self) -> bool {
+        true
+    }
+    fn supports_prefix_cacher(&self) -> bool {
         true
     }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
@@ -1369,6 +1375,9 @@ impl VisionModelLoader for VLlamaLoader {
     fn supports_paged_attention(&self) -> bool {
         false
     }
+    fn supports_prefix_cacher(&self) -> bool {
+        true
+    }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(VLlamaPrefixer)
     }
@@ -2030,6 +2039,9 @@ impl VisionModelLoader for Idefics3Loader {
     fn supports_paged_attention(&self) -> bool {
         true
     }
+    fn supports_prefix_cacher(&self) -> bool {
+        true
+    }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(Idefics3Prefixer)
     }
@@ -2576,6 +2588,9 @@ impl VisionModelLoader for Phi4MMLoader {
         Phi4MMProcessor::new_processor(processor_config, preprocessor_config)
     }
     fn supports_paged_attention(&self) -> bool {
+        true
+    }
+    fn supports_prefix_cacher(&self) -> bool {
         true
     }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
@@ -3484,6 +3499,9 @@ impl VisionModelLoader for Mistral3Loader {
         Arc::new(Mistral3Processor::new(processor_config.unwrap_or_default()))
     }
     fn supports_paged_attention(&self) -> bool {
+        true
+    }
+    fn supports_prefix_cacher(&self) -> bool {
         true
     }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
