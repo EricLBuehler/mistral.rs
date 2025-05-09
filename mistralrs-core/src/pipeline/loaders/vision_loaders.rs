@@ -97,6 +97,10 @@ pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync>;
     fn supports_paged_attention(&self) -> bool;
+    fn supports_prefix_cacher(&self) -> bool {
+        // Default is false, specific model must override.
+        false
+    }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer>;
     fn get_device_for_tensor(
         &self,
@@ -877,6 +881,9 @@ impl VisionModelLoader for LLaVANextLoader {
     fn supports_paged_attention(&self) -> bool {
         true
     }
+    fn supports_prefix_cacher(&self) -> bool {
+        true
+    }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(LLaVANextPrefixer)
     }
@@ -1120,6 +1127,9 @@ impl VisionModelLoader for LLaVALoader {
         Arc::new(LLaVAProcessor::new(model_config))
     }
     fn supports_paged_attention(&self) -> bool {
+        true
+    }
+    fn supports_prefix_cacher(&self) -> bool {
         true
     }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
@@ -3162,6 +3172,9 @@ impl VisionModelLoader for Gemma3Loader {
         ))
     }
     fn supports_paged_attention(&self) -> bool {
+        true
+    }
+    fn supports_prefix_cacher(&self) -> bool {
         true
     }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
