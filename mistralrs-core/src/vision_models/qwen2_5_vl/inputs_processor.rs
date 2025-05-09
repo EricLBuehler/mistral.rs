@@ -183,46 +183,46 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 .expect("Detokenization failed!");
 
             for seq in input_seqs.iter_mut() {
-                let (pixel_values, image_grid_thw, video_grid_thw) = {
-                    // if let Some(cached_pixel_values) = &seq.multimodal.cached_pixel_values {
-                    //     (
-                    //         cached_pixel_values.clone(),
-                    //         seq.multimodal.cached_img_thw.clone(),
-                    //         seq.multimodal.cached_vid_thw.clone(),
-                    //     )
-                    // } else {
-                    let PreprocessedImages {
-                        pixel_values,
-                        pixel_attention_mask: _,
-                        image_sizes: _,
-                        num_img_tokens: _,
-                        aspect_ratio_ids: _,
-                        aspect_ratio_mask: _,
-                        num_tiles: _,
-                        image_grid_thw,
-                        video_grid_thw,
-                        rows: _,
-                        cols: _,
-                        pixel_values_list: _,
-                        tgt_sizes: _,
-                        image_sizes_all: _,
-                        num_crops: _,
-                    } = self
-                        .preprocess(
-                            seq.clone_images()
-                                .expect("Need to have images by this point."),
-                            vec![],
-                            config,
-                            device,
-                            (usize::MAX, usize::MAX), // Don't use it here...
+                let (pixel_values, image_grid_thw, video_grid_thw) =
+                    if let Some(cached_pixel_values) = &seq.multimodal.cached_pixel_values {
+                        (
+                            cached_pixel_values.clone(),
+                            seq.multimodal.cached_img_thw.clone(),
+                            seq.multimodal.cached_vid_thw.clone(),
                         )
-                        .expect("Preprocessing failed");
+                    } else {
+                        let PreprocessedImages {
+                            pixel_values,
+                            pixel_attention_mask: _,
+                            image_sizes: _,
+                            num_img_tokens: _,
+                            aspect_ratio_ids: _,
+                            aspect_ratio_mask: _,
+                            num_tiles: _,
+                            image_grid_thw,
+                            video_grid_thw,
+                            rows: _,
+                            cols: _,
+                            pixel_values_list: _,
+                            tgt_sizes: _,
+                            image_sizes_all: _,
+                            num_crops: _,
+                        } = self
+                            .preprocess(
+                                seq.clone_images()
+                                    .expect("Need to have images by this point."),
+                                vec![],
+                                config,
+                                device,
+                                (usize::MAX, usize::MAX), // Don't use it here...
+                            )
+                            .expect("Preprocessing failed");
 
-                    seq.multimodal.cached_pixel_values = Some(pixel_values.clone());
-                    seq.multimodal.cached_img_thw = image_grid_thw.clone();
-                    seq.multimodal.cached_vid_thw = video_grid_thw.clone();
-                    (pixel_values, image_grid_thw, video_grid_thw)
-                };
+                        seq.multimodal.cached_pixel_values = Some(pixel_values.clone());
+                        seq.multimodal.cached_img_thw = image_grid_thw.clone();
+                        seq.multimodal.cached_vid_thw = video_grid_thw.clone();
+                        (pixel_values, image_grid_thw, video_grid_thw)
+                    };
 
                 pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
                 image_grid_thw_accum.push(image_grid_thw);
