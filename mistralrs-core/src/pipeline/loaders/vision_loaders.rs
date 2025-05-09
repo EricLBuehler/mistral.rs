@@ -3495,6 +3495,9 @@ impl VisionModelLoader for Mistral3Loader {
     fn supports_paged_attention(&self) -> bool {
         true
     }
+    fn supports_prefix_cacher(&self) -> bool {
+        true
+    }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(Mistral3Prefixer)
     }
