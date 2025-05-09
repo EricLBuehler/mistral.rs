@@ -299,10 +299,10 @@ impl InputsProcessor for Phi3InputsProcessor {
                     input_ids.extend(item);
                 }
 
-                // SAFETY: transmutng the i64 to a u32 here, will go back in the following lines
+                // SAFETY: transmuting the i64 to a u32 here, but keep the signed bit pattern
                 let new_ids = input_ids
                     .iter()
-                    .map(|x| unsafe { std::mem::transmute::<i32, u32>(*x as i32) })
+                    .map(|x| *x as i32 as u32)
                     .collect::<Vec<_>>();
                 let new_prompt = tokenizer.decode(&new_ids, false).unwrap();
                 seq.set_initial_prompt(new_prompt);
@@ -312,12 +312,7 @@ impl InputsProcessor for Phi3InputsProcessor {
 
                 toks.push(input_ids);
             } else {
-                toks.push(
-                    seq.get_toks()
-                        .iter()
-                        .map(|x| unsafe { std::mem::transmute::<u32, i32>(*x) } as i64)
-                        .collect(),
-                );
+                toks.push(seq.get_toks().iter().map(|x| *x as i32 as i64).collect());
             }
         }
 
