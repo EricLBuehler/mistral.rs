@@ -1080,9 +1080,9 @@ pub fn call_scan(
     }
 
     let type_name = match ty {
-        DType::F32 => "float",
+        DType::F32 => "float32",
         DType::BF16 => "bfloat16",
-        DType::F16 => "half",
+        DType::F16 => "float16",
         DType::U8 => "uint8",
         DType::I16 => "int16",
         DType::I32 => "int32",
