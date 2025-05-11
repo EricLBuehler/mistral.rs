@@ -26,7 +26,6 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
-serde_default_fn!(bool, use_flash_attn, false);
 serde_default_fn!(bool, tie_word_embeddings, false);
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -42,8 +41,6 @@ pub struct Config {
     pub(crate) rms_norm_eps: f64,
     pub(crate) rope_theta: f64,
     pub(crate) sliding_window: Option<usize>,
-    #[serde(default = "use_flash_attn")]
-    pub(crate) use_flash_attn: bool,
     pub(crate) head_dim: Option<usize>,
     pub(crate) quantization_config: Option<QuantizedConfig>,
     #[serde(default = "tie_word_embeddings")]
@@ -137,7 +134,6 @@ impl Attention {
                     cfg.num_attention_heads,
                     comm,
                 ),
-                use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: cfg.sliding_window,

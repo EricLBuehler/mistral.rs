@@ -23,10 +23,10 @@ use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader, AutoDeviceMapParams,
     BertEmbeddingModel, ChatCompletionResponse, CompletionResponse, Constraint,
     DefaultSchedulerMethod, DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DiffusionSpecificConfig,
-    DrySamplingParams, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
-    GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar,
-    Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
+    DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams,
+    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
+    ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar, Loader,
+    MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
     NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
     ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
     TokenSource, TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
@@ -83,8 +83,6 @@ fn parse_which(
     prompt_chunksize: Option<NonZeroUsize>,
     jinja_explicit: Option<String>,
 ) -> PyApiResult<Box<dyn Loader>> {
-    let use_flash_attn = mistralrs_core::using_flash_attn();
-
     Ok(match which {
         Which::Plain {
             model_id,
@@ -101,7 +99,6 @@ fn parse_which(
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                use_flash_attn,
                 prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.map(Into::into).unwrap_or(Default::default()),
@@ -138,7 +135,6 @@ fn parse_which(
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                use_flash_attn,
                 prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
@@ -182,7 +178,6 @@ fn parse_which(
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                use_flash_attn,
                 prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
@@ -394,7 +389,6 @@ fn parse_which(
             hf_cache_path,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
-                use_flash_attn,
                 prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
@@ -419,10 +413,7 @@ fn parse_which(
             model_id,
             arch,
             dtype: _,
-        } => {
-            DiffusionLoaderBuilder::new(DiffusionSpecificConfig { use_flash_attn }, Some(model_id))
-                .build(arch.into())
-        }
+        } => DiffusionLoaderBuilder::new(Some(model_id)).build(arch.into()),
     })
 }
 

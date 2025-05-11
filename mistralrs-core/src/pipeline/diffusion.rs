@@ -11,6 +11,7 @@ use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::ChatTemplate;
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
+use crate::utils::log::once_log_info;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::{DeviceMapSetting, PagedAttentionConfig, Pipeline, TryIntoDType};
@@ -39,7 +40,6 @@ pub struct DiffusionPipeline {
 pub struct DiffusionLoader {
     inner: Box<dyn DiffusionModelLoader>,
     model_id: String,
-    config: DiffusionSpecificConfig,
     kind: ModelKind,
 }
 
@@ -47,20 +47,12 @@ pub struct DiffusionLoader {
 /// A builder for a loader for a vision (non-quantized) model.
 pub struct DiffusionLoaderBuilder {
     model_id: Option<String>,
-    config: DiffusionSpecificConfig,
     kind: ModelKind,
 }
 
-#[derive(Clone, Default)]
-/// Config specific to loading a vision model.
-pub struct DiffusionSpecificConfig {
-    pub use_flash_attn: bool,
-}
-
 impl DiffusionLoaderBuilder {
-    pub fn new(config: DiffusionSpecificConfig, model_id: Option<String>) -> Self {
+    pub fn new(model_id: Option<String>) -> Self {
         Self {
-            config,
             model_id,
             kind: ModelKind::Normal,
         }
@@ -74,7 +66,6 @@ impl DiffusionLoaderBuilder {
         Box::new(DiffusionLoader {
             inner: loader,
             model_id: self.model_id.unwrap(),
-            config: self.config,
             kind: self.kind,
         })
     }
@@ -155,6 +146,10 @@ impl Loader for DiffusionLoader {
             paged_attn_config = None;
         }
 
+        if crate::using_flash_attn() {
+            once_log_info("FlashAttention is enabled.");
+        }
+
         let configs = paths
             .config_filenames
             .iter()
@@ -194,7 +189,6 @@ impl Loader for DiffusionLoader {
 
                 self.inner.load(
                     configs,
-                    self.config.use_flash_attn,
                     vbs,
                     crate::pipeline::NormalLoadingMetadata {
                         mapper,

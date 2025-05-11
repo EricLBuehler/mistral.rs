@@ -1,4 +1,3 @@
-use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::isq::ImatrixDataSource;
 use super::isq::UqffFullSer;
 use super::{
@@ -14,6 +13,7 @@ use super::{
 };
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
+use crate::kv_cache::{FullCacheManager, NormalCacheManager};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::llg::build_llg_factory;
@@ -22,6 +22,7 @@ use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
 use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
+use crate::utils::log::once_log_info;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
@@ -109,7 +110,6 @@ pub struct VisionLoaderBuilder {
 #[derive(Clone, Default)]
 /// Config specific to loading a vision model.
 pub struct VisionSpecificConfig {
-    pub use_flash_attn: bool,
     pub prompt_chunksize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
     pub write_uqff: Option<PathBuf>,
@@ -396,11 +396,10 @@ impl Loader for VisionLoader {
             paged_attn_config = None;
         }
 
-        info!(
-            "Model config: {:?}",
-            self.inner
-                .get_config_repr(&config, self.config.use_flash_attn)?
-        );
+        info!("Model config: {:?}", self.inner.get_config_repr(&config)?);
+        if crate::using_flash_attn() {
+            once_log_info("FlashAttention is enabled.");
+        }
 
         let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
         {
@@ -456,7 +455,6 @@ impl Loader for VisionLoader {
                     sharded_vb,
                     config,
                     self.inner,
-                    self.config.use_flash_attn,
                     mapper,
                     loading_isq,
                     device.clone(),
@@ -474,7 +472,6 @@ impl Loader for VisionLoader {
                     layer_devices.clone(),
                     config,
                     self.inner,
-                    self.config.use_flash_attn,
                     silent,
                     mapper,
                     loading_isq,
@@ -688,7 +685,7 @@ impl Loader for VisionLoader {
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 no_kv_cache: false,
-                no_prefix_cache: false,
+                no_prefix_cache: !self.inner.supports_prefix_cacher(),
                 activation_dtype: dtype,
                 sliding_window,
                 cache_config,
@@ -876,9 +873,7 @@ impl Pipeline for VisionPipeline {
         sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }
     fn category(&self) -> ModelCategory {
-        let has_conv2d = self.model.has_conv2d();
         ModelCategory::Vision {
-            has_conv2d,
             prefixer: self.prefixer.clone(),
         }
     }

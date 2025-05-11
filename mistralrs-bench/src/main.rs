@@ -11,7 +11,7 @@ use mistralrs_core::{
 use std::sync::Arc;
 use std::{fmt::Display, num::NonZeroUsize};
 use tokio::sync::mpsc::channel;
-use tracing::{info, warn};
+use tracing::info;
 
 enum TestName {
     Prompt(usize),
@@ -346,8 +346,6 @@ fn main() -> anyhow::Result<()> {
 
     args.concurrency = Some(args.concurrency.unwrap_or(vec![1]));
 
-    let use_flash_attn = mistralrs_core::using_flash_attn();
-
     let prompt_chunksize = match args.prompt_chunksize {
         Some(0) => {
             anyhow::bail!("`prompt_chunksize` must be a strictly positive integer, got 0.",)
@@ -362,7 +360,6 @@ fn main() -> anyhow::Result<()> {
     let max_seq_len = auto_device_map_params.max_seq_len();
 
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
-        .with_use_flash_attn(use_flash_attn)
         .with_prompt_chunksize(prompt_chunksize)
         .build()?;
     let model_name = loader.get_id();
@@ -389,12 +386,6 @@ fn main() -> anyhow::Result<()> {
         candle_core::utils::with_f16c()
     );
     info!("Sampling method: penalties -> temperature -> topk -> topp -> minp -> multinomial");
-    if use_flash_attn {
-        info!("Using flash attention.");
-    }
-    if use_flash_attn && loader.get_kind().is_quantized() {
-        warn!("Using flash attention with a quantized model has no effect!")
-    }
     info!("Model kind is: {}", loader.get_kind().to_string());
 
     // Parse device mapper

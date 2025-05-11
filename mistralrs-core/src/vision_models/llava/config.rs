@@ -15,11 +15,7 @@ pub struct Config {
     pub vision_config: LLaVAVisionConfig,
     pub vision_feature_layer: isize,
     pub vision_feature_select_strategy: String,
-    #[serde(default = "default_use_flash_attn")]
-    pub use_flash_attn: bool,
 }
-
-serde_default_fn!(bool, default_use_flash_attn, false);
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct LLaVATextConfig {
@@ -74,7 +70,6 @@ impl Config {
             num_hidden_layers: self.text_config.num_hidden_layers,
             num_attention_heads: self.text_config.num_attention_heads,
             num_key_value_heads: self.text_config.num_key_value_heads,
-            use_flash_attn: self.use_flash_attn,
             rms_norm_eps: self.text_config.rms_norm_eps,
             rope_theta: self.text_config.rope_theta,
             max_position_embeddings: self.text_config.max_position_embeddings,
@@ -98,7 +93,6 @@ impl Config {
             rms_norm_eps: self.text_config.rms_norm_eps,
             rope_theta: self.text_config.rope_theta as f64,
             sliding_window: self.text_config.sliding_window,
-            use_flash_attn: self.use_flash_attn,
             head_dim: None,
             quantization_config: None,
             tie_word_embeddings: false,

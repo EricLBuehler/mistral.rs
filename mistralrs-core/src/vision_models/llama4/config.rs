@@ -7,7 +7,6 @@ use crate::{
 };
 
 serde_default_fn!(bool, word_emb_default, false);
-serde_default_fn!(bool, use_flash_attn_default, false);
 serde_default_fn!(Option<f32>, attn_temperature_tuning, Some(4.));
 serde_default_fn!(Option<f32>, floor_scale, Some(8192.));
 serde_default_fn!(Option<f32>, attn_scale, Some(0.1));
@@ -21,8 +20,6 @@ pub struct TextConfig {
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
     pub num_key_value_heads: usize,
-    #[serde(default = "use_flash_attn_default")]
-    pub use_flash_attn: bool,
     pub rms_norm_eps: f64,
     pub rope_theta: f32,
     pub max_position_embeddings: usize,

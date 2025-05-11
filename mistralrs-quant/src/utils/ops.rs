@@ -649,8 +649,8 @@ impl CustomOp2 for BitWise {
                 s1.dtype(),
                 s1.buffer(),
                 s2.buffer(),
-                l1.start_offset(),
-                l2.start_offset(),
+                l1.start_offset() * s1.dtype().size_in_bytes(),
+                l2.start_offset() * s2.dtype().size_in_bytes(),
                 out_shape.elem_count(),
                 &output,
             )
@@ -662,8 +662,8 @@ impl CustomOp2 for BitWise {
                 s1.dtype(),
                 s1.buffer(),
                 s2.buffer(),
-                l1.start_offset(),
-                l2.start_offset(),
+                l1.start_offset() * s1.dtype().size_in_bytes(),
+                l2.start_offset() * s2.dtype().size_in_bytes(),
                 out_shape.elem_count(),
                 &output,
             )

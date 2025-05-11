@@ -323,6 +323,8 @@ impl InputsProcessor for MLlamaImageProcessor {
                 aspect_ratio_ids_accum.push(aspect_ratio_ids.unwrap().unsqueeze(0).unwrap());
                 aspect_ratio_mask_accum.push(aspect_ratio_mask.unwrap().unsqueeze(0).unwrap());
                 num_tiles_accum.push(num_tiles.unwrap());
+
+                seq.multimodal.has_changed_prompt = true;
             }
 
             // Create cross attn mask

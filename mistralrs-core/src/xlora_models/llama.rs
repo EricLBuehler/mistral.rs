@@ -202,7 +202,6 @@ impl CausalSelfAttention {
             max_seq_len: cfg.max_position_embeddings,
             sdpa_params: SdpaParams {
                 n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
-                use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
                 sliding_window: None,

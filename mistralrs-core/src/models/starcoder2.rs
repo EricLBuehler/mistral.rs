@@ -42,7 +42,6 @@ pub struct Config {
     pub(crate) rope_theta: f64,
     pub(crate) use_bias: bool,
     pub(crate) sliding_window: Option<usize>,
-    pub(crate) use_flash_attn: bool,
     pub(crate) quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     #[allow(dead_code)]
@@ -223,7 +222,6 @@ impl Attention {
                     cfg.num_attention_heads,
                     comm,
                 ),
-                use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: cfg.sliding_window,

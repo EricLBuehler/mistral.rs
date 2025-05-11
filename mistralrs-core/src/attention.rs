@@ -266,7 +266,6 @@ fn naive_sdpa(
 
 pub struct SdpaParams {
     pub n_kv_groups: usize,
-    pub use_flash_attn: bool,
     pub softcap: Option<f32>,
     pub softmax_scale: f32,
     pub sliding_window: Option<usize>,
@@ -283,7 +282,7 @@ impl Sdpa {
     /// - v: (b_sz, n_kv_heads, q_len, head_dim)
     ///
     /// The attention implementation is dispatched as follows:
-    /// 1) If `use_flash_attn == true` (CUDA), use a flash attention V2 kernel
+    /// 1) If using flash attn (CUDA), use a flash attention V2/V3 kernel
     /// 2) If decoding and using a Metal device, use a fused kkernel
     /// 2) Otherwise, use the "naive" SDPA implementation (with optimized mask+softmax+scale application)
     #[allow(unused_variables, clippy::too_many_arguments)]
@@ -299,7 +298,7 @@ impl Sdpa {
         let (b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()?;
         let (_, _, _, k_head_dim) = k.dims4()?;
         let (_, _, _, v_head_dim) = v.dims4()?;
-        if sdpa_params.use_flash_attn && q.device().is_cuda() {
+        if crate::using_flash_attn() && q.device().is_cuda() {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
@@ -369,7 +368,9 @@ impl Sdpa {
                         Some(mask.repeat((n_attn_heads, 1, 1))?)
                     }
                     Some(mask) if mask.rank() == 3 => Some(mask.clone()),
-                    Some(mask) if mask.rank() == 4 => Some(mask.flatten(0, 1)?),
+                    Some(mask) if mask.rank() == 4 => {
+                        Some(mask.broadcast_as(tgt_mask_shape)?.flatten(0, 1)?)
+                    }
                     Some(mask) => {
                         candle_core::bail!("cublaslt attn mask: rank must be 3 or 4")
                     }
@@ -400,7 +401,7 @@ impl Sdpa {
                 candle_nn::ops::inplace_softmax_last_dim(&mut attention_scores)?;
 
                 let context_layer = cublaslt.batch_matmul(
-                    &v.t()?.contiguous().unwrap(),
+                    &v.t()?.contiguous()?,
                     &attention_scores,
                     // We save one allocation
                     Some(&q),

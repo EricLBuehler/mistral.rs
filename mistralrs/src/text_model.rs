@@ -26,7 +26,6 @@ pub struct TextModelBuilder {
     pub(crate) search_bert_model: Option<BertEmbeddingModel>,
 
     // Model running
-    pub(crate) use_flash_attn: bool,
     pub(crate) prompt_chunksize: Option<NonZeroUsize>,
     pub(crate) topology: Option<Topology>,
     pub(crate) organization: IsqOrganization,
@@ -88,7 +87,6 @@ impl TextModelBuilder {
     pub fn new(model_id: impl ToString) -> Self {
         Self {
             model_id: model_id.to_string(),
-            use_flash_attn: cfg!(feature = "flash-attn"),
             prompt_chunksize: None,
             topology: None,
             organization: IsqOrganization::Default,
@@ -287,7 +285,6 @@ impl TextModelBuilder {
 
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = NormalSpecificConfig {
-            use_flash_attn: self.use_flash_attn,
             prompt_chunksize: self.prompt_chunksize,
             topology: self.topology,
             organization: self.organization,

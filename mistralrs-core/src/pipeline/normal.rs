@@ -1,4 +1,3 @@
-use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 use super::isq::ImatrixDataSource;
 use super::llg::build_llg_factory;
@@ -19,6 +18,7 @@ use super::{
 use crate::amoe::AnyMoeExpertType;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
+use crate::kv_cache::{FullCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
@@ -29,6 +29,7 @@ use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
+use crate::utils::log::once_log_info;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
@@ -117,7 +118,6 @@ pub struct NormalLoaderBuilder {
 #[derive(Clone, Default)]
 /// Config specific to loading a normal model.
 pub struct NormalSpecificConfig {
-    pub use_flash_attn: bool,
     pub prompt_chunksize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
     pub organization: IsqOrganization,
@@ -461,11 +461,10 @@ impl Loader for NormalLoader {
             paged_attn_config = None;
         }
 
-        info!(
-            "Model config: {:?}",
-            self.inner
-                .get_config_repr(&config, self.config.use_flash_attn)?
-        );
+        info!("Model config: {:?}", self.inner.get_config_repr(&config)?);
+        if crate::using_flash_attn() {
+            once_log_info("FlashAttention is enabled.");
+        }
 
         let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
         {
@@ -523,7 +522,6 @@ impl Loader for NormalLoader {
                     sharded_vb,
                     config,
                     self.inner,
-                    self.config.use_flash_attn,
                     mapper,
                     loading_isq,
                     device.clone(),
@@ -539,7 +537,6 @@ impl Loader for NormalLoader {
                     layer_devices.clone(),
                     config,
                     self.inner,
-                    self.config.use_flash_attn,
                     silent,
                     mapper,
                     loading_isq,
@@ -555,7 +552,6 @@ impl Loader for NormalLoader {
                     layer_devices.clone(),
                     config,
                     self.inner,
-                    self.config.use_flash_attn,
                     silent,
                     mapper,
                     loading_isq,
@@ -576,7 +572,6 @@ impl Loader for NormalLoader {
                     layer_devices.clone(),
                     config,
                     self.inner,
-                    self.config.use_flash_attn,
                     silent,
                     mapper,
                     loading_isq,
@@ -595,7 +590,6 @@ impl Loader for NormalLoader {
                     layer_devices.clone(),
                     config,
                     self.inner,
-                    self.config.use_flash_attn,
                     silent,
                     mapper,
                     loading_isq,
@@ -611,7 +605,6 @@ impl Loader for NormalLoader {
                     layer_devices.clone(),
                     config,
                     self.inner,
-                    self.config.use_flash_attn,
                     silent,
                     mapper,
                     loading_isq,

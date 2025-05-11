@@ -174,27 +174,28 @@ impl InputsProcessor for Idefics3ImageProcessor {
                 pixel_attention_mask_accum
                     .push(pixel_attention_mask.unwrap().unsqueeze(0).unwrap());
 
-                let detok = tokenizer
-                    .decode(seq.get_toks(), false)
-                    .expect("Detokenization failed!");
-
-                let mut image_prompt_strings = Vec::new();
-                for (n_rows, n_cols) in rows.unwrap().into_iter().zip(cols.unwrap().into_iter()) {
-                    let image_prompt_string =
-                        get_image_prompt_string(n_rows, n_cols, self.image_seq_len);
-                    image_prompt_strings.push(image_prompt_string);
-                }
-
-                let split_sample = detok.split(IMAGE_TOKEN).collect::<Vec<_>>();
-                let mut sample = split_sample
-                    .first()
-                    .expect("The image token <image> should be present in the text.")
-                    .to_string();
-                for (i, image_prompt_string) in image_prompt_strings.into_iter().enumerate() {
-                    sample.push_str(&format!("{image_prompt_string}{}", split_sample[i]));
-                }
-
                 if !seq.multimodal.has_changed_prompt {
+                    let detok = tokenizer
+                        .decode(seq.get_toks(), false)
+                        .expect("Detokenization failed!");
+
+                    let mut image_prompt_strings = Vec::new();
+                    for (n_rows, n_cols) in rows.unwrap().into_iter().zip(cols.unwrap().into_iter())
+                    {
+                        let image_prompt_string =
+                            get_image_prompt_string(n_rows, n_cols, self.image_seq_len);
+                        image_prompt_strings.push(image_prompt_string);
+                    }
+
+                    let split_sample = detok.split(IMAGE_TOKEN).collect::<Vec<_>>();
+                    let mut sample = split_sample
+                        .first()
+                        .expect("The image token <image> should be present in the text.")
+                        .to_string();
+                    for (i, image_prompt_string) in image_prompt_strings.into_iter().enumerate() {
+                        sample.push_str(&format!("{image_prompt_string}{}", split_sample[i]));
+                    }
+
                     seq.set_initial_prompt(sample.clone());
                     let toks = tokenizer
                         .encode_fast(sample, false)

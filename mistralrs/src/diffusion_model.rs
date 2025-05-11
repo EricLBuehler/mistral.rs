@@ -13,7 +13,6 @@ pub struct DiffusionModelBuilder {
     pub(crate) loader_type: DiffusionLoaderType,
     pub(crate) dtype: ModelDType,
     pub(crate) force_cpu: bool,
-    pub(crate) use_flash_attn: bool,
 
     // Other things
     pub(crate) max_num_seqs: usize,
@@ -27,7 +26,6 @@ impl DiffusionModelBuilder {
     pub fn new(model_id: impl ToString, loader_type: DiffusionLoaderType) -> Self {
         Self {
             model_id: model_id.to_string(),
-            use_flash_attn: cfg!(feature = "flash-attn"),
             loader_type,
             dtype: ModelDType::Auto,
             force_cpu: false,
@@ -75,16 +73,11 @@ impl DiffusionModelBuilder {
     }
 
     pub async fn build(self) -> anyhow::Result<Model> {
-        let config = DiffusionSpecificConfig {
-            use_flash_attn: self.use_flash_attn,
-        };
-
         if self.with_logging {
             initialize_logging();
         }
 
-        let loader =
-            DiffusionLoaderBuilder::new(config, Some(self.model_id)).build(self.loader_type);
+        let loader = DiffusionLoaderBuilder::new(Some(self.model_id)).build(self.loader_type);
 
         // Load, into a Pipeline
         let pipeline = loader.load_model_from_hf(

@@ -30,7 +30,6 @@ use crate::{
 };
 
 serde_default_fn!(bool, word_emb_default, false);
-serde_default_fn!(bool, use_flash_attn_default, false);
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Config {
@@ -41,8 +40,6 @@ pub struct Config {
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
     pub num_key_value_heads: usize,
-    #[serde(default = "use_flash_attn_default")]
-    pub use_flash_attn: bool,
     pub rms_norm_eps: f64,
     pub rope_theta: f32,
     pub max_position_embeddings: usize,
@@ -240,7 +237,6 @@ impl CausalSelfAttention {
                     cfg.num_attention_heads,
                     comm,
                 ),
-                use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
                 sliding_window: None,
