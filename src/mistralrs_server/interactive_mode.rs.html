@@ -240,415 +240,433 @@
 <a href=#240 id=240 data-nosnippet>240</a>            web_search_options: do_search.then(WebSearchOptions::default),
 <a href=#241 id=241 data-nosnippet>241</a>        });
 <a href=#242 id=242 data-nosnippet>242</a>        sender.send(req).<span class="kw">await</span>.unwrap();
-<a href=#243 id=243 data-nosnippet>243</a>
-<a href=#244 id=244 data-nosnippet>244</a>        <span class="kw">let </span><span class="kw-2">mut </span>assistant_output = String::new();
+<a href=#243 id=243 data-nosnippet>243</a>        <span class="kw">let </span>start_ttft = Instant::now();
+<a href=#244 id=244 data-nosnippet>244</a>        <span class="kw">let </span><span class="kw-2">mut </span>first_token_duration: <span class="prelude-ty">Option</span>&lt;std::time::Duration&gt; = <span class="prelude-val">None</span>;
 <a href=#245 id=245 data-nosnippet>245</a>
-<a href=#246 id=246 data-nosnippet>246</a>        <span class="kw">let </span><span class="kw-2">mut </span>last_usage = <span class="prelude-val">None</span>;
-<a href=#247 id=247 data-nosnippet>247</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>(resp) = rx.recv().<span class="kw">await </span>{
-<a href=#248 id=248 data-nosnippet>248</a>            <span class="kw">match </span>resp {
-<a href=#249 id=249 data-nosnippet>249</a>                Response::Chunk(chunk) =&gt; {
-<a href=#250 id=250 data-nosnippet>250</a>                    last_usage = chunk.usage.clone();
-<a href=#251 id=251 data-nosnippet>251</a>                    <span class="kw">if let </span>ChunkChoice {
-<a href=#252 id=252 data-nosnippet>252</a>                        delta:
-<a href=#253 id=253 data-nosnippet>253</a>                            Delta {
-<a href=#254 id=254 data-nosnippet>254</a>                                content: <span class="prelude-val">Some</span>(content),
-<a href=#255 id=255 data-nosnippet>255</a>                                ..
-<a href=#256 id=256 data-nosnippet>256</a>                            },
-<a href=#257 id=257 data-nosnippet>257</a>                        finish_reason,
-<a href=#258 id=258 data-nosnippet>258</a>                        ..
-<a href=#259 id=259 data-nosnippet>259</a>                    } = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>]
-<a href=#260 id=260 data-nosnippet>260</a>                    {
-<a href=#261 id=261 data-nosnippet>261</a>                        assistant_output.push_str(content);
-<a href=#262 id=262 data-nosnippet>262</a>                        <span class="macro">print!</span>(<span class="string">"{content}"</span>);
-<a href=#263 id=263 data-nosnippet>263</a>                        io::stdout().flush().unwrap();
-<a href=#264 id=264 data-nosnippet>264</a>                        <span class="kw">if </span>finish_reason.is_some() {
-<a href=#265 id=265 data-nosnippet>265</a>                            <span class="kw">if </span><span class="macro">matches!</span>(finish_reason.as_ref().unwrap().as_str(), <span class="string">"length"</span>) {
-<a href=#266 id=266 data-nosnippet>266</a>                                <span class="macro">print!</span>(<span class="string">"..."</span>);
-<a href=#267 id=267 data-nosnippet>267</a>                            }
-<a href=#268 id=268 data-nosnippet>268</a>                            <span class="kw">break</span>;
-<a href=#269 id=269 data-nosnippet>269</a>                        }
-<a href=#270 id=270 data-nosnippet>270</a>                    }
-<a href=#271 id=271 data-nosnippet>271</a>                }
-<a href=#272 id=272 data-nosnippet>272</a>                Response::InternalError(e) =&gt; {
-<a href=#273 id=273 data-nosnippet>273</a>                    <span class="macro">error!</span>(<span class="string">"Got an internal error: {e:?}"</span>);
-<a href=#274 id=274 data-nosnippet>274</a>                    <span class="kw">break </span><span class="lifetime">'outer</span>;
-<a href=#275 id=275 data-nosnippet>275</a>                }
-<a href=#276 id=276 data-nosnippet>276</a>                Response::ModelError(e, resp) =&gt; {
-<a href=#277 id=277 data-nosnippet>277</a>                    <span class="macro">error!</span>(<span class="string">"Got a model error: {e:?}, response: {resp:?}"</span>);
-<a href=#278 id=278 data-nosnippet>278</a>                    <span class="kw">break </span><span class="lifetime">'outer</span>;
-<a href=#279 id=279 data-nosnippet>279</a>                }
-<a href=#280 id=280 data-nosnippet>280</a>                Response::ValidationError(e) =&gt; {
-<a href=#281 id=281 data-nosnippet>281</a>                    <span class="macro">error!</span>(<span class="string">"Got a validation error: {e:?}"</span>);
-<a href=#282 id=282 data-nosnippet>282</a>                    <span class="kw">break </span><span class="lifetime">'outer</span>;
-<a href=#283 id=283 data-nosnippet>283</a>                }
-<a href=#284 id=284 data-nosnippet>284</a>                Response::Done(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#285 id=285 data-nosnippet>285</a>                Response::CompletionDone(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#286 id=286 data-nosnippet>286</a>                Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#287 id=287 data-nosnippet>287</a>                Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#288 id=288 data-nosnippet>288</a>                Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#289 id=289 data-nosnippet>289</a>                Response::Raw { .. } =&gt; <span class="macro">unreachable!</span>(),
-<a href=#290 id=290 data-nosnippet>290</a>            }
-<a href=#291 id=291 data-nosnippet>291</a>        }
-<a href=#292 id=292 data-nosnippet>292</a>
-<a href=#293 id=293 data-nosnippet>293</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(last_usage) = last_usage {
-<a href=#294 id=294 data-nosnippet>294</a>            <span class="macro">println!</span>();
-<a href=#295 id=295 data-nosnippet>295</a>            <span class="macro">println!</span>();
-<a href=#296 id=296 data-nosnippet>296</a>            <span class="macro">println!</span>(<span class="string">"Stats:"</span>);
-<a href=#297 id=297 data-nosnippet>297</a>            <span class="macro">println!</span>(
-<a href=#298 id=298 data-nosnippet>298</a>                <span class="string">"Prompt: {} tokens, {:.2} T/s"</span>,
-<a href=#299 id=299 data-nosnippet>299</a>                last_usage.prompt_tokens, last_usage.avg_prompt_tok_per_sec
-<a href=#300 id=300 data-nosnippet>300</a>            );
-<a href=#301 id=301 data-nosnippet>301</a>            <span class="macro">println!</span>(
-<a href=#302 id=302 data-nosnippet>302</a>                <span class="string">"Decode: {} tokens, {:.2} T/s"</span>,
-<a href=#303 id=303 data-nosnippet>303</a>                last_usage.completion_tokens, last_usage.avg_compl_tok_per_sec
-<a href=#304 id=304 data-nosnippet>304</a>            );
-<a href=#305 id=305 data-nosnippet>305</a>        }
-<a href=#306 id=306 data-nosnippet>306</a>        <span class="kw">let </span><span class="kw-2">mut </span>assistant_message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
-<a href=#307 id=307 data-nosnippet>307</a>            IndexMap::new();
-<a href=#308 id=308 data-nosnippet>308</a>        assistant_message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"assistant"</span>.to_string()));
-<a href=#309 id=309 data-nosnippet>309</a>        assistant_message.insert(<span class="string">"content"</span>.to_string(), Either::Left(assistant_output));
-<a href=#310 id=310 data-nosnippet>310</a>        messages.push(assistant_message);
-<a href=#311 id=311 data-nosnippet>311</a>        <span class="macro">println!</span>();
-<a href=#312 id=312 data-nosnippet>312</a>    }
-<a href=#313 id=313 data-nosnippet>313</a>
-<a href=#314 id=314 data-nosnippet>314</a>    rl.save_history(<span class="kw-2">&amp;</span>history_file_path()).unwrap();
-<a href=#315 id=315 data-nosnippet>315</a>}
-<a href=#316 id=316 data-nosnippet>316</a>
-<a href=#317 id=317 data-nosnippet>317</a><span class="kw">fn </span>parse_files_and_message(input: <span class="kw-2">&amp;</span>str, regex: <span class="kw-2">&amp;</span>Regex) -&gt; (Vec&lt;String&gt;, String) {
-<a href=#318 id=318 data-nosnippet>318</a>    <span class="comment">// Collect all URLs
-<a href=#319 id=319 data-nosnippet>319</a>    </span><span class="kw">let </span>urls: Vec&lt;String&gt; = regex
-<a href=#320 id=320 data-nosnippet>320</a>        .captures_iter(input)
-<a href=#321 id=321 data-nosnippet>321</a>        .filter_map(|cap| cap.get(<span class="number">1</span>).map(|m| m.as_str().to_string()))
-<a href=#322 id=322 data-nosnippet>322</a>        .collect();
-<a href=#323 id=323 data-nosnippet>323</a>    <span class="comment">// Remove the URLs from the input to get the message text
-<a href=#324 id=324 data-nosnippet>324</a>    </span><span class="kw">let </span>text = regex.replace_all(input, <span class="string">""</span>).trim().to_string();
-<a href=#325 id=325 data-nosnippet>325</a>    (urls, text)
-<a href=#326 id=326 data-nosnippet>326</a>}
-<a href=#327 id=327 data-nosnippet>327</a>
-<a href=#328 id=328 data-nosnippet>328</a><span class="kw">async fn </span>vision_interactive_mode(
-<a href=#329 id=329 data-nosnippet>329</a>    mistralrs: Arc&lt;MistralRs&gt;,
-<a href=#330 id=330 data-nosnippet>330</a>    do_search: bool,
-<a href=#331 id=331 data-nosnippet>331</a>    enable_thinking: <span class="prelude-ty">Option</span>&lt;bool&gt;,
-<a href=#332 id=332 data-nosnippet>332</a>) {
-<a href=#333 id=333 data-nosnippet>333</a>    <span class="comment">// Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
-<a href=#334 id=334 data-nosnippet>334</a>    </span><span class="kw">let </span>image_regex =
-<a href=#335 id=335 data-nosnippet>335</a>        Regex::new(<span class="string">r#"((?:https?://|file://)?\S+\.(?:png|jpe?g|bmp|gif|webp))"#</span>).unwrap();
+<a href=#246 id=246 data-nosnippet>246</a>        <span class="kw">let </span><span class="kw-2">mut </span>assistant_output = String::new();
+<a href=#247 id=247 data-nosnippet>247</a>
+<a href=#248 id=248 data-nosnippet>248</a>        <span class="kw">let </span><span class="kw-2">mut </span>last_usage = <span class="prelude-val">None</span>;
+<a href=#249 id=249 data-nosnippet>249</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>(resp) = rx.recv().<span class="kw">await </span>{
+<a href=#250 id=250 data-nosnippet>250</a>            <span class="kw">match </span>resp {
+<a href=#251 id=251 data-nosnippet>251</a>                Response::Chunk(chunk) =&gt; {
+<a href=#252 id=252 data-nosnippet>252</a>                    last_usage = chunk.usage.clone();
+<a href=#253 id=253 data-nosnippet>253</a>                    <span class="kw">if let </span>ChunkChoice {
+<a href=#254 id=254 data-nosnippet>254</a>                        delta:
+<a href=#255 id=255 data-nosnippet>255</a>                            Delta {
+<a href=#256 id=256 data-nosnippet>256</a>                                content: <span class="prelude-val">Some</span>(content),
+<a href=#257 id=257 data-nosnippet>257</a>                                ..
+<a href=#258 id=258 data-nosnippet>258</a>                            },
+<a href=#259 id=259 data-nosnippet>259</a>                        finish_reason,
+<a href=#260 id=260 data-nosnippet>260</a>                        ..
+<a href=#261 id=261 data-nosnippet>261</a>                    } = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>]
+<a href=#262 id=262 data-nosnippet>262</a>                    {
+<a href=#263 id=263 data-nosnippet>263</a>                        <span class="kw">if </span>first_token_duration.is_none() {
+<a href=#264 id=264 data-nosnippet>264</a>                            <span class="kw">let </span>ttft = Instant::now().duration_since(start_ttft);
+<a href=#265 id=265 data-nosnippet>265</a>                            first_token_duration = <span class="prelude-val">Some</span>(ttft);
+<a href=#266 id=266 data-nosnippet>266</a>                        }
+<a href=#267 id=267 data-nosnippet>267</a>                        assistant_output.push_str(content);
+<a href=#268 id=268 data-nosnippet>268</a>                        <span class="macro">print!</span>(<span class="string">"{content}"</span>);
+<a href=#269 id=269 data-nosnippet>269</a>                        io::stdout().flush().unwrap();
+<a href=#270 id=270 data-nosnippet>270</a>                        <span class="kw">if </span>finish_reason.is_some() {
+<a href=#271 id=271 data-nosnippet>271</a>                            <span class="kw">if </span><span class="macro">matches!</span>(finish_reason.as_ref().unwrap().as_str(), <span class="string">"length"</span>) {
+<a href=#272 id=272 data-nosnippet>272</a>                                <span class="macro">print!</span>(<span class="string">"..."</span>);
+<a href=#273 id=273 data-nosnippet>273</a>                            }
+<a href=#274 id=274 data-nosnippet>274</a>                            <span class="kw">break</span>;
+<a href=#275 id=275 data-nosnippet>275</a>                        }
+<a href=#276 id=276 data-nosnippet>276</a>                    }
+<a href=#277 id=277 data-nosnippet>277</a>                }
+<a href=#278 id=278 data-nosnippet>278</a>                Response::InternalError(e) =&gt; {
+<a href=#279 id=279 data-nosnippet>279</a>                    <span class="macro">error!</span>(<span class="string">"Got an internal error: {e:?}"</span>);
+<a href=#280 id=280 data-nosnippet>280</a>                    <span class="kw">break </span><span class="lifetime">'outer</span>;
+<a href=#281 id=281 data-nosnippet>281</a>                }
+<a href=#282 id=282 data-nosnippet>282</a>                Response::ModelError(e, resp) =&gt; {
+<a href=#283 id=283 data-nosnippet>283</a>                    <span class="macro">error!</span>(<span class="string">"Got a model error: {e:?}, response: {resp:?}"</span>);
+<a href=#284 id=284 data-nosnippet>284</a>                    <span class="kw">break </span><span class="lifetime">'outer</span>;
+<a href=#285 id=285 data-nosnippet>285</a>                }
+<a href=#286 id=286 data-nosnippet>286</a>                Response::ValidationError(e) =&gt; {
+<a href=#287 id=287 data-nosnippet>287</a>                    <span class="macro">error!</span>(<span class="string">"Got a validation error: {e:?}"</span>);
+<a href=#288 id=288 data-nosnippet>288</a>                    <span class="kw">break </span><span class="lifetime">'outer</span>;
+<a href=#289 id=289 data-nosnippet>289</a>                }
+<a href=#290 id=290 data-nosnippet>290</a>                Response::Done(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#291 id=291 data-nosnippet>291</a>                Response::CompletionDone(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#292 id=292 data-nosnippet>292</a>                Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#293 id=293 data-nosnippet>293</a>                Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#294 id=294 data-nosnippet>294</a>                Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#295 id=295 data-nosnippet>295</a>                Response::Raw { .. } =&gt; <span class="macro">unreachable!</span>(),
+<a href=#296 id=296 data-nosnippet>296</a>            }
+<a href=#297 id=297 data-nosnippet>297</a>        }
+<a href=#298 id=298 data-nosnippet>298</a>
+<a href=#299 id=299 data-nosnippet>299</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(last_usage) = last_usage {
+<a href=#300 id=300 data-nosnippet>300</a>            <span class="macro">println!</span>();
+<a href=#301 id=301 data-nosnippet>301</a>            <span class="macro">println!</span>();
+<a href=#302 id=302 data-nosnippet>302</a>            <span class="macro">println!</span>(<span class="string">"Stats:"</span>);
+<a href=#303 id=303 data-nosnippet>303</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(ttft) = first_token_duration {
+<a href=#304 id=304 data-nosnippet>304</a>                <span class="macro">println!</span>(<span class="string">"Time to first token: {:.2?}s"</span>, ttft.as_secs_f32());
+<a href=#305 id=305 data-nosnippet>305</a>            }
+<a href=#306 id=306 data-nosnippet>306</a>            <span class="macro">println!</span>(
+<a href=#307 id=307 data-nosnippet>307</a>                <span class="string">"Prompt: {} tokens, {:.2} T/s"</span>,
+<a href=#308 id=308 data-nosnippet>308</a>                last_usage.prompt_tokens, last_usage.avg_prompt_tok_per_sec
+<a href=#309 id=309 data-nosnippet>309</a>            );
+<a href=#310 id=310 data-nosnippet>310</a>            <span class="macro">println!</span>(
+<a href=#311 id=311 data-nosnippet>311</a>                <span class="string">"Decode: {} tokens, {:.2} T/s"</span>,
+<a href=#312 id=312 data-nosnippet>312</a>                last_usage.completion_tokens, last_usage.avg_compl_tok_per_sec
+<a href=#313 id=313 data-nosnippet>313</a>            );
+<a href=#314 id=314 data-nosnippet>314</a>        }
+<a href=#315 id=315 data-nosnippet>315</a>        <span class="kw">let </span><span class="kw-2">mut </span>assistant_message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
+<a href=#316 id=316 data-nosnippet>316</a>            IndexMap::new();
+<a href=#317 id=317 data-nosnippet>317</a>        assistant_message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"assistant"</span>.to_string()));
+<a href=#318 id=318 data-nosnippet>318</a>        assistant_message.insert(<span class="string">"content"</span>.to_string(), Either::Left(assistant_output));
+<a href=#319 id=319 data-nosnippet>319</a>        messages.push(assistant_message);
+<a href=#320 id=320 data-nosnippet>320</a>        <span class="macro">println!</span>();
+<a href=#321 id=321 data-nosnippet>321</a>    }
+<a href=#322 id=322 data-nosnippet>322</a>
+<a href=#323 id=323 data-nosnippet>323</a>    rl.save_history(<span class="kw-2">&amp;</span>history_file_path()).unwrap();
+<a href=#324 id=324 data-nosnippet>324</a>}
+<a href=#325 id=325 data-nosnippet>325</a>
+<a href=#326 id=326 data-nosnippet>326</a><span class="kw">fn </span>parse_files_and_message(input: <span class="kw-2">&amp;</span>str, regex: <span class="kw-2">&amp;</span>Regex) -&gt; (Vec&lt;String&gt;, String) {
+<a href=#327 id=327 data-nosnippet>327</a>    <span class="comment">// Collect all URLs
+<a href=#328 id=328 data-nosnippet>328</a>    </span><span class="kw">let </span>urls: Vec&lt;String&gt; = regex
+<a href=#329 id=329 data-nosnippet>329</a>        .captures_iter(input)
+<a href=#330 id=330 data-nosnippet>330</a>        .filter_map(|cap| cap.get(<span class="number">1</span>).map(|m| m.as_str().to_string()))
+<a href=#331 id=331 data-nosnippet>331</a>        .collect();
+<a href=#332 id=332 data-nosnippet>332</a>    <span class="comment">// Remove the URLs from the input to get the message text
+<a href=#333 id=333 data-nosnippet>333</a>    </span><span class="kw">let </span>text = regex.replace_all(input, <span class="string">""</span>).trim().to_string();
+<a href=#334 id=334 data-nosnippet>334</a>    (urls, text)
+<a href=#335 id=335 data-nosnippet>335</a>}
 <a href=#336 id=336 data-nosnippet>336</a>
-<a href=#337 id=337 data-nosnippet>337</a>    <span class="kw">let </span>sender = mistralrs.get_sender().unwrap();
-<a href=#338 id=338 data-nosnippet>338</a>    <span class="kw">let </span><span class="kw-2">mut </span>messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt; = Vec::new();
-<a href=#339 id=339 data-nosnippet>339</a>    <span class="kw">let </span><span class="kw-2">mut </span>images = Vec::new();
-<a href=#340 id=340 data-nosnippet>340</a>
-<a href=#341 id=341 data-nosnippet>341</a>    <span class="kw">let </span>prefixer = <span class="kw">match </span><span class="kw-2">&amp;</span>mistralrs.config().category {
-<a href=#342 id=342 data-nosnippet>342</a>        ModelCategory::Vision { prefixer } =&gt; prefixer,
-<a href=#343 id=343 data-nosnippet>343</a>        <span class="kw">_ </span>=&gt; {
-<a href=#344 id=344 data-nosnippet>344</a>            <span class="macro">panic!</span>(<span class="string">"`add_image_message` expects a vision model."</span>)
-<a href=#345 id=345 data-nosnippet>345</a>        }
-<a href=#346 id=346 data-nosnippet>346</a>    };
-<a href=#347 id=347 data-nosnippet>347</a>
-<a href=#348 id=348 data-nosnippet>348</a>    <span class="kw">let </span>sampling_params = interactive_sample_parameters();
+<a href=#337 id=337 data-nosnippet>337</a><span class="kw">async fn </span>vision_interactive_mode(
+<a href=#338 id=338 data-nosnippet>338</a>    mistralrs: Arc&lt;MistralRs&gt;,
+<a href=#339 id=339 data-nosnippet>339</a>    do_search: bool,
+<a href=#340 id=340 data-nosnippet>340</a>    enable_thinking: <span class="prelude-ty">Option</span>&lt;bool&gt;,
+<a href=#341 id=341 data-nosnippet>341</a>) {
+<a href=#342 id=342 data-nosnippet>342</a>    <span class="comment">// Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
+<a href=#343 id=343 data-nosnippet>343</a>    </span><span class="kw">let </span>image_regex =
+<a href=#344 id=344 data-nosnippet>344</a>        Regex::new(<span class="string">r#"((?:https?://|file://)?\S+\.(?:png|jpe?g|bmp|gif|webp))"#</span>).unwrap();
+<a href=#345 id=345 data-nosnippet>345</a>
+<a href=#346 id=346 data-nosnippet>346</a>    <span class="kw">let </span>sender = mistralrs.get_sender().unwrap();
+<a href=#347 id=347 data-nosnippet>347</a>    <span class="kw">let </span><span class="kw-2">mut </span>messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt; = Vec::new();
+<a href=#348 id=348 data-nosnippet>348</a>    <span class="kw">let </span><span class="kw-2">mut </span>images = Vec::new();
 <a href=#349 id=349 data-nosnippet>349</a>
-<a href=#350 id=350 data-nosnippet>350</a>    <span class="macro">info!</span>(<span class="string">"Starting interactive loop with sampling params: {sampling_params:?}"</span>);
-<a href=#351 id=351 data-nosnippet>351</a>    <span class="macro">println!</span>(
-<a href=#352 id=352 data-nosnippet>352</a>        <span class="string">"{}{VISION_INTERACTIVE_HELP}{COMMAND_COMMANDS}{}"</span>,
-<a href=#353 id=353 data-nosnippet>353</a>        <span class="string">"="</span>.repeat(<span class="number">20</span>),
-<a href=#354 id=354 data-nosnippet>354</a>        <span class="string">"="</span>.repeat(<span class="number">20</span>)
-<a href=#355 id=355 data-nosnippet>355</a>    );
+<a href=#350 id=350 data-nosnippet>350</a>    <span class="kw">let </span>prefixer = <span class="kw">match </span><span class="kw-2">&amp;</span>mistralrs.config().category {
+<a href=#351 id=351 data-nosnippet>351</a>        ModelCategory::Vision { prefixer } =&gt; prefixer,
+<a href=#352 id=352 data-nosnippet>352</a>        <span class="kw">_ </span>=&gt; {
+<a href=#353 id=353 data-nosnippet>353</a>            <span class="macro">panic!</span>(<span class="string">"`add_image_message` expects a vision model."</span>)
+<a href=#354 id=354 data-nosnippet>354</a>        }
+<a href=#355 id=355 data-nosnippet>355</a>    };
 <a href=#356 id=356 data-nosnippet>356</a>
-<a href=#357 id=357 data-nosnippet>357</a>    <span class="comment">// Set the handler to process exit
-<a href=#358 id=358 data-nosnippet>358</a>    </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>exit_handler;
-<a href=#359 id=359 data-nosnippet>359</a>
-<a href=#360 id=360 data-nosnippet>360</a>    ctrlc::set_handler(<span class="kw">move </span>|| CTRLC_HANDLER.lock().unwrap()())
-<a href=#361 id=361 data-nosnippet>361</a>        .expect(<span class="string">"Failed to set CTRL-C handler for interactive mode"</span>);
-<a href=#362 id=362 data-nosnippet>362</a>
-<a href=#363 id=363 data-nosnippet>363</a>    <span class="kw">let </span><span class="kw-2">mut </span>rl = DefaultEditor::new().expect(<span class="string">"Failed to open input"</span>);
-<a href=#364 id=364 data-nosnippet>364</a>    <span class="kw">let _ </span>= rl.load_history(<span class="kw-2">&amp;</span>history_file_path());
-<a href=#365 id=365 data-nosnippet>365</a>    <span class="lifetime">'outer</span>: <span class="kw">loop </span>{
-<a href=#366 id=366 data-nosnippet>366</a>        <span class="comment">// Set the handler to process exit
-<a href=#367 id=367 data-nosnippet>367</a>        </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>exit_handler;
+<a href=#357 id=357 data-nosnippet>357</a>    <span class="kw">let </span>sampling_params = interactive_sample_parameters();
+<a href=#358 id=358 data-nosnippet>358</a>
+<a href=#359 id=359 data-nosnippet>359</a>    <span class="macro">info!</span>(<span class="string">"Starting interactive loop with sampling params: {sampling_params:?}"</span>);
+<a href=#360 id=360 data-nosnippet>360</a>    <span class="macro">println!</span>(
+<a href=#361 id=361 data-nosnippet>361</a>        <span class="string">"{}{VISION_INTERACTIVE_HELP}{COMMAND_COMMANDS}{}"</span>,
+<a href=#362 id=362 data-nosnippet>362</a>        <span class="string">"="</span>.repeat(<span class="number">20</span>),
+<a href=#363 id=363 data-nosnippet>363</a>        <span class="string">"="</span>.repeat(<span class="number">20</span>)
+<a href=#364 id=364 data-nosnippet>364</a>    );
+<a href=#365 id=365 data-nosnippet>365</a>
+<a href=#366 id=366 data-nosnippet>366</a>    <span class="comment">// Set the handler to process exit
+<a href=#367 id=367 data-nosnippet>367</a>    </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>exit_handler;
 <a href=#368 id=368 data-nosnippet>368</a>
-<a href=#369 id=369 data-nosnippet>369</a>        <span class="kw">let </span>prompt = read_line(<span class="kw-2">&amp;mut </span>rl);
-<a href=#370 id=370 data-nosnippet>370</a>
-<a href=#371 id=371 data-nosnippet>371</a>        <span class="kw">match </span>prompt.as_str().trim() {
-<a href=#372 id=372 data-nosnippet>372</a>            <span class="string">"" </span>=&gt; <span class="kw">continue</span>,
-<a href=#373 id=373 data-nosnippet>373</a>            HELP_CMD =&gt; {
-<a href=#374 id=374 data-nosnippet>374</a>                <span class="macro">println!</span>(
-<a href=#375 id=375 data-nosnippet>375</a>                    <span class="string">"{}{VISION_INTERACTIVE_HELP}{COMMAND_COMMANDS}{}"</span>,
-<a href=#376 id=376 data-nosnippet>376</a>                    <span class="string">"="</span>.repeat(<span class="number">20</span>),
-<a href=#377 id=377 data-nosnippet>377</a>                    <span class="string">"="</span>.repeat(<span class="number">20</span>)
-<a href=#378 id=378 data-nosnippet>378</a>                );
-<a href=#379 id=379 data-nosnippet>379</a>                <span class="kw">continue</span>;
-<a href=#380 id=380 data-nosnippet>380</a>            }
-<a href=#381 id=381 data-nosnippet>381</a>            EXIT_CMD =&gt; {
-<a href=#382 id=382 data-nosnippet>382</a>                <span class="kw">break</span>;
-<a href=#383 id=383 data-nosnippet>383</a>            }
-<a href=#384 id=384 data-nosnippet>384</a>            CLEAR_CMD =&gt; {
-<a href=#385 id=385 data-nosnippet>385</a>                messages.clear();
-<a href=#386 id=386 data-nosnippet>386</a>                images.clear();
-<a href=#387 id=387 data-nosnippet>387</a>                <span class="macro">info!</span>(<span class="string">"Cleared chat history."</span>);
+<a href=#369 id=369 data-nosnippet>369</a>    ctrlc::set_handler(<span class="kw">move </span>|| CTRLC_HANDLER.lock().unwrap()())
+<a href=#370 id=370 data-nosnippet>370</a>        .expect(<span class="string">"Failed to set CTRL-C handler for interactive mode"</span>);
+<a href=#371 id=371 data-nosnippet>371</a>
+<a href=#372 id=372 data-nosnippet>372</a>    <span class="kw">let </span><span class="kw-2">mut </span>rl = DefaultEditor::new().expect(<span class="string">"Failed to open input"</span>);
+<a href=#373 id=373 data-nosnippet>373</a>    <span class="kw">let _ </span>= rl.load_history(<span class="kw-2">&amp;</span>history_file_path());
+<a href=#374 id=374 data-nosnippet>374</a>    <span class="lifetime">'outer</span>: <span class="kw">loop </span>{
+<a href=#375 id=375 data-nosnippet>375</a>        <span class="comment">// Set the handler to process exit
+<a href=#376 id=376 data-nosnippet>376</a>        </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>exit_handler;
+<a href=#377 id=377 data-nosnippet>377</a>
+<a href=#378 id=378 data-nosnippet>378</a>        <span class="kw">let </span>prompt = read_line(<span class="kw-2">&amp;mut </span>rl);
+<a href=#379 id=379 data-nosnippet>379</a>
+<a href=#380 id=380 data-nosnippet>380</a>        <span class="kw">match </span>prompt.as_str().trim() {
+<a href=#381 id=381 data-nosnippet>381</a>            <span class="string">"" </span>=&gt; <span class="kw">continue</span>,
+<a href=#382 id=382 data-nosnippet>382</a>            HELP_CMD =&gt; {
+<a href=#383 id=383 data-nosnippet>383</a>                <span class="macro">println!</span>(
+<a href=#384 id=384 data-nosnippet>384</a>                    <span class="string">"{}{VISION_INTERACTIVE_HELP}{COMMAND_COMMANDS}{}"</span>,
+<a href=#385 id=385 data-nosnippet>385</a>                    <span class="string">"="</span>.repeat(<span class="number">20</span>),
+<a href=#386 id=386 data-nosnippet>386</a>                    <span class="string">"="</span>.repeat(<span class="number">20</span>)
+<a href=#387 id=387 data-nosnippet>387</a>                );
 <a href=#388 id=388 data-nosnippet>388</a>                <span class="kw">continue</span>;
 <a href=#389 id=389 data-nosnippet>389</a>            }
-<a href=#390 id=390 data-nosnippet>390</a>            prompt <span class="kw">if </span>prompt.trim().starts_with(SYSTEM_CMD) =&gt; {
-<a href=#391 id=391 data-nosnippet>391</a>                <span class="kw">let </span>parsed = <span class="kw">match </span><span class="kw-2">&amp;</span>prompt.split(SYSTEM_CMD).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()[..] {
-<a href=#392 id=392 data-nosnippet>392</a>                    <span class="kw-2">&amp;</span>[<span class="string">""</span>, a] =&gt; a.trim(),
-<a href=#393 id=393 data-nosnippet>393</a>                    <span class="kw">_ </span>=&gt; {
-<a href=#394 id=394 data-nosnippet>394</a>                        <span class="macro">println!</span>(<span class="string">"Error: Setting the system command should be done with this format: `{SYSTEM_CMD} This is a system message.`"</span>);
-<a href=#395 id=395 data-nosnippet>395</a>                        <span class="kw">continue</span>;
-<a href=#396 id=396 data-nosnippet>396</a>                    }
-<a href=#397 id=397 data-nosnippet>397</a>                };
-<a href=#398 id=398 data-nosnippet>398</a>                <span class="macro">info!</span>(<span class="string">"Set system message to `{parsed}`."</span>);
-<a href=#399 id=399 data-nosnippet>399</a>                <span class="kw">let </span><span class="kw-2">mut </span>user_message: IndexMap&lt;String, MessageContent&gt; = IndexMap::new();
-<a href=#400 id=400 data-nosnippet>400</a>                user_message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"system"</span>.to_string()));
-<a href=#401 id=401 data-nosnippet>401</a>                user_message.insert(<span class="string">"content"</span>.to_string(), Either::Left(parsed.to_string()));
-<a href=#402 id=402 data-nosnippet>402</a>                messages.push(user_message);
-<a href=#403 id=403 data-nosnippet>403</a>                <span class="kw">continue</span>;
-<a href=#404 id=404 data-nosnippet>404</a>            }
-<a href=#405 id=405 data-nosnippet>405</a>            <span class="comment">// Extract any image URLs and the remaining text
-<a href=#406 id=406 data-nosnippet>406</a>            </span><span class="kw">_ </span>=&gt; {
-<a href=#407 id=407 data-nosnippet>407</a>                <span class="kw">let </span>(urls, text) = parse_files_and_message(prompt.trim(), <span class="kw-2">&amp;</span>image_regex);
-<a href=#408 id=408 data-nosnippet>408</a>                <span class="kw">if </span>!urls.is_empty() {
-<a href=#409 id=409 data-nosnippet>409</a>                    <span class="kw">let </span><span class="kw-2">mut </span>image_indexes = Vec::new();
-<a href=#410 id=410 data-nosnippet>410</a>                    <span class="comment">// Load all images first
-<a href=#411 id=411 data-nosnippet>411</a>                    </span><span class="kw">for </span>url <span class="kw">in </span><span class="kw-2">&amp;</span>urls {
-<a href=#412 id=412 data-nosnippet>412</a>                        <span class="kw">match </span>util::parse_image_url(url).<span class="kw">await </span>{
-<a href=#413 id=413 data-nosnippet>413</a>                            <span class="prelude-val">Ok</span>(image) =&gt; {
-<a href=#414 id=414 data-nosnippet>414</a>                                image_indexes.push(images.len());
-<a href=#415 id=415 data-nosnippet>415</a>                                images.push(image);
-<a href=#416 id=416 data-nosnippet>416</a>                            }
-<a href=#417 id=417 data-nosnippet>417</a>                            <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#418 id=418 data-nosnippet>418</a>                                <span class="macro">error!</span>(<span class="string">"Failed to read image from URL/path {}: {}"</span>, url, e);
-<a href=#419 id=419 data-nosnippet>419</a>                                <span class="kw">continue </span><span class="lifetime">'outer</span>;
-<a href=#420 id=420 data-nosnippet>420</a>                            }
-<a href=#421 id=421 data-nosnippet>421</a>                        }
-<a href=#422 id=422 data-nosnippet>422</a>                    }
-<a href=#423 id=423 data-nosnippet>423</a>                    <span class="comment">// Build a single user message with multiple images and then the text
-<a href=#424 id=424 data-nosnippet>424</a>                    </span><span class="kw">let </span><span class="kw-2">mut </span>content_vec: Vec&lt;IndexMap&lt;String, Value&gt;&gt; = Vec::new();
-<a href=#425 id=425 data-nosnippet>425</a>                    <span class="comment">// Add one image part per URL
-<a href=#426 id=426 data-nosnippet>426</a>                    </span><span class="kw">for _ in </span><span class="kw-2">&amp;</span>urls {
-<a href=#427 id=427 data-nosnippet>427</a>                        content_vec.push(IndexMap::from([(
-<a href=#428 id=428 data-nosnippet>428</a>                            <span class="string">"type"</span>.to_string(),
-<a href=#429 id=429 data-nosnippet>429</a>                            Value::String(<span class="string">"image"</span>.to_string()),
-<a href=#430 id=430 data-nosnippet>430</a>                        )]));
+<a href=#390 id=390 data-nosnippet>390</a>            EXIT_CMD =&gt; {
+<a href=#391 id=391 data-nosnippet>391</a>                <span class="kw">break</span>;
+<a href=#392 id=392 data-nosnippet>392</a>            }
+<a href=#393 id=393 data-nosnippet>393</a>            CLEAR_CMD =&gt; {
+<a href=#394 id=394 data-nosnippet>394</a>                messages.clear();
+<a href=#395 id=395 data-nosnippet>395</a>                images.clear();
+<a href=#396 id=396 data-nosnippet>396</a>                <span class="macro">info!</span>(<span class="string">"Cleared chat history."</span>);
+<a href=#397 id=397 data-nosnippet>397</a>                <span class="kw">continue</span>;
+<a href=#398 id=398 data-nosnippet>398</a>            }
+<a href=#399 id=399 data-nosnippet>399</a>            prompt <span class="kw">if </span>prompt.trim().starts_with(SYSTEM_CMD) =&gt; {
+<a href=#400 id=400 data-nosnippet>400</a>                <span class="kw">let </span>parsed = <span class="kw">match </span><span class="kw-2">&amp;</span>prompt.split(SYSTEM_CMD).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()[..] {
+<a href=#401 id=401 data-nosnippet>401</a>                    <span class="kw-2">&amp;</span>[<span class="string">""</span>, a] =&gt; a.trim(),
+<a href=#402 id=402 data-nosnippet>402</a>                    <span class="kw">_ </span>=&gt; {
+<a href=#403 id=403 data-nosnippet>403</a>                        <span class="macro">println!</span>(<span class="string">"Error: Setting the system command should be done with this format: `{SYSTEM_CMD} This is a system message.`"</span>);
+<a href=#404 id=404 data-nosnippet>404</a>                        <span class="kw">continue</span>;
+<a href=#405 id=405 data-nosnippet>405</a>                    }
+<a href=#406 id=406 data-nosnippet>406</a>                };
+<a href=#407 id=407 data-nosnippet>407</a>                <span class="macro">info!</span>(<span class="string">"Set system message to `{parsed}`."</span>);
+<a href=#408 id=408 data-nosnippet>408</a>                <span class="kw">let </span><span class="kw-2">mut </span>user_message: IndexMap&lt;String, MessageContent&gt; = IndexMap::new();
+<a href=#409 id=409 data-nosnippet>409</a>                user_message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"system"</span>.to_string()));
+<a href=#410 id=410 data-nosnippet>410</a>                user_message.insert(<span class="string">"content"</span>.to_string(), Either::Left(parsed.to_string()));
+<a href=#411 id=411 data-nosnippet>411</a>                messages.push(user_message);
+<a href=#412 id=412 data-nosnippet>412</a>                <span class="kw">continue</span>;
+<a href=#413 id=413 data-nosnippet>413</a>            }
+<a href=#414 id=414 data-nosnippet>414</a>            <span class="comment">// Extract any image URLs and the remaining text
+<a href=#415 id=415 data-nosnippet>415</a>            </span><span class="kw">_ </span>=&gt; {
+<a href=#416 id=416 data-nosnippet>416</a>                <span class="kw">let </span>(urls, text) = parse_files_and_message(prompt.trim(), <span class="kw-2">&amp;</span>image_regex);
+<a href=#417 id=417 data-nosnippet>417</a>                <span class="kw">if </span>!urls.is_empty() {
+<a href=#418 id=418 data-nosnippet>418</a>                    <span class="kw">let </span><span class="kw-2">mut </span>image_indexes = Vec::new();
+<a href=#419 id=419 data-nosnippet>419</a>                    <span class="comment">// Load all images first
+<a href=#420 id=420 data-nosnippet>420</a>                    </span><span class="kw">for </span>url <span class="kw">in </span><span class="kw-2">&amp;</span>urls {
+<a href=#421 id=421 data-nosnippet>421</a>                        <span class="kw">match </span>util::parse_image_url(url).<span class="kw">await </span>{
+<a href=#422 id=422 data-nosnippet>422</a>                            <span class="prelude-val">Ok</span>(image) =&gt; {
+<a href=#423 id=423 data-nosnippet>423</a>                                image_indexes.push(images.len());
+<a href=#424 id=424 data-nosnippet>424</a>                                images.push(image);
+<a href=#425 id=425 data-nosnippet>425</a>                            }
+<a href=#426 id=426 data-nosnippet>426</a>                            <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#427 id=427 data-nosnippet>427</a>                                <span class="macro">error!</span>(<span class="string">"Failed to read image from URL/path {}: {}"</span>, url, e);
+<a href=#428 id=428 data-nosnippet>428</a>                                <span class="kw">continue </span><span class="lifetime">'outer</span>;
+<a href=#429 id=429 data-nosnippet>429</a>                            }
+<a href=#430 id=430 data-nosnippet>430</a>                        }
 <a href=#431 id=431 data-nosnippet>431</a>                    }
-<a href=#432 id=432 data-nosnippet>432</a>                    <span class="comment">// Add the text part once
-<a href=#433 id=433 data-nosnippet>433</a>                    </span><span class="kw">let </span>text = prefixer.prefix_image(image_indexes, <span class="kw-2">&amp;</span>text);
-<a href=#434 id=434 data-nosnippet>434</a>                    content_vec.push(IndexMap::from([
-<a href=#435 id=435 data-nosnippet>435</a>                        (<span class="string">"type"</span>.to_string(), Value::String(<span class="string">"text"</span>.to_string())),
-<a href=#436 id=436 data-nosnippet>436</a>                        (<span class="string">"text"</span>.to_string(), Value::String(text.clone())),
-<a href=#437 id=437 data-nosnippet>437</a>                    ]));
-<a href=#438 id=438 data-nosnippet>438</a>                    <span class="kw">let </span><span class="kw-2">mut </span>user_message: IndexMap&lt;String, MessageContent&gt; = IndexMap::new();
-<a href=#439 id=439 data-nosnippet>439</a>                    user_message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
-<a href=#440 id=440 data-nosnippet>440</a>                    user_message.insert(<span class="string">"content"</span>.to_string(), Either::Right(content_vec));
-<a href=#441 id=441 data-nosnippet>441</a>                    messages.push(user_message);
-<a href=#442 id=442 data-nosnippet>442</a>                } <span class="kw">else </span>{
-<a href=#443 id=443 data-nosnippet>443</a>                    <span class="comment">// Default: handle as text-only prompt
-<a href=#444 id=444 data-nosnippet>444</a>                    </span><span class="kw">let </span><span class="kw-2">mut </span>user_message: IndexMap&lt;String, MessageContent&gt; = IndexMap::new();
-<a href=#445 id=445 data-nosnippet>445</a>                    user_message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
-<a href=#446 id=446 data-nosnippet>446</a>                    user_message.insert(
-<a href=#447 id=447 data-nosnippet>447</a>                        <span class="string">"content"</span>.to_string(),
-<a href=#448 id=448 data-nosnippet>448</a>                        Either::Left(prompt.trim().to_string()),
-<a href=#449 id=449 data-nosnippet>449</a>                    );
+<a href=#432 id=432 data-nosnippet>432</a>                    <span class="comment">// Build a single user message with multiple images and then the text
+<a href=#433 id=433 data-nosnippet>433</a>                    </span><span class="kw">let </span><span class="kw-2">mut </span>content_vec: Vec&lt;IndexMap&lt;String, Value&gt;&gt; = Vec::new();
+<a href=#434 id=434 data-nosnippet>434</a>                    <span class="comment">// Add one image part per URL
+<a href=#435 id=435 data-nosnippet>435</a>                    </span><span class="kw">for _ in </span><span class="kw-2">&amp;</span>urls {
+<a href=#436 id=436 data-nosnippet>436</a>                        content_vec.push(IndexMap::from([(
+<a href=#437 id=437 data-nosnippet>437</a>                            <span class="string">"type"</span>.to_string(),
+<a href=#438 id=438 data-nosnippet>438</a>                            Value::String(<span class="string">"image"</span>.to_string()),
+<a href=#439 id=439 data-nosnippet>439</a>                        )]));
+<a href=#440 id=440 data-nosnippet>440</a>                    }
+<a href=#441 id=441 data-nosnippet>441</a>                    <span class="comment">// Add the text part once
+<a href=#442 id=442 data-nosnippet>442</a>                    </span><span class="kw">let </span>text = prefixer.prefix_image(image_indexes, <span class="kw-2">&amp;</span>text);
+<a href=#443 id=443 data-nosnippet>443</a>                    content_vec.push(IndexMap::from([
+<a href=#444 id=444 data-nosnippet>444</a>                        (<span class="string">"type"</span>.to_string(), Value::String(<span class="string">"text"</span>.to_string())),
+<a href=#445 id=445 data-nosnippet>445</a>                        (<span class="string">"text"</span>.to_string(), Value::String(text.clone())),
+<a href=#446 id=446 data-nosnippet>446</a>                    ]));
+<a href=#447 id=447 data-nosnippet>447</a>                    <span class="kw">let </span><span class="kw-2">mut </span>user_message: IndexMap&lt;String, MessageContent&gt; = IndexMap::new();
+<a href=#448 id=448 data-nosnippet>448</a>                    user_message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
+<a href=#449 id=449 data-nosnippet>449</a>                    user_message.insert(<span class="string">"content"</span>.to_string(), Either::Right(content_vec));
 <a href=#450 id=450 data-nosnippet>450</a>                    messages.push(user_message);
-<a href=#451 id=451 data-nosnippet>451</a>                }
-<a href=#452 id=452 data-nosnippet>452</a>            }
-<a href=#453 id=453 data-nosnippet>453</a>        };
-<a href=#454 id=454 data-nosnippet>454</a>
-<a href=#455 id=455 data-nosnippet>455</a>        <span class="comment">// Set the handler to terminate all seqs, so allowing cancelling running
-<a href=#456 id=456 data-nosnippet>456</a>        </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>terminate_handler;
-<a href=#457 id=457 data-nosnippet>457</a>
-<a href=#458 id=458 data-nosnippet>458</a>        <span class="kw">let </span>request_messages = RequestMessage::VisionChat {
-<a href=#459 id=459 data-nosnippet>459</a>            images: images.clone(),
-<a href=#460 id=460 data-nosnippet>460</a>            messages: messages.clone(),
-<a href=#461 id=461 data-nosnippet>461</a>            enable_thinking,
+<a href=#451 id=451 data-nosnippet>451</a>                } <span class="kw">else </span>{
+<a href=#452 id=452 data-nosnippet>452</a>                    <span class="comment">// Default: handle as text-only prompt
+<a href=#453 id=453 data-nosnippet>453</a>                    </span><span class="kw">let </span><span class="kw-2">mut </span>user_message: IndexMap&lt;String, MessageContent&gt; = IndexMap::new();
+<a href=#454 id=454 data-nosnippet>454</a>                    user_message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
+<a href=#455 id=455 data-nosnippet>455</a>                    user_message.insert(
+<a href=#456 id=456 data-nosnippet>456</a>                        <span class="string">"content"</span>.to_string(),
+<a href=#457 id=457 data-nosnippet>457</a>                        Either::Left(prompt.trim().to_string()),
+<a href=#458 id=458 data-nosnippet>458</a>                    );
+<a href=#459 id=459 data-nosnippet>459</a>                    messages.push(user_message);
+<a href=#460 id=460 data-nosnippet>460</a>                }
+<a href=#461 id=461 data-nosnippet>461</a>            }
 <a href=#462 id=462 data-nosnippet>462</a>        };
 <a href=#463 id=463 data-nosnippet>463</a>
-<a href=#464 id=464 data-nosnippet>464</a>        <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
-<a href=#465 id=465 data-nosnippet>465</a>        <span class="kw">let </span>req = Request::Normal(NormalRequest {
-<a href=#466 id=466 data-nosnippet>466</a>            id: mistralrs.next_request_id(),
-<a href=#467 id=467 data-nosnippet>467</a>            messages: request_messages,
-<a href=#468 id=468 data-nosnippet>468</a>            sampling_params: sampling_params.clone(),
-<a href=#469 id=469 data-nosnippet>469</a>            response: tx,
-<a href=#470 id=470 data-nosnippet>470</a>            return_logprobs: <span class="bool-val">false</span>,
-<a href=#471 id=471 data-nosnippet>471</a>            is_streaming: <span class="bool-val">true</span>,
-<a href=#472 id=472 data-nosnippet>472</a>            constraint: Constraint::None,
-<a href=#473 id=473 data-nosnippet>473</a>            suffix: <span class="prelude-val">None</span>,
-<a href=#474 id=474 data-nosnippet>474</a>            tool_choice: <span class="prelude-val">None</span>,
-<a href=#475 id=475 data-nosnippet>475</a>            tools: <span class="prelude-val">None</span>,
-<a href=#476 id=476 data-nosnippet>476</a>            logits_processors: <span class="prelude-val">None</span>,
-<a href=#477 id=477 data-nosnippet>477</a>            return_raw_logits: <span class="bool-val">false</span>,
-<a href=#478 id=478 data-nosnippet>478</a>            web_search_options: do_search.then(WebSearchOptions::default),
-<a href=#479 id=479 data-nosnippet>479</a>        });
-<a href=#480 id=480 data-nosnippet>480</a>        sender.send(req).<span class="kw">await</span>.unwrap();
-<a href=#481 id=481 data-nosnippet>481</a>
-<a href=#482 id=482 data-nosnippet>482</a>        <span class="kw">let </span><span class="kw-2">mut </span>assistant_output = String::new();
-<a href=#483 id=483 data-nosnippet>483</a>
-<a href=#484 id=484 data-nosnippet>484</a>        <span class="kw">let </span><span class="kw-2">mut </span>last_usage = <span class="prelude-val">None</span>;
-<a href=#485 id=485 data-nosnippet>485</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>(resp) = rx.recv().<span class="kw">await </span>{
-<a href=#486 id=486 data-nosnippet>486</a>            <span class="kw">match </span>resp {
-<a href=#487 id=487 data-nosnippet>487</a>                Response::Chunk(chunk) =&gt; {
-<a href=#488 id=488 data-nosnippet>488</a>                    last_usage = chunk.usage.clone();
-<a href=#489 id=489 data-nosnippet>489</a>                    <span class="kw">if let </span>ChunkChoice {
-<a href=#490 id=490 data-nosnippet>490</a>                        delta:
-<a href=#491 id=491 data-nosnippet>491</a>                            Delta {
-<a href=#492 id=492 data-nosnippet>492</a>                                content: <span class="prelude-val">Some</span>(content),
-<a href=#493 id=493 data-nosnippet>493</a>                                ..
-<a href=#494 id=494 data-nosnippet>494</a>                            },
-<a href=#495 id=495 data-nosnippet>495</a>                        finish_reason,
-<a href=#496 id=496 data-nosnippet>496</a>                        ..
-<a href=#497 id=497 data-nosnippet>497</a>                    } = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>]
-<a href=#498 id=498 data-nosnippet>498</a>                    {
-<a href=#499 id=499 data-nosnippet>499</a>                        assistant_output.push_str(content);
-<a href=#500 id=500 data-nosnippet>500</a>                        <span class="macro">print!</span>(<span class="string">"{content}"</span>);
-<a href=#501 id=501 data-nosnippet>501</a>                        io::stdout().flush().unwrap();
-<a href=#502 id=502 data-nosnippet>502</a>                        <span class="kw">if </span>finish_reason.is_some() {
-<a href=#503 id=503 data-nosnippet>503</a>                            <span class="kw">if </span><span class="macro">matches!</span>(finish_reason.as_ref().unwrap().as_str(), <span class="string">"length"</span>) {
-<a href=#504 id=504 data-nosnippet>504</a>                                <span class="macro">print!</span>(<span class="string">"..."</span>);
-<a href=#505 id=505 data-nosnippet>505</a>                            }
-<a href=#506 id=506 data-nosnippet>506</a>                            <span class="kw">break</span>;
-<a href=#507 id=507 data-nosnippet>507</a>                        }
-<a href=#508 id=508 data-nosnippet>508</a>                    }
-<a href=#509 id=509 data-nosnippet>509</a>                }
-<a href=#510 id=510 data-nosnippet>510</a>                Response::InternalError(e) =&gt; {
-<a href=#511 id=511 data-nosnippet>511</a>                    <span class="macro">error!</span>(<span class="string">"Got an internal error: {e:?}"</span>);
-<a href=#512 id=512 data-nosnippet>512</a>                    <span class="kw">break </span><span class="lifetime">'outer</span>;
-<a href=#513 id=513 data-nosnippet>513</a>                }
-<a href=#514 id=514 data-nosnippet>514</a>                Response::ModelError(e, resp) =&gt; {
-<a href=#515 id=515 data-nosnippet>515</a>                    <span class="macro">error!</span>(<span class="string">"Got a model error: {e:?}, response: {resp:?}"</span>);
-<a href=#516 id=516 data-nosnippet>516</a>                    <span class="kw">break </span><span class="lifetime">'outer</span>;
-<a href=#517 id=517 data-nosnippet>517</a>                }
-<a href=#518 id=518 data-nosnippet>518</a>                Response::ValidationError(e) =&gt; {
-<a href=#519 id=519 data-nosnippet>519</a>                    <span class="macro">error!</span>(<span class="string">"Got a validation error: {e:?}"</span>);
-<a href=#520 id=520 data-nosnippet>520</a>                    <span class="kw">break </span><span class="lifetime">'outer</span>;
-<a href=#521 id=521 data-nosnippet>521</a>                }
-<a href=#522 id=522 data-nosnippet>522</a>                Response::Done(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#523 id=523 data-nosnippet>523</a>                Response::CompletionDone(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#524 id=524 data-nosnippet>524</a>                Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#525 id=525 data-nosnippet>525</a>                Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#526 id=526 data-nosnippet>526</a>                Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#527 id=527 data-nosnippet>527</a>                Response::Raw { .. } =&gt; <span class="macro">unreachable!</span>(),
-<a href=#528 id=528 data-nosnippet>528</a>            }
-<a href=#529 id=529 data-nosnippet>529</a>        }
-<a href=#530 id=530 data-nosnippet>530</a>
-<a href=#531 id=531 data-nosnippet>531</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(last_usage) = last_usage {
-<a href=#532 id=532 data-nosnippet>532</a>            <span class="macro">println!</span>();
-<a href=#533 id=533 data-nosnippet>533</a>            <span class="macro">println!</span>();
-<a href=#534 id=534 data-nosnippet>534</a>            <span class="macro">println!</span>(<span class="string">"Stats:"</span>);
-<a href=#535 id=535 data-nosnippet>535</a>            <span class="macro">println!</span>(
-<a href=#536 id=536 data-nosnippet>536</a>                <span class="string">"Prompt: {} tokens, {:.2} T/s"</span>,
-<a href=#537 id=537 data-nosnippet>537</a>                last_usage.prompt_tokens, last_usage.avg_prompt_tok_per_sec
-<a href=#538 id=538 data-nosnippet>538</a>            );
-<a href=#539 id=539 data-nosnippet>539</a>            <span class="macro">println!</span>(
-<a href=#540 id=540 data-nosnippet>540</a>                <span class="string">"Decode: {} tokens, {:.2} T/s"</span>,
-<a href=#541 id=541 data-nosnippet>541</a>                last_usage.completion_tokens, last_usage.avg_compl_tok_per_sec
-<a href=#542 id=542 data-nosnippet>542</a>            );
-<a href=#543 id=543 data-nosnippet>543</a>        }
-<a href=#544 id=544 data-nosnippet>544</a>        <span class="kw">let </span><span class="kw-2">mut </span>assistant_message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
-<a href=#545 id=545 data-nosnippet>545</a>            IndexMap::new();
-<a href=#546 id=546 data-nosnippet>546</a>        assistant_message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"assistant"</span>.to_string()));
-<a href=#547 id=547 data-nosnippet>547</a>        assistant_message.insert(<span class="string">"content"</span>.to_string(), Either::Left(assistant_output));
-<a href=#548 id=548 data-nosnippet>548</a>        messages.push(assistant_message);
-<a href=#549 id=549 data-nosnippet>549</a>        <span class="macro">println!</span>();
-<a href=#550 id=550 data-nosnippet>550</a>    }
-<a href=#551 id=551 data-nosnippet>551</a>
-<a href=#552 id=552 data-nosnippet>552</a>    rl.save_history(<span class="kw-2">&amp;</span>history_file_path()).unwrap();
-<a href=#553 id=553 data-nosnippet>553</a>}
-<a href=#554 id=554 data-nosnippet>554</a>
-<a href=#555 id=555 data-nosnippet>555</a><span class="kw">async fn </span>audio_interactive_mode(
-<a href=#556 id=556 data-nosnippet>556</a>    _mistralrs: Arc&lt;MistralRs&gt;,
-<a href=#557 id=557 data-nosnippet>557</a>    _do_search: bool,
-<a href=#558 id=558 data-nosnippet>558</a>    _enable_thinking: <span class="prelude-ty">Option</span>&lt;bool&gt;,
-<a href=#559 id=559 data-nosnippet>559</a>) {
-<a href=#560 id=560 data-nosnippet>560</a>    <span class="macro">unimplemented!</span>(<span class="string">"Using audio models isn't supported yet"</span>)
-<a href=#561 id=561 data-nosnippet>561</a>}
-<a href=#562 id=562 data-nosnippet>562</a>
-<a href=#563 id=563 data-nosnippet>563</a><span class="kw">async fn </span>speech_interactive_mode(_mistralrs: Arc&lt;MistralRs&gt;, _do_search: bool) {
-<a href=#564 id=564 data-nosnippet>564</a>    <span class="macro">unimplemented!</span>(<span class="string">"Using speech models isn't supported yet"</span>)
-<a href=#565 id=565 data-nosnippet>565</a>}
-<a href=#566 id=566 data-nosnippet>566</a>
-<a href=#567 id=567 data-nosnippet>567</a><span class="kw">async fn </span>diffusion_interactive_mode(mistralrs: Arc&lt;MistralRs&gt;, do_search: bool) {
-<a href=#568 id=568 data-nosnippet>568</a>    <span class="kw">let </span>sender = mistralrs.get_sender().unwrap();
+<a href=#464 id=464 data-nosnippet>464</a>        <span class="comment">// Set the handler to terminate all seqs, so allowing cancelling running
+<a href=#465 id=465 data-nosnippet>465</a>        </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>terminate_handler;
+<a href=#466 id=466 data-nosnippet>466</a>
+<a href=#467 id=467 data-nosnippet>467</a>        <span class="kw">let </span>request_messages = RequestMessage::VisionChat {
+<a href=#468 id=468 data-nosnippet>468</a>            images: images.clone(),
+<a href=#469 id=469 data-nosnippet>469</a>            messages: messages.clone(),
+<a href=#470 id=470 data-nosnippet>470</a>            enable_thinking,
+<a href=#471 id=471 data-nosnippet>471</a>        };
+<a href=#472 id=472 data-nosnippet>472</a>
+<a href=#473 id=473 data-nosnippet>473</a>        <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
+<a href=#474 id=474 data-nosnippet>474</a>        <span class="kw">let </span>req = Request::Normal(NormalRequest {
+<a href=#475 id=475 data-nosnippet>475</a>            id: mistralrs.next_request_id(),
+<a href=#476 id=476 data-nosnippet>476</a>            messages: request_messages,
+<a href=#477 id=477 data-nosnippet>477</a>            sampling_params: sampling_params.clone(),
+<a href=#478 id=478 data-nosnippet>478</a>            response: tx,
+<a href=#479 id=479 data-nosnippet>479</a>            return_logprobs: <span class="bool-val">false</span>,
+<a href=#480 id=480 data-nosnippet>480</a>            is_streaming: <span class="bool-val">true</span>,
+<a href=#481 id=481 data-nosnippet>481</a>            constraint: Constraint::None,
+<a href=#482 id=482 data-nosnippet>482</a>            suffix: <span class="prelude-val">None</span>,
+<a href=#483 id=483 data-nosnippet>483</a>            tool_choice: <span class="prelude-val">None</span>,
+<a href=#484 id=484 data-nosnippet>484</a>            tools: <span class="prelude-val">None</span>,
+<a href=#485 id=485 data-nosnippet>485</a>            logits_processors: <span class="prelude-val">None</span>,
+<a href=#486 id=486 data-nosnippet>486</a>            return_raw_logits: <span class="bool-val">false</span>,
+<a href=#487 id=487 data-nosnippet>487</a>            web_search_options: do_search.then(WebSearchOptions::default),
+<a href=#488 id=488 data-nosnippet>488</a>        });
+<a href=#489 id=489 data-nosnippet>489</a>        sender.send(req).<span class="kw">await</span>.unwrap();
+<a href=#490 id=490 data-nosnippet>490</a>        <span class="kw">let </span>start_ttft = Instant::now();
+<a href=#491 id=491 data-nosnippet>491</a>        <span class="kw">let </span><span class="kw-2">mut </span>first_token_duration: <span class="prelude-ty">Option</span>&lt;std::time::Duration&gt; = <span class="prelude-val">None</span>;
+<a href=#492 id=492 data-nosnippet>492</a>
+<a href=#493 id=493 data-nosnippet>493</a>        <span class="kw">let </span><span class="kw-2">mut </span>assistant_output = String::new();
+<a href=#494 id=494 data-nosnippet>494</a>
+<a href=#495 id=495 data-nosnippet>495</a>        <span class="kw">let </span><span class="kw-2">mut </span>last_usage = <span class="prelude-val">None</span>;
+<a href=#496 id=496 data-nosnippet>496</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>(resp) = rx.recv().<span class="kw">await </span>{
+<a href=#497 id=497 data-nosnippet>497</a>            <span class="kw">match </span>resp {
+<a href=#498 id=498 data-nosnippet>498</a>                Response::Chunk(chunk) =&gt; {
+<a href=#499 id=499 data-nosnippet>499</a>                    last_usage = chunk.usage.clone();
+<a href=#500 id=500 data-nosnippet>500</a>                    <span class="kw">if let </span>ChunkChoice {
+<a href=#501 id=501 data-nosnippet>501</a>                        delta:
+<a href=#502 id=502 data-nosnippet>502</a>                            Delta {
+<a href=#503 id=503 data-nosnippet>503</a>                                content: <span class="prelude-val">Some</span>(content),
+<a href=#504 id=504 data-nosnippet>504</a>                                ..
+<a href=#505 id=505 data-nosnippet>505</a>                            },
+<a href=#506 id=506 data-nosnippet>506</a>                        finish_reason,
+<a href=#507 id=507 data-nosnippet>507</a>                        ..
+<a href=#508 id=508 data-nosnippet>508</a>                    } = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>]
+<a href=#509 id=509 data-nosnippet>509</a>                    {
+<a href=#510 id=510 data-nosnippet>510</a>                        <span class="kw">if </span>first_token_duration.is_none() {
+<a href=#511 id=511 data-nosnippet>511</a>                            <span class="kw">let </span>ttft = Instant::now().duration_since(start_ttft);
+<a href=#512 id=512 data-nosnippet>512</a>                            first_token_duration = <span class="prelude-val">Some</span>(ttft);
+<a href=#513 id=513 data-nosnippet>513</a>                        }
+<a href=#514 id=514 data-nosnippet>514</a>                        assistant_output.push_str(content);
+<a href=#515 id=515 data-nosnippet>515</a>                        <span class="macro">print!</span>(<span class="string">"{content}"</span>);
+<a href=#516 id=516 data-nosnippet>516</a>                        io::stdout().flush().unwrap();
+<a href=#517 id=517 data-nosnippet>517</a>                        <span class="kw">if </span>finish_reason.is_some() {
+<a href=#518 id=518 data-nosnippet>518</a>                            <span class="kw">if </span><span class="macro">matches!</span>(finish_reason.as_ref().unwrap().as_str(), <span class="string">"length"</span>) {
+<a href=#519 id=519 data-nosnippet>519</a>                                <span class="macro">print!</span>(<span class="string">"..."</span>);
+<a href=#520 id=520 data-nosnippet>520</a>                            }
+<a href=#521 id=521 data-nosnippet>521</a>                            <span class="kw">break</span>;
+<a href=#522 id=522 data-nosnippet>522</a>                        }
+<a href=#523 id=523 data-nosnippet>523</a>                    }
+<a href=#524 id=524 data-nosnippet>524</a>                }
+<a href=#525 id=525 data-nosnippet>525</a>                Response::InternalError(e) =&gt; {
+<a href=#526 id=526 data-nosnippet>526</a>                    <span class="macro">error!</span>(<span class="string">"Got an internal error: {e:?}"</span>);
+<a href=#527 id=527 data-nosnippet>527</a>                    <span class="kw">break </span><span class="lifetime">'outer</span>;
+<a href=#528 id=528 data-nosnippet>528</a>                }
+<a href=#529 id=529 data-nosnippet>529</a>                Response::ModelError(e, resp) =&gt; {
+<a href=#530 id=530 data-nosnippet>530</a>                    <span class="macro">error!</span>(<span class="string">"Got a model error: {e:?}, response: {resp:?}"</span>);
+<a href=#531 id=531 data-nosnippet>531</a>                    <span class="kw">break </span><span class="lifetime">'outer</span>;
+<a href=#532 id=532 data-nosnippet>532</a>                }
+<a href=#533 id=533 data-nosnippet>533</a>                Response::ValidationError(e) =&gt; {
+<a href=#534 id=534 data-nosnippet>534</a>                    <span class="macro">error!</span>(<span class="string">"Got a validation error: {e:?}"</span>);
+<a href=#535 id=535 data-nosnippet>535</a>                    <span class="kw">break </span><span class="lifetime">'outer</span>;
+<a href=#536 id=536 data-nosnippet>536</a>                }
+<a href=#537 id=537 data-nosnippet>537</a>                Response::Done(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#538 id=538 data-nosnippet>538</a>                Response::CompletionDone(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#539 id=539 data-nosnippet>539</a>                Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#540 id=540 data-nosnippet>540</a>                Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#541 id=541 data-nosnippet>541</a>                Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#542 id=542 data-nosnippet>542</a>                Response::Raw { .. } =&gt; <span class="macro">unreachable!</span>(),
+<a href=#543 id=543 data-nosnippet>543</a>            }
+<a href=#544 id=544 data-nosnippet>544</a>        }
+<a href=#545 id=545 data-nosnippet>545</a>
+<a href=#546 id=546 data-nosnippet>546</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(last_usage) = last_usage {
+<a href=#547 id=547 data-nosnippet>547</a>            <span class="macro">println!</span>();
+<a href=#548 id=548 data-nosnippet>548</a>            <span class="macro">println!</span>();
+<a href=#549 id=549 data-nosnippet>549</a>            <span class="macro">println!</span>(<span class="string">"Stats:"</span>);
+<a href=#550 id=550 data-nosnippet>550</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(ttft) = first_token_duration {
+<a href=#551 id=551 data-nosnippet>551</a>                <span class="macro">println!</span>(<span class="string">"Time to first token: {:.2?}s"</span>, ttft.as_secs_f32());
+<a href=#552 id=552 data-nosnippet>552</a>            }
+<a href=#553 id=553 data-nosnippet>553</a>            <span class="macro">println!</span>(
+<a href=#554 id=554 data-nosnippet>554</a>                <span class="string">"Prompt: {} tokens, {:.2} T/s"</span>,
+<a href=#555 id=555 data-nosnippet>555</a>                last_usage.prompt_tokens, last_usage.avg_prompt_tok_per_sec
+<a href=#556 id=556 data-nosnippet>556</a>            );
+<a href=#557 id=557 data-nosnippet>557</a>            <span class="macro">println!</span>(
+<a href=#558 id=558 data-nosnippet>558</a>                <span class="string">"Decode: {} tokens, {:.2} T/s"</span>,
+<a href=#559 id=559 data-nosnippet>559</a>                last_usage.completion_tokens, last_usage.avg_compl_tok_per_sec
+<a href=#560 id=560 data-nosnippet>560</a>            );
+<a href=#561 id=561 data-nosnippet>561</a>        }
+<a href=#562 id=562 data-nosnippet>562</a>        <span class="kw">let </span><span class="kw-2">mut </span>assistant_message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
+<a href=#563 id=563 data-nosnippet>563</a>            IndexMap::new();
+<a href=#564 id=564 data-nosnippet>564</a>        assistant_message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"assistant"</span>.to_string()));
+<a href=#565 id=565 data-nosnippet>565</a>        assistant_message.insert(<span class="string">"content"</span>.to_string(), Either::Left(assistant_output));
+<a href=#566 id=566 data-nosnippet>566</a>        messages.push(assistant_message);
+<a href=#567 id=567 data-nosnippet>567</a>        <span class="macro">println!</span>();
+<a href=#568 id=568 data-nosnippet>568</a>    }
 <a href=#569 id=569 data-nosnippet>569</a>
-<a href=#570 id=570 data-nosnippet>570</a>    <span class="kw">let </span>diffusion_params = DiffusionGenerationParams::default();
-<a href=#571 id=571 data-nosnippet>571</a>
-<a href=#572 id=572 data-nosnippet>572</a>    <span class="macro">info!</span>(<span class="string">"Starting interactive loop with generation params: {diffusion_params:?}"</span>);
-<a href=#573 id=573 data-nosnippet>573</a>    <span class="macro">println!</span>(
-<a href=#574 id=574 data-nosnippet>574</a>        <span class="string">"{}{DIFFUSION_INTERACTIVE_HELP}{}"</span>,
-<a href=#575 id=575 data-nosnippet>575</a>        <span class="string">"="</span>.repeat(<span class="number">20</span>),
-<a href=#576 id=576 data-nosnippet>576</a>        <span class="string">"="</span>.repeat(<span class="number">20</span>)
-<a href=#577 id=577 data-nosnippet>577</a>    );
-<a href=#578 id=578 data-nosnippet>578</a>
-<a href=#579 id=579 data-nosnippet>579</a>    <span class="comment">// Set the handler to process exit
-<a href=#580 id=580 data-nosnippet>580</a>    </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>exit_handler;
-<a href=#581 id=581 data-nosnippet>581</a>
-<a href=#582 id=582 data-nosnippet>582</a>    ctrlc::set_handler(<span class="kw">move </span>|| CTRLC_HANDLER.lock().unwrap()())
-<a href=#583 id=583 data-nosnippet>583</a>        .expect(<span class="string">"Failed to set CTRL-C handler for interactive mode"</span>);
+<a href=#570 id=570 data-nosnippet>570</a>    rl.save_history(<span class="kw-2">&amp;</span>history_file_path()).unwrap();
+<a href=#571 id=571 data-nosnippet>571</a>}
+<a href=#572 id=572 data-nosnippet>572</a>
+<a href=#573 id=573 data-nosnippet>573</a><span class="kw">async fn </span>audio_interactive_mode(
+<a href=#574 id=574 data-nosnippet>574</a>    _mistralrs: Arc&lt;MistralRs&gt;,
+<a href=#575 id=575 data-nosnippet>575</a>    _do_search: bool,
+<a href=#576 id=576 data-nosnippet>576</a>    _enable_thinking: <span class="prelude-ty">Option</span>&lt;bool&gt;,
+<a href=#577 id=577 data-nosnippet>577</a>) {
+<a href=#578 id=578 data-nosnippet>578</a>    <span class="macro">unimplemented!</span>(<span class="string">"Using audio models isn't supported yet"</span>)
+<a href=#579 id=579 data-nosnippet>579</a>}
+<a href=#580 id=580 data-nosnippet>580</a>
+<a href=#581 id=581 data-nosnippet>581</a><span class="kw">async fn </span>speech_interactive_mode(_mistralrs: Arc&lt;MistralRs&gt;, _do_search: bool) {
+<a href=#582 id=582 data-nosnippet>582</a>    <span class="macro">unimplemented!</span>(<span class="string">"Using speech models isn't supported yet"</span>)
+<a href=#583 id=583 data-nosnippet>583</a>}
 <a href=#584 id=584 data-nosnippet>584</a>
-<a href=#585 id=585 data-nosnippet>585</a>    <span class="kw">let </span><span class="kw-2">mut </span>rl = DefaultEditor::new().expect(<span class="string">"Failed to open input"</span>);
-<a href=#586 id=586 data-nosnippet>586</a>    <span class="kw">let _ </span>= rl.load_history(<span class="kw-2">&amp;</span>history_file_path());
-<a href=#587 id=587 data-nosnippet>587</a>    <span class="kw">loop </span>{
-<a href=#588 id=588 data-nosnippet>588</a>        <span class="comment">// Set the handler to process exit
-<a href=#589 id=589 data-nosnippet>589</a>        </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>exit_handler;
-<a href=#590 id=590 data-nosnippet>590</a>
-<a href=#591 id=591 data-nosnippet>591</a>        <span class="kw">let </span>prompt = read_line(<span class="kw-2">&amp;mut </span>rl);
-<a href=#592 id=592 data-nosnippet>592</a>
-<a href=#593 id=593 data-nosnippet>593</a>        <span class="kw">let </span>prompt = <span class="kw">match </span>prompt.as_str().trim() {
-<a href=#594 id=594 data-nosnippet>594</a>            <span class="string">"" </span>=&gt; <span class="kw">continue</span>,
-<a href=#595 id=595 data-nosnippet>595</a>            HELP_CMD =&gt; {
-<a href=#596 id=596 data-nosnippet>596</a>                <span class="macro">println!</span>(
-<a href=#597 id=597 data-nosnippet>597</a>                    <span class="string">"{}{DIFFUSION_INTERACTIVE_HELP}{}"</span>,
-<a href=#598 id=598 data-nosnippet>598</a>                    <span class="string">"="</span>.repeat(<span class="number">20</span>),
-<a href=#599 id=599 data-nosnippet>599</a>                    <span class="string">"="</span>.repeat(<span class="number">20</span>)
-<a href=#600 id=600 data-nosnippet>600</a>                );
-<a href=#601 id=601 data-nosnippet>601</a>                <span class="kw">continue</span>;
-<a href=#602 id=602 data-nosnippet>602</a>            }
-<a href=#603 id=603 data-nosnippet>603</a>            EXIT_CMD =&gt; {
-<a href=#604 id=604 data-nosnippet>604</a>                <span class="kw">break</span>;
-<a href=#605 id=605 data-nosnippet>605</a>            }
-<a href=#606 id=606 data-nosnippet>606</a>            prompt =&gt; prompt.to_string(),
-<a href=#607 id=607 data-nosnippet>607</a>        };
+<a href=#585 id=585 data-nosnippet>585</a><span class="kw">async fn </span>diffusion_interactive_mode(mistralrs: Arc&lt;MistralRs&gt;, do_search: bool) {
+<a href=#586 id=586 data-nosnippet>586</a>    <span class="kw">let </span>sender = mistralrs.get_sender().unwrap();
+<a href=#587 id=587 data-nosnippet>587</a>
+<a href=#588 id=588 data-nosnippet>588</a>    <span class="kw">let </span>diffusion_params = DiffusionGenerationParams::default();
+<a href=#589 id=589 data-nosnippet>589</a>
+<a href=#590 id=590 data-nosnippet>590</a>    <span class="macro">info!</span>(<span class="string">"Starting interactive loop with generation params: {diffusion_params:?}"</span>);
+<a href=#591 id=591 data-nosnippet>591</a>    <span class="macro">println!</span>(
+<a href=#592 id=592 data-nosnippet>592</a>        <span class="string">"{}{DIFFUSION_INTERACTIVE_HELP}{}"</span>,
+<a href=#593 id=593 data-nosnippet>593</a>        <span class="string">"="</span>.repeat(<span class="number">20</span>),
+<a href=#594 id=594 data-nosnippet>594</a>        <span class="string">"="</span>.repeat(<span class="number">20</span>)
+<a href=#595 id=595 data-nosnippet>595</a>    );
+<a href=#596 id=596 data-nosnippet>596</a>
+<a href=#597 id=597 data-nosnippet>597</a>    <span class="comment">// Set the handler to process exit
+<a href=#598 id=598 data-nosnippet>598</a>    </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>exit_handler;
+<a href=#599 id=599 data-nosnippet>599</a>
+<a href=#600 id=600 data-nosnippet>600</a>    ctrlc::set_handler(<span class="kw">move </span>|| CTRLC_HANDLER.lock().unwrap()())
+<a href=#601 id=601 data-nosnippet>601</a>        .expect(<span class="string">"Failed to set CTRL-C handler for interactive mode"</span>);
+<a href=#602 id=602 data-nosnippet>602</a>
+<a href=#603 id=603 data-nosnippet>603</a>    <span class="kw">let </span><span class="kw-2">mut </span>rl = DefaultEditor::new().expect(<span class="string">"Failed to open input"</span>);
+<a href=#604 id=604 data-nosnippet>604</a>    <span class="kw">let _ </span>= rl.load_history(<span class="kw-2">&amp;</span>history_file_path());
+<a href=#605 id=605 data-nosnippet>605</a>    <span class="kw">loop </span>{
+<a href=#606 id=606 data-nosnippet>606</a>        <span class="comment">// Set the handler to process exit
+<a href=#607 id=607 data-nosnippet>607</a>        </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>exit_handler;
 <a href=#608 id=608 data-nosnippet>608</a>
-<a href=#609 id=609 data-nosnippet>609</a>        <span class="comment">// Set the handler to terminate all seqs, so allowing cancelling running
-<a href=#610 id=610 data-nosnippet>610</a>        </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>terminate_handler;
-<a href=#611 id=611 data-nosnippet>611</a>
-<a href=#612 id=612 data-nosnippet>612</a>        <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
-<a href=#613 id=613 data-nosnippet>613</a>        <span class="kw">let </span>req = Request::Normal(NormalRequest {
-<a href=#614 id=614 data-nosnippet>614</a>            id: <span class="number">0</span>,
-<a href=#615 id=615 data-nosnippet>615</a>            messages: RequestMessage::ImageGeneration {
-<a href=#616 id=616 data-nosnippet>616</a>                prompt: prompt.to_string(),
-<a href=#617 id=617 data-nosnippet>617</a>                format: ImageGenerationResponseFormat::Url,
-<a href=#618 id=618 data-nosnippet>618</a>                generation_params: diffusion_params.clone(),
-<a href=#619 id=619 data-nosnippet>619</a>            },
-<a href=#620 id=620 data-nosnippet>620</a>            sampling_params: SamplingParams::deterministic(),
-<a href=#621 id=621 data-nosnippet>621</a>            response: tx,
-<a href=#622 id=622 data-nosnippet>622</a>            return_logprobs: <span class="bool-val">false</span>,
-<a href=#623 id=623 data-nosnippet>623</a>            is_streaming: <span class="bool-val">false</span>,
-<a href=#624 id=624 data-nosnippet>624</a>            suffix: <span class="prelude-val">None</span>,
-<a href=#625 id=625 data-nosnippet>625</a>            constraint: Constraint::None,
-<a href=#626 id=626 data-nosnippet>626</a>            tool_choice: <span class="prelude-val">None</span>,
-<a href=#627 id=627 data-nosnippet>627</a>            tools: <span class="prelude-val">None</span>,
-<a href=#628 id=628 data-nosnippet>628</a>            logits_processors: <span class="prelude-val">None</span>,
-<a href=#629 id=629 data-nosnippet>629</a>            return_raw_logits: <span class="bool-val">false</span>,
-<a href=#630 id=630 data-nosnippet>630</a>            web_search_options: do_search.then(WebSearchOptions::default),
-<a href=#631 id=631 data-nosnippet>631</a>        });
-<a href=#632 id=632 data-nosnippet>632</a>
-<a href=#633 id=633 data-nosnippet>633</a>        <span class="kw">let </span>start = Instant::now();
-<a href=#634 id=634 data-nosnippet>634</a>        sender.send(req).<span class="kw">await</span>.unwrap();
-<a href=#635 id=635 data-nosnippet>635</a>
-<a href=#636 id=636 data-nosnippet>636</a>        <span class="kw">let </span>ResponseOk::ImageGeneration(response) = rx.recv().<span class="kw">await</span>.unwrap().as_result().unwrap()
-<a href=#637 id=637 data-nosnippet>637</a>        <span class="kw">else </span>{
-<a href=#638 id=638 data-nosnippet>638</a>            <span class="macro">panic!</span>(<span class="string">"Got unexpected response type."</span>)
-<a href=#639 id=639 data-nosnippet>639</a>        };
-<a href=#640 id=640 data-nosnippet>640</a>        <span class="kw">let </span>end = Instant::now();
-<a href=#641 id=641 data-nosnippet>641</a>
-<a href=#642 id=642 data-nosnippet>642</a>        <span class="kw">let </span>duration = end.duration_since(start).as_secs_f32();
-<a href=#643 id=643 data-nosnippet>643</a>        <span class="kw">let </span>pixels_per_s = (diffusion_params.height * diffusion_params.width) <span class="kw">as </span>f32 / duration;
-<a href=#644 id=644 data-nosnippet>644</a>
-<a href=#645 id=645 data-nosnippet>645</a>        <span class="macro">println!</span>(
-<a href=#646 id=646 data-nosnippet>646</a>            <span class="string">"Image generated can be found at: image is at `{}`. Took {duration:.2}s ({pixels_per_s:.2} pixels/s)."</span>,
-<a href=#647 id=647 data-nosnippet>647</a>            response.data[<span class="number">0</span>].url.as_ref().unwrap(),
-<a href=#648 id=648 data-nosnippet>648</a>        );
-<a href=#649 id=649 data-nosnippet>649</a>
-<a href=#650 id=650 data-nosnippet>650</a>        <span class="macro">println!</span>();
-<a href=#651 id=651 data-nosnippet>651</a>    }
-<a href=#652 id=652 data-nosnippet>652</a>
-<a href=#653 id=653 data-nosnippet>653</a>    rl.save_history(<span class="kw-2">&amp;</span>history_file_path()).unwrap();
-<a href=#654 id=654 data-nosnippet>654</a>}</code></pre></div></section></main></body></html>
+<a href=#609 id=609 data-nosnippet>609</a>        <span class="kw">let </span>prompt = read_line(<span class="kw-2">&amp;mut </span>rl);
+<a href=#610 id=610 data-nosnippet>610</a>
+<a href=#611 id=611 data-nosnippet>611</a>        <span class="kw">let </span>prompt = <span class="kw">match </span>prompt.as_str().trim() {
+<a href=#612 id=612 data-nosnippet>612</a>            <span class="string">"" </span>=&gt; <span class="kw">continue</span>,
+<a href=#613 id=613 data-nosnippet>613</a>            HELP_CMD =&gt; {
+<a href=#614 id=614 data-nosnippet>614</a>                <span class="macro">println!</span>(
+<a href=#615 id=615 data-nosnippet>615</a>                    <span class="string">"{}{DIFFUSION_INTERACTIVE_HELP}{}"</span>,
+<a href=#616 id=616 data-nosnippet>616</a>                    <span class="string">"="</span>.repeat(<span class="number">20</span>),
+<a href=#617 id=617 data-nosnippet>617</a>                    <span class="string">"="</span>.repeat(<span class="number">20</span>)
+<a href=#618 id=618 data-nosnippet>618</a>                );
+<a href=#619 id=619 data-nosnippet>619</a>                <span class="kw">continue</span>;
+<a href=#620 id=620 data-nosnippet>620</a>            }
+<a href=#621 id=621 data-nosnippet>621</a>            EXIT_CMD =&gt; {
+<a href=#622 id=622 data-nosnippet>622</a>                <span class="kw">break</span>;
+<a href=#623 id=623 data-nosnippet>623</a>            }
+<a href=#624 id=624 data-nosnippet>624</a>            prompt =&gt; prompt.to_string(),
+<a href=#625 id=625 data-nosnippet>625</a>        };
+<a href=#626 id=626 data-nosnippet>626</a>
+<a href=#627 id=627 data-nosnippet>627</a>        <span class="comment">// Set the handler to terminate all seqs, so allowing cancelling running
+<a href=#628 id=628 data-nosnippet>628</a>        </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>terminate_handler;
+<a href=#629 id=629 data-nosnippet>629</a>
+<a href=#630 id=630 data-nosnippet>630</a>        <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
+<a href=#631 id=631 data-nosnippet>631</a>        <span class="kw">let </span>req = Request::Normal(NormalRequest {
+<a href=#632 id=632 data-nosnippet>632</a>            id: <span class="number">0</span>,
+<a href=#633 id=633 data-nosnippet>633</a>            messages: RequestMessage::ImageGeneration {
+<a href=#634 id=634 data-nosnippet>634</a>                prompt: prompt.to_string(),
+<a href=#635 id=635 data-nosnippet>635</a>                format: ImageGenerationResponseFormat::Url,
+<a href=#636 id=636 data-nosnippet>636</a>                generation_params: diffusion_params.clone(),
+<a href=#637 id=637 data-nosnippet>637</a>            },
+<a href=#638 id=638 data-nosnippet>638</a>            sampling_params: SamplingParams::deterministic(),
+<a href=#639 id=639 data-nosnippet>639</a>            response: tx,
+<a href=#640 id=640 data-nosnippet>640</a>            return_logprobs: <span class="bool-val">false</span>,
+<a href=#641 id=641 data-nosnippet>641</a>            is_streaming: <span class="bool-val">false</span>,
+<a href=#642 id=642 data-nosnippet>642</a>            suffix: <span class="prelude-val">None</span>,
+<a href=#643 id=643 data-nosnippet>643</a>            constraint: Constraint::None,
+<a href=#644 id=644 data-nosnippet>644</a>            tool_choice: <span class="prelude-val">None</span>,
+<a href=#645 id=645 data-nosnippet>645</a>            tools: <span class="prelude-val">None</span>,
+<a href=#646 id=646 data-nosnippet>646</a>            logits_processors: <span class="prelude-val">None</span>,
+<a href=#647 id=647 data-nosnippet>647</a>            return_raw_logits: <span class="bool-val">false</span>,
+<a href=#648 id=648 data-nosnippet>648</a>            web_search_options: do_search.then(WebSearchOptions::default),
+<a href=#649 id=649 data-nosnippet>649</a>        });
+<a href=#650 id=650 data-nosnippet>650</a>
+<a href=#651 id=651 data-nosnippet>651</a>        <span class="kw">let </span>start = Instant::now();
+<a href=#652 id=652 data-nosnippet>652</a>        sender.send(req).<span class="kw">await</span>.unwrap();
+<a href=#653 id=653 data-nosnippet>653</a>
+<a href=#654 id=654 data-nosnippet>654</a>        <span class="kw">let </span>ResponseOk::ImageGeneration(response) = rx.recv().<span class="kw">await</span>.unwrap().as_result().unwrap()
+<a href=#655 id=655 data-nosnippet>655</a>        <span class="kw">else </span>{
+<a href=#656 id=656 data-nosnippet>656</a>            <span class="macro">panic!</span>(<span class="string">"Got unexpected response type."</span>)
+<a href=#657 id=657 data-nosnippet>657</a>        };
+<a href=#658 id=658 data-nosnippet>658</a>        <span class="kw">let </span>end = Instant::now();
+<a href=#659 id=659 data-nosnippet>659</a>
+<a href=#660 id=660 data-nosnippet>660</a>        <span class="kw">let </span>duration = end.duration_since(start).as_secs_f32();
+<a href=#661 id=661 data-nosnippet>661</a>        <span class="kw">let </span>pixels_per_s = (diffusion_params.height * diffusion_params.width) <span class="kw">as </span>f32 / duration;
+<a href=#662 id=662 data-nosnippet>662</a>
+<a href=#663 id=663 data-nosnippet>663</a>        <span class="macro">println!</span>(
+<a href=#664 id=664 data-nosnippet>664</a>            <span class="string">"Image generated can be found at: image is at `{}`. Took {duration:.2}s ({pixels_per_s:.2} pixels/s)."</span>,
+<a href=#665 id=665 data-nosnippet>665</a>            response.data[<span class="number">0</span>].url.as_ref().unwrap(),
+<a href=#666 id=666 data-nosnippet>666</a>        );
+<a href=#667 id=667 data-nosnippet>667</a>
+<a href=#668 id=668 data-nosnippet>668</a>        <span class="macro">println!</span>();
+<a href=#669 id=669 data-nosnippet>669</a>    }
+<a href=#670 id=670 data-nosnippet>670</a>
+<a href=#671 id=671 data-nosnippet>671</a>    rl.save_history(<span class="kw-2">&amp;</span>history_file_path()).unwrap();
+<a href=#672 id=672 data-nosnippet>672</a>}</code></pre></div></section></main></body></html>
