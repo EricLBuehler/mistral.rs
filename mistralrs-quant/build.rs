@@ -155,17 +155,21 @@ fn main() -> Result<(), String> {
         use std::process::Command;
         use std::{env, str};
 
-        const METAL_SOURCES: [&str; 5] = [
+        const METAL_SOURCES: [&str; 6] = [
             "bitwise",
             "blockwise_fp8",
             "bnb_dequantize",
             "hqq_dequantize",
             "quantized",
+            "scan",
         ];
+        const HEADER_SOURCES: [&str; 3] = ["utils", "bf16", "scan_impl"];
         for src in METAL_SOURCES {
             println!("cargo::rerun-if-changed=src/metal_kernels/{src}.metal");
         }
-        println!("cargo::rerun-if-changed=src/metal_kernels/utils.metal");
+        for src in HEADER_SOURCES {
+            println!("cargo::rerun-if-changed=src/metal_kernels/{src}.metal");
+        }
         println!("cargo::rerun-if-changed=build.rs");
 
         enum Platform {
@@ -203,7 +207,9 @@ fn main() -> Result<(), String> {
             for metal_file in METAL_SOURCES {
                 compile_air_cmd.arg(sources.join(format!("{metal_file}.metal")));
             }
-            compile_air_cmd.arg(sources.join("utils.metal"));
+            for metal_file in HEADER_SOURCES {
+                compile_air_cmd.arg(sources.join(format!("{metal_file}.metal")));
+            }
             compile_air_cmd.spawn().expect("Failed to compile air");
 
             let mut child = compile_air_cmd.spawn().expect("Failed to compile air");
@@ -243,7 +249,9 @@ fn main() -> Result<(), String> {
             for metal_file in METAL_SOURCES {
                 compile_metallib_cmd.arg(out_dir.join(format!("{metal_file}.air")));
             }
-            compile_metallib_cmd.arg(out_dir.join("utils.air"));
+            for metal_file in HEADER_SOURCES {
+                compile_metallib_cmd.arg(out_dir.join(format!("{metal_file}.air")));
+            }
 
             let mut child = compile_metallib_cmd
                 .spawn()

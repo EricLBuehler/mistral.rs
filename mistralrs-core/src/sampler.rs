@@ -7,6 +7,7 @@ use std::{
 };
 
 use candle_core::{Device, Error, Result, Tensor, D};
+use mistralrs_quant::CumSumOp;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -16,6 +17,8 @@ use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
+
+use crate::ops::{TopKLastDimOp, TopKOutput};
 
 static DRY_SEQUENCE_BREAKERS: Lazy<Vec<String>> =
     Lazy::new(|| ["\n", ":", "\"", "*"].map(String::from).to_vec());
@@ -337,6 +340,102 @@ impl Sampler {
         })
     }
 
+    fn sample_fast(
+        &self,
+        logits: Tensor,
+        return_logprobs: bool,
+        top_k: i64,
+        top_p: f64,
+        min_p: f64,
+    ) -> Result<Logprobs> {
+        let mut probs = candle_nn::ops::softmax_last_dim(&logits)?;
+
+        // Top-K
+        if top_k > 0 {
+            let TopKOutput {
+                values: topk_vals,
+                indices: _,
+            } = probs.topk(top_k as usize)?;
+            // select the kth largest value as threshold
+            let threshold = topk_vals
+                .get_on_dim(D::Minus1, (top_k as i64 - 1) as usize)?
+                .unsqueeze(0)?;
+            let mask_topk = probs.broadcast_ge(&threshold)?;
+            probs = mask_topk.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
+        }
+
+        // Top-P (nucleus) without cumsum
+        if top_p > 0.0 && top_p < 1.0 {
+            // sort indices by descending prob
+            let sorted_indices = probs.arg_sort_last_dim(false)?;
+            // gather sorted probabilities
+            let sorted_probs = probs.gather(&sorted_indices, D::Minus1)?;
+
+            let sorted_probs_vec: Vec<f32> = sorted_probs.to_device(&Device::Cpu)?.to_vec1()?;
+            let mut cum_sum = 0.0f32;
+            let mut threshold_val = 0.0f32;
+            for &p in sorted_probs_vec.iter() {
+                cum_sum += p;
+                if cum_sum > top_p as f32 {
+                    break;
+                }
+                threshold_val = p;
+            }
+            let threshold = Tensor::from_slice(&[threshold_val], &[], &Device::Cpu)?
+                .to_device(&probs.device())?
+                .unsqueeze(D::Minus1)?;
+            let mask_full = probs.broadcast_ge(&threshold)?;
+            probs = mask_full.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
+        }
+
+        // // Top-P (nucleus)
+        // if top_p > 0.0 && top_p < 1.0 {
+        //     let sorted_indices = probs.arg_sort_last_dim(false)?;
+        //     let sorted_probs = probs.gather(&sorted_indices, D::Minus1)?;
+        //     let cumsum = sorted_probs.fast_cumsum(D::Minus1)?;
+
+        //     let mask_topp = cumsum.le(top_p)?;
+
+        //     let masked_sorted =
+        //         mask_topp.where_cond(&sorted_probs, &Tensor::zeros_like(&sorted_probs)?)?;
+
+        //     let threshold = masked_sorted.max(D::Minus1)?;
+        //     let threshold = threshold.unsqueeze(D::Minus1)?;
+        //     let mask_full = probs.broadcast_ge(&threshold)?;
+        //     probs = mask_full.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
+        // }
+
+        // Min-P
+        if min_p > 0.0 && min_p < 1.0 {
+            let max_vals = probs.max(D::Minus1)?;
+            let threshold_min = (max_vals.unsqueeze(D::Minus1)? * min_p)?;
+            let mask_minp = probs.broadcast_gt(&threshold_min)?;
+            probs = mask_minp.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
+        }
+
+        let next_token = probs.argmax(D::Minus1)?.to_scalar::<u32>()?;
+
+        let logprob = 1.;
+
+        let top_logprobs: Option<Vec<TopLogprob>> = None;
+
+        let bytes = if let Some(tokenizer) = &self.tokenizer {
+            Some(
+                tokenizer
+                    .decode(&[next_token], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            )
+        } else {
+            None
+        };
+
+        Ok(Logprobs {
+            token: next_token,
+            logprob,
+            top_logprobs,
+            bytes,
+        })
+    }
     fn sample_speculative_top_kp_min_p(
         &self,
         logits: Tensor,
@@ -643,6 +742,8 @@ impl Sampler {
         rng: Arc<Mutex<Isaac64Rng>>,
         sample_speculative: bool,
     ) -> Result<Logprobs> {
+        return self.sample_fast(logits, return_logprobs, self.top_k, self.top_p, self.min_p);
+
         let logits = logits.to_vec1()?;
         let mut logits = self.apply_penalties(logits, context)?;
         for processor in &self.logits_processors {
