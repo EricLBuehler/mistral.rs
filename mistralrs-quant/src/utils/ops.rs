@@ -1,6 +1,6 @@
 use candle_core::{
-    backend::BackendStorage, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout, Result, Shape,
-    Tensor, WithDType,
+    backend::BackendStorage, shape::Dim, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout,
+    Result, Shape, Tensor, WithDType,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
@@ -901,7 +901,311 @@ impl NonZeroOp for Tensor {
     }
 }
 
+struct CumSum {
+    inclusive: bool,
+    reverse: bool,
+    axis: usize,
+}
+
+impl CustomOp1 for CumSum {
+    fn name(&self) -> &'static str {
+        "cumsum"
+    }
+
+    fn cpu_fwd(&self, s1: &CpuStorage, l1: &Layout) -> Result<(CpuStorage, Shape)> {
+        use std::ops::Add;
+        if !l1.is_contiguous() {
+            candle_core::bail!("Input tensor s1 must be contiguous");
+        }
+        let dims = l1.dims();
+        let axis = self.axis;
+        let axis_len = dims[axis];
+        let (start, end) = l1
+            .contiguous_offsets()
+            .ok_or(Error::RequiresContiguous { op: "cumsum" })?;
+
+        // helper to execute scan for a slice of T
+        macro_rules! scan_block {
+            ($vt:ident, $ty:ty, $add:ident, $init:expr) => {{
+                let vs: &[$ty] = $vt;
+                let input = &vs[start..end];
+                let count = input.len() / axis_len;
+                let mut result = Vec::<$ty>::with_capacity(input.len());
+                if !self.reverse {
+                    if self.inclusive {
+                        for block in 0..count {
+                            let base = block * axis_len;
+                            let mut sum = input[base];
+                            result.push(sum);
+                            for j in 1..axis_len {
+                                sum = sum.$add(input[base + j]);
+                                result.push(sum);
+                            }
+                        }
+                    } else {
+                        let init: $ty = $init;
+                        for block in 0..count {
+                            let base = block * axis_len;
+                            let mut sum = init;
+                            for j in 0..axis_len {
+                                result.push(sum);
+                                sum = sum.$add(input[base + j]);
+                            }
+                        }
+                    }
+                } else {
+                    if self.inclusive {
+                        for block in 0..count {
+                            let base = block * axis_len;
+                            let mut temp = Vec::<$ty>::with_capacity(axis_len);
+                            let mut sum = input[base + axis_len - 1];
+                            temp.push(sum);
+                            for k in 1..axis_len {
+                                let idx = axis_len - 1 - k;
+                                sum = sum.$add(input[base + idx]);
+                                temp.push(sum);
+                            }
+                            temp.reverse();
+                            result.extend(temp);
+                        }
+                    } else {
+                        let init: $ty = $init;
+                        for block in 0..count {
+                            let base = block * axis_len;
+                            let mut temp = Vec::<$ty>::with_capacity(axis_len);
+                            let mut sum = init;
+                            for k in 0..axis_len {
+                                let idx = axis_len - 1 - k;
+                                temp.push(sum);
+                                sum = sum.$add(input[base + idx]);
+                            }
+                            temp.reverse();
+                            result.extend(temp);
+                        }
+                    }
+                }
+                result
+            }};
+        }
+        match s1 {
+            CpuStorage::U8(vs) => {
+                let result = scan_block!(vs, u8, wrapping_add, 0u8);
+                Ok((CpuStorage::U8(result), l1.shape().clone()))
+            }
+            CpuStorage::I16(vs) => {
+                let result = scan_block!(vs, i16, add, 0i16);
+                Ok((CpuStorage::I16(result), l1.shape().clone()))
+            }
+            CpuStorage::U32(vs) => {
+                let result = scan_block!(vs, u32, wrapping_add, 0u32);
+                Ok((CpuStorage::U32(result), l1.shape().clone()))
+            }
+            CpuStorage::I32(vs) => {
+                let result = scan_block!(vs, i32, add, 0i32);
+                Ok((CpuStorage::I32(result), l1.shape().clone()))
+            }
+            CpuStorage::I64(vs) => {
+                let result = scan_block!(vs, i64, add, 0i64);
+                Ok((CpuStorage::I64(result), l1.shape().clone()))
+            }
+            CpuStorage::F32(vs) => {
+                let result = scan_block!(vs, f32, add, 0.0f32);
+                Ok((CpuStorage::F32(result), l1.shape().clone()))
+            }
+            CpuStorage::F64(vs) => {
+                let result = scan_block!(vs, f64, add, 0.0f64);
+                Ok((CpuStorage::F64(result), l1.shape().clone()))
+            }
+            _ => Err(Error::UnsupportedDTypeForOp(DType::F32, "cumsum")),
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(&self, s1: &CudaStorage, l1: &Layout) -> Result<(CudaStorage, Shape)> {
+        todo!()
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        s1: &candle_core::MetalStorage,
+        l1: &Layout,
+    ) -> Result<(candle_core::MetalStorage, Shape)> {
+        use crate::metal_kernels::ScanType;
+
+        let command_buffer = s1.device().command_buffer()?;
+        command_buffer.set_label("cumsum");
+
+        let device = s1.device();
+
+        let out_shape = l1.shape().clone();
+
+        let output = device.new_buffer(out_shape.elem_count(), s1.dtype(), "cumsum")?;
+
+        crate::metal_kernels::call_scan(
+            device.device(),
+            &command_buffer,
+            &crate::metal_kernels::Kernels::new(),
+            s1.dtype(),
+            ScanType::Sum,
+            s1.buffer(),
+            l1.start_offset() * s1.dtype().size_in_bytes(),
+            self.axis,
+            l1.dims(),
+            l1.stride(),
+            self.reverse,
+            self.inclusive,
+            &output,
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        let newstorage = candle_core::MetalStorage::new(
+            output,
+            device.clone(),
+            out_shape.elem_count(),
+            s1.dtype(),
+        );
+        Ok((newstorage, out_shape))
+    }
+}
+
+#[allow(dead_code)]
+pub trait CumSumOp {
+    /// inclusive = false, reverse = false
+    fn fast_cumsum<D: Dim>(&self, axis: D) -> Result<Tensor>;
+
+    fn fast_cumsum_config<D: Dim>(&self, axis: D, inclusive: bool, reverse: bool)
+        -> Result<Tensor>;
+}
+
+impl CumSumOp for Tensor {
+    fn fast_cumsum<D: Dim>(&self, axis: D) -> Result<Tensor> {
+        self.fast_cumsum_config(axis, false, false)
+    }
+
+    fn fast_cumsum_config<D: Dim>(
+        &self,
+        axis: D,
+        inclusive: bool,
+        reverse: bool,
+    ) -> Result<Tensor> {
+        self.apply_op1_no_bwd(&CumSum {
+            inclusive,
+            reverse,
+            axis: axis.to_index(self.shape(), "cumsum")?,
+        })
+    }
+}
+
 mod tests {
+    #[test]
+    fn test_cumsum_exclusive_forward_cpu() {
+        use crate::utils::ops::CumSumOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::Cpu;
+        let a = Tensor::from_vec(vec![1i64, 2, 3, 4], &[4], &device).unwrap();
+        let b = a.fast_cumsum(0).unwrap().to_vec1::<i64>().unwrap();
+        assert_eq!(b, [0, 1, 3, 6]);
+    }
+
+    #[test]
+    fn test_cumsum_inclusive_forward_cpu() {
+        use crate::utils::ops::CumSumOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::Cpu;
+        let a = Tensor::from_vec(vec![1i64, 2, 3, 4], &[4], &device).unwrap();
+        let b = a
+            .fast_cumsum_config(0, true, false)
+            .unwrap()
+            .to_vec1::<i64>()
+            .unwrap();
+        assert_eq!(b, [1, 3, 6, 10]);
+    }
+
+    #[test]
+    fn test_cumsum_exclusive_reverse_cpu() {
+        use crate::utils::ops::CumSumOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::Cpu;
+        let a = Tensor::from_vec(vec![1i64, 2, 3, 4], &[4], &device).unwrap();
+        let b = a
+            .fast_cumsum_config(0, false, true)
+            .unwrap()
+            .to_vec1::<i64>()
+            .unwrap();
+        assert_eq!(b, [9, 7, 4, 0]);
+    }
+
+    #[test]
+    fn test_cumsum_inclusive_reverse_cpu() {
+        use crate::utils::ops::CumSumOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::Cpu;
+        let a = Tensor::from_vec(vec![1i64, 2, 3, 4], &[4], &device).unwrap();
+        let b = a
+            .fast_cumsum_config(0, true, true)
+            .unwrap()
+            .to_vec1::<i64>()
+            .unwrap();
+        assert_eq!(b, [10, 9, 7, 4]);
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_cumsum_exclusive_forward_metal() {
+        use crate::utils::ops::CumSumOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::new_metal(0).unwrap();
+        let a = Tensor::from_vec(vec![1i64, 2, 3, 4], &[4], &device).unwrap();
+        let b = a.fast_cumsum(0).unwrap().to_vec1::<i64>().unwrap();
+        assert_eq!(b, [0, 1, 3, 6]);
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_cumsum_inclusive_forward_metal() {
+        use crate::utils::ops::CumSumOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::new_metal(0).unwrap();
+        let a = Tensor::from_vec(vec![1i64, 2, 3, 4], &[4], &device).unwrap();
+        let b = a
+            .fast_cumsum_config(0, true, false)
+            .unwrap()
+            .to_vec1::<i64>()
+            .unwrap();
+        assert_eq!(b, [1, 3, 6, 10]);
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_cumsum_exclusive_reverse_metal() {
+        use crate::utils::ops::CumSumOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::new_metal(0).unwrap();
+        let a = Tensor::from_vec(vec![1i64, 2, 3, 4], &[4], &device).unwrap();
+        let b = a
+            .fast_cumsum_config(0, false, true)
+            .unwrap()
+            .to_vec1::<i64>()
+            .unwrap();
+        assert_eq!(b, [9, 7, 4, 0]);
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_cumsum_inclusive_reverse_metal() {
+        use crate::utils::ops::CumSumOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::new_metal(0).unwrap();
+        let a = Tensor::from_vec(vec![1i64, 2, 3, 4], &[4], &device).unwrap();
+        let b = a
+            .fast_cumsum_config(0, true, true)
+            .unwrap()
+            .to_vec1::<i64>()
+            .unwrap();
+        assert_eq!(b, [10, 9, 7, 4]);
+    }
+
     #[test]
     fn test_nonzero_cpu() {
         use crate::utils::ops::NonZeroOp;

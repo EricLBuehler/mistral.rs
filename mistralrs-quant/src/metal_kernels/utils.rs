@@ -31,6 +31,57 @@ pub(crate) fn get_2d_grid_dims(shape: &[usize], strides: &[usize]) -> MTLSize {
     }
 }
 
+pub(crate) fn get_2d_grid_dims_divisor(
+    shape: &[usize],
+    strides: &[usize],
+    mut divisor: usize,
+) -> MTLSize {
+    let mut grid_x: usize = 1;
+    let mut grid_y: usize = 1;
+
+    for i in 0..shape.len() {
+        if strides[i] == 0 {
+            continue;
+        }
+
+        // No need to add this shape, we can just remove it from the divisor
+        if divisor % shape[i] == 0 {
+            divisor /= shape[i];
+            continue;
+        }
+
+        if grid_x.saturating_mul(shape[i]) < u32::MAX as usize {
+            grid_x *= shape[i];
+        } else {
+            grid_y *= shape[i];
+        }
+
+        if divisor > 1 {
+            if grid_x % divisor == 0 {
+                grid_x /= divisor;
+                divisor = 1;
+            } else if grid_y % divisor == 0 {
+                grid_y /= divisor;
+                divisor = 1;
+            }
+        }
+    }
+
+    if grid_y > u32::MAX as usize || grid_x > u32::MAX as usize {
+        panic!("Unable to safely factor shape.");
+    }
+
+    if grid_y > grid_x {
+        std::mem::swap(&mut grid_x, &mut grid_y);
+    }
+
+    MTLSize {
+        width: grid_x as u64,
+        height: grid_y as u64,
+        depth: 1,
+    }
+}
+
 /// Most kernels apply similarly across the tensors
 /// This creates a strategy that uses the maximum amount of threads per threadgroup (capped at the
 /// actual total buffer length).
