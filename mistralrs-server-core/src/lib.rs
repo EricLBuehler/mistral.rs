@@ -277,6 +277,8 @@ pub async fn bootstrap_mistralrs_router(
 ) -> Result<Router> {
     initialize_logging();
 
+    args = configure_args(args);
+
     let tgt_non_granular_index = get_tgt_non_granular_index(&args.model);
     let dtype = get_model_dtype(&args.model)?;
     let auto_device_map_params = get_auto_device_map_params(&args.model)?;
@@ -295,13 +297,20 @@ pub async fn bootstrap_mistralrs_router(
 
     let max_seq_len = auto_device_map_params.max_seq_len();
 
-    let device = init_device(&mut args)?;
-    let mapper = init_mapper(&args, auto_device_map_params);
-    let no_paged_attn = configure_no_paged_attn(&device, &args);
+    let device = init_device(args.cpu, args.seed)?;
+    let mapper = init_mapper(&args.num_device_layers, &auto_device_map_params);
+    let no_paged_attn = configure_no_paged_attn(&device, args.no_paged_attn, args.paged_attn);
 
     // Allocate 0.5 GB of CPU memory just as a placeholder.
     // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
-    let cache_config = init_cache_config(&args, no_paged_attn, max_seq_len)?;
+    let cache_config = init_cache_config(
+        args.paged_attn_block_size,
+        args.paged_attn_gpu_mem,
+        args.paged_attn_gpu_mem_usage,
+        args.paged_ctxt_len,
+        no_paged_attn,
+        max_seq_len,
+    )?;
 
     // Configure this last to prevent arg moves
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
@@ -371,12 +380,22 @@ pub async fn bootstrap_mistralrs_router(
     Ok(app)
 }
 
-fn init_device(args: &mut Args) -> Result<candle_core::Device> {
+// This was originally with the device config
+fn configure_args(mut args: Args) -> Args {
+    #[cfg(not(feature = "metal"))]
+    if args.cpu {
+        args.no_paged_attn = true;
+    }
+
+    args
+}
+
+fn init_device(force_cpu: bool, seed: Option<u64>) -> Result<candle_core::Device> {
     #[cfg(feature = "metal")]
     let device = Device::new_metal(0)?;
     #[cfg(not(feature = "metal"))]
-    let device = if args.cpu {
-        args.no_paged_attn = true;
+    #[allow(clippy::if_same_then_else)]
+    let device = if force_cpu {
         Device::Cpu
     } else if mistralrs_core::distributed::use_nccl() {
         Device::Cpu
@@ -384,16 +403,19 @@ fn init_device(args: &mut Args) -> Result<candle_core::Device> {
         Device::cuda_if_available(0)?
     };
 
-    if let Some(seed) = args.seed {
+    if let Some(seed) = seed {
         device.set_seed(seed)?;
     }
 
     Ok(device)
 }
 
-fn init_mapper(args: &Args, auto_device_map_params: AutoDeviceMapParams) -> DeviceMapSetting {
+fn init_mapper(
+    num_device_layers: &Option<Vec<String>>,
+    auto_device_map_params: &AutoDeviceMapParams,
+) -> DeviceMapSetting {
     // Parse device mapper
-    if let Some(device_layers) = &args.num_device_layers {
+    if let Some(device_layers) = num_device_layers {
         if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
             let layers = device_layers[0].parse::<usize>().unwrap();
             DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(vec![
@@ -425,7 +447,7 @@ fn init_mapper(args: &Args, auto_device_map_params: AutoDeviceMapParams) -> Devi
             DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
         }
     } else {
-        DeviceMapSetting::Auto(auto_device_map_params)
+        DeviceMapSetting::Auto(auto_device_map_params.clone())
     }
 }
 
@@ -443,26 +465,29 @@ fn print_mistral_server_info(loader: &Box<dyn Loader>) {
     info!("Model kind is: {}", loader.get_kind().to_string());
 }
 
-fn configure_no_paged_attn(device: &Device, args: &Args) -> bool {
+fn configure_no_paged_attn(device: &Device, no_paged_attn: bool, paged_attn: bool) -> bool {
     if device.is_cuda() || mistralrs_core::distributed::use_nccl() {
-        args.no_paged_attn
+        no_paged_attn
     } else if device.is_metal() {
-        !args.paged_attn
+        !paged_attn
     } else {
         true
     }
 }
 
 fn init_cache_config(
-    args: &Args,
+    paged_attn_block_size: Option<usize>,
+    paged_attn_gpu_mem: Option<usize>,
+    paged_attn_gpu_mem_usage: Option<f32>,
+    paged_ctxt_len: Option<usize>,
     no_paged_attn: bool,
     max_seq_len: usize,
 ) -> Result<Option<PagedAttentionConfig>> {
     match (
-        args.paged_attn_block_size,
-        args.paged_attn_gpu_mem,
-        args.paged_attn_gpu_mem_usage,
-        args.paged_ctxt_len,
+        paged_attn_block_size,
+        paged_attn_gpu_mem,
+        paged_attn_gpu_mem_usage,
+        paged_ctxt_len,
         paged_attn_supported(),
         no_paged_attn,
     ) {
