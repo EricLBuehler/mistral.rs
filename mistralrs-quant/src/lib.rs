@@ -56,6 +56,7 @@ pub use lora::{
     MULTI_LORA_DELIMITER,
 };
 pub use unquantized::UnquantLinear;
+use utils::isq::apply_immediate_isq;
 pub use utils::{BitWiseOp, LeftshiftOp, NonZeroOp, UQFF_QUANT_TYPE_OFFSET};
 
 use candle_nn::{Linear, Module};
@@ -665,6 +666,7 @@ pub fn linear_no_bias(
     config: &Option<QuantizedConfig>,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
+    let device = vb.device().clone();
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::Gptq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
@@ -693,7 +695,7 @@ pub fn linear_no_bias(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    Ok(layer)
+    apply_immediate_isq(layer, device)
 }
 
 pub fn linear(
@@ -702,6 +704,7 @@ pub fn linear(
     config: &Option<QuantizedConfig>,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
+    let device = vb.device().clone();
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::Gptq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
@@ -731,7 +734,7 @@ pub fn linear(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    Ok(layer)
+    apply_immediate_isq(layer, device)
 }
 
 pub fn linear_b(

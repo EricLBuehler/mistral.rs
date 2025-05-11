@@ -5,9 +5,10 @@ use candle_nn::Linear;
 
 use crate::{
     blockwise_fp8::blockwise_fp8_linear_b, distributed, get_immediate_isq, gptq::gptq_linear,
-    lora::merge_lora_weights, AfqLayer, BnbLinear, DistributedKind, DummyLayer, FP8Linear,
-    GgufMatMul, HqqLayer, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig,
-    QuantizedSerde, QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
+    lora::merge_lora_weights, utils::isq::apply_immediate_isq, AfqLayer, BnbLinear,
+    DistributedKind, DummyLayer, FP8Linear, GgufMatMul, HqqLayer, QuantMethod, QuantMethodConfig,
+    QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, QuantizedSerdeType, Shard,
+    ShardedVarBuilder, UnquantLinear,
 };
 
 use super::{Comm, SumAllReduce};
@@ -96,20 +97,12 @@ impl RowParallelLayer {
             None
         };
 
-        let mut this: Arc<dyn QuantMethod> = Arc::new(Self {
+        let this_unquant = Arc::new(Self {
             weight,
             bias,
             all_reduce: distributed::SumAllReduce::new(comm),
         });
-        if let Some(immediate_isq) = get_immediate_isq() {
-            this = this.clone().apply_isq(
-                Some(immediate_isq),
-                vb.device().clone(),
-                &AtomicUsize::new(0),
-                None,
-                QuantizeOntoGuard::new(),
-            )?;
-        }
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, vb.device().clone())?;
         Ok(this)
     }
 }
@@ -307,16 +300,8 @@ impl ColumnParallelLayer {
             None
         };
 
-        let mut this: Arc<dyn QuantMethod> = Arc::new(Self { weight, bias });
-        if let Some(immediate_isq) = get_immediate_isq() {
-            this = this.clone().apply_isq(
-                Some(immediate_isq),
-                vb.device().clone(),
-                &AtomicUsize::new(0),
-                None,
-                QuantizeOntoGuard::new(),
-            )?;
-        }
+        let this_unquant = Arc::new(Self { weight, bias });
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, vb.device().clone())?;
         Ok(this)
     }
 
@@ -455,17 +440,8 @@ pub struct ReplicatedLayer(Arc<dyn QuantMethod>);
 impl ReplicatedLayer {
     pub fn from_linear(lin: Linear) -> Result<Arc<dyn QuantMethod>> {
         let dev = lin.weight().device().clone();
-        let mut this: Arc<dyn QuantMethod> =
-            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
-        if let Some(immediate_isq) = get_immediate_isq() {
-            this = this.clone().apply_isq(
-                Some(immediate_isq),
-                dev,
-                &AtomicUsize::new(0),
-                None,
-                QuantizeOntoGuard::new(),
-            )?;
-        }
+        let this_unquant = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, dev)?;
         Ok(this)
     }
 
@@ -518,16 +494,8 @@ impl ReplicatedLayer {
             }
         };
 
-        let mut this: Arc<dyn QuantMethod> = Arc::new(Self(layer));
-        if let Some(immediate_isq) = get_immediate_isq() {
-            this = this.clone().apply_isq(
-                Some(immediate_isq),
-                vb.device().clone(),
-                &AtomicUsize::new(0),
-                None,
-                QuantizeOntoGuard::new(),
-            )?;
-        }
+        let this_unquant = Arc::new(Self(layer));
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, vb.device().clone())?;
         Ok(this)
     }
 }
