@@ -71,11 +71,10 @@ pub fn set_immediate_isq(isq: Option<IsqType>) {
 }
 
 pub fn get_immediate_isq() -> Option<IsqType> {
-    IMMEDIATE_ISQ
+    *IMMEDIATE_ISQ
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap()
-        .clone()
 }
 
 #[derive(Debug, Clone, Serialize)]
