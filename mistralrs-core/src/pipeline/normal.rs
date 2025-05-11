@@ -466,9 +466,15 @@ impl Loader for NormalLoader {
             once_log_info("FlashAttention is enabled.");
         }
 
-        // Apply ISQ here!
-        mistralrs_quant::set_immediate_isq(in_situ_quant);
-        let mut loading_isq = false;
+        // Logic for ISQ here: if no calibration (i.e imatrix), then allow immediate ISQ. Otherwise, back to normal.
+        let mut loading_isq =
+            if self.config.imatrix.is_none() && self.config.calibration_file.is_none() {
+                mistralrs_quant::set_immediate_isq(in_situ_quant);
+                false
+            } else {
+                in_situ_quant.is_some()
+            };
+
         if let Some(ref topology) = self.config.topology {
             loading_isq |= topology
                 .0
