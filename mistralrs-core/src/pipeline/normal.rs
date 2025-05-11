@@ -466,11 +466,9 @@ impl Loader for NormalLoader {
             once_log_info("FlashAttention is enabled.");
         }
 
-        let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
-        {
-            mistralrs_quant::set_immediate_isq(in_situ_quant);
-            loading_isq = false;
-        }
+        // Apply ISQ here!
+        mistralrs_quant::set_immediate_isq(in_situ_quant);
+        let mut loading_isq = false;
         if let Some(ref topology) = self.config.topology {
             loading_isq |= topology
                 .0
@@ -715,9 +713,7 @@ impl Loader for NormalLoader {
             );
         }
 
-        // if (in_situ_quant.is_some() || self.config.topology.is_some())
-        //     && self.config.from_uqff.is_none()
-        // {
+        // Only if loading from UQFF
         if self.config.topology.is_some() && self.config.from_uqff.is_none() {
             let imatrix_source = match (
                 self.config.imatrix.as_ref(),
