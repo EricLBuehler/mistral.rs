@@ -364,46 +364,46 @@ impl Sampler {
             probs = mask_topk.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
         }
 
-        // // Top-P (nucleus) without cumsum
-        // if top_p > 0.0 && top_p < 1.0 {
-        //     // sort indices by descending prob
-        //     let sorted_indices = probs.arg_sort_last_dim(false)?;
-        //     // gather sorted probabilities
-        //     let sorted_probs = probs.gather(&sorted_indices, D::Minus1)?;
-
-        //     let sorted_probs_vec: Vec<f32> = sorted_probs.to_device(&Device::Cpu)?.to_vec1()?;
-        //     let mut cum_sum = 0.0f32;
-        //     let mut threshold_val = 0.0f32;
-        //     for &p in sorted_probs_vec.iter() {
-        //         cum_sum += p;
-        //         if cum_sum > top_p as f32 {
-        //             break;
-        //         }
-        //         threshold_val = p;
-        //     }
-        //     let threshold = Tensor::from_slice(&[threshold_val], &[], &Device::Cpu)?
-        //         .to_device(&probs.device())?
-        //         .unsqueeze(D::Minus1)?;
-        //     let mask_full = probs.broadcast_ge(&threshold)?;
-        //     probs = mask_full.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
-        // }
-
-        // Top-P (nucleus)
+        // Top-P (nucleus) without cumsum
         if top_p > 0.0 && top_p < 1.0 {
+            // sort indices by descending prob
             let sorted_indices = probs.arg_sort_last_dim(false)?;
+            // gather sorted probabilities
             let sorted_probs = probs.gather(&sorted_indices, D::Minus1)?;
-            let cumsum = sorted_probs.fast_cumsum(D::Minus1)?;
 
-            let mask_topp = cumsum.le(top_p)?;
-
-            let masked_sorted =
-                mask_topp.where_cond(&sorted_probs, &Tensor::zeros_like(&sorted_probs)?)?;
-
-            let threshold = masked_sorted.max(D::Minus1)?;
-            let threshold = threshold.unsqueeze(D::Minus1)?;
+            let sorted_probs_vec: Vec<f32> = sorted_probs.to_device(&Device::Cpu)?.to_vec1()?;
+            let mut cum_sum = 0.0f32;
+            let mut threshold_val = 0.0f32;
+            for &p in sorted_probs_vec.iter() {
+                cum_sum += p;
+                if cum_sum > top_p as f32 {
+                    break;
+                }
+                threshold_val = p;
+            }
+            let threshold = Tensor::from_slice(&[threshold_val], &[], &Device::Cpu)?
+                .to_device(&probs.device())?
+                .unsqueeze(D::Minus1)?;
             let mask_full = probs.broadcast_ge(&threshold)?;
             probs = mask_full.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
         }
+
+        // // Top-P (nucleus)
+        // if top_p > 0.0 && top_p < 1.0 {
+        //     let sorted_indices = probs.arg_sort_last_dim(false)?;
+        //     let sorted_probs = probs.gather(&sorted_indices, D::Minus1)?;
+        //     let cumsum = sorted_probs.fast_cumsum(D::Minus1)?;
+
+        //     let mask_topp = cumsum.le(top_p)?;
+
+        //     let masked_sorted =
+        //         mask_topp.where_cond(&sorted_probs, &Tensor::zeros_like(&sorted_probs)?)?;
+
+        //     let threshold = masked_sorted.max(D::Minus1)?;
+        //     let threshold = threshold.unsqueeze(D::Minus1)?;
+        //     let mask_full = probs.broadcast_ge(&threshold)?;
+        //     probs = mask_full.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
+        // }
 
         // Min-P
         if min_p > 0.0 && min_p < 1.0 {
