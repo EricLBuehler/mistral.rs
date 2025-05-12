@@ -1,4 +1,3 @@
-use rayon::prelude::*;
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{Device, Module, Result, Tensor};
@@ -451,8 +450,7 @@ impl TextModel {
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .into_par_iter()
-        .map(|layer_idx| {
+        .par_iter_if_isq(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -482,8 +480,7 @@ impl TextModel {
                 paged_attn,
                 &comm,
             )
-        })
-        .collect::<Result<Vec<_>>>()?;
+        })?;
         let norm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,

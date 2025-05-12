@@ -1,5 +1,8 @@
 use indicatif::{MultiProgress, ProgressBar, ProgressBarIter, ProgressIterator, ProgressStyle};
+use mistralrs_quant::get_immediate_isq;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rayon::prelude::*;
+use std::iter::Iterator;
 use tqdm::Iter;
 
 // Optionally display a progress bar via the `tqdm` crate:
@@ -151,5 +154,42 @@ where
             iter: self.0.into_par_iter(),
             bar,
         }
+    }
+}
+
+impl<'a, T, const COLOR: char> NiceProgressBar<'a, T, COLOR>
+where
+    T: ExactSizeIterator + IntoParallelIterator + Send + Sync + 'a,
+    <T as IntoParallelIterator>::Item: Send + 'a,
+    T::Iter: ParallelIterator<Item = <T as IntoParallelIterator>::Item>
+        + IndexedParallelIterator<Item = <T as IntoParallelIterator>::Item>
+        + Send,
+    T: IntoParallelIterator<Item = <T as Iterator>::Item>,
+{
+    /// Applies the given closure over the items, optionally in parallel, and collects the results.
+    ///
+    /// - `is_parallel`: If true, uses Rayon parallel iteration; otherwise uses sequential iteration.
+    /// - `f`: A closure to apply to each item.
+    pub fn run<F, U>(self, is_parallel: bool, f: F) -> candle_core::Result<Vec<U>>
+    where
+        F: Fn(<T as IntoParallelIterator>::Item) -> candle_core::Result<U> + Sync + Send,
+        U: Send,
+    {
+        if is_parallel {
+            self.into_par_iter().map(f).collect()
+        } else {
+            self.into_iter().map(f).collect()
+        }
+    }
+
+    /// Applies the given closure over the items, optionally in parallel, and collects the results.
+    ///
+    /// - `f`: A closure to apply to each item.
+    pub fn par_iter_if_isq<F, U>(self, f: F) -> candle_core::Result<Vec<U>>
+    where
+        F: Fn(<T as IntoParallelIterator>::Item) -> candle_core::Result<U> + Sync + Send,
+        U: Send,
+    {
+        self.run(get_immediate_isq().ty.is_some(), f)
     }
 }
