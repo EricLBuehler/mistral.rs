@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::{env, error::Error, ops::Deref, pin::Pin, sync::Arc, task::Poll, time::Duration};
+use std::{env, error::Error, ops::Deref, pin::Pin, task::Poll, time::Duration};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::{
@@ -7,7 +7,7 @@ use crate::{
         ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
         ResponseFormat, StopTokens,
     },
-    util,
+    util, ExtractedMistralState, SharedMistralState,
 };
 use anyhow::Context;
 use anyhow::Result;
@@ -46,7 +46,7 @@ enum DoneState {
 pub struct Streamer {
     rx: Receiver<Response>,
     done_state: DoneState,
-    state: Arc<MistralRs>,
+    state: SharedMistralState,
 }
 
 impl futures::Stream for Streamer {
@@ -173,7 +173,7 @@ impl IntoResponse for ChatCompletionResponder {
 
 async fn parse_request(
     oairequest: ChatCompletionRequest,
-    state: Arc<MistralRs>,
+    state: SharedMistralState,
     tx: Sender<Response>,
 ) -> Result<(Request, bool)> {
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
@@ -417,6 +417,9 @@ async fn parse_request(
     ))
 }
 
+pub const CHANNEL_BUFFER_SIZE: usize = 10_000;
+pub const DEFAULT_KEEP_ALIVE_INTERVAL: u64 = 10_000;
+
 #[utoipa::path(
     post,
     tag = "Mistral.rs",
@@ -425,24 +428,20 @@ async fn parse_request(
     responses((status = 200, description = "Chat completions"))
 )]
 pub async fn chatcompletions(
-    State(state): State<Arc<MistralRs>>,
+    State(state): ExtractedMistralState,
     Json(oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
-    let (tx, mut rx) = channel(10_000);
+    let (tx, mut rx) = channel(CHANNEL_BUFFER_SIZE);
+
     let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx).await {
         Ok(x) => x,
-        Err(e) => {
-            let e = anyhow::Error::msg(e.to_string());
-            MistralRs::maybe_log_error(state, &*e);
-            return ChatCompletionResponder::InternalError(e.into());
-        }
+        Err(e) => return handle_error(state, e.into()),
     };
+
     let sender = state.get_sender().unwrap();
 
     if let Err(e) = sender.send(request).await {
-        let e = anyhow::Error::msg(e.to_string());
-        MistralRs::maybe_log_error(state, &*e);
-        return ChatCompletionResponder::InternalError(e.into());
+        return handle_error(state, e.into());
     }
 
     if is_streaming {
@@ -452,9 +451,8 @@ pub async fn chatcompletions(
             state,
         };
 
-        let keep_alive_interval = env::var("KEEP_ALIVE_INTERVAL")
-            .map(|val| val.parse::<u64>().unwrap_or(10000))
-            .unwrap_or(10000);
+        let keep_alive_interval = get_keep_alive_interval();
+
         ChatCompletionResponder::Sse(
             Sse::new(streamer)
                 .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval))),
@@ -464,32 +462,50 @@ pub async fn chatcompletions(
             Some(response) => response,
             None => {
                 let e = anyhow::Error::msg("No response received from the model.");
-                MistralRs::maybe_log_error(state, &*e);
-                return ChatCompletionResponder::InternalError(e.into());
+                return handle_error(state, e.into());
             }
         };
 
-        match response {
-            Response::InternalError(e) => {
-                MistralRs::maybe_log_error(state, &*e);
-                ChatCompletionResponder::InternalError(e)
-            }
-            Response::ModelError(msg, response) => {
-                MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
-                MistralRs::maybe_log_response(state, &response);
-                ChatCompletionResponder::ModelError(msg, response)
-            }
-            Response::ValidationError(e) => ChatCompletionResponder::ValidationError(e),
-            Response::Done(response) => {
-                MistralRs::maybe_log_response(state, &response);
-                ChatCompletionResponder::Json(response)
-            }
-            Response::Chunk(_) => unreachable!(),
-            Response::CompletionDone(_) => unreachable!(),
-            Response::CompletionModelError(_, _) => unreachable!(),
-            Response::CompletionChunk(_) => unreachable!(),
-            Response::ImageGeneration(_) => unreachable!(),
-            Response::Raw { .. } => unreachable!(),
+        match_responses(state, response)
+    }
+}
+
+pub fn handle_error(
+    state: SharedMistralState,
+    e: Box<dyn std::error::Error + Send + Sync + 'static>,
+) -> ChatCompletionResponder {
+    let e = anyhow::Error::msg(e.to_string());
+    MistralRs::maybe_log_error(state, &*e);
+    ChatCompletionResponder::InternalError(e.into())
+}
+
+pub fn get_keep_alive_interval() -> u64 {
+    env::var("KEEP_ALIVE_INTERVAL")
+        .map(|val| val.parse::<u64>().unwrap_or(DEFAULT_KEEP_ALIVE_INTERVAL))
+        .unwrap_or(DEFAULT_KEEP_ALIVE_INTERVAL)
+}
+
+pub fn match_responses(state: SharedMistralState, response: Response) -> ChatCompletionResponder {
+    match response {
+        Response::InternalError(e) => {
+            MistralRs::maybe_log_error(state, &*e);
+            ChatCompletionResponder::InternalError(e)
         }
+        Response::ModelError(msg, response) => {
+            MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
+            MistralRs::maybe_log_response(state, &response);
+            ChatCompletionResponder::ModelError(msg, response)
+        }
+        Response::ValidationError(e) => ChatCompletionResponder::ValidationError(e),
+        Response::Done(response) => {
+            MistralRs::maybe_log_response(state, &response);
+            ChatCompletionResponder::Json(response)
+        }
+        Response::Chunk(_) => unreachable!(),
+        Response::CompletionDone(_) => unreachable!(),
+        Response::CompletionModelError(_, _) => unreachable!(),
+        Response::CompletionChunk(_) => unreachable!(),
+        Response::ImageGeneration(_) => unreachable!(),
+        Response::Raw { .. } => unreachable!(),
     }
 }
