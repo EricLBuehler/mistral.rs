@@ -15,11 +15,12 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel,
     },
-    utils::{log::once_log_info, varbuilder_utils::DeviceForLoadTensor},
+    utils::varbuilder_utils::DeviceForLoadTensor,
     xlora_models::NonGranularState,
 };
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
+use mistralrs_quant::log::once_log_info;
 
 use indicatif::MultiProgress;
 use mistralrs_quant::ShardedVarBuilder;

@@ -6,9 +6,8 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use serde::Deserialize;
 use tokenizers::Tokenizer;
 
-use crate::{
-    engine::BertEmbeddingModel, layers::Activation, utils::log::once_log_info, GLOBAL_HF_CACHE,
-};
+use crate::{engine::BertEmbeddingModel, layers::Activation, GLOBAL_HF_CACHE};
+use mistralrs_quant::log::once_log_info;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]

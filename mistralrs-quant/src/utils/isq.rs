@@ -81,7 +81,7 @@ macro_rules! generate_isq {
             let dtype = match quantization_behaviour{
                 $crate::utils::isq::QuantizationBehavior::Skip => {
                     let shape = $tensor.shape();
-                    tracing::warn!("Skipping quantization of tensor with shape {shape:?} as it is not quantizable.");
+                    $crate::log::once_log_warn(&format!("Skipping quantization of tensor with shape {shape:?} as it is not quantizable."));
                     GgmlDType::F32
                 },
                 $crate::utils::isq::QuantizationBehavior::Quantize(dtype) => {
@@ -110,7 +110,7 @@ macro_rules! generate_isq_imatrix {
             let dtype = match quantization_behaviour{
                 $crate::utils::isq::QuantizationBehavior::Skip => {
                     let shape = $tensor.shape();
-                    tracing::warn!("Skipping quantization of tensor with shape {shape:?} as it is not quantizable.");
+                    $crate::log::once_log_warn(&format!("Skipping quantization of tensor with shape {shape:?} as it is not quantizable."));
                     GgmlDType::F32
                 },
                 $crate::utils::isq::QuantizationBehavior::Quantize(dtype) => {
