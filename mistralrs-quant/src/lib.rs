@@ -80,7 +80,7 @@ pub fn set_immediate_isq(isq: Option<IsqType>) {
         })
         .lock()
         .unwrap()
-        .ty = isq.clone();
+        .ty = isq;
 }
 
 pub fn get_immediate_isq() -> ImmediateIsqParams {
