@@ -27,6 +27,8 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
+use rayon::prelude::*;
+
 serde_default_fn!(bool, word_emb_default, false);
 
 /// https://github.com/huggingface/transformers/blob/1a585c1222a56bcaecc070966d558d4a9d862e83/src/transformers/models/mixtral/configuration_mixtral.py#L113
@@ -539,13 +541,14 @@ impl Model {
                 )?),
             );
         }
-        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        for layer_idx in NiceProgressBar::<_, 'b'>(
+        let layers: Vec<DecoderLayer> = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
-        ) {
+        )
+        .into_par_iter()
+        .map(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -560,7 +563,7 @@ impl Model {
                 }
             };
             let comm = mapper.get_comm_for(layer_idx)?;
-            let layer = DecoderLayer::new(
+            DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
                 vb_l.pp(layer_idx),
@@ -569,9 +572,9 @@ impl Model {
                 normal_loading_metadata.loading_isq,
                 paged_attn,
                 &comm,
-            )?;
-            layers.push(layer)
-        }
+            )
+        })
+        .collect::<Result<Vec<DecoderLayer>>>()?;
         let norm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,

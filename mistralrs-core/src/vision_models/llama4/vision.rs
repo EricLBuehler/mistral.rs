@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use rayon::prelude::*;
+
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{LayerNorm, LayerNormConfig, Linear, Module};
 use indicatif::MultiProgress;
@@ -333,21 +335,15 @@ impl Llama4VisionEncoder {
         comm: &Arc<mistralrs_quant::Comm>,
         multi_progress: &Arc<MultiProgress>,
     ) -> Result<Self> {
-        let mut layers = Vec::with_capacity(num_layers);
         let layers_vb = vb.pp("layers");
-        for i in NiceProgressBar::<_, 'b'>(
+        let layers = NiceProgressBar::<_, 'b'>(
             0..num_layers,
             "Loading vision repeating layers",
             multi_progress,
-        ) {
-            layers.push(Llama4VisionEncoderLayer::new(
-                cfg,
-                layers_vb.pp(i),
-                freqs.clone(),
-                real_dev,
-                comm,
-            )?);
-        }
+        )
+        .into_par_iter()
+        .map(|i| Llama4VisionEncoderLayer::new(cfg, layers_vb.pp(i), freqs.clone(), real_dev, comm))
+        .collect::<Result<Vec<_>>>()?;
         Ok(Self { layers })
     }
 

@@ -29,6 +29,8 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
+use rayon::prelude::*;
+
 serde_default_fn!(bool, word_emb_default, false);
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -417,7 +419,7 @@ impl Llama {
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .into_iter()
+        .into_par_iter()
         .map(|i| {
             let device = mapper
                 .device_for(i, false)

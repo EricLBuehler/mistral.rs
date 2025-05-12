@@ -7,6 +7,8 @@
 
 use std::sync::Arc;
 
+use rayon::prelude::*;
+
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
@@ -474,12 +476,12 @@ impl Llama {
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
 
-        let blocks: Vec<_> = NiceProgressBar::<_, 'b'>(
+        let blocks = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .into_iter()
+        .into_par_iter()
         .map(|i| {
             let vb_m = vb.pp(format!("model.layers.{i}"));
             let device = mapper
@@ -495,12 +497,11 @@ impl Llama {
             .unwrap();
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => Some(
-                    PagedAttention::new(head_dim, device, None)
-                        .expect("Failed to create PagedAttention"),
-                ),
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(head_dim, device, None)?)
+                }
             };
-            let comm = mapper.get_comm_for(i).unwrap();
+            let comm = mapper.get_comm_for(i)?;
             Block::load(
                 vb_m,
                 cfg,
@@ -511,9 +512,8 @@ impl Llama {
                 rope_parameters,
                 &comm,
             )
-            .expect("Failed to load block.")
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
             wte,

@@ -8,6 +8,8 @@ use mistralrs_quant::{
 };
 use std::{collections::HashMap, sync::Arc};
 
+use rayon::prelude::*;
+
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
@@ -642,12 +644,12 @@ impl TextModel {
                 )?),
             );
         }
-        let blocks: Vec<_> = NiceProgressBar::<_, 'b'>(
+        let blocks = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading text repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .into_iter()
+        .into_par_iter()
         .map(|i| {
             let device = mapper
                 .device_for(i, false)
@@ -658,12 +660,11 @@ impl TextModel {
                 .clone();
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => Some(
-                    PagedAttention::new(head_dim, device, None)
-                        .expect("Failed to create PagedAttention"),
-                ),
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(head_dim, device, None)?)
+                }
             };
-            let comm = mapper.get_comm_for(i).unwrap();
+            let comm = mapper.get_comm_for(i)?;
             Block::new(
                 vb_m.pp(format!("layers.{i}")),
                 cfg,
@@ -674,9 +675,8 @@ impl TextModel {
                 paged_attn,
                 &comm,
             )
-            .expect("Failed to load block.")
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
             wte,
