@@ -685,6 +685,12 @@ pub fn linear_no_bias(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let device = vb.device().clone();
+    let vb = if get_immediate_isq().ty.is_some() {
+        vb.set_device(Device::Cpu)
+    } else {
+        vb
+    };
+
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::Gptq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
@@ -723,6 +729,12 @@ pub fn linear(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let device = vb.device().clone();
+    let vb = if get_immediate_isq().ty.is_some() {
+        vb.set_device(Device::Cpu)
+    } else {
+        vb
+    };
+
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::Gptq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,

@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use candle_core::{Context, Result, Tensor};
+use candle_core::{Context, Device, Result, Tensor};
 use candle_nn::Linear;
 
 use crate::{
-    blockwise_fp8::blockwise_fp8_linear_b, distributed, gptq::gptq_linear,
+    blockwise_fp8::blockwise_fp8_linear_b, distributed, get_immediate_isq, gptq::gptq_linear,
     lora::merge_lora_weights, utils::isq::apply_immediate_isq, AfqLayer, BnbLinear,
     DistributedKind, DummyLayer, FP8Linear, GgufMatMul, HqqLayer, QuantMethod, QuantMethodConfig,
     QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, QuantizedSerdeType, Shard,
@@ -43,6 +43,12 @@ impl RowParallelLayer {
         let rank = comm.rank();
         let world_size = comm.world_size();
         let shard = shard(1, rank, world_size);
+        let device = vb.device().clone();
+        let vb = if get_immediate_isq().ty.is_some() {
+            vb.set_device(Device::Cpu)
+        } else {
+            vb
+        };
 
         let weight = if let Some(quant_conf) = &config {
             // GPTQ and BNB do not support tensor parallelism
@@ -102,7 +108,7 @@ impl RowParallelLayer {
             bias,
             all_reduce: distributed::SumAllReduce::new(comm),
         });
-        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, vb.device().clone())?;
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, device)?;
         Ok(this)
     }
 }
@@ -247,6 +253,13 @@ impl ColumnParallelLayer {
         shard: Shard,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
+        let device = vb.device().clone();
+        let vb = if get_immediate_isq().ty.is_some() {
+            vb.set_device(Device::Cpu)
+        } else {
+            vb
+        };
+
         let weight = if let Some(quant_conf) = &config {
             // GPTQ and BNB do not support tensor parallelism
             if matches!(
@@ -301,7 +314,7 @@ impl ColumnParallelLayer {
         };
 
         let this_unquant = Arc::new(Self { weight, bias });
-        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, vb.device().clone())?;
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, device)?;
         Ok(this)
     }
 
@@ -453,6 +466,13 @@ impl ReplicatedLayer {
         bias: bool,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
+        let device = vb.device().clone();
+        let vb = if get_immediate_isq().ty.is_some() {
+            vb.set_device(Device::Cpu)
+        } else {
+            vb
+        };
+
         let layer = if let Some(quant_conf) = &config {
             match quant_conf {
                 QuantizedConfig::Gptq { .. } => {
@@ -495,7 +515,7 @@ impl ReplicatedLayer {
         };
 
         let this_unquant = Arc::new(Self(layer));
-        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, vb.device().clone())?;
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, device)?;
         Ok(this)
     }
 }
@@ -615,6 +635,13 @@ impl PackedExperts {
             candle_core::bail!("PackedExperts does not support bias.");
         }
 
+        let device = vb.device().clone();
+        let vb = if get_immediate_isq().ty.is_some() {
+            vb.set_device(Device::Cpu)
+        } else {
+            vb
+        };
+
         let (gate_proj, up_proj, down_proj) = if let Some(quant_conf) = &config {
             // GPTQ and BNB do not support tensor parallelism
             if comm.world_size() != 1 {
@@ -632,32 +659,36 @@ impl PackedExperts {
                         candle_core::bail!("PackedExperts with AFQ quantization config does not support `gate_up_proj` format.");
                     }
 
-                    (
-                        vec![AfqLayer::afq_packed_linear_b(
-                            num_local_experts,
-                            hidden_size,
-                            intermediate_size,
-                            quant_conf,
-                            bias,
-                            vb.pp("gate_proj"),
-                        )?],
-                        vec![AfqLayer::afq_packed_linear_b(
-                            num_local_experts,
-                            hidden_size,
-                            intermediate_size,
-                            quant_conf,
-                            bias,
-                            vb.pp("up_proj"),
-                        )?],
-                        vec![AfqLayer::afq_packed_linear_b(
-                            num_local_experts,
-                            intermediate_size,
-                            hidden_size,
-                            quant_conf,
-                            bias,
-                            vb.pp("down_proj"),
-                        )?],
-                    )
+                    let mut gate_proj = AfqLayer::afq_packed_linear_b(
+                        num_local_experts,
+                        hidden_size,
+                        intermediate_size,
+                        quant_conf,
+                        bias,
+                        vb.pp("gate_proj"),
+                    )?;
+                    let mut up_proj = AfqLayer::afq_packed_linear_b(
+                        num_local_experts,
+                        hidden_size,
+                        intermediate_size,
+                        quant_conf,
+                        bias,
+                        vb.pp("up_proj"),
+                    )?;
+                    let mut down_proj = AfqLayer::afq_packed_linear_b(
+                        num_local_experts,
+                        intermediate_size,
+                        hidden_size,
+                        quant_conf,
+                        bias,
+                        vb.pp("down_proj"),
+                    )?;
+
+                    gate_proj = apply_immediate_isq(gate_proj, device.clone())?;
+                    up_proj = apply_immediate_isq(up_proj, device.clone())?;
+                    down_proj = apply_immediate_isq(down_proj, device.clone())?;
+
+                    (vec![gate_proj], vec![up_proj], vec![down_proj])
                 }
                 _ => candle_core::bail!(
                     "PackedExperts with quantization config only allows AFQ quantization"
@@ -669,12 +700,20 @@ impl PackedExperts {
             let mut us = Vec::new();
             let mut ds = Vec::new();
             for _ in 0..num_local_experts {
-                let gate_proj = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-                let up_proj = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-                let down_proj = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-                gs.push(Arc::new(gate_proj) as Arc<dyn QuantMethod>);
-                us.push(Arc::new(up_proj) as Arc<dyn QuantMethod>);
-                ds.push(Arc::new(down_proj) as Arc<dyn QuantMethod>);
+                let mut gate_proj: Arc<dyn QuantMethod> =
+                    Arc::new(<DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?);
+                let mut up_proj: Arc<dyn QuantMethod> =
+                    Arc::new(<DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?);
+                let mut down_proj: Arc<dyn QuantMethod> =
+                    Arc::new(<DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?);
+
+                gate_proj = apply_immediate_isq(gate_proj, device.clone())?;
+                up_proj = apply_immediate_isq(up_proj, device.clone())?;
+                down_proj = apply_immediate_isq(down_proj, device.clone())?;
+
+                gs.push(gate_proj);
+                us.push(up_proj);
+                ds.push(down_proj);
             }
             (gs, us, ds)
         } else {
@@ -760,17 +799,17 @@ impl PackedExperts {
                     Arc::new(<UnquantLinear as QuantMethod>::new(
                         QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
                     )?);
-                gate_proj = apply_immediate_isq(gate_proj, vb.device().clone())?;
+                gate_proj = apply_immediate_isq(gate_proj, device.clone())?;
                 let mut up_proj: Arc<dyn QuantMethod> =
                     Arc::new(<UnquantLinear as QuantMethod>::new(
                         QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
                     )?);
-                up_proj = apply_immediate_isq(up_proj, vb.device().clone())?;
+                up_proj = apply_immediate_isq(up_proj, device.clone())?;
                 let mut down_proj: Arc<dyn QuantMethod> =
                     Arc::new(<UnquantLinear as QuantMethod>::new(
                         QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
                     )?);
-                down_proj = apply_immediate_isq(down_proj, vb.device().clone())?;
+                down_proj = apply_immediate_isq(down_proj, device.clone())?;
                 gs.push(gate_proj);
                 us.push(up_proj);
                 ds.push(down_proj);
