@@ -62,20 +62,38 @@ pub use utils::{BitWiseOp, LeftshiftOp, NonZeroOp, UQFF_QUANT_TYPE_OFFSET};
 use candle_nn::{Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
 
-static IMMEDIATE_ISQ: OnceLock<Mutex<Option<IsqType>>> = OnceLock::new();
-
-pub fn set_immediate_isq(isq: Option<IsqType>) {
-    *IMMEDIATE_ISQ
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap() = isq;
+#[derive(Clone)]
+pub struct ImmediateIsqParams {
+    pub guard: QuantizeOntoGuard,
+    pub ty: Option<IsqType>,
 }
 
-pub fn get_immediate_isq() -> Option<IsqType> {
-    *IMMEDIATE_ISQ
-        .get_or_init(|| Mutex::new(None))
+static IMMEDIATE_ISQ: OnceLock<Mutex<ImmediateIsqParams>> = OnceLock::new();
+
+pub fn set_immediate_isq(isq: Option<IsqType>) {
+    IMMEDIATE_ISQ
+        .get_or_init(|| {
+            Mutex::new(ImmediateIsqParams {
+                guard: QuantizeOntoGuard::new(),
+                ty: None,
+            })
+        })
         .lock()
         .unwrap()
+        .ty = isq.clone();
+}
+
+pub fn get_immediate_isq() -> ImmediateIsqParams {
+    IMMEDIATE_ISQ
+        .get_or_init(|| {
+            Mutex::new(ImmediateIsqParams {
+                guard: QuantizeOntoGuard::new(),
+                ty: None,
+            })
+        })
+        .lock()
+        .unwrap()
+        .clone()
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -1,10 +1,10 @@
-use std::sync::{atomic::AtomicUsize, Arc};
+use std::sync::Arc;
 
 use candle_core::{Context, Result, Tensor};
 use candle_nn::Linear;
 
 use crate::{
-    blockwise_fp8::blockwise_fp8_linear_b, distributed, get_immediate_isq, gptq::gptq_linear,
+    blockwise_fp8::blockwise_fp8_linear_b, distributed, gptq::gptq_linear,
     lora::merge_lora_weights, utils::isq::apply_immediate_isq, AfqLayer, BnbLinear,
     DistributedKind, DummyLayer, FP8Linear, GgufMatMul, HqqLayer, QuantMethod, QuantMethodConfig,
     QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, QuantizedSerdeType, Shard,
@@ -760,41 +760,17 @@ impl PackedExperts {
                     Arc::new(<UnquantLinear as QuantMethod>::new(
                         QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
                     )?);
-                if let Some(immediate_isq) = get_immediate_isq() {
-                    gate_proj = gate_proj.clone().apply_isq(
-                        Some(immediate_isq),
-                        vb.device().clone(),
-                        &AtomicUsize::new(0),
-                        None,
-                        QuantizeOntoGuard::new(),
-                    )?;
-                }
+                gate_proj = apply_immediate_isq(gate_proj, vb.device().clone())?;
                 let mut up_proj: Arc<dyn QuantMethod> =
                     Arc::new(<UnquantLinear as QuantMethod>::new(
                         QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
                     )?);
-                if let Some(immediate_isq) = get_immediate_isq() {
-                    up_proj = up_proj.clone().apply_isq(
-                        Some(immediate_isq),
-                        vb.device().clone(),
-                        &AtomicUsize::new(0),
-                        None,
-                        QuantizeOntoGuard::new(),
-                    )?;
-                }
+                up_proj = apply_immediate_isq(up_proj, vb.device().clone())?;
                 let mut down_proj: Arc<dyn QuantMethod> =
                     Arc::new(<UnquantLinear as QuantMethod>::new(
                         QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
                     )?);
-                if let Some(immediate_isq) = get_immediate_isq() {
-                    down_proj = down_proj.clone().apply_isq(
-                        Some(immediate_isq),
-                        vb.device().clone(),
-                        &AtomicUsize::new(0),
-                        None,
-                        QuantizeOntoGuard::new(),
-                    )?;
-                }
+                down_proj = apply_immediate_isq(down_proj, vb.device().clone())?;
                 gs.push(gate_proj);
                 us.push(up_proj);
                 ds.push(down_proj);
