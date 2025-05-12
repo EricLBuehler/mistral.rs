@@ -25,8 +25,6 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
-use rayon::prelude::*;
-
 macro_rules! sliding_window {
     ($layer_idx:expr, $cfg:expr) => {
         if !($cfg.sliding_window.is_some()
@@ -654,8 +652,7 @@ impl Model {
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .into_par_iter()
-        .map(|layer_idx| {
+        .par_iter_if_isq(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -684,8 +681,7 @@ impl Model {
                 normal_loading_metadata.real_device.clone(),
                 &comm,
             )
-        })
-        .collect::<Result<Vec<_>>>()?;
+        })?;
         let norm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,

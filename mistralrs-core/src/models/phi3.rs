@@ -28,7 +28,6 @@ use crate::{
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
-use rayon::prelude::*;
 
 serde_default_fn!(bool, word_emb_default, false);
 
@@ -468,8 +467,7 @@ impl Model {
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .into_par_iter()
-        .map(|layer_idx| {
+        .par_iter_if_isq(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -492,8 +490,7 @@ impl Model {
                 normal_loading_metadata.loading_isq,
                 paged_attn,
             )
-        })
-        .collect::<Result<Vec<DecoderLayer>>>()?;
+        })?;
         let norm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,

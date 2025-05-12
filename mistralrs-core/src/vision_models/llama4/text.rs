@@ -8,8 +8,6 @@ use mistralrs_quant::{
 };
 use std::{collections::HashMap, sync::Arc};
 
-use rayon::prelude::*;
-
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
@@ -649,8 +647,7 @@ impl TextModel {
             "Loading text repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .into_par_iter()
-        .map(|i| {
+        .par_iter_if_isq(|i| {
             let device = mapper
                 .device_for(i, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -675,8 +672,7 @@ impl TextModel {
                 paged_attn,
                 &comm,
             )
-        })
-        .collect::<Result<Vec<_>>>()?;
+        })?;
 
         Ok(Self {
             wte,

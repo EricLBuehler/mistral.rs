@@ -9,8 +9,6 @@ use mistralrs_quant::{
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
-use rayon::prelude::*;
-
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
     attention::SdpaParams,
@@ -455,8 +453,7 @@ impl Model {
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .into_par_iter()
-        .map(|layer_idx| -> Result<DecoderLayer> {
+        .par_iter_if_isq(|layer_idx| -> Result<DecoderLayer> {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -481,8 +478,7 @@ impl Model {
                 paged_attn,
                 &comm,
             )
-        })
-        .collect::<Result<Vec<_>>>()?;
+        })?;
         let norm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,

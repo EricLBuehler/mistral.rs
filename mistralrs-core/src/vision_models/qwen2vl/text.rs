@@ -1,7 +1,5 @@
 use std::{collections::HashMap, sync::Arc};
 
-use rayon::prelude::*;
-
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
@@ -366,8 +364,7 @@ impl Qwen2VLTextModel {
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .into_par_iter()
-        .map(|layer_idx| {
+        .par_iter_if_isq(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -385,8 +382,7 @@ impl Qwen2VLTextModel {
                 normal_loading_metadata.loading_isq,
                 &comm,
             )
-        })
-        .collect::<Result<Vec<_>>>()?;
+        })?;
         let norm = F32RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,

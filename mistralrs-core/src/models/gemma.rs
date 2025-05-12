@@ -26,8 +26,6 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
-use rayon::prelude::*;
-
 fn default_max_position_embeddings() -> usize {
     4096
 }
@@ -407,8 +405,7 @@ impl Model {
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .into_par_iter()
-        .map(|layer_idx| {
+        .par_iter_if_isq(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -433,8 +430,7 @@ impl Model {
                 paged_attn,
                 &comm,
             )
-        })
-        .collect::<Result<Vec<DecoderLayer>>>()?;
+        })?;
         let norm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,

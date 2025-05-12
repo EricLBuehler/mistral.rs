@@ -29,7 +29,7 @@ use crate::{
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
-use rayon::prelude::*;
+
 use std::collections::HashSet;
 use std::iter::FromIterator;
 serde_default_fn!(f64, routed_scaling_factor, 1.0);
@@ -834,8 +834,7 @@ impl DeepSeekV2 {
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .into_par_iter()
-        .map(|layer_idx| {
+        .par_iter_if_isq(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -861,8 +860,7 @@ impl DeepSeekV2 {
                 paged_attn,
                 &comm,
             )
-        })
-        .collect::<Result<Vec<DecoderLayer>>>()?;
+        })?;
 
         Ok(Self {
             lm_head,

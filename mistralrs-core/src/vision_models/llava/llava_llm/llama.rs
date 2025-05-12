@@ -7,8 +7,6 @@
 
 use std::sync::Arc;
 
-use rayon::prelude::*;
-
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
@@ -481,8 +479,7 @@ impl Llama {
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .into_par_iter()
-        .map(|i| {
+        .par_iter_if_isq(|i| {
             let vb_m = vb.pp(format!("model.layers.{i}"));
             let device = mapper
                 .device_for(i, false)
@@ -512,8 +509,7 @@ impl Llama {
                 rope_parameters,
                 &comm,
             )
-        })
-        .collect::<Result<Vec<_>>>()?;
+        })?;
 
         Ok(Self {
             wte,

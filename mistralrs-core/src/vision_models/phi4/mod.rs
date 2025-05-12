@@ -2,8 +2,6 @@
 
 use std::{any::Any, collections::HashMap, sync::Arc};
 
-use rayon::prelude::*;
-
 use candle_core::{Device, Result, Tensor, D};
 use candle_nn::Module;
 use mistralrs_quant::{MatMul, QuantMethod, ReplicatedLayer, ShardedVarBuilder};
@@ -378,8 +376,7 @@ impl Phi4MMModel {
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .into_par_iter()
-        .map(|layer_idx| {
+        .par_iter_if_isq(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -402,8 +399,7 @@ impl Phi4MMModel {
                 normal_loading_metadata.loading_isq,
                 paged_attn,
             )
-        })
-        .collect::<Result<Vec<_>>>()?;
+        })?;
         let norm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,

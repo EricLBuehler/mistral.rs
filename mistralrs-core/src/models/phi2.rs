@@ -34,8 +34,6 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
-use rayon::prelude::*;
-
 serde_default_fn!(bool, word_emb_default, false);
 
 // https://huggingface.co/microsoft/phi-2/blob/main/configuration_phi.py
@@ -498,8 +496,7 @@ impl Model {
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .into_par_iter()
-        .map(|layer_idx| {
+        .par_iter_if_isq(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -524,8 +521,7 @@ impl Model {
                 paged_attn,
                 &comm,
             )
-        })
-        .collect::<Result<Vec<DecoderLayer>>>()?;
+        })?;
         let lm_head = if !cfg.tie_word_embeddings {
             ReplicatedLayer::new(
                 cfg.hidden_size,
