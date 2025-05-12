@@ -174,6 +174,9 @@ pub struct Args {
     pub enable_thinking: bool,
 }
 
+pub type SharedMistralState = Arc<MistralRs>;
+pub type ExtractedMistralState = State<SharedMistralState>;
+
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
 }
@@ -184,7 +187,7 @@ fn parse_token_source(s: &str) -> Result<TokenSource, String> {
   path = "/v1/models",
   responses((status = 200, description = "Served model info", body = ModelObjects))
 )]
-async fn models(State(state): State<Arc<MistralRs>>) -> Json<ModelObjects> {
+async fn models(State(state): ExtractedMistralState) -> Json<ModelObjects> {
     Json(ModelObjects {
         object: "list",
         data: vec![ModelObject {
@@ -220,7 +223,7 @@ struct ReIsqRequest {
   responses((status = 200, description = "Reapply ISQ to a non GGUF or GGML model."))
 )]
 async fn re_isq(
-    State(state): State<Arc<MistralRs>>,
+    State(state): ExtractedMistralState,
     Json(request): Json<ReIsqRequest>,
 ) -> Result<String, String> {
     let repr = format!("Re ISQ: {:?}", request.ggml_type);
