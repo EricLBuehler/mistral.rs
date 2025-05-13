@@ -171,7 +171,7 @@ impl IntoResponse for ChatCompletionResponder {
     }
 }
 
-async fn parse_request(
+pub async fn parse_request(
     oairequest: ChatCompletionRequest,
     state: SharedMistralState,
     tx: Sender<Response>,
@@ -431,42 +431,21 @@ pub async fn chatcompletions(
     State(state): ExtractedMistralState,
     Json(oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
-    let (tx, mut rx) = channel(CHANNEL_BUFFER_SIZE);
+    let (tx, mut rx) = create_response_channel();
 
     let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx).await {
         Ok(x) => x,
         Err(e) => return handle_error(state, e.into()),
     };
 
-    let sender = state.get_sender().unwrap();
-
-    if let Err(e) = sender.send(request).await {
+    if let Err(e) = send_request(&state, request).await {
         return handle_error(state, e.into());
     }
 
     if is_streaming {
-        let streamer = Streamer {
-            rx,
-            done_state: DoneState::Running,
-            state,
-        };
-
-        let keep_alive_interval = get_keep_alive_interval();
-
-        ChatCompletionResponder::Sse(
-            Sse::new(streamer)
-                .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval))),
-        )
+        ChatCompletionResponder::Sse(create_chat_streamer(rx, state))
     } else {
-        let response = match rx.recv().await {
-            Some(response) => response,
-            None => {
-                let e = anyhow::Error::msg("No response received from the model.");
-                return handle_error(state, e.into());
-            }
-        };
-
-        match_responses(state, response)
+        process_non_streaming_chat_response(&mut rx, state).await
     }
 }
 
@@ -479,10 +458,47 @@ pub fn handle_error(
     ChatCompletionResponder::InternalError(e.into())
 }
 
+pub fn create_response_channel() -> (Sender<Response>, Receiver<Response>) {
+    channel(CHANNEL_BUFFER_SIZE)
+}
+
 pub fn get_keep_alive_interval() -> u64 {
     env::var("KEEP_ALIVE_INTERVAL")
         .map(|val| val.parse::<u64>().unwrap_or(DEFAULT_KEEP_ALIVE_INTERVAL))
         .unwrap_or(DEFAULT_KEEP_ALIVE_INTERVAL)
+}
+
+pub async fn send_request(state: &SharedMistralState, request: Request) -> Result<()> {
+    let sender = state.get_sender().unwrap();
+    sender.send(request).await.map_err(|e| e.into())
+}
+
+pub fn create_chat_streamer(rx: Receiver<Response>, state: SharedMistralState) -> Sse<Streamer> {
+    let streamer = Streamer {
+        rx,
+        done_state: DoneState::Running,
+        state,
+    };
+
+    let keep_alive_interval = get_keep_alive_interval();
+
+    Sse::new(streamer)
+        .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval)))
+}
+
+pub async fn process_non_streaming_chat_response(
+    rx: &mut Receiver<Response>,
+    state: SharedMistralState,
+) -> ChatCompletionResponder {
+    let response = match rx.recv().await {
+        Some(response) => response,
+        None => {
+            let e = anyhow::Error::msg("No response received from the model.");
+            return handle_error(state, e.into());
+        }
+    };
+
+    match_responses(state, response)
 }
 
 pub fn match_responses(state: SharedMistralState, response: Response) -> ChatCompletionResponder {

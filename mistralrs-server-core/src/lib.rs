@@ -273,13 +273,67 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     doc
 }
 
-pub async fn bootstrap_mistralrs_router(
-    mut args: Args,
+pub async fn bootstrap_mistralrs_router_from_state(
+    mistralrs: SharedMistralState,
     include_swagger_routes: bool,
     base_path: Option<&str>,
 ) -> Result<Router> {
     initialize_logging();
 
+    // if args.interactive_mode {
+    //     interactive_mode(mistralrs, args.throughput_log, args.interactive_search).await;
+    //     return Ok(());
+    // }
+
+    // // Needs to be after the .build call as that is where the daemon waits.
+    // let setting_server = if !args.interactive_mode {
+    //     let port = args.port.expect("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?");
+    //     let ip = args.serve_ip.unwrap_or_else(|| "0.0.0.0".to_string());
+
+    //     // Create listener early to validate address before model loading
+    //     let listener = tokio::net::TcpListener::bind(format!("{ip}:{port}")).await?;
+    //     Some((listener, ip, port))
+    // } else {
+    //     None
+    // };
+
+    let app = get_router(mistralrs, include_swagger_routes, base_path);
+
+    Ok(app)
+}
+
+pub async fn bootstrap_mistralrs_router_from_args(
+    args: Args,
+    include_swagger_routes: bool,
+    base_path: Option<&str>,
+) -> Result<Router> {
+    initialize_logging();
+
+    let mistralrs = bootstrap_mistralrs(args).await?;
+
+    // if args.interactive_mode {
+    //     interactive_mode(mistralrs, args.throughput_log, args.interactive_search).await;
+    //     return Ok(());
+    // }
+
+    // // Needs to be after the .build call as that is where the daemon waits.
+    // let setting_server = if !args.interactive_mode {
+    //     let port = args.port.expect("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?");
+    //     let ip = args.serve_ip.unwrap_or_else(|| "0.0.0.0".to_string());
+
+    //     // Create listener early to validate address before model loading
+    //     let listener = tokio::net::TcpListener::bind(format!("{ip}:{port}")).await?;
+    //     Some((listener, ip, port))
+    // } else {
+    //     None
+    // };
+
+    let app = get_router(mistralrs, include_swagger_routes, base_path);
+
+    Ok(app)
+}
+
+pub async fn bootstrap_mistralrs(mut args: Args) -> Result<SharedMistralState> {
     args = configure_args(args);
 
     let tgt_non_granular_index = get_tgt_non_granular_index(&args.model);
@@ -350,7 +404,7 @@ pub async fn bootstrap_mistralrs_router(
     };
 
     // Throughput logging in the server
-    let mistralrs = build_mistralrs(
+    Ok(build_mistralrs(
         pipeline,
         scheduler_config,
         args.interactive_mode,
@@ -359,28 +413,7 @@ pub async fn bootstrap_mistralrs_router(
         args.truncate_sequence,
         args.no_kv_cache,
         args.prefix_cache_n,
-    );
-
-    // if args.interactive_mode {
-    //     interactive_mode(mistralrs, args.throughput_log, args.interactive_search).await;
-    //     return Ok(());
-    // }
-
-    // // Needs to be after the .build call as that is where the daemon waits.
-    // let setting_server = if !args.interactive_mode {
-    //     let port = args.port.expect("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?");
-    //     let ip = args.serve_ip.unwrap_or_else(|| "0.0.0.0".to_string());
-
-    //     // Create listener early to validate address before model loading
-    //     let listener = tokio::net::TcpListener::bind(format!("{ip}:{port}")).await?;
-    //     Some((listener, ip, port))
-    // } else {
-    //     None
-    // };
-
-    let app = get_router(mistralrs, include_swagger_routes, base_path);
-
-    Ok(app)
+    ))
 }
 
 // This was originally with the device config
@@ -576,7 +609,7 @@ fn build_mistralrs(
     truncate_sequence: bool,
     no_kv_cache: bool,
     prefix_cache_n: usize,
-) -> Arc<MistralRs> {
+) -> SharedMistralState {
     MistralRsBuilder::new(pipeline, scheduler_config, !interactive_mode, bert_model)
         .with_opt_log(log)
         .with_truncate_sequence(truncate_sequence)
@@ -586,7 +619,7 @@ fn build_mistralrs(
 }
 
 fn get_router(
-    state: Arc<MistralRs>,
+    state: SharedMistralState,
     include_swagger_routes: bool,
     base_path: Option<&str>,
 ) -> Router {
