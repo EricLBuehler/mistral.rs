@@ -147,7 +147,7 @@ where
     Adapted(Config<Q, Adapter<'a>>),
 }
 
-// A `builder()` method is derived from the `new()` method and it's params (derived builder struct fields).
+// A `builder()` method is derived from the `new()` method and its params (derived builder struct fields).
 // NOTE: Intended to be built via fluent API in a single line, cannot conditionally append params.
 // `.adapter(Adapter<' >)` or for conditional usage `.and_adapter(Option<Adapter<' >)` can be used.
 // Otherwise omitting an `.adapter()` call prior to calling `build()` is ok, defaults to `None`.

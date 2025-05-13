@@ -189,7 +189,7 @@ impl NormalLoaderType {
             "Qwen3ForCausalLM" => Ok(Self::Qwen3),
             "Qwen3MoeForCausalLM" => Ok(Self::Qwen3Moe),
             other => anyhow::bail!(
-                "Unsupported Huggging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
+                "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
         }
     }
@@ -249,7 +249,7 @@ macro_rules! bias_if {
     };
 }
 
-/// Load a model based on the Huggging Face Transformers -CausalLM model class
+/// Load a model based on the Hugging Face Transformers -CausalLM model class
 pub struct AutoLoader;
 
 #[derive(Deserialize)]
