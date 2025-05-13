@@ -73,19 +73,10 @@ impl Idefics3Model {
 
     fn inputs_merger(
         &self,
-        input_ids: &Tensor,
+        indices: &Tensor,
         input_embeds: &Tensor,
         image_hidden_states: &Tensor,
     ) -> Result<Tensor> {
-        let special_image_mask = input_ids
-            .eq(self.config.image_token_id as f64)?
-            .unsqueeze(D::Minus1)?
-            .broadcast_as(input_embeds.shape())?
-            .to_dtype(DType::U32)?;
-
-        let mask_flat = special_image_mask.flatten_all()?;
-        let indices = mask_flat.nonzero()?.squeeze(1)?;
-
         let mut x_flat = input_embeds.flatten_all()?;
         let src_flat = image_hidden_states.flatten_all()?;
 
@@ -108,6 +99,20 @@ impl Idefics3Model {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let input_embeds = if let Some(pixel_values) = pixel_values {
+            let input_embeds = self
+                .text_model
+                .get_input_embeddings(input_ids)?
+                .to_dtype(DType::F32)?;
+            let special_image_mask = input_ids
+                .eq(self.config.image_token_id as f64)?
+                .unsqueeze(D::Minus1)?
+                .broadcast_as(input_embeds.shape())?
+                .to_dtype(DType::U32)?;
+
+            let mask_flat = special_image_mask.flatten_all()?;
+            // Nonzero before vision model to allow async processing all the way through logits.
+            let indices = mask_flat.nonzero()?.squeeze(1)?;
+
             // == START VISUAL INPUTS INTEGRATION ==
             let (batch_size, num_images, _, _, _) = pixel_values.dims5()?;
             let mut s = vec![batch_size * num_images];
@@ -188,15 +193,8 @@ impl Idefics3Model {
             // Modality proj and perceiver resampling
             let image_hidden_states = self.connector.forward(&image_hidden_states)?;
 
-            self.inputs_merger(
-                input_ids,
-                &self
-                    .text_model
-                    .get_input_embeddings(input_ids)?
-                    .to_dtype(DType::F32)?,
-                &image_hidden_states,
-            )?
-            .to_dtype(self.dtype)?
+            self.inputs_merger(&indices, &input_embeds, &image_hidden_states)?
+                .to_dtype(self.dtype)?
         } else {
             self.text_model.get_input_embeddings(input_ids)?
         };
