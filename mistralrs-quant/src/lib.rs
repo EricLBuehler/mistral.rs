@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     fmt::Debug,
     num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard},
+    sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard, OnceLock},
 };
 
 use blockwise_fp8::blockwise_fp8_linear_b;
@@ -33,6 +33,7 @@ mod utils;
 
 use gptq::gptq_linear;
 use lora::merge_lora_weights;
+use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
 pub use afq::{AfqBits, AfqGroupSize, AfqLayer};
@@ -56,10 +57,56 @@ pub use lora::{
     MULTI_LORA_DELIMITER,
 };
 pub use unquantized::UnquantLinear;
-pub use utils::{BitWiseOp, LeftshiftOp, NonZeroOp, UQFF_QUANT_TYPE_OFFSET};
+use utils::isq::apply_immediate_isq;
+pub use utils::{log, BitWiseOp, LeftshiftOp, NonZeroOp, UQFF_QUANT_TYPE_OFFSET};
 
 use candle_nn::{Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
+
+#[derive(Clone)]
+pub struct ImmediateIsqParams {
+    pub guard: QuantizeOntoGuard,
+    pub ty: Option<IsqType>,
+    pub predicates: Vec<Regex>,
+}
+
+static IMMEDIATE_ISQ: OnceLock<Mutex<ImmediateIsqParams>> = OnceLock::new();
+
+pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>) {
+    IMMEDIATE_ISQ
+        .get_or_init(|| {
+            Mutex::new(ImmediateIsqParams {
+                guard: QuantizeOntoGuard::new(),
+                ty: None,
+                predicates,
+            })
+        })
+        .lock()
+        .unwrap()
+        .ty = isq;
+}
+
+pub fn get_immediate_isq() -> ImmediateIsqParams {
+    IMMEDIATE_ISQ.get().unwrap().lock().unwrap().clone()
+}
+
+pub fn should_apply_immediate_isq(vb: &ShardedVarBuilder) -> bool {
+    let immediate_isq = get_immediate_isq();
+    // Add a .weight to match the ISQ regexes!
+    let prefix = format!("{}.weight", vb.prefix());
+    println!(
+        "{prefix} {}",
+        immediate_isq
+            .predicates
+            .iter()
+            .any(|predicate| predicate.is_match(&prefix))
+    );
+    immediate_isq.ty.is_some()
+        && immediate_isq
+            .predicates
+            .iter()
+            .any(|predicate| predicate.is_match(&prefix))
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "quant_method", rename_all = "lowercase")]
@@ -649,6 +696,13 @@ pub fn linear_no_bias(
     config: &Option<QuantizedConfig>,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
+    let base_vb = vb.clone();
+    let vb = if should_apply_immediate_isq(&vb) {
+        vb.set_device(Device::Cpu)
+    } else {
+        vb
+    };
+
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::Gptq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
@@ -677,7 +731,7 @@ pub fn linear_no_bias(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    Ok(layer)
+    apply_immediate_isq(layer, base_vb)
 }
 
 pub fn linear(
@@ -686,6 +740,13 @@ pub fn linear(
     config: &Option<QuantizedConfig>,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
+    let base_vb = vb.clone();
+    let vb = if should_apply_immediate_isq(&vb) {
+        vb.set_device(Device::Cpu)
+    } else {
+        vb
+    };
+
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::Gptq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
@@ -715,7 +776,7 @@ pub fn linear(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    Ok(layer)
+    apply_immediate_isq(layer, base_vb)
 }
 
 pub fn linear_b(

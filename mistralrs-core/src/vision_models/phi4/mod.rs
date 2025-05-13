@@ -360,7 +360,6 @@ impl Phi4MMModel {
             &cfg.quantization_config,
         )?;
 
-        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         let mut ropes = HashMap::new();
         for layer_idx in 0..cfg.num_hidden_layers {
@@ -372,11 +371,12 @@ impl Phi4MMModel {
                 Arc::new(Phi4MMRotaryEmbedding::new(vb.dtype(), cfg, device)?),
             );
         }
-        for layer_idx in NiceProgressBar::<_, 'b'>(
+        let layers = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
-        ) {
+        )
+        .par_iter_if_isq(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -390,17 +390,16 @@ impl Phi4MMModel {
                     Some(PagedAttention::new(cfg.head_dim(), device, None)?)
                 }
             };
-            let layer = DecoderLayer::new(
-                rotary_emb.clone(),
+            DecoderLayer::new(
+                rotary_emb,
                 cfg,
                 vb_l.pp(layer_idx),
                 &*mapper,
                 layer_idx,
                 normal_loading_metadata.loading_isq,
                 paged_attn,
-            )?;
-            layers.push(layer)
-        }
+            )
+        })?;
         let norm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,

@@ -29,7 +29,6 @@ use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::utils::log::once_log_info;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
@@ -44,6 +43,7 @@ use candle_core::{Device, Tensor, Var};
 use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
+use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::{AfqLayer, GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
@@ -466,7 +466,21 @@ impl Loader for NormalLoader {
             once_log_info("FlashAttention is enabled.");
         }
 
-        let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
+        // Logic for ISQ here: if no calibration (i.e imatrix), then allow immediate ISQ. Otherwise, back to normal.
+        let mut loading_isq =
+            if self.config.imatrix.is_none() && self.config.calibration_file.is_none() {
+                let predicates =
+                    if matches!(self.config.organization, IsqOrganization::MoeExpertsOnly) {
+                        self.inner.immediate_isq_predicates_moqe(&config)?
+                    } else {
+                        self.inner.immediate_isq_predicates(&config)?
+                    };
+                mistralrs_quant::set_immediate_isq(in_situ_quant, predicates);
+                false
+            } else {
+                in_situ_quant.is_some()
+            };
+
         if let Some(ref topology) = self.config.topology {
             loading_isq |= topology
                 .0
@@ -711,9 +725,8 @@ impl Loader for NormalLoader {
             );
         }
 
-        if (in_situ_quant.is_some() || self.config.topology.is_some())
-            && self.config.from_uqff.is_none()
-        {
+        // Only if loading from UQFF
+        if self.config.topology.is_some() && self.config.from_uqff.is_none() {
             let imatrix_source = match (
                 self.config.imatrix.as_ref(),
                 self.config.calibration_file.is_some(),
