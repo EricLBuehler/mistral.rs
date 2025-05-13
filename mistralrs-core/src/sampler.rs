@@ -2,7 +2,6 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    iter::zip,
     sync::{Arc, Mutex},
 };
 
@@ -256,53 +255,46 @@ impl Sampler {
         })
     }
 
-    fn get_top_logprobs(&self, probs: &[f32], argsort_indices: &[u32]) -> Result<Vec<TopLogprob>> {
-        let mut argsort_indices_sorted = argsort_indices.to_vec();
-        // Sort by descending prob
-        argsort_indices_sorted.sort_by(|a, b| {
-            probs[*b as usize]
-                .partial_cmp(&probs[*a as usize])
-                .expect("No ordering.")
+    fn get_top_logprobs(&self, probs: &[f32], _argsort_indices: &[u32]) -> Result<Vec<TopLogprob>> {
+        // Fast top-k selection without sorting the entire vocabulary
+        let k = self.top_n_logprobs.min(probs.len());
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+        // Build (token, probability) pairs
+        let mut idx_probs: Vec<(u32, f32)> = (0..probs.len() as u32)
+            .map(|i| (i, probs[i as usize]))
+            .collect();
+        // Partition so that the top k probabilities are in the first k positions
+        let (top_k_slice, _, _) = idx_probs.select_nth_unstable_by(k, |a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
         });
-        // These are where the top n are
-        let top_n_toks_range = 0..self.top_n_logprobs;
-        // The top n's values
-        let top_n_logprobs = argsort_indices_sorted[top_n_toks_range.clone()]
-            .iter()
-            .map(|x| probs[*x as usize].log(10.0))
-            .collect::<Vec<_>>();
-        // Find where they actually are in the logits
-        let mut top_n_toks = Vec::new();
-        for val in top_n_toks_range {
-            top_n_toks.push(argsort_indices[val]);
-        }
-
+        // Copy and sort only the top k elements by descending probability
+        let mut top_k: Vec<(u32, f32)> = top_k_slice.to_vec();
+        top_k.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Build the result vector with log10 of probabilities and optional decoding
+        let mut result = Vec::with_capacity(k);
         if let Some(tokenizer) = &self.tokenizer {
-            let mut bytes = Vec::new();
-            for tok in &top_n_toks {
-                bytes.push(
-                    tokenizer
-                        .decode(&[{ *tok }], false)
-                        .map_err(|x| Error::Msg(x.to_string()))?,
-                );
+            for (token, prob) in top_k {
+                let decoded = tokenizer
+                    .decode(&[token], false)
+                    .map_err(|e| Error::Msg(e.to_string()))?;
+                result.push(TopLogprob {
+                    token,
+                    logprob: prob.log(10.0),
+                    bytes: Some(decoded),
+                });
             }
-
-            Ok(zip(bytes, zip(top_n_toks, top_n_logprobs))
-                .map(|(bytes, (token, logprob))| TopLogprob {
-                    token,
-                    logprob,
-                    bytes: Some(bytes),
-                })
-                .collect::<Vec<_>>())
         } else {
-            Ok(zip(top_n_toks, top_n_logprobs)
-                .map(|(token, logprob)| TopLogprob {
+            for (token, prob) in top_k {
+                result.push(TopLogprob {
                     token,
-                    logprob,
+                    logprob: prob.log(10.0),
                     bytes: None,
-                })
-                .collect::<Vec<_>>())
+                });
+            }
         }
+        Ok(result)
     }
 
     fn sample_argmax(&self, logits: Tensor, return_logprobs: bool) -> Result<Logprobs> {
