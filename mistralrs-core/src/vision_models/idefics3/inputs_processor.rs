@@ -557,7 +557,6 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
                 ],
             };
 
-            image.save(format!("out-{i}.png")).unwrap();
             let mut image = image.apply(transforms, device)?;
             // Pad images, calculating attention mask.
             if config.do_pad.is_some_and(|x| x) {
