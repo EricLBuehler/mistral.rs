@@ -1419,7 +1419,7 @@
 <a href=#1419 id=1419 data-nosnippet>1419</a>
 <a href=#1420 id=1420 data-nosnippet>1420</a><span class="attr">#[derive(Debug, Clone, Deserialize, Serialize)]
 <a href=#1421 id=1421 data-nosnippet>1421</a>#[serde(rename_all = <span class="string">"lowercase"</span>)]
-<a href=#1422 id=1422 data-nosnippet>1422</a></span><span class="kw">pub enum </span>Gemmma3ScaledRopeType {
+<a href=#1422 id=1422 data-nosnippet>1422</a></span><span class="kw">pub enum </span>Gemma3ScaledRopeType {
 <a href=#1423 id=1423 data-nosnippet>1423</a>    <span class="attr">#[serde(alias = <span class="string">"linear"</span>)]
 <a href=#1424 id=1424 data-nosnippet>1424</a>    </span>Linear,
 <a href=#1425 id=1425 data-nosnippet>1425</a>}
@@ -1427,7 +1427,7 @@
 <a href=#1427 id=1427 data-nosnippet>1427</a><span class="attr">#[derive(Debug, Clone, Deserialize, Serialize)]
 <a href=#1428 id=1428 data-nosnippet>1428</a></span><span class="kw">pub struct </span>Gemma3RopeScalingConfig {
 <a href=#1429 id=1429 data-nosnippet>1429</a>    factor: f64,
-<a href=#1430 id=1430 data-nosnippet>1430</a>    rope_type: Gemmma3ScaledRopeType,
+<a href=#1430 id=1430 data-nosnippet>1430</a>    rope_type: Gemma3ScaledRopeType,
 <a href=#1431 id=1431 data-nosnippet>1431</a>}
 <a href=#1432 id=1432 data-nosnippet>1432</a>
 <a href=#1433 id=1433 data-nosnippet>1433</a><span class="kw">impl </span>Gemma3RotaryEmbedding {
@@ -1470,7 +1470,7 @@
 <a href=#1470 id=1470 data-nosnippet>1470</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
 <a href=#1471 id=1471 data-nosnippet>1471</a>        <span class="kw">match </span><span class="kw-2">&amp;</span>cfg.rope_scaling {
 <a href=#1472 id=1472 data-nosnippet>1472</a>            <span class="prelude-val">Some</span>(Gemma3RopeScalingConfig {
-<a href=#1473 id=1473 data-nosnippet>1473</a>                rope_type: Gemmma3ScaledRopeType::Linear,
+<a href=#1473 id=1473 data-nosnippet>1473</a>                rope_type: Gemma3ScaledRopeType::Linear,
 <a href=#1474 id=1474 data-nosnippet>1474</a>                factor,
 <a href=#1475 id=1475 data-nosnippet>1475</a>            }) =&gt; <span class="self">Self</span>::new_linear(cfg, <span class="kw-2">*</span>factor, is_gpt_neox, dtype, dev),
 <a href=#1476 id=1476 data-nosnippet>1476</a>
