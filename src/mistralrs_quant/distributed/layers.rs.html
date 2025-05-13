@@ -755,142 +755,140 @@
 <a href=#755 id=755 data-nosnippet>755</a>                world_size: comm.world_size(),
 <a href=#756 id=756 data-nosnippet>756</a>            };
 <a href=#757 id=757 data-nosnippet>757</a>
-<a href=#758 id=758 data-nosnippet>758</a>            <span class="kw">let </span>base_vb = vb.clone();
-<a href=#759 id=759 data-nosnippet>759</a>
-<a href=#760 id=760 data-nosnippet>760</a>            <span class="kw">let </span>vb_gate_up_proj = <span class="kw">if </span>should_apply_immediate_isq(<span class="kw-2">&amp;</span>vb) {
-<a href=#761 id=761 data-nosnippet>761</a>                vb.pp(<span class="string">"gate_up_proj"</span>).set_device(Device::Cpu)
-<a href=#762 id=762 data-nosnippet>762</a>            } <span class="kw">else </span>{
-<a href=#763 id=763 data-nosnippet>763</a>                vb.pp(<span class="string">"gate_up_proj"</span>)
-<a href=#764 id=764 data-nosnippet>764</a>            };
-<a href=#765 id=765 data-nosnippet>765</a>            <span class="kw">let </span>vb_down_proj = <span class="kw">if </span>should_apply_immediate_isq(<span class="kw-2">&amp;</span>vb) {
-<a href=#766 id=766 data-nosnippet>766</a>                vb.pp(<span class="string">"down_proj"</span>).set_device(Device::Cpu)
-<a href=#767 id=767 data-nosnippet>767</a>            } <span class="kw">else </span>{
-<a href=#768 id=768 data-nosnippet>768</a>                vb.pp(<span class="string">"down_proj"</span>)
-<a href=#769 id=769 data-nosnippet>769</a>            };
-<a href=#770 id=770 data-nosnippet>770</a>
-<a href=#771 id=771 data-nosnippet>771</a>            <span class="kw">let </span>gate_proj = vb_gate_up_proj
-<a href=#772 id=772 data-nosnippet>772</a>                .get_with_hints(
-<a href=#773 id=773 data-nosnippet>773</a>                    (num_local_experts, hidden_size, intermediate_size * <span class="number">2</span>),
-<a href=#774 id=774 data-nosnippet>774</a>                    <span class="string">"gate_up_proj"</span>,
-<a href=#775 id=775 data-nosnippet>775</a>                    shard_gate,
-<a href=#776 id=776 data-nosnippet>776</a>                )<span class="question-mark">?
-<a href=#777 id=777 data-nosnippet>777</a>                </span>.t()<span class="question-mark">?
-<a href=#778 id=778 data-nosnippet>778</a>                </span>.contiguous()<span class="question-mark">?</span>;
-<a href=#779 id=779 data-nosnippet>779</a>            <span class="kw">let </span>up_proj = vb_gate_up_proj
-<a href=#780 id=780 data-nosnippet>780</a>                .get_with_hints(
-<a href=#781 id=781 data-nosnippet>781</a>                    (num_local_experts, hidden_size, intermediate_size * <span class="number">2</span>),
-<a href=#782 id=782 data-nosnippet>782</a>                    <span class="string">"gate_up_proj"</span>,
-<a href=#783 id=783 data-nosnippet>783</a>                    shard_up,
-<a href=#784 id=784 data-nosnippet>784</a>                )<span class="question-mark">?
-<a href=#785 id=785 data-nosnippet>785</a>                </span>.t()<span class="question-mark">?
-<a href=#786 id=786 data-nosnippet>786</a>                </span>.contiguous()<span class="question-mark">?</span>;
-<a href=#787 id=787 data-nosnippet>787</a>            <span class="kw">let </span>down_proj = vb_down_proj
-<a href=#788 id=788 data-nosnippet>788</a>                .get_with_hints(
-<a href=#789 id=789 data-nosnippet>789</a>                    (num_local_experts, intermediate_size, hidden_size),
-<a href=#790 id=790 data-nosnippet>790</a>                    <span class="string">"down_proj"</span>,
-<a href=#791 id=791 data-nosnippet>791</a>                    shard_down,
-<a href=#792 id=792 data-nosnippet>792</a>                )<span class="question-mark">?
-<a href=#793 id=793 data-nosnippet>793</a>                </span>.t()<span class="question-mark">?
-<a href=#794 id=794 data-nosnippet>794</a>                </span>.contiguous()<span class="question-mark">?</span>;
-<a href=#795 id=795 data-nosnippet>795</a>
-<a href=#796 id=796 data-nosnippet>796</a>            <span class="kw">let </span>gc = gate_proj.chunk(num_local_experts, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#797 id=797 data-nosnippet>797</a>            <span class="kw">let </span>uc = up_proj.chunk(num_local_experts, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#798 id=798 data-nosnippet>798</a>            <span class="kw">let </span>dc = down_proj.chunk(num_local_experts, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#799 id=799 data-nosnippet>799</a>            drop((gate_proj, up_proj, down_proj));
-<a href=#800 id=800 data-nosnippet>800</a>
-<a href=#801 id=801 data-nosnippet>801</a>            <span class="kw">let </span><span class="kw-2">mut </span>gs = Vec::new();
-<a href=#802 id=802 data-nosnippet>802</a>            <span class="kw">let </span><span class="kw-2">mut </span>us = Vec::new();
-<a href=#803 id=803 data-nosnippet>803</a>            <span class="kw">let </span><span class="kw-2">mut </span>ds = Vec::new();
-<a href=#804 id=804 data-nosnippet>804</a>            <span class="kw">for </span>((<span class="kw-2">mut </span>gate_proj, <span class="kw-2">mut </span>up_proj), <span class="kw-2">mut </span>down_proj) <span class="kw">in
-<a href=#805 id=805 data-nosnippet>805</a>                </span>gc.into_iter().zip(uc.into_iter()).zip(dc.into_iter())
-<a href=#806 id=806 data-nosnippet>806</a>            {
-<a href=#807 id=807 data-nosnippet>807</a>                gate_proj = gate_proj.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#808 id=808 data-nosnippet>808</a>                up_proj = up_proj.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#809 id=809 data-nosnippet>809</a>                down_proj = down_proj.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#810 id=810 data-nosnippet>810</a>                <span class="kw">let </span>gate_proj = merge_lora_weights(
-<a href=#811 id=811 data-nosnippet>811</a>                    <span class="kw-2">&amp;</span>vb,
-<a href=#812 id=812 data-nosnippet>812</a>                    gate_proj,
-<a href=#813 id=813 data-nosnippet>813</a>                    hidden_size,
-<a href=#814 id=814 data-nosnippet>814</a>                    intermediate_size * <span class="number">2</span>,
-<a href=#815 id=815 data-nosnippet>815</a>                    shard_gate,
-<a href=#816 id=816 data-nosnippet>816</a>                )<span class="question-mark">?</span>;
-<a href=#817 id=817 data-nosnippet>817</a>                <span class="kw">let </span>up_proj =
-<a href=#818 id=818 data-nosnippet>818</a>                    merge_lora_weights(<span class="kw-2">&amp;</span>vb, up_proj, hidden_size, intermediate_size * <span class="number">2</span>, shard_up)<span class="question-mark">?</span>;
-<a href=#819 id=819 data-nosnippet>819</a>                <span class="kw">let </span>down_proj =
-<a href=#820 id=820 data-nosnippet>820</a>                    merge_lora_weights(<span class="kw-2">&amp;</span>vb, down_proj, intermediate_size, hidden_size, shard_down)<span class="question-mark">?</span>;
-<a href=#821 id=821 data-nosnippet>821</a>
-<a href=#822 id=822 data-nosnippet>822</a>                <span class="kw">let </span><span class="kw-2">mut </span>gate_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
-<a href=#823 id=823 data-nosnippet>823</a>                    Arc::new(&lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(
-<a href=#824 id=824 data-nosnippet>824</a>                        QuantMethodConfig::Unquantized(Linear::new(gate_proj, <span class="prelude-val">None</span>)),
-<a href=#825 id=825 data-nosnippet>825</a>                    )<span class="question-mark">?</span>);
-<a href=#826 id=826 data-nosnippet>826</a>                gate_proj = apply_immediate_isq(gate_proj, base_vb.pp(<span class="string">"gate_up_proj"</span>))<span class="question-mark">?</span>;
-<a href=#827 id=827 data-nosnippet>827</a>                <span class="kw">let </span><span class="kw-2">mut </span>up_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
-<a href=#828 id=828 data-nosnippet>828</a>                    Arc::new(&lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(
-<a href=#829 id=829 data-nosnippet>829</a>                        QuantMethodConfig::Unquantized(Linear::new(up_proj, <span class="prelude-val">None</span>)),
-<a href=#830 id=830 data-nosnippet>830</a>                    )<span class="question-mark">?</span>);
-<a href=#831 id=831 data-nosnippet>831</a>                up_proj = apply_immediate_isq(up_proj, base_vb.pp(<span class="string">"gate_up_proj"</span>))<span class="question-mark">?</span>;
-<a href=#832 id=832 data-nosnippet>832</a>                <span class="kw">let </span><span class="kw-2">mut </span>down_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
-<a href=#833 id=833 data-nosnippet>833</a>                    Arc::new(&lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(
-<a href=#834 id=834 data-nosnippet>834</a>                        QuantMethodConfig::Unquantized(Linear::new(down_proj, <span class="prelude-val">None</span>)),
-<a href=#835 id=835 data-nosnippet>835</a>                    )<span class="question-mark">?</span>);
-<a href=#836 id=836 data-nosnippet>836</a>                down_proj = apply_immediate_isq(down_proj, base_vb.pp(<span class="string">"down_proj"</span>))<span class="question-mark">?</span>;
-<a href=#837 id=837 data-nosnippet>837</a>                gs.push(gate_proj);
-<a href=#838 id=838 data-nosnippet>838</a>                us.push(up_proj);
-<a href=#839 id=839 data-nosnippet>839</a>                ds.push(down_proj);
-<a href=#840 id=840 data-nosnippet>840</a>            }
-<a href=#841 id=841 data-nosnippet>841</a>            (gs, us, ds)
-<a href=#842 id=842 data-nosnippet>842</a>        };
-<a href=#843 id=843 data-nosnippet>843</a>
-<a href=#844 id=844 data-nosnippet>844</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-<a href=#845 id=845 data-nosnippet>845</a>            gate_proj,
-<a href=#846 id=846 data-nosnippet>846</a>            up_proj,
-<a href=#847 id=847 data-nosnippet>847</a>            down_proj,
-<a href=#848 id=848 data-nosnippet>848</a>        })
-<a href=#849 id=849 data-nosnippet>849</a>    }
-<a href=#850 id=850 data-nosnippet>850</a>}
-<a href=#851 id=851 data-nosnippet>851</a>
-<a href=#852 id=852 data-nosnippet>852</a><span class="doccomment">/// Compute the appropriate KV shard. This handles KV head replication. Be sure to use `compute_n_kv_groups` in tandem.
-<a href=#853 id=853 data-nosnippet>853</a></span><span class="kw">pub fn </span>compute_kv_shard(total_num_kv_heads: usize, head_dim: usize, comm: <span class="kw-2">&amp;</span>Comm) -&gt; Shard {
-<a href=#854 id=854 data-nosnippet>854</a>    <span class="kw">if </span>comm.world_size() == <span class="number">1 </span>{
-<a href=#855 id=855 data-nosnippet>855</a>        <span class="kw">return </span>Shard::default();
-<a href=#856 id=856 data-nosnippet>856</a>    }
+<a href=#758 id=758 data-nosnippet>758</a>            <span class="kw">let </span>vb_gate_up_proj = <span class="kw">if </span>should_apply_immediate_isq(<span class="kw-2">&amp;</span>vb) {
+<a href=#759 id=759 data-nosnippet>759</a>                vb.pp(<span class="string">"gate_up_proj"</span>).set_device(Device::Cpu)
+<a href=#760 id=760 data-nosnippet>760</a>            } <span class="kw">else </span>{
+<a href=#761 id=761 data-nosnippet>761</a>                vb.pp(<span class="string">"gate_up_proj"</span>)
+<a href=#762 id=762 data-nosnippet>762</a>            };
+<a href=#763 id=763 data-nosnippet>763</a>            <span class="kw">let </span>vb_down_proj = <span class="kw">if </span>should_apply_immediate_isq(<span class="kw-2">&amp;</span>vb) {
+<a href=#764 id=764 data-nosnippet>764</a>                vb.pp(<span class="string">"down_proj"</span>).set_device(Device::Cpu)
+<a href=#765 id=765 data-nosnippet>765</a>            } <span class="kw">else </span>{
+<a href=#766 id=766 data-nosnippet>766</a>                vb.pp(<span class="string">"down_proj"</span>)
+<a href=#767 id=767 data-nosnippet>767</a>            };
+<a href=#768 id=768 data-nosnippet>768</a>
+<a href=#769 id=769 data-nosnippet>769</a>            <span class="kw">let </span>gate_proj = vb
+<a href=#770 id=770 data-nosnippet>770</a>                .get_with_hints(
+<a href=#771 id=771 data-nosnippet>771</a>                    (num_local_experts, hidden_size, intermediate_size * <span class="number">2</span>),
+<a href=#772 id=772 data-nosnippet>772</a>                    <span class="string">"gate_up_proj"</span>,
+<a href=#773 id=773 data-nosnippet>773</a>                    shard_gate,
+<a href=#774 id=774 data-nosnippet>774</a>                )<span class="question-mark">?
+<a href=#775 id=775 data-nosnippet>775</a>                </span>.t()<span class="question-mark">?
+<a href=#776 id=776 data-nosnippet>776</a>                </span>.contiguous()<span class="question-mark">?</span>;
+<a href=#777 id=777 data-nosnippet>777</a>            <span class="kw">let </span>up_proj = vb
+<a href=#778 id=778 data-nosnippet>778</a>                .get_with_hints(
+<a href=#779 id=779 data-nosnippet>779</a>                    (num_local_experts, hidden_size, intermediate_size * <span class="number">2</span>),
+<a href=#780 id=780 data-nosnippet>780</a>                    <span class="string">"gate_up_proj"</span>,
+<a href=#781 id=781 data-nosnippet>781</a>                    shard_up,
+<a href=#782 id=782 data-nosnippet>782</a>                )<span class="question-mark">?
+<a href=#783 id=783 data-nosnippet>783</a>                </span>.t()<span class="question-mark">?
+<a href=#784 id=784 data-nosnippet>784</a>                </span>.contiguous()<span class="question-mark">?</span>;
+<a href=#785 id=785 data-nosnippet>785</a>            <span class="kw">let </span>down_proj = vb
+<a href=#786 id=786 data-nosnippet>786</a>                .get_with_hints(
+<a href=#787 id=787 data-nosnippet>787</a>                    (num_local_experts, intermediate_size, hidden_size),
+<a href=#788 id=788 data-nosnippet>788</a>                    <span class="string">"down_proj"</span>,
+<a href=#789 id=789 data-nosnippet>789</a>                    shard_down,
+<a href=#790 id=790 data-nosnippet>790</a>                )<span class="question-mark">?
+<a href=#791 id=791 data-nosnippet>791</a>                </span>.t()<span class="question-mark">?
+<a href=#792 id=792 data-nosnippet>792</a>                </span>.contiguous()<span class="question-mark">?</span>;
+<a href=#793 id=793 data-nosnippet>793</a>
+<a href=#794 id=794 data-nosnippet>794</a>            <span class="kw">let </span>gc = gate_proj.chunk(num_local_experts, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#795 id=795 data-nosnippet>795</a>            <span class="kw">let </span>uc = up_proj.chunk(num_local_experts, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#796 id=796 data-nosnippet>796</a>            <span class="kw">let </span>dc = down_proj.chunk(num_local_experts, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#797 id=797 data-nosnippet>797</a>            drop((gate_proj, up_proj, down_proj));
+<a href=#798 id=798 data-nosnippet>798</a>
+<a href=#799 id=799 data-nosnippet>799</a>            <span class="kw">let </span><span class="kw-2">mut </span>gs = Vec::new();
+<a href=#800 id=800 data-nosnippet>800</a>            <span class="kw">let </span><span class="kw-2">mut </span>us = Vec::new();
+<a href=#801 id=801 data-nosnippet>801</a>            <span class="kw">let </span><span class="kw-2">mut </span>ds = Vec::new();
+<a href=#802 id=802 data-nosnippet>802</a>            <span class="kw">for </span>((<span class="kw-2">mut </span>gate_proj, <span class="kw-2">mut </span>up_proj), <span class="kw-2">mut </span>down_proj) <span class="kw">in
+<a href=#803 id=803 data-nosnippet>803</a>                </span>gc.into_iter().zip(uc.into_iter()).zip(dc.into_iter())
+<a href=#804 id=804 data-nosnippet>804</a>            {
+<a href=#805 id=805 data-nosnippet>805</a>                gate_proj = gate_proj.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#806 id=806 data-nosnippet>806</a>                up_proj = up_proj.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#807 id=807 data-nosnippet>807</a>                down_proj = down_proj.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#808 id=808 data-nosnippet>808</a>                <span class="kw">let </span>gate_proj = merge_lora_weights(
+<a href=#809 id=809 data-nosnippet>809</a>                    <span class="kw-2">&amp;</span>vb,
+<a href=#810 id=810 data-nosnippet>810</a>                    gate_proj,
+<a href=#811 id=811 data-nosnippet>811</a>                    hidden_size,
+<a href=#812 id=812 data-nosnippet>812</a>                    intermediate_size * <span class="number">2</span>,
+<a href=#813 id=813 data-nosnippet>813</a>                    shard_gate,
+<a href=#814 id=814 data-nosnippet>814</a>                )<span class="question-mark">?</span>;
+<a href=#815 id=815 data-nosnippet>815</a>                <span class="kw">let </span>up_proj =
+<a href=#816 id=816 data-nosnippet>816</a>                    merge_lora_weights(<span class="kw-2">&amp;</span>vb, up_proj, hidden_size, intermediate_size * <span class="number">2</span>, shard_up)<span class="question-mark">?</span>;
+<a href=#817 id=817 data-nosnippet>817</a>                <span class="kw">let </span>down_proj =
+<a href=#818 id=818 data-nosnippet>818</a>                    merge_lora_weights(<span class="kw-2">&amp;</span>vb, down_proj, intermediate_size, hidden_size, shard_down)<span class="question-mark">?</span>;
+<a href=#819 id=819 data-nosnippet>819</a>
+<a href=#820 id=820 data-nosnippet>820</a>                <span class="kw">let </span><span class="kw-2">mut </span>gate_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
+<a href=#821 id=821 data-nosnippet>821</a>                    Arc::new(&lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(
+<a href=#822 id=822 data-nosnippet>822</a>                        QuantMethodConfig::Unquantized(Linear::new(gate_proj, <span class="prelude-val">None</span>)),
+<a href=#823 id=823 data-nosnippet>823</a>                    )<span class="question-mark">?</span>);
+<a href=#824 id=824 data-nosnippet>824</a>                gate_proj = apply_immediate_isq(gate_proj, vb_gate_up_proj.clone())<span class="question-mark">?</span>;
+<a href=#825 id=825 data-nosnippet>825</a>                <span class="kw">let </span><span class="kw-2">mut </span>up_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
+<a href=#826 id=826 data-nosnippet>826</a>                    Arc::new(&lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(
+<a href=#827 id=827 data-nosnippet>827</a>                        QuantMethodConfig::Unquantized(Linear::new(up_proj, <span class="prelude-val">None</span>)),
+<a href=#828 id=828 data-nosnippet>828</a>                    )<span class="question-mark">?</span>);
+<a href=#829 id=829 data-nosnippet>829</a>                up_proj = apply_immediate_isq(up_proj, vb_gate_up_proj.clone())<span class="question-mark">?</span>;
+<a href=#830 id=830 data-nosnippet>830</a>                <span class="kw">let </span><span class="kw-2">mut </span>down_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
+<a href=#831 id=831 data-nosnippet>831</a>                    Arc::new(&lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(
+<a href=#832 id=832 data-nosnippet>832</a>                        QuantMethodConfig::Unquantized(Linear::new(down_proj, <span class="prelude-val">None</span>)),
+<a href=#833 id=833 data-nosnippet>833</a>                    )<span class="question-mark">?</span>);
+<a href=#834 id=834 data-nosnippet>834</a>                down_proj = apply_immediate_isq(down_proj, vb_down_proj.clone())<span class="question-mark">?</span>;
+<a href=#835 id=835 data-nosnippet>835</a>                gs.push(gate_proj);
+<a href=#836 id=836 data-nosnippet>836</a>                us.push(up_proj);
+<a href=#837 id=837 data-nosnippet>837</a>                ds.push(down_proj);
+<a href=#838 id=838 data-nosnippet>838</a>            }
+<a href=#839 id=839 data-nosnippet>839</a>            (gs, us, ds)
+<a href=#840 id=840 data-nosnippet>840</a>        };
+<a href=#841 id=841 data-nosnippet>841</a>
+<a href=#842 id=842 data-nosnippet>842</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+<a href=#843 id=843 data-nosnippet>843</a>            gate_proj,
+<a href=#844 id=844 data-nosnippet>844</a>            up_proj,
+<a href=#845 id=845 data-nosnippet>845</a>            down_proj,
+<a href=#846 id=846 data-nosnippet>846</a>        })
+<a href=#847 id=847 data-nosnippet>847</a>    }
+<a href=#848 id=848 data-nosnippet>848</a>}
+<a href=#849 id=849 data-nosnippet>849</a>
+<a href=#850 id=850 data-nosnippet>850</a><span class="doccomment">/// Compute the appropriate KV shard. This handles KV head replication. Be sure to use `compute_n_kv_groups` in tandem.
+<a href=#851 id=851 data-nosnippet>851</a></span><span class="kw">pub fn </span>compute_kv_shard(total_num_kv_heads: usize, head_dim: usize, comm: <span class="kw-2">&amp;</span>Comm) -&gt; Shard {
+<a href=#852 id=852 data-nosnippet>852</a>    <span class="kw">if </span>comm.world_size() == <span class="number">1 </span>{
+<a href=#853 id=853 data-nosnippet>853</a>        <span class="kw">return </span>Shard::default();
+<a href=#854 id=854 data-nosnippet>854</a>    }
+<a href=#855 id=855 data-nosnippet>855</a>
+<a href=#856 id=856 data-nosnippet>856</a>    <span class="comment">// Tensor parallelism case
 <a href=#857 id=857 data-nosnippet>857</a>
-<a href=#858 id=858 data-nosnippet>858</a>    <span class="comment">// Tensor parallelism case
-<a href=#859 id=859 data-nosnippet>859</a>
-<a href=#860 id=860 data-nosnippet>860</a>    // We may need to replicate the kv heads
-<a href=#861 id=861 data-nosnippet>861</a>    </span><span class="kw">let </span>kv_replicate = <span class="kw">if </span>comm.world_size() &gt; total_num_kv_heads {
-<a href=#862 id=862 data-nosnippet>862</a>        comm.world_size() / total_num_kv_heads
-<a href=#863 id=863 data-nosnippet>863</a>    } <span class="kw">else </span>{
-<a href=#864 id=864 data-nosnippet>864</a>        <span class="kw">return </span>Shard::Simple {
-<a href=#865 id=865 data-nosnippet>865</a>            dim: <span class="number">0</span>,
-<a href=#866 id=866 data-nosnippet>866</a>            rank: comm.rank(),
-<a href=#867 id=867 data-nosnippet>867</a>            world_size: comm.world_size(),
-<a href=#868 id=868 data-nosnippet>868</a>        };
-<a href=#869 id=869 data-nosnippet>869</a>    };
-<a href=#870 id=870 data-nosnippet>870</a>
-<a href=#871 id=871 data-nosnippet>871</a>    <span class="kw">let </span>num_kv_heads = (total_num_kv_heads / comm.world_size()).max(<span class="number">1</span>);
-<a href=#872 id=872 data-nosnippet>872</a>    <span class="kw">let </span>kv_shard_id = (comm.rank() / kv_replicate) * num_kv_heads;
-<a href=#873 id=873 data-nosnippet>873</a>    Shard::Offset {
-<a href=#874 id=874 data-nosnippet>874</a>        dim: <span class="number">0</span>,
-<a href=#875 id=875 data-nosnippet>875</a>        offset: kv_shard_id * head_dim,
-<a href=#876 id=876 data-nosnippet>876</a>        len: head_dim,
-<a href=#877 id=877 data-nosnippet>877</a>    }
-<a href=#878 id=878 data-nosnippet>878</a>}
-<a href=#879 id=879 data-nosnippet>879</a>
-<a href=#880 id=880 data-nosnippet>880</a><span class="doccomment">/// Compute the number of KV groups, taking into account KV head replication.
-<a href=#881 id=881 data-nosnippet>881</a></span><span class="kw">pub fn </span>compute_n_kv_groups(
-<a href=#882 id=882 data-nosnippet>882</a>    total_num_kv_heads: usize,
-<a href=#883 id=883 data-nosnippet>883</a>    num_attention_heads: usize,
-<a href=#884 id=884 data-nosnippet>884</a>    comm: <span class="kw-2">&amp;</span>Comm,
-<a href=#885 id=885 data-nosnippet>885</a>) -&gt; usize {
-<a href=#886 id=886 data-nosnippet>886</a>    <span class="kw">let </span>kv_replicate = <span class="kw">if </span>comm.world_size() &gt; total_num_kv_heads {
-<a href=#887 id=887 data-nosnippet>887</a>        comm.world_size() / total_num_kv_heads
-<a href=#888 id=888 data-nosnippet>888</a>    } <span class="kw">else </span>{
-<a href=#889 id=889 data-nosnippet>889</a>        <span class="number">1
-<a href=#890 id=890 data-nosnippet>890</a>    </span>};
-<a href=#891 id=891 data-nosnippet>891</a>    <span class="kw">if </span>kv_replicate != <span class="number">0 </span>{
-<a href=#892 id=892 data-nosnippet>892</a>        (num_attention_heads / total_num_kv_heads) / kv_replicate
-<a href=#893 id=893 data-nosnippet>893</a>    } <span class="kw">else </span>{
-<a href=#894 id=894 data-nosnippet>894</a>        num_attention_heads / total_num_kv_heads
-<a href=#895 id=895 data-nosnippet>895</a>    }
-<a href=#896 id=896 data-nosnippet>896</a>}</code></pre></div></section></main></body></html>
+<a href=#858 id=858 data-nosnippet>858</a>    // We may need to replicate the kv heads
+<a href=#859 id=859 data-nosnippet>859</a>    </span><span class="kw">let </span>kv_replicate = <span class="kw">if </span>comm.world_size() &gt; total_num_kv_heads {
+<a href=#860 id=860 data-nosnippet>860</a>        comm.world_size() / total_num_kv_heads
+<a href=#861 id=861 data-nosnippet>861</a>    } <span class="kw">else </span>{
+<a href=#862 id=862 data-nosnippet>862</a>        <span class="kw">return </span>Shard::Simple {
+<a href=#863 id=863 data-nosnippet>863</a>            dim: <span class="number">0</span>,
+<a href=#864 id=864 data-nosnippet>864</a>            rank: comm.rank(),
+<a href=#865 id=865 data-nosnippet>865</a>            world_size: comm.world_size(),
+<a href=#866 id=866 data-nosnippet>866</a>        };
+<a href=#867 id=867 data-nosnippet>867</a>    };
+<a href=#868 id=868 data-nosnippet>868</a>
+<a href=#869 id=869 data-nosnippet>869</a>    <span class="kw">let </span>num_kv_heads = (total_num_kv_heads / comm.world_size()).max(<span class="number">1</span>);
+<a href=#870 id=870 data-nosnippet>870</a>    <span class="kw">let </span>kv_shard_id = (comm.rank() / kv_replicate) * num_kv_heads;
+<a href=#871 id=871 data-nosnippet>871</a>    Shard::Offset {
+<a href=#872 id=872 data-nosnippet>872</a>        dim: <span class="number">0</span>,
+<a href=#873 id=873 data-nosnippet>873</a>        offset: kv_shard_id * head_dim,
+<a href=#874 id=874 data-nosnippet>874</a>        len: head_dim,
+<a href=#875 id=875 data-nosnippet>875</a>    }
+<a href=#876 id=876 data-nosnippet>876</a>}
+<a href=#877 id=877 data-nosnippet>877</a>
+<a href=#878 id=878 data-nosnippet>878</a><span class="doccomment">/// Compute the number of KV groups, taking into account KV head replication.
+<a href=#879 id=879 data-nosnippet>879</a></span><span class="kw">pub fn </span>compute_n_kv_groups(
+<a href=#880 id=880 data-nosnippet>880</a>    total_num_kv_heads: usize,
+<a href=#881 id=881 data-nosnippet>881</a>    num_attention_heads: usize,
+<a href=#882 id=882 data-nosnippet>882</a>    comm: <span class="kw-2">&amp;</span>Comm,
+<a href=#883 id=883 data-nosnippet>883</a>) -&gt; usize {
+<a href=#884 id=884 data-nosnippet>884</a>    <span class="kw">let </span>kv_replicate = <span class="kw">if </span>comm.world_size() &gt; total_num_kv_heads {
+<a href=#885 id=885 data-nosnippet>885</a>        comm.world_size() / total_num_kv_heads
+<a href=#886 id=886 data-nosnippet>886</a>    } <span class="kw">else </span>{
+<a href=#887 id=887 data-nosnippet>887</a>        <span class="number">1
+<a href=#888 id=888 data-nosnippet>888</a>    </span>};
+<a href=#889 id=889 data-nosnippet>889</a>    <span class="kw">if </span>kv_replicate != <span class="number">0 </span>{
+<a href=#890 id=890 data-nosnippet>890</a>        (num_attention_heads / total_num_kv_heads) / kv_replicate
+<a href=#891 id=891 data-nosnippet>891</a>    } <span class="kw">else </span>{
+<a href=#892 id=892 data-nosnippet>892</a>        num_attention_heads / total_num_kv_heads
+<a href=#893 id=893 data-nosnippet>893</a>    }
+<a href=#894 id=894 data-nosnippet>894</a>}</code></pre></div></section></main></body></html>
