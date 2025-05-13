@@ -193,7 +193,12 @@ impl InputsProcessor for Idefics3ImageProcessor {
                         .expect("The image token <image> should be present in the text.")
                         .to_string();
                     for (i, image_prompt_string) in image_prompt_strings.into_iter().enumerate() {
-                        sample.push_str(&format!("{image_prompt_string}{}", split_sample[i + 1]));
+                        sample.push_str(&format!(
+                            "{image_prompt_string}{}",
+                            split_sample
+                                .get(i + 1)
+                                .expect("Incorrect chat template. Use the one provided in `chat_templates` with the `--chat-template`/`chat_template` settings.")
+                        ));
                     }
 
                     seq.set_initial_prompt(sample.clone());
