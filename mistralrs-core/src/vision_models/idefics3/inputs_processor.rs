@@ -535,7 +535,7 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
             }
         }
 
-        for image in images.iter_mut() {
+        for (i, image) in images.iter_mut().enumerate() {
             let transforms = Transforms {
                 input: &ToTensorNoNorm,
                 inner_transforms: &[
@@ -557,6 +557,7 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
                 ],
             };
 
+            image.save(format!("out-{i}.png")).unwrap();
             let mut image = image.apply(transforms, device)?;
             // Pad images, calculating attention mask.
             if config.do_pad.is_some_and(|x| x) {

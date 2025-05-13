@@ -94,13 +94,6 @@ pub fn should_apply_immediate_isq(vb: &ShardedVarBuilder) -> bool {
     let immediate_isq = get_immediate_isq();
     // Add a .weight to match the ISQ regexes!
     let prefix = format!("{}.weight", vb.prefix());
-    println!(
-        "{prefix} {}",
-        immediate_isq
-            .predicates
-            .iter()
-            .any(|predicate| predicate.is_match(&prefix))
-    );
     immediate_isq.ty.is_some()
         && immediate_isq
             .predicates
