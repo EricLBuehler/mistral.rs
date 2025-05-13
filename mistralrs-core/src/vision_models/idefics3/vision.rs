@@ -4,7 +4,8 @@ use mistralrs_quant::ShardedVarBuilder;
 use std::ops::Mul;
 
 use crate::{
-    layers::{self, conv2d, embedding, layer_norm, Activation, CausalMasker, MatMul},
+    attention::SdpaParams,
+    layers::{self, conv2d, embedding, layer_norm, Activation, CausalMasker, Sdpa},
     utils::unvarbuilder::UnVarBuilder,
 };
 
@@ -229,11 +230,11 @@ struct Attention {
     embed_dim: usize,
     num_heads: usize,
     head_dim: usize,
-    scale: f64,
     q_proj: Linear,
     k_proj: Linear,
     v_proj: Linear,
     o_proj: Linear,
+    sdpa_params: SdpaParams,
 }
 
 impl Attention {
@@ -241,7 +242,7 @@ impl Attention {
         let embed_dim = config.hidden_size;
         let num_heads = config.num_attention_heads;
         let head_dim = embed_dim / num_heads;
-        let scale = 1.0 / (head_dim as f64).sqrt();
+        let scale = 1.0 / (head_dim as f32).sqrt();
 
         let q_proj = layers::linear(embed_dim, embed_dim, vb.pp("q_proj"))?;
         let k_proj = layers::linear(embed_dim, embed_dim, vb.pp("k_proj"))?;
@@ -252,11 +253,16 @@ impl Attention {
             embed_dim,
             num_heads,
             head_dim,
-            scale,
             q_proj,
             k_proj,
             v_proj,
             o_proj,
+            sdpa_params: SdpaParams {
+                n_kv_groups: 1,
+                softcap: None,
+                softmax_scale: scale,
+                sliding_window: None,
+            },
         })
     }
 
@@ -277,15 +283,8 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let mut attn_weights =
-            (MatMul.matmul(&q.contiguous()?, &k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
-
-        attn_weights = match attention_mask {
-            Some(mask) => attn_weights.broadcast_add(mask)?,
-            None => attn_weights,
-        };
-        attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let attn_output = MatMul.matmul(&attn_weights, &v.contiguous()?)?;
+        let attn_output =
+            Sdpa.run_attention(&q, &k, &v, attention_mask, None, &self.sdpa_params)?;
 
         attn_output
             .transpose(1, 2)?
