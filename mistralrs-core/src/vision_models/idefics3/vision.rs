@@ -234,7 +234,6 @@ struct Attention {
     k_proj: Linear,
     v_proj: Linear,
     o_proj: Linear,
-    neg_inf: Tensor,
 }
 
 impl Attention {
@@ -258,7 +257,6 @@ impl Attention {
             k_proj,
             v_proj,
             o_proj,
-            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?,
         })
     }
 
@@ -279,14 +277,13 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let attn_weights =
+        let mut attn_weights =
             (MatMul.matmul(&q.contiguous()?, &k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
 
-        let mut attn_weights = CausalMasker.apply_mask_one_and_zero(
-            &attention_mask.map(|x| x.to_dtype(DType::U8).unwrap()),
-            attn_weights,
-            &self.neg_inf,
-        )?;
+        attn_weights = match attention_mask {
+            Some(mask) => attn_weights.broadcast_add(mask)?,
+            None => attn_weights,
+        };
         attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
         let attn_output = MatMul.matmul(&attn_weights, &v.contiguous()?)?;
 
@@ -412,6 +409,7 @@ pub struct Idefics3VisionTransformer {
     encoder: Encoder,
     post_layernorm: LayerNorm,
     patch_size: usize,
+    neg_inf: Tensor,
 }
 
 impl Idefics3VisionTransformer {
@@ -428,6 +426,7 @@ impl Idefics3VisionTransformer {
             encoder,
             post_layernorm,
             patch_size: config.patch_size,
+            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?,
         })
     }
 
@@ -462,6 +461,21 @@ impl Idefics3VisionTransformer {
                 .reshape((patch_attention_mask.dim(0)?, ()))?
                 .to_dtype(hidden_states.dtype())?;
             Some(CausalMasker.expand_mask(&mask, hidden_states.dtype(), None)?)
+        };
+
+        let attention_mask = match &attention_mask {
+            Some(mask) => {
+                let (b, _h, q, k) = mask.dims4()?;
+                let dims = [b, self.encoder.layers[0].attn.num_heads, q, k];
+                let mask = mask.broadcast_as(&dims)?;
+                let mask = mask.to_dtype(DType::U8)?.where_cond(
+                    &self.neg_inf.to_device(mask.device())?.broadcast_as(&dims)?,
+                    &Tensor::zeros(&dims, self.neg_inf.dtype(), self.neg_inf.device())?,
+                )?;
+
+                Some(mask)
+            }
+            None => None,
         };
         let hidden_states = self
             .encoder
