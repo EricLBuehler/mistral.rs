@@ -45,13 +45,11 @@ impl Idefics3Model {
         let connector = Idefics3Connector::new(
             cfg,
             vb_m.pp("connector")
-                .set_dtype(DType::F32)
                 .set_device(normal_loading_metadata.real_device.clone()),
         )?;
         let vision = Idefics3VisionTransformer::new(
             &cfg.vision_config,
             vb_m.pp("vision_model")
-                .set_dtype(DType::F32)
                 .set_device(normal_loading_metadata.real_device.clone()),
         )?;
         let text_model = Llama::new_inner(
@@ -99,10 +97,7 @@ impl Idefics3Model {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let input_embeds = if let Some(pixel_values) = pixel_values {
-            let input_embeds = self
-                .text_model
-                .get_input_embeddings(input_ids)?
-                .to_dtype(DType::F32)?;
+            let input_embeds = self.text_model.get_input_embeddings(input_ids)?;
             let special_image_mask = input_ids
                 .eq(self.config.image_token_id as f64)?
                 .unsqueeze(D::Minus1)?
@@ -185,10 +180,9 @@ impl Idefics3Model {
             let pixel_values = pixel_values.to_dtype(self.dtype)?;
 
             // Get seq from vision encoder
-            let image_hidden_states = self.vision.forward(
-                &pixel_values.to_dtype(DType::F32)?,
-                Some(&patch_attention_mask),
-            )?;
+            let image_hidden_states = self
+                .vision
+                .forward(&pixel_values, Some(&patch_attention_mask))?;
 
             // Modality proj and perceiver resampling
             let image_hidden_states = self.connector.forward(&image_hidden_states)?;
