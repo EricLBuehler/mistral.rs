@@ -469,7 +469,13 @@ impl Loader for NormalLoader {
         // Logic for ISQ here: if no calibration (i.e imatrix), then allow immediate ISQ. Otherwise, back to normal.
         let mut loading_isq =
             if self.config.imatrix.is_none() && self.config.calibration_file.is_none() {
-                mistralrs_quant::set_immediate_isq(in_situ_quant);
+                let predicates =
+                    if matches!(self.config.organization, IsqOrganization::MoeExpertsOnly) {
+                        self.inner.immediate_isq_predicates_moqe(&config)?
+                    } else {
+                        self.inner.immediate_isq_predicates(&config)?
+                    };
+                mistralrs_quant::set_immediate_isq(in_situ_quant, predicates);
                 false
             } else {
                 in_situ_quant.is_some()

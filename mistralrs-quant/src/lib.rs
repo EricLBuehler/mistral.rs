@@ -33,6 +33,7 @@ mod utils;
 
 use gptq::gptq_linear;
 use lora::merge_lora_weights;
+use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
 pub use afq::{AfqBits, AfqGroupSize, AfqLayer};
@@ -66,16 +67,18 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub struct ImmediateIsqParams {
     pub guard: QuantizeOntoGuard,
     pub ty: Option<IsqType>,
+    pub predicates: Vec<Regex>,
 }
 
 static IMMEDIATE_ISQ: OnceLock<Mutex<ImmediateIsqParams>> = OnceLock::new();
 
-pub fn set_immediate_isq(isq: Option<IsqType>) {
+pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>) {
     IMMEDIATE_ISQ
         .get_or_init(|| {
             Mutex::new(ImmediateIsqParams {
                 guard: QuantizeOntoGuard::new(),
                 ty: None,
+                predicates,
             })
         })
         .lock()
@@ -84,16 +87,25 @@ pub fn set_immediate_isq(isq: Option<IsqType>) {
 }
 
 pub fn get_immediate_isq() -> ImmediateIsqParams {
-    IMMEDIATE_ISQ
-        .get_or_init(|| {
-            Mutex::new(ImmediateIsqParams {
-                guard: QuantizeOntoGuard::new(),
-                ty: None,
-            })
-        })
-        .lock()
-        .unwrap()
-        .clone()
+    IMMEDIATE_ISQ.get().unwrap().lock().unwrap().clone()
+}
+
+pub fn should_apply_immediate_isq(vb: &ShardedVarBuilder) -> bool {
+    let immediate_isq = get_immediate_isq();
+    // Add a .weight to match the ISQ regexes!
+    let prefix = format!("{}.weight", vb.prefix());
+    println!(
+        "{prefix} {}",
+        immediate_isq
+            .predicates
+            .iter()
+            .any(|predicate| predicate.is_match(&prefix))
+    );
+    immediate_isq.ty.is_some()
+        && immediate_isq
+            .predicates
+            .iter()
+            .any(|predicate| predicate.is_match(&prefix))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -684,8 +696,8 @@ pub fn linear_no_bias(
     config: &Option<QuantizedConfig>,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
-    let device = vb.device().clone();
-    let vb = if get_immediate_isq().ty.is_some() {
+    let base_vb = vb.clone();
+    let vb = if should_apply_immediate_isq(&vb) {
         vb.set_device(Device::Cpu)
     } else {
         vb
@@ -719,7 +731,7 @@ pub fn linear_no_bias(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    apply_immediate_isq(layer, device)
+    apply_immediate_isq(layer, base_vb)
 }
 
 pub fn linear(
@@ -728,8 +740,8 @@ pub fn linear(
     config: &Option<QuantizedConfig>,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
-    let device = vb.device().clone();
-    let vb = if get_immediate_isq().ty.is_some() {
+    let base_vb = vb.clone();
+    let vb = if should_apply_immediate_isq(&vb) {
         vb.set_device(Device::Cpu)
     } else {
         vb
@@ -764,7 +776,7 @@ pub fn linear(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    apply_immediate_isq(layer, device)
+    apply_immediate_isq(layer, base_vb)
 }
 
 pub fn linear_b(

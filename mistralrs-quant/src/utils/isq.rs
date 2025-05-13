@@ -1,8 +1,11 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use candle_core::{quantized::GgmlDType, Result, Tensor};
+use candle_core::{quantized::GgmlDType, Device, Result, Tensor};
 
-use crate::{get_immediate_isq, ImmediateIsqParams, QuantMethod};
+use crate::{
+    get_immediate_isq, should_apply_immediate_isq, ImmediateIsqParams, QuantMethod,
+    ShardedVarBuilder,
+};
 
 pub enum QuantizationBehavior {
     Quantize(GgmlDType),
@@ -11,16 +14,28 @@ pub enum QuantizationBehavior {
 
 pub(crate) fn apply_immediate_isq(
     layer: Arc<dyn QuantMethod>,
-    device: candle_core::Device,
+    vb: ShardedVarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    if should_apply_immediate_isq(&vb) {
+        apply_immediate_isq_always(layer, vb.device())
+    } else {
+        Ok(layer)
+    }
+}
+
+pub(crate) fn apply_immediate_isq_always(
+    layer: Arc<dyn QuantMethod>,
+    device: &Device,
 ) -> Result<Arc<dyn QuantMethod>> {
     if let ImmediateIsqParams {
         guard,
         ty: Some(immediate_isq),
+        predicates: _,
     } = get_immediate_isq()
     {
         layer.clone().apply_isq(
             Some(immediate_isq),
-            device,
+            device.clone(),
             &AtomicUsize::new(0),
             None,
             guard,

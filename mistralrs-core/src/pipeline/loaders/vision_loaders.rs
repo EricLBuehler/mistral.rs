@@ -316,6 +316,9 @@ impl IsqModelLoader for Phi3VLoader {
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
 }
 
 impl DeviceMappedModelLoader for Phi3VLoader {
@@ -584,6 +587,20 @@ impl IsqModelLoader for Idefics2Loader {
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"model\.text_model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.text_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.text_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.text_model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"model\.text_model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.text_model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.text_model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
 }
@@ -910,6 +927,20 @@ impl IsqModelLoader for LLaVANextLoader {
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
+    fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
 }
 
 impl DeviceMappedModelLoader for LLaVANextLoader {
@@ -1156,6 +1187,20 @@ impl IsqModelLoader for LLaVALoader {
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
 }
@@ -1450,6 +1495,9 @@ impl IsqModelLoader for VLlamaLoader {
         ];
 
         Ok([text_regexes, vision_regexes].concat())
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -1771,12 +1819,15 @@ impl IsqModelLoader for Qwen2VLLoader {
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -2062,6 +2113,20 @@ impl IsqModelLoader for Idefics3Loader {
             Regex::new(r"model.text_model.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
+    fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"model\.text_model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.text_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.text_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.text_model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"model\.text_model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.text_model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.text_model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
 }
 
 impl DeviceMappedModelLoader for Idefics3Loader {
@@ -2334,12 +2399,15 @@ impl IsqModelLoader for MiniCpmOLoader {
             Regex::new(r"llm.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"llm.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"llm.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"llm.layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            Regex::new(r"llm.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
             Regex::new(r"llm.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"llm.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"llm.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -2609,6 +2677,9 @@ impl IsqModelLoader for Phi4MMLoader {
             Regex::new(r"layers\.(\d+)\.mlp\.gate_up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -2922,12 +2993,15 @@ impl IsqModelLoader for Qwen2_5VLLoader {
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -3205,11 +3279,25 @@ impl IsqModelLoader for Gemma3Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
 }
@@ -3517,11 +3605,25 @@ impl IsqModelLoader for Mistral3Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
 }
@@ -3832,6 +3934,51 @@ impl IsqModelLoader for VLlama4Loader {
             Regex::new(r"layers\.(\d+)\.feed_forward\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.feed_forward\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.feed_forward\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // FF MoE
+            Regex::new(
+                r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.gate_up_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.gate_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.up_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.down_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"language_model\.model\.layers\.(\d+)\.feed_forward\.router\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"language_model\.model\.layers\.(\d+)\.feed_forward\.shared_expert\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"language_model\.model\.layers\.(\d+)\.feed_forward\.shared_expert\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"language_model\.model\.layers\.(\d+)\.feed_forward\.shared_expert\.(weight|bias)$",
+            )?,
+            // FF MLP
+            Regex::new(
+                r"language_model\.model\.layers\.(\d+)\.feed_forward\.gate_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"language_model\.model\.layers\.(\d+)\.feed_forward\.up_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"language_model\.model\.layers\.(\d+)\.feed_forward\.down_proj\.(weight|bias)$",
+            )?,
         ])
     }
 }
