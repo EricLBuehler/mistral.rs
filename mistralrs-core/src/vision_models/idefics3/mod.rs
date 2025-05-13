@@ -78,11 +78,11 @@ impl Idefics3Model {
         let mut x_flat = input_embeds.flatten_all()?;
         let src_flat = image_hidden_states.flatten_all()?;
 
-        let current_vals = x_flat.gather(&indices, 0)?;
+        let current_vals = x_flat.gather(indices, 0)?;
         let diff = (src_flat - current_vals)?;
-        x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
+        x_flat = x_flat.scatter_add(indices, &diff, 0)?;
 
-        return x_flat.reshape(input_embeds.shape());
+        x_flat.reshape(input_embeds.shape())
     }
 
     #[allow(clippy::too_many_arguments)]
