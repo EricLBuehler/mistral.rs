@@ -535,7 +535,7 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
             }
         }
 
-        for (i, image) in images.iter_mut().enumerate() {
+        for image in images.iter_mut() {
             let transforms = Transforms {
                 input: &ToTensorNoNorm,
                 inner_transforms: &[
