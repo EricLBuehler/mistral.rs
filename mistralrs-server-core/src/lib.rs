@@ -21,10 +21,10 @@ use openai::{
 use serde::{Deserialize, Serialize};
 use std::{num::NonZeroUsize, sync::Arc};
 
-mod chat_completion;
+pub mod chat_completion;
 mod completions;
 mod image_generation;
-mod openai;
+pub mod openai;
 mod util;
 
 use crate::openai::ModelObject;
@@ -273,12 +273,14 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     doc
 }
 
-pub async fn bootstrap_mistralrs_router_from_state(
-    mistralrs: SharedMistralState,
+pub async fn bootstrap_mistralrs_router_from_args(
+    args: Args,
     include_swagger_routes: bool,
     base_path: Option<&str>,
 ) -> Result<Router> {
     initialize_logging();
+
+    let mistralrs = bootstrap_mistralrs(args).await?;
 
     // if args.interactive_mode {
     //     interactive_mode(mistralrs, args.throughput_log, args.interactive_search).await;
@@ -302,14 +304,12 @@ pub async fn bootstrap_mistralrs_router_from_state(
     Ok(app)
 }
 
-pub async fn bootstrap_mistralrs_router_from_args(
-    args: Args,
+pub async fn bootstrap_mistralrs_router_from_state(
+    mistralrs: SharedMistralState,
     include_swagger_routes: bool,
     base_path: Option<&str>,
 ) -> Result<Router> {
     initialize_logging();
-
-    let mistralrs = bootstrap_mistralrs(args).await?;
 
     // if args.interactive_mode {
     //     interactive_mode(mistralrs, args.throughput_log, args.interactive_search).await;
