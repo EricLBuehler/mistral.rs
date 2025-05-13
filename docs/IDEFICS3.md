@@ -14,11 +14,14 @@ The Rust API takes an image from the [image](https://docs.rs/image/latest/image/
 > Note: When using device mapping or model topology, only the text model and its layers will be managed. This is because it contains most of the model parameters. Check the Hugging Face text model config for more information or raise an issue.
 
 ## ToC
-- [Interactive mode](#interactive-mode)
-- [HTTP server](#http-server)
-- [Rust API](#rust)
-- [Python API](#python)
-- [UQFF models](#uqff-models)
+- [Idefics 3 Vision: `HuggingFaceM4/Idefics3-8B-Llama3`](#idefics-3-vision-huggingfacem4idefics3-8b-llama3)
+  - [ToC](#toc)
+  - [Using the 🤗 Smol VLM models](#using-the--smol-vlm-models)
+  - [Interactive mode](#interactive-mode)
+  - [HTTP server](#http-server)
+  - [Rust](#rust)
+  - [Python](#python)
+  - [UQFF models](#uqff-models)
 
 ## Using the [🤗 Smol VLM](HuggingFaceTB/SmolVLM-Instruct) models
 
@@ -34,7 +37,7 @@ Mistral.rs supports interactive mode for vision models! It is an easy way to int
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --features ... --release -- -i --isq Q4K vision-plain -m HuggingFaceM4/Idefics3-8B-Llama3 -a idefics3
+cargo run --features ... --release -- -i --isq Q4K vision-plain -m HuggingFaceM4/Idefics3-8B-Llama3
 ```
 
 2) Ask a question
@@ -106,7 +109,7 @@ On closer inspection near one side of this grandeur scene stands tall trees with
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m HuggingFaceM4/Idefics3-8B-Llama3 -a idefics3
+cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m HuggingFaceM4/Idefics3-8B-Llama3
 ```
 
 2) Send a request

@@ -46,7 +46,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - 🦙🦙🦙🦙 Run the **Llama 4** Models with long context length and vision support: [documentation](docs/LLAMA4.md)
 
     ```
-    ./mistralrs-server -i --isq q4k vision-plain -m meta-llama/Llama-4-Scout-17B-16E-Instruct -a llama4
+    ./mistralrs-server -i --isq q4k vision-plain -m meta-llama/Llama-4-Scout-17B-16E-Instruct
     ```
 
 - Run the **Qwen 3** hybrid reasoning models with full tool calling support: [documentation](docs/QWEN3.md)
@@ -59,13 +59,13 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - 💎💎💎 Run the entire **Gemma 3** Model family (1b, 4b, 12b, 27b) with 128k context length and vision support: [documentation](docs/GEMMA3.md)
 
     ```
-    ./mistralrs-server -i vision-plain -m google/gemma-3-4b-it -a gemma3
+    ./mistralrs-server -i vision-plain -m google/gemma-3-4b-it
     ```
 
 - Run the **Mistral 3** Model with 128k context length and strong vision support: [documentation](docs/MISTRAL3.md)
 
     ```
-    ./mistralrs-server -i --isq q4k vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 -a mistral3
+    ./mistralrs-server -i --isq q4k vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
     ```
 
 - 🐋🐋🐋 Run the **Deepseek R1/V3** model with automatic **tensor parallelism**: [documentation](docs/DEEPSEEKV3.md)
@@ -88,19 +88,19 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     <h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
 
     ```
-    ./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
+    ./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
     ```
 
 - φ⁴ 📷 Run the **Phi 4 Multimodal** model: [documentation and guide here](docs/PHI4MM.md)
 
     ```
-    ./mistralrs-server -i vision-plain -m microsoft/Phi-4-multimodal-instruct -a phi4mm
+    ./mistralrs-server -i vision-plain -m microsoft/Phi-4-multimodal-instruct
     ```
 
 - φ⁴ Run the new **Phi 4/Phi 4 Mini** models with 128K context window
 
     ```
-    ./mistralrs-server -i plain -m microsoft/Phi-4-mini-instruct -a phi3
+    ./mistralrs-server -i plain -m microsoft/Phi-4-mini-instruct
     ```
 
 - 🧮 Enhance ISQ by collecting an imatrix from calibration data: [documentation](docs/IMATRIX.md)
@@ -357,7 +357,7 @@ Mistral.rs can automatically download models from HF Hub. To access gated models
 This is passed in the following ways:
 - Command line:
 ```bash
-./mistralrs-server --token-source none -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
+./mistralrs-server --token-source none -i plain -m microsoft/Phi-3-mini-128k-instruct
 ```
 - Python:
 
@@ -369,7 +369,7 @@ If token cannot be loaded, no token will be used (i.e. effectively using `none`)
 
 You can also instruct mistral.rs to load models fully locally by modifying the `*_model_id` arguments or options:
 ```bash
-./mistralrs-server --port 1234 plain -m . -a mistral
+./mistralrs-server --port 1234 plain -m .
 ```
 
 Throughout mistral.rs, any model ID argument or option may be a local path and should contain the following files for each model ID option:
@@ -507,13 +507,13 @@ If you do not specify the architecture, an attempt will be made to use the model
 You can launch interactive mode, a simple chat application running in the terminal, by passing `-i`:
 
 ```bash
-./mistralrs-server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
+./mistralrs-server -i plain -m microsoft/Phi-3-mini-128k-instruct
 ```
 
 Vision models work too:
 
 ```bash
-./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
+./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
 ```
 
 And even diffusion models:
@@ -534,7 +534,7 @@ cargo build --release --features metal
 You can an HTTP server
 
 ```bash
-./mistralrs-server --port 1234 plain -m microsoft/Phi-3.5-MoE-instruct -a phi3.5moe
+./mistralrs-server --port 1234 plain -m microsoft/Phi-3.5-MoE-instruct
 ```
 
 ### Structured selection with a `.toml` file

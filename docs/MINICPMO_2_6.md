@@ -15,10 +15,12 @@ The Python and HTTP APIs support sending images as:
 The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
 ## ToC
-- [Interactive mode](#interactive-mode)
-- [HTTP server](#http-server)
-- [Rust API](#rust)
-- [Python API](#python)
+- [MiniCPM-O 2.6 Model: `openbmb/MiniCPM-o-2_6`](#minicpm-o-26-model-openbmbminicpm-o-2_6)
+  - [ToC](#toc)
+  - [Interactive mode](#interactive-mode)
+  - [HTTP server](#http-server)
+  - [Rust](#rust)
+  - [Python](#python)
 
 ## Interactive mode
 
@@ -30,7 +32,7 @@ Mistral.rs supports interactive mode for vision models! It is an easy way to int
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --features ... --release -- -i --isq Q4K vision-plain -m openbmb/MiniCPM-o-2_6 -a minicpmo
+cargo run --features ... --release -- -i --isq Q4K vision-plain -m openbmb/MiniCPM-o-2_6
 ```
 
 2) Say hello!
@@ -92,7 +94,7 @@ Overall, the image showcases the diverse geological and ecological features of M
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m openbmb/MiniCPM-o-2_6 -a minicpmo
+cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m openbmb/MiniCPM-o-2_6
 ```
 
 2) Send a request
