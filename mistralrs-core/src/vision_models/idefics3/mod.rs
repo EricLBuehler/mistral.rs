@@ -6,10 +6,10 @@ mod vision;
 
 use std::any::Any;
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 pub use config::Idefics3Config;
 pub use inputs_processor::Idefics3Processor;
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 use vision::{Idefics3Connector, Idefics3VisionTransformer};
 
 use crate::{
@@ -77,38 +77,23 @@ impl Idefics3Model {
         input_embeds: &Tensor,
         image_hidden_states: &Tensor,
     ) -> Result<Tensor> {
-        // Docs copied from Transformers impl
-        /*
-        This method aims at merging the token embeddings with the image hidden states into one single sequence of vectors that are fed to the transformer LM.
-        The merging happens as follows:
-        - The text token sequence is: `tok_1 tok_2 tok_3 <fake_token_around_image> <image> <image> ... <image> <fake_token_around_image> tok_4`.
-        - We get the image hidden states for the image through the vision encoder (and potentially the perceiver), and that hidden state is then projected into the text embedding space.
-        We thus have a sequence of image hidden states of size (1, image_seq_len, hidden_dim), where 1 is for batch_size of 1 image and hidden_dim is the hidden_dim of the LM transformer.
-        - The merging happens so that we obtain the following sequence: `vector_tok_1 vector_tok_2 vector_tok_3 vector_fake_tok_around_image {sequence of image_seq_len image hidden states} vector_fake_toke_around_image vector_tok_4`. That sequence is fed to the LM.
-        - To fit the format of that sequence, `input_ids`, `input_embeds`, `attention_mask` are all 3 adapted to insert the image hidden states.
-        */
-        let (_, _, vision_hidden_size) = image_hidden_states.dims3()?;
-        let bs = input_ids.dim(0)?;
-        let special_image_token_mask = input_ids.eq(self.config.image_token_id as f64)?;
-        let mut new_inputs_embeds = input_embeds.clone();
-        let reshaped_image_hidden_states =
-            image_hidden_states.reshape((bs, (), vision_hidden_size))?;
-        assert_eq!(input_embeds.dim(0)?, 1);
-        assert_eq!(reshaped_image_hidden_states.dim(0)?, 1);
-        let special_image_token_mask = special_image_token_mask.i(0)?.to_vec1::<u8>()?;
-        let mut image_hidden_state_i = 0;
-        for (i, v) in special_image_token_mask.iter().enumerate() {
-            if *v != 0 {
-                new_inputs_embeds = new_inputs_embeds.slice_assign(
-                    &[&.., &i, &..],
-                    &reshaped_image_hidden_states
-                        .i((.., image_hidden_state_i, ..))?
-                        .unsqueeze(1)?,
-                )?;
-                image_hidden_state_i += 1;
-            }
-        }
-        Ok(new_inputs_embeds)
+        let special_image_mask = input_ids
+            .eq(self.config.image_token_id as f64)?
+            .unsqueeze(D::Minus1)?
+            .broadcast_as(input_embeds.shape())?
+            .to_dtype(DType::U32)?;
+
+        let mask_flat = special_image_mask.flatten_all()?;
+        let indices = mask_flat.nonzero()?.squeeze(1)?;
+
+        let mut x_flat = input_embeds.flatten_all()?;
+        let src_flat = image_hidden_states.flatten_all()?;
+
+        let current_vals = x_flat.gather(&indices, 0)?;
+        let diff = (src_flat - current_vals)?;
+        x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
+
+        return x_flat.reshape(input_embeds.shape());
     }
 
     #[allow(clippy::too_many_arguments)]
