@@ -1419,7 +1419,7 @@ pub struct Gemma3RotaryEmbedding(RotaryEmbedding);
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Gemmma3ScaledRopeType {
+pub enum Gemma3ScaledRopeType {
     #[serde(alias = "linear")]
     Linear,
 }
@@ -1427,7 +1427,7 @@ pub enum Gemmma3ScaledRopeType {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Gemma3RopeScalingConfig {
     factor: f64,
-    rope_type: Gemmma3ScaledRopeType,
+    rope_type: Gemma3ScaledRopeType,
 }
 
 impl Gemma3RotaryEmbedding {
@@ -1470,7 +1470,7 @@ impl Gemma3RotaryEmbedding {
     ) -> Result<Self> {
         match &cfg.rope_scaling {
             Some(Gemma3RopeScalingConfig {
-                rope_type: Gemmma3ScaledRopeType::Linear,
+                rope_type: Gemma3ScaledRopeType::Linear,
                 factor,
             }) => Self::new_linear(cfg, *factor, is_gpt_neox, dtype, dev),
 
