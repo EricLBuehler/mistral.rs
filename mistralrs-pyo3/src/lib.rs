@@ -408,7 +408,7 @@ fn parse_which(
             Some(model_id),
             jinja_explicit,
         )
-        .build(arch.into()),
+        .build(arch.map(Into::into)),
         Which::DiffusionPlain {
             model_id,
             arch,

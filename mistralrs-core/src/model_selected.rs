@@ -472,7 +472,7 @@ pub enum ModelSelected {
 
         /// The architecture of the model.
         #[arg(short, long, value_parser = parse_vision_arch)]
-        arch: VisionLoaderType,
+        arch: Option<VisionLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]

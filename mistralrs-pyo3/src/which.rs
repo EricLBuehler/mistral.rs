@@ -397,7 +397,7 @@ pub enum Which {
 
     #[pyo3(constructor = (
         model_id,
-        arch,
+        arch = None,
         tokenizer_json = None,
         topology = None,
         write_uqff = None,
@@ -411,7 +411,7 @@ pub enum Which {
     ))]
     VisionPlain {
         model_id: String,
-        arch: VisionArchitecture,
+        arch: Option<VisionArchitecture>,
         tokenizer_json: Option<String>,
         topology: Option<String>,
         write_uqff: Option<PathBuf>,

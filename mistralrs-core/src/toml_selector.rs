@@ -394,7 +394,7 @@ pub enum TomlModelSelected {
         model_id: String,
 
         /// The architecture of the model.
-        arch: VisionLoaderType,
+        arch: Option<VisionLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[serde(default = "default_dtype")]

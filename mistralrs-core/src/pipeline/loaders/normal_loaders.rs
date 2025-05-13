@@ -170,7 +170,6 @@ pub enum NormalLoaderType {
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
-
 impl NormalLoaderType {
     pub fn from_causal_lm_name(name: &str) -> Result<Self> {
         match name {
@@ -250,16 +249,16 @@ macro_rules! bias_if {
 }
 
 /// Load a model based on the Hugging Face Transformers -CausalLM model class
-pub struct AutoLoader;
+pub struct AutoNormalLoader;
 
 #[derive(Deserialize)]
-struct AutoLoaderConfig {
+struct AutoNormalLoaderConfig {
     architectures: Vec<String>,
 }
 
-impl AutoLoader {
+impl AutoNormalLoader {
     fn get_loader(config: &str) -> Result<Box<dyn NormalModelLoader>> {
-        let auto_cfg: AutoLoaderConfig = serde_json::from_str(config)?;
+        let auto_cfg: AutoNormalLoaderConfig = serde_json::from_str(config)?;
         if auto_cfg.architectures.len() != 1 {
             anyhow::bail!("Expected to have one name for `architectures` config field.")
         }
@@ -289,7 +288,7 @@ impl AutoLoader {
     }
 }
 
-impl NormalModelLoader for AutoLoader {
+impl NormalModelLoader for AutoNormalLoader {
     fn load(
         &self,
         config: &str,
@@ -330,7 +329,7 @@ impl NormalModelLoader for AutoLoader {
     }
 }
 
-impl IsqModelLoader for AutoLoader {
+impl IsqModelLoader for AutoNormalLoader {
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
         Self::get_loader(config)?.immediate_isq_predicates(config)
     }
@@ -345,7 +344,7 @@ impl IsqModelLoader for AutoLoader {
     }
 }
 
-impl DeviceMappedModelLoader for AutoLoader {
+impl DeviceMappedModelLoader for AutoNormalLoader {
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,

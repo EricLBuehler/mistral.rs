@@ -17,7 +17,7 @@ use mistralrs_quant::IsqType;
 use tokio::sync::Mutex;
 
 pub use normal_loaders::{
-    AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader, Gemma2Loader, GemmaLoader, LlamaLoader,
+    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, Gemma2Loader, GemmaLoader, LlamaLoader,
     MistralLoader, MixtralLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel,
     NormalModelLoader, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader,
     Qwen3MoELoader, Starcoder2Loader,
@@ -25,9 +25,9 @@ pub use normal_loaders::{
 
 use tracing::{info, warn};
 pub use vision_loaders::{
-    Gemma3Loader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, MiniCpmOLoader,
-    Mistral3Loader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader, Qwen2_5VLLoader, VLlama4Loader,
-    VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
+    AutoVisionLoader, Gemma3Loader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader,
+    MiniCpmOLoader, Mistral3Loader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader, Qwen2_5VLLoader,
+    VLlama4Loader, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
 };
 
 pub use diffusion_loaders::{

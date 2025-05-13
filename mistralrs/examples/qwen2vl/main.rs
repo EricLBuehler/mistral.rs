@@ -1,11 +1,11 @@
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 const MODEL_ID: &str = "Qwen/Qwen2-VL-2B-Instruct";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new(MODEL_ID, VisionLoaderType::Qwen2VL)
+    let model = VisionModelBuilder::new(MODEL_ID)
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()
