@@ -755,8 +755,6 @@ impl PackedExperts {
                 world_size: comm.world_size(),
             };
 
-            let base_vb = vb.clone();
-
             let vb_gate_up_proj = if should_apply_immediate_isq(&vb) {
                 vb.pp("gate_up_proj").set_device(Device::Cpu)
             } else {
@@ -768,7 +766,7 @@ impl PackedExperts {
                 vb.pp("down_proj")
             };
 
-            let gate_proj = vb_gate_up_proj
+            let gate_proj = vb
                 .get_with_hints(
                     (num_local_experts, hidden_size, intermediate_size * 2),
                     "gate_up_proj",
@@ -776,7 +774,7 @@ impl PackedExperts {
                 )?
                 .t()?
                 .contiguous()?;
-            let up_proj = vb_gate_up_proj
+            let up_proj = vb
                 .get_with_hints(
                     (num_local_experts, hidden_size, intermediate_size * 2),
                     "gate_up_proj",
@@ -784,7 +782,7 @@ impl PackedExperts {
                 )?
                 .t()?
                 .contiguous()?;
-            let down_proj = vb_down_proj
+            let down_proj = vb
                 .get_with_hints(
                     (num_local_experts, intermediate_size, hidden_size),
                     "down_proj",
@@ -823,17 +821,17 @@ impl PackedExperts {
                     Arc::new(<UnquantLinear as QuantMethod>::new(
                         QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
                     )?);
-                gate_proj = apply_immediate_isq(gate_proj, base_vb.pp("gate_up_proj"))?;
+                gate_proj = apply_immediate_isq(gate_proj, vb_gate_up_proj.clone())?;
                 let mut up_proj: Arc<dyn QuantMethod> =
                     Arc::new(<UnquantLinear as QuantMethod>::new(
                         QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
                     )?);
-                up_proj = apply_immediate_isq(up_proj, base_vb.pp("gate_up_proj"))?;
+                up_proj = apply_immediate_isq(up_proj, vb_gate_up_proj.clone())?;
                 let mut down_proj: Arc<dyn QuantMethod> =
                     Arc::new(<UnquantLinear as QuantMethod>::new(
                         QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
                     )?);
-                down_proj = apply_immediate_isq(down_proj, base_vb.pp("down_proj"))?;
+                down_proj = apply_immediate_isq(down_proj, vb_down_proj.clone())?;
                 gs.push(gate_proj);
                 us.push(up_proj);
                 ds.push(down_proj);
