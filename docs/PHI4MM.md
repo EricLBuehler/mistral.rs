@@ -100,12 +100,12 @@ This is a minimal example of running the Phi 4 Multimodal model with a dummy ima
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model =
-        VisionModelBuilder::new("microsoft/Phi-4-multimodal-instruct", VisionLoaderType::Phi4MM)
+        VisionModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()

@@ -157,13 +157,13 @@ You can find this example [here](../mistralrs/examples/idefics3/main.rs).
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 const MODEL_ID: &str = "HuggingFaceM4/Idefics3-8B-Llama3";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new(MODEL_ID, VisionLoaderType::Idefics3)
+    let model = VisionModelBuilder::new(MODEL_ID)
         .with_isq(IsqType::Q8_0)
         .with_logging()
         .build()

@@ -107,13 +107,12 @@ This is a minimal example of running the LLaVA and LLaVANext model with a dummy 
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = VisionModelBuilder::new(
         "llava-hf/llava-v1.6-mistral-7b-hf",
-        VisionLoaderType::LLaVANext,
     )
     .with_isq(IsqType::Q4K)
     .with_logging()

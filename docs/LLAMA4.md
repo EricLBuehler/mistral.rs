@@ -122,13 +122,12 @@ This is a minimal example of running the Llama 4 model with a dummy image.
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = VisionModelBuilder::new(
         "meta-llama/Llama-4-Scout-17B-16E-Instruct",
-        VisionLoaderType::Llama4,
     )
     .with_isq(IsqType::Q4K)
     .with_logging()

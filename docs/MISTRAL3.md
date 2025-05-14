@@ -113,12 +113,12 @@ This is a minimal example of running the Mistral 3 model with a dummy image.
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model =
-        VisionModelBuilder::new("mistralai/Mistral-Small-3.1-24B-Instruct-2503", VisionLoaderType::Mistral3)
+        VisionModelBuilder::new("mistralai/Mistral-Small-3.1-24B-Instruct-2503")
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()

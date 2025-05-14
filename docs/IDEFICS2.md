@@ -97,13 +97,12 @@ This is a minimal example of running the Idefics 2 model with a dummy image.
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = VisionModelBuilder::new(
         "HuggingFaceM4/idefics2-8b-chatty",
-        VisionLoaderType::Idefics2,
     )
     .with_isq(IsqType::Q4K)
     .with_logging()

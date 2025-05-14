@@ -102,12 +102,12 @@ This is a minimal example of running the Phi 3 Vision model with a dummy image.
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model =
-        VisionModelBuilder::new("microsoft/Phi-3.5-vision-instruct", VisionLoaderType::Phi3V)
+        VisionModelBuilder::new("microsoft/Phi-3.5-vision-instruct")
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
