@@ -8,7 +8,6 @@ use std::{
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
-    layers::{Activation, Llama3RopeConfig, PhiRopeScalingConfig},
     lora::{LoraConfig, Ordering},
     paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata},
     pipeline::{
@@ -16,15 +15,15 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel,
     },
-    serde_default_fn,
-    utils::{log::once_log_info, varbuilder_utils::DeviceForLoadTensor},
+    utils::varbuilder_utils::DeviceForLoadTensor,
     xlora_models::NonGranularState,
 };
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
+use mistralrs_quant::log::once_log_info;
 
 use indicatif::MultiProgress;
-use mistralrs_quant::{QuantizedConfig, ShardedVarBuilder};
+use mistralrs_quant::ShardedVarBuilder;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -87,7 +86,6 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -96,7 +94,6 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -108,7 +105,7 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
     fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>>;
     fn get_device_for_tensor(
         &self,
         config: &str,
@@ -173,7 +170,6 @@ pub enum NormalLoaderType {
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
-
 impl NormalLoaderType {
     pub fn from_causal_lm_name(name: &str) -> Result<Self> {
         match name {
@@ -192,7 +188,7 @@ impl NormalLoaderType {
             "Qwen3ForCausalLM" => Ok(Self::Qwen3),
             "Qwen3MoeForCausalLM" => Ok(Self::Qwen3Moe),
             other => anyhow::bail!(
-                "Unsupported Huggging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
+                "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
         }
     }
@@ -252,17 +248,17 @@ macro_rules! bias_if {
     };
 }
 
-/// Load a model based on the Huggging Face Transformers -CausalLM model class
-pub struct AutoLoader;
+/// Load a model based on the Hugging Face Transformers -CausalLM model class
+pub struct AutoNormalLoader;
 
 #[derive(Deserialize)]
-struct AutoLoaderConfig {
+struct AutoNormalLoaderConfig {
     architectures: Vec<String>,
 }
 
-impl AutoLoader {
+impl AutoNormalLoader {
     fn get_loader(config: &str) -> Result<Box<dyn NormalModelLoader>> {
-        let auto_cfg: AutoLoaderConfig = serde_json::from_str(config)?;
+        let auto_cfg: AutoNormalLoaderConfig = serde_json::from_str(config)?;
         if auto_cfg.architectures.len() != 1 {
             anyhow::bail!("Expected to have one name for `architectures` config field.")
         }
@@ -292,27 +288,19 @@ impl AutoLoader {
     }
 }
 
-impl NormalModelLoader for AutoLoader {
+impl NormalModelLoader for AutoNormalLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        Self::get_loader(config)?.load(
-            config,
-            use_flash_attn,
-            vb,
-            normal_loading_metadata,
-            attention_mechanism,
-        )
+        Self::get_loader(config)?.load(config, vb, normal_loading_metadata, attention_mechanism)
     }
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -322,7 +310,6 @@ impl NormalModelLoader for AutoLoader {
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Self::get_loader(config)?.load_xlora(
             config,
-            use_flash_attn,
             vb,
             lora_config,
             xlora_config,
@@ -331,8 +318,8 @@ impl NormalModelLoader for AutoLoader {
             preload_adapters,
         )
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        Self::get_loader(config)?.get_config_repr(config, use_flash_attn)
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        Self::get_loader(config)?.get_config_repr(config)
     }
     fn supports_paged_attention(&self, config: &str) -> Result<bool> {
         Self::get_loader(config)?.supports_paged_attention(config)
@@ -342,13 +329,22 @@ impl NormalModelLoader for AutoLoader {
     }
 }
 
-impl IsqModelLoader for AutoLoader {
+impl IsqModelLoader for AutoNormalLoader {
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.immediate_isq_predicates(config)
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.immediate_isq_predicates_moqe(config)
+    }
     fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
         Self::get_loader(config)?.isq_layer_regexes(config)
     }
+    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.isq_layer_regexes_moqe(config)
+    }
 }
 
-impl DeviceMappedModelLoader for AutoLoader {
+impl DeviceMappedModelLoader for AutoNormalLoader {
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -388,51 +384,7 @@ impl DeviceMappedModelLoader for AutoLoader {
     }
 }
 
-serde_default_fn!(bool, word_emb_default, false);
-
 // ======================== Mistral loader
-
-#[derive(Deserialize, Debug)]
-struct MistralBasicConfig {
-    vocab_size: usize,
-    hidden_size: usize,
-    intermediate_size: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    num_key_value_heads: usize,
-    hidden_act: Activation,
-    max_position_embeddings: usize,
-    rms_norm_eps: f64,
-    rope_theta: f64,
-    sliding_window: Option<usize>,
-    head_dim: Option<usize>,
-    quantization_config: Option<QuantizedConfig>,
-    #[serde(default = "word_emb_default")]
-    tie_word_embeddings: bool,
-}
-
-impl MistralBasicConfig {
-    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::mistral::Config> {
-        let basic_config: Self = serde_json::from_str(slice)?;
-        Ok(models::mistral::Config {
-            vocab_size: basic_config.vocab_size,
-            hidden_size: basic_config.hidden_size,
-            intermediate_size: basic_config.intermediate_size,
-            num_hidden_layers: basic_config.num_hidden_layers,
-            num_attention_heads: basic_config.num_attention_heads,
-            num_key_value_heads: basic_config.num_key_value_heads,
-            hidden_act: basic_config.hidden_act,
-            max_position_embeddings: basic_config.max_position_embeddings,
-            rms_norm_eps: basic_config.rms_norm_eps,
-            rope_theta: basic_config.rope_theta,
-            sliding_window: basic_config.sliding_window,
-            use_flash_attn,
-            head_dim: basic_config.head_dim,
-            quantization_config: basic_config.quantization_config,
-            tie_word_embeddings: basic_config.tie_word_embeddings,
-        })
-    }
-}
 
 pub struct MistralLoader;
 
@@ -440,13 +392,13 @@ impl NormalModelLoader for MistralLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::mistral::Config = serde_json::from_str(config)?;
         Ok(Box::new(models::mistral::Model::new(
-            &MistralBasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             self.is_gptx(config)?,
             normal_loading_metadata,
@@ -456,7 +408,6 @@ impl NormalModelLoader for MistralLoader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -464,8 +415,9 @@ impl NormalModelLoader for MistralLoader {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::mistral::Config = serde_json::from_str(config)?;
         Ok(Box::new(xlora_models::XLoraMistral::new(
-            &MistralBasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             lora_config,
             xlora_config,
@@ -478,11 +430,9 @@ impl NormalModelLoader for MistralLoader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        Ok(Box::new(MistralBasicConfig::deserialize(
-            config,
-            use_flash_attn,
-        )?))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::mistral::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
     }
 }
 
@@ -501,6 +451,9 @@ impl IsqModelLoader for MistralLoader {
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
 }
 
 impl DeviceMappedModelLoader for MistralLoader {
@@ -518,7 +471,7 @@ impl DeviceMappedModelLoader for MistralLoader {
             anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
-        let cfg = MistralBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::mistral::Config = serde_json::from_str(config)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
@@ -536,7 +489,8 @@ impl DeviceMappedModelLoader for MistralLoader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<usize> {
-        let cfg = MistralBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::mistral::Config = serde_json::from_str(config)?;
+
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
@@ -556,7 +510,8 @@ impl DeviceMappedModelLoader for MistralLoader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
-        let cfg = MistralBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::mistral::Config = serde_json::from_str(config)?;
+
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
@@ -592,12 +547,12 @@ impl DeviceMappedModelLoader for MistralLoader {
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg = MistralBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::mistral::Config = serde_json::from_str(config)?;
         Ok(cfg.num_hidden_layers)
     }
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg = MistralBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::mistral::Config = serde_json::from_str(config)?;
 
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
@@ -616,57 +571,6 @@ impl DeviceMappedModelLoader for MistralLoader {
 
 // ======================== Gemma loader
 
-fn default_max_position_embeddings() -> usize {
-    4096
-}
-
-#[derive(Deserialize)]
-struct GemmaBasicConfig {
-    attention_bias: bool,
-    head_dim: usize,
-    // The code gemma configs include both hidden_act and hidden_activation.
-    hidden_act: Option<Activation>,
-    hidden_activation: Option<Activation>,
-    hidden_size: usize,
-    intermediate_size: usize,
-    num_attention_heads: usize,
-    num_hidden_layers: usize,
-    num_key_value_heads: usize,
-    rms_norm_eps: f64,
-    rope_theta: f64,
-    vocab_size: usize,
-
-    #[serde(default = "default_max_position_embeddings")]
-    max_position_embeddings: usize,
-    quantization_config: Option<QuantizedConfig>,
-    #[serde(default = "word_emb_default")]
-    tie_word_embeddings: bool,
-}
-
-impl GemmaBasicConfig {
-    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::gemma::Config> {
-        let basic_config: Self = serde_json::from_str(slice)?;
-        Ok(models::gemma::Config {
-            vocab_size: basic_config.vocab_size,
-            hidden_size: basic_config.hidden_size,
-            intermediate_size: basic_config.intermediate_size,
-            num_hidden_layers: basic_config.num_hidden_layers,
-            num_attention_heads: basic_config.num_attention_heads,
-            num_key_value_heads: basic_config.num_key_value_heads,
-            hidden_act: basic_config.hidden_act,
-            hidden_activation: basic_config.hidden_activation,
-            max_position_embeddings: basic_config.max_position_embeddings,
-            rms_norm_eps: basic_config.rms_norm_eps,
-            rope_theta: basic_config.rope_theta,
-            attention_bias: basic_config.attention_bias,
-            head_dim: basic_config.head_dim,
-            use_flash_attn,
-            quantization_config: basic_config.quantization_config,
-            tie_word_embeddings: basic_config.tie_word_embeddings,
-        })
-    }
-}
-
 /// [`NormalLoader`] for a Gemma model.
 ///
 /// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
@@ -676,13 +580,14 @@ impl NormalModelLoader for GemmaLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::gemma::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(models::gemma::Model::new(
-            &GemmaBasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             self.is_gptx(config)?,
             normal_loading_metadata,
@@ -692,7 +597,6 @@ impl NormalModelLoader for GemmaLoader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -700,8 +604,10 @@ impl NormalModelLoader for GemmaLoader {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::gemma::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(xlora_models::XLoraGemma::new(
-            &GemmaBasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             lora_config,
             xlora_config,
@@ -714,11 +620,9 @@ impl NormalModelLoader for GemmaLoader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        Ok(Box::new(GemmaBasicConfig::deserialize(
-            config,
-            use_flash_attn,
-        )?))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::gemma::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
     }
 }
 
@@ -737,6 +641,9 @@ impl IsqModelLoader for GemmaLoader {
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
 }
 
 impl DeviceMappedModelLoader for GemmaLoader {
@@ -754,7 +661,7 @@ impl DeviceMappedModelLoader for GemmaLoader {
             anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
-        let cfg = GemmaBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::gemma::Config = serde_json::from_str(config)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
@@ -772,7 +679,8 @@ impl DeviceMappedModelLoader for GemmaLoader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<usize> {
-        let cfg = GemmaBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::gemma::Config = serde_json::from_str(config)?;
+
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
@@ -792,7 +700,8 @@ impl DeviceMappedModelLoader for GemmaLoader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
-        let cfg = GemmaBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::gemma::Config = serde_json::from_str(config)?;
+
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
@@ -832,12 +741,12 @@ impl DeviceMappedModelLoader for GemmaLoader {
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg = GemmaBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::gemma::Config = serde_json::from_str(config)?;
         Ok(cfg.num_hidden_layers)
     }
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg = GemmaBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::gemma::Config = serde_json::from_str(config)?;
 
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
@@ -856,53 +765,6 @@ impl DeviceMappedModelLoader for GemmaLoader {
 
 // ======================== Llama loader
 
-#[derive(Deserialize)]
-struct LlamaBasicConfig {
-    hidden_act: Activation,
-    hidden_size: usize,
-    intermediate_size: usize,
-    vocab_size: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    num_key_value_heads: Option<usize>,
-    rms_norm_eps: f64,
-    #[serde(default = "default_rope")]
-    rope_theta: f32,
-    max_position_embeddings: usize,
-    rope_scaling: Option<Llama3RopeConfig>,
-    quantization_config: Option<QuantizedConfig>,
-    #[serde(default = "word_emb_default")]
-    tie_word_embeddings: bool,
-}
-
-fn default_rope() -> f32 {
-    10_000.0
-}
-
-impl LlamaBasicConfig {
-    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::llama::Config> {
-        let basic_config: Self = serde_json::from_str(slice)?;
-        Ok(models::llama::Config {
-            hidden_size: basic_config.hidden_size,
-            intermediate_size: basic_config.intermediate_size,
-            vocab_size: basic_config.vocab_size,
-            num_hidden_layers: basic_config.num_hidden_layers,
-            num_attention_heads: basic_config.num_attention_heads,
-            num_key_value_heads: basic_config
-                .num_key_value_heads
-                .unwrap_or(basic_config.num_attention_heads),
-            rms_norm_eps: basic_config.rms_norm_eps,
-            rope_theta: basic_config.rope_theta,
-            use_flash_attn,
-            max_position_embeddings: basic_config.max_position_embeddings,
-            rope_scaling: basic_config.rope_scaling,
-            quantization_config: basic_config.quantization_config,
-            tie_word_embeddings: basic_config.tie_word_embeddings,
-            hidden_act: basic_config.hidden_act,
-        })
-    }
-}
-
 /// [`NormalLoader`] for a Llama model.
 ///
 /// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
@@ -912,13 +774,14 @@ impl NormalModelLoader for LlamaLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::llama::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(models::llama::Llama::new(
-            &LlamaBasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             self.is_gptx(config)?,
             normal_loading_metadata,
@@ -928,7 +791,6 @@ impl NormalModelLoader for LlamaLoader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -936,8 +798,10 @@ impl NormalModelLoader for LlamaLoader {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::llama::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(xlora_models::XLoraLlama::new(
-            &LlamaBasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             lora_config,
             xlora_config,
@@ -950,11 +814,9 @@ impl NormalModelLoader for LlamaLoader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        Ok(Box::new(LlamaBasicConfig::deserialize(
-            config,
-            use_flash_attn,
-        )?))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::llama::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
     }
 }
 
@@ -973,6 +835,9 @@ impl IsqModelLoader for LlamaLoader {
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
 }
 
 impl DeviceMappedModelLoader for LlamaLoader {
@@ -990,7 +855,7 @@ impl DeviceMappedModelLoader for LlamaLoader {
             anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
-        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::llama::Config = serde_json::from_str(config)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
@@ -1008,7 +873,8 @@ impl DeviceMappedModelLoader for LlamaLoader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<usize> {
-        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::llama::Config = serde_json::from_str(config)?;
+
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
@@ -1028,7 +894,8 @@ impl DeviceMappedModelLoader for LlamaLoader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
-        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::llama::Config = serde_json::from_str(config)?;
+
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
@@ -1064,11 +931,12 @@ impl DeviceMappedModelLoader for LlamaLoader {
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::llama::Config = serde_json::from_str(config)?;
+
         Ok(cfg.num_hidden_layers)
     }
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::llama::Config = serde_json::from_str(config)?;
 
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
@@ -1087,63 +955,20 @@ impl DeviceMappedModelLoader for LlamaLoader {
 
 // ======================== Mixtral loader
 
-#[derive(Deserialize)]
-struct MixtralBasicConfig {
-    vocab_size: usize,
-    hidden_size: usize,
-    intermediate_size: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    num_key_value_heads: usize,
-    hidden_act: Activation,
-    max_position_embeddings: usize,
-    rms_norm_eps: f64,
-    rope_theta: f64,
-    sliding_window: Option<usize>,
-    num_experts_per_tok: usize,
-    num_local_experts: usize,
-    quantization_config: Option<QuantizedConfig>,
-    #[serde(default = "word_emb_default")]
-    tie_word_embeddings: bool,
-}
-
-impl MixtralBasicConfig {
-    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::mixtral::Config> {
-        let basic_config: Self = serde_json::from_str(slice)?;
-        Ok(models::mixtral::Config {
-            vocab_size: basic_config.vocab_size,
-            hidden_size: basic_config.hidden_size,
-            intermediate_size: basic_config.intermediate_size,
-            num_hidden_layers: basic_config.num_hidden_layers,
-            num_attention_heads: basic_config.num_attention_heads,
-            num_key_value_heads: basic_config.num_key_value_heads,
-            hidden_act: basic_config.hidden_act,
-            max_position_embeddings: basic_config.max_position_embeddings,
-            rms_norm_eps: basic_config.rms_norm_eps,
-            rope_theta: basic_config.rope_theta,
-            sliding_window: basic_config.sliding_window,
-            use_flash_attn,
-            num_experts_per_tok: basic_config.num_experts_per_tok,
-            num_local_experts: basic_config.num_local_experts,
-            quantization_config: basic_config.quantization_config,
-            tie_word_embeddings: basic_config.tie_word_embeddings,
-        })
-    }
-}
-
 pub struct MixtralLoader;
 
 impl NormalModelLoader for MixtralLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(models::mixtral::Model::new(
-            &MixtralBasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             self.is_gptx(config)?,
             normal_loading_metadata,
@@ -1153,7 +978,6 @@ impl NormalModelLoader for MixtralLoader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -1161,8 +985,10 @@ impl NormalModelLoader for MixtralLoader {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(xlora_models::XLoraMixtral::new(
-            &MixtralBasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             lora_config,
             xlora_config,
@@ -1175,11 +1001,10 @@ impl NormalModelLoader for MixtralLoader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        Ok(Box::new(MixtralBasicConfig::deserialize(
-            config,
-            use_flash_attn,
-        )?))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
+
+        Ok(Box::new(cfg))
     }
 }
 
@@ -1199,6 +1024,9 @@ impl IsqModelLoader for MixtralLoader {
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$")?,
         ])
     }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
 }
 
 impl DeviceMappedModelLoader for MixtralLoader {
@@ -1216,7 +1044,7 @@ impl DeviceMappedModelLoader for MixtralLoader {
             anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
-        let cfg = MixtralBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
@@ -1234,7 +1062,8 @@ impl DeviceMappedModelLoader for MixtralLoader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<usize> {
-        let cfg = MixtralBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
+
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
@@ -1254,7 +1083,8 @@ impl DeviceMappedModelLoader for MixtralLoader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
-        let cfg = MixtralBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
+
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
@@ -1293,12 +1123,13 @@ impl DeviceMappedModelLoader for MixtralLoader {
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg = MixtralBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
+
         Ok(cfg.num_hidden_layers)
     }
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg = MixtralBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
 
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
@@ -1317,48 +1148,6 @@ impl DeviceMappedModelLoader for MixtralLoader {
 
 // ======================== Phi2 loader
 
-#[derive(Deserialize)]
-struct Phi2BasicConfig {
-    vocab_size: usize,
-    hidden_size: usize,
-    intermediate_size: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    num_key_value_heads: Option<usize>,
-    hidden_act: Activation,
-    max_position_embeddings: usize,
-    layer_norm_eps: f64,
-    rope_theta: f32,
-    partial_rotary_factor: f64,
-    qk_layernorm: bool,
-    quantization_config: Option<QuantizedConfig>,
-    #[serde(default = "word_emb_default")]
-    tie_word_embeddings: bool,
-}
-
-impl Phi2BasicConfig {
-    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::phi2::Config> {
-        let basic_config: Self = serde_json::from_str(slice)?;
-        Ok(models::phi2::Config {
-            vocab_size: basic_config.vocab_size,
-            hidden_size: basic_config.hidden_size,
-            intermediate_size: basic_config.intermediate_size,
-            num_hidden_layers: basic_config.num_hidden_layers,
-            num_attention_heads: basic_config.num_attention_heads,
-            num_key_value_heads: basic_config.num_key_value_heads,
-            hidden_act: basic_config.hidden_act,
-            max_position_embeddings: basic_config.max_position_embeddings,
-            rope_theta: basic_config.rope_theta,
-            layer_norm_eps: basic_config.layer_norm_eps,
-            partial_rotary_factor: basic_config.partial_rotary_factor,
-            qk_layernorm: basic_config.qk_layernorm,
-            use_flash_attn,
-            quantization_config: basic_config.quantization_config,
-            tie_word_embeddings: basic_config.tie_word_embeddings,
-        })
-    }
-}
-
 /// [`NormalLoader`] for a Phi 2 model.
 ///
 /// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
@@ -1368,13 +1157,14 @@ impl NormalModelLoader for Phi2Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::phi2::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(models::phi2::Model::new(
-            &Phi2BasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             self.is_gptx(config)?,
             normal_loading_metadata,
@@ -1384,7 +1174,6 @@ impl NormalModelLoader for Phi2Loader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -1392,8 +1181,10 @@ impl NormalModelLoader for Phi2Loader {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::phi2::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(xlora_models::XLoraPhi2::new(
-            &Phi2BasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             lora_config,
             xlora_config,
@@ -1406,11 +1197,10 @@ impl NormalModelLoader for Phi2Loader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        Ok(Box::new(Phi2BasicConfig::deserialize(
-            config,
-            use_flash_attn,
-        )?))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::phi2::Config = serde_json::from_str(config)?;
+
+        Ok(Box::new(cfg))
     }
 }
 
@@ -1427,6 +1217,9 @@ impl IsqModelLoader for Phi2Loader {
             Regex::new(r"layers\.(\d+)\.mlp\.fc1\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.fc2\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -1445,7 +1238,7 @@ impl DeviceMappedModelLoader for Phi2Loader {
             anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
-        let cfg = Phi2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::phi2::Config = serde_json::from_str(config)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
@@ -1463,7 +1256,8 @@ impl DeviceMappedModelLoader for Phi2Loader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<usize> {
-        let cfg = Phi2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::phi2::Config = serde_json::from_str(config)?;
+
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
@@ -1483,7 +1277,8 @@ impl DeviceMappedModelLoader for Phi2Loader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
-        let cfg = Phi2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::phi2::Config = serde_json::from_str(config)?;
+
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size + cfg.hidden_size;
 
@@ -1514,12 +1309,13 @@ impl DeviceMappedModelLoader for Phi2Loader {
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg = Phi2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::phi2::Config = serde_json::from_str(config)?;
+
         Ok(cfg.num_hidden_layers)
     }
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg = Phi2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::phi2::Config = serde_json::from_str(config)?;
 
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
@@ -1538,56 +1334,6 @@ impl DeviceMappedModelLoader for Phi2Loader {
 
 // ======================== Phi3 loader
 
-#[derive(Deserialize)]
-struct Phi3BasicConfig {
-    vocab_size: usize,
-    hidden_act: Activation,
-    hidden_size: usize,
-    intermediate_size: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    num_key_value_heads: usize,
-    rms_norm_eps: f64,
-    rope_theta: f64,
-    bos_token_id: Option<u32>,
-    eos_token_id: Option<u32>,
-    rope_scaling: Option<PhiRopeScalingConfig>,
-    max_position_embeddings: usize,
-    original_max_position_embeddings: usize,
-    sliding_window: Option<usize>,
-    quantization_config: Option<QuantizedConfig>,
-    #[serde(default = "word_emb_default")]
-    tie_word_embeddings: bool,
-    partial_rotary_factor: Option<f64>,
-}
-
-impl Phi3BasicConfig {
-    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::phi3::Config> {
-        let basic_config: Self = serde_json::from_str(slice)?;
-        Ok(models::phi3::Config {
-            vocab_size: basic_config.vocab_size,
-            hidden_size: basic_config.hidden_size,
-            intermediate_size: basic_config.intermediate_size,
-            num_hidden_layers: basic_config.num_hidden_layers,
-            num_attention_heads: basic_config.num_attention_heads,
-            num_key_value_heads: basic_config.num_key_value_heads,
-            hidden_act: basic_config.hidden_act,
-            max_position_embeddings: basic_config.max_position_embeddings,
-            rope_theta: basic_config.rope_theta,
-            rms_norm_eps: basic_config.rms_norm_eps,
-            eos_token_id: basic_config.eos_token_id,
-            bos_token_id: basic_config.bos_token_id,
-            rope_scaling: basic_config.rope_scaling,
-            original_max_position_embeddings: basic_config.original_max_position_embeddings,
-            use_flash_attn,
-            sliding_window: basic_config.sliding_window,
-            quantization_config: basic_config.quantization_config,
-            tie_word_embeddings: basic_config.tie_word_embeddings,
-            partial_rotary_factor: basic_config.partial_rotary_factor,
-        })
-    }
-}
-
 /// [`NormalLoader`] for a Phi 3 model.
 ///
 /// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
@@ -1597,13 +1343,14 @@ impl NormalModelLoader for Phi3Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::phi3::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(models::phi3::Model::new(
-            &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             self.is_gptx(config)?,
             normal_loading_metadata,
@@ -1613,7 +1360,6 @@ impl NormalModelLoader for Phi3Loader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -1621,8 +1367,10 @@ impl NormalModelLoader for Phi3Loader {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::phi3::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(xlora_models::XLoraPhi3::new(
-            &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             lora_config,
             xlora_config,
@@ -1635,11 +1383,10 @@ impl NormalModelLoader for Phi3Loader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        Ok(Box::new(Phi3BasicConfig::deserialize(
-            config,
-            use_flash_attn,
-        )?))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::phi3::Config = serde_json::from_str(config)?;
+
+        Ok(Box::new(cfg))
     }
 }
 
@@ -1655,6 +1402,9 @@ impl IsqModelLoader for Phi3Loader {
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -1673,7 +1423,7 @@ impl DeviceMappedModelLoader for Phi3Loader {
             anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
-        let cfg = Phi3BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::phi3::Config = serde_json::from_str(config)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
@@ -1691,7 +1441,8 @@ impl DeviceMappedModelLoader for Phi3Loader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<usize> {
-        let cfg = Phi3BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::phi3::Config = serde_json::from_str(config)?;
+
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
@@ -1711,7 +1462,8 @@ impl DeviceMappedModelLoader for Phi3Loader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
-        let cfg = Phi3BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::phi3::Config = serde_json::from_str(config)?;
+
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
@@ -1742,12 +1494,13 @@ impl DeviceMappedModelLoader for Phi3Loader {
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg = Phi3BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::phi3::Config = serde_json::from_str(config)?;
+
         Ok(cfg.num_hidden_layers)
     }
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg = Phi3BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::phi3::Config = serde_json::from_str(config)?;
 
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
@@ -1766,45 +1519,6 @@ impl DeviceMappedModelLoader for Phi3Loader {
 
 // ======================== Qwen2 loader
 
-#[derive(Deserialize)]
-struct Qwen2BasicConfig {
-    vocab_size: usize,
-    hidden_size: usize,
-    intermediate_size: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    num_key_value_heads: usize,
-    max_position_embeddings: usize,
-    sliding_window: Option<usize>,
-    rope_theta: f64,
-    rms_norm_eps: f64,
-    hidden_act: Activation,
-    quantization_config: Option<QuantizedConfig>,
-    tie_word_embeddings: bool,
-}
-
-impl Qwen2BasicConfig {
-    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::qwen2::Config> {
-        let basic_config: Self = serde_json::from_str(slice)?;
-        Ok(models::qwen2::Config {
-            vocab_size: basic_config.vocab_size,
-            hidden_size: basic_config.hidden_size,
-            intermediate_size: basic_config.intermediate_size,
-            num_hidden_layers: basic_config.num_hidden_layers,
-            num_attention_heads: basic_config.num_attention_heads,
-            num_key_value_heads: basic_config.num_key_value_heads,
-            hidden_act: basic_config.hidden_act,
-            max_position_embeddings: basic_config.max_position_embeddings,
-            rope_theta: basic_config.rope_theta,
-            rms_norm_eps: basic_config.rms_norm_eps,
-            sliding_window: basic_config.sliding_window,
-            use_flash_attn,
-            quantization_config: basic_config.quantization_config,
-            tie_word_embeddings: basic_config.tie_word_embeddings,
-        })
-    }
-}
-
 /// [`NormalLoader`] for a Qwen 2 model.
 ///
 /// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
@@ -1814,13 +1528,14 @@ impl NormalModelLoader for Qwen2Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::qwen2::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(models::qwen2::Model::new(
-            &Qwen2BasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             self.is_gptx(config)?,
             normal_loading_metadata,
@@ -1830,7 +1545,6 @@ impl NormalModelLoader for Qwen2Loader {
     fn load_xlora(
         &self,
         _config: &str,
-        _use_flash_attn: bool,
         _vb: ShardedVarBuilder,
         _lora_config: &[((String, String), LoraConfig)],
         _xlora_config: Option<XLoraConfig>,
@@ -1843,11 +1557,10 @@ impl NormalModelLoader for Qwen2Loader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        Ok(Box::new(Qwen2BasicConfig::deserialize(
-            config,
-            use_flash_attn,
-        )?))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::qwen2::Config = serde_json::from_str(config)?;
+
+        Ok(Box::new(cfg))
     }
 }
 
@@ -1859,12 +1572,15 @@ impl IsqModelLoader for Qwen2Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -1883,7 +1599,7 @@ impl DeviceMappedModelLoader for Qwen2Loader {
             anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
-        let cfg = Qwen2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::qwen2::Config = serde_json::from_str(config)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
@@ -1901,7 +1617,8 @@ impl DeviceMappedModelLoader for Qwen2Loader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<usize> {
-        let cfg = Qwen2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::qwen2::Config = serde_json::from_str(config)?;
+
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
@@ -1921,7 +1638,8 @@ impl DeviceMappedModelLoader for Qwen2Loader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
-        let cfg = Qwen2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::qwen2::Config = serde_json::from_str(config)?;
+
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
@@ -1957,12 +1675,13 @@ impl DeviceMappedModelLoader for Qwen2Loader {
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg = Qwen2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::qwen2::Config = serde_json::from_str(config)?;
+
         Ok(cfg.num_hidden_layers)
     }
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg = Qwen2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::qwen2::Config = serde_json::from_str(config)?;
 
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
@@ -1981,61 +1700,6 @@ impl DeviceMappedModelLoader for Qwen2Loader {
 
 // ======================== Gemma2 loader
 
-#[derive(Deserialize)]
-struct Gemma2BasicConfig {
-    attention_bias: bool,
-    head_dim: usize,
-    // The code gemma configs include both hidden_act and hidden_activation.
-    hidden_act: Option<Activation>,
-    hidden_activation: Option<Activation>,
-    hidden_size: usize,
-    intermediate_size: usize,
-    num_attention_heads: usize,
-    num_hidden_layers: usize,
-    num_key_value_heads: usize,
-    rms_norm_eps: f64,
-    rope_theta: f64,
-    vocab_size: usize,
-    sliding_window: usize,
-    attn_logit_softcapping: Option<f64>,
-    final_logit_softcapping: Option<f64>,
-    query_pre_attn_scalar: usize,
-
-    #[serde(default = "default_max_position_embeddings")]
-    max_position_embeddings: usize,
-    quantization_config: Option<QuantizedConfig>,
-    #[serde(default = "word_emb_default")]
-    tie_word_embeddings: bool,
-}
-
-impl Gemma2BasicConfig {
-    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::gemma2::Config> {
-        let basic_config: Self = serde_json::from_str(slice)?;
-        Ok(models::gemma2::Config {
-            vocab_size: basic_config.vocab_size,
-            hidden_size: basic_config.hidden_size,
-            intermediate_size: basic_config.intermediate_size,
-            num_hidden_layers: basic_config.num_hidden_layers,
-            num_attention_heads: basic_config.num_attention_heads,
-            num_key_value_heads: basic_config.num_key_value_heads,
-            hidden_act: basic_config.hidden_act,
-            hidden_activation: basic_config.hidden_activation,
-            max_position_embeddings: basic_config.max_position_embeddings,
-            rms_norm_eps: basic_config.rms_norm_eps,
-            rope_theta: basic_config.rope_theta,
-            attention_bias: basic_config.attention_bias,
-            head_dim: basic_config.head_dim,
-            use_flash_attn,
-            quantization_config: basic_config.quantization_config,
-            sliding_window: basic_config.sliding_window,
-            attn_logit_softcapping: basic_config.attn_logit_softcapping,
-            final_logit_softcapping: basic_config.final_logit_softcapping,
-            query_pre_attn_scalar: basic_config.query_pre_attn_scalar,
-            tie_word_embeddings: basic_config.tie_word_embeddings,
-        })
-    }
-}
-
 /// [`NormalLoader`] for a Gemma2 model.
 ///
 /// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
@@ -2045,13 +1709,14 @@ impl NormalModelLoader for Gemma2Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::gemma2::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(models::gemma2::Model::new(
-            &Gemma2BasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             self.is_gptx(config)?,
             normal_loading_metadata,
@@ -2061,7 +1726,6 @@ impl NormalModelLoader for Gemma2Loader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -2069,8 +1733,10 @@ impl NormalModelLoader for Gemma2Loader {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::gemma2::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(xlora_models::XLoraGemma2::new(
-            &Gemma2BasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             lora_config,
             xlora_config,
@@ -2083,12 +1749,10 @@ impl NormalModelLoader for Gemma2Loader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        // Already will warn about it
-        Ok(Box::new(Gemma2BasicConfig::deserialize(
-            config,
-            use_flash_attn,
-        )?))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::gemma2::Config = serde_json::from_str(config)?;
+
+        Ok(Box::new(cfg))
     }
 }
 
@@ -2100,12 +1764,15 @@ impl IsqModelLoader for Gemma2Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -2124,7 +1791,7 @@ impl DeviceMappedModelLoader for Gemma2Loader {
             anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
-        let cfg = Gemma2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::gemma2::Config = serde_json::from_str(config)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
@@ -2142,7 +1809,8 @@ impl DeviceMappedModelLoader for Gemma2Loader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<usize> {
-        let cfg = Gemma2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::gemma2::Config = serde_json::from_str(config)?;
+
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
@@ -2162,7 +1830,8 @@ impl DeviceMappedModelLoader for Gemma2Loader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
-        let cfg = Gemma2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::gemma2::Config = serde_json::from_str(config)?;
+
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
@@ -2202,11 +1871,12 @@ impl DeviceMappedModelLoader for Gemma2Loader {
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg = Gemma2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::gemma2::Config = serde_json::from_str(config)?;
+
         Ok(cfg.num_hidden_layers)
     }
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg = Gemma2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::gemma2::Config = serde_json::from_str(config)?;
 
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
@@ -2225,48 +1895,6 @@ impl DeviceMappedModelLoader for Gemma2Loader {
 
 // ======================== Starcoder2 loader
 
-#[derive(Deserialize, Debug)]
-struct Starcoder2BasicConfig {
-    vocab_size: usize,
-    hidden_size: usize,
-    intermediate_size: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    num_key_value_heads: usize,
-    hidden_act: Activation,
-    max_position_embeddings: usize,
-    norm_epsilon: f64,
-    rope_theta: f64,
-    use_bias: bool,
-    sliding_window: Option<usize>,
-    quantization_config: Option<QuantizedConfig>,
-    #[serde(default = "word_emb_default")]
-    tie_word_embeddings: bool,
-}
-
-impl Starcoder2BasicConfig {
-    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::starcoder2::Config> {
-        let basic_config: Self = serde_json::from_str(slice)?;
-        Ok(models::starcoder2::Config {
-            vocab_size: basic_config.vocab_size,
-            hidden_size: basic_config.hidden_size,
-            intermediate_size: basic_config.intermediate_size,
-            num_hidden_layers: basic_config.num_hidden_layers,
-            num_attention_heads: basic_config.num_attention_heads,
-            num_key_value_heads: basic_config.num_key_value_heads,
-            hidden_act: basic_config.hidden_act,
-            max_position_embeddings: basic_config.max_position_embeddings,
-            rope_theta: basic_config.rope_theta,
-            sliding_window: basic_config.sliding_window,
-            use_flash_attn,
-            norm_epsilon: basic_config.norm_epsilon,
-            use_bias: basic_config.use_bias,
-            quantization_config: basic_config.quantization_config,
-            tie_word_embeddings: basic_config.tie_word_embeddings,
-        })
-    }
-}
-
 /// [`NormalLoader`] for a Starcoder2 model.
 ///
 /// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
@@ -2276,13 +1904,14 @@ impl NormalModelLoader for Starcoder2Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::starcoder2::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(models::starcoder2::Model::new(
-            &Starcoder2BasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             self.is_gptx(config)?,
             normal_loading_metadata,
@@ -2292,7 +1921,6 @@ impl NormalModelLoader for Starcoder2Loader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -2300,8 +1928,10 @@ impl NormalModelLoader for Starcoder2Loader {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::starcoder2::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(xlora_models::XLoraStarcoder2::new(
-            &Starcoder2BasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             lora_config,
             xlora_config,
@@ -2314,10 +1944,10 @@ impl NormalModelLoader for Starcoder2Loader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        Ok(Box::new(serde_json::from_str::<Starcoder2BasicConfig>(
-            config,
-        )?))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::starcoder2::Config = serde_json::from_str(config)?;
+
+        Ok(Box::new(cfg))
     }
 }
 
@@ -2329,11 +1959,14 @@ impl IsqModelLoader for Starcoder2Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
             Regex::new(r"layers\.(\d+)\.mlp\.fc1\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.c_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -2352,7 +1985,7 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
             anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
-        let cfg = Starcoder2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::starcoder2::Config = serde_json::from_str(config)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
@@ -2370,7 +2003,8 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<usize> {
-        let cfg = Starcoder2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::starcoder2::Config = serde_json::from_str(config)?;
+
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
@@ -2390,7 +2024,8 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
-        let cfg = Starcoder2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::starcoder2::Config = serde_json::from_str(config)?;
+
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size + cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size + cfg.hidden_size;
@@ -2424,12 +2059,13 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg = Starcoder2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::starcoder2::Config = serde_json::from_str(config)?;
+
         Ok(cfg.num_hidden_layers)
     }
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg = Starcoder2BasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::starcoder2::Config = serde_json::from_str(config)?;
 
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
@@ -2448,58 +2084,6 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
 
 // ======================== Phi3 loader
 
-#[derive(Deserialize)]
-struct Phi3_5MoEBasicConfig {
-    vocab_size: usize,
-    hidden_act: Activation,
-    hidden_size: usize,
-    intermediate_size: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    num_key_value_heads: usize,
-    rms_norm_eps: f64,
-    rope_theta: f64,
-    rope_scaling: Option<PhiRopeScalingConfig>,
-    max_position_embeddings: usize,
-    original_max_position_embeddings: usize,
-    sliding_window: Option<usize>,
-    quantization_config: Option<QuantizedConfig>,
-    lm_head_bias: bool,
-    attention_bias: bool,
-    num_local_experts: usize,
-    router_jitter_noise: f64,
-    #[serde(default = "word_emb_default")]
-    tie_word_embeddings: bool,
-}
-
-impl Phi3_5MoEBasicConfig {
-    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::phi3_5_moe::Config> {
-        let basic_config: Self = serde_json::from_str(slice)?;
-        Ok(models::phi3_5_moe::Config {
-            vocab_size: basic_config.vocab_size,
-            hidden_size: basic_config.hidden_size,
-            intermediate_size: basic_config.intermediate_size,
-            num_hidden_layers: basic_config.num_hidden_layers,
-            num_attention_heads: basic_config.num_attention_heads,
-            num_key_value_heads: basic_config.num_key_value_heads,
-            hidden_act: basic_config.hidden_act,
-            max_position_embeddings: basic_config.max_position_embeddings,
-            rope_theta: basic_config.rope_theta,
-            rms_norm_eps: basic_config.rms_norm_eps,
-            rope_scaling: basic_config.rope_scaling,
-            original_max_position_embeddings: basic_config.original_max_position_embeddings,
-            use_flash_attn,
-            sliding_window: basic_config.sliding_window,
-            quantization_config: basic_config.quantization_config,
-            lm_head_bias: basic_config.lm_head_bias,
-            attention_bias: basic_config.attention_bias,
-            num_local_experts: basic_config.num_local_experts,
-            router_jitter_noise: basic_config.router_jitter_noise,
-            tie_word_embeddings: basic_config.tie_word_embeddings,
-        })
-    }
-}
-
 /// [`NormalLoader`] for a Phi 3.5 MoE model.
 ///
 /// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
@@ -2509,13 +2093,14 @@ impl NormalModelLoader for Phi3_5MoELoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::phi3_5_moe::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(models::phi3_5_moe::Model::new(
-            &Phi3_5MoEBasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             self.is_gptx(config)?,
             normal_loading_metadata,
@@ -2525,7 +2110,6 @@ impl NormalModelLoader for Phi3_5MoELoader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -2533,8 +2117,10 @@ impl NormalModelLoader for Phi3_5MoELoader {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::phi3::Config = serde_json::from_str(config)?;
+
         Ok(Box::new(xlora_models::XLoraPhi3::new(
-            &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
+            &cfg,
             vb,
             lora_config,
             xlora_config,
@@ -2547,11 +2133,10 @@ impl NormalModelLoader for Phi3_5MoELoader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        Ok(Box::new(Phi3_5MoEBasicConfig::deserialize(
-            config,
-            use_flash_attn,
-        )?))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::phi3_5_moe::Config = serde_json::from_str(config)?;
+
+        Ok(Box::new(cfg))
     }
 }
 
@@ -2570,6 +2155,9 @@ impl IsqModelLoader for Phi3_5MoELoader {
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$")?,
         ])
     }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
 
     fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
@@ -2579,6 +2167,9 @@ impl IsqModelLoader for Phi3_5MoELoader {
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
     }
 }
 
@@ -2597,7 +2188,7 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
             anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
-        let cfg = Phi3_5MoEBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::phi3_5_moe::Config = serde_json::from_str(config)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
@@ -2615,7 +2206,8 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<usize> {
-        let cfg = Phi3_5MoEBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::phi3_5_moe::Config = serde_json::from_str(config)?;
+
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
@@ -2635,7 +2227,8 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
-        let cfg = Phi3_5MoEBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::phi3_5_moe::Config = serde_json::from_str(config)?;
+
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
@@ -2678,12 +2271,13 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg = Phi3_5MoEBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::phi3_5_moe::Config = serde_json::from_str(config)?;
+
         Ok(cfg.num_hidden_layers)
     }
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg = Phi3_5MoEBasicConfig::deserialize(config, false)?;
+        let cfg: crate::models::phi3_5_moe::Config = serde_json::from_str(config)?;
 
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
@@ -2709,13 +2303,12 @@ impl NormalModelLoader for DeepSeekV2Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        let mut cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
-        cfg.use_flash_attn = use_flash_attn;
+        let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
+
         Ok(Box::new(models::deepseek2::DeepSeekV2::new(
             &cfg,
             vb,
@@ -2727,7 +2320,6 @@ impl NormalModelLoader for DeepSeekV2Loader {
     fn load_xlora(
         &self,
         _config: &str,
-        _use_flash_attn: bool,
         _vb: ShardedVarBuilder,
         _lora_config: &[((String, String), LoraConfig)],
         _xlora_config: Option<XLoraConfig>,
@@ -2740,10 +2332,9 @@ impl NormalModelLoader for DeepSeekV2Loader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let mut config: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
-        config.use_flash_attn = use_flash_attn;
-        Ok(Box::new(config))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
     }
 }
 
@@ -2812,6 +2403,9 @@ impl IsqModelLoader for DeepSeekV2Loader {
         }
         Ok(data)
     }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
 
     fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         let mut data = vec![Regex::new(r"lm_head\.(weight|bias)$")?];
@@ -2860,6 +2454,9 @@ impl IsqModelLoader for DeepSeekV2Loader {
             };
         }
         Ok(data)
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
     }
 }
 
@@ -3031,13 +2628,11 @@ impl NormalModelLoader for DeepSeekV3Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        let mut cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
-        cfg.use_flash_attn = use_flash_attn;
+        let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
         Ok(Box::new(models::deepseek3::DeepSeekV3::new(
             &cfg,
             vb,
@@ -3049,7 +2644,6 @@ impl NormalModelLoader for DeepSeekV3Loader {
     fn load_xlora(
         &self,
         _config: &str,
-        _use_flash_attn: bool,
         _vb: ShardedVarBuilder,
         _lora_config: &[((String, String), LoraConfig)],
         _xlora_config: Option<XLoraConfig>,
@@ -3062,10 +2656,9 @@ impl NormalModelLoader for DeepSeekV3Loader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let mut config: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
-        config.use_flash_attn = use_flash_attn;
-        Ok(Box::new(config))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
     }
 }
 
@@ -3134,6 +2727,9 @@ impl IsqModelLoader for DeepSeekV3Loader {
         }
         Ok(data)
     }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
 
     fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         let mut data = vec![Regex::new(r"lm_head\.(weight|bias)$")?];
@@ -3182,6 +2778,9 @@ impl IsqModelLoader for DeepSeekV3Loader {
             };
         }
         Ok(data)
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
     }
 }
 
@@ -3353,13 +2952,11 @@ impl NormalModelLoader for Qwen3Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        let mut cfg: models::qwen3::Config = serde_json::from_str(config)?;
-        cfg.use_flash_attn = use_flash_attn;
+        let cfg: crate::models::qwen3::Config = serde_json::from_str(config)?;
 
         Ok(Box::new(models::qwen3::Model::new(
             &cfg,
@@ -3372,7 +2969,6 @@ impl NormalModelLoader for Qwen3Loader {
     fn load_xlora(
         &self,
         _config: &str,
-        _use_flash_attn: bool,
         _vb: ShardedVarBuilder,
         _lora_config: &[((String, String), LoraConfig)],
         _xlora_config: Option<XLoraConfig>,
@@ -3385,9 +2981,8 @@ impl NormalModelLoader for Qwen3Loader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let mut cfg: models::qwen3::Config = serde_json::from_str(config)?;
-        cfg.use_flash_attn = use_flash_attn;
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::qwen3::Config = serde_json::from_str(config)?;
 
         Ok(Box::new(cfg))
     }
@@ -3401,12 +2996,15 @@ impl IsqModelLoader for Qwen3Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
     }
 }
 
@@ -3535,13 +3133,11 @@ impl NormalModelLoader for Qwen3MoELoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        let mut cfg: models::qwen3_moe::Config = serde_json::from_str(config)?;
-        cfg.use_flash_attn = use_flash_attn;
+        let cfg: crate::models::qwen3_moe::Config = serde_json::from_str(config)?;
 
         Ok(Box::new(models::qwen3_moe::Model::new(
             &cfg,
@@ -3554,7 +3150,6 @@ impl NormalModelLoader for Qwen3MoELoader {
     fn load_xlora(
         &self,
         _config: &str,
-        _use_flash_attn: bool,
         _vb: ShardedVarBuilder,
         _lora_config: &[((String, String), LoraConfig)],
         _xlora_config: Option<XLoraConfig>,
@@ -3567,9 +3162,8 @@ impl NormalModelLoader for Qwen3MoELoader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let mut cfg: models::qwen3_moe::Config = serde_json::from_str(config)?;
-        cfg.use_flash_attn = use_flash_attn;
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::qwen3_moe::Config = serde_json::from_str(config)?;
 
         Ok(Box::new(cfg))
     }
@@ -3583,7 +3177,7 @@ impl IsqModelLoader for Qwen3MoELoader {
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
@@ -3593,6 +3187,9 @@ impl IsqModelLoader for Qwen3MoELoader {
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
     }
 }
 

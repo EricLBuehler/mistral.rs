@@ -171,8 +171,6 @@ pub(crate) struct TextConfig {
     #[serde(default = "default_sliding")]
     pub(crate) sliding_window: Option<usize>,
 
-    #[serde(default = "default_false")]
-    pub(crate) use_flash_attn: bool,
     model_type: String, // Must be mistral for now
 }
 
@@ -190,7 +188,6 @@ impl From<TextConfig> for mistral::Config {
             rms_norm_eps: val.rms_norm_eps,
             rope_theta: val.rope_theta,
             sliding_window: val.sliding_window,
-            use_flash_attn: val.use_flash_attn,
             head_dim: None,
             quantization_config: None,
             tie_word_embeddings: false,
@@ -1173,15 +1170,11 @@ impl Idefics2 {
                 &patch_attention_mask.reshape((pixel_values.dim(0)?, ()))?,
             )?;
 
-            if self.text_model.cache.normal().0[0].current_seq_len() == 0 {
-                self.inputs_merger(
-                    input_ids,
-                    &self.text_model.get_input_embeddings(input_ids)?,
-                    &image_hidden_states,
-                )?
-            } else {
-                candle_core::bail!("Pixel values were specified for a non-prompt.")
-            }
+            self.inputs_merger(
+                input_ids,
+                &self.text_model.get_input_embeddings(input_ids)?,
+                &image_hidden_states,
+            )?
         } else {
             self.text_model.get_input_embeddings(input_ids)?
         };
@@ -1295,9 +1288,6 @@ impl VisionModel for Idefics2 {
     }
     fn max_seq_len(&self) -> usize {
         self.text_model.max_seq_len()
-    }
-    fn has_conv2d(&self) -> bool {
-        true
     }
     fn config(&self) -> &ModelConfigMetadata {
         self.text_model.config()

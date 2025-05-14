@@ -10,7 +10,7 @@ The DeepSeek V2 is a mixture of expert (MoE) model featuring ["Multi-head Latent
 ```
 
 > [!NOTE]
-> This models supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
+> This model supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
 
 ```
 ./mistralrs-server --isq Q4K -i plain -m deepseek-ai/DeepSeek-V2-Lite --organization moqe

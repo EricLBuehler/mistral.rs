@@ -353,10 +353,10 @@ impl Qwen2_5VLModel {
         }
         let ropeidx_attn_mask = Tensor::stack(&ropeidx_attn_mask_bs, 0)?;
         let mut ropeidx_attn_mask_indices_bs = Vec::new();
-        for len in seqlens {
+        for (len, offset) in seqlens.iter().zip(seqlen_offsets) {
             ropeidx_attn_mask_indices_bs.push(Tensor::from_vec(
-                (0..len as i64).collect(),
-                (len,),
+                (*offset as i64..(*len as i64 + *offset as i64)).collect(),
+                (*len,),
                 input_ids.device(),
             )?);
         }
@@ -478,9 +478,6 @@ impl VisionModel for Qwen2_5VLModel {
     }
     fn max_seq_len(&self) -> usize {
         self.text.max_seq_len
-    }
-    fn has_conv2d(&self) -> bool {
-        true
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.text.cfg

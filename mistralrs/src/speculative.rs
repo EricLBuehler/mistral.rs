@@ -40,7 +40,6 @@ impl TextSpeculativeBuilder {
 
     fn build_pipeline(builder: TextModelBuilder) -> anyhow::Result<Arc<Mutex<dyn Pipeline>>> {
         let config = NormalSpecificConfig {
-            use_flash_attn: builder.use_flash_attn,
             prompt_chunksize: builder.prompt_chunksize,
             topology: builder.topology,
             organization: builder.organization,

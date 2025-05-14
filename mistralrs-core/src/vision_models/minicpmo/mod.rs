@@ -258,9 +258,6 @@ impl VisionModel for MiniCpmOModel {
     fn device(&self) -> &Device {
         self.llm.device()
     }
-    fn has_conv2d(&self) -> bool {
-        true
-    }
     fn max_seq_len(&self) -> usize {
         self.llm.max_seq_len()
     }

@@ -271,16 +271,13 @@ impl Attention {
 
         q = q
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
         k = k
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
         v = v
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
 
         let attn_weights = Sdpa.run_attention(
             &q,
@@ -290,7 +287,6 @@ impl Attention {
             None,
             &SdpaParams {
                 n_kv_groups: 1,
-                use_flash_attn: false,
                 sliding_window: None,
                 softcap: None,
                 softmax_scale: self.scale,

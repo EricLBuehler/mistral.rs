@@ -38,7 +38,6 @@ macro_rules! sliding_window {
     };
 }
 
-serde_default_fn!(bool, use_flash_attn, false);
 serde_default_fn!(bool, tie_word_embeddings, false);
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -54,8 +53,6 @@ pub struct Config {
     pub(crate) rms_norm_eps: f64,
     pub(crate) rope_theta: f64,
     pub(crate) sliding_window: Option<usize>,
-    #[serde(default = "use_flash_attn")]
-    pub(crate) use_flash_attn: bool,
     pub(crate) head_dim: Option<usize>,
     pub(crate) quantization_config: Option<QuantizedConfig>,
     #[serde(default = "tie_word_embeddings")]
@@ -176,7 +173,6 @@ impl Attention {
                     cfg.num_attention_heads,
                     comm,
                 ),
-                use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window,
@@ -650,14 +646,13 @@ impl Model {
                 )?),
             );
         }
-
-        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        for layer_idx in NiceProgressBar::<_, 'b'>(
+        let layers: Vec<DecoderLayer> = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
-        ) {
+        )
+        .par_iter_if_isq(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -667,12 +662,15 @@ impl Model {
                 .clone();
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => {
-                    Some(PagedAttention::new(head_dim, device, None)?)
-                }
+                AttentionImplementation::PagedAttention => Some(
+                    PagedAttention::new(head_dim, device, None)
+                        .expect("PagedAttention creation failed"),
+                ),
             };
-            let comm = mapper.get_comm_for(layer_idx)?;
-            let layer = DecoderLayer::new(
+            let comm = mapper
+                .get_comm_for(layer_idx)
+                .expect("Failed to get comm for layer");
+            DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
                 vb_l.pp(layer_idx),
@@ -682,9 +680,8 @@ impl Model {
                 paged_attn,
                 normal_loading_metadata.real_device.clone(),
                 &comm,
-            )?;
-            layers.push(layer)
-        }
+            )
+        })?;
         let norm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,

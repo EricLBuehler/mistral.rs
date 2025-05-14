@@ -1,11 +1,10 @@
 use std::{fmt::Debug, sync::Arc};
 
 use crate::{
-    pipeline::AutoDeviceMapParams,
-    utils::{debug::DeviceRepr, log::once_log_info},
-    MemoryUsage, Topology, TryIntoDType,
+    pipeline::AutoDeviceMapParams, utils::debug::DeviceRepr, MemoryUsage, Topology, TryIntoDType,
 };
 use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
+use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 use tracing::info;

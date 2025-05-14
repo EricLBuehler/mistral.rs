@@ -55,9 +55,9 @@ Text: The image shows a steep, snow-covered hillside with a pine tree on the rig
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m llava-hf/llava-v1.6-mistral-7b-hf -a llava_next
+cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m llava-hf/llava-v1.6-mistral-7b-hf
 //or 
-cargo run  --features cuda -- --port 1234  --isq Q4K --chat-template ./chat_templates/vicuna.json vision-plain -m /root/autodl-tmp/llava-v1.6-vicuna-7b-hf -a llava_next // if use vicuna as backend llm, then we need to specific the chat-template
+cargo run  --features cuda -- --port 1234  --isq Q4K --chat-template ./chat_templates/vicuna.json vision-plain -m /root/autodl-tmp/llava-v1.6-vicuna-7b-hf // if use vicuna as backend llm, then we need to specific the chat-template
 ```
 
 2) Send a request
@@ -107,13 +107,12 @@ This is a minimal example of running the LLaVA and LLaVANext model with a dummy 
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = VisionModelBuilder::new(
         "llava-hf/llava-v1.6-mistral-7b-hf",
-        VisionLoaderType::LLaVANext,
     )
     .with_isq(IsqType::Q4K)
     .with_logging()

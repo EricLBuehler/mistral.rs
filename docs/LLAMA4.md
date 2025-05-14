@@ -66,7 +66,7 @@ The image exudes a sense of serenity and majesty, capturing the beauty of nature
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --release --features ... -- --port 1234 --isq q4k vision-plain -m meta-llama/Llama-4-Scout-17B-16E-Instruct -a llama4
+cargo run --release --features ... -- --port 1234 --isq q4k vision-plain -m meta-llama/Llama-4-Scout-17B-16E-Instruct
 ```
 
 2) Send a request
@@ -122,13 +122,12 @@ This is a minimal example of running the Llama 4 model with a dummy image.
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = VisionModelBuilder::new(
         "meta-llama/Llama-4-Scout-17B-16E-Instruct",
-        VisionLoaderType::Llama4,
     )
     .with_isq(IsqType::Q4K)
     .with_logging()

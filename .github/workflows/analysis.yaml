@@ -30,9 +30,7 @@ jobs:
             const codeReport = `
               <details>
               <summary>${uniqueIdentifier}</summary>
-              <pre>
-              ${tokeiOutput}
-              </pre>
+              <pre>${tokeiOutput}</pre>
               </details>
             `;
 

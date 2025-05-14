@@ -1,13 +1,10 @@
 use anyhow::Result;
-use mistralrs::{
-    IsqType, TextMessageRole, UqffVisionModelBuilder, VisionLoaderType, VisionMessages,
-};
+use mistralrs::{IsqType, TextMessageRole, UqffVisionModelBuilder, VisionMessages};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = UqffVisionModelBuilder::new(
         "EricB/Phi-3.5-vision-instruct-UQFF",
-        VisionLoaderType::Phi3V,
         vec!["phi3.5-vision-instruct-q8_0.uqff".into()],
     )
     .into_inner()

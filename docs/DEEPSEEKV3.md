@@ -10,7 +10,7 @@ The DeepSeek V3 is a mixture of expert (MoE) model.
 > The non-distill versions of the DeepSeek R1 models share the DeepSeek V3 architecture.
 
 > [!NOTE]
-> This models supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
+> This model supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
 
 ```
 ./mistralrs-server --isq Q4K -i plain -m deepseek-ai/DeepSeek-R1 --organization moqe

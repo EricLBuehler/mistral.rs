@@ -6,10 +6,10 @@ mod vision;
 
 use std::any::Any;
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 pub use config::Idefics3Config;
 pub use inputs_processor::Idefics3Processor;
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 use vision::{Idefics3Connector, Idefics3VisionTransformer};
 
 use crate::{
@@ -45,13 +45,11 @@ impl Idefics3Model {
         let connector = Idefics3Connector::new(
             cfg,
             vb_m.pp("connector")
-                .set_dtype(DType::F32)
                 .set_device(normal_loading_metadata.real_device.clone()),
         )?;
         let vision = Idefics3VisionTransformer::new(
             &cfg.vision_config,
             vb_m.pp("vision_model")
-                .set_dtype(DType::F32)
                 .set_device(normal_loading_metadata.real_device.clone()),
         )?;
         let text_model = Llama::new_inner(
@@ -73,42 +71,18 @@ impl Idefics3Model {
 
     fn inputs_merger(
         &self,
-        input_ids: &Tensor,
+        indices: &Tensor,
         input_embeds: &Tensor,
         image_hidden_states: &Tensor,
     ) -> Result<Tensor> {
-        // Docs copied from Transformers impl
-        /*
-        This method aims at merging the token embeddings with the image hidden states into one single sequence of vectors that are fed to the transformer LM.
-        The merging happens as follows:
-        - The text token sequence is: `tok_1 tok_2 tok_3 <fake_token_around_image> <image> <image> ... <image> <fake_token_around_image> tok_4`.
-        - We get the image hidden states for the image through the vision encoder (and potentially the perceiver), and that hidden state is then projected into the text embedding space.
-        We thus have a sequence of image hidden states of size (1, image_seq_len, hidden_dim), where 1 is for batch_size of 1 image and hidden_dim is the hidden_dim of the LM transformer.
-        - The merging happens so that we obtain the following sequence: `vector_tok_1 vector_tok_2 vector_tok_3 vector_fake_tok_around_image {sequence of image_seq_len image hidden states} vector_fake_toke_around_image vector_tok_4`. That sequence is fed to the LM.
-        - To fit the format of that sequence, `input_ids`, `input_embeds`, `attention_mask` are all 3 adapted to insert the image hidden states.
-        */
-        let (_, _, vision_hidden_size) = image_hidden_states.dims3()?;
-        let bs = input_ids.dim(0)?;
-        let special_image_token_mask = input_ids.eq(self.config.image_token_id as f64)?;
-        let mut new_inputs_embeds = input_embeds.clone();
-        let reshaped_image_hidden_states =
-            image_hidden_states.reshape((bs, (), vision_hidden_size))?;
-        assert_eq!(input_embeds.dim(0)?, 1);
-        assert_eq!(reshaped_image_hidden_states.dim(0)?, 1);
-        let special_image_token_mask = special_image_token_mask.i(0)?.to_vec1::<u8>()?;
-        let mut image_hidden_state_i = 0;
-        for (i, v) in special_image_token_mask.iter().enumerate() {
-            if *v != 0 {
-                new_inputs_embeds = new_inputs_embeds.slice_assign(
-                    &[&.., &i, &..],
-                    &reshaped_image_hidden_states
-                        .i((.., image_hidden_state_i, ..))?
-                        .unsqueeze(1)?,
-                )?;
-                image_hidden_state_i += 1;
-            }
-        }
-        Ok(new_inputs_embeds)
+        let mut x_flat = input_embeds.flatten_all()?;
+        let src_flat = image_hidden_states.flatten_all()?;
+
+        let current_vals = x_flat.gather(indices, 0)?;
+        let diff = (src_flat - current_vals)?;
+        x_flat = x_flat.scatter_add(indices, &diff, 0)?;
+
+        x_flat.reshape(input_embeds.shape())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -123,6 +97,17 @@ impl Idefics3Model {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let input_embeds = if let Some(pixel_values) = pixel_values {
+            let input_embeds = self.text_model.get_input_embeddings(input_ids)?;
+            let special_image_mask = input_ids
+                .eq(self.config.image_token_id as f64)?
+                .unsqueeze(D::Minus1)?
+                .broadcast_as(input_embeds.shape())?
+                .to_dtype(DType::U32)?;
+
+            let mask_flat = special_image_mask.flatten_all()?;
+            // Nonzero before vision model to allow async processing all the way through logits.
+            let indices = mask_flat.nonzero()?.squeeze(1)?;
+
             // == START VISUAL INPUTS INTEGRATION ==
             let (batch_size, num_images, _, _, _) = pixel_values.dims5()?;
             let mut s = vec![batch_size * num_images];
@@ -195,27 +180,15 @@ impl Idefics3Model {
             let pixel_values = pixel_values.to_dtype(self.dtype)?;
 
             // Get seq from vision encoder
-            let image_hidden_states = self.vision.forward(
-                &pixel_values.to_dtype(DType::F32)?,
-                Some(&patch_attention_mask),
-            )?;
+            let image_hidden_states = self
+                .vision
+                .forward(&pixel_values, Some(&patch_attention_mask))?;
 
             // Modality proj and perceiver resampling
             let image_hidden_states = self.connector.forward(&image_hidden_states)?;
 
-            if self.text_model.cache().normal().0[0].current_seq_len() == 0 {
-                self.inputs_merger(
-                    input_ids,
-                    &self
-                        .text_model
-                        .get_input_embeddings(input_ids)?
-                        .to_dtype(DType::F32)?,
-                    &image_hidden_states,
-                )?
+            self.inputs_merger(&indices, &input_embeds, &image_hidden_states)?
                 .to_dtype(self.dtype)?
-            } else {
-                candle_core::bail!("Pixel values were specified for a non-prompt.")
-            }
         } else {
             self.text_model.get_input_embeddings(input_ids)?
         };
@@ -329,9 +302,6 @@ impl VisionModel for Idefics3Model {
     }
     fn max_seq_len(&self) -> usize {
         self.text_model.max_seq_len()
-    }
-    fn has_conv2d(&self) -> bool {
-        true
     }
     fn config(&self) -> &ModelConfigMetadata {
         self.text_model.config()

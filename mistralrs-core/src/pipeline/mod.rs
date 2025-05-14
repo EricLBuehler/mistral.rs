@@ -1,5 +1,4 @@
 mod amoe;
-mod cache_manager;
 pub mod chat_template;
 mod diffusion;
 mod ggml;
@@ -25,7 +24,7 @@ use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 use chat_template::ChatTemplate;
-pub use diffusion::{DiffusionLoader, DiffusionLoaderBuilder, DiffusionSpecificConfig};
+pub use diffusion::{DiffusionLoader, DiffusionLoaderBuilder};
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 use image::DynamicImage;
@@ -34,21 +33,20 @@ pub(crate) use isq::IsqModelLoader;
 pub use isq::{parse_isq_value, IsqModel, IsqOrganization, UQFF_MULTI_FILE_DELIMITER};
 use llguidance::toktrie::TokEnv;
 pub use loaders::{
-    AdapterKind, AutoDeviceMapParams, AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader,
-    DeviceMappedModelLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
-    Gemma2Loader, Gemma3Loader, GemmaLoader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader, Mistral3Loader,
-    MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType, NormalLoadingMetadata,
-    NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader,
-    Phi4MMLoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader,
-    Qwen3Loader, Qwen3MoELoader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
-    VisionLoaderType, VisionModel, VisionModelLoader,
+    AdapterKind, AutoDeviceMapParams, AutoNormalLoader, AutoVisionLoader, DeepSeekV2Loader,
+    DeepSeekV3Loader, DeviceMappedModelLoader, DiffusionLoaderType, DiffusionModel,
+    DiffusionModelLoader, FluxLoader, Gemma2Loader, Gemma3Loader, GemmaLoader, Idefics2Loader,
+    Idefics3Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths,
+    MiniCpmOLoader, Mistral3Loader, MistralLoader, MixtralLoader, ModelKind, ModelPaths,
+    NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
+    Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind,
+    Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3Loader, Qwen3MoELoader, Starcoder2Loader,
+    TokenSource, VLlama4Loader, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
 };
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
-pub(crate) use paths::{
-    get_chat_template, get_model_paths, get_xlora_paths, AdapterPaths, LoraAdapterPaths,
-};
+pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths};
+pub use paths::{AdapterPaths, LoraAdapterPaths};
 pub(crate) use processing::{
     apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
 };
@@ -68,13 +66,13 @@ use candle_core::{DType, Device, IndexOp, Tensor, Var};
 
 use crate::sequence::Sequence;
 
-pub use self::cache_manager::{
-    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache, NormalCacheType,
-};
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
 };
 use self::text_models_inputs_processor::PagedAttentionMeta;
+pub use crate::kv_cache::{
+    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache, NormalCacheType,
+};
 
 pub struct GeneralMetadata {
     pub max_seq_len: usize,
@@ -219,10 +217,10 @@ pub trait AnyMoePipelineMixin {
 pub enum ModelCategory {
     Text,
     Vision {
-        has_conv2d: bool,
         prefixer: Arc<dyn VisionPromptPrefixer>,
     },
     Diffusion,
+    Audio,
     Speech,
 }
 
@@ -231,10 +229,13 @@ impl PartialEq for ModelCategory {
         match (self, other) {
             (Self::Text, Self::Text) => true,
             (Self::Vision { .. }, Self::Vision { .. }) => true,
+            (Self::Audio, Self::Audio) => true,
+            (Self::Speech, Self::Speech) => true,
             (Self::Diffusion, Self::Diffusion) => true,
-            (Self::Text, _) => false,
-            (Self::Vision { .. }, _) => false,
-            (Self::Diffusion, _) => false,
+            (
+                Self::Text | Self::Vision { .. } | Self::Diffusion | Self::Audio | Self::Speech,
+                _,
+            ) => false,
             (Self::Speech, Self::Speech) => true,
             (Self::Speech, _) => false,
         }

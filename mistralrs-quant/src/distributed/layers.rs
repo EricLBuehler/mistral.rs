@@ -1,13 +1,18 @@
 use std::sync::Arc;
 
-use candle_core::{Context, Result, Tensor};
+use candle_core::{Context, Device, Result, Tensor};
 use candle_nn::Linear;
 
 use crate::{
-    blockwise_fp8::blockwise_fp8_linear_b, distributed, gptq::gptq_linear,
-    lora::merge_lora_weights, AfqLayer, BnbLinear, DistributedKind, DummyLayer, FP8Linear,
-    GgufMatMul, HqqLayer, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig,
-    QuantizedSerde, QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
+    blockwise_fp8::blockwise_fp8_linear_b,
+    distributed,
+    gptq::gptq_linear,
+    lora::merge_lora_weights,
+    should_apply_immediate_isq,
+    utils::isq::{apply_immediate_isq, apply_immediate_isq_always},
+    AfqLayer, BnbLinear, DistributedKind, DummyLayer, FP8Linear, GgufMatMul, HqqLayer, QuantMethod,
+    QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, QuantizedSerdeType,
+    Shard, ShardedVarBuilder, UnquantLinear,
 };
 
 use super::{Comm, SumAllReduce};
@@ -42,6 +47,13 @@ impl RowParallelLayer {
         let rank = comm.rank();
         let world_size = comm.world_size();
         let shard = shard(1, rank, world_size);
+
+        let base_vb = vb.clone();
+        let vb = if should_apply_immediate_isq(&vb) {
+            vb.set_device(Device::Cpu)
+        } else {
+            vb
+        };
 
         let weight = if let Some(quant_conf) = &config {
             // GPTQ and BNB do not support tensor parallelism
@@ -96,11 +108,13 @@ impl RowParallelLayer {
             None
         };
 
-        Ok(Arc::new(Self {
+        let this_unquant = Arc::new(Self {
             weight,
             bias,
             all_reduce: distributed::SumAllReduce::new(comm),
-        }))
+        });
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        Ok(this)
     }
 }
 
@@ -244,6 +258,13 @@ impl ColumnParallelLayer {
         shard: Shard,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
+        let base_vb = vb.clone();
+        let vb = if should_apply_immediate_isq(&vb) {
+            vb.set_device(Device::Cpu)
+        } else {
+            vb
+        };
+
         let weight = if let Some(quant_conf) = &config {
             // GPTQ and BNB do not support tensor parallelism
             if matches!(
@@ -297,7 +318,9 @@ impl ColumnParallelLayer {
             None
         };
 
-        Ok(Arc::new(Self { weight, bias }))
+        let this_unquant = Arc::new(Self { weight, bias });
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        Ok(this)
     }
 
     #[allow(clippy::new_ret_no_self)]
@@ -434,9 +457,10 @@ pub struct ReplicatedLayer(Arc<dyn QuantMethod>);
 
 impl ReplicatedLayer {
     pub fn from_linear(lin: Linear) -> Result<Arc<dyn QuantMethod>> {
-        Ok(Arc::new(UnquantLinear::new(
-            QuantMethodConfig::Unquantized(lin),
-        )?))
+        let dev = lin.weight().device().clone();
+        let this_unquant = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq_always(this_unquant, &dev)?;
+        Ok(this)
     }
 
     #[allow(clippy::new_ret_no_self)]
@@ -447,19 +471,28 @@ impl ReplicatedLayer {
         bias: bool,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
+        let base_vb = vb.clone();
+        let vb = if should_apply_immediate_isq(&vb) {
+            vb.set_device(Device::Cpu)
+        } else {
+            vb
+        };
+
         let layer = if let Some(quant_conf) = &config {
             match quant_conf {
-                QuantizedConfig::Gptq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+                QuantizedConfig::Gptq { .. } => {
+                    gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
+                }
                 QuantizedConfig::Fp8 { .. } => blockwise_fp8_linear_b(
                     in_dim,
                     out_dim,
                     quant_conf,
                     bias,
                     Default::default(),
-                    vb,
+                    vb.clone(),
                 )?,
                 QuantizedConfig::Bitsandbytes { .. } => {
-                    Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb)?) as Arc<_>
+                    Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>
                 }
                 QuantizedConfig::Afq { .. } => {
                     AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
@@ -486,7 +519,9 @@ impl ReplicatedLayer {
             }
         };
 
-        Ok(Arc::new(Self(layer)))
+        let this_unquant = Arc::new(Self(layer));
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        Ok(this)
     }
 }
 
@@ -622,32 +657,53 @@ impl PackedExperts {
                         candle_core::bail!("PackedExperts with AFQ quantization config does not support `gate_up_proj` format.");
                     }
 
-                    (
-                        vec![AfqLayer::afq_packed_linear_b(
-                            num_local_experts,
-                            hidden_size,
-                            intermediate_size,
-                            quant_conf,
-                            bias,
-                            vb.pp("gate_proj"),
-                        )?],
-                        vec![AfqLayer::afq_packed_linear_b(
-                            num_local_experts,
-                            hidden_size,
-                            intermediate_size,
-                            quant_conf,
-                            bias,
-                            vb.pp("up_proj"),
-                        )?],
-                        vec![AfqLayer::afq_packed_linear_b(
-                            num_local_experts,
-                            intermediate_size,
-                            hidden_size,
-                            quant_conf,
-                            bias,
-                            vb.pp("down_proj"),
-                        )?],
-                    )
+                    let base_vb = vb.clone();
+
+                    let vb_gate_proj = if should_apply_immediate_isq(&vb) {
+                        vb.pp("gate_proj").set_device(Device::Cpu)
+                    } else {
+                        vb.pp("gate_proj")
+                    };
+                    let vb_up_proj = if should_apply_immediate_isq(&vb) {
+                        vb.pp("up_proj").set_device(Device::Cpu)
+                    } else {
+                        vb.pp("up_proj")
+                    };
+                    let vb_down_proj = if should_apply_immediate_isq(&vb) {
+                        vb.pp("down_proj").set_device(Device::Cpu)
+                    } else {
+                        vb.pp("down_proj")
+                    };
+                    let mut gate_proj = AfqLayer::afq_packed_linear_b(
+                        num_local_experts,
+                        hidden_size,
+                        intermediate_size,
+                        quant_conf,
+                        bias,
+                        vb_gate_proj,
+                    )?;
+                    let mut up_proj = AfqLayer::afq_packed_linear_b(
+                        num_local_experts,
+                        hidden_size,
+                        intermediate_size,
+                        quant_conf,
+                        bias,
+                        vb_up_proj,
+                    )?;
+                    let mut down_proj = AfqLayer::afq_packed_linear_b(
+                        num_local_experts,
+                        intermediate_size,
+                        hidden_size,
+                        quant_conf,
+                        bias,
+                        vb_down_proj,
+                    )?;
+
+                    gate_proj = apply_immediate_isq(gate_proj, base_vb.pp("gate_proj"))?;
+                    up_proj = apply_immediate_isq(up_proj, base_vb.pp("up_proj"))?;
+                    down_proj = apply_immediate_isq(down_proj, base_vb.pp("down_proj"))?;
+
+                    (vec![gate_proj], vec![up_proj], vec![down_proj])
                 }
                 _ => candle_core::bail!(
                     "PackedExperts with quantization config only allows AFQ quantization"
@@ -659,12 +715,16 @@ impl PackedExperts {
             let mut us = Vec::new();
             let mut ds = Vec::new();
             for _ in 0..num_local_experts {
-                let gate_proj = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-                let up_proj = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-                let down_proj = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-                gs.push(Arc::new(gate_proj) as Arc<dyn QuantMethod>);
-                us.push(Arc::new(up_proj) as Arc<dyn QuantMethod>);
-                ds.push(Arc::new(down_proj) as Arc<dyn QuantMethod>);
+                let gate_proj: Arc<dyn QuantMethod> =
+                    Arc::new(<DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?);
+                let up_proj: Arc<dyn QuantMethod> =
+                    Arc::new(<DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?);
+                let down_proj: Arc<dyn QuantMethod> =
+                    Arc::new(<DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?);
+
+                gs.push(gate_proj);
+                us.push(up_proj);
+                ds.push(down_proj);
             }
             (gs, us, ds)
         } else {
@@ -695,6 +755,17 @@ impl PackedExperts {
                 world_size: comm.world_size(),
             };
 
+            let vb_gate_up_proj = if should_apply_immediate_isq(&vb) {
+                vb.pp("gate_up_proj").set_device(Device::Cpu)
+            } else {
+                vb.pp("gate_up_proj")
+            };
+            let vb_down_proj = if should_apply_immediate_isq(&vb) {
+                vb.pp("down_proj").set_device(Device::Cpu)
+            } else {
+                vb.pp("down_proj")
+            };
+
             let gate_proj = vb
                 .get_with_hints(
                     (num_local_experts, hidden_size, intermediate_size * 2),
@@ -720,14 +791,16 @@ impl PackedExperts {
                 .t()?
                 .contiguous()?;
 
+            let gc = gate_proj.chunk(num_local_experts, 0)?;
+            let uc = up_proj.chunk(num_local_experts, 0)?;
+            let dc = down_proj.chunk(num_local_experts, 0)?;
+            drop((gate_proj, up_proj, down_proj));
+
             let mut gs = Vec::new();
             let mut us = Vec::new();
             let mut ds = Vec::new();
-            for ((mut gate_proj, mut up_proj), mut down_proj) in gate_proj
-                .chunk(num_local_experts, 0)?
-                .into_iter()
-                .zip(up_proj.chunk(num_local_experts, 0)?)
-                .zip(down_proj.chunk(num_local_experts, 0)?)
+            for ((mut gate_proj, mut up_proj), mut down_proj) in
+                gc.into_iter().zip(uc.into_iter()).zip(dc.into_iter())
             {
                 gate_proj = gate_proj.squeeze(0)?;
                 up_proj = up_proj.squeeze(0)?;
@@ -744,18 +817,24 @@ impl PackedExperts {
                 let down_proj =
                     merge_lora_weights(&vb, down_proj, intermediate_size, hidden_size, shard_down)?;
 
-                let gate_proj = <UnquantLinear as QuantMethod>::new(
-                    QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
-                )?;
-                let up_proj = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
-                    Linear::new(up_proj, None),
-                ))?;
-                let down_proj = <UnquantLinear as QuantMethod>::new(
-                    QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
-                )?;
-                gs.push(Arc::new(gate_proj) as Arc<dyn QuantMethod>);
-                us.push(Arc::new(up_proj) as Arc<dyn QuantMethod>);
-                ds.push(Arc::new(down_proj) as Arc<dyn QuantMethod>);
+                let mut gate_proj: Arc<dyn QuantMethod> =
+                    Arc::new(<UnquantLinear as QuantMethod>::new(
+                        QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
+                    )?);
+                gate_proj = apply_immediate_isq(gate_proj, vb_gate_up_proj.clone())?;
+                let mut up_proj: Arc<dyn QuantMethod> =
+                    Arc::new(<UnquantLinear as QuantMethod>::new(
+                        QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
+                    )?);
+                up_proj = apply_immediate_isq(up_proj, vb_gate_up_proj.clone())?;
+                let mut down_proj: Arc<dyn QuantMethod> =
+                    Arc::new(<UnquantLinear as QuantMethod>::new(
+                        QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
+                    )?);
+                down_proj = apply_immediate_isq(down_proj, vb_down_proj.clone())?;
+                gs.push(gate_proj);
+                us.push(up_proj);
+                ds.push(down_proj);
             }
             (gs, us, ds)
         };

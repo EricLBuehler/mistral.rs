@@ -150,7 +150,6 @@ impl Llama4VisionAttention {
             )?,
             sdpa_params: SdpaParams {
                 n_kv_groups: 1,
-                use_flash_attn: false,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
@@ -334,21 +333,15 @@ impl Llama4VisionEncoder {
         comm: &Arc<mistralrs_quant::Comm>,
         multi_progress: &Arc<MultiProgress>,
     ) -> Result<Self> {
-        let mut layers = Vec::with_capacity(num_layers);
         let layers_vb = vb.pp("layers");
-        for i in NiceProgressBar::<_, 'b'>(
+        let layers = NiceProgressBar::<_, 'b'>(
             0..num_layers,
             "Loading vision repeating layers",
             multi_progress,
-        ) {
-            layers.push(Llama4VisionEncoderLayer::new(
-                cfg,
-                layers_vb.pp(i),
-                freqs.clone(),
-                real_dev,
-                comm,
-            )?);
-        }
+        )
+        .par_iter_if_isq(|i| {
+            Llama4VisionEncoderLayer::new(cfg, layers_vb.pp(i), freqs.clone(), real_dev, comm)
+        })?;
         Ok(Self { layers })
     }
 

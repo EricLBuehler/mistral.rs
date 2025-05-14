@@ -1,10 +1,11 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Linear, Module};
-use mistralrs_quant::ShardedVarBuilder;
-use std::ops::Mul;
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use std::{ops::Mul, sync::Arc};
 
 use crate::{
-    layers::{self, conv2d, embedding, layer_norm, Activation, CausalMasker, MatMul},
+    attention::SdpaParams,
+    layers::{self, conv2d, embedding, layer_norm, Activation, CausalMasker, Sdpa},
     utils::unvarbuilder::UnVarBuilder,
 };
 
@@ -229,12 +230,11 @@ struct Attention {
     embed_dim: usize,
     num_heads: usize,
     head_dim: usize,
-    scale: f64,
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
-    neg_inf: Tensor,
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
+    sdpa_params: SdpaParams,
 }
 
 impl Attention {
@@ -242,32 +242,36 @@ impl Attention {
         let embed_dim = config.hidden_size;
         let num_heads = config.num_attention_heads;
         let head_dim = embed_dim / num_heads;
-        let scale = 1.0 / (head_dim as f64).sqrt();
+        let scale = 1.0 / (head_dim as f32).sqrt();
 
-        let q_proj = layers::linear(embed_dim, embed_dim, vb.pp("q_proj"))?;
-        let k_proj = layers::linear(embed_dim, embed_dim, vb.pp("k_proj"))?;
-        let v_proj = layers::linear(embed_dim, embed_dim, vb.pp("v_proj"))?;
-        let o_proj = layers::linear(embed_dim, embed_dim, vb.pp("out_proj"))?;
+        let q_proj = mistralrs_quant::linear(embed_dim, embed_dim, &None, vb.pp("q_proj"))?;
+        let k_proj = mistralrs_quant::linear(embed_dim, embed_dim, &None, vb.pp("k_proj"))?;
+        let v_proj = mistralrs_quant::linear(embed_dim, embed_dim, &None, vb.pp("v_proj"))?;
+        let o_proj = mistralrs_quant::linear(embed_dim, embed_dim, &None, vb.pp("out_proj"))?;
 
         Ok(Self {
             embed_dim,
             num_heads,
             head_dim,
-            scale,
             q_proj,
             k_proj,
             v_proj,
             o_proj,
-            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?,
+            sdpa_params: SdpaParams {
+                n_kv_groups: 1,
+                softcap: None,
+                softmax_scale: scale,
+                sliding_window: None,
+            },
         })
     }
 
     fn forward(&self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let mut q = self.q_proj.forward(xs)?;
-        let mut k = self.k_proj.forward(xs)?;
-        let mut v = self.v_proj.forward(xs)?;
+        let mut q = self.q_proj.forward_autocast(xs)?;
+        let mut k = self.k_proj.forward_autocast(xs)?;
+        let mut v = self.v_proj.forward_autocast(xs)?;
 
         q = q
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -279,21 +283,15 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let attn_weights =
-            (MatMul.matmul(&q.contiguous()?, &k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
+        let attn_output =
+            Sdpa.run_attention(&q, &k, &v, attention_mask, None, &self.sdpa_params)?;
 
-        let mut attn_weights = CausalMasker.apply_mask_one_and_zero(
-            &attention_mask.map(|x| x.to_dtype(DType::U8).unwrap()),
-            attn_weights,
-            &self.neg_inf,
-        )?;
-        attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let attn_output = MatMul.matmul(&attn_weights, &v.contiguous()?)?;
-
-        attn_output
-            .transpose(1, 2)?
-            .reshape((b_sz, q_len, self.embed_dim))?
-            .apply(&self.o_proj)
+        self.o_proj
+            .forward_autocast(&attn_output.transpose(1, 2)?.reshape((
+                b_sz,
+                q_len,
+                self.embed_dim,
+            ))?)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
@@ -310,14 +308,24 @@ impl Attention {
 
 struct VisionMLP {
     activation: Activation,
-    fc1: Linear,
-    fc2: Linear,
+    fc1: Arc<dyn QuantMethod>,
+    fc2: Arc<dyn QuantMethod>,
 }
 
 impl VisionMLP {
     fn new(config: Idefics3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        let fc1 = layers::linear(config.hidden_size, config.intermediate_size, vb.pp("fc1"))?;
-        let fc2 = layers::linear(config.intermediate_size, config.hidden_size, vb.pp("fc2"))?;
+        let fc1 = mistralrs_quant::linear(
+            config.hidden_size,
+            config.intermediate_size,
+            &None,
+            vb.pp("fc1"),
+        )?;
+        let fc2 = mistralrs_quant::linear(
+            config.intermediate_size,
+            config.hidden_size,
+            &None,
+            vb.pp("fc2"),
+        )?;
         Ok(Self {
             activation: config.hidden_act,
             fc1,
@@ -326,9 +334,9 @@ impl VisionMLP {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let mut x = self.fc1.forward(x)?;
+        let mut x = self.fc1.forward_autocast(x)?;
         x = self.activation.forward(&x)?;
-        self.fc2.forward(&x)
+        self.fc2.forward_autocast(&x)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
@@ -373,13 +381,13 @@ impl EncoderLayer {
     fn forward(&self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         let residual = xs.clone();
 
-        let hidden_states = self.layer_norm_1.forward(xs)?;
-        let hidden_states = self.attn.forward(&hidden_states, attention_mask)?;
-        let hidden_states = (hidden_states + residual)?;
+        let mut hidden_states = self.layer_norm_1.forward(xs)?;
+        hidden_states = self.attn.forward(&hidden_states, attention_mask)?;
+        hidden_states = (hidden_states + residual)?;
 
-        let residual = &hidden_states;
-        let hidden_states = self.layer_norm_2.forward(&hidden_states)?;
-        let hidden_states = self.mlp.forward(&hidden_states)?;
+        let residual = hidden_states.clone();
+        hidden_states = self.layer_norm_2.forward(&hidden_states)?;
+        hidden_states = self.mlp.forward(&hidden_states)?;
         hidden_states + residual
     }
 }
@@ -412,6 +420,7 @@ pub struct Idefics3VisionTransformer {
     encoder: Encoder,
     post_layernorm: LayerNorm,
     patch_size: usize,
+    neg_inf: Tensor,
 }
 
 impl Idefics3VisionTransformer {
@@ -428,6 +437,7 @@ impl Idefics3VisionTransformer {
             encoder,
             post_layernorm,
             patch_size: config.patch_size,
+            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?,
         })
     }
 
@@ -462,6 +472,21 @@ impl Idefics3VisionTransformer {
                 .reshape((patch_attention_mask.dim(0)?, ()))?
                 .to_dtype(hidden_states.dtype())?;
             Some(CausalMasker.expand_mask(&mask, hidden_states.dtype(), None)?)
+        };
+
+        let attention_mask = match &attention_mask {
+            Some(mask) => {
+                let (b, _h, q, k) = mask.dims4()?;
+                let dims = [b, self.encoder.layers[0].attn.num_heads, q, k];
+                let mask = mask.broadcast_as(&dims)?;
+                let mask = mask.to_dtype(DType::U8)?.where_cond(
+                    &self.neg_inf.to_device(mask.device())?.broadcast_as(&dims)?,
+                    &Tensor::zeros(&dims, self.neg_inf.dtype(), self.neg_inf.device())?,
+                )?;
+
+                Some(mask)
+            }
+            None => None,
         };
         let hidden_states = self
             .encoder

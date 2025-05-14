@@ -86,8 +86,6 @@ pub(crate) struct MLlamaRopeScaling {
     pub(crate) high_freq_factor: Option<f32>,
 }
 
-serde_default_fn!(bool, d_flash_attn, false);
-
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct MLlamaTextConfig {
     pub(crate) rope_scaling: Option<MLlamaRopeScaling>,
@@ -103,8 +101,6 @@ pub struct MLlamaTextConfig {
     pub(crate) max_position_embeddings: usize,
     pub(crate) tie_word_embeddings: bool,
     pub(crate) cross_attention_layers: Vec<usize>,
-    #[serde(default = "d_flash_attn")]
-    pub(crate) use_flash_attn: bool,
     pub(crate) quantization_config: Option<QuantizedConfig>,
 }
 
