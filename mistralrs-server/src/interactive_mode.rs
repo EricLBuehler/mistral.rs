@@ -349,7 +349,10 @@ async fn vision_interactive_mode(
 
     let prefixer = match &mistralrs.config().category {
         ModelCategory::Vision { prefixer } => prefixer,
-        ModelCategory::Text | ModelCategory::Diffusion  | ModelCategory::Speech => {
+        ModelCategory::Text
+        | ModelCategory::Diffusion
+        | ModelCategory::Speech
+        | ModelCategory::Audio => {
             panic!("`add_image_message` expects a vision model.")
         }
     };
@@ -664,91 +667,6 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
             "Image generated can be found at: image is at `{}`. Took {duration:.2}s ({pixels_per_s:.2} pixels/s).",
             response.data[0].url.as_ref().unwrap(),
         );
-
-        println!();
-    }
-
-    rl.save_history(&history_file_path()).unwrap();
-}
-
-async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
-    let sender = mistralrs.get_sender().unwrap();
-
-    info!("Starting interactive loop for speech");
-    println!(
-        "{}{DIFFUSION_INTERACTIVE_HELP}{}",
-        "=".repeat(20),
-        "=".repeat(20)
-    );
-
-    // Set the handler to process exit
-    *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
-
-    ctrlc::set_handler(move || CTRLC_HANDLER.lock().unwrap()())
-        .expect("Failed to set CTRL-C handler for interactive mode");
-
-    let mut rl = DefaultEditor::new().expect("Failed to open input");
-    let _ = rl.load_history(&history_file_path());
-    loop {
-        // Set the handler to process exit
-        *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
-
-        let prompt = read_line(&mut rl);
-
-        let prompt = match prompt.as_str().trim() {
-            "" => continue,
-            HELP_CMD => {
-                println!(
-                    "{}{DIFFUSION_INTERACTIVE_HELP}{}",
-                    "=".repeat(20),
-                    "=".repeat(20)
-                );
-                continue;
-            }
-            EXIT_CMD => {
-                break;
-            }
-            prompt => prompt.to_string(),
-        };
-
-        // Set the handler to terminate all seqs, so allowing cancelling running
-        *CTRLC_HANDLER.lock().unwrap() = &terminate_handler;
-
-        let (tx, mut rx) = channel(10_000);
-        let req = Request::Normal(NormalRequest {
-            id: 0,
-            messages: RequestMessage::SpeechGeneration {
-                prompt: prompt.to_string(),
-            },
-            sampling_params: SamplingParams::deterministic(),
-            response: tx,
-            return_logprobs: false,
-            is_streaming: false,
-            suffix: None,
-            constraint: Constraint::None,
-            tool_choice: None,
-            tools: None,
-            logits_processors: None,
-            return_raw_logits: false,
-            web_search_options: do_search.then(WebSearchOptions::default),
-        });
-
-        let start = Instant::now();
-        sender.send(req).await.unwrap();
-
-        let ResponseOk::ImageGeneration(response) = rx.recv().await.unwrap().as_result().unwrap()
-        else {
-            panic!("Got unexpected response type.")
-        };
-        let end = Instant::now();
-
-        // let duration = end.duration_since(start).as_secs_f32();
-        // let pixels_per_s = (diffusion_params.height * diffusion_params.width) as f32 / duration;
-
-        // println!(
-        //     "Image generated can be found at: image is at `{}`. Took {duration:.2}s ({pixels_per_s:.2} pixels/s).",
-        //     response.data[0].url.as_ref().unwrap(),
-        // );
 
         println!();
     }

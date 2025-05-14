@@ -12,8 +12,8 @@ use crate::{
     pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
     toml_selector::get_toml_selected_model_device_map_params,
     AutoDeviceMapParams, DiffusionLoaderBuilder, GGUFSpecificConfig, Loader, ModelDType,
-    ModelSelected, NormalLoaderBuilder, SpeechLoader, TomlLoaderArgs,
-    TomlSelector, Topology, VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
+    ModelSelected, NormalLoaderBuilder, SpeechLoader, TomlLoaderArgs, TomlSelector, Topology,
+    VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
     UQFF_MULTI_FILE_DELIMITER,
 };
 

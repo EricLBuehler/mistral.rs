@@ -163,7 +163,6 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
                 n_kv_groups: self.num_gqa_groups,
                 sliding_window: None,
                 softcap: None,
-                use_flash_attn: false,
                 softmax_scale: 1.,
             },
         )?;

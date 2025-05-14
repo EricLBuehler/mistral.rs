@@ -242,7 +242,9 @@ impl DiaPipeline {
             self.model
                 .encoder
                 .forward(&enc_input, &encoder_positions, Some(&encoder_attn_mask))?;
-        let encoder_out = Tensor::read_npy("encoder_out.npy")?.to_dtype(DType::F32)?.to_device(&self.device)?;
+        let encoder_out = Tensor::read_npy("encoder_out.npy")?
+            .to_dtype(DType::F32)?
+            .to_device(&self.device)?;
         println!("{encoder_out}");
 
         let decoder_cross_attn_cache = self

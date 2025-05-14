@@ -236,8 +236,6 @@ impl PartialEq for ModelCategory {
                 Self::Text | Self::Vision { .. } | Self::Diffusion | Self::Audio | Self::Speech,
                 _,
             ) => false,
-            (Self::Speech, Self::Speech) => true,
-            (Self::Speech, _) => false,
         }
     }
 }
