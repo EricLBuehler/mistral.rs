@@ -50,7 +50,6 @@ pub struct Config {
     pub num_codebooks: usize,
     pub codebook_size: usize,
     pub latent_dim: usize,
-    pub sampling_rate: u32,
 }
 
 impl Config {
@@ -59,7 +58,6 @@ impl Config {
             num_codebooks: 9,
             codebook_size: 1024,
             latent_dim: 1024,
-            sampling_rate: 44100,
         }
     }
 }
@@ -129,100 +127,6 @@ impl candle_core::Module for ResidualUnit {
         } else {
             ys + xs
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct EncoderBlock {
-    res1: ResidualUnit,
-    res2: ResidualUnit,
-    res3: ResidualUnit,
-    snake1: Snake1d,
-    conv1: Conv1d,
-}
-
-impl EncoderBlock {
-    pub fn new(dim: usize, stride: usize, vb: VarBuilder) -> Result<Self> {
-        let vb = vb.pp("block");
-        let res1 = ResidualUnit::new(dim / 2, 1, vb.pp(0))?;
-        let res2 = ResidualUnit::new(dim / 2, 3, vb.pp(1))?;
-        let res3 = ResidualUnit::new(dim / 2, 9, vb.pp(2))?;
-        let snake1 = Snake1d::new(dim / 2, vb.pp(3))?;
-        let cfg1 = Conv1dConfig {
-            stride,
-            padding: stride.div_ceil(2),
-            ..Default::default()
-        };
-        let conv1 = conv1d_weight_norm(dim / 2, dim, 2 * stride, cfg1, vb.pp(4))?;
-        Ok(Self {
-            res1,
-            res2,
-            res3,
-            snake1,
-            conv1,
-        })
-    }
-}
-
-impl candle_core::Module for EncoderBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.res1)?
-            .apply(&self.res2)?
-            .apply(&self.res3)?
-            .apply(&self.snake1)?
-            .apply(&self.conv1)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Encoder {
-    conv1: Conv1d,
-    blocks: Vec<EncoderBlock>,
-    snake1: Snake1d,
-    conv2: Conv1d,
-}
-
-impl candle_core::Module for Encoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let mut xs = xs.apply(&self.conv1)?;
-        for block in self.blocks.iter() {
-            xs = xs.apply(block)?
-        }
-        xs.apply(&self.snake1)?.apply(&self.conv2)
-    }
-}
-
-impl Encoder {
-    pub fn new(
-        mut d_model: usize,
-        strides: &[usize],
-        d_latent: usize,
-        vb: VarBuilder,
-    ) -> Result<Self> {
-        let vb = vb.pp("block");
-        let cfg1 = Conv1dConfig {
-            padding: 3,
-            ..Default::default()
-        };
-        let conv1 = conv1d_weight_norm(1, d_model, 7, cfg1, vb.pp(0))?;
-        let mut blocks = Vec::with_capacity(strides.len());
-        for (block_idx, stride) in strides.iter().enumerate() {
-            d_model *= 2;
-            let block = EncoderBlock::new(d_model, *stride, vb.pp(block_idx + 1))?;
-            blocks.push(block)
-        }
-        let snake1 = Snake1d::new(d_model, vb.pp(strides.len() + 1))?;
-        let cfg2 = Conv1dConfig {
-            padding: 1,
-            ..Default::default()
-        };
-        let conv2 = conv1d_weight_norm(d_model, d_latent, 3, cfg2, vb.pp(strides.len() + 2))?;
-        Ok(Self {
-            conv1,
-            blocks,
-            snake1,
-            conv2,
-        })
     }
 }
 

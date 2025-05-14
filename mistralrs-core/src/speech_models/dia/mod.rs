@@ -436,9 +436,7 @@ impl DiaPipeline {
         codebook = invalid_mask.where_cond(&codebook.zeros_like()?, &codebook)?;
 
         let codes = codebook.transpose(1, 2)?;
-        println!("{codes}");
         let pcm = self.dac.decode_codes(&codes)?;
-        println!("{pcm}");
         let pcm = pcm.i((0, 0))?;
         let pcm = normalize_loudness(&pcm, 44_100, true)?;
         let pcm = pcm.to_vec1::<f32>()?;
