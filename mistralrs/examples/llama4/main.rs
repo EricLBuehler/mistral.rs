@@ -1,16 +1,13 @@
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new(
-        "meta-llama/Llama-4-Scout-17B-16E-Instruct",
-        VisionLoaderType::Llama4,
-    )
-    .with_isq(IsqType::Q4K)
-    .with_logging()
-    .build()
-    .await?;
+    let model = VisionModelBuilder::new("meta-llama/Llama-4-Scout-17B-16E-Instruct")
+        .with_isq(IsqType::Q4K)
+        .with_logging()
+        .build()
+        .await?;
 
     let bytes = match reqwest::blocking::get(
         "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg",

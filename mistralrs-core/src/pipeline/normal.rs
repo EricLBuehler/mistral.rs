@@ -11,7 +11,7 @@ use super::{
     IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use super::{
-    AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader, Gemma2Loader, GemmaLoader, LlamaLoader,
+    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, Gemma2Loader, GemmaLoader, LlamaLoader,
     MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader,
     Qwen2Loader, Qwen3Loader, Qwen3MoELoader, Starcoder2Loader,
 };
@@ -221,7 +221,7 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::DeepSeekV3) => Box::new(DeepSeekV3Loader),
             Some(NormalLoaderType::Qwen3) => Box::new(Qwen3Loader),
             Some(NormalLoaderType::Qwen3Moe) => Box::new(Qwen3MoELoader),
-            None => Box::new(AutoLoader),
+            None => Box::new(AutoNormalLoader),
         };
         Ok(Box::new(NormalLoader {
             inner: loader,

@@ -86,5 +86,5 @@ let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
 
 ## Server example
 ```
-cargo run --release --features "cuda flash-attn" -- --port 1234 --log output.txt --isq Q2K plain -m mistralai/Mistral-7B-Instruct-v0.1 -a mistral
+cargo run --release --features "cuda flash-attn" -- --port 1234 --log output.txt --isq Q2K plain -m mistralai/Mistral-7B-Instruct-v0.1
 ```

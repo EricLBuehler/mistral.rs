@@ -7,6 +7,7 @@ use candle_core::{DType, Device, Tensor, D};
 use candle_nn::Conv2dConfig;
 use image::{ColorType, DynamicImage};
 use itertools::Itertools;
+use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::ShardedVarBuilder;
 
 #[cfg(feature = "pyo3_macros")]
@@ -87,7 +88,7 @@ pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>>;
-    fn is_gptx(&self) -> bool;
+    fn is_gptx(&self, config: &str) -> bool;
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>>;
     fn get_processor(
         &self,
@@ -96,12 +97,12 @@ pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         preprocessor_config: PreProcessorConfig,
         max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync>;
-    fn supports_paged_attention(&self) -> bool;
-    fn supports_prefix_cacher(&self) -> bool {
+    fn supports_paged_attention(&self, config: &str) -> bool;
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
         // Default is false, specific model must override.
         false
     }
-    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer>;
+    fn prefixer(&self, config: &str) -> Arc<dyn VisionPromptPrefixer>;
     fn get_device_for_tensor(
         &self,
         config: &str,
@@ -163,6 +164,30 @@ pub enum VisionLoaderType {
     Llama4,
 }
 
+// https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
+impl VisionLoaderType {
+    pub fn from_causal_lm_name(name: &str) -> Result<Self> {
+        match name {
+            "Phi3VForCausalLM" => Ok(Self::Phi3V),
+            "Idefics2ForConditionalGeneration" => Ok(Self::Idefics2),
+            "LlavaNextForConditionalGeneration" => Ok(Self::LLaVANext),
+            "LlavaForConditionalGeneration" => Ok(Self::LLaVA),
+            "MllamaForConditionalGeneration" => Ok(Self::VLlama),
+            "Qwen2VLForConditionalGeneration" => Ok(Self::Qwen2VL),
+            "Idefics3ForConditionalGeneration" => Ok(Self::Idefics3),
+            "MiniCPMO" => Ok(Self::MiniCpmO),
+            "Phi4MMForCausalLM" => Ok(Self::Phi4MM),
+            "Qwen2_5_VLForConditionalGeneration" => Ok(Self::Qwen2_5VL),
+            "Gemma3ForConditionalGeneration" => Ok(Self::Gemma3),
+            "Mistral3ForConditionalGeneration" => Ok(Self::Mistral3),
+            "Llama4ForConditionalGeneration" => Ok(Self::Llama4),
+            other => anyhow::bail!(
+                "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
+            ),
+        }
+    }
+}
+
 impl FromStr for VisionLoaderType {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -182,6 +207,176 @@ impl FromStr for VisionLoaderType {
             "llama4" => Ok(Self::Llama4),
             a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`.")),
         }
+    }
+}
+
+impl std::fmt::Display for VisionLoaderType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            VisionLoaderType::Phi3V => "phi3v",
+            VisionLoaderType::Idefics2 => "idefics2",
+            VisionLoaderType::LLaVANext => "llava_next",
+            VisionLoaderType::LLaVA => "llava",
+            VisionLoaderType::VLlama => "vllama",
+            VisionLoaderType::Qwen2VL => "qwen2vl",
+            VisionLoaderType::Idefics3 => "idefics3",
+            VisionLoaderType::MiniCpmO => "minicpmo",
+            VisionLoaderType::Phi4MM => "phi4mm",
+            VisionLoaderType::Qwen2_5VL => "qwen2_5vl",
+            VisionLoaderType::Gemma3 => "gemma3",
+            VisionLoaderType::Mistral3 => "mistral3",
+            VisionLoaderType::Llama4 => "llama4",
+        };
+        write!(f, "{name}")
+    }
+}
+
+#[derive(Deserialize)]
+struct AutoVisionLoaderConfig {
+    architectures: Vec<String>,
+}
+
+/// Automatically selects a VisionModelLoader implementation based on the JSON `architectures` field.
+pub struct AutoVisionLoader;
+
+impl AutoVisionLoader {
+    fn get_loader(config: &str) -> Result<Box<dyn VisionModelLoader>> {
+        let auto_cfg: AutoVisionLoaderConfig = serde_json::from_str(config)?;
+        if auto_cfg.architectures.len() != 1 {
+            anyhow::bail!("Expected exactly one architecture in config");
+        }
+
+        let name = &auto_cfg.architectures[0];
+        let tp = VisionLoaderType::from_causal_lm_name(name)?;
+
+        once_log_info(format!("Automatic loader type determined to be `{tp}`"));
+
+        // Delegate to the concrete loader
+        Ok(match tp {
+            VisionLoaderType::Phi3V => Box::new(Phi3VLoader),
+            VisionLoaderType::Idefics2 => Box::new(Idefics2Loader),
+            VisionLoaderType::LLaVANext => Box::new(LLaVANextLoader),
+            VisionLoaderType::LLaVA => Box::new(LLaVALoader),
+            VisionLoaderType::VLlama => Box::new(VLlamaLoader),
+            VisionLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
+            VisionLoaderType::Idefics3 => Box::new(Idefics3Loader),
+            VisionLoaderType::MiniCpmO => Box::new(MiniCpmOLoader),
+            VisionLoaderType::Phi4MM => Box::new(Phi4MMLoader),
+            VisionLoaderType::Qwen2_5VL => Box::new(Qwen2_5VLLoader),
+            VisionLoaderType::Gemma3 => Box::new(Gemma3Loader),
+            VisionLoaderType::Mistral3 => Box::new(Mistral3Loader),
+            VisionLoaderType::Llama4 => Box::new(VLlama4Loader),
+        })
+    }
+}
+
+impl VisionModelLoader for AutoVisionLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        Self::get_loader(config)?.load(config, vb, normal_loading_metadata, attention_mechanism)
+    }
+
+    fn is_gptx(&self, config: &str) -> bool {
+        Self::get_loader(config)
+            .expect("AutoVisionLoader get_loader")
+            .is_gptx(config)
+    }
+
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        Self::get_loader(config)?.get_config_repr(config)
+    }
+
+    fn get_processor(
+        &self,
+        model_config: &str,
+        proc_cfg: Option<ProcessorConfig>,
+        preproc_cfg: PreProcessorConfig,
+        max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Self::get_loader(model_config)
+            .expect("AutoVisionLoader get_loader")
+            .get_processor(model_config, proc_cfg, preproc_cfg, max_edge)
+    }
+
+    fn supports_paged_attention(&self, config: &str) -> bool {
+        Self::get_loader(config)
+            .expect("AutoVisionLoader")
+            .supports_paged_attention(config)
+    }
+
+    fn supports_prefix_cacher(&self, config: &str) -> bool {
+        Self::get_loader(config)
+            .expect("AutoVisionLoader")
+            .supports_prefix_cacher(config)
+    }
+
+    fn prefixer(&self, config: &str) -> Arc<dyn VisionPromptPrefixer> {
+        Self::get_loader(config)
+            .expect("AutoVisionLoader")
+            .prefixer(config)
+    }
+
+    fn get_device_for_tensor(
+        &self,
+        config: &str,
+        mapper: &dyn DeviceMapper,
+        loading_isq: bool,
+    ) -> Result<Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>> {
+        Self::get_loader(config)?.get_device_for_tensor(config, mapper, loading_isq)
+    }
+}
+
+impl IsqModelLoader for AutoVisionLoader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.isq_layer_regexes(config)
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.immediate_isq_predicates(config)
+    }
+}
+
+impl DeviceMappedModelLoader for AutoVisionLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
+    ) -> Result<usize> {
+        Self::get_loader(config)?.mapped_max_act_size_elems(config, params, prompt_chunksize)
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Self::get_loader(config)?.non_mapped_max_act_size_elems(config, params)
+    }
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        Self::get_loader(config)?.non_mapped_size_in_bytes(config, dtype, weight_pack_factor)
+    }
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<Vec<usize>> {
+        Self::get_loader(config)?.layer_sizes_in_bytes(config, dtype, weight_pack_factor)
+    }
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        Self::get_loader(config)?.num_layers(config)
+    }
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        Self::get_loader(config)?.model_config(config)
     }
 }
 
@@ -272,12 +467,12 @@ impl VisionModelLoader for Phi3VLoader {
         Ok(Box::new(Phi3::new(
             &cfg,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config),
             normal_loading_metadata,
             attention_mechanism,
         )?))
     }
-    fn is_gptx(&self) -> bool {
+    fn is_gptx(&self, _config: &str) -> bool {
         true
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
@@ -293,13 +488,13 @@ impl VisionModelLoader for Phi3VLoader {
     ) -> Arc<dyn Processor + Send + Sync> {
         Phi3Processor::new_processor(processor_config, preprocessor_config)
     }
-    fn supports_paged_attention(&self) -> bool {
+    fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
-    fn supports_prefix_cacher(&self) -> bool {
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(Phi3VPrefixer)
     }
 }
@@ -538,12 +733,12 @@ impl VisionModelLoader for Idefics2Loader {
         Ok(Box::new(Idefics2::new(
             &cfg,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config),
             normal_loading_metadata,
             attention_mechanism,
         )?))
     }
-    fn is_gptx(&self) -> bool {
+    fn is_gptx(&self, _config: &str) -> bool {
         true
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
@@ -563,13 +758,13 @@ impl VisionModelLoader for Idefics2Loader {
             max_edge,
         ))
     }
-    fn supports_paged_attention(&self) -> bool {
+    fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
-    fn supports_prefix_cacher(&self) -> bool {
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(Idefics2Prefixer)
     }
 }
@@ -880,12 +1075,12 @@ impl VisionModelLoader for LLaVANextLoader {
         Ok(Box::new(LLaVANext::new(
             &cfg,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config),
             normal_loading_metadata,
             attention_mechanism,
         )?))
     }
-    fn is_gptx(&self) -> bool {
+    fn is_gptx(&self, _config: &str) -> bool {
         false
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
@@ -901,13 +1096,13 @@ impl VisionModelLoader for LLaVANextLoader {
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(LLaVANextProcessor::new(model_config))
     }
-    fn supports_paged_attention(&self) -> bool {
+    fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
-    fn supports_prefix_cacher(&self) -> bool {
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(LLaVANextPrefixer)
     }
 }
@@ -1142,12 +1337,12 @@ impl VisionModelLoader for LLaVALoader {
         Ok(Box::new(LLaVA::new(
             &cfg,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config),
             normal_loading_metadata,
             attention_mechanism,
         )?))
     }
-    fn is_gptx(&self) -> bool {
+    fn is_gptx(&self, _config: &str) -> bool {
         false
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
@@ -1163,13 +1358,13 @@ impl VisionModelLoader for LLaVALoader {
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(LLaVAProcessor::new(model_config))
     }
-    fn supports_paged_attention(&self) -> bool {
+    fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
-    fn supports_prefix_cacher(&self) -> bool {
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(LLaVAPrefixer)
     }
 }
@@ -1396,12 +1591,12 @@ impl VisionModelLoader for VLlamaLoader {
         Ok(Box::new(MLlamaModel::new(
             &cfg,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config),
             normal_loading_metadata,
             attention_mechanism,
         )?))
     }
-    fn is_gptx(&self) -> bool {
+    fn is_gptx(&self, _config: &str) -> bool {
         true
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
@@ -1417,13 +1612,13 @@ impl VisionModelLoader for VLlamaLoader {
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(MLlamaProcessor::new())
     }
-    fn supports_paged_attention(&self) -> bool {
+    fn supports_paged_attention(&self, _config: &str) -> bool {
         false
     }
-    fn supports_prefix_cacher(&self) -> bool {
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(VLlamaPrefixer)
     }
 }
@@ -1778,16 +1973,16 @@ impl VisionModelLoader for Qwen2VLLoader {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        let config: Qwen2VLConfig = serde_json::from_str(config)?;
+        let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
         Ok(Box::new(Qwen2VLModel::new(
-            &config,
+            &cfg,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config),
             normal_loading_metadata,
             attention_mechanism,
         )?))
     }
-    fn is_gptx(&self) -> bool {
+    fn is_gptx(&self, _config: &str) -> bool {
         true
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
@@ -1803,10 +1998,10 @@ impl VisionModelLoader for Qwen2VLLoader {
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(Qwen2VLProcessor::new(max_edge))
     }
-    fn supports_paged_attention(&self) -> bool {
+    fn supports_paged_attention(&self, _config: &str) -> bool {
         false
     }
-    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(Qwen2VLPrefixer)
     }
 }
@@ -2062,12 +2257,12 @@ impl VisionModelLoader for Idefics3Loader {
         Ok(Box::new(Idefics3Model::new(
             &cfg,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config),
             normal_loading_metadata,
             attention_mechanism,
         )?))
     }
-    fn is_gptx(&self) -> bool {
+    fn is_gptx(&self, _config: &str) -> bool {
         true
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
@@ -2087,13 +2282,13 @@ impl VisionModelLoader for Idefics3Loader {
             max_edge,
         ))
     }
-    fn supports_paged_attention(&self) -> bool {
+    fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
-    fn supports_prefix_cacher(&self) -> bool {
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(Idefics3Prefixer)
     }
 }
@@ -2374,12 +2569,12 @@ impl VisionModelLoader for MiniCpmOLoader {
         Ok(Box::new(MiniCpmOModel::new(
             &cfg,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config),
             normal_loading_metadata,
             attention_mechanism,
         )?))
     }
-    fn is_gptx(&self) -> bool {
+    fn is_gptx(&self, _config: &str) -> bool {
         true
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
@@ -2399,10 +2594,10 @@ impl VisionModelLoader for MiniCpmOLoader {
             max_edge,
         ))
     }
-    fn supports_paged_attention(&self) -> bool {
+    fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(MiniCpmOPrefixer)
     }
 }
@@ -2650,12 +2845,12 @@ impl VisionModelLoader for Phi4MMLoader {
         Ok(Box::new(Phi4MMModel::new(
             &cfg,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config),
             normal_loading_metadata,
             attention_mechanism,
         )?))
     }
-    fn is_gptx(&self) -> bool {
+    fn is_gptx(&self, _config: &str) -> bool {
         true
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
@@ -2671,13 +2866,13 @@ impl VisionModelLoader for Phi4MMLoader {
     ) -> Arc<dyn Processor + Send + Sync> {
         Phi4MMProcessor::new_processor(processor_config, preprocessor_config)
     }
-    fn supports_paged_attention(&self) -> bool {
+    fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
-    fn supports_prefix_cacher(&self) -> bool {
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(Phi4MMPrefixer)
     }
 }
@@ -2968,16 +3163,16 @@ impl VisionModelLoader for Qwen2_5VLLoader {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        let config: Qwen2_5VLConfig = serde_json::from_str(config)?;
+        let cfg: Qwen2_5VLConfig = serde_json::from_str(config)?;
         Ok(Box::new(Qwen2_5VLModel::new(
-            &config,
+            &cfg,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config),
             normal_loading_metadata,
             attention_mechanism,
         )?))
     }
-    fn is_gptx(&self) -> bool {
+    fn is_gptx(&self, _config: &str) -> bool {
         true
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
@@ -2993,10 +3188,10 @@ impl VisionModelLoader for Qwen2_5VLLoader {
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(Qwen2_5VLProcessor::new(max_edge))
     }
-    fn supports_paged_attention(&self) -> bool {
+    fn supports_paged_attention(&self, _config: &str) -> bool {
         false
     }
-    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(Qwen2_5VLPrefixer)
     }
 }
@@ -3246,16 +3441,16 @@ impl VisionModelLoader for Gemma3Loader {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        let config: Gemma3Config = serde_json::from_str(config)?;
+        let cfg: Gemma3Config = serde_json::from_str(config)?;
         Ok(Box::new(Gemma3Model::new(
-            &config,
+            &cfg,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config),
             normal_loading_metadata,
             attention_mechanism,
         )?))
     }
-    fn is_gptx(&self) -> bool {
+    fn is_gptx(&self, _config: &str) -> bool {
         true
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
@@ -3276,13 +3471,13 @@ impl VisionModelLoader for Gemma3Loader {
             matches!(config, Gemma3Config::WithVision { .. }),
         ))
     }
-    fn supports_paged_attention(&self) -> bool {
+    fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
-    fn supports_prefix_cacher(&self) -> bool {
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(Gemma3Prefixer)
     }
 }
@@ -3581,12 +3776,12 @@ impl VisionModelLoader for Mistral3Loader {
         Ok(Box::new(Mistral3Model::new(
             &cfg,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config),
             normal_loading_metadata,
             attention_mechanism,
         )?))
     }
-    fn is_gptx(&self) -> bool {
+    fn is_gptx(&self, _config: &str) -> bool {
         true
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
@@ -3602,13 +3797,13 @@ impl VisionModelLoader for Mistral3Loader {
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(Mistral3Processor::new(processor_config.unwrap_or_default()))
     }
-    fn supports_paged_attention(&self) -> bool {
+    fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
-    fn supports_prefix_cacher(&self) -> bool {
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(Mistral3Prefixer)
     }
 }
@@ -3899,12 +4094,12 @@ impl VisionModelLoader for VLlama4Loader {
         Ok(Box::new(Llama4Model::new(
             &cfg,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config),
             normal_loading_metadata,
             attention_mechanism,
         )?))
     }
-    fn is_gptx(&self) -> bool {
+    fn is_gptx(&self, _config: &str) -> bool {
         false
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
@@ -3920,10 +4115,10 @@ impl VisionModelLoader for VLlama4Loader {
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(Llama4Processor::new(&processor_config.unwrap()))
     }
-    fn supports_paged_attention(&self) -> bool {
+    fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(VLlama4Prefixer)
     }
 }

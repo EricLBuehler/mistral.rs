@@ -33,7 +33,7 @@ Here are some examples using various models. Note that this works for both strea
 ```
 
 ```
-./mistralrs-server --enable-search --port 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 -a mistral3
+./mistralrs-server --enable-search --port 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
 ```
 
 ```

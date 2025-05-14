@@ -1,11 +1,11 @@
 use super::isq::ImatrixDataSource;
 use super::isq::UqffFullSer;
 use super::{
-    get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, CacheManager,
-    CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader, GeneralMetadata,
-    IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths,
-    Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource, VLlama4Loader,
-    VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
+    get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoVisionLoader,
+    CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
+    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
+    ModelKind, ModelPaths, Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource,
+    VLlama4Loader, VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
 };
 use super::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader, Phi3VLoader,
@@ -153,21 +153,22 @@ impl VisionLoaderBuilder {
         self
     }
 
-    pub fn build(self, loader: VisionLoaderType) -> Box<dyn Loader> {
+    pub fn build(self, loader: Option<VisionLoaderType>) -> Box<dyn Loader> {
         let loader: Box<dyn VisionModelLoader> = match loader {
-            VisionLoaderType::Phi3V => Box::new(Phi3VLoader),
-            VisionLoaderType::Idefics2 => Box::new(Idefics2Loader),
-            VisionLoaderType::LLaVANext => Box::new(LLaVANextLoader),
-            VisionLoaderType::LLaVA => Box::new(LLaVALoader),
-            VisionLoaderType::VLlama => Box::new(VLlamaLoader),
-            VisionLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
-            VisionLoaderType::Idefics3 => Box::new(Idefics3Loader),
-            VisionLoaderType::MiniCpmO => Box::new(MiniCpmOLoader),
-            VisionLoaderType::Phi4MM => Box::new(Phi4MMLoader),
-            VisionLoaderType::Qwen2_5VL => Box::new(Qwen2_5VLLoader),
-            VisionLoaderType::Gemma3 => Box::new(Gemma3Loader),
-            VisionLoaderType::Mistral3 => Box::new(Mistral3Loader),
-            VisionLoaderType::Llama4 => Box::new(VLlama4Loader),
+            Some(VisionLoaderType::Phi3V) => Box::new(Phi3VLoader),
+            Some(VisionLoaderType::Idefics2) => Box::new(Idefics2Loader),
+            Some(VisionLoaderType::LLaVANext) => Box::new(LLaVANextLoader),
+            Some(VisionLoaderType::LLaVA) => Box::new(LLaVALoader),
+            Some(VisionLoaderType::VLlama) => Box::new(VLlamaLoader),
+            Some(VisionLoaderType::Qwen2VL) => Box::new(Qwen2VLLoader),
+            Some(VisionLoaderType::Idefics3) => Box::new(Idefics3Loader),
+            Some(VisionLoaderType::MiniCpmO) => Box::new(MiniCpmOLoader),
+            Some(VisionLoaderType::Phi4MM) => Box::new(Phi4MMLoader),
+            Some(VisionLoaderType::Qwen2_5VL) => Box::new(Qwen2_5VLLoader),
+            Some(VisionLoaderType::Gemma3) => Box::new(Gemma3Loader),
+            Some(VisionLoaderType::Mistral3) => Box::new(Mistral3Loader),
+            Some(VisionLoaderType::Llama4) => Box::new(VLlama4Loader),
+            None => Box::new(AutoVisionLoader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -250,7 +251,7 @@ impl Loader for VisionLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
 
-        if !self.inner.supports_paged_attention() {
+        if !self.inner.supports_paged_attention(&config) {
             paged_attn_config = None;
         }
 
@@ -689,7 +690,7 @@ impl Loader for VisionLoader {
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 no_kv_cache: false,
-                no_prefix_cache: !self.inner.supports_prefix_cacher(),
+                no_prefix_cache: !self.inner.supports_prefix_cacher(&config),
                 activation_dtype: dtype,
                 sliding_window,
                 cache_config,
@@ -698,7 +699,7 @@ impl Loader for VisionLoader {
                 model_metadata: Some(model_metadata),
             }),
             processor,
-            prefixer: self.inner.prefixer(),
+            prefixer: self.inner.prefixer(&config),
             preprocessor_config: Arc::new(preprocessor_config),
             topology: self.config.topology.clone(),
             silent,

@@ -1,9 +1,9 @@
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("llava-hf/llava-1.5-7b-hf", VisionLoaderType::LLaVA)
+    let model = VisionModelBuilder::new("llava-hf/llava-1.5-7b-hf")
         .with_isq(IsqType::Q4K)
         .with_chat_template("chat_templates/vicuna.json")
         .with_logging()
