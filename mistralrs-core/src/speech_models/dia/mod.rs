@@ -226,7 +226,7 @@ impl DiaPipeline {
     )> {
         let enc_input_cond = self.prepare_text_prompt(text)?;
         let enc_input_uncond = enc_input_cond.zeros_like()?;
-        let enc_input = Tensor::cat(&[&enc_input_cond, &enc_input_uncond], 0)?;
+        let enc_input = Tensor::cat(&[&enc_input_uncond, &enc_input_cond], 0)?;
 
         let prefill = self.prepare_audio_prompt()?;
 
@@ -377,7 +377,7 @@ impl DiaPipeline {
             self_attn_cache,
             cross_attn_cache,
         )?;
-        // println!("{logits}");
+        // println!("LOGITS {logits}");
         // todo!();
 
         let logits_last = logits.i((.., logits.dim(1)? - 1.., .., ..))?.squeeze(1)?;
@@ -551,6 +551,9 @@ impl DiaPipeline {
 
             if dec_step % 86 == 0 {
                 println!("Generated 1s")
+            }
+            if dec_step >= 600 {
+                break;
             }
         }
 

@@ -140,32 +140,57 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
             }
         };
 
-        let attn_mask = match attn_mask {
-            Some(attn_mask) => {
-                let should_attend = attn_mask.eq(1.)?;
-                let should_not_attend = attn_mask.eq(0.)?;
-                Some(masked_fill(
-                    &masked_fill(&attn_mask.to_dtype(DType::F32)?, &should_attend, 0f32)?,
-                    &should_not_attend,
-                    f32::NEG_INFINITY,
-                )?)
+        fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
+            if n_rep == 1 {
+                Ok(x)
+            } else {
+                let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
+                Tensor::cat(&vec![&x; n_rep], 2)?.reshape((
+                    b_sz,
+                    n_kv_head * n_rep,
+                    seq_len,
+                    head_dim,
+                ))
             }
-            None => None,
-        };
-        // TODO: flash attention
-        let mut attn_output = Sdpa.run_attention(
-            &xq,
-            &k,
-            &v,
-            attn_mask.as_ref(),
-            None,
-            &SdpaParams {
-                n_kv_groups: self.num_gqa_groups,
-                sliding_window: None,
-                softcap: None,
-                softmax_scale: 1.,
-            },
-        )?;
+        }
+        let k = repeat_kv(k, self.num_gqa_groups)?;
+        let v = repeat_kv(v, self.num_gqa_groups)?;
+        let mut att = xq.contiguous()?.matmul(&k.t()?.contiguous()?)?;
+
+        if let Some(mask) = attn_mask {
+            att = masked_fill(&att, &(1. - mask)?, f32::NEG_INFINITY)?;
+        }
+        att = candle_nn::ops::softmax_last_dim(&att)?;
+
+        let mut attn_output = att.matmul(&v.contiguous()?)?;
+        // let attn_mask = match attn_mask {
+        //     Some(attn_mask) => {
+        //         let should_attend = attn_mask.eq(1.)?;
+        //         let should_not_attend = attn_mask.eq(0.)?;
+        //         let mask = masked_fill(
+        //             &attn_mask.to_dtype(DType::F32)?,
+        //             &should_not_attend,
+        //             f32::NEG_INFINITY,
+        //         )?;
+        //         dbg!(&mask.mean_all()?);
+        //         Some(mask)
+        //     }
+        //     None => None,
+        // };
+        // // TODO: flash attention
+        // let mut attn_output = Sdpa.run_attention(
+        //     &xq,
+        //     &k,
+        //     &v,
+        //     attn_mask.as_ref(),
+        //     None,
+        //     &SdpaParams {
+        //         n_kv_groups: self.num_gqa_groups,
+        //         sliding_window: None,
+        //         softcap: None,
+        //         softmax_scale: 1.,
+        //     },
+        // )?;
 
         attn_output = attn_output.transpose(1, 2)?.reshape((b, t, ()))?;
 
