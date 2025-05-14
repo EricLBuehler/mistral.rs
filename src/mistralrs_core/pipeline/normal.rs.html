@@ -11,7 +11,7 @@
 <a href=#11 id=11 data-nosnippet>11</a>    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 <a href=#12 id=12 data-nosnippet>12</a>};
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use super</span>::{
-<a href=#14 id=14 data-nosnippet>14</a>    AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader, Gemma2Loader, GemmaLoader, LlamaLoader,
+<a href=#14 id=14 data-nosnippet>14</a>    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, Gemma2Loader, GemmaLoader, LlamaLoader,
 <a href=#15 id=15 data-nosnippet>15</a>    MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader,
 <a href=#16 id=16 data-nosnippet>16</a>    Qwen2Loader, Qwen3Loader, Qwen3MoELoader, Starcoder2Loader,
 <a href=#17 id=17 data-nosnippet>17</a>};
@@ -221,7 +221,7 @@
 <a href=#221 id=221 data-nosnippet>221</a>            <span class="prelude-val">Some</span>(NormalLoaderType::DeepSeekV3) =&gt; Box::new(DeepSeekV3Loader),
 <a href=#222 id=222 data-nosnippet>222</a>            <span class="prelude-val">Some</span>(NormalLoaderType::Qwen3) =&gt; Box::new(Qwen3Loader),
 <a href=#223 id=223 data-nosnippet>223</a>            <span class="prelude-val">Some</span>(NormalLoaderType::Qwen3Moe) =&gt; Box::new(Qwen3MoELoader),
-<a href=#224 id=224 data-nosnippet>224</a>            <span class="prelude-val">None </span>=&gt; Box::new(AutoLoader),
+<a href=#224 id=224 data-nosnippet>224</a>            <span class="prelude-val">None </span>=&gt; Box::new(AutoNormalLoader),
 <a href=#225 id=225 data-nosnippet>225</a>        };
 <a href=#226 id=226 data-nosnippet>226</a>        <span class="prelude-val">Ok</span>(Box::new(NormalLoader {
 <a href=#227 id=227 data-nosnippet>227</a>            inner: loader,
