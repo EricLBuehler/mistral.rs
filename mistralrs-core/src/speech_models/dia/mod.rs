@@ -244,11 +244,10 @@ impl DiaPipeline {
                 .encoder
                 .forward(&enc_input, &encoder_positions, Some(&encoder_attn_mask))?;
 
-        let decoder_cross_attn_cache = self.model.decoder.precompute_cross_attn_cache(
-            &encoder_out,
-            &encoder_positions,
-            &encoder_padding_mask,
-        )?;
+        let decoder_cross_attn_cache = self
+            .model
+            .decoder
+            .precompute_cross_attn_cache(&encoder_out, &encoder_positions)?;
         let decoder_padding_mask = Tensor::ones((2, 1), DType::U8, &self.device)?;
         let decoder_attn_mask = create_attn_mask(&decoder_padding_mask, &encoder_padding_mask)?;
 
@@ -259,7 +258,6 @@ impl DiaPipeline {
             &self.device,
         )?;
 
-        prefill.write_npy("prefill_m.npy")?;
         generated_tokens.slice_set(&prefill.to_dtype(DType::F32)?, 0, 0)?;
 
         let mut decoder_self_attn_cache = Vec::new();
@@ -302,10 +300,18 @@ impl DiaPipeline {
         let batch_logits: Vec<Vec<f32>> = logits.to_vec2::<f32>()?;
 
         let mut sampled = Vec::with_capacity(batch_logits.len());
+        let audio_eos_value = self.cfg.data.audio_eos_value as usize;
+
         for mut probs in batch_logits {
             let mut argsort_indices: Vec<usize> = (0..probs.len()).collect();
             argsort_indices.sort_unstable_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap());
 
+            // ---- Mask out EOS unless it is the highest ----
+            if !argsort_indices.is_empty() && argsort_indices[0] != audio_eos_value {
+                probs[audio_eos_value] = 0.0;
+            }
+
+            // Top-k
             if let Some(cfg_filter_top_k) = cfg_filter_top_k {
                 // Clamp smaller probabilities to zero.
                 for (index, val) in argsort_indices.iter().enumerate() {
@@ -315,13 +321,7 @@ impl DiaPipeline {
                 }
             }
 
-            // TOP P
-
-            // top-p sampling (or "nucleus sampling") samples from the smallest set of
-            // tokens that exceed probability top_p. This way we never sample tokens that
-            // have very low probabilities and are less likely to go "off the rails".
-
-            // Clamp smaller probabilities to zero.
+            // Top-p
             let mut cumsum = 0.;
             for index in &argsort_indices {
                 if cumsum >= top_p {
@@ -498,10 +498,6 @@ impl DiaPipeline {
         let mut eos_countdown: Option<usize> = None;
 
         let mut rng = Isaac64Rng::seed_from_u64(0);
-        generated_tokens.write_npy("generated_tokens_m.npy")?;
-        let mut generated_tokens = Tensor::read_npy("generated_tokens.npy")?
-            .to_device(generated_tokens.device())?
-            .to_dtype(DType::F32)?;
 
         while dec_step < max_tokens {
             let dec_positions = Tensor::full(dec_step as f32, (2, 1), &self.device)?;

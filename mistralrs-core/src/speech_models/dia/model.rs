@@ -1,10 +1,9 @@
-use candle_core::{DType, IndexOp, Result, Tensor, D};
+use candle_core::{IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::ShardedVarBuilder;
 
 use crate::{
-    attention::SdpaParams,
-    layers::{self, DiaRotaryEmbedding, RmsNorm, Sdpa},
+    layers::{self, DiaRotaryEmbedding, RmsNorm},
     layers_masker::masked_fill,
 };
 
@@ -69,7 +68,6 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
             head_dim,
             vb.device(),
             vb.dtype(),
-            cfg.data.text_length,
         )?;
 
         Ok(Self {
@@ -96,7 +94,7 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
         prefill: bool,
         current_index: usize,
     ) -> Result<Tensor> {
-        let (b, t, d) = xq.dims3()?;
+        let (b, t, _d) = xq.dims3()?;
 
         let mut xq = self
             .q_proj
@@ -525,7 +523,6 @@ impl DiaDecoder {
         &self,
         encoder_out: &Tensor,
         encoder_positions: &Tensor,
-        encoder_padding_mask: &Tensor,
     ) -> Result<Vec<Option<DiaKvCache>>> {
         let (b, t, _d) = encoder_out.dims3()?;
 
@@ -540,11 +537,6 @@ impl DiaDecoder {
                     .reshape((b, t, ca.num_kv_heads, ca.head_dim))?;
             k_proj = ca.rope.forward(&k_proj, encoder_positions)?;
             k_proj = k_proj.transpose(1, 2)?;
-            // k_proj = masked_fill(
-            //     &k_proj,
-            //     &(1. - encoder_padding_mask.unsqueeze(1)?.unsqueeze(3)?)?,
-            //     0f32,
-            // )?;
 
             let mut v_proj =
                 ca.v_proj

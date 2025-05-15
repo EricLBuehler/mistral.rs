@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::info;
 
 #[derive(Clone, Debug)]
 pub struct SpeechModelPaths {
@@ -203,7 +203,7 @@ impl Loader for SpeechLoader {
         silent: bool,
         mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
-        mut paged_attn_config: Option<PagedAttentionConfig>,
+        _paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths = &paths
             .as_ref()
@@ -217,12 +217,6 @@ impl Loader for SpeechLoader {
 
         if in_situ_quant.is_some() {
             anyhow::bail!("ISQ is not supported for speech models.");
-        }
-
-        if paged_attn_config.is_some() {
-            warn!("PagedAttention is not supported for speech models, disabling it.");
-
-            paged_attn_config = None;
         }
 
         let cfg: DiaConfig = serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;

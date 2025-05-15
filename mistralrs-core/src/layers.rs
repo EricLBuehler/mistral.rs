@@ -1500,7 +1500,6 @@ impl DiaRotaryEmbedding {
         head_dim: usize,
         device: &Device,
         dtype: DType,
-        max_len: usize,
     ) -> Result<Self> {
         assert_eq!(head_dim % 2, 0);
         let half_embedding_dim = head_dim / 2;
