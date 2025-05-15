@@ -107,6 +107,7 @@ pub use sampler::{
 };
 pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 use serde::Serialize;
+pub use speech_models::utils as speech_utils;
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
 pub use tools::{

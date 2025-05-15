@@ -2,7 +2,7 @@ use directories::ProjectDirs;
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    ChunkChoice, Constraint, Delta, DiffusionGenerationParams, DrySamplingParams,
+    speech_utils, ChunkChoice, Constraint, Delta, DiffusionGenerationParams, DrySamplingParams,
     ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory, NormalRequest,
     Request, RequestMessage, Response, ResponseOk, SamplingParams, WebSearchOptions,
     TERMINATE_ALL_NEXT_STEP,
@@ -690,6 +690,8 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
 
     let mut rl = DefaultEditor::new().expect("Failed to open input");
     let _ = rl.load_history(&history_file_path());
+
+    let mut n = 0;
     loop {
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
@@ -737,19 +739,21 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
         let start = Instant::now();
         sender.send(req).await.unwrap();
 
-        let ResponseOk::ImageGeneration(response) = rx.recv().await.unwrap().as_result().unwrap()
+        let ResponseOk::Speech { batched_pcms } = rx.recv().await.unwrap().as_result().unwrap()
         else {
             panic!("Got unexpected response type.")
         };
+        let pcm = batched_pcms[0].clone();
         let end = Instant::now();
 
-        // let duration = end.duration_since(start).as_secs_f32();
-        // let pixels_per_s = (diffusion_params.height * diffusion_params.width) as f32 / duration;
+        let out_file = format!("speech-{n}.wav");
+        let mut output = std::fs::File::create(&out_file).unwrap();
+        speech_utils::write_pcm_as_wav(&mut output, &pcm, 44_100).unwrap();
 
-        // println!(
-        //     "Image generated can be found at: image is at `{}`. Took {duration:.2}s ({pixels_per_s:.2} pixels/s).",
-        //     response.data[0].url.as_ref().unwrap(),
-        // );
+        let duration = end.duration_since(start).as_secs_f32();
+        println!("Speech generated can be found at `{out_file}`. Took {duration:.2}s.");
+
+        n += 1;
 
         println!();
     }
