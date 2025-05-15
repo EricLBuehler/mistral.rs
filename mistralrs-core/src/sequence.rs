@@ -848,7 +848,10 @@ impl Sequence {
 
     pub fn add_image_choice_to_group(&self, choice: ImageChoice) {
         get_mut_group!(self).image_choices.push(choice);
-        self.update_time_info();
+    }
+
+    pub fn add_speech_pcm_to_group(&self, pcm: Arc<Vec<f32>>) {
+        get_mut_group!(self).speech_pcms.push(pcm);
     }
 
     pub fn add_choice_to_group(&self, choice: Choice) {
@@ -946,6 +949,7 @@ pub struct SequenceGroup {
     pub total_completion_time: u128,
     choices: Vec<Choice>,
     image_choices: Vec<ImageChoice>,
+    speech_pcms: Vec<Arc<Vec<f32>>>,
     raw_choices: Vec<(Vec<Tensor>, Vec<u32>)>,
     completion_choices: Vec<(f32, CompletionChoice)>,
     pub chat_streaming_chunks: Vec<ChunkChoice>,
@@ -964,6 +968,7 @@ impl SequenceGroup {
         Self {
             choices: Vec::new(),
             image_choices: Vec::new(),
+            speech_pcms: Vec::new(),
             raw_choices: Vec::new(),
             completion_choices: Vec::new(),
             n_choices,
@@ -1063,6 +1068,21 @@ impl SequenceGroup {
     ) -> Result<(), SendError<Response>> {
         if self.image_choices.len() == self.n_choices {
             sender.send(Response::ImageGeneration(response)).await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn maybe_send_speech_response(
+        &self,
+        sender: Sender<Response>,
+    ) -> Result<(), SendError<Response>> {
+        if self.speech_pcms.len() == self.n_choices {
+            sender
+                .send(Response::Speech {
+                    batched_pcms: self.speech_pcms.clone(),
+                })
+                .await?;
         }
 
         Ok(())

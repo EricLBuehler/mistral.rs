@@ -100,6 +100,7 @@ impl futures::Stream for Streamer {
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
             },
             Poll::Pending | Poll::Ready(None) => Poll::Pending,
@@ -489,6 +490,7 @@ pub async fn chatcompletions(
             Response::CompletionModelError(_, _) => unreachable!(),
             Response::CompletionChunk(_) => unreachable!(),
             Response::ImageGeneration(_) => unreachable!(),
+            Response::Speech { .. } => unreachable!(),
             Response::Raw { .. } => unreachable!(),
         }
     }

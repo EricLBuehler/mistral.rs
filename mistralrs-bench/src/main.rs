@@ -116,6 +116,7 @@ fn run_bench(
                     }
                     Response::CompletionChunk(_) => unreachable!(),
                     Response::ImageGeneration(_) => unreachable!(),
+                    Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
                 },
                 None => unreachable!("Expected a Done response, got None",),

@@ -292,6 +292,7 @@ async fn text_interactive_mode(
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
             }
         }
@@ -542,6 +543,7 @@ async fn vision_interactive_mode(
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
             }
         }

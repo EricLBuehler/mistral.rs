@@ -335,9 +335,11 @@ impl Pipeline for SpeechPipeline {
         assert!(!return_raw_logits);
 
         let ModelInputs { prompt } = *inputs.downcast().expect("Downcast failed.");
-        self.model.generate(&prompt)?;
-        todo!()
+        let pcm = self.model.generate(&prompt)?;
+
+        Ok(ForwardInputsResult::Speech { pcms: vec![pcm] })
     }
+
     async fn sample_causal_gen(
         &self,
         _seqs: &mut [&mut Sequence],
@@ -348,6 +350,7 @@ impl Pipeline for SpeechPipeline {
     ) -> Result<(), candle_core::Error> {
         candle_core::bail!("`sample_causal_gen` is incompatible with `SpeechPipeline`");
     }
+
     fn category(&self) -> ModelCategory {
         ModelCategory::Speech
     }

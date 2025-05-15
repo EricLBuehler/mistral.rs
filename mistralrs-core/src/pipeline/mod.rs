@@ -264,6 +264,7 @@ pub enum ForwardInputsResult {
     RawLogits { logits: Tensor },
     CausalGeneration { logits: Tensor },
     Image { images: Vec<DynamicImage> },
+    Speech { pcms: Vec<Arc<Vec<f32>>> },
 }
 
 impl ForwardInputsResult {
@@ -278,6 +279,9 @@ impl ForwardInputsResult {
             Self::Image { images } => Ok(Self::Image {
                 images: vec![images[bs_idx].clone()],
             }),
+            Self::Speech { pcms } => Ok(Self::Speech {
+                pcms: vec![pcms[bs_idx].clone()],
+            }),
         }
     }
 
@@ -290,6 +294,7 @@ impl ForwardInputsResult {
                 logits: logits.to_device(device)?,
             }),
             Self::Image { .. } => Ok(self.clone()),
+            Self::Speech { .. } => Ok(self.clone()),
         }
     }
 }
@@ -476,6 +481,9 @@ pub trait Pipeline:
                         )
                         .await?;
                     }
+                    ForwardInputsResult::Speech { pcms } => {
+                        response::send_speech_responses(input_seqs, pcms).await?;
+                    }
                 }
                 let end = Instant::now();
                 exec_duration += end.duration_since(start);
@@ -617,6 +625,9 @@ pub trait Pipeline:
                                 .collect::<Vec<_>>(),
                         )
                         .await?;
+                    }
+                    ForwardInputsResult::Speech { pcms } => {
+                        response::send_speech_responses(input_seqs, pcms).await?;
                     }
                 }
                 let end = Instant::now();

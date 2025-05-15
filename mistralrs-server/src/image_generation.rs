@@ -145,6 +145,7 @@ pub async fn image_generation(
         Response::Chunk(_) => unreachable!(),
         Response::Done(_) => unreachable!(),
         Response::ModelError(_, _) => unreachable!(),
+        Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
     }
 }

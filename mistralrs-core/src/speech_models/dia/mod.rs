@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::{io::Write, sync::Arc};
 
 use audio::{apply_audio_delay, build_delay_indices, build_revert_indices, revert_audio_delay};
 use cache::DiaKvCache;
@@ -399,7 +399,7 @@ impl DiaPipeline {
         Ok(next)
     }
 
-    fn generate_output(&self, generated_codes: &Tensor) -> Result<Tensor> {
+    fn generate_output(&self, generated_codes: &Tensor) -> Result<Vec<f32>> {
         let num_channels = self.cfg.data.channels;
         let seq_length = generated_codes.dim(0)?;
         let audio_pad_value = self.cfg.data.audio_pad_value;
@@ -437,13 +437,11 @@ impl DiaPipeline {
         let pcm = pcm.i((0, 0))?;
         let pcm = normalize_loudness(&pcm, 44_100, true)?;
         let pcm = pcm.to_vec1::<f32>()?;
-        let mut output = std::fs::File::create(&"out.wav")?;
-        write_pcm_as_wav(&mut output, &pcm, 44_100)?;
 
-        todo!()
+        Ok(pcm)
     }
 
-    pub fn generate(&self, text: &str) -> Result<()> {
+    pub fn generate(&self, text: &str) -> Result<Arc<Vec<f32>>> {
         let max_tokens: Option<usize> = None;
         let cfg_scale = 3.0f32;
         let temperature = 1.3f32;
@@ -584,8 +582,8 @@ impl DiaPipeline {
         }
 
         let generated_codes = generated_tokens.i((0..dec_step + 1, ..))?;
-        self.generate_output(&generated_codes)?;
-        Ok(())
+        let pcm = self.generate_output(&generated_codes)?;
+        Ok(Arc::new(pcm))
     }
 
     pub fn device(&self) -> &Device {

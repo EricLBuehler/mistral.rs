@@ -1184,6 +1184,7 @@ impl Runner {
                     Response::CompletionModelError(_, _) => unreachable!(),
                     Response::CompletionChunk(_) => unreachable!(),
                     Response::ImageGeneration(_) => unreachable!(),
+                    Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
                 }
             }
@@ -1286,6 +1287,7 @@ impl Runner {
                 Response::ModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
             }
         })
