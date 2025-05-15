@@ -301,45 +301,46 @@ impl DiaPipeline {
     ) -> Result<Vec<u32>> {
         assert_eq!(logits.rank(), 2);
 
-        // if temperature == 0. {
+        if temperature == 0. {
             return logits.argmax(D::Minus1)?.to_vec1::<u32>();
-        // }
+        }
 
         let mut logits = (logits / temperature as f64)?;
-        if let Some(cfg_filter_top_k) = cfg_filter_top_k {
-            let TopKOutput {
-                values: _,
-                indices: top_k_indices,
-            } = logits.topk(cfg_filter_top_k)?;
-            let mut mask = logits.ones_like()?;
-            mask = mask.scatter_add(&top_k_indices, &mask.index_select(&top_k_indices, D::Minus1)?.neg()?, D::Minus1)?;
-            logits = masked_fill(&logits, &mask, f32::NEG_INFINITY)?;
-        }
+        // if let Some(cfg_filter_top_k) = cfg_filter_top_k {
+        //     let TopKOutput {
+        //         values: _,
+        //         indices: top_k_indices,
+        //     } = logits.topk(cfg_filter_top_k)?;
+        //     let mut mask = logits.ones_like()?;
+        //     mask = mask.scatter_add(&top_k_indices, &mask.gather(&top_k_indices, D::Minus1)?.neg()?, D::Minus1)?;
+        //     println!("{logits}");
+        //     logits = masked_fill(&logits, &mask.to_dtype(DType::U8)?, f32::NEG_INFINITY)?;
+        // }
 
-        if top_p < 1. {
-            let probs = candle_nn::ops::softmax_last_dim(&logits)?;
-            let (sorted_probs, sorted_indices) = probs.sort_last_dim(false)?;
-            let cumulative_probs = sorted_probs.cumsum(D::Minus1)?;
+        // if top_p < 1. {
+        //     let probs = candle_nn::ops::softmax_last_dim(&logits)?;
+        //     let (sorted_probs, sorted_indices) = probs.sort_last_dim(false)?;
+        //     let cumulative_probs = sorted_probs.cumsum(D::Minus1)?;
 
-            let mut sorted_indices_to_remove = cumulative_probs.ge(top_p as f64)?;
-            sorted_indices_to_remove = sorted_indices_to_remove.slice_assign(
-                &[&.., &(1..)],
-                &sorted_indices_to_remove
-                    .i((.., ..sorted_indices_to_remove.dim(D::Minus1)? - 1))?,
-            )?;
-            sorted_indices_to_remove = sorted_indices_to_remove.slice_assign(
-                &[&.., &0],
-                &sorted_indices_to_remove.i((.., 0))?.zeros_like()?,
-            )?;
+        //     let mut sorted_indices_to_remove = cumulative_probs.ge(top_p as f64)?;
+        //     sorted_indices_to_remove = sorted_indices_to_remove.slice_assign(
+        //         &[&.., &(1..)],
+        //         &sorted_indices_to_remove
+        //             .i((.., ..sorted_indices_to_remove.dim(D::Minus1)? - 1))?,
+        //     )?;
+        //     sorted_indices_to_remove = sorted_indices_to_remove.slice_assign(
+        //         &[&.., &0],
+        //         &sorted_indices_to_remove.i((.., 0))?.zeros_like()?,
+        //     )?;
 
-            let mut indices_to_remove = sorted_indices_to_remove.zeros_like()?;
-            indices_to_remove = indices_to_remove.scatter_add(
-                &sorted_indices_to_remove,
-                &sorted_indices,
-                D::Minus1,
-            )?;
-            logits = masked_fill(&logits, &indices_to_remove, f32::NEG_INFINITY)?;
-        }
+        //     let mut indices_to_remove = sorted_indices_to_remove.zeros_like()?;
+        //     indices_to_remove = indices_to_remove.scatter_add(
+        //         &sorted_indices_to_remove,
+        //         &sorted_indices,
+        //         D::Minus1,
+        //     )?;
+        //     logits = masked_fill(&logits, &indices_to_remove, f32::NEG_INFINITY)?;
+        // }
 
         logits = candle_nn::ops::softmax_last_dim(&logits)?;
 
@@ -547,29 +548,28 @@ impl DiaPipeline {
                 dec_step,
             )?;
 
-            // if (!eos_detected && pred_c[0] == audio_eos_value)
-            //     || dec_step == max_tokens - max_delay_pattern - 1
-            // {
-            //     eos_detected = true;
-            //     eos_countdown = Some(max_delay_pattern);
-            // }
+            if (!eos_detected && pred_c[0] == audio_eos_value)
+                || dec_step == max_tokens - max_delay_pattern - 1
+            {
+                eos_detected = true;
+                eos_countdown = Some(max_delay_pattern);
+            }
 
-            // if let Some(eos_countdown) = &mut eos_countdown {
-            //     let step_after_eos = max_delay_pattern - *eos_countdown;
-            //     for (i, d) in delay_pattern.iter().enumerate() {
-            //         if step_after_eos == *d as usize {
-            //             pred_c[i] = audio_eos_value;
-            //         } else if step_after_eos > *d as usize {
-            //             pred_c[i] = audio_pad_value;
-            //         }
-            //     }
-            //     *eos_countdown -= 1;
-            // }
+            if let Some(eos_countdown) = &mut eos_countdown {
+                let step_after_eos = max_delay_pattern - *eos_countdown;
+                for (i, d) in delay_pattern.iter().enumerate() {
+                    if step_after_eos == *d as usize {
+                        pred_c[i] = audio_eos_value;
+                    } else if step_after_eos > *d as usize {
+                        pred_c[i] = audio_pad_value;
+                    }
+                }
+                *eos_countdown -= 1;
+            }
 
-            // bos_countdown = bos_countdown.saturating_sub(1);
+            bos_countdown = bos_countdown.saturating_sub(1);
 
-            // let apply_mask = bos_countdown > 0;
-            let apply_mask = true;
+            let apply_mask = bos_countdown > 0;
             if apply_mask {
                 let len = pred_c.len();
                 let dec_out = Tensor::from_vec(pred_c, len, &self.device)?.to_dtype(DType::F32)?;
