@@ -579,9 +579,6 @@ impl DiaPipeline {
             if dec_step % 86 == 0 {
                 println!("Generated 1s")
             }
-            if dec_step >= 86 * 8 {
-                break;
-            }
         }
 
         let generated_codes = generated_tokens.i((0..dec_step + 1, ..))?;
