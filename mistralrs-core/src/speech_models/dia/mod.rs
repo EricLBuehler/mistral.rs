@@ -12,11 +12,6 @@ use rand::{
 };
 use rand_isaac::Isaac64Rng;
 
-use crate::{
-    layers_masker::masked_fill,
-    ops::{TopKLastDimOp, TopKOutput},
-};
-
 pub use config::DiaConfig;
 
 use super::bs1770;
@@ -299,61 +294,45 @@ impl DiaPipeline {
         cfg_filter_top_k: Option<usize>,
         rng: &mut Isaac64Rng,
     ) -> Result<Vec<u32>> {
-        assert_eq!(logits.rank(), 2);
-
         if temperature == 0. {
-            return logits.argmax(D::Minus1)?.to_vec1::<u32>();
+            return logits.argmax(D::Minus1)?.to_vec1();
         }
 
-        let mut logits = (logits / temperature as f64)?;
-        // if let Some(cfg_filter_top_k) = cfg_filter_top_k {
-        //     let TopKOutput {
-        //         values: _,
-        //         indices: top_k_indices,
-        //     } = logits.topk(cfg_filter_top_k)?;
-        //     let mut mask = logits.ones_like()?;
-        //     mask = mask.scatter_add(&top_k_indices, &mask.gather(&top_k_indices, D::Minus1)?.neg()?, D::Minus1)?;
-        //     println!("{logits}");
-        //     logits = masked_fill(&logits, &mask.to_dtype(DType::U8)?, f32::NEG_INFINITY)?;
-        // }
+        let logits = candle_nn::ops::softmax_last_dim(&(logits / temperature as f64)?)?;
+        let batch_logits: Vec<Vec<f32>> = logits.to_vec2::<f32>()?;
 
-        // if top_p < 1. {
-        //     let probs = candle_nn::ops::softmax_last_dim(&logits)?;
-        //     let (sorted_probs, sorted_indices) = probs.sort_last_dim(false)?;
-        //     let cumulative_probs = sorted_probs.cumsum(D::Minus1)?;
+        let mut sampled = Vec::with_capacity(batch_logits.len());
+        for mut probs in batch_logits {
+            let mut argsort_indices: Vec<usize> = (0..probs.len()).collect();
+            argsort_indices.sort_unstable_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap());
 
-        //     let mut sorted_indices_to_remove = cumulative_probs.ge(top_p as f64)?;
-        //     sorted_indices_to_remove = sorted_indices_to_remove.slice_assign(
-        //         &[&.., &(1..)],
-        //         &sorted_indices_to_remove
-        //             .i((.., ..sorted_indices_to_remove.dim(D::Minus1)? - 1))?,
-        //     )?;
-        //     sorted_indices_to_remove = sorted_indices_to_remove.slice_assign(
-        //         &[&.., &0],
-        //         &sorted_indices_to_remove.i((.., 0))?.zeros_like()?,
-        //     )?;
+            if let Some(cfg_filter_top_k) = cfg_filter_top_k {
+                // Clamp smaller probabilities to zero.
+                for (index, val) in argsort_indices.iter().enumerate() {
+                    if index >= cfg_filter_top_k {
+                        probs[*val as usize] = 0.0;
+                    }
+                }
+            }
 
-        //     let mut indices_to_remove = sorted_indices_to_remove.zeros_like()?;
-        //     indices_to_remove = indices_to_remove.scatter_add(
-        //         &sorted_indices_to_remove,
-        //         &sorted_indices,
-        //         D::Minus1,
-        //     )?;
-        //     logits = masked_fill(&logits, &indices_to_remove, f32::NEG_INFINITY)?;
-        // }
+            // TOP P
 
-        logits = candle_nn::ops::softmax_last_dim(&logits)?;
+            // top-p sampling (or "nucleus sampling") samples from the smallest set of
+            // tokens that exceed probability top_p. This way we never sample tokens that
+            // have very low probabilities and are less likely to go "off the rails".
 
-        let mut sampled = Vec::new();
-        for mut logits in logits.chunk(logits.dim(0)?, 0)? {
-            logits = logits.squeeze(0)?;
-
-            let probs = logits.to_vec1::<f32>()?;
+            // Clamp smaller probabilities to zero.
+            let mut cumsum = 0.;
+            for index in &argsort_indices {
+                if cumsum >= top_p {
+                    probs[*index as usize] = 0.0;
+                } else {
+                    cumsum += probs[*index as usize];
+                }
+            }
 
             let distr = WeightedIndex::new(&probs).map_err(candle_core::Error::msg)?;
-
-            let next_token = distr.sample(rng);
-            sampled.push(next_token as u32);
+            sampled.push(distr.sample(rng) as u32);
         }
         Ok(sampled)
     }
@@ -609,7 +588,6 @@ impl DiaPipeline {
             }
         }
 
-        generated_tokens.write_npy("generated_codes_m.npy")?;
         let generated_codes = generated_tokens.i((0..dec_step + 1, ..))?;
         println!("{generated_codes}");
         self.generate_output(&generated_codes)?;

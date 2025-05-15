@@ -433,8 +433,7 @@ impl DiaDecoderLayer {
             ),
             None => None,
         };
-        //println!("\n\n\n");
-        //println!("x {x}");
+
         let sa_out = self.self_attn.forward(
             &x_norm,
             &x_norm,
@@ -445,21 +444,11 @@ impl DiaDecoderLayer {
             prefill,
             current_idx,
         )?;
-        //println!("sa_out {sa_out}");
         let x = (residual + sa_out)?;
 
         residual = &x;
         x_norm = self.pre_ca_norm.forward(&x)?;
-        //println!("x_norm {x_norm}");
 
-        //println!("encoder_out {encoder_out}");
-        //println!("decoder_positions {decoder_positions}");
-        //println!("encoder_positions {encoder_positions}");
-        //println!("cross_attn_mask {}", cross_attn_mask.as_ref().unwrap().to_dtype(DType::F32)?.mean_all()?);
-        //println!("cross_attn_cache k {}", cross_attn_cache.as_ref().unwrap().k_v().0.mean_all()?);
-        //println!("cross_attn_cache v {}", cross_attn_cache.as_ref().unwrap().k_v().1.mean_all()?);
-        //x_norm.write_npy("x_norm_m.npy")?;
-        //encoder_out.write_npy("encoder_out_m.npy")?;
         let ca_out = self.cross_attn.forward(
             &x_norm,
             &encoder_out,
@@ -470,16 +459,12 @@ impl DiaDecoderLayer {
             false,
             current_idx,
         )?;
-        //println!("ca_out {}", ca_out.mean_all()?);
-        //ca_out.write_npy("ca_out_m.npy")?;
+
         let x = (residual + ca_out)?;
         residual = &x;
 
         x_norm = self.pre_mlp_norm.forward(&x)?;
         let mlp_out = self.mlp.forward(&x_norm)?;
-        //mlp_out.write_npy("mlp_out_m.npy")?;
-        //println!("mlp_out {}", mlp_out.mean_all()?);
-        //todo!();
 
         let res = (residual + mlp_out)?;
         Ok(res)
