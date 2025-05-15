@@ -144,19 +144,6 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
             }
         };
 
-        let attn_mask = match attn_mask {
-            Some(mask) => {
-                let neg_inf = Tensor::new(f32::NEG_INFINITY, xq.device())?.to_dtype(xq.dtype())?;
-                let dims = mask.dims();
-                let mask = mask.to_dtype(DType::U8)?.where_cond(
-                    &Tensor::zeros(dims, neg_inf.dtype(), neg_inf.device())?,
-                    &neg_inf.to_device(mask.device())?.broadcast_as(dims)?,
-                )?;
-                Some(mask)
-            }
-            None => None,
-        };
-
         k = repeat_kv(k.clone(), self.sdpa_params.n_kv_groups)?;
         v = repeat_kv(v.clone(), self.sdpa_params.n_kv_groups)?;
 
@@ -164,7 +151,7 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
             &xq.contiguous()?,
             &k.contiguous()?,
             &v.contiguous()?,
-            attn_mask.as_ref(),
+            attn_mask,
             &self.sdpa_params,
         )?;
 
@@ -309,8 +296,21 @@ impl DiaEncoder {
     ) -> Result<Tensor> {
         let mut x = self.embedding.forward(x)?;
 
+        let attn_mask = match attn_mask {
+            Some(mask) => {
+                let neg_inf = Tensor::new(f32::NEG_INFINITY, x.device())?.to_dtype(x.dtype())?;
+                let dims = mask.dims();
+                let mask = mask.to_dtype(DType::U8)?.where_cond(
+                    &Tensor::zeros(dims, neg_inf.dtype(), neg_inf.device())?,
+                    &neg_inf.to_device(mask.device())?.broadcast_as(dims)?,
+                )?;
+                Some(mask)
+            }
+            None => None,
+        };
+
         for layer in &self.layers {
-            x = layer.forward(&x, positions, attn_mask, 0)?;
+            x = layer.forward(&x, positions, attn_mask.as_ref(), 0)?;
         }
 
         self.norm.forward(&x)
@@ -551,6 +551,32 @@ impl DiaDecoder {
 
         let mut x = x.unwrap();
 
+        let self_attn_mask = match self_attn_mask {
+            Some(mask) => {
+                let neg_inf = Tensor::new(f32::NEG_INFINITY, x.device())?.to_dtype(x.dtype())?;
+                let dims = mask.dims();
+                let mask = mask.to_dtype(DType::U8)?.where_cond(
+                    &Tensor::zeros(dims, neg_inf.dtype(), neg_inf.device())?,
+                    &neg_inf.to_device(mask.device())?.broadcast_as(dims)?,
+                )?;
+                Some(mask)
+            }
+            None => None,
+        };
+
+        let cross_attn_mask = match cross_attn_mask {
+            Some(mask) => {
+                let neg_inf = Tensor::new(f32::NEG_INFINITY, x.device())?.to_dtype(x.dtype())?;
+                let dims = mask.dims();
+                let mask = mask.to_dtype(DType::U8)?.where_cond(
+                    &Tensor::zeros(dims, neg_inf.dtype(), neg_inf.device())?,
+                    &neg_inf.to_device(mask.device())?.broadcast_as(dims)?,
+                )?;
+                Some(mask)
+            }
+            None => None,
+        };
+
         for (i, layer) in self.layers.iter().enumerate() {
             let self_cache = &mut self_attn_cache[i];
             let cross_cache = &mut cross_attn_cache[i];
@@ -559,8 +585,8 @@ impl DiaDecoder {
                 encoder_out,
                 encoder_positions,
                 decoder_positions,
-                self_attn_mask,
-                cross_attn_mask,
+                self_attn_mask.as_ref(),
+                cross_attn_mask.as_ref(),
                 self_cache.as_mut(),
                 cross_cache.as_mut(),
                 false,
