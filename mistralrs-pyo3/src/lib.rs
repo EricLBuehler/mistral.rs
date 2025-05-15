@@ -1129,7 +1129,7 @@ impl Runner {
                 None
             };
 
-            let model_request = _Request::Normal(NormalRequest {
+            let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: {
                     let l = NEXT_REQUEST_ID.lock().unwrap();
                     let last = &mut *l.borrow_mut();
@@ -1162,7 +1162,7 @@ impl Runner {
                 logits_processors: None,
                 return_raw_logits: false,
                 web_search_options: request.web_search_options.clone(),
-            });
+            }));
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
             let sender = self.runner.get_sender()?;
@@ -1232,7 +1232,7 @@ impl Runner {
                 None
             };
 
-            let model_request = _Request::Normal(NormalRequest {
+            let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: {
                     let l = NEXT_REQUEST_ID.lock().unwrap();
                     let last = &mut *l.borrow_mut();
@@ -1269,7 +1269,7 @@ impl Runner {
                 logits_processors: None,
                 return_raw_logits: false,
                 web_search_options: None,
-            });
+            }));
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
             let sender = self.runner.get_sender()?;
@@ -1309,7 +1309,7 @@ impl Runner {
     ) -> PyApiResult<ImageGenerationResponse> {
         let (tx, mut rx) = channel(1);
 
-        let request = _Request::Normal(NormalRequest {
+        let request = _Request::Normal(Box::new(NormalRequest {
             id: 0,
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
@@ -1327,7 +1327,7 @@ impl Runner {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
-        });
+        }));
 
         let sender = self.runner.get_sender()?;
         sender.blocking_send(request).unwrap();

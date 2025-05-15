@@ -44,6 +44,7 @@ struct DiaAttention<const CROSS_ATTN: bool> {
 }
 
 impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         cfg: &DiaConfig,
         vb: ShardedVarBuilder,
@@ -88,6 +89,7 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xq: &Tensor,
@@ -381,6 +383,7 @@ impl DiaDecoderLayer {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         x: &Tensor,
@@ -527,6 +530,7 @@ impl DiaDecoder {
     }
 
     /// Performs a single decoding step, managing KV caches layer by layer.
+    #[allow(clippy::too_many_arguments)]
     pub fn decode_step(
         &self,
         tgt_ids: &Tensor,
@@ -535,8 +539,8 @@ impl DiaDecoder {
         cross_attn_mask: Option<&Tensor>,
         encoder_positions: &Tensor,
         decoder_positions: &Tensor,
-        self_attn_cache: &mut Vec<Option<DiaKvCache>>,
-        cross_attn_cache: &mut Vec<Option<DiaKvCache>>,
+        self_attn_cache: &mut [Option<DiaKvCache>],
+        cross_attn_cache: &mut [Option<DiaKvCache>],
         current_idx: usize,
     ) -> Result<Tensor> {
         let mut x: Option<Tensor> = None;

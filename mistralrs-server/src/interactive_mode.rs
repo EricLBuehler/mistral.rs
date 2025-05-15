@@ -224,7 +224,7 @@ async fn text_interactive_mode(
         };
 
         let (tx, mut rx) = channel(10_000);
-        let req = Request::Normal(NormalRequest {
+        let req = Request::Normal(Box::new(NormalRequest {
             id: mistralrs.next_request_id(),
             messages: request_messages,
             sampling_params: sampling_params.clone(),
@@ -238,7 +238,7 @@ async fn text_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
-        });
+        }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
         let mut first_token_duration: Option<std::time::Duration> = None;
@@ -475,7 +475,7 @@ async fn vision_interactive_mode(
         };
 
         let (tx, mut rx) = channel(10_000);
-        let req = Request::Normal(NormalRequest {
+        let req = Request::Normal(Box::new(NormalRequest {
             id: mistralrs.next_request_id(),
             messages: request_messages,
             sampling_params: sampling_params.clone(),
@@ -489,7 +489,7 @@ async fn vision_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
-        });
+        }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
         let mut first_token_duration: Option<std::time::Duration> = None;
@@ -629,7 +629,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
         *CTRLC_HANDLER.lock().unwrap() = &terminate_handler;
 
         let (tx, mut rx) = channel(10_000);
-        let req = Request::Normal(NormalRequest {
+        let req = Request::Normal(Box::new(NormalRequest {
             id: 0,
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
@@ -647,7 +647,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
-        });
+        }));
 
         let start = Instant::now();
         sender.send(req).await.unwrap();
@@ -718,7 +718,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
         *CTRLC_HANDLER.lock().unwrap() = &terminate_handler;
 
         let (tx, mut rx) = channel(10_000);
-        let req = Request::Normal(NormalRequest {
+        let req = Request::Normal(Box::new(NormalRequest {
             id: 0,
             messages: RequestMessage::SpeechGeneration {
                 prompt: prompt.to_string(),
@@ -734,7 +734,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
-        });
+        }));
 
         let start = Instant::now();
         sender.send(req).await.unwrap();

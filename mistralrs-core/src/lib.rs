@@ -437,7 +437,7 @@ impl MistralRs {
             let clone_sender = sender.read().unwrap().clone();
             tokio::task::block_in_place(|| {
                 let (tx, mut rx) = channel(1);
-                let req = Request::Normal(NormalRequest {
+                let req = Request::Normal(Box::new(NormalRequest {
                     id: 0,
                     messages: RequestMessage::Completion {
                         text: "hello".to_string(),
@@ -458,7 +458,7 @@ impl MistralRs {
                     logits_processors: None,
                     return_raw_logits: false,
                     web_search_options: None,
-                });
+                }));
                 info!("Beginning dummy run.");
                 let start = Instant::now();
                 clone_sender.blocking_send(req).unwrap();

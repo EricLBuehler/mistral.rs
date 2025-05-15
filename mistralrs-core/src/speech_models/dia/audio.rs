@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use candle_core::{DType, Device, Result, Tensor};
 
 /// Precompute indices for applying delay to audio channels.

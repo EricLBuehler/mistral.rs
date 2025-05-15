@@ -72,7 +72,7 @@ fn parse_request(
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
 
-    let request = Request::Normal(NormalRequest {
+    let request = Request::Normal(Box::new(NormalRequest {
         id: state.next_request_id(),
         messages: RequestMessage::SpeechGeneration {
             prompt: oairequest.input,
@@ -88,7 +88,7 @@ fn parse_request(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
-    });
+    }));
 
     Ok((request, oairequest.response_format))
 }

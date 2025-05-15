@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::io::Write;
 
 use candle_core::{Result, Tensor};

@@ -34,9 +34,9 @@ impl Engine {
                 ) && request.web_search_options.is_some()
                     && get_mut_arcmutex!(self.bert_pipeline).is_some()
                 {
-                    search_request::search_request(self.clone(), request).await;
+                    search_request::search_request(self.clone(), *request).await;
                 } else {
-                    self.add_request(request).await
+                    self.add_request(*request).await
                 }
             }
             Request::ReIsq(level) => {

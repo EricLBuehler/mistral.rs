@@ -1,4 +1,4 @@
-#![allow(unused)]
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, unused)]
 // Copied from https://github.com/ruuda/bs1770/blob/master/src/lib.rs
 // BS1770 -- Loudness analysis library conforming to ITU-R BS.1770
 // Copyright 2020 Ruud van Asseldonk

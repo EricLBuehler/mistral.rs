@@ -386,7 +386,7 @@ async fn parse_request(
     };
 
     Ok((
-        Request::Normal(NormalRequest {
+        Request::Normal(Box::new(NormalRequest {
             id: state.next_request_id(),
             messages,
             sampling_params: SamplingParams {
@@ -413,7 +413,7 @@ async fn parse_request(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: oairequest.web_search_options,
-        }),
+        })),
         is_streaming,
     ))
 }

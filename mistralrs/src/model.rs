@@ -75,7 +75,7 @@ impl Model {
         } else {
             (None, None)
         };
-        let request = Request::Normal(NormalRequest {
+        let request = Request::Normal(Box::new(NormalRequest {
             messages: request.take_messages(),
             sampling_params: request.take_sampling_params(),
             response: tx,
@@ -89,7 +89,7 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
-        });
+        }));
 
         self.runner.get_sender()?.send(request).await?;
 
@@ -110,7 +110,7 @@ impl Model {
         } else {
             (None, None)
         };
-        let request = Request::Normal(NormalRequest {
+        let request = Request::Normal(Box::new(NormalRequest {
             messages: request.take_messages(),
             sampling_params: request.take_sampling_params(),
             response: tx,
@@ -124,7 +124,7 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
-        });
+        }));
 
         self.runner.get_sender()?.send(request).await?;
 
@@ -154,7 +154,7 @@ impl Model {
         } else {
             (None, None)
         };
-        let request = Request::Normal(NormalRequest {
+        let request = Request::Normal(Box::new(NormalRequest {
             messages: request.take_messages(),
             sampling_params: request.take_sampling_params(),
             response: tx,
@@ -168,7 +168,7 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: true,
             web_search_options: request.take_web_search_options(),
-        });
+        }));
 
         self.runner.get_sender()?.send(request).await?;
 
@@ -195,7 +195,7 @@ impl Model {
     ) -> anyhow::Result<ImageGenerationResponse> {
         let (tx, mut rx) = channel(1);
 
-        let request = Request::Normal(NormalRequest {
+        let request = Request::Normal(Box::new(NormalRequest {
             id: 0,
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
@@ -213,7 +213,7 @@ impl Model {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
-        });
+        }));
 
         self.runner.get_sender()?.send(request).await?;
 

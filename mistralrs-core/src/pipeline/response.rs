@@ -72,9 +72,9 @@ pub async fn send_image_responses(
 
 pub async fn send_speech_responses(
     input_seqs: &mut [&mut Sequence],
-    pcms: &Vec<Arc<Vec<f32>>>,
-    rates: &Vec<usize>,
-    channels: &Vec<usize>,
+    pcms: &[Arc<Vec<f32>>],
+    rates: &[usize],
+    channels: &[usize],
 ) -> candle_core::Result<()> {
     if input_seqs.len() != pcms.len() {
         candle_core::bail!(

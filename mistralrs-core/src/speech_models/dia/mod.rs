@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::sync::Arc;
 
 use audio::{apply_audio_delay, build_delay_indices, build_revert_indices, revert_audio_delay};
@@ -16,6 +18,16 @@ pub use config::DiaConfig;
 use tracing::info;
 
 use super::utils::normalize_loudness;
+
+/// Aggregated outputs for generation preparation.
+pub struct PrepareGenerationOutput {
+    pub generated_tokens: Tensor,
+    pub decoder_attn_mask: Tensor,
+    pub encoder_out: Tensor,
+    pub encoder_positions: Tensor,
+    pub cross_cache: Vec<Option<DiaKvCache>>,
+    pub self_cache: Vec<Option<DiaKvCache>>,
+}
 
 mod audio;
 mod cache;
@@ -140,17 +152,7 @@ impl DiaPipeline {
     /// - encoder positions
     /// - cross cache
     /// - self cache
-    fn prepare_generation(
-        &self,
-        text: &str,
-    ) -> Result<(
-        Tensor,
-        Tensor,
-        Tensor,
-        Tensor,
-        Vec<Option<DiaKvCache>>,
-        Vec<Option<DiaKvCache>>,
-    )> {
+    fn prepare_generation(&self, text: &str) -> Result<PrepareGenerationOutput> {
         let enc_input_cond = self.prepare_text_prompt(text)?;
         let enc_input_uncond = enc_input_cond.zeros_like()?;
         let enc_input = Tensor::cat(&[&enc_input_uncond, &enc_input_cond], 0)?;
@@ -200,14 +202,14 @@ impl DiaPipeline {
             )?));
         }
 
-        Ok((
+        Ok(PrepareGenerationOutput {
             generated_tokens,
             decoder_attn_mask,
             encoder_out,
             encoder_positions,
-            decoder_cross_attn_cache,
-            decoder_self_attn_cache,
-        ))
+            cross_cache: decoder_cross_attn_cache,
+            self_cache: decoder_self_attn_cache,
+        })
     }
 
     fn sample_next_token(
@@ -265,6 +267,7 @@ impl DiaPipeline {
         Ok(sampled)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn decoder_step(
         &self,
         tokens: &Tensor,
@@ -273,8 +276,8 @@ impl DiaPipeline {
         cross_attn_mask: Option<&Tensor>,
         encoder_positions: &Tensor,
         decoder_positions: &Tensor,
-        self_attn_cache: &mut Vec<Option<DiaKvCache>>,
-        cross_attn_cache: &mut Vec<Option<DiaKvCache>>,
+        self_attn_cache: &mut [Option<DiaKvCache>],
+        cross_attn_cache: &mut [Option<DiaKvCache>],
         cfg_scale: f32,
         temperature: f32,
         top_p: f32,
@@ -381,14 +384,14 @@ impl DiaPipeline {
         let max_tokens = max_tokens.unwrap_or(self.cfg.data.audio_length);
         let max_delay_pattern = *delay_pattern.iter().max().unwrap() as usize;
 
-        let (
+        let PrepareGenerationOutput {
             mut generated_tokens,
             decoder_attn_mask,
             encoder_out,
             encoder_positions,
-            mut decoder_cross_attn_cache,
-            mut decoder_self_attn_cache,
-        ) = self.prepare_generation(text)?;
+            cross_cache: mut decoder_cross_attn_cache,
+            self_cache: mut decoder_self_attn_cache,
+        } = self.prepare_generation(text)?;
 
         // https://github.com/mokeyish/candle-ext/blob/ca4547c803469bd51c00ce5eda2f18dd249c8f10/src/triangular.rs#L21
         fn apply_triangular(xs: &Tensor, diagonal: isize, upper: bool) -> Result<Tensor> {
