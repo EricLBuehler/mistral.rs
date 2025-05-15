@@ -286,17 +286,22 @@ pub enum AudioResponseFormat {
 }
 
 impl AudioResponseFormat {
-    pub fn audio_content_type(&self, rate: usize, channels: usize, format: &'static str) -> String {
+    pub fn audio_content_type(
+        &self,
+        pcm_rate: usize,
+        pcm_channels: usize,
+        pcm_format: &'static str,
+    ) -> String {
         let content_type = match &self {
-            AudioResponseFormat::Mp3 => "audio/mpeg;",
-            AudioResponseFormat::Opus => "audio/ogg; codecs=opus",
-            AudioResponseFormat::Aac => "audio/aac",
-            AudioResponseFormat::Flac => "audio/flac",
-            AudioResponseFormat::Wav => "audio/wav",
-            AudioResponseFormat::Pcm => "audio/wave; codecs=1",
+            AudioResponseFormat::Mp3 => "audio/mpeg".to_string(),
+            AudioResponseFormat::Opus => "audio/ogg; codecs=opus".to_string(),
+            AudioResponseFormat::Aac => "audio/aac".to_string(),
+            AudioResponseFormat::Flac => "audio/flac".to_string(),
+            AudioResponseFormat::Wav => "audio/wav".to_string(),
+            AudioResponseFormat::Pcm => format!("audio/pcm; codecs=1; format={pcm_format}"),
         };
 
-        format!("{content_type}; format={format}; rate={rate}; channels={channels}")
+        format!("{content_type}; rate={pcm_rate}; channels={pcm_channels}")
     }
 }
 

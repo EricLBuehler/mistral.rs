@@ -164,10 +164,9 @@ pub async fn speech_generation(
             rate,
             channels,
         } => {
-            // Very important to define this, it must be consistent with the encoding process below.
-            let endianness = "le";
+            let pcm_endianness = "f32le";
 
-            let content_type = response_format.audio_content_type(rate, channels, endianness);
+            let content_type = response_format.audio_content_type(rate, channels, pcm_endianness);
             let mut headers = HeaderMap::new();
             headers.insert(
                 http::header::CONTENT_TYPE,
