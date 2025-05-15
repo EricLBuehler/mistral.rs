@@ -19,8 +19,6 @@ use tokio::sync::mpsc::channel;
 use util::{PyApiErr, PyApiResult};
 
 use candle_core::{Device, Result};
-use pyo3::types::PyType;
-use pyo3::Bound;
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader, AutoDeviceMapParams,
     BertEmbeddingModel, ChatCompletionResponse, CompletionResponse, Constraint,
@@ -34,6 +32,8 @@ use mistralrs_core::{
     TokenSource, TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::prelude::*;
+use pyo3::types::PyType;
+use pyo3::Bound;
 use std::fs::File;
 mod anymoe;
 mod requests;
@@ -835,28 +835,25 @@ impl Runner {
         };
 
         Self::new(
-            which,
-            max_seqs,
-            false,              // no_kv_cache
-            16,                 // prefix_cache_n
-            "cache",           // token_source
-            32,                 // speculative_gamma
-            None,               // which_draft
-            None,               // chat_template
-            None,               // jinja_explicit
-            None,               // num_device_layers
-            None,               // in_situ_quant
-            None,               // anymoe_config
-            None,               // pa_gpu_mem
-            None,               // pa_gpu_mem_usage
-            None,               // pa_ctxt_len
-            None,               // pa_blk_size
-            false,              // no_paged_attn
-            false,              // paged_attn
-            None,               // prompt_chunksize
-            seed,
-            false,              // enable_search
-            None,               // search_bert_model
+            which, max_seqs, false,   // no_kv_cache
+            16,      // prefix_cache_n
+            "cache", // token_source
+            32,      // speculative_gamma
+            None,    // which_draft
+            None,    // chat_template
+            None,    // jinja_explicit
+            None,    // num_device_layers
+            None,    // in_situ_quant
+            None,    // anymoe_config
+            None,    // pa_gpu_mem
+            None,    // pa_gpu_mem_usage
+            None,    // pa_ctxt_len
+            None,    // pa_blk_size
+            false,   // no_paged_attn
+            false,   // paged_attn
+            None,    // prompt_chunksize
+            seed, false, // enable_search
+            None,  // search_bert_model
         )
     }
 
@@ -923,11 +920,7 @@ impl Runner {
         let py_request = Python::with_gil(|py| Py::new(py, raw_request).map_err(PyApiErr))?;
 
         match self.send_chat_completion_request(py_request)? {
-            Either::Left(resp) => Ok(resp.choices[0]
-                .message
-                .content
-                .clone()
-                .unwrap_or_default()),
+            Either::Left(resp) => Ok(resp.choices[0].message.content.clone().unwrap_or_default()),
             Either::Right(_) => Err(PyApiErr::from("stream was not expected")),
         }
     }

@@ -122,6 +122,10 @@ fn create_attn_mask(q_padding_mask_1d: &Tensor, k_padding_mask_1d: &Tensor) -> R
     // # Combine: True if padding status is compatible (both non-pad OR both pad)
     // mask = non_pad_attends_non_pad | pad_attends_pad  # Shape [B, Tq, Tk]
 
+    // let np_att_np = p_mask_q.bitwise_and(&p_mask_k)?;
+    // let p_att_p = p_mask_q.bitwise_not()?.bitwise_and(&p_mask_k.bitwise_not()?)?;
+    // let mask = np_att_np.bitwise_or(&p_att_p)?;
+
     let mask = p_mask_q.broadcast_eq(&p_mask_k)?;
 
     mask.unsqueeze(1)
@@ -160,22 +164,25 @@ impl DiaPipeline {
         let prefill =
             (Tensor::ones((1, num_channels), DType::F32, &self.device)? * audio_bos_value as f64)?;
 
-        let delay_pad_tensor =
-            (Tensor::ones((max_delay_pattern, num_channels), DType::F32, &self.device)? * 1024f64)?;
+        let delay_pad_tensor = (Tensor::ones(
+            (max_delay_pattern - 1, num_channels),
+            DType::F32,
+            &self.device,
+        )? * -1f64)?;
         let prefill = Tensor::cat(&[prefill, delay_pad_tensor], 0)?;
 
         let delay_precomp = build_delay_indices(
             1,
             prefill.dim(0)?,
             num_channels,
-            delay_pattern,
+            &delay_pattern.iter().map(|x| *x as i64).collect::<Vec<_>>(),
             &self.device,
         )?;
 
         let prefill = apply_audio_delay(
             &prefill.unsqueeze(0)?,
-            audio_pad_value,
-            audio_bos_value,
+            audio_pad_value as i64,
+            audio_bos_value as i64,
             &delay_precomp,
         )?
         .squeeze(0)?;
@@ -242,21 +249,23 @@ impl DiaPipeline {
                 .encoder
                 .forward(&enc_input, &encoder_positions, Some(&encoder_attn_mask))?;
 
-        let decoder_cross_attn_cache = self
-            .model
-            .decoder
-            .precompute_cross_attn_cache(&encoder_out, &encoder_positions)?;
+        let decoder_cross_attn_cache = self.model.decoder.precompute_cross_attn_cache(
+            &encoder_out,
+            &encoder_positions,
+            &encoder_padding_mask,
+        )?;
         let decoder_padding_mask = Tensor::ones((2, 1), DType::U8, &self.device)?;
         let decoder_attn_mask = create_attn_mask(&decoder_padding_mask, &encoder_padding_mask)?;
 
         let max_audio_length = self.cfg.data.audio_length;
         let generated_tokens = Tensor::zeros(
             (max_audio_length, self.cfg.data.channels),
-            DType::U32,
+            DType::F32,
             &self.device,
         )?;
 
-        generated_tokens.slice_set(&prefill.to_dtype(DType::U32)?, 0, 0)?;
+        prefill.write_npy("prefill_m.npy")?;
+        generated_tokens.slice_set(&prefill.to_dtype(DType::F32)?, 0, 0)?;
 
         let mut decoder_self_attn_cache = Vec::new();
         for _ in 0..self.cfg.model.decoder.n_layer {
@@ -293,7 +302,7 @@ impl DiaPipeline {
         assert_eq!(logits.rank(), 2);
 
         // if temperature == 0. {
-        return logits.argmax(D::Minus1)?.to_vec1::<u32>();
+            return logits.argmax(D::Minus1)?.to_vec1::<u32>();
         // }
 
         let mut logits = (logits / temperature as f64)?;
@@ -303,7 +312,7 @@ impl DiaPipeline {
                 indices: top_k_indices,
             } = logits.topk(cfg_filter_top_k)?;
             let mut mask = logits.ones_like()?;
-            mask = mask.scatter_add(&top_k_indices, &mask.gather(&top_k_indices, 0)?.neg()?, 0)?;
+            mask = mask.scatter_add(&top_k_indices, &mask.index_select(&top_k_indices, D::Minus1)?.neg()?, D::Minus1)?;
             logits = masked_fill(&logits, &mask, f32::NEG_INFINITY)?;
         }
 
@@ -415,12 +424,17 @@ impl DiaPipeline {
         let delay_pattern = &self.cfg.data.delay_pattern;
         let max_delay_pattern = *delay_pattern.iter().max().unwrap() as usize;
 
-        let revert_precomp =
-            build_revert_indices(1, seq_length, num_channels, delay_pattern, &self.device)?;
+        let revert_precomp = build_revert_indices(
+            1,
+            seq_length,
+            num_channels,
+            &delay_pattern.iter().map(|x| *x as i64).collect::<Vec<_>>(),
+            &self.device,
+        )?;
 
         let mut codebook = revert_audio_delay(
             &generated_codes.unsqueeze(0)?,
-            audio_pad_value,
+            audio_pad_value as i64,
             &revert_precomp,
             seq_length,
         )?;
@@ -437,7 +451,7 @@ impl DiaPipeline {
         codebook = invalid_mask.where_cond(&codebook.zeros_like()?, &codebook)?;
 
         let codes = codebook.transpose(1, 2)?;
-        let pcm = self.dac.decode_codes(&codes)?;
+        let pcm = self.dac.decode_codes(&codes.to_dtype(DType::U32)?)?;
         let pcm = pcm.i((0, 0))?;
         let pcm = normalize_loudness(&pcm, 44_100, true)?;
         let pcm = pcm.to_vec1::<f32>()?;
@@ -504,6 +518,10 @@ impl DiaPipeline {
         let mut eos_countdown: Option<usize> = None;
 
         let mut rng = Isaac64Rng::seed_from_u64(0);
+        generated_tokens.write_npy("generated_tokens_m.npy")?;
+        let mut generated_tokens = Tensor::read_npy("generated_tokens.npy")?
+            .to_device(generated_tokens.device())?
+            .to_dtype(DType::F32)?;
 
         while dec_step < max_tokens {
             let dec_positions = Tensor::full(dec_step as f32, (2, 1), &self.device)?;
@@ -513,7 +531,7 @@ impl DiaPipeline {
                 .repeat((2, 1, 1))?;
 
             let mut pred_c = self.decoder_step(
-                &current_tokens,
+                &current_tokens.to_dtype(DType::U32)?,
                 &encoder_out,
                 Some(&self_attn_mask),
                 Some(&decoder_attn_mask),
@@ -529,36 +547,36 @@ impl DiaPipeline {
                 dec_step,
             )?;
 
-            if (!eos_detected && pred_c[0] == audio_eos_value)
-                || dec_step == max_tokens - max_delay_pattern - 1
-            {
-                eos_detected = true;
-                eos_countdown = Some(max_delay_pattern);
-            }
+            // if (!eos_detected && pred_c[0] == audio_eos_value)
+            //     || dec_step == max_tokens - max_delay_pattern - 1
+            // {
+            //     eos_detected = true;
+            //     eos_countdown = Some(max_delay_pattern);
+            // }
 
-            if let Some(eos_countdown) = &mut eos_countdown {
-                let step_after_eos = max_delay_pattern - *eos_countdown;
-                for (i, d) in delay_pattern.iter().enumerate() {
-                    if step_after_eos == *d as usize {
-                        pred_c[i] = audio_eos_value;
-                    } else if step_after_eos > *d as usize {
-                        pred_c[i] = audio_pad_value;
-                    }
-                }
-                *eos_countdown -= 1;
-            }
+            // if let Some(eos_countdown) = &mut eos_countdown {
+            //     let step_after_eos = max_delay_pattern - *eos_countdown;
+            //     for (i, d) in delay_pattern.iter().enumerate() {
+            //         if step_after_eos == *d as usize {
+            //             pred_c[i] = audio_eos_value;
+            //         } else if step_after_eos > *d as usize {
+            //             pred_c[i] = audio_pad_value;
+            //         }
+            //     }
+            //     *eos_countdown -= 1;
+            // }
 
-            bos_countdown = bos_countdown.saturating_sub(1);
+            // bos_countdown = bos_countdown.saturating_sub(1);
 
-            let apply_mask = bos_countdown > 0;
+            // let apply_mask = bos_countdown > 0;
+            let apply_mask = true;
             if apply_mask {
                 let len = pred_c.len();
-                let dec_out = Tensor::from_vec(pred_c, len, &self.device)?;
+                let dec_out = Tensor::from_vec(pred_c, len, &self.device)?.to_dtype(DType::F32)?;
 
                 let mask = generated_tokens
                     .i((dec_step + 1..dec_step + 2, ..))?
-                    .eq(1024.)?;
-                println!("{mask}");
+                    .eq(-1.)?;
                 generated_tokens = generated_tokens.slice_assign(
                     &[&(dec_step + 1..dec_step + 2), &..],
                     &mask.where_cond(
@@ -569,7 +587,9 @@ impl DiaPipeline {
             } else {
                 let len = pred_c.len();
                 generated_tokens.slice_set(
-                    &Tensor::from_vec(pred_c, len, &self.device)?.unsqueeze(0)?,
+                    &Tensor::from_vec(pred_c, len, &self.device)?
+                        .unsqueeze(0)?
+                        .to_dtype(DType::F32)?,
                     0,
                     dec_step + 1,
                 )?;
@@ -584,14 +604,14 @@ impl DiaPipeline {
             if dec_step % 86 == 0 {
                 println!("Generated 1s")
             }
-            if dec_step >= 86*1 {
+            if dec_step >= 86 * 8 {
                 break;
             }
         }
 
+        generated_tokens.write_npy("generated_codes_m.npy")?;
         let generated_codes = generated_tokens.i((0..dec_step + 1, ..))?;
-        generated_codes.write_npy("generated_codes_m.npy")?;
-        // println!("{generated_codes}");
+        println!("{generated_codes}");
         self.generate_output(&generated_codes)?;
         Ok(())
     }

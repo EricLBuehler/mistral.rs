@@ -94,6 +94,7 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
         attn_mask: Option<&Tensor>,
         cached_kv: Option<&mut DiaKvCache>,
         prefill: bool,
+        current_index: usize,
     ) -> Result<Tensor> {
         let (b, t, d) = xq.dims3()?;
 
@@ -132,7 +133,7 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
                     if prefill {
                         kv_cache.prefill(&k, &v)?
                     } else {
-                        kv_cache.update(&k, &v)?
+                        kv_cache.update(&k, &v, current_index)?
                     }
                 }
                 // No cache supplied – just use freshly computed tensors.
@@ -270,12 +271,20 @@ impl DiaEncoderLayer {
         x: &Tensor,
         positions: &Tensor,
         attn_mask: Option<&Tensor>,
+        current_index: usize,
     ) -> Result<Tensor> {
         let mut residual = x;
         let mut x_norm = self.pre_sa_norm.forward(x)?;
 
         let sa_out = self.self_attn.forward(
-            &x_norm, &x_norm, positions, positions, attn_mask, None, false,
+            &x_norm,
+            &x_norm,
+            positions,
+            positions,
+            attn_mask,
+            None,
+            false,
+            current_index,
         )?;
         let x = (residual + sa_out)?;
 
@@ -327,7 +336,7 @@ impl DiaEncoder {
         let mut x = self.embedding.forward(x)?;
 
         for layer in &self.layers {
-            x = layer.forward(&x, positions, attn_mask)?;
+            x = layer.forward(&x, positions, attn_mask, 0)?;
         }
 
         self.norm.forward(&x)
@@ -434,6 +443,7 @@ impl DiaDecoderLayer {
             self_attn_mask.as_ref(),
             self_attn_cache,
             prefill,
+            current_idx,
         )?;
         //println!("sa_out {sa_out}");
         let x = (residual + sa_out)?;
@@ -455,9 +465,10 @@ impl DiaDecoderLayer {
             &encoder_out,
             decoder_positions,
             encoder_positions,
-            None,//cross_attn_mask,
+            cross_attn_mask,
             cross_attn_cache,
             false,
+            current_idx,
         )?;
         //println!("ca_out {}", ca_out.mean_all()?);
         //ca_out.write_npy("ca_out_m.npy")?;
@@ -529,6 +540,7 @@ impl DiaDecoder {
         &self,
         encoder_out: &Tensor,
         encoder_positions: &Tensor,
+        encoder_padding_mask: &Tensor,
     ) -> Result<Vec<Option<DiaKvCache>>> {
         let (b, t, _d) = encoder_out.dims3()?;
 
@@ -542,16 +554,20 @@ impl DiaDecoder {
                     .forward(encoder_out)?
                     .reshape((b, t, ca.num_kv_heads, ca.head_dim))?;
             k_proj = ca.rope.forward(&k_proj, encoder_positions)?;
+            k_proj = k_proj.transpose(1, 2)?;
+            // k_proj = masked_fill(
+            //     &k_proj,
+            //     &(1. - encoder_padding_mask.unsqueeze(1)?.unsqueeze(3)?)?,
+            //     0f32,
+            // )?;
 
-            let v_proj =
+            let mut v_proj =
                 ca.v_proj
                     .forward(encoder_out)?
                     .reshape((b, t, ca.num_kv_heads, ca.head_dim))?;
+            v_proj = v_proj.transpose(1, 2)?;
 
-            per_layer_kv_cache.push(Some(DiaKvCache::from_kv(
-                k_proj.transpose(1, 2)?,
-                v_proj.transpose(1, 2)?,
-            )));
+            per_layer_kv_cache.push(Some(DiaKvCache::from_kv(k_proj, v_proj)));
         }
 
         Ok(per_layer_kv_cache)

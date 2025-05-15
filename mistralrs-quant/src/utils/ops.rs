@@ -6,7 +6,7 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterato
 
 use std::{
     fmt::Display,
-    ops::{BitAnd, BitOr, BitXor, Shl},
+    ops::{BitAnd, BitOr, BitXor, Not, Shl},
 };
 
 #[cfg(feature = "cuda")]
@@ -216,28 +216,40 @@ impl LeftshiftOp for Tensor {
     }
 }
 
-pub enum BitWiseOpEnum {
+pub enum BitWiseBinaryOpEnum {
     And,
     Or,
     Xor,
 }
 
-impl Display for BitWiseOpEnum {
+impl Display for BitWiseBinaryOpEnum {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BitWiseOpEnum::And => write!(f, "And"),
-            BitWiseOpEnum::Or => write!(f, "Or"),
-            BitWiseOpEnum::Xor => write!(f, "Xor"),
+            BitWiseBinaryOpEnum::And => write!(f, "And"),
+            BitWiseBinaryOpEnum::Or => write!(f, "Or"),
+            BitWiseBinaryOpEnum::Xor => write!(f, "Xor"),
+        }
+    }
+}
+
+pub enum BitWiseUnaryOpEnum {
+    Not,
+}
+
+impl Display for BitWiseUnaryOpEnum {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BitWiseUnaryOpEnum::Not => write!(f, "Not"),
         }
     }
 }
 
 struct BitWise {
-    pub op: BitWiseOpEnum,
+    pub op: BitWiseBinaryOpEnum,
 }
 
 impl BitWise {
-    pub fn new(op: BitWiseOpEnum) -> Self {
+    pub fn new(op: BitWiseBinaryOpEnum) -> Self {
         Self { op }
     }
 
@@ -249,9 +261,9 @@ impl BitWise {
         vs1.into_par_iter()
             .zip_eq(vs2)
             .map(|(v1, v2)| match self.op {
-                BitWiseOpEnum::And => *v1 & *v2,
-                BitWiseOpEnum::Or => *v1 | *v2,
-                BitWiseOpEnum::Xor => *v1 ^ *v2,
+                BitWiseBinaryOpEnum::And => *v1 & *v2,
+                BitWiseBinaryOpEnum::Or => *v1 | *v2,
+                BitWiseBinaryOpEnum::Xor => *v1 ^ *v2,
             })
             .collect()
     }
@@ -482,19 +494,19 @@ impl CustomOp2 for BitWise {
                 let d_out_ptr = *d_out.device_ptr() as *mut c_void;
                 unsafe {
                     match self.op {
-                        BitWiseOpEnum::And => ffi::bitwise_and_u8(
+                        BitWiseBinaryOpEnum::And => ffi::bitwise_and_u8(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr,
                             u32::try_from(elem_count)?,
                         ),
-                        BitWiseOpEnum::Or => ffi::bitwise_or_u8(
+                        BitWiseBinaryOpEnum::Or => ffi::bitwise_or_u8(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr,
                             u32::try_from(elem_count)?,
                         ),
-                        BitWiseOpEnum::Xor => ffi::bitwise_xor_u8(
+                        BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_u8(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr,
@@ -509,19 +521,19 @@ impl CustomOp2 for BitWise {
                 let d_out_ptr = *d_out.device_ptr() as *mut c_void;
                 unsafe {
                     match self.op {
-                        BitWiseOpEnum::And => ffi::bitwise_and_u32(
+                        BitWiseBinaryOpEnum::And => ffi::bitwise_and_u32(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr,
                             u32::try_from(elem_count)?,
                         ),
-                        BitWiseOpEnum::Or => ffi::bitwise_or_u32(
+                        BitWiseBinaryOpEnum::Or => ffi::bitwise_or_u32(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr,
                             u32::try_from(elem_count)?,
                         ),
-                        BitWiseOpEnum::Xor => ffi::bitwise_xor_u32(
+                        BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_u32(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr,
@@ -536,19 +548,19 @@ impl CustomOp2 for BitWise {
                 let d_out_ptr = *d_out.device_ptr() as *mut c_void;
                 unsafe {
                     match self.op {
-                        BitWiseOpEnum::And => ffi::bitwise_and_i64(
+                        BitWiseBinaryOpEnum::And => ffi::bitwise_and_i64(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr,
                             u32::try_from(elem_count)?,
                         ),
-                        BitWiseOpEnum::Or => ffi::bitwise_or_i64(
+                        BitWiseBinaryOpEnum::Or => ffi::bitwise_or_i64(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr,
                             u32::try_from(elem_count)?,
                         ),
-                        BitWiseOpEnum::Xor => ffi::bitwise_xor_i64(
+                        BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_i64(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr,
@@ -563,19 +575,19 @@ impl CustomOp2 for BitWise {
                 let d_out_ptr = *d_out.device_ptr() as *mut c_void;
                 unsafe {
                     match self.op {
-                        BitWiseOpEnum::And => ffi::bitwise_and_i32(
+                        BitWiseBinaryOpEnum::And => ffi::bitwise_and_i32(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr,
                             u32::try_from(elem_count)?,
                         ),
-                        BitWiseOpEnum::Or => ffi::bitwise_or_i32(
+                        BitWiseBinaryOpEnum::Or => ffi::bitwise_or_i32(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr,
                             u32::try_from(elem_count)?,
                         ),
-                        BitWiseOpEnum::Xor => ffi::bitwise_xor_i32(
+                        BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_i32(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr,
@@ -629,7 +641,7 @@ impl CustomOp2 for BitWise {
         let output = device.new_buffer(out_shape.elem_count(), s1.dtype(), "bitwise-op")?;
 
         match self.op {
-            BitWiseOpEnum::Or => crate::metal_kernels::call_bitwise_or(
+            BitWiseBinaryOpEnum::Or => crate::metal_kernels::call_bitwise_or(
                 device.device(),
                 &command_buffer,
                 &crate::metal_kernels::Kernels::new(),
@@ -642,7 +654,7 @@ impl CustomOp2 for BitWise {
                 &output,
             )
             .map_err(candle_core::Error::wrap)?,
-            BitWiseOpEnum::And => crate::metal_kernels::call_bitwise_and(
+            BitWiseBinaryOpEnum::And => crate::metal_kernels::call_bitwise_and(
                 device.device(),
                 &command_buffer,
                 &crate::metal_kernels::Kernels::new(),
@@ -655,7 +667,7 @@ impl CustomOp2 for BitWise {
                 &output,
             )
             .map_err(candle_core::Error::wrap)?,
-            BitWiseOpEnum::Xor => crate::metal_kernels::call_bitwise_xor(
+            BitWiseBinaryOpEnum::Xor => crate::metal_kernels::call_bitwise_xor(
                 device.device(),
                 &command_buffer,
                 &crate::metal_kernels::Kernels::new(),
@@ -680,24 +692,165 @@ impl CustomOp2 for BitWise {
     }
 }
 
+struct BitWiseUnary {
+    pub op: BitWiseUnaryOpEnum,
+}
+
+impl BitWiseUnary {
+    pub fn new(op: BitWiseUnaryOpEnum) -> Self {
+        Self { op }
+    }
+
+    fn bitwise<T: WithDType + Not<Output = T>>(&self, vs1: &[T]) -> Vec<T> {
+        vs1.into_par_iter()
+            .map(|v1| match self.op {
+                BitWiseUnaryOpEnum::Not => !*v1,
+            })
+            .collect()
+    }
+}
+
+impl CustomOp1 for BitWiseUnary {
+    fn name(&self) -> &'static str {
+        "bitwise-unary"
+    }
+
+    fn cpu_fwd(&self, s1: &CpuStorage, l1: &Layout) -> Result<(CpuStorage, Shape)> {
+        if !l1.is_contiguous() {
+            candle_core::bail!("Input tensor s1 must be contiguous");
+        }
+
+        match s1 {
+            CpuStorage::U8(vs1) => {
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((a, b)) => &vs1[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
+                let result = self.bitwise(vs1);
+                let result = CpuStorage::U8(result);
+                Ok((result, l1.shape().clone()))
+            }
+            CpuStorage::U32(vs1) => {
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((a, b)) => &vs1[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
+                let result = self.bitwise(vs1);
+                let result = CpuStorage::U32(result);
+                Ok((result, l1.shape().clone()))
+            }
+            CpuStorage::I64(vs1) => {
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((a, b)) => &vs1[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
+                let result = self.bitwise(vs1);
+                let result = CpuStorage::I64(result);
+                Ok((result, l1.shape().clone()))
+            }
+            CpuStorage::I16(vs1) => {
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((a, b)) => &vs1[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
+                let result = self.bitwise(vs1);
+                let result = CpuStorage::I16(result);
+                Ok((result, l1.shape().clone()))
+            }
+            CpuStorage::I32(vs1) => {
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((a, b)) => &vs1[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
+                let result = self.bitwise(vs1);
+                let result = CpuStorage::I32(result);
+                Ok((result, l1.shape().clone()))
+            }
+            CpuStorage::BF16(_) => Err(Error::UnsupportedDTypeForOp(DType::BF16, "bitwise")),
+            CpuStorage::F16(_) => Err(Error::UnsupportedDTypeForOp(DType::F16, "bitwise")),
+            CpuStorage::F32(_) => Err(Error::UnsupportedDTypeForOp(DType::F32, "bitwise")),
+            CpuStorage::F64(_) => Err(Error::UnsupportedDTypeForOp(DType::F64, "bitwise")),
+            CpuStorage::F8E4M3(_) => Err(Error::UnsupportedDTypeForOp(DType::F8E4M3, "bitwise")),
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        s1: &CudaStorage,
+        l1: &Layout,
+        s2: &CudaStorage,
+        l2: &Layout,
+    ) -> Result<(CudaStorage, Shape)> {
+        todo!()
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        s1: &candle_core::MetalStorage,
+        l1: &Layout,
+    ) -> Result<(candle_core::MetalStorage, Shape)> {
+        if !l1.is_contiguous() {
+            candle_core::bail!("Input tensor s1 must be contiguous");
+        }
+
+        let command_buffer = s1.device().command_buffer()?;
+        command_buffer.set_label("bitwise-unary-op");
+
+        let device = s1.device();
+
+        let out_shape = l1.shape().clone();
+
+        let output = device.new_buffer(out_shape.elem_count(), s1.dtype(), "bitwise-op")?;
+
+        match self.op {
+            BitWiseUnaryOpEnum::Not => crate::metal_kernels::call_bitwise_not(
+                device.device(),
+                &command_buffer,
+                &crate::metal_kernels::Kernels::new(),
+                s1.dtype(),
+                s1.buffer(),
+                l1.start_offset() * s1.dtype().size_in_bytes(),
+                out_shape.elem_count(),
+                &output,
+            )
+            .map_err(candle_core::Error::wrap)?,
+        }
+
+        let newstorage = candle_core::MetalStorage::new(
+            output,
+            device.clone(),
+            out_shape.elem_count(),
+            s1.dtype(),
+        );
+        Ok((newstorage, out_shape))
+    }
+}
+
 #[allow(dead_code)]
 pub trait BitWiseOp {
     fn bitwise_and(&self, rhs: &Tensor) -> Result<Tensor>;
     fn bitwise_or(&self, rhs: &Tensor) -> Result<Tensor>;
     fn bitwise_xor(&self, rhs: &Tensor) -> Result<Tensor>;
+    fn bitwise_not(&self) -> Result<Tensor>;
 }
 
 impl BitWiseOp for Tensor {
     fn bitwise_and(&self, rhs: &Tensor) -> Result<Tensor> {
-        self.apply_op2_no_bwd(rhs, &BitWise::new(BitWiseOpEnum::And))
+        self.apply_op2_no_bwd(rhs, &BitWise::new(BitWiseBinaryOpEnum::And))
     }
 
     fn bitwise_or(&self, rhs: &Tensor) -> Result<Tensor> {
-        self.apply_op2_no_bwd(rhs, &BitWise::new(BitWiseOpEnum::Or))
+        self.apply_op2_no_bwd(rhs, &BitWise::new(BitWiseBinaryOpEnum::Or))
     }
 
     fn bitwise_xor(&self, rhs: &Tensor) -> Result<Tensor> {
-        self.apply_op2_no_bwd(rhs, &BitWise::new(BitWiseOpEnum::Xor))
+        self.apply_op2_no_bwd(rhs, &BitWise::new(BitWiseBinaryOpEnum::Xor))
+    }
+
+    fn bitwise_not(&self) -> Result<Tensor> {
+        self.apply_op1_no_bwd(&BitWiseUnary::new(BitWiseUnaryOpEnum::Not))
     }
 }
 

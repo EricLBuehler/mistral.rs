@@ -27,10 +27,9 @@ impl DiaKvCache {
         }
     }
 
-    pub fn update(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
-        self.k.slice_set(&k, 2, self.current_index)?;
-        self.v.slice_set(&v, 2, self.current_index)?;
-        self.current_index += 1;
+    pub fn update(&self, k: &Tensor, v: &Tensor, current_index: usize) -> Result<(Tensor, Tensor)> {
+        self.k.slice_set(&k, 2, current_index)?;
+        self.v.slice_set(&v, 2, current_index)?;
         Ok((self.k.clone(), self.v.clone()))
     }
 

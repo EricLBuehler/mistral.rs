@@ -308,6 +308,42 @@ pub fn call_dequant_3bit(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn call_bitwise_not(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    a: &Buffer,
+    a_offset: usize,
+    length: usize,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::U8 => "bitwise_not_uint8_t",
+        DType::U32 => "bitwise_not_uint32_t",
+        DType::I64 => "bitwise_not_int64_t",
+        DType::I32 => "bitwise_not_int",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::U8, DType::U32, DType::I64, DType::I32],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, ((a, a_offset), output));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn call_bitwise_or(
     device: &Device,
     ep: impl EncoderProvider,

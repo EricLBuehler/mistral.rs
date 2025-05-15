@@ -1513,7 +1513,6 @@ impl DiaRotaryEmbedding {
 
         let timescale_len = timescale.len();
         let timescale = Tensor::from_vec(timescale, timescale_len, device)?;
-        let t = Tensor::arange(0u32, max_len as u32, device)?.to_dtype(DType::F32)?;
 
         Ok(Self { timescale, dtype })
     }
