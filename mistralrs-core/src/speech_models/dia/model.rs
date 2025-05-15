@@ -425,7 +425,7 @@ impl DiaDecoderLayer {
 
         let ca_out = self.cross_attn.forward(
             &x_norm,
-            &encoder_out,
+            encoder_out,
             decoder_positions,
             encoder_positions,
             cross_attn_mask,

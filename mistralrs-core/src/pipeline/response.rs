@@ -86,7 +86,7 @@ pub async fn send_speech_responses(
 
     for (seq, (pcm, (rate, channel))) in input_seqs
         .iter_mut()
-        .zip(pcms.into_iter().zip(rates.into_iter().zip(channels)))
+        .zip(pcms.iter().zip(rates.iter().zip(channels)))
     {
         seq.add_speech_pcm_to_group(pcm.clone(), *rate, *channel);
 

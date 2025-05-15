@@ -244,7 +244,7 @@ impl DiaPipeline {
                 // Clamp smaller probabilities to zero.
                 for (index, val) in argsort_indices.iter().enumerate() {
                     if index >= cfg_filter_top_k {
-                        probs[*val as usize] = 0.0;
+                        probs[*val] = 0.0;
                     }
                 }
             }
@@ -253,9 +253,9 @@ impl DiaPipeline {
             let mut cumsum = 0.;
             for index in &argsort_indices {
                 if cumsum >= top_p {
-                    probs[*index as usize] = 0.0;
+                    probs[*index] = 0.0;
                 } else {
-                    cumsum += probs[*index as usize];
+                    cumsum += probs[*index];
                 }
             }
 

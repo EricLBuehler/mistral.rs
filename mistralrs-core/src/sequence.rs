@@ -743,7 +743,7 @@ impl Sequence {
         max_model_len: usize,
     ) -> Option<StopReason> {
         let is_eos = match eos_tok {
-            Some(eos_tok) => eos_tok.iter().any(|t| *t == tok),
+            Some(eos_tok) => eos_tok.contains(&tok),
             None => false,
         };
         if is_eos {
