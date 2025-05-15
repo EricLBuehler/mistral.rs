@@ -22,13 +22,33 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indexmap::IndexMap;
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
+use serde::Deserialize;
 use std::any::Any;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::info;
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub enum SpeechLoaderType {
+    #[serde(rename = "dia")]
+    Dia,
+}
+
+impl FromStr for SpeechLoaderType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "dia" => Ok(Self::Dia),
+            a => Err(format!(
+                "Unknown architecture `{a}`. Possible architectures: `dia`."
+            )),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct SpeechModelPaths {
@@ -141,6 +161,7 @@ impl InputsProcessor for SpeechInputsProcessor {
 }
 
 pub struct SpeechPipeline {
+    model_id: String,
     model: DiaPipeline,
     metadata: Arc<GeneralMetadata>,
     dummy_cache: EitherCache,
@@ -148,6 +169,8 @@ pub struct SpeechPipeline {
 
 pub struct SpeechLoader {
     pub model_id: String,
+    pub dac_model_id: Option<String>,
+    pub arch: SpeechLoaderType,
 }
 
 impl Loader for SpeechLoader {
@@ -164,24 +187,57 @@ impl Loader for SpeechLoader {
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = {
-            let api = ApiBuilder::new()
-                .with_progress(!silent)
-                .with_token(get_token(&token_source)?)
-                .build()?;
-            let revision = revision.unwrap_or("main".to_string());
-            let api = api.repo(Repo::with_revision(
-                self.model_id.to_string(),
-                RepoType::Model,
-                revision.clone(),
-            ));
-            let model_id = std::path::Path::new(&self.model_id);
+            // Main weights first, DAC is the final one.
+            let mut weights = Vec::new();
 
-            let weight = api_get_file!(api, "model.safetensors", &model_id);
-            let config = api_get_file!(api, "config.json", &model_id);
-            Ok(Box::new(SpeechModelPaths {
-                weights: vec![weight],
-                config,
-            }))
+            // Main model
+            let config = {
+                let api = ApiBuilder::new()
+                    .with_progress(!silent)
+                    .with_token(get_token(&token_source)?)
+                    .build()?;
+                let revision = revision.clone().unwrap_or("main".to_string());
+                let api = api.repo(Repo::with_revision(
+                    self.model_id.to_string(),
+                    RepoType::Model,
+                    revision.clone(),
+                ));
+                let model_id = std::path::Path::new(&self.model_id);
+
+                let weight = api_get_file!(api, "model.safetensors", &model_id);
+                let config = api_get_file!(api, "config.json", &model_id);
+                weights.push(weight);
+                config
+            };
+
+            // DAC model
+            {
+                let api = ApiBuilder::new()
+                    .with_progress(!silent)
+                    .with_token(get_token(&token_source)?)
+                    .build()?;
+                let revision = revision.unwrap_or("main".to_string());
+
+                // Apply default here
+                let dac_model = self
+                    .dac_model_id
+                    .clone()
+                    .unwrap_or_else(|| match self.arch {
+                        SpeechLoaderType::Dia => "EricB/dac_44khz".to_string(),
+                    });
+
+                let api = api.repo(Repo::with_revision(
+                    dac_model,
+                    RepoType::Model,
+                    revision.clone(),
+                ));
+                let model_id = std::path::Path::new(&self.model_id);
+
+                let weight = api_get_file!(api, "model.safetensors", &model_id);
+                weights.push(weight);
+            }
+
+            Ok(Box::new(SpeechModelPaths { weights, config }))
         };
         self.load_model_from_path(
             &paths?,
@@ -224,8 +280,10 @@ impl Loader for SpeechLoader {
         let mapper = DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None)?;
         let dtype = mapper.get_min_dtype(dtype)?;
 
+        // Last weight is the dac.
+        let model_weights = paths.weights[..paths.weights.len() - 1].to_vec();
         let vb = from_mmaped_safetensors(
-            vec![paths.weights[0].clone()],
+            model_weights,
             Vec::new(),
             Some(dtype),
             device,
@@ -236,12 +294,17 @@ impl Loader for SpeechLoader {
             Arc::new(|_| DeviceForLoadTensor::Base),
         )?;
 
-        let dac_vb =
-            unsafe { VarBuilder::from_mmaped_safetensors(&["model.safetensors"], dtype, device)? };
+        let dac_vb = unsafe {
+            VarBuilder::from_mmaped_safetensors(&[paths.weights.last().unwrap()], dtype, device)?
+        };
+
+        // Only Dia is supported for now.
+        assert_eq!(self.arch, SpeechLoaderType::Dia);
 
         let model = DiaPipeline::new(&cfg, vb, dac_vb)?;
 
         Ok(Arc::new(Mutex::new(SpeechPipeline {
+            model_id: self.model_id.clone(),
             model,
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len: 1024,
@@ -264,7 +327,7 @@ impl Loader for SpeechLoader {
     }
 
     fn get_id(&self) -> String {
-        "TODO".to_string()
+        self.model_id.clone()
     }
 
     fn get_kind(&self) -> ModelKind {
@@ -314,7 +377,7 @@ impl MetadataMixin for SpeechPipeline {
         self.metadata.clone()
     }
     fn name(&self) -> String {
-        "TODO".to_string()
+        self.model_id.clone()
     }
     fn reset_non_granular_state(&self) {}
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {

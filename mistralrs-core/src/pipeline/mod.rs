@@ -52,7 +52,7 @@ pub(crate) use processing::{
 };
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
-pub use speech::{SpeechLoader, SpeechPipeline};
+pub use speech::{SpeechLoader, SpeechLoaderType, SpeechPipeline};
 use std::any::Any;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;

@@ -544,7 +544,16 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             arch,
             dtype: _,
         } => DiffusionLoaderBuilder::new(Some(model_id)).build(arch),
-        ModelSelected::Speech { model_id, .. } => Box::new(SpeechLoader { model_id }),
+        ModelSelected::Speech {
+            model_id,
+            dac_model_id,
+            arch,
+            ..
+        } => Box::new(SpeechLoader {
+            model_id,
+            dac_model_id,
+            arch,
+        }),
     };
     Ok(loader)
 }
