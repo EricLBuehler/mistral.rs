@@ -1,10 +1,10 @@
-use candle_core::{IndexOp, Result, Tensor, D};
+use candle_core::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::ShardedVarBuilder;
 
 use crate::{
-    layers::{self, DiaRotaryEmbedding, RmsNorm},
-    layers_masker::masked_fill,
+    attention::{naive_sdpa, SdpaParams},
+    layers::{self, repeat_kv, DiaRotaryEmbedding, RmsNorm},
 };
 
 use super::{cache::DiaKvCache, config::DiaConfig};
@@ -40,7 +40,7 @@ struct DiaAttention<const CROSS_ATTN: bool> {
     head_dim: usize,
     num_q_heads: usize,
     num_kv_heads: usize,
-    num_gqa_groups: usize,
+    sdpa_params: SdpaParams,
 }
 
 impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
@@ -79,7 +79,12 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
             num_q_heads,
             num_kv_heads,
             head_dim,
-            num_gqa_groups: num_q_heads / num_kv_heads,
+            sdpa_params: SdpaParams {
+                n_kv_groups: num_q_heads / num_kv_heads,
+                sliding_window: None,
+                softcap: None,
+                softmax_scale: 1.,
+            },
         })
     }
 
@@ -104,7 +109,7 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
         xq = xq.transpose(1, 2)?;
 
         // ---- K‒V computation & cache handling --------------------------------
-        let (k, v) = if CROSS_ATTN {
+        let (mut k, mut v) = if CROSS_ATTN {
             // Cross‑attention re‑uses a pre‑computed immutable cache.
             cached_kv
                 .expect("cross-attention requires cached KV tensors")
@@ -139,58 +144,29 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
             }
         };
 
-        fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
-            if n_rep == 1 {
-                Ok(x)
-            } else {
-                let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
-                Tensor::cat(&vec![&x; n_rep], 2)?.reshape((
-                    b_sz,
-                    n_kv_head * n_rep,
-                    seq_len,
-                    head_dim,
-                ))
+        let attn_mask = match attn_mask {
+            Some(mask) => {
+                let neg_inf = Tensor::new(f32::NEG_INFINITY, xq.device())?.to_dtype(xq.dtype())?;
+                let dims = mask.dims();
+                let mask = mask.to_dtype(DType::U8)?.where_cond(
+                    &Tensor::zeros(dims, neg_inf.dtype(), neg_inf.device())?,
+                    &neg_inf.to_device(mask.device())?.broadcast_as(dims)?,
+                )?;
+                Some(mask)
             }
-        }
-        let k = repeat_kv(k, self.num_gqa_groups)?;
-        let v = repeat_kv(v, self.num_gqa_groups)?;
+            None => None,
+        };
 
-        let mut att = xq.contiguous()?.matmul(&k.t()?.contiguous()?)?;
+        k = repeat_kv(k.clone(), self.sdpa_params.n_kv_groups)?;
+        v = repeat_kv(v.clone(), self.sdpa_params.n_kv_groups)?;
 
-        if let Some(mask) = attn_mask {
-            att = masked_fill(&att, &(1. - mask)?, f32::NEG_INFINITY)?;
-        }
-        att = candle_nn::ops::softmax_last_dim(&att)?;
-
-        let mut attn_output = att.matmul(&v.contiguous()?)?;
-        // let attn_mask = match attn_mask {
-        //     Some(attn_mask) => {
-        //         let should_attend = attn_mask.eq(1.)?;
-        //         let should_not_attend = attn_mask.eq(0.)?;
-        //         let mask = masked_fill(
-        //             &attn_mask.to_dtype(DType::F32)?,
-        //             &should_not_attend,
-        //             f32::NEG_INFINITY,
-        //         )?;
-        //         dbg!(&mask.mean_all()?);
-        //         Some(mask)
-        //     }
-        //     None => None,
-        // };
-        // // TODO: flash attention
-        // let mut attn_output = Sdpa.run_attention(
-        //     &xq,
-        //     &k,
-        //     &v,
-        //     attn_mask.as_ref(),
-        //     None,
-        //     &SdpaParams {
-        //         n_kv_groups: self.num_gqa_groups,
-        //         sliding_window: None,
-        //         softcap: None,
-        //         softmax_scale: 1.,
-        //     },
-        // )?;
+        let mut attn_output = naive_sdpa(
+            &xq.contiguous()?,
+            &k.contiguous()?,
+            &v.contiguous()?,
+            attn_mask.as_ref(),
+            &self.sdpa_params,
+        )?;
 
         attn_output = attn_output.transpose(1, 2)?.reshape((b, t, ()))?;
 

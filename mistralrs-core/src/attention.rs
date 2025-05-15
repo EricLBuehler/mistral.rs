@@ -210,7 +210,7 @@ fn maybe_synchronize(device: &Device) -> Result<()> {
 }
 
 /// Computes softmax(QK^T*sqrt(d_k))V
-fn naive_sdpa(
+pub(crate) fn naive_sdpa(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
