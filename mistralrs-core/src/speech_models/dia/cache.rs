@@ -31,10 +31,7 @@ impl DiaKvCache {
         self.k.slice_set(&k, 2, self.current_index)?;
         self.v.slice_set(&v, 2, self.current_index)?;
         self.current_index += 1;
-        Ok((
-            self.k.i((.., .., ..self.current_index, ..))?,
-            self.v.i((.., .., ..self.current_index, ..))?,
-        ))
+        Ok((self.k.clone(), self.v.clone()))
     }
 
     pub fn prefill(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {

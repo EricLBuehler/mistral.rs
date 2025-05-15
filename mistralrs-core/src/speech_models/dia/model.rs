@@ -155,6 +155,7 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
         }
         let k = repeat_kv(k, self.num_gqa_groups)?;
         let v = repeat_kv(v, self.num_gqa_groups)?;
+
         let mut att = xq.contiguous()?.matmul(&k.t()?.contiguous()?)?;
 
         if let Some(mask) = attn_mask {
@@ -403,14 +404,26 @@ impl DiaDecoderLayer {
         encoder_out: &Tensor,
         encoder_positions: &Tensor,
         decoder_positions: &Tensor,
+        self_attn_mask: Option<&Tensor>,
         cross_attn_mask: Option<&Tensor>,
         self_attn_cache: Option<&mut DiaKvCache>,
         cross_attn_cache: Option<&mut DiaKvCache>,
         prefill: bool,
+        current_idx: usize,
     ) -> Result<Tensor> {
         let mut residual = x;
         let mut x_norm = self.pre_sa_norm.forward(x)?;
 
+        let self_attn_mask = match self_attn_mask {
+            Some(self_attn_mask) => Some(
+                self_attn_mask
+                    .unsqueeze(0)?
+                    .unsqueeze(0)?
+                    .i((.., .., current_idx))?
+                    .unsqueeze(2)?,
+            ),
+            None => None,
+        };
         //println!("\n\n\n");
         //println!("x {x}");
         let sa_out = self.self_attn.forward(
@@ -418,7 +431,7 @@ impl DiaDecoderLayer {
             &x_norm,
             decoder_positions,
             decoder_positions,
-            None,
+            self_attn_mask.as_ref(),
             self_attn_cache,
             prefill,
         )?;
@@ -442,7 +455,7 @@ impl DiaDecoderLayer {
             &encoder_out,
             decoder_positions,
             encoder_positions,
-            cross_attn_mask,
+            None,//cross_attn_mask,
             cross_attn_cache,
             false,
         )?;
@@ -457,7 +470,8 @@ impl DiaDecoderLayer {
         //println!("mlp_out {}", mlp_out.mean_all()?);
         //todo!();
 
-        residual + mlp_out
+        let res = (residual + mlp_out)?;
+        Ok(res)
     }
 }
 
@@ -548,11 +562,13 @@ impl DiaDecoder {
         &self,
         tgt_ids: &Tensor,
         encoder_out: &Tensor,
+        self_attn_mask: Option<&Tensor>,
         cross_attn_mask: Option<&Tensor>,
         encoder_positions: &Tensor,
         decoder_positions: &Tensor,
         self_attn_cache: &mut Vec<Option<DiaKvCache>>,
         cross_attn_cache: &mut Vec<Option<DiaKvCache>>,
+        current_idx: usize,
     ) -> Result<Tensor> {
         let mut x: Option<Tensor> = None;
         for (i, embedding) in self.embeddings.iter().enumerate() {
@@ -565,7 +581,6 @@ impl DiaDecoder {
         }
 
         let mut x = x.unwrap();
-        //println!("{x}");
 
         for (i, layer) in self.layers.iter().enumerate() {
             let self_cache = &mut self_attn_cache[i];
@@ -575,10 +590,12 @@ impl DiaDecoder {
                 encoder_out,
                 encoder_positions,
                 decoder_positions,
+                self_attn_mask,
                 cross_attn_mask,
                 self_cache.as_mut(),
                 cross_cache.as_mut(),
                 false,
+                current_idx,
             )?;
         }
 
@@ -589,48 +606,51 @@ impl DiaDecoder {
         x.reshape((x.dim(0)?, x.dim(1)?, self.channels, self.vocab_size))
     }
 
-    /// Forward pass for the Decoder stack, managing KV caches.
-    pub fn forward(
-        &self,
-        tgt_ids: &Tensor,
-        encoder_out: &Tensor,
-        cross_attn_mask: Option<&Tensor>,
-        encoder_positions: &Tensor,
-        decoder_positions: &Tensor,
-        self_attn_cache: &mut Vec<Option<DiaKvCache>>,
-        cross_attn_cache: &mut Vec<Option<DiaKvCache>>,
-    ) -> Result<Tensor> {
-        let mut x: Option<Tensor> = None;
-        for (i, embedding) in self.embeddings.iter().enumerate() {
-            let channel_tokens = tgt_ids.narrow(D::Minus1, i, 1)?.squeeze(D::Minus1)?;
-            let channel_embed = embedding.forward(&channel_tokens)?;
-            x = match x {
-                Some(x) => Some((x + channel_embed)?),
-                None => Some(channel_embed),
-            };
-        }
+    // /// Forward pass for the Decoder stack, managing KV caches.
+    // pub fn forward(
+    //     &self,
+    //     tgt_ids: &Tensor,
+    //     encoder_out: &Tensor,
+    //     self_attn_mask: Option<&Tensor>,
+    //     cross_attn_mask: Option<&Tensor>,
+    //     encoder_positions: &Tensor,
+    //     decoder_positions: &Tensor,
+    //     self_attn_cache: &mut Vec<Option<DiaKvCache>>,
+    //     cross_attn_cache: &mut Vec<Option<DiaKvCache>>,
+    // ) -> Result<Tensor> {
+    //     let mut x: Option<Tensor> = None;
+    //     for (i, embedding) in self.embeddings.iter().enumerate() {
+    //         let channel_tokens = tgt_ids.narrow(D::Minus1, i, 1)?.squeeze(D::Minus1)?;
+    //         let channel_embed = embedding.forward(&channel_tokens)?;
+    //         x = match x {
+    //             Some(x) => Some((x + channel_embed)?),
+    //             None => Some(channel_embed),
+    //         };
+    //     }
 
-        let mut x = x.unwrap();
+    //     let mut x = x.unwrap();
 
-        for (i, layer) in self.layers.iter().enumerate() {
-            let self_cache = &mut self_attn_cache[i];
-            let cross_cache = &mut cross_attn_cache[i];
-            x = layer.forward(
-                &x,
-                encoder_out,
-                encoder_positions,
-                decoder_positions,
-                cross_attn_mask,
-                self_cache.as_mut(),
-                cross_cache.as_mut(),
-                true,
-            )?;
-        }
+    //     for (i, layer) in self.layers.iter().enumerate() {
+    //         let self_cache = &mut self_attn_cache[i];
+    //         let cross_cache = &mut cross_attn_cache[i];
+    //         x = layer.forward(
+    //             &x,
+    //             encoder_out,
+    //             encoder_positions,
+    //             decoder_positions,
+    //             None,
+    //             cross_attn_mask,
+    //             self_cache.as_mut(),
+    //             cross_cache.as_mut(),
+    //             true,
+    //             0,
+    //         )?;
+    //     }
 
-        x = self.norm.forward(&x)?;
+    //     x = self.norm.forward(&x)?;
 
-        self.logits_dense.forward(&x)
-    }
+    //     self.logits_dense.forward(&x)
+    // }
 }
 
 pub struct DiaModel {

@@ -202,7 +202,6 @@ impl DiaPipeline {
             Tensor::cat(&[text, pad], 0)?
         };
 
-        println!("{padded_text_np}");
         padded_text_np.to_dtype(DType::U32)?.unsqueeze(0)
     }
 
@@ -242,7 +241,6 @@ impl DiaPipeline {
             self.model
                 .encoder
                 .forward(&enc_input, &encoder_positions, Some(&encoder_attn_mask))?;
-        println!("{encoder_out}");
 
         let decoder_cross_attn_cache = self
             .model
@@ -354,6 +352,7 @@ impl DiaPipeline {
         &self,
         tokens: &Tensor,
         encoder_out: &Tensor,
+        self_attn_mask: Option<&Tensor>,
         cross_attn_mask: Option<&Tensor>,
         encoder_positions: &Tensor,
         decoder_positions: &Tensor,
@@ -364,6 +363,7 @@ impl DiaPipeline {
         top_p: f32,
         cfg_filter_top_k: Option<usize>,
         rng: &mut Isaac64Rng,
+        current_idx: usize,
     ) -> Result<Vec<u32>> {
         let audio_eos_value = self.cfg.data.audio_eos_value as usize;
 
@@ -371,14 +371,14 @@ impl DiaPipeline {
         let mut logits = self.model.decoder.decode_step(
             tokens,
             encoder_out,
+            self_attn_mask,
             cross_attn_mask,
             encoder_positions,
             decoder_positions,
             self_attn_cache,
             cross_attn_cache,
+            current_idx,
         )?;
-        // println!("LOGITS {logits}");
-        // todo!();
 
         let logits_last = logits.i((.., logits.dim(1)? - 1.., .., ..))?.squeeze(1)?;
         let uncond_logits = logits_last.i((0, .., ..))?.squeeze(0)?;
@@ -404,7 +404,8 @@ impl DiaPipeline {
             )? * f64::NEG_INFINITY)?,
         )?;
 
-        self.sample_next_token(&logits, temperature, top_p, cfg_filter_top_k, rng)
+        let next = self.sample_next_token(&logits, temperature, top_p, cfg_filter_top_k, rng)?;
+        Ok(next)
     }
 
     fn generate_output(&self, generated_codes: &Tensor) -> Result<Tensor> {
@@ -423,7 +424,7 @@ impl DiaPipeline {
             &revert_precomp,
             seq_length,
         )?;
-        codebook = codebook.i((.., codebook.dim(1)? - max_delay_pattern.., ..))?;
+        codebook = codebook.i((.., ..codebook.dim(1)? - max_delay_pattern, ..))?;
 
         let min_valid_index = 0f64;
         let max_valid_index = 1023f64;
@@ -468,6 +469,34 @@ impl DiaPipeline {
             mut decoder_self_attn_cache,
         ) = self.prepare_generation(text)?;
 
+        // https://github.com/mokeyish/candle-ext/blob/ca4547c803469bd51c00ce5eda2f18dd249c8f10/src/triangular.rs#L21
+        fn apply_triangular(xs: &Tensor, diagonal: isize, upper: bool) -> Result<Tensor> {
+            let device = xs.device();
+            let (l, s) = xs.dims2()?;
+            let mut xs_tri = vec![];
+            for i in 0..l as isize {
+                for j in 0..s as isize {
+                    let cond = if upper {
+                        i + diagonal > j
+                    } else {
+                        i + diagonal < j
+                    };
+                    xs_tri.push(if cond { 0u8 } else { 1u8 });
+                }
+            }
+            xs * Tensor::from_vec(xs_tri, (l, s), device)?.to_dtype(xs.dtype())?
+        }
+
+        let self_attn_mask = apply_triangular(
+            &Tensor::ones(
+                (self.cfg.data.audio_length, self.cfg.data.audio_length),
+                DType::U8,
+                decoder_attn_mask.device(),
+            )?,
+            0,
+            false,
+        )?;
+
         let mut dec_step = 0;
 
         let mut bos_countdown = max_delay_pattern;
@@ -486,6 +515,7 @@ impl DiaPipeline {
             let mut pred_c = self.decoder_step(
                 &current_tokens,
                 &encoder_out,
+                Some(&self_attn_mask),
                 Some(&decoder_attn_mask),
                 &encoder_positions,
                 &dec_positions,
@@ -496,6 +526,7 @@ impl DiaPipeline {
                 top_p,
                 cfg_filter_top_k,
                 &mut rng,
+                dec_step,
             )?;
 
             if (!eos_detected && pred_c[0] == audio_eos_value)
@@ -527,6 +558,7 @@ impl DiaPipeline {
                 let mask = generated_tokens
                     .i((dec_step + 1..dec_step + 2, ..))?
                     .eq(1024.)?;
+                println!("{mask}");
                 generated_tokens = generated_tokens.slice_assign(
                     &[&(dec_step + 1..dec_step + 2), &..],
                     &mask.where_cond(
@@ -552,12 +584,14 @@ impl DiaPipeline {
             if dec_step % 86 == 0 {
                 println!("Generated 1s")
             }
-            if dec_step >= 600 {
+            if dec_step >= 86*1 {
                 break;
             }
         }
 
         let generated_codes = generated_tokens.i((0..dec_step + 1, ..))?;
+        generated_codes.write_npy("generated_codes_m.npy")?;
+        // println!("{generated_codes}");
         self.generate_output(&generated_codes)?;
         Ok(())
     }

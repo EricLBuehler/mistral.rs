@@ -19,6 +19,8 @@ use tokio::sync::mpsc::channel;
 use util::{PyApiErr, PyApiResult};
 
 use candle_core::{Device, Result};
+use pyo3::types::PyType;
+use pyo3::Bound;
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader, AutoDeviceMapParams,
     BertEmbeddingModel, ChatCompletionResponse, CompletionResponse, Constraint,
@@ -39,6 +41,8 @@ mod stream;
 mod util;
 mod which;
 use which::{Architecture, DiffusionArchitecture, VisionArchitecture, Which};
+// (keep imports minimal – if needed later, re-introduce)
+use mistralrs_core::ModelDType;
 
 static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
 
@@ -796,6 +800,136 @@ impl Runner {
             .build();
 
         Ok(Self { runner: mistralrs })
+    }
+
+    // ---------------------------------------------------------------------
+    // Convenience constructor
+    // ---------------------------------------------------------------------
+    #[classmethod]
+    #[pyo3(name = "from_pretrained", signature = (
+        model_id,
+        arch = None,
+        max_seqs = 16,
+        seed = None,
+    ))]
+    fn from_pretrained(
+        _cls: &Bound<'_, PyType>,
+        model_id: String,
+        arch: Option<Architecture>,
+        max_seqs: usize,
+        seed: Option<u64>,
+    ) -> PyApiResult<Self> {
+        let which = Which::Plain {
+            model_id,
+            arch,
+            tokenizer_json: None,
+            topology: None,
+            organization: None,
+            write_uqff: None,
+            from_uqff: None,
+            dtype: ModelDType::Auto,
+            imatrix: None,
+            calibration_file: None,
+            auto_map_params: None,
+            hf_cache_path: None,
+        };
+
+        Self::new(
+            which,
+            max_seqs,
+            false,              // no_kv_cache
+            16,                 // prefix_cache_n
+            "cache",           // token_source
+            32,                 // speculative_gamma
+            None,               // which_draft
+            None,               // chat_template
+            None,               // jinja_explicit
+            None,               // num_device_layers
+            None,               // in_situ_quant
+            None,               // anymoe_config
+            None,               // pa_gpu_mem
+            None,               // pa_gpu_mem_usage
+            None,               // pa_ctxt_len
+            None,               // pa_blk_size
+            false,              // no_paged_attn
+            false,              // paged_attn
+            None,               // prompt_chunksize
+            seed,
+            false,              // enable_search
+            None,               // search_bert_model
+        )
+    }
+
+    /// A convenience helper making the Python API more ergonomic.
+    ///
+    /// Instead of having to manually construct a `ChatCompletionRequest`, you can now
+    /// simply call `runner.chat("<your prompt>")` and directly obtain the assistant
+    /// response **as a string**.  Common generation parameters can be passed as
+    /// optional keyword arguments.
+    ///
+    /// Example (Python):
+    /// ```python
+    /// from mistralrs import Runner, Which
+    /// runner = Runner(which = Which.Plain(model_id="mistralai/Mistral-7B-Instruct-v0.1"))
+    /// answer = runner.chat("Explain what an LLM is in one sentence")
+    /// print(answer)
+    /// ```
+    #[pyo3(signature = (
+        prompt,
+        max_tokens = None,
+        temperature = 1.0,
+        top_p = 1.0,
+        stop = None,
+    ))]
+    fn chat(
+        &mut self,
+        prompt: String,
+        max_tokens: Option<usize>,
+        temperature: f64,
+        top_p: f64,
+        stop: Option<Vec<String>>,
+    ) -> PyApiResult<String> {
+        use requests::ChatCompletionRequest;
+
+        // Build the request directly in Rust and then convert it into a Python object.
+        let raw_request = ChatCompletionRequest {
+            messages: Either::Right(prompt.clone()),
+            _model: "mistralrs".to_string(),
+            logit_bias: None,
+            logprobs: false,
+            top_logprobs: None,
+            max_tokens,
+            n_choices: 1,
+            presence_penalty: None,
+            frequency_penalty: None,
+            stop_seqs: stop.clone(),
+            temperature: Some(temperature),
+            top_p: Some(top_p),
+            stream: false,
+            top_k: None,
+            grammar: None,
+            grammar_type: None,
+            min_p: None,
+            tool_schemas: None,
+            tool_choice: None,
+            dry_multiplier: None,
+            dry_base: None,
+            dry_allowed_length: None,
+            dry_sequence_breakers: None,
+            web_search_options: None,
+            enable_thinking: Some(false),
+        };
+
+        let py_request = Python::with_gil(|py| Py::new(py, raw_request).map_err(PyApiErr))?;
+
+        match self.send_chat_completion_request(py_request)? {
+            Either::Left(resp) => Ok(resp.choices[0]
+                .message
+                .content
+                .clone()
+                .unwrap_or_default()),
+            Either::Right(_) => Err(PyApiErr::from("stream was not expected")),
+        }
     }
 
     /// Send an OpenAI API compatible request, returning the result.
