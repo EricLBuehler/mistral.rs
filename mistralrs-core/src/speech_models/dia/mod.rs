@@ -13,6 +13,7 @@ use rand::{
 use rand_isaac::Isaac64Rng;
 
 pub use config::DiaConfig;
+use tracing::info;
 
 use super::utils::normalize_loudness;
 
@@ -499,7 +500,7 @@ impl DiaPipeline {
             dec_step += 1;
 
             if dec_step % 86 == 0 {
-                println!("Generated 1s")
+                info!("Generated 1s, {dec_step} tokens.");
             }
         }
 

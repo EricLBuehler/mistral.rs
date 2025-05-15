@@ -91,7 +91,7 @@ pub async fn send_speech_responses(
             .await
             .map_err(candle_core::Error::msg)?;
 
-        seq.set_state(SequenceState::Done(StopReason::GeneratedImage));
+        seq.set_state(SequenceState::Done(StopReason::GeneratedSpeech));
     }
 
     Ok(())

@@ -108,7 +108,9 @@ impl Engine {
         };
 
         let seq_step_type = match &request.messages {
-            RequestMessage::ImageGeneration { .. } => SeqStepType::OneShot,
+            RequestMessage::ImageGeneration { .. } | RequestMessage::SpeechGeneration { .. } => {
+                SeqStepType::OneShot
+            }
             _ => SeqStepType::PromptAndDecode,
         };
 
