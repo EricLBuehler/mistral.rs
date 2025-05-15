@@ -16,7 +16,7 @@ use crate::{
     api_get_file, DeviceMapSetting, MessageContent, PagedAttentionConfig, Pipeline, TryIntoDType,
 };
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indexmap::IndexMap;
@@ -223,8 +223,6 @@ impl Loader for SpeechLoader {
 
         let mapper = DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None)?;
         let dtype = mapper.get_min_dtype(dtype)?;
-
-        let dtype = DType::F32;
 
         let vb = from_mmaped_safetensors(
             vec![paths.weights[0].clone()],

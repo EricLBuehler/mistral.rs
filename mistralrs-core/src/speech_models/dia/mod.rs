@@ -138,7 +138,7 @@ impl DiaPipeline {
     pub fn new(cfg: &DiaConfig, vb: ShardedVarBuilder, dac_vb: VarBuilder) -> Result<Self> {
         // https://github.com/descriptinc/descript-audio-codec/releases/download/0.0.1/weights.pth
         // https://github.com/descriptinc/descript-audio-codec/blob/c7cfc5d2647e26471dc394f95846a0830e7bec34/conf/final/44khz.yml
-        let dac = dac::Model::new(&dac::Config::dia(), dac_vb)?;
+        let dac = dac::Model::new(&dac::Config::dia(), dac_vb.set_dtype(DType::F32))?;
 
         Ok(Self {
             dtype: vb.dtype(),
@@ -296,7 +296,9 @@ impl DiaPipeline {
             return logits.argmax(D::Minus1)?.to_vec1();
         }
 
-        let logits = candle_nn::ops::softmax_last_dim(&(logits / temperature as f64)?)?;
+        let logits = candle_nn::ops::softmax_last_dim(
+            &(logits.to_dtype(DType::F32)? / temperature as f64)?,
+        )?;
         let batch_logits: Vec<Vec<f32>> = logits.to_vec2::<f32>()?;
 
         let mut sampled = Vec::with_capacity(batch_logits.len());
@@ -582,7 +584,6 @@ impl DiaPipeline {
         }
 
         let generated_codes = generated_tokens.i((0..dec_step + 1, ..))?;
-        println!("{generated_codes}");
         self.generate_output(&generated_codes)?;
         Ok(())
     }
