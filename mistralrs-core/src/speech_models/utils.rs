@@ -57,11 +57,11 @@ pub fn write_pcm_as_wav<W: Write, S: Sample>(
     w: &mut W,
     samples: &[S],
     sample_rate: u32,
+    n_channels: u16,
 ) -> std::io::Result<()> {
     let len = 12u32; // header
     let len = len + 24u32; // fmt
     let len = len + samples.len() as u32 * 2 + 8; // data
-    let n_channels = 1u16;
     let bytes_per_second = sample_rate * 2 * n_channels as u32;
     w.write_all(b"RIFF")?;
     w.write_all(&(len - 8).to_le_bytes())?; // total length minus 8 bytes

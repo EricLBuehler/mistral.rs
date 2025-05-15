@@ -261,10 +261,20 @@ pub enum CacheBackendMetadata<'a> {
 
 #[derive(Clone, Debug)]
 pub enum ForwardInputsResult {
-    RawLogits { logits: Tensor },
-    CausalGeneration { logits: Tensor },
-    Image { images: Vec<DynamicImage> },
-    Speech { pcms: Vec<Arc<Vec<f32>>> },
+    RawLogits {
+        logits: Tensor,
+    },
+    CausalGeneration {
+        logits: Tensor,
+    },
+    Image {
+        images: Vec<DynamicImage>,
+    },
+    Speech {
+        pcms: Vec<Arc<Vec<f32>>>,
+        rates: Vec<usize>,
+        channels: Vec<usize>,
+    },
 }
 
 impl ForwardInputsResult {
@@ -279,8 +289,14 @@ impl ForwardInputsResult {
             Self::Image { images } => Ok(Self::Image {
                 images: vec![images[bs_idx].clone()],
             }),
-            Self::Speech { pcms } => Ok(Self::Speech {
+            Self::Speech {
+                pcms,
+                rates,
+                channels,
+            } => Ok(Self::Speech {
                 pcms: vec![pcms[bs_idx].clone()],
+                rates: vec![rates[bs_idx]],
+                channels: vec![channels[bs_idx]],
             }),
         }
     }
@@ -481,8 +497,12 @@ pub trait Pipeline:
                         )
                         .await?;
                     }
-                    ForwardInputsResult::Speech { pcms } => {
-                        response::send_speech_responses(input_seqs, pcms).await?;
+                    ForwardInputsResult::Speech {
+                        pcms,
+                        rates,
+                        channels,
+                    } => {
+                        response::send_speech_responses(input_seqs, pcms, rates, channels).await?;
                     }
                 }
                 let end = Instant::now();
@@ -626,8 +646,12 @@ pub trait Pipeline:
                         )
                         .await?;
                     }
-                    ForwardInputsResult::Speech { pcms } => {
-                        response::send_speech_responses(input_seqs, pcms).await?;
+                    ForwardInputsResult::Speech {
+                        pcms,
+                        rates,
+                        channels,
+                    } => {
+                        response::send_speech_responses(input_seqs, pcms, rates, channels).await?;
                     }
                 }
                 let end = Instant::now();

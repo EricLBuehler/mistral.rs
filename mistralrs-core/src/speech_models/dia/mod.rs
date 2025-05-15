@@ -23,6 +23,9 @@ mod config;
 mod dac;
 mod model;
 
+const RATE: usize = 44100;
+const CHANNELS: usize = 1;
+
 fn create_attn_mask(q_padding_mask_1d: &Tensor, k_padding_mask_1d: &Tensor) -> Result<Tensor> {
     let (b1, _tq) = q_padding_mask_1d.dims2()?;
     let (b2, _tk) = k_padding_mask_1d.dims2()?;
@@ -358,13 +361,14 @@ impl DiaPipeline {
         let codes = codebook.transpose(1, 2)?;
         let pcm = self.dac.decode_codes(&codes.to_dtype(DType::U32)?)?;
         let pcm = pcm.i((0, 0))?;
-        let pcm = normalize_loudness(&pcm, 44_100, true)?;
+        let pcm = normalize_loudness(&pcm, RATE as u32, true)?;
         let pcm = pcm.to_vec1::<f32>()?;
 
         Ok(pcm)
     }
 
-    pub fn generate(&self, text: &str) -> Result<Arc<Vec<f32>>> {
+    /// (pcm, rate, channel)
+    pub fn generate(&self, text: &str) -> Result<(Arc<Vec<f32>>, usize, usize)> {
         let max_tokens: Option<usize> = None;
         let cfg_scale = 3.0f32;
         let temperature = 1.3f32;
@@ -506,7 +510,7 @@ impl DiaPipeline {
 
         let generated_codes = generated_tokens.i((0..dec_step + 1, ..))?;
         let pcm = self.generate_output(&generated_codes)?;
-        Ok(Arc::new(pcm))
+        Ok((Arc::new(pcm), RATE, CHANNELS))
     }
 
     pub fn device(&self) -> &Device {

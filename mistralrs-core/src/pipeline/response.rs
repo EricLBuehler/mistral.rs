@@ -73,6 +73,8 @@ pub async fn send_image_responses(
 pub async fn send_speech_responses(
     input_seqs: &mut [&mut Sequence],
     pcms: &Vec<Arc<Vec<f32>>>,
+    rates: &Vec<usize>,
+    channels: &Vec<usize>,
 ) -> candle_core::Result<()> {
     if input_seqs.len() != pcms.len() {
         candle_core::bail!(
@@ -82,8 +84,11 @@ pub async fn send_speech_responses(
         );
     }
 
-    for (seq, pcm) in input_seqs.iter_mut().zip(pcms) {
-        seq.add_speech_pcm_to_group(pcm.clone());
+    for (seq, (pcm, (rate, channel))) in input_seqs
+        .iter_mut()
+        .zip(pcms.into_iter().zip(rates.into_iter().zip(channels)))
+    {
+        seq.add_speech_pcm_to_group(pcm.clone(), *rate, *channel);
 
         let group = seq.get_mut_group();
         group

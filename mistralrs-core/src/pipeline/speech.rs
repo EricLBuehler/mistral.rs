@@ -335,9 +335,13 @@ impl Pipeline for SpeechPipeline {
         assert!(!return_raw_logits);
 
         let ModelInputs { prompt } = *inputs.downcast().expect("Downcast failed.");
-        let pcm = self.model.generate(&prompt)?;
+        let (pcm, rate, channel) = self.model.generate(&prompt)?;
 
-        Ok(ForwardInputsResult::Speech { pcms: vec![pcm] })
+        Ok(ForwardInputsResult::Speech {
+            pcms: vec![pcm],
+            rates: vec![rate],
+            channels: vec![channel],
+        })
     }
 
     async fn sample_causal_gen(

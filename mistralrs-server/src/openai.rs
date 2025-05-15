@@ -272,3 +272,44 @@ pub struct ImageGenerationRequest {
     #[schema(example = 1280)]
     pub width: usize,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AudioResponseFormat {
+    #[default]
+    Mp3,
+    Opus,
+    Aac,
+    Flac,
+    Wav,
+    Pcm,
+}
+
+impl AudioResponseFormat {
+    pub fn audio_content_type(&self, rate: usize, channels: usize, format: &'static str) -> String {
+        let content_type = match &self {
+            AudioResponseFormat::Mp3 => "audio/mpeg;",
+            AudioResponseFormat::Opus => "audio/ogg; codecs=opus",
+            AudioResponseFormat::Aac => "audio/aac",
+            AudioResponseFormat::Flac => "audio/flac",
+            AudioResponseFormat::Wav => "audio/wav",
+            AudioResponseFormat::Pcm => "audio/wave; codecs=1",
+        };
+
+        format!("{content_type}; format={format}; rate={rate}; channels={channels}")
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct SpeechGenerationRequest {
+    #[schema(example = "nari-labs/Dia-1.6B")]
+    #[serde(default = "default_model")]
+    pub model: String,
+    #[schema(
+        example = "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face."
+    )]
+    pub input: String,
+    // `voice` and `instructions` are ignored.
+    #[schema(example = "mp3")]
+    pub response_format: AudioResponseFormat,
+}

@@ -739,16 +739,19 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
         let start = Instant::now();
         sender.send(req).await.unwrap();
 
-        let ResponseOk::Speech { batched_pcms } = rx.recv().await.unwrap().as_result().unwrap()
+        let ResponseOk::Speech {
+            pcm,
+            rate,
+            channels,
+        } = rx.recv().await.unwrap().as_result().unwrap()
         else {
             panic!("Got unexpected response type.")
         };
-        let pcm = batched_pcms[0].clone();
         let end = Instant::now();
 
         let out_file = format!("speech-{n}.wav");
         let mut output = std::fs::File::create(&out_file).unwrap();
-        speech_utils::write_pcm_as_wav(&mut output, &pcm, 44_100).unwrap();
+        speech_utils::write_pcm_as_wav(&mut output, &pcm, rate as u32, channels as u16).unwrap();
 
         let duration = end.duration_since(start).as_secs_f32();
         println!("Speech generated can be found at `{out_file}`. Took {duration:.2}s.");

@@ -244,7 +244,9 @@ pub enum Response {
     ImageGeneration(ImageGenerationResponse),
     // Speech generation
     Speech {
-        batched_pcms: Vec<Arc<Vec<f32>>>,
+        pcm: Arc<Vec<f32>>,
+        rate: usize,
+        channels: usize,
     },
     // Raw
     Raw {
@@ -265,7 +267,9 @@ pub enum ResponseOk {
     ImageGeneration(ImageGenerationResponse),
     // Speech generation
     Speech {
-        batched_pcms: Vec<Arc<Vec<f32>>>,
+        pcm: Arc<Vec<f32>>,
+        rate: usize,
+        channels: usize,
     },
     // Raw
     Raw {
@@ -334,7 +338,15 @@ impl Response {
                 Err(Box::new(ResponseErr::CompletionModelError(e, x)))
             }
             Self::ImageGeneration(x) => Ok(ResponseOk::ImageGeneration(x)),
-            Self::Speech { batched_pcms } => Ok(ResponseOk::Speech { batched_pcms }),
+            Self::Speech {
+                pcm,
+                rate,
+                channels,
+            } => Ok(ResponseOk::Speech {
+                pcm,
+                rate,
+                channels,
+            }),
             Self::Raw {
                 logits_chunks,
                 tokens,
