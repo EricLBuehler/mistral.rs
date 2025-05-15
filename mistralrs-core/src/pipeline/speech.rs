@@ -9,7 +9,7 @@ use crate::device_map::DeviceMapper;
 use crate::pipeline::ChatTemplate;
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::speech_models::{DiaConfig, DiaPipeline};
+use crate::speech_models::{DiaConfig, DiaPipeline, SpeechLoaderType};
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::{
@@ -22,33 +22,13 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indexmap::IndexMap;
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
-use serde::Deserialize;
 use std::any::Any;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::info;
-
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-pub enum SpeechLoaderType {
-    #[serde(rename = "dia")]
-    Dia,
-}
-
-impl FromStr for SpeechLoaderType {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "dia" => Ok(Self::Dia),
-            a => Err(format!(
-                "Unknown architecture `{a}`. Possible architectures: `dia`."
-            )),
-        }
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct SpeechModelPaths {

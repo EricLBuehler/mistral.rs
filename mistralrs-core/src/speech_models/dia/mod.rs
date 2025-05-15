@@ -17,6 +17,8 @@ use rand_isaac::Isaac64Rng;
 pub use config::DiaConfig;
 use tracing::info;
 
+use crate::ops::apply_triangular;
+
 use super::utils::normalize_loudness;
 
 /// Aggregated outputs for generation preparation.
@@ -392,24 +394,6 @@ impl DiaPipeline {
             cross_cache: mut decoder_cross_attn_cache,
             self_cache: mut decoder_self_attn_cache,
         } = self.prepare_generation(text)?;
-
-        // https://github.com/mokeyish/candle-ext/blob/ca4547c803469bd51c00ce5eda2f18dd249c8f10/src/triangular.rs#L21
-        fn apply_triangular(xs: &Tensor, diagonal: isize, upper: bool) -> Result<Tensor> {
-            let device = xs.device();
-            let (l, s) = xs.dims2()?;
-            let mut xs_tri = vec![];
-            for i in 0..l as isize {
-                for j in 0..s as isize {
-                    let cond = if upper {
-                        i + diagonal > j
-                    } else {
-                        i + diagonal < j
-                    };
-                    xs_tri.push(if cond { 0u8 } else { 1u8 });
-                }
-            }
-            xs * Tensor::from_vec(xs_tri, (l, s), device)?.to_dtype(xs.dtype())?
-        }
 
         let self_attn_mask = apply_triangular(
             &Tensor::ones(
