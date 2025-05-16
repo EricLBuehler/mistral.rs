@@ -11,6 +11,8 @@ Blazingly fast LLM inference.
 | <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Documentation</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Documentation</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> | <a href="https://matrix.to/#/#mistral.rs:matrix.org"><b>Matrix</b></a> |
 </p>
 
+Mistral.rs is a cross-platform, highly multimodal inference engine featuring support for **text**, **vision**, **image generation**, and **speech generation** models!
+
 Please submit requests for new models [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
 
 ## Get started fast 🚀
