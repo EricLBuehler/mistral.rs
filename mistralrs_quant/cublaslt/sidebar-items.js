@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["F8MatmulOutType"],"fn":["maybe_init_cublas_lt_wrapper"],"static":["CUBLASLT_HANDLE"],"struct":["CublasLtWrapper"]};
+window.SIDEBAR_ITEMS = {"enum":["F8MatmulOutType"],"fn":["maybe_init_cublas_lt_wrapper"],"static":["CUBLASLT_CONTROLLER"],"struct":["CublasLtController","CublasLtWrapper"]};
