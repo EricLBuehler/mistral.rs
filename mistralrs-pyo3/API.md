@@ -197,7 +197,7 @@ class Which(Enum):
         dtype: ModelDType = ModelDType.Auto
 
     @dataclass
-    class DiffusionPlain:
+    class Speech:
         model_id: str
         arch: DiffusionArchitecture
         dac_model_id: str | None = None

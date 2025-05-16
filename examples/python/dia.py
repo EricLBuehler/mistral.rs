@@ -25,8 +25,8 @@ output_path = Path("output.wav")
 # convert floats to 16-bit PCM ints
 pcm_ints = [int(max(-32768, min(32767, int(sample * 32767)))) for sample in pcm_data]
 with wave.open(output_path, "wb") as wf:
-    wf.setnchannels(1)  # mono
-    wf.setsampwidth(2 * res.channels)  # 2 bytes per sample (16-bit)
+    wf.setnchannels(res.channels)  # mono
+    wf.setsampwidth(2)  # 2 bytes per sample (16-bit)
     wf.setframerate(res.rate)  # set sample rate (adjust if needed)
     wf.writeframes(b"".join(struct.pack("<h", s) for s in pcm_ints))
 
