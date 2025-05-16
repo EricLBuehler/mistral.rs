@@ -475,7 +475,10 @@ impl Engine {
                 eos_toks,
             );
 
-            self.logger.add_new_sequence();
+            // Only "track" a new sequence if it is a traditional one
+            if matches!(seq_step_type, SeqStepType::PromptAndDecode) {
+                self.logger.add_new_sequence();
+            }
 
             // Run the inputs processor to update the prompt for multimodal models.
             if images.is_some() {
