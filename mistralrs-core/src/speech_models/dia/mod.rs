@@ -502,7 +502,7 @@ impl DiaPipeline {
                 info!(
                     "Generated {}s of audio, {dec_step} tokens at {:.2} tokens/second.",
                     dec_step / TOKENS_PER_SECOND,
-                    TOKENS_PER_SECOND as f32 / (start - end).as_secs_f32()
+                    TOKENS_PER_SECOND as f32 / (end - start).as_secs_f32()
                 );
                 start = end;
             }
