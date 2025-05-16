@@ -43,6 +43,12 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs-server --enable-search --port 1234 --isq q4k plain -m NousResearch/Hermes-3-Llama-3.1-8B
     ```
 
+- 🔊 Run the **Dia 1.6b** model for highly-realistic dialogue generation: [documentation](docs/DIA.md)
+
+    ```
+    ./mistralrs-server -i speech -m nari-labs/Dia-1.6B -a dia
+    ```
+
 - 🦙🦙🦙🦙 Run the **Llama 4** Models with long context length and vision support: [documentation](docs/LLAMA4.md)
 
     ```
@@ -507,26 +513,25 @@ If you do not specify the architecture, an attempt will be made to use the model
 You can launch interactive mode, a simple chat application running in the terminal, by passing `-i`:
 
 ```bash
-./mistralrs-server -i plain -m microsoft/Phi-3-mini-128k-instruct
+./mistralrs-server -i plain -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
-Vision models work too:
+Vision models work seamlessly:
 
 ```bash
 ./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
 ```
 
-And even diffusion models:
+Diffusion models can be run too:
 
 ```bash
 ./mistralrs-server -i diffusion-plain -m black-forest-labs/FLUX.1-schnell -a flux
 ```
 
-On Apple Silicon (`Metal`), run with throughput log, settings of paged attention (maximum usage of 4GB for kv cache) and dtype (bf16 for kv cache and attention)
+And you can run speech generation in your terminal!
 
 ```bash
-cargo build --release --features metal
-./target/release/mistralrs-server -i --throughput --paged-attn --pa-gpu-mem 4096 gguf --dtype bf16 -m /Users/Downloads/ -f Phi-3.5-mini-instruct-Q4_K_M.gguf
+./mistralrs-server -i speech -m nari-labs/Dia-1.6B -a dia
 ```
 
 ### OpenAI HTTP server
@@ -580,6 +585,7 @@ Please submit more benchmarks via raising an issue!
 |Mistral 3| | |✅|
 |Llama 4| | |✅|
 |Qwen 3| | |✅|
+|Dia 1.6b| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
