@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use audio::{apply_audio_delay, build_delay_indices, build_revert_indices, revert_audio_delay};
 use cache::DiaKvCache;
@@ -19,7 +19,7 @@ use tracing::info;
 
 use crate::ops::apply_triangular;
 
-use super::utils::normalize_loudness;
+use super::{utils::normalize_loudness, SpeechGenerationConfig, SpeechGenerationOutput};
 
 /// Aggregated outputs for generation preparation.
 pub struct PrepareGenerationOutput {
@@ -39,6 +39,7 @@ mod model;
 
 const RATE: usize = 44100;
 const CHANNELS: usize = 1;
+const TOKENS_PER_SECOND: usize = 86;
 
 fn create_attn_mask(q_padding_mask_1d: &Tensor, k_padding_mask_1d: &Tensor) -> Result<Tensor> {
     let (b1, _tq) = q_padding_mask_1d.dims2()?;
@@ -372,13 +373,18 @@ impl DiaPipeline {
         Ok(pcm)
     }
 
-    /// (pcm, rate, channel)
-    pub fn generate(&self, text: &str) -> Result<(Arc<Vec<f32>>, usize, usize)> {
-        let max_tokens: Option<usize> = None;
-        let cfg_scale = 3.0f32;
-        let temperature = 1.3f32;
-        let top_p = 0.95f32;
-        let cfg_filter_top_k = Some(35usize);
+    pub fn generate(
+        &self,
+        text: &str,
+        cfg: &SpeechGenerationConfig,
+    ) -> Result<SpeechGenerationOutput> {
+        let SpeechGenerationConfig::Dia {
+            max_tokens,
+            cfg_scale,
+            temperature,
+            top_p,
+            top_k,
+        } = cfg;
 
         let audio_pad_value = self.cfg.data.audio_pad_value as u32;
         let audio_eos_value = self.cfg.data.audio_eos_value as u32;
@@ -413,6 +419,7 @@ impl DiaPipeline {
 
         let mut rng = Isaac64Rng::seed_from_u64(0);
 
+        let mut start = Instant::now();
         while dec_step < max_tokens {
             let dec_positions = Tensor::full(dec_step as f32, (2, 1), &self.device)?;
             let current_tokens = generated_tokens
@@ -429,10 +436,10 @@ impl DiaPipeline {
                 &dec_positions,
                 &mut decoder_self_attn_cache,
                 &mut decoder_cross_attn_cache,
-                cfg_scale,
-                temperature,
-                top_p,
-                cfg_filter_top_k,
+                *cfg_scale,
+                *temperature,
+                *top_p,
+                *top_k,
                 &mut rng,
                 dec_step,
             )?;
@@ -490,14 +497,24 @@ impl DiaPipeline {
 
             dec_step += 1;
 
-            if dec_step % 86 == 0 {
-                info!("Generated 1s, {dec_step} tokens.");
+            let end = Instant::now();
+            if dec_step % TOKENS_PER_SECOND == 0 {
+                info!(
+                    "Generated {}s of audio, {dec_step} tokens at {:.2} tokens/second.",
+                    dec_step / TOKENS_PER_SECOND,
+                    TOKENS_PER_SECOND as f32 / (start - end).as_secs_f32()
+                );
+                start = end;
             }
         }
 
         let generated_codes = generated_tokens.i((0..dec_step + 1, ..))?;
         let pcm = self.generate_output(&generated_codes)?;
-        Ok((Arc::new(pcm), RATE, CHANNELS))
+        Ok(SpeechGenerationOutput {
+            pcm: Arc::new(pcm),
+            rate: RATE,
+            channels: CHANNELS,
+        })
     }
 
     pub fn device(&self) -> &Device {

@@ -2,12 +2,12 @@ mod bs1770;
 mod dia;
 pub mod utils;
 
-use std::str::FromStr;
+use std::{str::FromStr, sync::Arc};
 
 pub use dia::{DiaConfig, DiaPipeline};
 use serde::Deserialize;
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 pub enum SpeechLoaderType {
     #[serde(rename = "dia")]
     Dia,
@@ -25,13 +25,14 @@ impl FromStr for SpeechLoaderType {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub enum SpeechGenerationConfig {
     Dia {
         max_tokens: Option<usize>,
         cfg_scale: f32,
         temperature: f32,
         top_p: f32,
-        too_k: Option<usize>,
+        top_k: Option<usize>,
     },
 }
 
@@ -43,8 +44,15 @@ impl SpeechGenerationConfig {
                 cfg_scale: 3.,
                 temperature: 1.3,
                 top_p: 0.95,
-                too_k: Some(35),
+                top_k: Some(35),
             },
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct SpeechGenerationOutput {
+    pub pcm: Arc<Vec<f32>>,
+    pub rate: usize,
+    pub channels: usize,
 }

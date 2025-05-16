@@ -9,11 +9,12 @@ use crate::device_map::DeviceMapper;
 use crate::pipeline::ChatTemplate;
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::speech_models::{DiaConfig, DiaPipeline, SpeechLoaderType};
+use crate::speech_models::{DiaConfig, DiaPipeline, SpeechGenerationOutput, SpeechLoaderType};
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::{
-    api_get_file, DeviceMapSetting, MessageContent, PagedAttentionConfig, Pipeline, TryIntoDType,
+    api_get_file, DeviceMapSetting, MessageContent, PagedAttentionConfig, Pipeline,
+    SpeechGenerationConfig, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor};
@@ -145,12 +146,14 @@ pub struct SpeechPipeline {
     model: DiaPipeline,
     metadata: Arc<GeneralMetadata>,
     dummy_cache: EitherCache,
+    cfg: SpeechGenerationConfig,
 }
 
 pub struct SpeechLoader {
     pub model_id: String,
     pub dac_model_id: Option<String>,
     pub arch: SpeechLoaderType,
+    pub cfg: Option<SpeechGenerationConfig>,
 }
 
 impl Loader for SpeechLoader {
@@ -303,6 +306,9 @@ impl Loader for SpeechLoader {
                 model_metadata: None,
             }),
             dummy_cache: EitherCache::Full(Cache::new(0, false)),
+            cfg: self
+                .cfg
+                .unwrap_or_else(|| SpeechGenerationConfig::default(self.arch)),
         })))
     }
 
@@ -378,12 +384,16 @@ impl Pipeline for SpeechPipeline {
         assert!(!return_raw_logits);
 
         let ModelInputs { prompt } = *inputs.downcast().expect("Downcast failed.");
-        let (pcm, rate, channel) = self.model.generate(&prompt)?;
+        let SpeechGenerationOutput {
+            pcm,
+            rate,
+            channels,
+        } = self.model.generate(&prompt, &self.cfg)?;
 
         Ok(ForwardInputsResult::Speech {
             pcms: vec![pcm],
             rates: vec![rate],
-            channels: vec![channel],
+            channels: vec![channels],
         })
     }
 

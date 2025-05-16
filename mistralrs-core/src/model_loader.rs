@@ -553,6 +553,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             model_id,
             dac_model_id,
             arch,
+            cfg: None,
         }),
     };
     Ok(loader)
