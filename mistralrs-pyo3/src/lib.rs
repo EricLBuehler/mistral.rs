@@ -28,8 +28,9 @@ use mistralrs_core::{
     ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar, Loader,
     MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
     NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
-    ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
-    TokenSource, TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
+    ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader,
+    SpeechLoader, StopTokens, TokenSource, TokenizationRequest, Tool, Topology,
+    VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyType;
@@ -40,7 +41,7 @@ mod requests;
 mod stream;
 mod util;
 mod which;
-use which::{Architecture, DiffusionArchitecture, VisionArchitecture, Which};
+use which::{Architecture, DiffusionArchitecture, SpeechLoaderType, VisionArchitecture, Which};
 // (keep imports minimal – if needed later, re-introduce)
 use mistralrs_core::ModelDType;
 
@@ -70,6 +71,15 @@ fn get_device(seed: Option<u64>) -> &'static Result<Device> {
         }
         Ok(device)
     })
+}
+
+#[pyclass]
+#[pyo3(get_all)]
+#[derive(Debug, Clone)]
+pub struct SpeechGenerationResponse {
+    pub pcm: Vec<f32>,
+    pub rate: usize,
+    pub channels: usize,
 }
 
 #[pyclass]
@@ -418,6 +428,17 @@ fn parse_which(
             arch,
             dtype: _,
         } => DiffusionLoaderBuilder::new(Some(model_id)).build(arch.into()),
+        Which::Speech {
+            model_id,
+            dac_model_id,
+            arch,
+            ..
+        } => Box::new(SpeechLoader {
+            model_id,
+            dac_model_id,
+            arch: arch.into(),
+            cfg: None,
+        }),
     })
 }
 
@@ -514,7 +535,8 @@ impl Runner {
             | Which::GGML { .. }
             | Which::LoraGGML { .. }
             | Which::VisionPlain { .. }
-            | Which::DiffusionPlain { .. } => None,
+            | Which::DiffusionPlain { .. }
+            | Which::Speech { .. } => None,
             Which::XLora {
                 tgt_non_granular_index,
                 ..
@@ -537,6 +559,7 @@ impl Runner {
             | Which::LoraGGML { dtype, .. }
             | Which::VisionPlain { dtype, .. }
             | Which::DiffusionPlain { dtype, .. }
+            | Which::Speech { dtype, .. }
             | Which::XLora { dtype, .. }
             | Which::XLoraGGUF { dtype, .. }
             | Which::XLoraGGML { dtype, .. } => dtype,
@@ -586,7 +609,9 @@ impl Runner {
                     max_num_images: p.max_num_images,
                 })
                 .unwrap_or(AutoDeviceMapParams::default_vision()),
-            Which::DiffusionPlain { .. } => AutoDeviceMapParams::default_text(),
+            Which::DiffusionPlain { .. } | Which::Speech { .. } => {
+                AutoDeviceMapParams::default_text()
+            }
         };
 
         let max_seq_len = auto_map_params.max_seq_len();
@@ -1343,6 +1368,51 @@ impl Runner {
         Ok(response)
     }
 
+    /// Generate audio.
+    #[pyo3(signature = (
+        prompt,
+    ))]
+    fn generate_audio(&self, prompt: String) -> PyApiResult<SpeechGenerationResponse> {
+        let (tx, mut rx) = channel(1);
+
+        let request = _Request::Normal(Box::new(NormalRequest {
+            id: 0,
+            messages: RequestMessage::SpeechGeneration { prompt },
+            sampling_params: SamplingParams::deterministic(),
+            response: tx,
+            return_logprobs: false,
+            is_streaming: false,
+            suffix: None,
+            constraint: Constraint::None,
+            tool_choice: None,
+            tools: None,
+            logits_processors: None,
+            return_raw_logits: false,
+            web_search_options: None,
+        }));
+
+        let sender = self.runner.get_sender()?;
+        sender.blocking_send(request).unwrap();
+
+        let ResponseOk::Speech {
+            pcm,
+            rate,
+            channels,
+        } = rx
+            .blocking_recv()
+            .context("Channel was erroneously closed!")?
+            .as_result()?
+        else {
+            return Err(PyApiErr::from("Got unexpected response type."));
+        };
+
+        Ok(SpeechGenerationResponse {
+            pcm: (*pcm).clone(),
+            rate,
+            channels,
+        })
+    }
+
     /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
     /// then nothing will happen.
     fn send_re_isq(&self, dtype: String) -> PyApiResult<()> {
@@ -1406,6 +1476,8 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<AnyMoeConfig>()?;
     m.add_class::<AnyMoeExpertType>()?;
     m.add_class::<ToolChoice>()?;
+    m.add_class::<SpeechGenerationResponse>()?;
+    m.add_class::<SpeechLoaderType>()?;
 
     m.add_class::<mistralrs_core::ResponseMessage>()?;
     m.add_class::<mistralrs_core::Delta>()?;

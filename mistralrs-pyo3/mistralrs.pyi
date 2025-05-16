@@ -145,6 +145,16 @@ class ImageGenerationResponseFormat(Enum):
     B64Json = "b64json"
 
 @dataclass
+class SpeechGenerationResponse:
+    """
+    This wraps PCM values, sampling rate and the number of channels.
+    """
+
+    pcm: list[float]
+    rate: int
+    channels: int
+
+@dataclass
 class TextAutoMapParams:
     """
     Auto-mapping parameters for a text model.
@@ -307,6 +317,13 @@ class Which(Enum):
         arch: DiffusionArchitecture
         dtype: ModelDType = ModelDType.Auto
 
+    @dataclass
+    class DiffusionPlain:
+        model_id: str
+        arch: DiffusionArchitecture
+        dac_model_id: str | None = None
+        dtype: ModelDType = ModelDType.Auto
+
 class Runner:
     def __init__(
         self,
@@ -397,6 +414,11 @@ class Runner:
     ) -> ImageGenerationResponse:
         """
         Generate an image.
+        """
+
+    def generate_audio(self, prompt: str) -> SpeechGenerationResponse:
+        """
+        Generate audio given a (model specific) prompt. PCM and sampling rate as well as the number of channels is returned.
         """
 
     def send_re_isq(self, dtype: str) -> CompletionResponse:
