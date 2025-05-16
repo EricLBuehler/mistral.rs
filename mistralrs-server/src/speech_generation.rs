@@ -10,8 +10,8 @@ use axum::{
     response::IntoResponse,
 };
 use mistralrs_core::{
-    speech_utils, Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response,
-    SamplingParams,
+    speech_utils::{self, Sample},
+    Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response, SamplingParams,
 };
 use serde::Serialize;
 
@@ -164,7 +164,7 @@ pub async fn speech_generation(
             rate,
             channels,
         } => {
-            let pcm_endianness = "f32le";
+            let pcm_endianness = "s16le";
 
             let content_type = response_format.audio_content_type(rate, channels, pcm_endianness);
             let mut headers = HeaderMap::new();
@@ -176,9 +176,9 @@ pub async fn speech_generation(
             let encoded = match response_format {
                 AudioResponseFormat::Pcm => {
                     let samples: &[f32] = &pcm;
-                    let mut buf = Vec::with_capacity(samples.len() * 4);
+                    let mut buf = Vec::with_capacity(samples.len() * std::mem::size_of::<i64>());
                     for &sample in samples {
-                        buf.extend_from_slice(&sample.to_le_bytes());
+                        buf.extend_from_slice(&sample.to_i16().to_le_bytes());
                     }
                     buf
                 }

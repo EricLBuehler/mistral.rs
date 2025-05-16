@@ -76,7 +76,8 @@ pub fn write_pcm_as_wav<W: Write, S: Sample>(
     w.write_all(&n_channels.to_le_bytes())?; // one channel
     w.write_all(&sample_rate.to_le_bytes())?;
     w.write_all(&bytes_per_second.to_le_bytes())?;
-    w.write_all(&2u16.to_le_bytes())?; // 2 bytes of data per sample
+    let block_align = 2 * n_channels;
+    w.write_all(&block_align.to_le_bytes())?; // 2 bytes of data per sample
     w.write_all(&16u16.to_le_bytes())?; // bits per sample
 
     // Data block

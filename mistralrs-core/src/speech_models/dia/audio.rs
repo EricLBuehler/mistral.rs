@@ -203,13 +203,7 @@ pub fn revert_audio_delay(
     Ok(result_bxtxc)
 }
 
-// Helper function to implement gather_nd-like functionality
-// This is a simplified version - actual implementation would depend on Candle's indexing capabilities
 pub fn gather_nd(tensor: &Tensor, indices: &Tensor) -> Result<Tensor> {
-    // This is a placeholder that would need to be implemented
-    // based on Candle's indexing capabilities
-
-    // For now, let's assume we'd implement something like:
     let n_indices = indices.dim(0)?;
     let mut results = Vec::with_capacity(n_indices);
 

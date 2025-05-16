@@ -211,11 +211,11 @@ impl Loader for SpeechLoader {
                     });
 
                 let api = api.repo(Repo::with_revision(
-                    dac_model,
+                    dac_model.clone(),
                     RepoType::Model,
                     revision.clone(),
                 ));
-                let model_id = std::path::Path::new(&self.model_id);
+                let model_id = std::path::Path::new(&dac_model);
 
                 let weight = api_get_file!(api, "model.safetensors", &model_id);
                 weights.push(weight);

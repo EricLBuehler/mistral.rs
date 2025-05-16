@@ -121,6 +121,14 @@ Commands:
 - `\exit`: Quit interactive mode.
 "#;
 
+const SPEECH_INTERACTIVE_HELP: &str = r#"
+Welcome to interactive mode! Because this model is a speech generation model, you can enter prompts and the model will generate audio.
+
+Commands:
+- `\help`: Display this message.
+- `\exit`: Quit interactive mode.
+"#;
+
 const HELP_CMD: &str = "\\help";
 const EXIT_CMD: &str = "\\exit";
 const SYSTEM_CMD: &str = "\\system";
@@ -677,7 +685,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
 
     info!("Starting interactive loop for speech");
     println!(
-        "{}{DIFFUSION_INTERACTIVE_HELP}{}",
+        "{}{SPEECH_INTERACTIVE_HELP}{}",
         "=".repeat(20),
         "=".repeat(20)
     );
@@ -702,7 +710,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
             "" => continue,
             HELP_CMD => {
                 println!(
-                    "{}{DIFFUSION_INTERACTIVE_HELP}{}",
+                    "{}{SPEECH_INTERACTIVE_HELP}{}",
                     "=".repeat(20),
                     "=".repeat(20)
                 );
