@@ -23,8 +23,9 @@ use either::Either;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use mistralrs_core::{
-    ChatCompletionResponse, Constraint, DrySamplingParams, MistralRs, NormalRequest, Request,
-    RequestMessage, Response, SamplingParams, StopTokens as InternalStopTokens,
+    ChatCompletionChunkResponse, ChatCompletionResponse, Constraint, DrySamplingParams, MistralRs,
+    NormalRequest, Request, RequestMessage, Response, SamplingParams,
+    StopTokens as InternalStopTokens,
 };
 use serde::Serialize;
 
@@ -43,10 +44,15 @@ enum DoneState {
     Done,
 }
 
+pub type StreamerChunks = Vec<ChatCompletionChunkResponse>;
+
 pub struct Streamer {
     rx: Receiver<Response>,
     done_state: DoneState,
     state: SharedMistralState,
+    store_chunks: bool,
+    chunks: StreamerChunks,
+    on_complete: Option<fn(StreamerChunks)>,
 }
 
 impl futures::Stream for Streamer {
@@ -64,6 +70,9 @@ impl futures::Stream for Streamer {
                 return Poll::Ready(Some(Ok(Event::default().data("[DONE]"))));
             }
             DoneState::Done => {
+                if let Some(on_complete) = self.on_complete {
+                    on_complete(self.chunks.clone());
+                }
                 return Poll::Ready(None);
             }
             DoneState::Running => (),
@@ -93,6 +102,11 @@ impl futures::Stream for Streamer {
                     }
                     // Done now, just need to send the [DONE]
                     MistralRs::maybe_log_response(self.state.clone(), &response);
+
+                    if self.store_chunks {
+                        self.chunks.push(response.clone());
+                    }
+
                     Poll::Ready(Some(Event::default().json_data(response)))
                 }
                 Response::Done(_) => unreachable!(),
@@ -443,7 +457,7 @@ pub async fn chatcompletions(
     }
 
     if is_streaming {
-        ChatCompletionResponder::Sse(create_chat_streamer(rx, state))
+        ChatCompletionResponder::Sse(create_chat_streamer(rx, state, None))
     } else {
         process_non_streaming_chat_response(&mut rx, state).await
     }
@@ -473,11 +487,18 @@ pub async fn send_request(state: &SharedMistralState, request: Request) -> Resul
     sender.send(request).await.map_err(|e| e.into())
 }
 
-pub fn create_chat_streamer(rx: Receiver<Response>, state: SharedMistralState) -> Sse<Streamer> {
+pub fn create_chat_streamer(
+    rx: Receiver<Response>,
+    state: SharedMistralState,
+    on_complete_callback: Option<fn(StreamerChunks)>,
+) -> Sse<Streamer> {
     let streamer = Streamer {
         rx,
         done_state: DoneState::Running,
+        store_chunks: true,
         state,
+        chunks: Vec::new(),
+        on_complete: on_complete_callback,
     };
 
     let keep_alive_interval = get_keep_alive_interval();
