@@ -77,7 +77,7 @@ impl Mlp {
 
 #[derive(Debug)]
 enum MlpOrMoe {
-    Mlp(Mlp),
+    Mlp(Box<Mlp>),
     MoE {
         n_expert_used: usize,
         feed_forward_gate_inp: QMatMul,
@@ -305,7 +305,7 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
                 let cfg_w1 = get_lora_cfg(&feed_forward_w1);
                 let cfg_w2 = get_lora_cfg(&feed_forward_w2);
                 let cfg_w3 = get_lora_cfg(&feed_forward_w3);
-                MlpOrMoe::Mlp(Mlp {
+                MlpOrMoe::Mlp(Box::new(Mlp {
                     feed_forward_w1: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w1)?,
                         &cfg_w1,
@@ -336,7 +336,7 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
                         &mut count,
                         preload_adapters,
                     )?,
-                })
+                }))
             };
             let attention_norm = ct.remove(&format!("{prefix}.attention_norm.weight"))?;
             let ffn_norm = ct.remove(&format!("{prefix}.ffn_norm.weight"))?;
@@ -555,7 +555,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                 let cfg_w1 = get_lora_cfg(&feed_forward_w1);
                 let cfg_w2 = get_lora_cfg(&feed_forward_w2);
                 let cfg_w3 = get_lora_cfg(&feed_forward_w3);
-                MlpOrMoe::Mlp(Mlp {
+                MlpOrMoe::Mlp(Box::new(Mlp {
                     feed_forward_w1: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w1)?,
                         &cfg_w1,
@@ -586,7 +586,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                         &mut count,
                         preload_adapters,
                     )?,
-                })
+                }))
             } else {
                 let feed_forward_gate_inp =
                     ct.tensor(&format!("{prefix}.ffn_gate_inp.weight"), device)?;

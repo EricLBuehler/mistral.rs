@@ -75,7 +75,7 @@ impl Model {
         } else {
             (None, None)
         };
-        let request = Request::Normal(NormalRequest {
+        let request = Request::Normal(Box::new(NormalRequest {
             messages: request.take_messages(),
             sampling_params: request.take_sampling_params(),
             response: tx,
@@ -89,7 +89,7 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
-        });
+        }));
 
         self.runner.get_sender()?.send(request).await?;
 
@@ -110,7 +110,7 @@ impl Model {
         } else {
             (None, None)
         };
-        let request = Request::Normal(NormalRequest {
+        let request = Request::Normal(Box::new(NormalRequest {
             messages: request.take_messages(),
             sampling_params: request.take_sampling_params(),
             response: tx,
@@ -124,7 +124,7 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
-        });
+        }));
 
         self.runner.get_sender()?.send(request).await?;
 
@@ -154,7 +154,7 @@ impl Model {
         } else {
             (None, None)
         };
-        let request = Request::Normal(NormalRequest {
+        let request = Request::Normal(Box::new(NormalRequest {
             messages: request.take_messages(),
             sampling_params: request.take_sampling_params(),
             response: tx,
@@ -168,7 +168,7 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: true,
             web_search_options: request.take_web_search_options(),
-        });
+        }));
 
         self.runner.get_sender()?.send(request).await?;
 
@@ -195,7 +195,7 @@ impl Model {
     ) -> anyhow::Result<ImageGenerationResponse> {
         let (tx, mut rx) = channel(1);
 
-        let request = Request::Normal(NormalRequest {
+        let request = Request::Normal(Box::new(NormalRequest {
             id: 0,
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
@@ -213,7 +213,7 @@ impl Model {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
-        });
+        }));
 
         self.runner.get_sender()?.send(request).await?;
 
@@ -227,6 +227,51 @@ impl Model {
         };
 
         Ok(response)
+    }
+
+    /// Generate audio given a (model specific) prompt.
+    ///
+    /// This returns: (pcm, sampling rate, channels)
+    pub async fn generate_speech(
+        &self,
+        prompt: impl ToString,
+    ) -> anyhow::Result<(Arc<Vec<f32>>, usize, usize)> {
+        let (tx, mut rx) = channel(1);
+
+        let request = Request::Normal(Box::new(NormalRequest {
+            id: 0,
+            messages: RequestMessage::SpeechGeneration {
+                prompt: prompt.to_string(),
+            },
+            sampling_params: SamplingParams::deterministic(),
+            response: tx,
+            return_logprobs: false,
+            is_streaming: false,
+            suffix: None,
+            constraint: Constraint::None,
+            tool_choice: None,
+            tools: None,
+            logits_processors: None,
+            return_raw_logits: false,
+            web_search_options: None,
+        }));
+
+        self.runner.get_sender()?.send(request).await?;
+
+        let ResponseOk::Speech {
+            pcm,
+            rate,
+            channels,
+        } = rx
+            .recv()
+            .await
+            .context("Channel was erroneously closed!")?
+            .as_result()?
+        else {
+            anyhow::bail!("Got unexpected response type.")
+        };
+
+        Ok((pcm, rate, channels))
     }
 
     /// Reapply ISQ to the model. This will be done on whatever device the model is already on.

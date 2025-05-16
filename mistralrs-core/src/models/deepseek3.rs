@@ -694,7 +694,7 @@ impl Moe {
 }
 
 enum MoeOrMlp {
-    Moe(Moe),
+    Moe(Box<Moe>),
     Mlp(Mlp),
 }
 
@@ -750,7 +750,7 @@ impl DecoderLayer {
             && layer_idx >= cfg.first_k_dense_replace
             && layer_idx % cfg.moe_layer_freq == 0
         {
-            MoeOrMlp::Moe(Moe::new(
+            MoeOrMlp::Moe(Box::new(Moe::new(
                 cfg,
                 vb.pp("mlp"),
                 mapper,
@@ -759,7 +759,7 @@ impl DecoderLayer {
                 cfg.n_shared_experts,
                 cfg.n_routed_experts.unwrap(),
                 comm,
-            )?)
+            )?))
         } else {
             MoeOrMlp::Mlp(Mlp::new(
                 mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),

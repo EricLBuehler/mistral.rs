@@ -69,6 +69,7 @@ mod response;
 mod sampler;
 mod scheduler;
 mod sequence;
+mod speech_models;
 mod toml_selector;
 mod tools;
 mod topology;
@@ -91,9 +92,9 @@ pub use pipeline::{
     LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, LoraAdapterPaths,
     MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder,
     NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
-    SpeculativeConfig, SpeculativeLoader, SpeculativePipeline, Starcoder2Loader, TokenSource,
-    VisionLoader, VisionLoaderBuilder, VisionLoaderType, VisionPromptPrefixer,
-    VisionSpecificConfig, UQFF_MULTI_FILE_DELIMITER,
+    SpeculativeConfig, SpeculativeLoader, SpeculativePipeline, SpeechLoader, SpeechPipeline,
+    Starcoder2Loader, TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType,
+    VisionPromptPrefixer, VisionSpecificConfig, UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
     ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
@@ -106,6 +107,7 @@ pub use sampler::{
 };
 pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 use serde::Serialize;
+pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
 pub use tools::{
@@ -435,7 +437,7 @@ impl MistralRs {
             let clone_sender = sender.read().unwrap().clone();
             tokio::task::block_in_place(|| {
                 let (tx, mut rx) = channel(1);
-                let req = Request::Normal(NormalRequest {
+                let req = Request::Normal(Box::new(NormalRequest {
                     id: 0,
                     messages: RequestMessage::Completion {
                         text: "hello".to_string(),
@@ -456,7 +458,7 @@ impl MistralRs {
                     logits_processors: None,
                     return_raw_logits: false,
                     web_search_options: None,
-                });
+                }));
                 info!("Beginning dummy run.");
                 let start = Instant::now();
                 clone_sender.blocking_send(req).unwrap();

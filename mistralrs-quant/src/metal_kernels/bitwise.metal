@@ -78,3 +78,21 @@ instantiate_bitwise_leftshift(uint8_t);
 instantiate_bitwise_leftshift(uint32_t);
 instantiate_bitwise_leftshift(int64_t);
 instantiate_bitwise_leftshift(int);
+
+template <typename T>
+[[kernel]] void bitwise_not(const device T *a [[buffer(0)]],
+                           device T *output [[buffer(1)]],
+                           uint tid [[thread_position_in_grid]]) {
+  output[tid] = ~a[tid];
+}
+
+#define instantiate_bitwise_not(type)                                           \
+  template [[host_name("bitwise_not_" #type)]] [[kernel]] void                  \
+  bitwise_not<type>(const device type *a [[buffer(0)]],                         \
+                   device type *out [[buffer(1)]],                            \            
+    uint tid [[thread_position_in_grid]]);
+
+instantiate_bitwise_not(uint8_t);
+instantiate_bitwise_not(uint32_t);
+instantiate_bitwise_not(int64_t);
+instantiate_bitwise_not(int);

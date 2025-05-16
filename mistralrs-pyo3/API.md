@@ -50,6 +50,9 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Flux`
 - `FluxOffloaded`
 
+### Architecture for speech models
+- `Dia`
+
 ### ISQ Organization
 - `Default`
 - `MoQE`: if applicable, only quantize MoE experts. https://arxiv.org/abs/2310.02410
@@ -191,6 +194,13 @@ class Which(Enum):
     class DiffusionPlain:
         model_id: str
         arch: DiffusionArchitecture
+        dtype: ModelDType = ModelDType.Auto
+
+    @dataclass
+    class Speech:
+        model_id: str
+        arch: DiffusionArchitecture
+        dac_model_id: str | None = None
         dtype: ModelDType = ModelDType.Auto
 ```
 

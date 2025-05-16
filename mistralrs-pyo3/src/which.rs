@@ -102,6 +102,20 @@ impl From<DiffusionArchitecture> for DiffusionLoaderType {
 
 #[pyclass(eq, eq_int)]
 #[derive(Debug, Clone, PartialEq)]
+pub enum SpeechLoaderType {
+    Dia,
+}
+
+impl From<SpeechLoaderType> for mistralrs_core::SpeechLoaderType {
+    fn from(value: SpeechLoaderType) -> Self {
+        match value {
+            SpeechLoaderType::Dia => mistralrs_core::SpeechLoaderType::Dia,
+        }
+    }
+}
+
+#[pyclass(eq, eq_int)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum IsqOrganization {
     Default,
     MoQE,
@@ -432,6 +446,19 @@ pub enum Which {
     DiffusionPlain {
         model_id: String,
         arch: DiffusionArchitecture,
+        dtype: ModelDType,
+    },
+
+    #[pyo3(constructor = (
+        model_id,
+        arch,
+        dac_model_id = None,
+        dtype = ModelDType::Auto,
+    ))]
+    Speech {
+        model_id: String,
+        arch: SpeechLoaderType,
+        dac_model_id: Option<String>,
         dtype: ModelDType,
     },
 }

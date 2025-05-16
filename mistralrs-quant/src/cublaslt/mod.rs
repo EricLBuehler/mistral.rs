@@ -5,7 +5,36 @@
 use candle_core::{Device, Result, Tensor};
 use candle_nn::Activation as CandleActivation;
 use once_cell::sync::Lazy;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, Once};
+
+/// Controller for the CUBLASLT handle and inhibition flag.
+pub struct CublasLtController {
+    handle: Mutex<Option<&'static CublasLtWrapper>>,
+    inhibit: AtomicBool,
+}
+
+impl CublasLtController {
+    /// Set whether to inhibit CUBLASLT usage.
+    pub fn set_inhibit(&self, value: bool) {
+        self.inhibit.store(value, Ordering::SeqCst);
+    }
+
+    /// Get the handle if not inhibited.
+    pub fn get(&self) -> Option<&'static CublasLtWrapper> {
+        let handle_opt = self.handle.lock().unwrap();
+        if self.inhibit.load(Ordering::SeqCst) {
+            None
+        } else {
+            *handle_opt
+        }
+    }
+}
+
+pub static CUBLASLT_CONTROLLER: Lazy<CublasLtController> = Lazy::new(|| CublasLtController {
+    handle: Mutex::new(None),
+    inhibit: AtomicBool::new(false),
+});
 
 #[cfg(feature = "cuda")]
 mod api;
@@ -25,8 +54,6 @@ pub enum F8MatmulOutType {
 
 static INIT: Once = Once::new();
 static mut CUBLASLT: Option<CublasLtWrapper> = None;
-pub static CUBLASLT_HANDLE: Lazy<Mutex<Option<&'static CublasLtWrapper>>> =
-    Lazy::new(|| Mutex::new(None));
 
 pub fn maybe_init_cublas_lt_wrapper(device: Device) {
     unsafe {
@@ -51,7 +78,10 @@ pub fn maybe_init_cublas_lt_wrapper(device: Device) {
             }
             #[allow(static_mut_refs)]
             let cublaslt: Option<&'static CublasLtWrapper> = CUBLASLT.as_ref();
-            *CUBLASLT_HANDLE.lock().unwrap() = cublaslt;
+
+            // Set the controller handle
+            let mut handle_lock = CUBLASLT_CONTROLLER.handle.lock().unwrap();
+            *handle_lock = cublaslt;
         });
     }
 }

@@ -160,7 +160,10 @@ impl VisionMessages {
     ) -> anyhow::Result<Self> {
         let prefixer = match &model.config().category {
             ModelCategory::Vision { prefixer } => prefixer,
-            _ => {
+            ModelCategory::Text
+            | ModelCategory::Diffusion
+            | ModelCategory::Speech
+            | ModelCategory::Audio => {
                 anyhow::bail!("`add_image_message` expects a vision model.")
             }
         };

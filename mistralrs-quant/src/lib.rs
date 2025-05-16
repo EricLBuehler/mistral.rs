@@ -57,7 +57,7 @@ pub use lora::{
     MULTI_LORA_DELIMITER,
 };
 pub use unquantized::UnquantLinear;
-use utils::isq::apply_immediate_isq;
+pub use utils::isq::apply_immediate_isq;
 pub use utils::{log, BitWiseOp, LeftshiftOp, NonZeroOp, UQFF_QUANT_TYPE_OFFSET};
 
 use candle_nn::{Linear, Module};

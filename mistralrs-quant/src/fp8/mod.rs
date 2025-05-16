@@ -12,7 +12,7 @@ use quantize::QuantizationResult;
 mod quantize;
 
 use crate::{
-    cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_HANDLE},
+    cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_CONTROLLER},
     utils::{
         deserialize_tensor, read_dtype, serialize_tensor, version_is_compatible, write_dtype,
         UQFF_VERSION,
@@ -68,7 +68,7 @@ impl QuantMethod for FP8Linear {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(x.device().clone());
 
-        match *CUBLASLT_HANDLE.lock().unwrap() {
+        match CUBLASLT_CONTROLLER.get() {
             Some(handle) => {
                 let n_dims = x.dims().len();
                 if n_dims < 3 {

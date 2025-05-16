@@ -34,9 +34,9 @@ impl Engine {
                 ) && request.web_search_options.is_some()
                     && get_mut_arcmutex!(self.bert_pipeline).is_some()
                 {
-                    search_request::search_request(self.clone(), request).await;
+                    search_request::search_request(self.clone(), *request).await;
                 } else {
-                    self.add_request(request).await
+                    self.add_request(*request).await
                 }
             }
             Request::ReIsq(level) => {
@@ -71,7 +71,8 @@ impl Engine {
             RequestMessage::Chat { .. }
             | RequestMessage::CompletionTokens(_)
             | RequestMessage::VisionChat { .. }
-            | RequestMessage::ImageGeneration { .. } => None,
+            | RequestMessage::ImageGeneration { .. }
+            | RequestMessage::SpeechGeneration { .. } => None,
         };
         if is_chat
             && !get_mut_arcmutex!(self.pipeline)
@@ -107,7 +108,9 @@ impl Engine {
         };
 
         let seq_step_type = match &request.messages {
-            RequestMessage::ImageGeneration { .. } => SeqStepType::OneShot,
+            RequestMessage::ImageGeneration { .. } | RequestMessage::SpeechGeneration { .. } => {
+                SeqStepType::OneShot
+            }
             _ => SeqStepType::PromptAndDecode,
         };
 
@@ -161,7 +164,8 @@ impl Engine {
                     text,
                 )
             }
-            RequestMessage::ImageGeneration { prompt, .. } => (vec![u32::MAX], prompt),
+            RequestMessage::ImageGeneration { prompt, .. }
+            | RequestMessage::SpeechGeneration { prompt } => (vec![u32::MAX], prompt),
             RequestMessage::CompletionTokens(it) => {
                 let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
                     request
@@ -471,7 +475,10 @@ impl Engine {
                 eos_toks,
             );
 
-            self.logger.add_new_sequence();
+            // Only "track" a new sequence if it is a traditional one
+            if matches!(seq_step_type, SeqStepType::PromptAndDecode) {
+                self.logger.add_new_sequence();
+            }
 
             // Run the inputs processor to update the prompt for multimodal models.
             if images.is_some() {

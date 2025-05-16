@@ -1,6 +1,7 @@
 use std::{
     error::Error,
     fmt::{Debug, Display},
+    sync::Arc,
 };
 
 use candle_core::Tensor;
@@ -241,6 +242,12 @@ pub enum Response {
     CompletionChunk(CompletionChunkResponse),
     // Image generation
     ImageGeneration(ImageGenerationResponse),
+    // Speech generation
+    Speech {
+        pcm: Arc<Vec<f32>>,
+        rate: usize,
+        channels: usize,
+    },
     // Raw
     Raw {
         logits_chunks: Vec<Tensor>,
@@ -258,6 +265,12 @@ pub enum ResponseOk {
     CompletionChunk(CompletionChunkResponse),
     // Image generation
     ImageGeneration(ImageGenerationResponse),
+    // Speech generation
+    Speech {
+        pcm: Arc<Vec<f32>>,
+        rate: usize,
+        channels: usize,
+    },
     // Raw
     Raw {
         logits_chunks: Vec<Tensor>,
@@ -325,6 +338,15 @@ impl Response {
                 Err(Box::new(ResponseErr::CompletionModelError(e, x)))
             }
             Self::ImageGeneration(x) => Ok(ResponseOk::ImageGeneration(x)),
+            Self::Speech {
+                pcm,
+                rate,
+                channels,
+            } => Ok(ResponseOk::Speech {
+                pcm,
+                rate,
+                channels,
+            }),
             Self::Raw {
                 logits_chunks,
                 tokens,

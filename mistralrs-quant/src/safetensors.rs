@@ -93,21 +93,6 @@ fn convert(
     cast_dtype: Option<DType>,
 ) -> Result<Tensor> {
     match (view.dtype(), cast_dtype) {
-        (st::Dtype::U8, _) => convert_::<u8>(view, device),
-        (st::Dtype::U16, _) => {
-            let conv = |x| Ok(u32::from(x));
-            convert_with_cast_::<u16, u32, _>(view, device, conv)
-        }
-        (st::Dtype::U32, _) => convert_::<u32>(view, device),
-        (st::Dtype::I16, _) => convert_::<i16>(view, device),
-        (st::Dtype::I32, _) => convert_::<i32>(view, device),
-        (st::Dtype::I64, _) => convert_::<i64>(view, device),
-        (st::Dtype::BF16, None | Some(DType::BF16)) => convert_::<half::bf16>(view, device),
-        (st::Dtype::F16, None | Some(DType::F16)) => convert_::<half::f16>(view, device),
-        (st::Dtype::F32, _) => convert_::<f32>(view, device),
-        (st::Dtype::F64, _) => convert_::<f64>(view, device),
-        (st::Dtype::F8_E4M3, _) => convert_::<F8E4M3>(view, device),
-
         (st::Dtype::BF16, Some(DType::F16)) => {
             let conv = |x: half::bf16| Ok(half::f16::from_f32(x.to_f32()));
             convert_with_cast_::<half::bf16, half::f16, _>(view, device, conv)
@@ -124,6 +109,29 @@ fn convert(
             let conv = |x: half::f16| Ok(x.to_f32());
             convert_with_cast_::<half::f16, f32, _>(view, device, conv)
         }
+        (st::Dtype::F32, Some(DType::BF16)) => {
+            let conv = |x: f32| Ok(half::bf16::from_f32(x));
+            convert_with_cast_::<f32, half::bf16, _>(view, device, conv)
+        }
+        (st::Dtype::F32, Some(DType::F16)) => {
+            let conv = |x: f32| Ok(half::f16::from_f32(x));
+            convert_with_cast_::<f32, half::f16, _>(view, device, conv)
+        }
+
+        (st::Dtype::U8, _) => convert_::<u8>(view, device),
+        (st::Dtype::U16, _) => {
+            let conv = |x| Ok(u32::from(x));
+            convert_with_cast_::<u16, u32, _>(view, device, conv)
+        }
+        (st::Dtype::U32, _) => convert_::<u32>(view, device),
+        (st::Dtype::I16, _) => convert_::<i16>(view, device),
+        (st::Dtype::I32, _) => convert_::<i32>(view, device),
+        (st::Dtype::I64, _) => convert_::<i64>(view, device),
+        (st::Dtype::BF16, None | Some(DType::BF16)) => convert_::<half::bf16>(view, device),
+        (st::Dtype::F16, None | Some(DType::F16)) => convert_::<half::f16>(view, device),
+        (st::Dtype::F32, _) => convert_::<f32>(view, device),
+        (st::Dtype::F64, _) => convert_::<f64>(view, device),
+        (st::Dtype::F8_E4M3, _) => convert_::<F8E4M3>(view, device),
         (dtype, _) => Err(Error::UnsupportedSafeTensorDtype(dtype)),
     }
 }
@@ -198,7 +206,12 @@ impl MmapedSafetensors {
     }
 
     pub fn load(&self, name: &str, dev: &Device, dtype: Option<DType>) -> Result<Tensor> {
-        self.get(name)?.load(dev, dtype)
+        let t = self.get(name)?.load(dev, None)?;
+        if let Some(dt) = dtype {
+            t.to_dtype(dt)
+        } else {
+            Ok(t)
+        }
     }
 
     pub fn tensors(&self) -> Vec<(String, st::TensorView<'_>)> {

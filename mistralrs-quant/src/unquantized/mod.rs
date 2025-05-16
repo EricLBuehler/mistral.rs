@@ -9,7 +9,7 @@ use candle_core::{quantized::GgmlDType, DType, Device, DeviceLocation, Result, S
 use candle_nn::Linear;
 
 use crate::{
-    cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_HANDLE},
+    cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_CONTROLLER},
     generate_isq, generate_isq_imatrix,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
@@ -73,7 +73,7 @@ impl QuantMethod for UnquantLinear {
                 DeviceLocation::Cuda { .. } => {
                     // Try to use cublaslt, otherwise fallback to gemm
                     if let (Device::Cuda(_), Some(cublaslt)) =
-                        (a.device(), *CUBLASLT_HANDLE.lock().unwrap())
+                        (a.device(), CUBLASLT_CONTROLLER.get())
                     {
                         cublaslt
                             .batch_matmul(
@@ -117,9 +117,7 @@ impl QuantMethod for UnquantLinear {
                     }
                 }
             }
-        } else if let (Device::Cuda(_), Some(cublaslt)) =
-            (a.device(), *CUBLASLT_HANDLE.lock().unwrap())
-        {
+        } else if let (Device::Cuda(_), Some(cublaslt)) = (a.device(), CUBLASLT_CONTROLLER.get()) {
             cublaslt
                 .batch_matmul(a, &w, None, None, None, None, None)?
                 .t()

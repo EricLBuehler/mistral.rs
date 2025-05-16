@@ -170,14 +170,14 @@ fn main() -> Result<(), String> {
 
         enum Platform {
             MacOS,
-            IOS,
+            Ios,
         }
 
         impl Platform {
             fn sdk(&self) -> &str {
                 match self {
                     Platform::MacOS => "macosx",
-                    Platform::IOS => "iphoneos",
+                    Platform::Ios => "iphoneos",
                 }
             }
         }
@@ -204,7 +204,11 @@ fn main() -> Result<(), String> {
                 compile_air_cmd.arg(sources.join(format!("{metal_file}.metal")));
             }
             compile_air_cmd.arg(sources.join("utils.metal"));
-            compile_air_cmd.spawn().expect("Failed to compile air");
+            compile_air_cmd
+                .spawn()
+                .expect("Failed to compile air")
+                .wait()
+                .expect("Failed to compile air");
 
             let mut child = compile_air_cmd.spawn().expect("Failed to compile air");
 
@@ -234,7 +238,7 @@ fn main() -> Result<(), String> {
             // Compile air to metallib
             let lib_name = match platform {
                 Platform::MacOS => "mistralrs_quant.metallib",
-                Platform::IOS => "mistralrs_quant_ios.metallib",
+                Platform::Ios => "mistralrs_quant_ios.metallib",
             };
             let metallib = out_dir.join(lib_name);
             let mut compile_metallib_cmd = Command::new("xcrun");
@@ -276,7 +280,7 @@ fn main() -> Result<(), String> {
         }
 
         compile(Platform::MacOS)?;
-        compile(Platform::IOS)?;
+        compile(Platform::Ios)?;
 
         Ok(())
     }
