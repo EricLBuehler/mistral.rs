@@ -104,7 +104,7 @@ mod tests {
     #[test]
     #[cfg(feature = "cuda")]
     fn test_cublaslt_matmul() -> Result<()> {
-        use crate::cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_HANDLE};
+        use crate::cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_CONTROLLER};
         let dev = Device::new_cuda(0)?;
 
         let w = Tensor::rand(0., 1., (1, 16, 32), &dev)?.to_dtype(DType::F32)?;
@@ -113,7 +113,7 @@ mod tests {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(x.device().clone());
 
-        let handle = CUBLASLT_HANDLE.lock().unwrap().unwrap();
+        let handle = CUBLASLT_CONTROLLER.get().unwrap();
 
         let QuantizationResult {
             qw,

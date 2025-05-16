@@ -353,7 +353,7 @@ impl Sdpa {
         #[allow(unused)]
         if let (Device::Cuda(_), Some(cublaslt)) = (
             q.device(),
-            *mistralrs_quant::cublaslt::CUBLASLT_HANDLE.lock().unwrap(),
+            mistralrs_quant::cublaslt::CUBLASLT_CONTROLLER.get(),
         ) {
             #[cfg(feature = "cuda")]
             {

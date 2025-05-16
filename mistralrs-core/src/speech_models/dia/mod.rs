@@ -81,6 +81,10 @@ impl DiaPipeline {
         // https://github.com/descriptinc/descript-audio-codec/blob/c7cfc5d2647e26471dc394f95846a0830e7bec34/conf/final/44khz.yml
         let dac = dac::Model::new(&dac::Config::dia(), dac_vb.set_dtype(DType::F32))?;
 
+        // Dia suffers accuracy issues with cublaslt.
+        #[cfg(feature = "cuda")]
+        mistralrs_quant::cublaslt::CUBLASLT_CONTROLLER.set_inhibit(true);
+
         Ok(Self {
             dtype: vb.dtype(),
             device: vb.device().clone(),
