@@ -108,6 +108,7 @@ mod lora_model;
 mod messages;
 mod model;
 mod speculative;
+mod speech_model;
 mod text_model;
 mod vision_model;
 mod xlora_model;
@@ -125,6 +126,7 @@ pub mod v0_4_api {
     };
     pub use super::model::{best_device, Model};
     pub use super::speculative::TextSpeculativeBuilder;
+    pub use super::speech_model::SpeechModelBuilder;
     pub use super::text_model::{
         PagedAttentionMetaBuilder, TextModelBuilder, UqffTextModelBuilder,
     };
