@@ -1,10 +1,16 @@
+use std::sync::Arc;
+
 use candle_core::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
-use mistralrs_quant::ShardedVarBuilder;
+use indicatif::MultiProgress;
+use mistralrs_quant::{
+    apply_immediate_isq, QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear,
+};
 
 use crate::{
     attention::{naive_sdpa, SdpaParams},
     layers::{self, repeat_kv, DiaRotaryEmbedding, RmsNorm},
+    utils::progress::NiceProgressBar,
 };
 
 use super::{cache::DiaKvCache, config::DiaConfig};
@@ -32,10 +38,10 @@ pub fn dense_general_row(
 }
 
 struct DiaAttention<const CROSS_ATTN: bool> {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
     rope: DiaRotaryEmbedding,
     head_dim: usize,
     num_q_heads: usize,
@@ -62,6 +68,19 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
         let v_proj =
             dense_general_column(kv_embed_dim, vec![num_kv_heads, head_dim], vb.pp("v_proj"))?;
         let o_proj = dense_general_row(vec![num_q_heads, head_dim], output_dim, vb.pp("o_proj"))?;
+
+        let mut q_proj: Arc<dyn QuantMethod> =
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(q_proj))?);
+        q_proj = apply_immediate_isq(q_proj, vb.clone())?;
+        let mut k_proj: Arc<dyn QuantMethod> =
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(k_proj))?);
+        k_proj = apply_immediate_isq(k_proj, vb.clone())?;
+        let mut v_proj: Arc<dyn QuantMethod> =
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(v_proj))?);
+        v_proj = apply_immediate_isq(v_proj, vb.clone())?;
+        let mut o_proj: Arc<dyn QuantMethod> =
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(o_proj))?);
+        o_proj = apply_immediate_isq(o_proj, vb.clone())?;
 
         let rope = DiaRotaryEmbedding::new(
             cfg.model.rope_min_timescale,
@@ -103,10 +122,10 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
     ) -> Result<Tensor> {
         let (b, t, _d) = xq.dims3()?;
 
-        let mut xq = self
-            .q_proj
-            .forward(xq)?
-            .reshape((b, t, self.num_q_heads, self.head_dim))?;
+        let mut xq =
+            self.q_proj
+                .forward_autocast(xq)?
+                .reshape((b, t, self.num_q_heads, self.head_dim))?;
         xq = self.rope.forward(&xq, q_positions)?;
         xq = xq.transpose(1, 2)?;
 
@@ -118,14 +137,18 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
                 .k_v()
         } else {
             // Compute fresh K and V for self‑attention.
-            let mut k =
-                self.k_proj
-                    .forward(xkv)?
-                    .reshape((b, t, self.num_kv_heads, self.head_dim))?;
-            let mut v =
-                self.v_proj
-                    .forward(xkv)?
-                    .reshape((b, t, self.num_kv_heads, self.head_dim))?;
+            let mut k = self.k_proj.forward_autocast(xkv)?.reshape((
+                b,
+                t,
+                self.num_kv_heads,
+                self.head_dim,
+            ))?;
+            let mut v = self.v_proj.forward_autocast(xkv)?.reshape((
+                b,
+                t,
+                self.num_kv_heads,
+                self.head_dim,
+            ))?;
 
             // Apply RoPE to K and put heads first.
             k = self.rope.forward(&k, kv_positions)?;
@@ -159,13 +182,13 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
 
         attn_output = attn_output.transpose(1, 2)?.reshape((b, t, ()))?;
 
-        self.o_proj.forward(&attn_output)
+        self.o_proj.forward_autocast(&attn_output)
     }
 }
 
 struct DiaMlp {
-    wi: Linear,
-    wo: Linear,
+    wi: Arc<dyn QuantMethod>,
+    wo: Arc<dyn QuantMethod>,
 }
 
 impl DiaMlp {
@@ -173,16 +196,23 @@ impl DiaMlp {
         let wi = dense_general_column(embed_dim, vec![2, intermediate_dim], vb.pp("wi_fused"))?;
         let wo = dense_general_row(vec![intermediate_dim], embed_dim, vb.pp("wo"))?;
 
+        let mut wi: Arc<dyn QuantMethod> =
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(wi))?);
+        wi = apply_immediate_isq(wi, vb.clone())?;
+        let mut wo: Arc<dyn QuantMethod> =
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(wo))?);
+        wo = apply_immediate_isq(wo, vb.clone())?;
+
         Ok(Self { wi, wo })
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (bs, seqlen, _dim) = xs.dims3()?;
-        let fused_x = self.wi.forward(xs)?.reshape((bs, seqlen, 2, ()))?;
+        let fused_x = self.wi.forward_autocast(xs)?.reshape((bs, seqlen, 2, ()))?;
         let gate = fused_x.i((.., .., 0, ..))?;
         let up = fused_x.i((.., .., 1, ..))?;
         let hidden = (gate.silu()? * up)?;
-        self.wo.forward(&hidden)
+        self.wo.forward_autocast(&hidden)
     }
 }
 
@@ -278,10 +308,13 @@ impl DiaEncoder {
             cfg.model.normalization_layer_epsilon,
             vb.pp("norm"),
         )?;
-        let mut layers = Vec::new();
-        for i in 0..cfg.model.encoder.n_layer {
-            layers.push(DiaEncoderLayer::new(cfg, vb.pp("layers").pp(i))?)
-        }
+
+        let layers = NiceProgressBar::<_, 'b'>(
+            0..cfg.model.encoder.n_layer,
+            "Loading encoder",
+            &MultiProgress::new(),
+        )
+        .run(false, |i| DiaEncoderLayer::new(cfg, vb.pp("layers").pp(i)))?;
 
         Ok(Self {
             embedding,
@@ -476,10 +509,12 @@ impl DiaDecoder {
             vb.pp("norm"),
         )?;
 
-        let mut layers = Vec::new();
-        for i in 0..cfg.model.decoder.n_layer {
-            layers.push(DiaDecoderLayer::new(cfg, vb.pp("layers").pp(i))?)
-        }
+        let layers = NiceProgressBar::<_, 'b'>(
+            0..cfg.model.decoder.n_layer,
+            "Loading decoder",
+            &MultiProgress::new(),
+        )
+        .run(false, |i| DiaDecoderLayer::new(cfg, vb.pp("layers").pp(i)))?;
 
         let logits_dense = dense_general_column(
             cfg.model.decoder.n_embd,
@@ -510,17 +545,21 @@ impl DiaDecoder {
         for layer in &self.layers {
             let ca = &layer.cross_attn;
 
-            let mut k_proj =
-                ca.k_proj
-                    .forward(encoder_out)?
-                    .reshape((b, t, ca.num_kv_heads, ca.head_dim))?;
+            let mut k_proj = ca.k_proj.forward_autocast(encoder_out)?.reshape((
+                b,
+                t,
+                ca.num_kv_heads,
+                ca.head_dim,
+            ))?;
             k_proj = ca.rope.forward(&k_proj, encoder_positions)?;
             k_proj = k_proj.transpose(1, 2)?;
 
-            let mut v_proj =
-                ca.v_proj
-                    .forward(encoder_out)?
-                    .reshape((b, t, ca.num_kv_heads, ca.head_dim))?;
+            let mut v_proj = ca.v_proj.forward_autocast(encoder_out)?.reshape((
+                b,
+                t,
+                ca.num_kv_heads,
+                ca.head_dim,
+            ))?;
             v_proj = v_proj.transpose(1, 2)?;
 
             per_layer_kv_cache.push(Some(DiaKvCache::from_kv(k_proj, v_proj)));

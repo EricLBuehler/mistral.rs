@@ -23,6 +23,7 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indexmap::IndexMap;
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
+use regex::Regex;
 use std::any::Any;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -254,9 +255,7 @@ impl Loader for SpeechLoader {
             anyhow::bail!("Device mapping is not supported for speech models.")
         }
 
-        if in_situ_quant.is_some() {
-            anyhow::bail!("ISQ is not supported for speech models.");
-        }
+        mistralrs_quant::set_immediate_isq(in_situ_quant, vec![Regex::new(".*")?]);
 
         let cfg: DiaConfig = serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
 

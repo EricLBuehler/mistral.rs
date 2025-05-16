@@ -12,7 +12,7 @@ pub enum QuantizationBehavior {
     Skip,
 }
 
-pub(crate) fn apply_immediate_isq(
+pub fn apply_immediate_isq(
     layer: Arc<dyn QuantMethod>,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
