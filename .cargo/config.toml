@@ -1,10 +1,14 @@
 [build]
-rustflags = ["-C", "target-cpu=native"]
+# keep your existing native (for other arches), but add aes+pmull
+rustflags = [
+  "-C", "target-cpu=native",
+  "-C", "target-feature=+aes,+pmull"
+]
 
 [target.aarch64-apple-darwin]
 rustflags = [
   "-C", "target-cpu=native",
-  "-C", "target-feature=+fp16,+fp16fml"
+  "-C", "target-feature=+aes,+pmull,+fp16,+fp16fml"
 ]
 
 [target.wasm32-unknown-unknown]
