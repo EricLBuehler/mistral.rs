@@ -258,7 +258,7 @@
 <a href=#258 id=258 data-nosnippet>258</a>    <span class="kw">fn </span>drop(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
 <a href=#259 id=259 data-nosnippet>259</a>        ENGINE_INSTRUCTIONS
 <a href=#260 id=260 data-nosnippet>260</a>            .lock()
-<a href=#261 id=261 data-nosnippet>261</a>            .expect(<span class="string">"`ENGINE_INSTRUCTIONS` was poisioned"</span>)
+<a href=#261 id=261 data-nosnippet>261</a>            .expect(<span class="string">"`ENGINE_INSTRUCTIONS` was poisoned"</span>)
 <a href=#262 id=262 data-nosnippet>262</a>            .insert(<span class="self">self</span>.engine_id, <span class="prelude-val">Some</span>(EngineInstruction::Terminate));
 <a href=#263 id=263 data-nosnippet>263</a>    }
 <a href=#264 id=264 data-nosnippet>264</a>}
