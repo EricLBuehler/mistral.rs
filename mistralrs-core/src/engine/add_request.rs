@@ -3,7 +3,7 @@ use crate::{
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     sequence::SeqStepType,
     tools::{ToolCallingMatcher, ToolChoice},
-    RequestMessage, Response,
+    ModelCategory, RequestMessage, Response,
 };
 use candle_core::Tensor;
 use either::Either;
@@ -86,6 +86,32 @@ impl Engine {
                         "Received messages for a model which does not have a chat template. Either use a different model or pass a single string as the prompt".into(),
                     )).await.expect("Expected receiver.");
             return;
+        }
+
+        // Verify the model's category matches the messages received.
+        match (
+            get_mut_arcmutex!(self.pipeline).category(),
+            &request.messages,
+        ) {
+            (
+                ModelCategory::Text | ModelCategory::Vision { .. },
+                RequestMessage::Chat { .. }
+                | RequestMessage::VisionChat { .. }
+                | RequestMessage::Completion { .. }
+                | RequestMessage::CompletionTokens(_),
+            ) => (),
+            (ModelCategory::Diffusion, RequestMessage::ImageGeneration { .. }) => (),
+            (ModelCategory::Speech, RequestMessage::SpeechGeneration { .. }) => (),
+            _ => {
+                request
+                    .response
+                    .send(Response::ValidationError(
+                        "Received a request incompatible for this model's category.".into(),
+                    ))
+                    .await
+                    .expect("Expected receiver.");
+                return;
+            }
         }
 
         let images = match request.messages {
