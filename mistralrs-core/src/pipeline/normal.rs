@@ -467,19 +467,21 @@ impl Loader for NormalLoader {
         }
 
         // Logic for ISQ here: if no calibration (i.e imatrix), then allow immediate ISQ. Otherwise, back to normal.
-        let mut loading_isq =
-            if self.config.imatrix.is_none() && self.config.calibration_file.is_none() {
-                let predicates =
-                    if matches!(self.config.organization, IsqOrganization::MoeExpertsOnly) {
-                        self.inner.immediate_isq_predicates_moqe(&config)?
-                    } else {
-                        self.inner.immediate_isq_predicates(&config)?
-                    };
-                mistralrs_quant::set_immediate_isq(in_situ_quant, predicates);
-                false
+        let mut loading_isq = if self.config.imatrix.is_none()
+            && self.config.calibration_file.is_none()
+            && !device.is_cuda()
+        {
+            let predicates = if matches!(self.config.organization, IsqOrganization::MoeExpertsOnly)
+            {
+                self.inner.immediate_isq_predicates_moqe(&config)?
             } else {
-                in_situ_quant.is_some()
+                self.inner.immediate_isq_predicates(&config)?
             };
+            mistralrs_quant::set_immediate_isq(in_situ_quant, predicates);
+            false
+        } else {
+            in_situ_quant.is_some()
+        };
 
         if let Some(ref topology) = self.config.topology {
             loading_isq |= topology
@@ -726,7 +728,7 @@ impl Loader for NormalLoader {
         }
 
         // Only if loading from UQFF
-        if self.config.topology.is_some() && self.config.from_uqff.is_none() {
+        if loading_isq || (self.config.topology.is_some() && self.config.from_uqff.is_none()) {
             let imatrix_source = match (
                 self.config.imatrix.as_ref(),
                 self.config.calibration_file.is_some(),

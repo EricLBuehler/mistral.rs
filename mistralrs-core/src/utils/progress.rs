@@ -190,6 +190,6 @@ where
         F: Fn(<T as IntoParallelIterator>::Item) -> candle_core::Result<U> + Sync + Send,
         U: Send,
     {
-        self.run(get_immediate_isq().ty.is_some(), f)
+        self.run(get_immediate_isq().is_some_and(|x| x.ty.is_some()), f)
     }
 }
