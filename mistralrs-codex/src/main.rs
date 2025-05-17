@@ -3,6 +3,8 @@ use std::{
     io::{stdin, stdout, Write},
     process::Command,
 };
+use std::fs;
+use std::process::{Stdio};
 
 use anyhow::Result;
 use mistralrs::{
@@ -18,6 +20,22 @@ use serde_json::{json, Value};
 struct ShellInput {
     command: String,
     // working_directory: String,
+}
+
+#[derive(serde::Deserialize, Debug, Clone)]
+struct ReadFileInput {
+    path: String,
+}
+
+#[derive(serde::Deserialize, Debug, Clone)]
+struct WriteFileInput {
+    path: String,
+    contents: String,
+}
+
+#[derive(serde::Deserialize, Debug, Clone)]
+struct GitApplyInput {
+    patch: String,
 }
 
 #[tokio::main]
@@ -49,14 +67,79 @@ async fn main() -> Result<()> {
         "required": ["command"],
     }))?;
 
-    let tools = vec![Tool {
-        tp: ToolType::Function,
-        function: Function {
-            description: Some("Run a shell command.".to_string()),
-            name: "shell".to_string(),
-            parameters: Some(parameters),
+    let read_file_params: HashMap<String, Value> = serde_json::from_value(json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string", "description": "Path of the file to read." }
         },
-    }];
+        "required": ["path"]
+    }))?;
+
+    let write_file_params: HashMap<String, Value> = serde_json::from_value(json!({
+        "type": "object",
+        "properties": {
+            "path":    { "type": "string", "description": "Path of the file to write." },
+            "contents":{ "type": "string", "description": "Contents to write to the file." }
+        },
+        "required": ["path", "contents"]
+    }))?;
+
+    let git_diff_params: HashMap<String, Value> = serde_json::from_value(json!({
+        "type": "object",
+        "properties": {},
+        "required": []
+    }))?;
+
+    let git_apply_params: HashMap<String, Value> = serde_json::from_value(json!({
+        "type": "object",
+        "properties": {
+            "patch": { "type": "string", "description": "Unified diff to apply." }
+        },
+        "required": ["patch"]
+    }))?;
+
+    let tools = vec![
+        Tool {
+            tp: ToolType::Function,
+            function: Function {
+                description: Some("Run a shell command.".to_string()),
+                name: "shell".to_string(),
+                parameters: Some(parameters),
+            },
+        },
+        Tool {
+            tp: ToolType::Function,
+            function: Function {
+                description: Some("Read a file.".to_string()),
+                name: "read_file".to_string(),
+                parameters: Some(read_file_params),
+            },
+        },
+        Tool {
+            tp: ToolType::Function,
+            function: Function {
+                description: Some("Write a file.".to_string()),
+                name: "write_file".to_string(),
+                parameters: Some(write_file_params),
+            },
+        },
+        Tool {
+            tp: ToolType::Function,
+            function: Function {
+                description: Some("Get git diff.".to_string()),
+                name: "git_diff".to_string(),
+                parameters: Some(git_diff_params),
+            },
+        },
+        Tool {
+            tp: ToolType::Function,
+            function: Function {
+                description: Some("Apply a git patch.".to_string()),
+                name: "git_apply".to_string(),
+                parameters: Some(git_apply_params),
+            },
+        },
+    ];
 
     let current_dir = std::env::current_dir()?;
     let system = format!("You are a coding agent.
@@ -104,23 +187,58 @@ To create a patch, you should create a .diff file and then apply it using `git a
                     } => {
                         let called = &tool_calls[0];
 
-                        if called.function.name != "shell" {
-                            anyhow::bail!("Unexpected function name");
-                        }
-
-                        let input: ShellInput = serde_json::from_str(&called.function.arguments)?;
-
-                        dbg!(&input);
-                        let result = Command::new("sh")
-                            .arg("-c")
-                            .arg(&input.command)
-                            .current_dir(&current_dir)
-                            .output()?;
-
-                        let res_stdout = String::from_utf8(result.stdout)?;
-                        let res_stderr = String::from_utf8(result.stderr)?;
-                        let output = format!("STDOUT: {res_stdout}\n\nSTDERR: {res_stderr}");
-                        println!("{output}");
+                        let output = match called.function.name.as_str() {
+                            "shell" => {
+                                let input: ShellInput = serde_json::from_str(&called.function.arguments)?;
+                                let result = Command::new("sh")
+                                    .arg("-c")
+                                    .arg(&input.command)
+                                    .current_dir(&current_dir)
+                                    .output()?;
+                                let stdout = String::from_utf8(result.stdout)?;
+                                let stderr = String::from_utf8(result.stderr)?;
+                                format!("STDOUT: {stdout}\n\nSTDERR: {stderr}")
+                            }
+                            "read_file" => {
+                                let input: ReadFileInput = serde_json::from_str(&called.function.arguments)?;
+                                let contents = fs::read_to_string(&input.path)
+                                    .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", input.path, e))?;
+                                format!("CONTENTS:\n{}", contents)
+                            }
+                            "write_file" => {
+                                let input: WriteFileInput = serde_json::from_str(&called.function.arguments)?;
+                                fs::write(&input.path, &input.contents)
+                                    .map_err(|e| anyhow::anyhow!("Failed to write {}: {}", input.path, e))?;
+                                format!("WROTE {} bytes to {}", input.contents.len(), input.path)
+                            }
+                            "git_diff" => {
+                                let result = Command::new("git")
+                                    .arg("diff")
+                                    .current_dir(&current_dir)
+                                    .output()?;
+                                let stdout = String::from_utf8(result.stdout)?;
+                                let stderr = String::from_utf8(result.stderr)?;
+                                format!("STDOUT: {stdout}\n\nSTDERR: {stderr}")
+                            }
+                            "git_apply" => {
+                                let input: GitApplyInput = serde_json::from_str(&called.function.arguments)?;
+                                let mut child = Command::new("git")
+                                    .arg("apply")
+                                    .stdin(Stdio::piped())
+                                    .current_dir(&current_dir)
+                                    .spawn()?;
+                                {
+                                    let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+                                    stdin.write_all(input.patch.as_bytes())?;
+                                }
+                                let result = child.wait_with_output()?;
+                                let stdout = String::from_utf8(result.stdout)?;
+                                let stderr = String::from_utf8(result.stderr)?;
+                                format!("STDOUT: {stdout}\n\nSTDERR: {stderr}")
+                            }
+                            other => anyhow::bail!("Unexpected function name: {}", other),
+                        };
+                        println!("{}", output);
 
                         messages = messages
                             .add_message_with_tool_call(
