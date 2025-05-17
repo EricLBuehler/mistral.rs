@@ -60,43 +60,7 @@ pub const UQFF_MULTI_FILE_DELIMITER: &str = ";";
 /// - `AFQ6`
 /// - `AFQ8`
 pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
-    let tp = match s.to_lowercase().as_str() {
-        "2" if cfg!(feature = "metal") => IsqType::AFQ2,
-        "2" if !cfg!(feature = "metal") => IsqType::Q2K,
-        "3" if cfg!(feature = "metal") => IsqType::AFQ3,
-        "3" if !cfg!(feature = "metal") => IsqType::Q3K,
-        "4" if cfg!(feature = "metal") => IsqType::AFQ4,
-        "4" if !cfg!(feature = "metal") => IsqType::Q4K,
-        "5" => IsqType::Q5K,
-        "6" if cfg!(feature = "metal") => IsqType::AFQ6,
-        "6" if !cfg!(feature = "metal") => IsqType::Q6K,
-        "8" if cfg!(feature = "metal") => IsqType::AFQ8,
-        "8" if !cfg!(feature = "metal") => IsqType::Q8_0,
-        "q4_0" => IsqType::Q4_0,
-        "q4_1" => IsqType::Q4_1,
-        "q5_0" => IsqType::Q5_0,
-        "q5_1" => IsqType::Q5_1,
-        "q8_0" => IsqType::Q8_0,
-        "q8_1" => IsqType::Q8_1,
-        "q2k" => IsqType::Q2K,
-        "q3k" => IsqType::Q3K,
-        "q4k" => IsqType::Q4K,
-        "q5k" => IsqType::Q5K,
-        "q6k" => IsqType::Q6K,
-        "q8k" => IsqType::Q8K,
-        "hqq8" => IsqType::HQQ8,
-        "hqq4" => IsqType::HQQ4,
-        "fp8" => IsqType::F8E4M3,
-        "afq8" => IsqType::AFQ8,
-        "afq6" => IsqType::AFQ6,
-        "afq4" => IsqType::AFQ4,
-        "afq3" => IsqType::AFQ3,
-        "afq2" => IsqType::AFQ2,
-        // "hqq3" => IsqType::HQQ3,
-        // "hqq2" => IsqType::HQQ2,
-        // "hqq1" => IsqType::HQQ1,
-        _ => return Err(format!("ISQ type {s} unknown, choose one of `2`, `3`, `4`, `6`, `8`, `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`, `AFQ8`, `AFQ6`, `AFQ4`, `AFQ3`, `AFQ2`.")),
-    };
+    let tp = IsqType::from_str(s)?;
     #[cfg(feature = "cuda")]
     {
         if !matches!(
