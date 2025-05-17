@@ -91,7 +91,7 @@ impl Engine {
         // Verify the model's category matches the messages received.
         match (
             get_mut_arcmutex!(self.pipeline).category(),
-            request.messages,
+            &request.messages,
         ) {
             (
                 ModelCategory::Text | ModelCategory::Vision { .. },
@@ -105,10 +105,9 @@ impl Engine {
             _ => {
                 request
                     .response
-                    .send(Response::ValidationError(format!(
-                        "Received a request incompatible for this model's category ({:?}).",
-                        get_mut_arcmutex!(self.pipeline).category()
-                    )))
+                    .send(Response::ValidationError(
+                        "Received a request incompatible for this model's category.".into(),
+                    ))
                     .await
                     .expect("Expected receiver.");
                 return;
