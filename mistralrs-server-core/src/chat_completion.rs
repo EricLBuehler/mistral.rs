@@ -44,15 +44,16 @@ enum DoneState {
     Done,
 }
 
-pub type StreamerChunks = Vec<ChatCompletionChunkResponse>;
+/// A hook that runs when the stream finishes, receiving all of the chunks.
+pub type OnCompleteCallback = Box<dyn Fn(&[ChatCompletionChunkResponse]) + Send + Sync>;
 
 pub struct Streamer {
     rx: Receiver<Response>,
     done_state: DoneState,
     state: SharedMistralState,
     store_chunks: bool,
-    chunks: StreamerChunks,
-    on_complete: Option<fn(StreamerChunks)>,
+    chunks: Vec<ChatCompletionChunkResponse>,
+    on_complete: Option<OnCompleteCallback>,
 }
 
 impl futures::Stream for Streamer {
@@ -70,8 +71,8 @@ impl futures::Stream for Streamer {
                 return Poll::Ready(Some(Ok(Event::default().data("[DONE]"))));
             }
             DoneState::Done => {
-                if let Some(on_complete) = self.on_complete {
-                    on_complete(self.chunks.clone());
+                if let Some(on_complete) = &self.on_complete {
+                    on_complete(&self.chunks);
                 }
                 return Poll::Ready(None);
             }
@@ -491,7 +492,7 @@ pub async fn send_request(state: &SharedMistralState, request: Request) -> Resul
 pub fn create_chat_streamer(
     rx: Receiver<Response>,
     state: SharedMistralState,
-    on_complete_callback: Option<fn(StreamerChunks)>,
+    on_complete_callback: Option<OnCompleteCallback>,
 ) -> Sse<Streamer> {
     let streamer = Streamer {
         rx,
@@ -499,7 +500,7 @@ pub fn create_chat_streamer(
         store_chunks: true,
         state,
         chunks: Vec::new(),
-        on_complete: on_complete_callback,
+        on_complete: on_complete_callback.map(|cb| Box::new(cb) as _),
     };
 
     let keep_alive_interval = get_keep_alive_interval();
