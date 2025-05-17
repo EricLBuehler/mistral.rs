@@ -59,7 +59,6 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     Ok((None, _tools))
                 )
             {
-                println!("DONE!");
                 seq.set_state(SequenceState::Done(StopReason::Eos));
                 is_done = Some(StopReason::Eos);
             }
