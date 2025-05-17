@@ -22,16 +22,17 @@ struct ShellInput {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("../hf_models/qwen3_4b")
+    let mut model_builder = TextModelBuilder::new("../hf_models/qwen3_4b")
         .with_logging()
-        .with_isq(IsqType::AFQ4)
-        // .with_paged_attn(|| {
-        //     PagedAttentionMetaBuilder::default()
-        //         .with_gpu_memory(MemoryGpuConfig::ContextSize(16384))
-        //         .build()
-        // })?
-        .build()
-        .await?;
+        .with_isq(IsqType::AFQ4);
+    if cfg!(feature = "cuda") {
+        model_builder = model_builder.with_paged_attn(|| {
+            PagedAttentionMetaBuilder::default()
+                .with_gpu_memory(MemoryGpuConfig::ContextSize(16384))
+                .build()
+        })?;
+    }
+    let model = model_builder.build().await?;
 
     let parameters: HashMap<String, Value> = serde_json::from_value(json!({
         "type": "object",
@@ -64,7 +65,7 @@ The current working directory is: {}.
 
 You should call tools repeatedly as appropriate to answer the user's query. If you get an error, think about why and try to run the command again.
 
-You should start by looking at the README file if it exists.
+To create a patch, you should create a .diff file and then apply it using `git apply`.
     ", current_dir.display());
 
     print!(">>> ");
@@ -80,10 +81,10 @@ You should start by looking at the README file if it exists.
         .set_tools(tools)
         .set_tool_choice(ToolChoice::Auto);
 
-    loop {
+    'outer: loop {
         let mut stream = model.stream_chat_request(messages.clone()).await?;
 
-        let mut finished_with_tool_call = false;
+        let mut assistant = String::new();
         while let Some(chunk) = stream.next().await {
             if let Response::Chunk(ChatCompletionChunkResponse { choices, .. }) = chunk {
                 match &choices.first().unwrap().delta {
@@ -92,6 +93,7 @@ You should start by looking at the README file if it exists.
                         role: _,
                         tool_calls: None,
                     } => {
+                        assistant.push_str(&content);
                         print!("{content}");
                         stdout().flush()?;
                     }
@@ -109,14 +111,11 @@ You should start by looking at the README file if it exists.
                         let input: ShellInput = serde_json::from_str(&called.function.arguments)?;
 
                         dbg!(&input);
-                        let result = if input.command.contains(' ') {
-                            let mut command = input.command.splitn(2, ' ');
-                            Command::new(command.nth(0).unwrap())
-                                .arg(command.nth(0).unwrap_or(""))
-                                .output()?
-                        } else {
-                            Command::new(&input.command).output()?
-                        };
+                        let result = Command::new("sh")
+                            .arg("-c")
+                            .arg(&input.command)
+                            .current_dir(&current_dir)
+                            .output()?;
 
                         let res_stdout = String::from_utf8(result.stdout)?;
                         let res_stderr = String::from_utf8(result.stderr)?;
@@ -130,8 +129,7 @@ You should start by looking at the README file if it exists.
                                 vec![called.clone()],
                             )
                             .add_tool_message(output, called.id.clone());
-
-                        finished_with_tool_call = true;
+                        continue 'outer;
                     }
                     _ => anyhow::bail!("Got an unexpected delta."),
                 }
@@ -139,19 +137,16 @@ You should start by looking at the README file if it exists.
                 anyhow::bail!("Encountered an unrecoverable error.");
             }
         }
+        messages = messages.add_message(TextMessageRole::Assistant, assistant);
 
         println!("\n\n");
-        if !finished_with_tool_call {
-            print!(">>> ");
-            stdout().flush()?;
-            let mut user_prompt = String::new();
-            stdin().read_line(&mut user_prompt)?;
-            let user_prompt = user_prompt.trim();
 
-            // We will keep all the messages here
-            messages = messages.add_message(TextMessageRole::User, user_prompt);
-        }
+        print!(">>> ");
+        stdout().flush()?;
+        let mut user_prompt = String::new();
+        stdin().read_line(&mut user_prompt)?;
+        let user_prompt = user_prompt.trim();
+
+        messages = messages.add_message(TextMessageRole::User, user_prompt);
     }
-
-    Ok(())
 }
