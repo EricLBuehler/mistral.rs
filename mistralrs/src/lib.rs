@@ -91,7 +91,7 @@
 //!                    ..
 //!                }) = choices.first()
 //!                {
-//!                    print!("content");
+//!                    print!("{}", content);
 //!                };
 //!            }
 //!        }
