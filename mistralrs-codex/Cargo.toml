@@ -1,0 +1,28 @@
+[package]
+name = "mistralrs-codex"
+readme = "README.md"
+authors = ["Eric Buehler"]
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+tokio.workspace = true
+mistralrs = { version = "0.5.0", path = "../mistralrs" }
+
+[features]
+cuda = ["mistralrs/cuda"]
+cudnn = ["mistralrs/cudnn"]
+metal = ["mistralrs/metal"]
+flash-attn = ["cuda", "mistralrs/flash-attn"]
+accelerate = ["mistralrs/accelerate"]
+mkl = ["mistralrs/mkl"]
+nccl = ["mistralrs/nccl"]
