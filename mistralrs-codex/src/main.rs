@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    io::{stdout, Write},
+    io::{stdin, stdout, Write},
     process::Command,
 };
 
@@ -22,9 +22,9 @@ struct ShellInput {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("/media/ericbuehler/2TB_SSD/hf_models/qwen3_4b")
+    let model = TextModelBuilder::new("../hf_models/qwen3_4b")
         .with_logging()
-        .with_isq(IsqType::Q4K)
+        .with_isq(IsqType::AFQ4)
         // .with_paged_attn(|| {
         //     PagedAttentionMetaBuilder::default()
         //         .with_gpu_memory(MemoryGpuConfig::ContextSize(16384))
@@ -67,13 +67,16 @@ You should call tools repeatedly as appropriate to answer the user's query. If y
 You should start by looking at the README file if it exists.
     ", current_dir.display());
 
+    print!(">>> ");
+    stdout().flush()?;
+    let mut user_prompt = String::new();
+    stdin().read_line(&mut user_prompt)?;
+    let user_prompt = user_prompt.trim();
+
     // We will keep all the messages here
     let mut messages = RequestBuilder::new()
         .add_message(TextMessageRole::System, system)
-        .add_message(
-            TextMessageRole::User,
-            "Can you please give me a summary of this project?",
-        )
+        .add_message(TextMessageRole::User, user_prompt)
         .set_tools(tools)
         .set_tool_choice(ToolChoice::Auto);
 
@@ -139,7 +142,14 @@ You should start by looking at the README file if it exists.
 
         println!("\n\n");
         if !finished_with_tool_call {
-            break;
+            print!(">>> ");
+            stdout().flush()?;
+            let mut user_prompt = String::new();
+            stdin().read_line(&mut user_prompt)?;
+            let user_prompt = user_prompt.trim();
+
+            // We will keep all the messages here
+            messages = messages.add_message(TextMessageRole::User, user_prompt);
         }
     }
 
