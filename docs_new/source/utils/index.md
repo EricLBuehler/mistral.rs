@@ -1,0 +1,14 @@
+ # Utilities
+
+ ::: {toctree}
+ :maxdepth: 1
+
+ CHAT_TOK
+ DEVICE_MAPPING
+ HTTP
+ IMATRIX
+ SAMPLING
+ TOML_SELECTOR
+ TOOL_CALLING
+ WEB_SEARCH
+ :::
