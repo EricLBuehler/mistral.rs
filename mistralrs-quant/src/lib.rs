@@ -86,12 +86,16 @@ pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>) {
         .ty = isq;
 }
 
-pub fn get_immediate_isq() -> ImmediateIsqParams {
-    IMMEDIATE_ISQ.get().unwrap().lock().unwrap().clone()
+pub fn get_immediate_isq() -> Option<ImmediateIsqParams> {
+    IMMEDIATE_ISQ
+        .get()
+        .map(|guard| guard.lock().unwrap().clone())
 }
 
 pub fn should_apply_immediate_isq(vb: &ShardedVarBuilder) -> bool {
-    let immediate_isq = get_immediate_isq();
+    let Some(immediate_isq) = get_immediate_isq() else {
+        return false;
+    };
     // Add a .weight to match the ISQ regexes!
     let prefix = format!("{}.weight", vb.prefix());
     immediate_isq.ty.is_some()

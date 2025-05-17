@@ -27,11 +27,11 @@ pub(crate) fn apply_immediate_isq_always(
     layer: Arc<dyn QuantMethod>,
     device: &Device,
 ) -> Result<Arc<dyn QuantMethod>> {
-    if let ImmediateIsqParams {
+    if let Some(ImmediateIsqParams {
         guard,
         ty: Some(immediate_isq),
         predicates: _,
-    } = get_immediate_isq()
+    }) = get_immediate_isq()
     {
         layer.clone().apply_isq(
             Some(immediate_isq),
