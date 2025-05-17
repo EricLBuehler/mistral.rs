@@ -62,7 +62,7 @@ fn parse_request(
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
 
-    Ok(Request::Normal(NormalRequest {
+    Ok(Request::Normal(Box::new(NormalRequest {
         id: state.next_request_id(),
         messages: RequestMessage::ImageGeneration {
             prompt: oairequest.prompt,
@@ -83,7 +83,7 @@ fn parse_request(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
-    }))
+    })))
 }
 
 #[utoipa::path(
@@ -145,6 +145,7 @@ pub async fn image_generation(
         Response::Chunk(_) => unreachable!(),
         Response::Done(_) => unreachable!(),
         Response::ModelError(_, _) => unreachable!(),
+        Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
     }
 }
