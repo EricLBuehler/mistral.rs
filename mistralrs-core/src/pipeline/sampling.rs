@@ -59,6 +59,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     Ok((None, _tools))
                 )
             {
+                println!("DONE!");
                 seq.set_state(SequenceState::Done(StopReason::Eos));
                 is_done = Some(StopReason::Eos);
             }
@@ -85,9 +86,6 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             parse_text_tools(this, delta.as_str(), seq.tools.clone())
                                 .map_err(candle_core::Error::msg)?;
 
-                        if !tool_calls.is_empty() && is_done.is_none() {
-                            is_done = Some(StopReason::Eos);
-                        };
                         seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
                             delta: crate::Delta {
                                 content: fixup_sentencepiece!(
