@@ -96,6 +96,7 @@ impl Engine {
             (
                 ModelCategory::Text | ModelCategory::Vision { .. },
                 RequestMessage::Chat { .. }
+                | RequestMessage::VisionChat { .. }
                 | RequestMessage::Completion { .. }
                 | RequestMessage::CompletionTokens(_),
             ) => (),
