@@ -151,10 +151,6 @@ pub struct Args {
     #[arg(long = "paged-attn", default_value_t = false)]
     pub paged_attn: bool,
 
-    /// Enable server throughput logging, supported in the server and with interactive mode
-    #[arg(long = "throughput", default_value_t = false)]
-    pub throughput_log: bool,
-
     /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     #[arg(long = "prompt-batchsize")]
     pub prompt_chunksize: Option<usize>,
