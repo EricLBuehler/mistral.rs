@@ -73,6 +73,8 @@ mod arg_defaults {
 const N_INPUT_SIZE: usize = 50;
 const MB_TO_B: usize = 1024 * 1024; // 1024 kb in a mb
 
+pub type SharedMistralState = Arc<MistralRs>;
+pub type ExtractedMistralState = State<SharedMistralState>;
 type LoadedPipeline = Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>;
 
 #[derive(Parser)]
@@ -233,9 +235,6 @@ impl Default for Args {
         }
     }
 }
-
-pub type SharedMistralState = Arc<MistralRs>;
-pub type ExtractedMistralState = State<SharedMistralState>;
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
