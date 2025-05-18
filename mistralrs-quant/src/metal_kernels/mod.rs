@@ -1237,3 +1237,163 @@ pub fn call_scan(
 
     Ok(())
 }
+
+fn type_to_name(dt: DType) -> &'static str {
+    match dt {
+        DType::F32 => "float32",
+        DType::F16 => "float16",
+        DType::BF16 => "bfloat16",
+        DType::I32 => "int32",
+        DType::I64 => "int64",
+        DType::U32 => "uint32",
+        DType::U8 => "uint8",
+        _ => "unknown",
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn call_block_sort(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    in_ty: DType,  // dtype of the elements to sort
+    out_ty: DType, // dtype of the output (same as input for `sort`,
+    // or `uint32` for `argsort`)
+    n_rows: usize,         // product of dimensions except the sorted axis
+    n_cols: usize,         // length of the axis being sorted
+    stride_in_axis: usize, // stride (in elements) for the sorted axis
+    src: &Buffer,
+    src_offset: usize,
+    dst: &Buffer,
+    argsort: bool,
+) -> Result<(), MetalKernelError> {
+    // --- choose tile sizes --------------------------------------------------
+    let tn = 4usize;
+    let mut bn = match (n_cols + tn - 1) / tn {
+        v if v > 256 => 512,
+        v if v > 128 => 256,
+        v if v > 64 => 128,
+        v if v > 32 => 64,
+        _ => 32,
+    };
+    if bn == 512 && in_ty.size_in_bytes() > 4 {
+        bn = 256;
+    }
+    let n_per_block = bn * tn;
+    let n_blocks = (n_cols + n_per_block - 1) / n_per_block;
+    if n_blocks > 1 {
+        return Err(MetalKernelError::FailedToCreatePipeline(
+            "multi-block sort not yet implemented".into(),
+        ));
+    }
+
+    // --- kernel name --------------------------------------------------------
+    use std::fmt::Write as _;
+    let mut name = String::new();
+    name.push_str("c"); // contiguous path only for now
+    if argsort {
+        name.push_str("arg");
+    }
+    write!(
+        &mut name,
+        "_block_sort_{}_{}_bn{}_tn{}",
+        type_to_name(in_ty),
+        type_to_name(out_ty),
+        bn,
+        tn
+    )
+    .unwrap();
+
+    // --- pipeline -----------------------------------------------------------
+    let pipeline = kernels.load_pipeline(device, &name)?;
+
+    // --- encode -------------------------------------------------------------
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    // Buffers
+    encoder.set_buffer(0, Some(src), src_offset as u64);
+    encoder.set_buffer(1, Some(dst), 0);
+
+    // Scalar params
+    <i32 as EncoderParam>::set_param(encoder, 2, n_cols as i32); // size_sorted_axis
+    <i32 as EncoderParam>::set_param(encoder, 3, stride_in_axis as i32); // in_stride_sorted_axis
+    <i32 as EncoderParam>::set_param(encoder, 4, stride_in_axis as i32); // out_stride_sorted_axis
+    <i32 as EncoderParam>::set_param(encoder, 5, 1); // in_stride_segment_axis
+    <i32 as EncoderParam>::set_param(encoder, 6, 1); // out_stride_segment_axis
+
+    // Dispatch
+    let group_dims = MTLSize {
+        width: bn as u64,
+        height: 1,
+        depth: 1,
+    };
+    let grid_dims = MTLSize {
+        width: 1,
+        height: n_rows as u64,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
+/// Sorts values along the last axis of a contiguous tensor.
+#[allow(clippy::too_many_arguments)]
+pub fn call_sort(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    n_rows: usize,
+    n_cols: usize,
+    stride_in_axis: usize,
+    src: &Buffer,
+    src_offset: usize,
+    dst: &Buffer,
+) -> Result<(), MetalKernelError> {
+    call_block_sort(
+        device,
+        ep,
+        kernels,
+        ty,
+        ty,
+        n_rows,
+        n_cols,
+        stride_in_axis,
+        src,
+        src_offset,
+        dst,
+        /* argsort = */ false,
+    )
+}
+
+/// Returns the indices that would sort `src` along the last axis.
+#[allow(clippy::too_many_arguments)]
+pub fn call_argsort(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    n_rows: usize,
+    n_cols: usize,
+    stride_in_axis: usize,
+    src: &Buffer,
+    src_offset: usize,
+    dst: &Buffer, // must be `uint32`
+) -> Result<(), MetalKernelError> {
+    call_block_sort(
+        device,
+        ep,
+        kernels,
+        ty,
+        DType::U32,
+        n_rows,
+        n_cols,
+        stride_in_axis,
+        src,
+        src_offset,
+        dst,
+        /* argsort = */ true,
+    )
+}
