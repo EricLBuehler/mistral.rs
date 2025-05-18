@@ -29,6 +29,9 @@ use mistralrs_core::{
 };
 use serde::Serialize;
 
+/// A hook that runs when the stream finishes, receiving all of the chunks.
+pub type OnCompleteCallback = Box<dyn Fn(&[ChatCompletionChunkResponse]) + Send + Sync>;
+
 #[derive(Debug)]
 struct ModelErrorMessage(String);
 impl std::fmt::Display for ModelErrorMessage {
@@ -43,9 +46,6 @@ enum DoneState {
     SendingDone,
     Done,
 }
-
-/// A hook that runs when the stream finishes, receiving all of the chunks.
-pub type OnCompleteCallback = Box<dyn Fn(&[ChatCompletionChunkResponse]) + Send + Sync>;
 
 pub struct Streamer {
     rx: Receiver<Response>,
