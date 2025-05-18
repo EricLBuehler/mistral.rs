@@ -44,8 +44,8 @@ impl RotatingCache {
         self.max_seq_len
     }
 
-    pub fn all_data(&self) -> &Option<Tensor> {
-        &self.all_data
+    pub fn all_data(&self) -> Option<&Tensor> {
+        self.all_data.as_ref()
     }
 
     pub fn current_data(&self) -> Result<Option<Tensor>> {

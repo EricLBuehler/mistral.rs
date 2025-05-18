@@ -54,11 +54,11 @@ pub enum AdapterPaths {
 
 pub fn get_xlora_paths(
     base_model_id: String,
-    xlora_model_id: &Option<String>,
-    lora_adapter_ids: &Option<Vec<String>>,
+    xlora_model_id: Option<&String>,
+    lora_adapter_ids: Option<&Vec<String>>,
     token_source: &TokenSource,
     revision: String,
-    xlora_order: &Option<Ordering>,
+    xlora_order: Option<&Ordering>,
 ) -> Result<AdapterPaths> {
     match (lora_adapter_ids, xlora_model_id, xlora_order) {
         (None, Some(xlora_id), Some(xlora_order)) => {
@@ -309,15 +309,15 @@ pub fn get_xlora_paths(
 pub fn get_model_paths(
     revision: String,
     token_source: &TokenSource,
-    quantized_model_id: &Option<String>,
-    quantized_filename: &Option<Vec<String>>,
+    quantized_model_id: Option<&String>,
+    quantized_filename: Option<&Vec<String>>,
     api: &ApiRepo,
     model_id: &Path,
     loading_from_uqff: bool,
 ) -> Result<Vec<PathBuf>> {
-    match &quantized_filename {
+    match quantized_filename {
         Some(names) => {
-            let id = quantized_model_id.as_ref().unwrap();
+            let id = quantized_model_id.unwrap();
             let mut files = Vec::new();
 
             for name in names {
@@ -407,9 +407,9 @@ pub fn get_model_paths(
 #[allow(clippy::borrowed_box)]
 pub(crate) fn get_chat_template(
     paths: &Box<dyn ModelPaths>,
-    jinja_explicit: &Option<String>,
-    chat_template_explicit: &Option<String>,
-    chat_template_fallback: &Option<String>,
+    jinja_explicit: Option<&String>,
+    chat_template_explicit: Option<&String>,
+    chat_template_fallback: Option<&String>,
     chat_template_ovrd: Option<String>,
 ) -> ChatTemplate {
     // Get template content, this may be overridden.
@@ -426,12 +426,10 @@ pub(crate) fn get_chat_template(
         }
         Some(fs::read_to_string(template_filename).expect("Loading chat template failed."))
     } else if chat_template_fallback
-        .as_ref()
         .is_some_and(|f| f.ends_with(".json"))
     {
         // User specified a file
         let template_filename = chat_template_fallback
-            .as_ref()
             .expect("A tokenizer config or chat template file path must be specified.");
         Some(fs::read_to_string(template_filename).expect("Loading chat template failed."))
     } else if chat_template_ovrd.is_some() {
@@ -512,7 +510,7 @@ pub(crate) fn get_chat_template(
             let mut deser: HashMap<String, Value> =
                 serde_json::from_str(&template_content.unwrap()).unwrap();
 
-            match chat_template_fallback.clone() {
+            match chat_template_fallback.cloned() {
                 Some(t) => {
                     info!("Loading specified loading chat template file at `{t}`.");
                     let templ: SpecifiedTemplate =
