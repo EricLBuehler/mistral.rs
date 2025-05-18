@@ -19,6 +19,7 @@ use openai::{
     StopTokens,
 };
 use serde::{Deserialize, Serialize};
+use speech_generation::speech_generation;
 use std::{num::NonZeroUsize, sync::Arc};
 
 mod chat_completion;
@@ -26,6 +27,7 @@ mod completions;
 mod image_generation;
 mod interactive_mode;
 mod openai;
+mod speech_generation;
 mod util;
 
 use crate::openai::ModelObject;
@@ -261,6 +263,7 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .route("/", get(health))
         .route("/re_isq", post(re_isq))
         .route("/v1/images/generations", post(image_generation))
+        .route("/v1/audio/speech", post(speech_generation))
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(N_INPUT_SIZE * MB_TO_B))
         .with_state(state)

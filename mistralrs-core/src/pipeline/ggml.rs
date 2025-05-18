@@ -47,7 +47,7 @@ use tracing::{info, warn};
 
 enum Model {
     Llama(QLlama),
-    XLoraLlama(XLoraQLlama),
+    XLoraLlama(Box<XLoraQLlama>),
 }
 
 pub struct GGMLPipeline {
@@ -337,7 +337,7 @@ impl Loader for GGMLLoader {
         let model = match self.kind {
             ModelKind::GgufQuantized { .. } => Model::Llama(QLlama::try_from(model_config)?),
             ModelKind::GgufAdapter { .. } => {
-                Model::XLoraLlama(XLoraQLlama::try_from(model_config)?)
+                Model::XLoraLlama(Box::new(XLoraQLlama::try_from(model_config)?))
             }
             _ => unreachable!(),
         };

@@ -150,7 +150,7 @@ impl Engine {
             if matches!(
                 ENGINE_INSTRUCTIONS
                     .lock()
-                    .expect("`ENGINE_INSTRUCTIONS` was poisioned")
+                    .expect("`ENGINE_INSTRUCTIONS` was poisoned")
                     .get(get_mut_arcmutex!(self.id).deref()),
                 Some(Some(EngineInstruction::Terminate))
             ) {

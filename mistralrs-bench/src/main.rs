@@ -70,7 +70,7 @@ fn run_bench(
     let sender = mistralrs.get_sender().unwrap();
     let (tx, mut rx) = channel(10_000);
 
-    let req = Request::Normal(NormalRequest {
+    let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: prompt,
         sampling_params: sampling_params.clone(),
@@ -84,7 +84,7 @@ fn run_bench(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
-    });
+    }));
 
     let mut usages = Vec::new();
 
@@ -116,6 +116,7 @@ fn run_bench(
                     }
                     Response::CompletionChunk(_) => unreachable!(),
                     Response::ImageGeneration(_) => unreachable!(),
+                    Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
                 },
                 None => unreachable!("Expected a Done response, got None",),
@@ -237,7 +238,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
     let sender = mistralrs.get_sender().unwrap();
     let (tx, mut rx) = channel(10_000);
 
-    let req = Request::Normal(NormalRequest {
+    let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: RequestMessage::Completion {
             text: "Hello!".to_string(),
@@ -255,7 +256,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
-    });
+    }));
 
     sender
         .blocking_send(req.clone())

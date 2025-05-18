@@ -94,6 +94,7 @@ impl futures::Stream for Streamer {
                 Response::Chunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
                 Response::ModelError(_, _) => unreachable!(),
+                Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
             },
             Poll::Pending | Poll::Ready(None) => Poll::Pending,
@@ -194,7 +195,7 @@ fn parse_request(
         None
     };
     Ok((
-        Request::Normal(NormalRequest {
+        Request::Normal(Box::new(NormalRequest {
             id: state.next_request_id(),
             messages: RequestMessage::Completion {
                 text: oairequest.prompt,
@@ -231,7 +232,7 @@ fn parse_request(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
-        }),
+        })),
         is_streaming,
     ))
 }
@@ -315,6 +316,7 @@ pub async fn completions(
             Response::Done(_) => unreachable!(),
             Response::ModelError(_, _) => unreachable!(),
             Response::ImageGeneration(_) => unreachable!(),
+            Response::Speech { .. } => unreachable!(),
             Response::Raw { .. } => unreachable!(),
         }
     }

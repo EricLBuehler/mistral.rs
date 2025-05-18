@@ -1419,7 +1419,7 @@ pub struct Gemma3RotaryEmbedding(RotaryEmbedding);
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Gemmma3ScaledRopeType {
+pub enum Gemma3ScaledRopeType {
     #[serde(alias = "linear")]
     Linear,
 }
@@ -1427,7 +1427,7 @@ pub enum Gemmma3ScaledRopeType {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Gemma3RopeScalingConfig {
     factor: f64,
-    rope_type: Gemmma3ScaledRopeType,
+    rope_type: Gemma3ScaledRopeType,
 }
 
 impl Gemma3RotaryEmbedding {
@@ -1470,7 +1470,7 @@ impl Gemma3RotaryEmbedding {
     ) -> Result<Self> {
         match &cfg.rope_scaling {
             Some(Gemma3RopeScalingConfig {
-                rope_type: Gemmma3ScaledRopeType::Linear,
+                rope_type: Gemma3ScaledRopeType::Linear,
                 factor,
             }) => Self::new_linear(cfg, *factor, is_gpt_neox, dtype, dev),
 
@@ -1488,6 +1488,53 @@ impl Gemma3RotaryEmbedding {
     }
 }
 
+pub struct DiaRotaryEmbedding {
+    timescale: Tensor,
+    dtype: DType,
+}
+
+impl DiaRotaryEmbedding {
+    pub fn new(
+        min_timescale: f32,
+        max_timescale: f32,
+        head_dim: usize,
+        device: &Device,
+        dtype: DType,
+    ) -> Result<Self> {
+        assert_eq!(head_dim % 2, 0);
+        let half_embedding_dim = head_dim / 2;
+
+        let fraction = (0..half_embedding_dim).map(|i| 2f32 * i as f32 / head_dim as f32);
+        let timescale = fraction
+            .into_iter()
+            .map(|x| min_timescale * (max_timescale / min_timescale).powf(x))
+            .collect::<Vec<_>>();
+
+        let timescale_len = timescale.len();
+        let timescale = Tensor::from_vec(timescale, timescale_len, device)?;
+
+        Ok(Self { timescale, dtype })
+    }
+
+    pub fn forward(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        let freqs = positions
+            .unsqueeze(D::Minus1)?
+            .unsqueeze(D::Minus1)?
+            .broadcast_div(&self.timescale)?;
+
+        let sin = freqs.sin()?.to_dtype(self.dtype)?;
+        let cos = freqs.cos()?.to_dtype(self.dtype)?;
+
+        let split = xs.chunk(2, D::Minus1)?;
+        let first_half = &split[0];
+        let second_half = &split[1];
+
+        let first_part = (first_half.broadcast_mul(&cos)? - second_half.broadcast_mul(&sin)?)?;
+        let second_part = (second_half.broadcast_mul(&cos)? + first_half.broadcast_mul(&sin)?)?;
+
+        Tensor::cat(&[first_part, second_part], D::Minus1)
+    }
+}
 #[derive(Debug, Clone)]
 pub struct QLinear {
     inner: QMatMul,

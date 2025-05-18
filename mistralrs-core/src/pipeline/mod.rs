@@ -14,6 +14,7 @@ mod processing;
 mod response;
 mod sampling;
 mod speculative;
+mod speech;
 mod vision;
 
 pub use super::diffusion_models::DiffusionGenerationParams;
@@ -32,15 +33,15 @@ pub(crate) use isq::IsqModelLoader;
 pub use isq::{parse_isq_value, IsqModel, IsqOrganization, UQFF_MULTI_FILE_DELIMITER};
 use llguidance::toktrie::TokEnv;
 pub use loaders::{
-    AdapterKind, AutoDeviceMapParams, AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader,
-    DeviceMappedModelLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
-    Gemma2Loader, Gemma3Loader, GemmaLoader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader, Mistral3Loader,
-    MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType, NormalLoadingMetadata,
-    NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader,
-    Phi4MMLoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader,
-    Qwen3Loader, Qwen3MoELoader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
-    VisionLoaderType, VisionModel, VisionModelLoader,
+    AdapterKind, AutoDeviceMapParams, AutoNormalLoader, AutoVisionLoader, DeepSeekV2Loader,
+    DeepSeekV3Loader, DeviceMappedModelLoader, DiffusionLoaderType, DiffusionModel,
+    DiffusionModelLoader, FluxLoader, Gemma2Loader, Gemma3Loader, GemmaLoader, Idefics2Loader,
+    Idefics3Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths,
+    MiniCpmOLoader, Mistral3Loader, MistralLoader, MixtralLoader, ModelKind, ModelPaths,
+    NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
+    Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind,
+    Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3Loader, Qwen3MoELoader, Starcoder2Loader,
+    TokenSource, VLlama4Loader, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
 };
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -51,6 +52,7 @@ pub(crate) use processing::{
 };
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
+pub use speech::{SpeechLoader, SpeechPipeline};
 use std::any::Any;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -259,9 +261,20 @@ pub enum CacheBackendMetadata<'a> {
 
 #[derive(Clone, Debug)]
 pub enum ForwardInputsResult {
-    RawLogits { logits: Tensor },
-    CausalGeneration { logits: Tensor },
-    Image { images: Vec<DynamicImage> },
+    RawLogits {
+        logits: Tensor,
+    },
+    CausalGeneration {
+        logits: Tensor,
+    },
+    Image {
+        images: Vec<DynamicImage>,
+    },
+    Speech {
+        pcms: Vec<Arc<Vec<f32>>>,
+        rates: Vec<usize>,
+        channels: Vec<usize>,
+    },
 }
 
 impl ForwardInputsResult {
@@ -276,6 +289,15 @@ impl ForwardInputsResult {
             Self::Image { images } => Ok(Self::Image {
                 images: vec![images[bs_idx].clone()],
             }),
+            Self::Speech {
+                pcms,
+                rates,
+                channels,
+            } => Ok(Self::Speech {
+                pcms: vec![pcms[bs_idx].clone()],
+                rates: vec![rates[bs_idx]],
+                channels: vec![channels[bs_idx]],
+            }),
         }
     }
 
@@ -288,6 +310,7 @@ impl ForwardInputsResult {
                 logits: logits.to_device(device)?,
             }),
             Self::Image { .. } => Ok(self.clone()),
+            Self::Speech { .. } => Ok(self.clone()),
         }
     }
 }
@@ -471,6 +494,13 @@ pub trait Pipeline:
                         )
                         .await?;
                     }
+                    ForwardInputsResult::Speech {
+                        pcms,
+                        rates,
+                        channels,
+                    } => {
+                        response::send_speech_responses(input_seqs, pcms, rates, channels).await?;
+                    }
                 }
                 let end = Instant::now();
                 exec_duration += end.duration_since(start);
@@ -612,6 +642,13 @@ pub trait Pipeline:
                                 .collect::<Vec<_>>(),
                         )
                         .await?;
+                    }
+                    ForwardInputsResult::Speech {
+                        pcms,
+                        rates,
+                        channels,
+                    } => {
+                        response::send_speech_responses(input_seqs, pcms, rates, channels).await?;
                     }
                 }
                 let end = Instant::now();

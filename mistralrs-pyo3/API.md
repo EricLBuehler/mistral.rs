@@ -9,7 +9,7 @@ These are API docs for the `mistralrs` package.
 
 ## `Which`
 
-Each `*_model_id` may be a HF hub repo or a local path. For quantized GGUF models, a list is accepted if multiples files must be specified.
+Each `*_model_id` may be a HF hub repo or a local path. For quantized GGUF models, a list is accepted if multiple files must be specified.
 
 ### Architecture for plain models
 If you do not specify the architecture, an attempt will be made to use the model's config. If this fails, please raise an issue.
@@ -49,6 +49,9 @@ If you do not specify the architecture, an attempt will be made to use the model
 ### Architecture for diffusion models
 - `Flux`
 - `FluxOffloaded`
+
+### Architecture for speech models
+- `Dia`
 
 ### ISQ Organization
 - `Default`
@@ -191,6 +194,13 @@ class Which(Enum):
     class DiffusionPlain:
         model_id: str
         arch: DiffusionArchitecture
+        dtype: ModelDType = ModelDType.Auto
+
+    @dataclass
+    class Speech:
+        model_id: str
+        arch: DiffusionArchitecture
+        dac_model_id: str | None = None
         dtype: ModelDType = ModelDType.Auto
 ```
 

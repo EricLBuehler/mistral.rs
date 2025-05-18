@@ -29,6 +29,7 @@ use crate::{
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
+
 use std::collections::HashSet;
 use std::iter::FromIterator;
 serde_default_fn!(f64, routed_scaling_factor, 1.0);
@@ -693,7 +694,7 @@ impl Moe {
 }
 
 enum MoeOrMlp {
-    Moe(Moe),
+    Moe(Box<Moe>),
     Mlp(Mlp),
 }
 
@@ -749,7 +750,7 @@ impl DecoderLayer {
             && layer_idx >= cfg.first_k_dense_replace
             && layer_idx % cfg.moe_layer_freq == 0
         {
-            MoeOrMlp::Moe(Moe::new(
+            MoeOrMlp::Moe(Box::new(Moe::new(
                 cfg,
                 vb.pp("mlp"),
                 mapper,
@@ -758,7 +759,7 @@ impl DecoderLayer {
                 cfg.n_shared_experts,
                 cfg.n_routed_experts.unwrap(),
                 comm,
-            )?)
+            )?))
         } else {
             MoeOrMlp::Mlp(Mlp::new(
                 mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
@@ -880,13 +881,13 @@ impl DeepSeekV3 {
             );
         }
 
-        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        for layer_idx in NiceProgressBar::<_, 'b'>(
+        let layers: Vec<DecoderLayer> = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
-        ) {
+        )
+        .par_iter_if_isq(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -902,7 +903,7 @@ impl DeepSeekV3 {
                 ),
             };
             let comm = mapper.get_comm_for(layer_idx)?;
-            let layer = DecoderLayer::new(
+            DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
                 vb_l.pp(layer_idx),
@@ -911,9 +912,8 @@ impl DeepSeekV3 {
                 normal_loading_metadata.loading_isq,
                 paged_attn,
                 &comm,
-            )?;
-            layers.push(layer)
-        }
+            )
+        })?;
 
         Ok(Self {
             lm_head,

@@ -31,7 +31,7 @@ impl ImageTransform for ToTensorNoNorm {
 /// Normalize the image data based on the mean and standard deviation.
 /// The value is computed as follows:
 /// `
-/// x[channel]=(x[channel - mean[channel]) / std[channel]
+/// x[channel] = (x[channel] - mean[channel]) / std[channel]
 /// `
 ///
 /// Expects an input tensor of shape (channels, height, width).

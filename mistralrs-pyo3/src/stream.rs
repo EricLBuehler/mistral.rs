@@ -40,6 +40,7 @@ impl ChatCompletionStreamer {
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
             },
             None => Some(Err(PyValueError::new_err(

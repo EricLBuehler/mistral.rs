@@ -1,8 +1,8 @@
 #[cfg(feature = "cuda")]
 mod ffi;
 pub(crate) mod isq;
+pub mod log;
 mod ops;
-
 mod uqff;
 
 pub use ops::{BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp};

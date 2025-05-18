@@ -29,7 +29,7 @@ pub struct VisionModelBuilder {
     // Model running
     pub(crate) prompt_chunksize: Option<NonZeroUsize>,
     pub(crate) topology: Option<Topology>,
-    pub(crate) loader_type: VisionLoaderType,
+    pub(crate) loader_type: Option<VisionLoaderType>,
     pub(crate) dtype: ModelDType,
     pub(crate) force_cpu: bool,
     pub(crate) isq: Option<IsqType>,
@@ -47,7 +47,7 @@ impl VisionModelBuilder {
     /// - Maximum number of sequences running is 32
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
     /// - By default, web searching compatible with the OpenAI `web_search_options` setting is disabled.
-    pub fn new(model_id: impl ToString, loader_type: VisionLoaderType) -> Self {
+    pub fn new(model_id: impl ToString) -> Self {
         Self {
             model_id: model_id.to_string(),
             topology: None,
@@ -57,7 +57,7 @@ impl VisionModelBuilder {
             chat_template: None,
             tokenizer_json: None,
             max_edge: None,
-            loader_type,
+            loader_type: None,
             dtype: ModelDType::Auto,
             force_cpu: false,
             token_source: TokenSource::CacheToken,
@@ -115,6 +115,13 @@ impl VisionModelBuilder {
     /// Path to a discrete `tokenizer.json` file.
     pub fn with_tokenizer_json(mut self, tokenizer_json: impl ToString) -> Self {
         self.tokenizer_json = Some(tokenizer_json.to_string());
+        self
+    }
+
+    /// Manually set the model loader type. Otherwise, it will attempt to automatically
+    /// determine the loader type.
+    pub fn with_loader_type(mut self, loader_type: VisionLoaderType) -> Self {
+        self.loader_type = Some(loader_type);
         self
     }
 
@@ -302,12 +309,8 @@ impl UqffVisionModelBuilder {
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
-    pub fn new(
-        model_id: impl ToString,
-        loader_type: VisionLoaderType,
-        uqff_file: Vec<PathBuf>,
-    ) -> Self {
-        let mut inner = VisionModelBuilder::new(model_id, loader_type);
+    pub fn new(model_id: impl ToString, uqff_file: Vec<PathBuf>) -> Self {
+        let mut inner = VisionModelBuilder::new(model_id);
         inner = inner.from_uqff(uqff_file);
         Self(inner)
     }

@@ -1,6 +1,5 @@
 pub(crate) mod debug;
 pub(crate) mod gguf_metadata;
-pub(crate) mod log;
 pub(crate) mod memory_usage;
 pub(crate) mod model_config;
 pub(crate) mod normal;

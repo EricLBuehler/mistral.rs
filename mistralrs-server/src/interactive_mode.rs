@@ -2,7 +2,7 @@ use directories::ProjectDirs;
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    ChunkChoice, Constraint, Delta, DiffusionGenerationParams, DrySamplingParams,
+    speech_utils, ChunkChoice, Constraint, Delta, DiffusionGenerationParams, DrySamplingParams,
     ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory, NormalRequest,
     Request, RequestMessage, Response, ResponseOk, SamplingParams, WebSearchOptions,
     TERMINATE_ALL_NEXT_STEP,
@@ -121,6 +121,14 @@ Commands:
 - `\exit`: Quit interactive mode.
 "#;
 
+const SPEECH_INTERACTIVE_HELP: &str = r#"
+Welcome to interactive mode! Because this model is a speech generation model, you can enter prompts and the model will generate audio.
+
+Commands:
+- `\help`: Display this message.
+- `\exit`: Quit interactive mode.
+"#;
+
 const HELP_CMD: &str = "\\help";
 const EXIT_CMD: &str = "\\exit";
 const SYSTEM_CMD: &str = "\\system";
@@ -224,7 +232,7 @@ async fn text_interactive_mode(
         };
 
         let (tx, mut rx) = channel(10_000);
-        let req = Request::Normal(NormalRequest {
+        let req = Request::Normal(Box::new(NormalRequest {
             id: mistralrs.next_request_id(),
             messages: request_messages,
             sampling_params: sampling_params.clone(),
@@ -238,7 +246,7 @@ async fn text_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
-        });
+        }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
         let mut first_token_duration: Option<std::time::Duration> = None;
@@ -292,6 +300,7 @@ async fn text_interactive_mode(
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
             }
         }
@@ -349,7 +358,10 @@ async fn vision_interactive_mode(
 
     let prefixer = match &mistralrs.config().category {
         ModelCategory::Vision { prefixer } => prefixer,
-        _ => {
+        ModelCategory::Text
+        | ModelCategory::Diffusion
+        | ModelCategory::Speech
+        | ModelCategory::Audio => {
             panic!("`add_image_message` expects a vision model.")
         }
     };
@@ -471,7 +483,7 @@ async fn vision_interactive_mode(
         };
 
         let (tx, mut rx) = channel(10_000);
-        let req = Request::Normal(NormalRequest {
+        let req = Request::Normal(Box::new(NormalRequest {
             id: mistralrs.next_request_id(),
             messages: request_messages,
             sampling_params: sampling_params.clone(),
@@ -485,7 +497,7 @@ async fn vision_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
-        });
+        }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
         let mut first_token_duration: Option<std::time::Duration> = None;
@@ -539,6 +551,7 @@ async fn vision_interactive_mode(
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
             }
         }
@@ -576,10 +589,6 @@ async fn audio_interactive_mode(
     _enable_thinking: Option<bool>,
 ) {
     unimplemented!("Using audio models isn't supported yet")
-}
-
-async fn speech_interactive_mode(_mistralrs: Arc<MistralRs>, _do_search: bool) {
-    unimplemented!("Using speech models isn't supported yet")
 }
 
 async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
@@ -628,7 +637,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
         *CTRLC_HANDLER.lock().unwrap() = &terminate_handler;
 
         let (tx, mut rx) = channel(10_000);
-        let req = Request::Normal(NormalRequest {
+        let req = Request::Normal(Box::new(NormalRequest {
             id: 0,
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
@@ -646,7 +655,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
-        });
+        }));
 
         let start = Instant::now();
         sender.send(req).await.unwrap();
@@ -664,6 +673,98 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
             "Image generated can be found at: image is at `{}`. Took {duration:.2}s ({pixels_per_s:.2} pixels/s).",
             response.data[0].url.as_ref().unwrap(),
         );
+
+        println!();
+    }
+
+    rl.save_history(&history_file_path()).unwrap();
+}
+
+async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
+    let sender = mistralrs.get_sender().unwrap();
+
+    info!("Starting interactive loop for speech");
+    println!(
+        "{}{SPEECH_INTERACTIVE_HELP}{}",
+        "=".repeat(20),
+        "=".repeat(20)
+    );
+
+    // Set the handler to process exit
+    *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
+
+    ctrlc::set_handler(move || CTRLC_HANDLER.lock().unwrap()())
+        .expect("Failed to set CTRL-C handler for interactive mode");
+
+    let mut rl = DefaultEditor::new().expect("Failed to open input");
+    let _ = rl.load_history(&history_file_path());
+
+    let mut n = 0;
+    loop {
+        // Set the handler to process exit
+        *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
+
+        let prompt = read_line(&mut rl);
+
+        let prompt = match prompt.as_str().trim() {
+            "" => continue,
+            HELP_CMD => {
+                println!(
+                    "{}{SPEECH_INTERACTIVE_HELP}{}",
+                    "=".repeat(20),
+                    "=".repeat(20)
+                );
+                continue;
+            }
+            EXIT_CMD => {
+                break;
+            }
+            prompt => prompt.to_string(),
+        };
+
+        // Set the handler to terminate all seqs, so allowing cancelling running
+        *CTRLC_HANDLER.lock().unwrap() = &terminate_handler;
+
+        let (tx, mut rx) = channel(10_000);
+        let req = Request::Normal(Box::new(NormalRequest {
+            id: 0,
+            messages: RequestMessage::SpeechGeneration {
+                prompt: prompt.to_string(),
+            },
+            sampling_params: SamplingParams::deterministic(),
+            response: tx,
+            return_logprobs: false,
+            is_streaming: false,
+            suffix: None,
+            constraint: Constraint::None,
+            tool_choice: None,
+            tools: None,
+            logits_processors: None,
+            return_raw_logits: false,
+            web_search_options: do_search.then(WebSearchOptions::default),
+        }));
+
+        let start = Instant::now();
+        sender.send(req).await.unwrap();
+
+        let ResponseOk::Speech {
+            pcm,
+            rate,
+            channels,
+        } = rx.recv().await.unwrap().as_result().unwrap()
+        else {
+            panic!("Got unexpected response type.")
+        };
+        let end = Instant::now();
+
+        let out_file = format!("speech-{n}.wav");
+        let mut output = std::fs::File::create(&out_file).unwrap();
+        speech_utils::write_pcm_as_wav(&mut output, &pcm, rate as u32, channels as u16).unwrap();
+
+        let duration = end.duration_since(start).as_secs_f32();
+        println!("Speech generated can be found at `{out_file}`. Took {duration:.2}s.");
+
+        n += 1;
 
         println!();
     }

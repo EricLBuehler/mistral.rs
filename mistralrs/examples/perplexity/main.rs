@@ -33,7 +33,7 @@ struct Args {
 async fn process_chunk(runner: &MistralRs, chunk: Vec<u32>) -> anyhow::Result<(Tensor, Vec<u32>)> {
     let (tx, mut rx) = channel(1);
 
-    let request = Request::Normal(NormalRequest {
+    let request = Request::Normal(Box::new(NormalRequest {
         messages: mistralrs::RequestMessage::CompletionTokens(chunk),
         sampling_params: SamplingParams {
             max_len: Some(0),
@@ -50,7 +50,7 @@ async fn process_chunk(runner: &MistralRs, chunk: Vec<u32>) -> anyhow::Result<(T
         logits_processors: None,
         return_raw_logits: true,
         web_search_options: None,
-    });
+    }));
 
     runner.get_sender()?.send(request).await?;
 

@@ -353,6 +353,24 @@ impl BincountOp for Tensor {
     }
 }
 
+// https://github.com/mokeyish/candle-ext/blob/ca4547c803469bd51c00ce5eda2f18dd249c8f10/src/triangular.rs#L21
+pub fn apply_triangular(xs: &Tensor, diagonal: isize, upper: bool) -> Result<Tensor> {
+    let device = xs.device();
+    let (l, s) = xs.dims2()?;
+    let mut xs_tri = vec![];
+    for i in 0..l as isize {
+        for j in 0..s as isize {
+            let cond = if upper {
+                i + diagonal > j
+            } else {
+                i + diagonal < j
+            };
+            xs_tri.push(if cond { 0u8 } else { 1u8 });
+        }
+    }
+    xs * Tensor::from_vec(xs_tri, (l, s), device)?.to_dtype(xs.dtype())?
+}
+
 mod tests {
     #[test]
     fn test_topk() {

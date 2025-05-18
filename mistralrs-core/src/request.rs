@@ -59,6 +59,9 @@ pub enum RequestMessage {
         format: ImageGenerationResponseFormat,
         generation_params: DiffusionGenerationParams,
     },
+    SpeechGeneration {
+        prompt: String,
+    },
 }
 
 fn default_responder<T>() -> Sender<T> {
@@ -196,7 +199,7 @@ pub struct DetokenizationRequest {
 /// A request to the Engine, encapsulating the various parameters as well as
 /// the `mpsc` response `Sender` used to return the [`Response`].
 pub enum Request {
-    Normal(NormalRequest),
+    Normal(Box<NormalRequest>),
     ReIsq(IsqType),
     Tokenize(TokenizationRequest),
     Detokenize(DetokenizationRequest),
@@ -209,13 +212,14 @@ pub enum Request {
 impl Debug for Request {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Request::Normal(NormalRequest {
-                messages,
-                sampling_params,
-                is_streaming,
-                id,
-                ..
-            }) => {
+            Request::Normal(boxed_req) => {
+                let NormalRequest {
+                    messages,
+                    sampling_params,
+                    is_streaming,
+                    id,
+                    ..
+                } = &**boxed_req;
                 write!(
                     f,
                     "Request {id} {{ messages: `{messages:?}`, sampling_params: {sampling_params:?}, is_streaming: {is_streaming}}}",

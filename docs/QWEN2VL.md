@@ -14,11 +14,12 @@ The Rust API takes an image from the [image](https://docs.rs/image/latest/image/
 > Note: When using device mapping or model topology, only the text model and its layers will be managed. This is because it contains most of the model parameters. *The text model has 28 layers*.
 
 ## ToC
-- [Interactive mode](#interactive-mode)
-- [HTTP server](#http-server)
-- [Rust API](#rust)
-- [Python API](#python)
-- [UQFF models](#uqff-models)
+- [Qwen 2 Vision Model: `Qwen2-VL Collection`](#qwen-2-vision-model-qwen2-vl-collection)
+  - [ToC](#toc)
+  - [Interactive mode](#interactive-mode)
+  - [HTTP server](#http-server)
+  - [Rust](#rust)
+  - [Python](#python)
 
 ## Interactive mode
 
@@ -30,7 +31,7 @@ Mistral.rs supports interactive mode for vision models! It is an easy way to int
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --features ... --release -- -i vision-plain -m Qwen/Qwen2-VL-2B-Instruct -a qwen2vl
+cargo run --features ... --release -- -i vision-plain -m Qwen/Qwen2-VL-2B-Instruct
 ```
 
 2) Say hello!
@@ -91,7 +92,7 @@ In conclusion, camellias are beautiful flowers that add color and interest to ga
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --release --features ... -- --port 1234 -m Qwen/Qwen2-VL-2B-Instruct -a qwen2vl
+cargo run --release --features ... -- --port 1234 -m Qwen/Qwen2-VL-2B-Instruct
 ```
 
 2) Send a request
@@ -140,14 +141,14 @@ You can find this example [here](../mistralrs/examples/qwen2vl/main.rs).
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 const MODEL_ID: &str = "Qwen/Qwen2-VL-2B-Instruct";
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model =
-        VisionModelBuilder::new(MODEL_ID, VisionLoaderType::Qwen2VL)
+        VisionModelBuilder::new(MODEL_ID)
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()

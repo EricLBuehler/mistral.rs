@@ -15,11 +15,12 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel,
     },
-    utils::{log::once_log_info, varbuilder_utils::DeviceForLoadTensor},
+    utils::varbuilder_utils::DeviceForLoadTensor,
     xlora_models::NonGranularState,
 };
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
+use mistralrs_quant::log::once_log_info;
 
 use indicatif::MultiProgress;
 use mistralrs_quant::ShardedVarBuilder;
@@ -169,7 +170,6 @@ pub enum NormalLoaderType {
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
-
 impl NormalLoaderType {
     pub fn from_causal_lm_name(name: &str) -> Result<Self> {
         match name {
@@ -188,7 +188,7 @@ impl NormalLoaderType {
             "Qwen3ForCausalLM" => Ok(Self::Qwen3),
             "Qwen3MoeForCausalLM" => Ok(Self::Qwen3Moe),
             other => anyhow::bail!(
-                "Unsupported Huggging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
+                "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
         }
     }
@@ -248,17 +248,17 @@ macro_rules! bias_if {
     };
 }
 
-/// Load a model based on the Huggging Face Transformers -CausalLM model class
-pub struct AutoLoader;
+/// Load a model based on the Hugging Face Transformers -CausalLM model class
+pub struct AutoNormalLoader;
 
 #[derive(Deserialize)]
-struct AutoLoaderConfig {
+struct AutoNormalLoaderConfig {
     architectures: Vec<String>,
 }
 
-impl AutoLoader {
+impl AutoNormalLoader {
     fn get_loader(config: &str) -> Result<Box<dyn NormalModelLoader>> {
-        let auto_cfg: AutoLoaderConfig = serde_json::from_str(config)?;
+        let auto_cfg: AutoNormalLoaderConfig = serde_json::from_str(config)?;
         if auto_cfg.architectures.len() != 1 {
             anyhow::bail!("Expected to have one name for `architectures` config field.")
         }
@@ -288,7 +288,7 @@ impl AutoLoader {
     }
 }
 
-impl NormalModelLoader for AutoLoader {
+impl NormalModelLoader for AutoNormalLoader {
     fn load(
         &self,
         config: &str,
@@ -329,13 +329,22 @@ impl NormalModelLoader for AutoLoader {
     }
 }
 
-impl IsqModelLoader for AutoLoader {
+impl IsqModelLoader for AutoNormalLoader {
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.immediate_isq_predicates(config)
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.immediate_isq_predicates_moqe(config)
+    }
     fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
         Self::get_loader(config)?.isq_layer_regexes(config)
     }
+    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.isq_layer_regexes_moqe(config)
+    }
 }
 
-impl DeviceMappedModelLoader for AutoLoader {
+impl DeviceMappedModelLoader for AutoNormalLoader {
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -441,6 +450,9 @@ impl IsqModelLoader for MistralLoader {
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -628,6 +640,9 @@ impl IsqModelLoader for GemmaLoader {
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -820,6 +835,9 @@ impl IsqModelLoader for LlamaLoader {
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
 }
 
 impl DeviceMappedModelLoader for LlamaLoader {
@@ -1005,6 +1023,9 @@ impl IsqModelLoader for MixtralLoader {
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -1197,6 +1218,9 @@ impl IsqModelLoader for Phi2Loader {
             Regex::new(r"layers\.(\d+)\.mlp\.fc2\.(weight|bias)$")?,
         ])
     }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
 }
 
 impl DeviceMappedModelLoader for Phi2Loader {
@@ -1379,6 +1403,9 @@ impl IsqModelLoader for Phi3Loader {
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
 }
 
 impl DeviceMappedModelLoader for Phi3Loader {
@@ -1545,12 +1572,15 @@ impl IsqModelLoader for Qwen2Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -1734,12 +1764,15 @@ impl IsqModelLoader for Gemma2Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -1926,11 +1959,14 @@ impl IsqModelLoader for Starcoder2Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
             Regex::new(r"layers\.(\d+)\.mlp\.fc1\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.c_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -2119,6 +2155,9 @@ impl IsqModelLoader for Phi3_5MoELoader {
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$")?,
         ])
     }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
 
     fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
@@ -2128,6 +2167,9 @@ impl IsqModelLoader for Phi3_5MoELoader {
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
     }
 }
 
@@ -2361,6 +2403,9 @@ impl IsqModelLoader for DeepSeekV2Loader {
         }
         Ok(data)
     }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
 
     fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         let mut data = vec![Regex::new(r"lm_head\.(weight|bias)$")?];
@@ -2409,6 +2454,9 @@ impl IsqModelLoader for DeepSeekV2Loader {
             };
         }
         Ok(data)
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
     }
 }
 
@@ -2679,6 +2727,9 @@ impl IsqModelLoader for DeepSeekV3Loader {
         }
         Ok(data)
     }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
 
     fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         let mut data = vec![Regex::new(r"lm_head\.(weight|bias)$")?];
@@ -2727,6 +2778,9 @@ impl IsqModelLoader for DeepSeekV3Loader {
             };
         }
         Ok(data)
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
     }
 }
 
@@ -2942,12 +2996,15 @@ impl IsqModelLoader for Qwen3Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
     }
 }
 
@@ -3120,7 +3177,7 @@ impl IsqModelLoader for Qwen3MoELoader {
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
@@ -3130,6 +3187,9 @@ impl IsqModelLoader for Qwen3MoELoader {
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
     }
 }
 

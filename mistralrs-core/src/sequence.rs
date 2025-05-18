@@ -37,6 +37,7 @@ pub enum StopReason {
     },
     Canceled,
     GeneratedImage,
+    GeneratedSpeech,
 }
 
 impl Display for StopReason {
@@ -47,6 +48,7 @@ impl Display for StopReason {
             StopReason::StopTok(_) | StopReason::StopString { .. } => write!(f, "stop"),
             StopReason::Canceled => write!(f, "canceled"),
             StopReason::GeneratedImage => write!(f, "generated-image"),
+            StopReason::GeneratedSpeech => write!(f, "generated-speech"),
         }
     }
 }
@@ -741,7 +743,7 @@ impl Sequence {
         max_model_len: usize,
     ) -> Option<StopReason> {
         let is_eos = match eos_tok {
-            Some(eos_tok) => eos_tok.iter().any(|t| *t == tok),
+            Some(eos_tok) => eos_tok.contains(&tok),
             None => false,
         };
         if is_eos {
@@ -848,7 +850,10 @@ impl Sequence {
 
     pub fn add_image_choice_to_group(&self, choice: ImageChoice) {
         get_mut_group!(self).image_choices.push(choice);
-        self.update_time_info();
+    }
+
+    pub fn add_speech_pcm_to_group(&self, pcm: Arc<Vec<f32>>, rate: usize, channels: usize) {
+        get_mut_group!(self).speech_pcms.push((pcm, rate, channels));
     }
 
     pub fn add_choice_to_group(&self, choice: Choice) {
@@ -946,6 +951,7 @@ pub struct SequenceGroup {
     pub total_completion_time: u128,
     choices: Vec<Choice>,
     image_choices: Vec<ImageChoice>,
+    speech_pcms: Vec<(Arc<Vec<f32>>, usize, usize)>, // (pcm, rate, channels)
     raw_choices: Vec<(Vec<Tensor>, Vec<u32>)>,
     completion_choices: Vec<(f32, CompletionChoice)>,
     pub chat_streaming_chunks: Vec<ChunkChoice>,
@@ -964,6 +970,7 @@ impl SequenceGroup {
         Self {
             choices: Vec::new(),
             image_choices: Vec::new(),
+            speech_pcms: Vec::new(),
             raw_choices: Vec::new(),
             completion_choices: Vec::new(),
             n_choices,
@@ -1064,6 +1071,24 @@ impl SequenceGroup {
         if self.image_choices.len() == self.n_choices {
             sender.send(Response::ImageGeneration(response)).await?;
         }
+
+        Ok(())
+    }
+
+    pub async fn maybe_send_speech_response(
+        &self,
+        sender: Sender<Response>,
+    ) -> Result<(), SendError<Response>> {
+        assert_eq!(self.speech_pcms.len(), 1);
+
+        let (pcm, rate, channels) = self.speech_pcms[0].clone();
+        sender
+            .send(Response::Speech {
+                pcm,
+                rate,
+                channels,
+            })
+            .await?;
 
         Ok(())
     }

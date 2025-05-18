@@ -210,7 +210,7 @@ fn maybe_synchronize(device: &Device) -> Result<()> {
 }
 
 /// Computes softmax(QK^T*sqrt(d_k))V
-fn naive_sdpa(
+pub(crate) fn naive_sdpa(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
@@ -353,7 +353,7 @@ impl Sdpa {
         #[allow(unused)]
         if let (Device::Cuda(_), Some(cublaslt)) = (
             q.device(),
-            *mistralrs_quant::cublaslt::CUBLASLT_HANDLE.lock().unwrap(),
+            mistralrs_quant::cublaslt::CUBLASLT_CONTROLLER.get(),
         ) {
             #[cfg(feature = "cuda")]
             {

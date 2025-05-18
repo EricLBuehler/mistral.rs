@@ -4,7 +4,7 @@ use clap::Subcommand;
 
 use crate::{
     pipeline::{AutoDeviceMapParams, IsqOrganization, NormalLoaderType, VisionLoaderType},
-    DiffusionLoaderType, ModelDType,
+    DiffusionLoaderType, ModelDType, SpeechLoaderType,
 };
 
 fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
@@ -16,6 +16,10 @@ fn parse_vision_arch(x: &str) -> Result<VisionLoaderType, String> {
 }
 
 fn parse_diffusion_arch(x: &str) -> Result<DiffusionLoaderType, String> {
+    x.parse()
+}
+
+fn parse_speech_arch(x: &str) -> Result<SpeechLoaderType, String> {
     x.parse()
 }
 
@@ -472,7 +476,7 @@ pub enum ModelSelected {
 
         /// The architecture of the model.
         #[arg(short, long, value_parser = parse_vision_arch)]
-        arch: VisionLoaderType,
+        arch: Option<VisionLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
@@ -537,6 +541,25 @@ pub enum ModelSelected {
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        dtype: ModelDType,
+    },
+
+    Speech {
+        /// Model ID to load from. This may be a HF hub repo or a local path.
+        #[arg(short, long)]
+        model_id: String,
+
+        /// DAC Model ID to load from. If not provided, this is automatically downloaded from the default path for the model.
+        /// This may be a HF hub repo or a local path.
+        #[arg(short, long)]
+        dac_model_id: Option<String>,
+
+        /// The architecture of the model.
+        #[arg(short, long, value_parser = parse_speech_arch)]
+        arch: SpeechLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        #[arg(long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
     },
 }

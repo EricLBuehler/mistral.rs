@@ -14,6 +14,8 @@ fn normalize() {
     };
     let transformed = image.apply(transforms, &Device::Cpu).unwrap();
     assert_eq!(transformed.dims(), &[3, 4, 3]);
+    let expected = vec![vec![vec![-1f32; 3]; 4]; 3];
+    assert_eq!(transformed.to_vec3::<f32>().unwrap(), expected);
 }
 
 #[test]

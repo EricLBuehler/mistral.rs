@@ -3,7 +3,7 @@ use crate::{
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     sequence::SeqStepType,
     tools::{ToolCallingMatcher, ToolChoice},
-    RequestMessage, Response,
+    ModelCategory, RequestMessage, Response,
 };
 use candle_core::Tensor;
 use either::Either;
@@ -34,9 +34,9 @@ impl Engine {
                 ) && request.web_search_options.is_some()
                     && get_mut_arcmutex!(self.bert_pipeline).is_some()
                 {
-                    search_request::search_request(self.clone(), request).await;
+                    search_request::search_request(self.clone(), *request).await;
                 } else {
-                    self.add_request(request).await
+                    self.add_request(*request).await
                 }
             }
             Request::ReIsq(level) => {
@@ -71,7 +71,8 @@ impl Engine {
             RequestMessage::Chat { .. }
             | RequestMessage::CompletionTokens(_)
             | RequestMessage::VisionChat { .. }
-            | RequestMessage::ImageGeneration { .. } => None,
+            | RequestMessage::ImageGeneration { .. }
+            | RequestMessage::SpeechGeneration { .. } => None,
         };
         if is_chat
             && !get_mut_arcmutex!(self.pipeline)
@@ -85,6 +86,32 @@ impl Engine {
                         "Received messages for a model which does not have a chat template. Either use a different model or pass a single string as the prompt".into(),
                     )).await.expect("Expected receiver.");
             return;
+        }
+
+        // Verify the model's category matches the messages received.
+        match (
+            get_mut_arcmutex!(self.pipeline).category(),
+            &request.messages,
+        ) {
+            (
+                ModelCategory::Text | ModelCategory::Vision { .. },
+                RequestMessage::Chat { .. }
+                | RequestMessage::VisionChat { .. }
+                | RequestMessage::Completion { .. }
+                | RequestMessage::CompletionTokens(_),
+            ) => (),
+            (ModelCategory::Diffusion, RequestMessage::ImageGeneration { .. }) => (),
+            (ModelCategory::Speech, RequestMessage::SpeechGeneration { .. }) => (),
+            _ => {
+                request
+                    .response
+                    .send(Response::ValidationError(
+                        "Received a request incompatible for this model's category.".into(),
+                    ))
+                    .await
+                    .expect("Expected receiver.");
+                return;
+            }
         }
 
         let images = match request.messages {
@@ -107,7 +134,9 @@ impl Engine {
         };
 
         let seq_step_type = match &request.messages {
-            RequestMessage::ImageGeneration { .. } => SeqStepType::OneShot,
+            RequestMessage::ImageGeneration { .. } | RequestMessage::SpeechGeneration { .. } => {
+                SeqStepType::OneShot
+            }
             _ => SeqStepType::PromptAndDecode,
         };
 
@@ -161,7 +190,8 @@ impl Engine {
                     text,
                 )
             }
-            RequestMessage::ImageGeneration { prompt, .. } => (vec![u32::MAX], prompt),
+            RequestMessage::ImageGeneration { prompt, .. }
+            | RequestMessage::SpeechGeneration { prompt } => (vec![u32::MAX], prompt),
             RequestMessage::CompletionTokens(it) => {
                 let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
                     request
@@ -471,7 +501,10 @@ impl Engine {
                 eos_toks,
             );
 
-            self.logger.add_new_sequence();
+            // Only "track" a new sequence if it is a traditional one
+            if matches!(seq_step_type, SeqStepType::PromptAndDecode) {
+                self.logger.add_new_sequence();
+            }
 
             // Run the inputs processor to update the prompt for multimodal models.
             if images.is_some() {

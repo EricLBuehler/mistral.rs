@@ -1,16 +1,13 @@
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new(
-        "llava-hf/llava-v1.6-mistral-7b-hf",
-        VisionLoaderType::LLaVANext,
-    )
-    .with_isq(IsqType::Q4K)
-    .with_logging()
-    .build()
-    .await?;
+    let model = VisionModelBuilder::new("llava-hf/llava-v1.6-mistral-7b-hf")
+        .with_isq(IsqType::Q4K)
+        .with_logging()
+        .build()
+        .await?;
 
     let bytes = match reqwest::blocking::get(
         "https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg",

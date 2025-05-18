@@ -85,9 +85,6 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             parse_text_tools(this, delta.as_str(), seq.tools.clone())
                                 .map_err(candle_core::Error::msg)?;
 
-                        if !tool_calls.is_empty() && is_done.is_none() {
-                            is_done = Some(StopReason::Eos);
-                        };
                         seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
                             delta: crate::Delta {
                                 content: fixup_sentencepiece!(
@@ -218,7 +215,8 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     let txt = String::from_utf8_lossy(seq.completion_bytes());
                     txt[..completion_bytes_pos].trim_start().to_string()
                 }
-                crate::sequence::StopReason::GeneratedImage => {
+                crate::sequence::StopReason::GeneratedImage
+                | crate::sequence::StopReason::GeneratedSpeech => {
                     candle_core::bail!("Stop reason was `GeneratedImage`.")
                 }
             };

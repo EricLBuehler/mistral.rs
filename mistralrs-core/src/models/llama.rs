@@ -417,8 +417,7 @@ impl Llama {
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .into_iter()
-        .map(|i| {
+        .par_iter_if_isq(|i| {
             let device = mapper
                 .device_for(i, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -428,12 +427,11 @@ impl Llama {
                 .clone();
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => Some(
-                    PagedAttention::new(head_dim, device, None)
-                        .expect("Failed to create PagedAttention"),
-                ),
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(head_dim, device, None)?)
+                }
             };
-            let comm = mapper.get_comm_for(i).unwrap();
+            let comm = mapper.get_comm_for(i)?;
             Block::load(
                 vb_m.pp(format!("layers.{i}")),
                 cfg,
@@ -444,9 +442,7 @@ impl Llama {
                 paged_attn,
                 &comm,
             )
-            .expect("Failed to load block.")
-        })
-        .collect();
+        })?;
 
         Ok(Self {
             wte,
