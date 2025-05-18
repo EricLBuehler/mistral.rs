@@ -41,6 +41,34 @@ use tracing::info;
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
+mod arg_defaults {
+    pub const TRUNCATE_SEQUENCE: bool = false;
+    pub const MAX_SEQS: usize = 16;
+    pub const NO_KV_CACHE: bool = false;
+    pub const INTERACTIVE_MODE: bool = false;
+    pub const PREFIX_CACHE_N: usize = 16;
+    pub const NO_PAGED_ATTN: bool = false;
+    pub const PAGED_ATTN: bool = false;
+    pub const CPU: bool = false;
+    pub const ENABLE_SEARCH: bool = false;
+    pub const ENABLE_THINKING: bool = false;
+
+    pub fn default_none<T>() -> Option<T> {
+        None
+    }
+
+    pub fn default_token_source() -> crate::TokenSource {
+        crate::TokenSource::CacheToken
+    }
+
+    // Helper function for placeholder model (used in Default impl)
+    pub fn placeholder_model() -> crate::ModelSelected {
+        crate::ModelSelected::Toml {
+            file: String::from("/this/is/just/a/placeholder"),
+        }
+    }
+}
+
 // NOTE(EricLBuehler): Accept up to 50mb input
 const N_INPUT_SIZE: usize = 50;
 const MB_TO_B: usize = 1024 * 1024; // 1024 kb in a mb
@@ -77,11 +105,11 @@ pub struct Args {
     pub model: ModelSelected,
 
     /// Maximum running sequences at any time. If the `tgt_non_granular_index` flag is set for X-LoRA models, this will be set to 1.
-    #[arg(long, default_value_t = 16)]
+    #[arg(long, default_value_t = arg_defaults::MAX_SEQS)]
     pub max_seqs: usize,
 
     /// Use no KV cache.
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = arg_defaults::NO_KV_CACHE)]
     pub no_kv_cache: bool,
 
     /// Chat template file with a JINJA file with `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
@@ -96,7 +124,7 @@ pub struct Args {
     /// Source of the token for authentication.
     /// Can be in the formats: `literal:<value>`, `env:<value>`, `path:<value>`, `cache` to use a cached token, or `none` to use no token.
     /// Defaults to `cache`.
-    #[arg(long, default_value_t = TokenSource::CacheToken, value_parser = parse_token_source)]
+    #[arg(long, default_value_t = arg_defaults::default_token_source(), value_parser = parse_token_source)]
     pub token_source: TokenSource,
 
     /// Enter interactive mode instead of serving a chat server.
@@ -104,7 +132,7 @@ pub struct Args {
     pub interactive_mode: bool,
 
     /// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
-    #[arg(long, default_value_t = 16)]
+    #[arg(long, default_value_t = arg_defaults::PREFIX_CACHE_N)]
     pub prefix_cache_n: usize,
 
     /// NOTE: This can be omitted to use automatic device mapping!
@@ -144,11 +172,11 @@ pub struct Args {
     pub paged_attn_block_size: Option<usize>,
 
     /// Disable PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
-    #[arg(long = "no-paged-attn", default_value_t = false)]
+    #[arg(long = "no-paged-attn", default_value_t = arg_defaults::NO_PAGED_ATTN)]
     pub no_paged_attn: bool,
 
     /// Enable PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
-    #[arg(long = "paged-attn", default_value_t = false)]
+    #[arg(long = "paged-attn", default_value_t = arg_defaults::PAGED_ATTN)]
     pub paged_attn: bool,
 
     /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
@@ -170,6 +198,40 @@ pub struct Args {
     /// Enable thinking for interactive mode and models that support it.
     #[arg(long = "enable-thinking")]
     pub enable_thinking: bool,
+}
+
+impl Default for Args {
+    fn default() -> Self {
+        Self {
+            serve_ip: arg_defaults::default_none(),
+            seed: arg_defaults::default_none(),
+            port: arg_defaults::default_none(),
+            log: arg_defaults::default_none(),
+            truncate_sequence: arg_defaults::TRUNCATE_SEQUENCE,
+            // Default trait requires all fields to be provided, so provide a placeholder value
+            model: arg_defaults::placeholder_model(),
+            max_seqs: arg_defaults::MAX_SEQS,
+            no_kv_cache: arg_defaults::NO_KV_CACHE,
+            chat_template: arg_defaults::default_none(),
+            jinja_explicit: arg_defaults::default_none(),
+            token_source: arg_defaults::default_token_source(),
+            interactive_mode: arg_defaults::INTERACTIVE_MODE,
+            prefix_cache_n: arg_defaults::PREFIX_CACHE_N,
+            num_device_layers: arg_defaults::default_none(),
+            in_situ_quant: arg_defaults::default_none(),
+            paged_attn_gpu_mem: arg_defaults::default_none(),
+            paged_attn_gpu_mem_usage: arg_defaults::default_none(),
+            paged_ctxt_len: arg_defaults::default_none(),
+            paged_attn_block_size: arg_defaults::default_none(),
+            no_paged_attn: arg_defaults::NO_PAGED_ATTN,
+            paged_attn: arg_defaults::PAGED_ATTN,
+            prompt_chunksize: arg_defaults::default_none(),
+            cpu: arg_defaults::CPU,
+            enable_search: arg_defaults::ENABLE_SEARCH,
+            search_bert_model: arg_defaults::default_none(),
+            enable_thinking: arg_defaults::ENABLE_THINKING,
+        }
+    }
 }
 
 pub type SharedMistralState = Arc<MistralRs>;
