@@ -29,10 +29,11 @@ impl QuantMethod for DummyLayer {
         _imatrix_weight: Option<Vec<f32>>,
         _guard: QuantizeOntoGuard,
     ) -> candle_core::Result<std::sync::Arc<dyn QuantMethod>> {
-        candle_core::bail!("DummyLayer should not ever be present in forward pass!")
+        // This is necessary for the immediate ISQ
+        Ok(self)
     }
     fn dtype_and_device(&self) -> (candle_core::DType, candle_core::Device) {
-        (candle_core::DType::F64, candle_core::Device::Cpu)
+        (candle_core::DType::F32, candle_core::Device::Cpu)
     }
     fn forward(&self, _a: &candle_core::Tensor) -> candle_core::Result<candle_core::Tensor> {
         candle_core::bail!("DummyLayer should not ever be present in forward pass!")
