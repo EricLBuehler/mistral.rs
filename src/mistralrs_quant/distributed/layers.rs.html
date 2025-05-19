@@ -59,7 +59,7 @@
 <a href=#59 id=59 data-nosnippet>59</a>            <span class="comment">// GPTQ and BNB do not support tensor parallelism
 <a href=#60 id=60 data-nosnippet>60</a>            </span><span class="kw">if </span><span class="macro">matches!</span>(
 <a href=#61 id=61 data-nosnippet>61</a>                quant_conf,
-<a href=#62 id=62 data-nosnippet>62</a>                QuantizedConfig::Gptq { .. }
+<a href=#62 id=62 data-nosnippet>62</a>                QuantizedConfig::GptqAwq { .. }
 <a href=#63 id=63 data-nosnippet>63</a>                    | QuantizedConfig::Bitsandbytes { .. }
 <a href=#64 id=64 data-nosnippet>64</a>                    | QuantizedConfig::Afq { .. }
 <a href=#65 id=65 data-nosnippet>65</a>            ) &amp;&amp; comm.world_size() != <span class="number">1
@@ -71,7 +71,7 @@
 <a href=#71 id=71 data-nosnippet>71</a>            }
 <a href=#72 id=72 data-nosnippet>72</a>
 <a href=#73 id=73 data-nosnippet>73</a>            <span class="kw">match </span>quant_conf {
-<a href=#74 id=74 data-nosnippet>74</a>                QuantizedConfig::Gptq { .. } =&gt; {
+<a href=#74 id=74 data-nosnippet>74</a>                QuantizedConfig::GptqAwq { .. } =&gt; {
 <a href=#75 id=75 data-nosnippet>75</a>                    gptq_linear(in_dim, out_dim, quant_conf, vb.clone())<span class="question-mark">?
 <a href=#76 id=76 data-nosnippet>76</a>                </span>}
 <a href=#77 id=77 data-nosnippet>77</a>                QuantizedConfig::Fp8 { .. } =&gt; {
@@ -269,19 +269,19 @@
 <a href=#269 id=269 data-nosnippet>269</a>            <span class="comment">// GPTQ and BNB do not support tensor parallelism
 <a href=#270 id=270 data-nosnippet>270</a>            </span><span class="kw">if </span><span class="macro">matches!</span>(
 <a href=#271 id=271 data-nosnippet>271</a>                quant_conf,
-<a href=#272 id=272 data-nosnippet>272</a>                QuantizedConfig::Gptq { .. }
+<a href=#272 id=272 data-nosnippet>272</a>                QuantizedConfig::GptqAwq { .. }
 <a href=#273 id=273 data-nosnippet>273</a>                    | QuantizedConfig::Bitsandbytes { .. }
 <a href=#274 id=274 data-nosnippet>274</a>                    | QuantizedConfig::Afq { .. }
 <a href=#275 id=275 data-nosnippet>275</a>            ) &amp;&amp; comm.world_size() != <span class="number">1
 <a href=#276 id=276 data-nosnippet>276</a>            </span>{
 <a href=#277 id=277 data-nosnippet>277</a>                <span class="macro">candle_core::bail!</span>(
-<a href=#278 id=278 data-nosnippet>278</a>                    <span class="string">"GPTQ and BNB and AFQ quantization types to not support tensor parallelism, but got a world size of {}"</span>,
+<a href=#278 id=278 data-nosnippet>278</a>                    <span class="string">"GPTQ/AWQ and BNB and AFQ quantization types to not support tensor parallelism, but got a world size of {}"</span>,
 <a href=#279 id=279 data-nosnippet>279</a>                    comm.world_size()
 <a href=#280 id=280 data-nosnippet>280</a>                );
 <a href=#281 id=281 data-nosnippet>281</a>            }
 <a href=#282 id=282 data-nosnippet>282</a>
 <a href=#283 id=283 data-nosnippet>283</a>            <span class="kw">match </span>quant_conf {
-<a href=#284 id=284 data-nosnippet>284</a>                QuantizedConfig::Gptq { .. } =&gt; {
+<a href=#284 id=284 data-nosnippet>284</a>                QuantizedConfig::GptqAwq { .. } =&gt; {
 <a href=#285 id=285 data-nosnippet>285</a>                    gptq_linear(in_dim, out_dim, quant_conf, vb.clone())<span class="question-mark">?
 <a href=#286 id=286 data-nosnippet>286</a>                </span>}
 <a href=#287 id=287 data-nosnippet>287</a>                QuantizedConfig::Fp8 { .. } =&gt; {
@@ -480,7 +480,7 @@
 <a href=#480 id=480 data-nosnippet>480</a>
 <a href=#481 id=481 data-nosnippet>481</a>        <span class="kw">let </span>layer = <span class="kw">if let </span><span class="prelude-val">Some</span>(quant_conf) = <span class="kw-2">&amp;</span>config {
 <a href=#482 id=482 data-nosnippet>482</a>            <span class="kw">match </span>quant_conf {
-<a href=#483 id=483 data-nosnippet>483</a>                QuantizedConfig::Gptq { .. } =&gt; {
+<a href=#483 id=483 data-nosnippet>483</a>                QuantizedConfig::GptqAwq { .. } =&gt; {
 <a href=#484 id=484 data-nosnippet>484</a>                    gptq_linear(in_dim, out_dim, quant_conf, vb.clone())<span class="question-mark">?
 <a href=#485 id=485 data-nosnippet>485</a>                </span>}
 <a href=#486 id=486 data-nosnippet>486</a>                QuantizedConfig::Fp8 { .. } =&gt; blockwise_fp8_linear_b(
