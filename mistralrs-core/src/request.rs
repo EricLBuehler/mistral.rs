@@ -70,6 +70,7 @@ fn default_responder<T>() -> Sender<T> {
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub enum SearchContextSize {
     #[serde(rename = "low")]
@@ -82,6 +83,7 @@ pub enum SearchContextSize {
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ApproximateUserLocation {
     pub city: String,
@@ -91,6 +93,7 @@ pub struct ApproximateUserLocation {
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum WebSearchUserLocation {
@@ -101,6 +104,7 @@ pub enum WebSearchUserLocation {
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct WebSearchOptions {
     pub search_context_size: Option<SearchContextSize>,
