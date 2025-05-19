@@ -90,11 +90,12 @@ pub fn gptq_linear(
         candle_core::bail!("Unexpected quantization config.")
     };
 
+    let is_awq = *is_awq;
     // Handle the case where the layer is dummy (no tensors)
-    if !(vb.contains_tensor("qweight")
-        && vb.contains_tensor("qzeros")
-        && (is_awq || !is_awq && vb.contains_tensor("g_idx"))
-        && vb.contains_tensor("scales"))
+    if !vb.contains_tensor("qweight")
+        || !vb.contains_tensor("qzeros")
+        || !vb.contains_tensor("scales")
+        || !is_awq && !vb.contains_tensor("g_idx")
     {
         let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
         return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
@@ -138,12 +139,12 @@ pub fn gptq_linear(
         use_exllama: false,
         q_weight: qweight,
         qzeros: Some(qzeros),
-        scales: scales,
-        g_idx: g_idx,
+        scales,
+        g_idx,
         bias,
         workspace: None,
         is_marlin: false,
-        is_awq: is_awq,
+        is_awq,
     };
     Ok(Arc::new(GptqLayer::new(config)?))
 }

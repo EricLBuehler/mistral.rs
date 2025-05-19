@@ -157,7 +157,7 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
                     bits,
                     group_size,
                     checkpoint_format: raw.checkpoint_format,
-                    is_awq: if m == "awq" { true } else { false },
+                    is_awq: m == "awq",
                 })
             }
             Some(m) if m == "fp8" => {
