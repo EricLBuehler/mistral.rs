@@ -30,7 +30,7 @@ use mistralrs_core::{
 use serde::Serialize;
 
 /// A hook that runs when the stream finishes, receiving all of the chunks.
-pub type OnCompleteCallback = Box<dyn Fn(&[ChatCompletionChunkResponse]) + Send + Sync>;
+pub type OnDoneCallback = Box<dyn Fn(&[ChatCompletionChunkResponse]) + Send + Sync>;
 
 #[derive(Debug)]
 struct ModelErrorMessage(String);
@@ -53,7 +53,7 @@ pub struct Streamer {
     state: SharedMistralState,
     store_chunks: bool,
     chunks: Vec<ChatCompletionChunkResponse>,
-    on_complete: Option<OnCompleteCallback>,
+    on_done: Option<OnDoneCallback>,
 }
 
 impl futures::Stream for Streamer {
@@ -71,8 +71,8 @@ impl futures::Stream for Streamer {
                 return Poll::Ready(Some(Ok(Event::default().data("[DONE]"))));
             }
             DoneState::Done => {
-                if let Some(on_complete) = &self.on_complete {
-                    on_complete(&self.chunks);
+                if let Some(on_done) = &self.on_done {
+                    on_done(&self.chunks);
                 }
                 return Poll::Ready(None);
             }
@@ -492,7 +492,7 @@ pub async fn send_request(state: &SharedMistralState, request: Request) -> Resul
 pub fn create_chat_streamer(
     rx: Receiver<Response>,
     state: SharedMistralState,
-    on_complete_callback: Option<OnCompleteCallback>,
+    on_done: Option<OnDoneCallback>,
 ) -> Sse<Streamer> {
     let streamer = Streamer {
         rx,
@@ -500,7 +500,7 @@ pub fn create_chat_streamer(
         store_chunks: true,
         state,
         chunks: Vec::new(),
-        on_complete: on_complete_callback.map(|cb| Box::new(cb) as _),
+        on_done,
     };
 
     let keep_alive_interval = get_keep_alive_interval();
