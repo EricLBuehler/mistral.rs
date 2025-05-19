@@ -406,6 +406,7 @@ impl Loader for VisionLoader {
         let mut loading_isq = if self.config.imatrix.is_none()
             && self.config.calibration_file.is_none()
             && !device.is_cuda()
+            && self.config.write_uqff.is_none()
         {
             let predicates = self.inner.immediate_isq_predicates(&config)?;
             mistralrs_quant::set_immediate_isq(in_situ_quant, predicates);

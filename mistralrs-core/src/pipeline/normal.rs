@@ -470,6 +470,7 @@ impl Loader for NormalLoader {
         let mut loading_isq = if self.config.imatrix.is_none()
             && self.config.calibration_file.is_none()
             && !device.is_cuda()
+            && self.config.write_uqff.is_none()
         {
             let predicates = if matches!(self.config.organization, IsqOrganization::MoeExpertsOnly)
             {
