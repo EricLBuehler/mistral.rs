@@ -17,7 +17,7 @@ use half::f16;
 use lazy_static::lazy_static;
 
 use crate::{
-    gptq::marlin_backend::{gptq_marlin_matmul, gptq_weight_repack},
+    gptq::marlin_backend::{marlin_matmul, marlin_weight_repack},
     utils::{get_cuda_device, get_cuda_slice},
     DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig,
     QuantizedSerde, ShardedVarBuilder,
@@ -41,15 +41,16 @@ lazy_static! {
 
 #[derive(Debug)]
 pub struct GptqLayer {
-    q_weight: Tensor,            // u32
-    gptq_qzeros: Option<Tensor>, // u32
-    gptq_scales: Tensor,         // f16
-    bias: Option<Tensor>,        // f16
-    g_idx: Option<Tensor>,       // i32
+    q_weight: Tensor,       // u32
+    qzeros: Option<Tensor>, // u32
+    scales: Tensor,         // f16
+    bias: Option<Tensor>,   // f16
+    g_idx: Option<Tensor>,  // i32
     bits: i32,
     use_exllama: bool,
     workspace: Option<Tensor>,
     is_marlin: bool,
+    is_awq: bool,
 }
 
 impl GptqLayer {
@@ -59,7 +60,7 @@ impl GptqLayer {
         &self,
         a: Tensor,
         g_idx: &Tensor,
-        gptq_qzeros: &Tensor,
+        qzeros: &Tensor,
         groups: i32,
         use_exllama: bool,
     ) -> Result<Tensor> {
@@ -71,8 +72,8 @@ impl GptqLayer {
         }
         let a_ptr = get_cuda_slice::<f16>(&a)?;
         let b_q_weight = get_cuda_slice::<i32>(&self.q_weight)? as *const u32;
-        let b_gptq_qzeros = get_cuda_slice::<i32>(gptq_qzeros)? as *const u32;
-        let b_gptq_scales = get_cuda_slice::<f16>(&self.gptq_scales)?;
+        let b_qzeros = get_cuda_slice::<i32>(qzeros)? as *const u32;
+        let b_scales = get_cuda_slice::<f16>(&self.scales)?;
         let b_g_idx = get_cuda_slice::<i32>(g_idx)?;
 
         let dev = get_cuda_device(&a)?;
@@ -116,8 +117,8 @@ impl GptqLayer {
             unsafe {
                 reconstruct_kernel(
                     b_q_weight,
-                    b_gptq_qzeros,
-                    b_gptq_scales,
+                    b_qzeros,
+                    b_scales,
                     b_g_idx,
                     temp_dq_ptr,
                     k,
@@ -159,8 +160,8 @@ impl GptqLayer {
                     gemm_half_q_half_cuda_part(
                         a_ptr as *const _,
                         b_q_weight,
-                        b_gptq_qzeros,
-                        b_gptq_scales,
+                        b_qzeros,
+                        b_scales,
                         b_g_idx,
                         c_ptr,
                         last_chunk,
@@ -177,8 +178,8 @@ impl GptqLayer {
                     gemm_half_q_half_cuda_part(
                         a_ptr.add((last_chunk * k) as usize),
                         b_q_weight,
-                        b_gptq_qzeros,
-                        b_gptq_scales,
+                        b_qzeros,
+                        b_scales,
                         b_g_idx,
                         c_ptr.add((last_chunk * n) as usize),
                         last_chunk_size,
@@ -195,8 +196,8 @@ impl GptqLayer {
                 gemm_half_q_half_alt(
                     a_ptr as *const _,
                     b_q_weight,
-                    b_gptq_qzeros,
-                    b_gptq_scales,
+                    b_qzeros,
+                    b_scales,
                     b_g_idx,
                     c_ptr,
                     m,
@@ -223,16 +224,17 @@ impl QuantMethod for GptqLayer {
         Self: Sized,
     {
         match method {
-            QuantMethodConfig::Gptq {
+            QuantMethodConfig::GptqAwq {
                 bits,
                 use_exllama,
                 q_weight,
-                gptq_qzeros,
-                gptq_scales,
+                qzeros,
+                scales,
                 g_idx,
                 bias,
                 workspace,
                 is_marlin,
+                is_awq,
             } => {
                 if workspace.is_none() {
                     let dev = get_cuda_device(&q_weight)?;
@@ -246,14 +248,15 @@ impl QuantMethod for GptqLayer {
                 }
                 Ok(Self {
                     q_weight,
-                    gptq_qzeros,
-                    gptq_scales,
+                    qzeros,
+                    scales,
                     g_idx,
                     bits,
                     use_exllama,
                     bias,
                     workspace,
                     is_marlin,
+                    is_awq,
                 })
             }
             QuantMethodConfig::Gguf { .. }
@@ -288,26 +291,24 @@ impl QuantMethod for GptqLayer {
             candle_core::bail!("Expected CUDA input to GptqLayer");
         }
 
-        let out = match (
-            self.g_idx.as_ref(),
-            self.gptq_qzeros.as_ref(),
-            self.is_marlin,
-        ) {
-            (Some(g_idx), Some(gptq_qzeros), false) => self
+        let out = match (self.g_idx.as_ref(), self.qzeros.as_ref(), self.is_marlin) {
+            (Some(g_idx), Some(qzeros), false) => self
                 .gptq_gemm(
                     reshaped_a,
                     g_idx,
-                    gptq_qzeros,
-                    gptq_qzeros.dim(0)? as i32,
+                    qzeros,
+                    qzeros.dim(0)? as i32,
                     self.use_exllama,
                 )?
                 .reshape(out_shape)?,
-            (_, _, true) => gptq_marlin_matmul(
+            (_, _, true) => marlin_matmul(
                 a,
                 &self.q_weight,
-                &self.gptq_scales,
+                &self.scales,
+                &self.qzeros,
                 self.workspace.as_ref().context("Workspace required")?,
                 self.bits,
+                self.is_awq,
             )?,
             _ => unreachable!(),
         };
@@ -328,7 +329,7 @@ impl QuantMethod for GptqLayer {
     }
 
     fn dtype_and_device(&self) -> (DType, Device) {
-        (self.gptq_scales.dtype(), self.gptq_scales.device().clone())
+        (self.scales.dtype(), self.scales.device().clone())
     }
 
     fn apply_isq(
@@ -361,19 +362,21 @@ pub fn gptq_linear(
     config: &QuantizedConfig,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
-    let QuantizedConfig::Gptq {
+    let QuantizedConfig::GptqAwq {
         bits,
         group_size,
         checkpoint_format,
+        is_awq,
     } = config
     else {
         candle_core::bail!("Unexpected quantization config.")
     };
 
+    let is_awq = *is_awq;
     // Handle the case where the layer is dummy (no tensors)
     if !(vb.contains_tensor("qweight")
         && vb.contains_tensor("qzeros")
-        && vb.contains_tensor("g_idx")
+        && (is_awq || !is_awq && vb.contains_tensor("g_idx"))
         && vb.contains_tensor("scales"))
     {
         let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
@@ -386,11 +389,20 @@ pub fn gptq_linear(
         .is_some_and(|fmt| fmt == "marlin")
         && HAVE_MARLIN_KERNELS;
 
-    let qw_shape = if marlin_format {
-        (in_dim / pack_factor!(bits) / 2, out_dim * 2)
+    let qw_shape = if !is_awq {
+        //quantized gptq (k/pack_factor, n) format
+        (
+            in_dim / pack_factor!(bits) / if marlin_format { 2 } else { 1 },
+            out_dim * if marlin_format { 2 } else { 1 },
+        )
     } else {
-        (in_dim / pack_factor!(bits), out_dim)
+        //quantized awq (k, n/pack_factor) format
+        (
+            in_dim * if marlin_format { 2 } else { 1 },
+            out_dim / pack_factor!(bits) / if marlin_format { 2 } else { 1 },
+        )
     };
+
     let qweight = vb.get_with_hints_dtype(
         qw_shape,
         if marlin_format { "B" } else { "qweight" },
@@ -412,16 +424,17 @@ pub fn gptq_linear(
     let workspace = Tensor::zeros(out_dim / pack_factor!(bits), DType::U32, vb.device())?;
 
     let config = if marlin_format {
-        QuantMethodConfig::Gptq {
+        QuantMethodConfig::GptqAwq {
             bits: *bits as i32,
             use_exllama: false,
             q_weight: qweight,
-            gptq_qzeros: None,
-            gptq_scales: scales,
+            qzeros: None,
+            scales: scales,
             g_idx: None,
             bias,
             workspace: Some(workspace),
             is_marlin: true,
+            is_awq: is_awq,
         }
     } else {
         fn get_scale_perms() -> (Vec<u32>, Vec<u32>) {
@@ -467,15 +480,21 @@ pub fn gptq_linear(
             DType::I32,
         )?;
 
-        let g_idx = vb.get_with_hints_dtype((in_dim,), "g_idx", Default::default(), DType::I32)?;
-        let perm = g_idx
-            .to_device(&Device::Cpu)?
-            .arg_sort_last_dim(true)?
-            .to_device(g_idx.device())?;
+        let (g_idx, perm) = if is_awq {
+            (None, None)
+        } else {
+            let g_idx =
+                vb.get_with_hints_dtype((in_dim,), "g_idx", Default::default(), DType::I32)?;
+            let perm = g_idx
+                .to_device(&Device::Cpu)?
+                .arg_sort_last_dim(true)?
+                .to_device(g_idx.device())?;
+            (Some(g_idx), Some(perm))
+        };
 
         // Repack to marlin format
         let qweight = if marlin_compatible {
-            gptq_weight_repack(&qweight, &perm, in_dim, *bits as i32)?
+            marlin_weight_repack(&qweight, &perm, in_dim, *bits as i32, is_awq)?
         } else {
             qweight
         };
@@ -497,16 +516,17 @@ pub fn gptq_linear(
             None
         };
 
-        QuantMethodConfig::Gptq {
+        QuantMethodConfig::GptqAwq {
             bits: *bits as i32,
             use_exllama: false,
             q_weight: qweight,
-            gptq_qzeros: Some(qzeros),
-            gptq_scales: scales,
-            g_idx: Some(g_idx),
+            qzeros: Some(qzeros),
+            scales: scales,
+            g_idx: g_idx,
             bias,
             workspace,
             is_marlin: marlin_compatible,
+            is_awq: is_awq,
         }
     };
     Ok(Arc::new(GptqLayer::new(config)?))

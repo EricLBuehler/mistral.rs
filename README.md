@@ -63,6 +63,15 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs-server -i --isq 4 plain -m Qwen/Qwen3-8B
     ```
 
+- Run the **AWQ format** models
+    Step 1: Convert AWQ model to marlin compatible format
+    ```
+    python3 scripts/convert_awq_marlin.py --src /home/Meta-Llama-3.1-8B-Instruct-AWQ-INT4/ --dst /home/Meta-Llama-3.1-8B-Instruct-AWQ-INT4-Marlin/ --bits 4
+    ```
+    Step 2: Run the converted model
+    ```
+    ./mistralrs-server -i plain -m /home/Meta-Llama-3.1-8B-Instruct-AWQ-INT4-Marlin/
+    ```
 
 - 💎💎💎 Run the entire **Gemma 3** Model family (1b, 4b, 12b, 27b) with 128k context length and vision support: [documentation](docs/GEMMA3.md)
 
@@ -152,6 +161,7 @@ Mistral.rs supports several model categories:
 - [Details](docs/QUANTS.md)
 - GGML: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit, with imatrix support
 - GPTQ: 2-bit, 3-bit, 4-bit and 8-bit, with [Marlin](https://github.com/IST-DASLab/marlin) kernel support in 4-bit and 8-bit.
+- AWQ: 4-bit and 8-bit (convert using [script](scripts/convert_awq_marlin.py))
 - AFQ: 🔥 2-bit, 3-bit, 4-bit, 6-bit and 8-bit, designed to be fast on Metal!
 - HQQ: 4-bit and 8 bit, with ISQ support
 - FP8
