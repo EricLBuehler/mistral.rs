@@ -425,9 +425,7 @@ pub(crate) fn get_chat_template(
             panic!("Template filename {template_filename:?} must end with `.json` or `.jinja`.");
         }
         Some(fs::read_to_string(template_filename).expect("Loading chat template failed."))
-    } else if chat_template_fallback
-        .is_some_and(|f| f.ends_with(".json"))
-    {
+    } else if chat_template_fallback.is_some_and(|f| f.ends_with(".json")) {
         // User specified a file
         let template_filename = chat_template_fallback
             .expect("A tokenizer config or chat template file path must be specified.");
