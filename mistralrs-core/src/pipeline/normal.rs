@@ -470,6 +470,7 @@ impl Loader for NormalLoader {
         let mut loading_isq = if self.config.imatrix.is_none()
             && self.config.calibration_file.is_none()
             && !device.is_cuda()
+            && self.config.write_uqff.is_none()
         {
             let predicates = if matches!(self.config.organization, IsqOrganization::MoeExpertsOnly)
             {
@@ -728,7 +729,7 @@ impl Loader for NormalLoader {
         }
 
         // Only if loading from UQFF
-        if loading_isq || (self.config.topology.is_some() && self.config.from_uqff.is_none()) {
+        if (loading_isq || self.config.topology.is_some()) && self.config.from_uqff.is_none() {
             let imatrix_source = match (
                 self.config.imatrix.as_ref(),
                 self.config.calibration_file.is_some(),

@@ -1470,7 +1470,8 @@ impl DeviceMappedModelLoader for Phi3Loader {
 
             let size_in = cfg.hidden_size;
             let head_dim = cfg.head_dim();
-            let op_size = head_dim * head_dim + 2 * cfg.num_key_value_heads * head_dim;
+            let op_size =
+                cfg.num_attention_heads * head_dim + 2 * cfg.num_key_value_heads * head_dim;
             let qkv_proj = size_in * op_size / weight_pack_factor;
             let o_proj =
                 (cfg.num_attention_heads * head_dim) * size_in / weight_pack_factor + size_in;
