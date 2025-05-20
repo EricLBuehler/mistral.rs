@@ -612,7 +612,7 @@
 <a href=#612 id=612 data-nosnippet>612</a>        }
 <a href=#613 id=613 data-nosnippet>613</a>
 <a href=#614 id=614 data-nosnippet>614</a>        <span class="comment">// Only if loading from UQFF
-<a href=#615 id=615 data-nosnippet>615</a>        </span><span class="kw">if </span>loading_isq || (<span class="self">self</span>.config.topology.is_some() &amp;&amp; <span class="self">self</span>.config.from_uqff.is_none()) {
+<a href=#615 id=615 data-nosnippet>615</a>        </span><span class="kw">if </span>(loading_isq || <span class="self">self</span>.config.topology.is_some()) &amp;&amp; <span class="self">self</span>.config.from_uqff.is_none() {
 <a href=#616 id=616 data-nosnippet>616</a>            <span class="kw">let </span>imatrix_source = <span class="kw">match </span>(
 <a href=#617 id=617 data-nosnippet>617</a>                <span class="self">self</span>.config.imatrix.as_ref(),
 <a href=#618 id=618 data-nosnippet>618</a>                <span class="self">self</span>.config.calibration_file.is_some(),
