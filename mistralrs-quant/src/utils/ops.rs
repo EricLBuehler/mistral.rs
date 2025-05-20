@@ -848,6 +848,175 @@ impl BitWiseOp for Tensor {
     }
 }
 
+// ────────────────────────────── ArgSort / Sort ────────────────────────────────
+
+/// Configuration for an **argsort** (returns indices) operation.
+struct ArgSort {
+    axis: usize,
+}
+
+/// Configuration for a **sort** (returns re‑ordered values) operation.
+struct Sort {
+    axis: usize,
+}
+
+impl CustomOp1 for ArgSort {
+    fn name(&self) -> &'static str {
+        "argsort"
+    }
+
+    // -------- CPU ------------------------------------------------------------
+    fn cpu_fwd(&self, _s1: &CpuStorage, _l1: &Layout) -> Result<(CpuStorage, Shape)> {
+        candle_core::bail!("ArgSort is not implemented for the CPU backend");
+    }
+
+    // -------- CUDA -----------------------------------------------------------
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
+        candle_core::bail!("ArgSort is not implemented for the CUDA backend");
+    }
+
+    // -------- Metal ----------------------------------------------------------
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        s1: &candle_core::MetalStorage,
+        l1: &Layout,
+    ) -> Result<(candle_core::MetalStorage, Shape)> {
+        // Require contiguous input (same as other metal ops in this file)
+        if !l1.is_contiguous() {
+            candle_core::bail!("Input tensor s1 must be contiguous");
+        }
+
+        // Create a command‑buffer and label it for easy debugging in Xcode’s GPU frame‑capture
+        let command_buffer = s1.device().command_buffer()?;
+        command_buffer.set_label("argsort");
+
+        let device = s1.device();
+        let out_shape = l1.shape().clone();
+        let elem_count = out_shape.elem_count();
+
+        // Output buffer holds the sorted indices → always `U32`
+        let output = device.new_buffer(elem_count, candle_core::DType::U32, "argsort")?;
+
+        // Launch the Metal kernel (new argument order & style)
+        crate::metal_kernels::call_argsort(
+            device,
+            device.device(),
+            &command_buffer,
+            &crate::metal_kernels::Kernels::new(),
+            self.axis,
+            l1.dims(),
+            l1.stride(),
+            l1.dims(),
+            l1.stride(),
+            l1.is_contiguous(),
+            s1.dtype(),
+            s1.buffer(),
+            l1.start_offset() * s1.dtype().size_in_bytes(),
+            &output,
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        // Wrap and return as a new MetalStorage
+        let newstorage = candle_core::MetalStorage::new(
+            output,
+            device.clone(),
+            elem_count,
+            candle_core::DType::U32,
+        );
+        Ok((newstorage, out_shape))
+    }
+}
+
+impl CustomOp1 for Sort {
+    fn name(&self) -> &'static str {
+        "sort"
+    }
+
+    // -------- CPU ------------------------------------------------------------
+    fn cpu_fwd(&self, _s1: &CpuStorage, _l1: &Layout) -> Result<(CpuStorage, Shape)> {
+        candle_core::bail!("Sort is not implemented for the CPU backend");
+    }
+
+    // -------- CUDA -----------------------------------------------------------
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
+        candle_core::bail!("Sort is not implemented for the CUDA backend");
+    }
+
+    // -------- Metal ----------------------------------------------------------
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        s1: &candle_core::MetalStorage,
+        l1: &Layout,
+    ) -> Result<(candle_core::MetalStorage, Shape)> {
+        // Require contiguous input (same as other metal ops in this file)
+        if !l1.is_contiguous() {
+            candle_core::bail!("Input tensor s1 must be contiguous");
+        }
+
+        // Create a command‑buffer and label it for easy debugging in Xcode’s GPU frame‑capture
+        let command_buffer = s1.device().command_buffer()?;
+        command_buffer.set_label("sort");
+
+        let device = s1.device();
+        let out_shape = l1.shape().clone();
+        let elem_count = out_shape.elem_count();
+
+        // Output buffer keeps the same dtype as the input (these are the reordered values)
+        let output = device.new_buffer(elem_count, s1.dtype(), "sort")?;
+
+        // Launch the Metal kernel (new argument order & style)
+        crate::metal_kernels::call_sort(
+            device,
+            device.device(),
+            &command_buffer,
+            &crate::metal_kernels::Kernels::new(),
+            self.axis,
+            l1.dims(),
+            l1.stride(),
+            l1.dims(),
+            l1.stride(),
+            l1.is_contiguous(),
+            s1.dtype(),
+            s1.dtype(),
+            s1.buffer(),
+            l1.start_offset() * s1.dtype().size_in_bytes(),
+            &output,
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        // Wrap and return as a new MetalStorage
+        let newstorage =
+            candle_core::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
+        Ok((newstorage, out_shape))
+    }
+}
+
+/// Extension trait adding `argsort` / `sort` convenience calls on `Tensor`.
+pub trait SortOp {
+    /// Returns the indices that would (ascending) sort the tensor along `axis`.
+    fn fast_argsort<D: Dim>(&self, axis: D) -> Result<Tensor>;
+    /// Returns the tensor's values (ascending) sorted along `axis`.
+    fn fast_sort<D: Dim>(&self, axis: D) -> Result<Tensor>;
+}
+
+impl SortOp for Tensor {
+    fn fast_argsort<D: Dim>(&self, axis: D) -> Result<Tensor> {
+        self.apply_op1_no_bwd(&ArgSort {
+            axis: axis.to_index(self.shape(), "argsort")?,
+        })
+    }
+
+    fn fast_sort<D: Dim>(&self, axis: D) -> Result<Tensor> {
+        self.apply_op1_no_bwd(&Sort {
+            axis: axis.to_index(self.shape(), "sort")?,
+        })
+    }
+}
+
 struct NonZero;
 
 impl NonZero {
@@ -1632,5 +1801,44 @@ mod tests {
             .to_vec2::<u8>()
             .unwrap();
         assert_eq!(c, [[19, 36]]);
+    }
+    // ─────────────────────────────── Sort / ArgSort ────────────────────────────────
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_sort_and_argsort_vector_metal() {
+        use crate::utils::ops::SortOp;
+        use candle_core::Tensor;
+
+        let device = candle_core::Device::new_metal(0).unwrap();
+        let a = Tensor::from_vec(vec![3i32, 1, 4, 2], &[4], &device).unwrap();
+
+        // sort (ascending)
+        let sorted = a.fast_sort(0).unwrap().to_vec1::<i32>().unwrap();
+        assert_eq!(sorted, [1, 2, 3, 4]);
+
+        // argsort (ascending indices)
+        let idx = a.fast_argsort(0).unwrap().to_vec1::<u32>().unwrap();
+        assert_eq!(idx, [1, 3, 0, 2]);
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_sort_and_argsort_matrix_axis1_metal() {
+        use crate::utils::ops::SortOp;
+        use candle_core::Tensor;
+
+        let device = candle_core::Device::new_metal(0).unwrap();
+        // 2 × 3 matrix:
+        // [[3, 1, 2],
+        //  [0, 4, 5]]
+        let a = Tensor::from_vec(vec![3i32, 1, 2, 0, 4, 5], &[2, 3], &device).unwrap();
+
+        // Sort along axis=1 (second dimension)
+        let sorted = a.fast_sort(1).unwrap().to_vec2::<i32>().unwrap();
+        assert_eq!(sorted, [[1, 2, 3], [0, 4, 5]]);
+
+        // ArgSort indices along axis=1
+        let idx = a.fast_argsort(1).unwrap().to_vec2::<u32>().unwrap();
+        assert_eq!(idx, [[1, 2, 0], [0, 1, 2]]);
     }
 }

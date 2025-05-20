@@ -6,7 +6,7 @@ use std::{
 };
 
 use candle_core::{DType, Device, Error, Result, Tensor, D};
-use mistralrs_quant::CumSumOp;
+use mistralrs_quant::{CumSumOp, SortOp};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -382,7 +382,7 @@ impl Sampler {
 
         // Top-P (nucleus)
         if top_p > 0.0 && top_p < 1.0 {
-            let sorted_indices = probs.arg_sort_last_dim(false)?;
+            let sorted_indices = probs.fast_argsort(D::Minus1)?;
             let sorted_probs = probs.gather(&sorted_indices, D::Minus1)?;
 
             let cpu = probs.to_device(&Device::Cpu)?; // cheap copy
