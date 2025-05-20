@@ -1,4 +1,4 @@
-use candle_core::DType;
+use candle_core::{DType, MetalDevice};
 use metal::{
     Buffer, ComputeCommandEncoderRef, ComputePipelineState, Device, Function,
     FunctionConstantValues, Library, MTLSize,
@@ -1396,13 +1396,239 @@ fn call_single_block_sort(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn call_block_sort(
+fn call_multi_block_sort(
+    metal_device: &MetalDevice,
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
     axis: usize,
     shape: &[usize],
     strides: &[usize],
+    out_shape: &[usize],
+    out_strides: &[usize],
+    in_contiguous: bool,
+    in_ty: DType,
+    out_ty: DType,
+    bn: usize,
+    tn: usize,
+    n_blocks: usize,
+    src: &Buffer,
+    src_offset: usize,
+    dst: &Buffer,
+    argsort: bool,
+) -> Result<(), MetalKernelError> {
+    let n_rows = shape.iter().product::<usize>() / shape[axis];
+
+    let mut nc_str = strides.iter().map(|x| *x as i64).collect::<Vec<_>>();
+    nc_str.remove(axis);
+
+    let mut nc_shape = shape.iter().map(|x| *x as i32).collect::<Vec<_>>();
+    nc_shape.remove(axis);
+
+    let nc_dim = nc_shape.len();
+
+    if nc_dim == 0 {
+        nc_shape = vec![0];
+        nc_str = vec![1];
+    }
+
+    let size_sorted_axis = shape[axis];
+    let stride_sorted_axis = strides[axis];
+
+    // Make temporary copies
+    let dev_vals_0 = metal_device
+        .new_buffer(n_rows * size_sorted_axis, in_ty, "dev_vals_0")
+        .unwrap();
+    let dev_vals_1 = metal_device
+        .new_buffer(n_rows * size_sorted_axis, in_ty, "dev_vals_1")
+        .unwrap();
+
+    let dev_idxs_0 = metal_device
+        .new_buffer(n_rows * size_sorted_axis, DType::U32, "dev_idxs_0")
+        .unwrap();
+    let dev_idxs_1 = metal_device
+        .new_buffer(n_rows * size_sorted_axis, DType::U32, "dev_idxs_1")
+        .unwrap();
+
+    let block_partitions = metal_device
+        .new_buffer(n_rows * (n_blocks + 1), DType::U32, "block_partitions")
+        .unwrap();
+
+    // Do blockwise sort
+    {
+        let name = format!(
+            "sort_mbsort_{}_{}_bn{bn}_tn{tn}",
+            type_to_name(in_ty),
+            type_to_name(DType::U32)
+        );
+
+        let pipeline = kernels.load_pipeline(device, &name)?;
+
+        let encoder = ep.encoder();
+        let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+        encoder.set_compute_pipeline_state(&pipeline);
+
+        encoder.set_buffer(0, Some(src), src_offset as u64);
+        encoder.set_buffer(1, Some(&dev_vals_0), 0);
+        encoder.set_buffer(2, Some(&dev_idxs_0), 0);
+        <i32 as EncoderParam>::set_param(encoder, 3, size_sorted_axis as i32);
+        <i32 as EncoderParam>::set_param(encoder, 4, stride_sorted_axis as i32);
+        <i32 as EncoderParam>::set_param(encoder, 5, nc_dim as i32);
+        encoder.set_bytes(
+            6,
+            (std::mem::size_of::<i32>() * nc_shape.len()) as u64,
+            nc_shape.as_ptr() as *const _,
+        );
+        encoder.set_bytes(
+            7,
+            (std::mem::size_of::<i64>() * nc_str.len()) as u64,
+            nc_str.as_ptr() as *const _,
+        );
+
+        // Dispatch
+        let group_dims = MTLSize {
+            width: bn as u64,
+            height: 1,
+            depth: 1,
+        };
+        let grid_dims = MTLSize {
+            width: n_blocks as u64,
+            height: n_rows as u64,
+            depth: 1,
+        };
+        encoder.dispatch_thread_groups(grid_dims, group_dims);
+    }
+
+    // Do merges
+    let mut ping = false;
+    let mut dev_vals_in = dev_vals_0.clone();
+    let mut dev_idxs_in = dev_idxs_0.clone();
+    let mut dev_vals_out = dev_vals_1.clone();
+    let mut dev_idxs_out = dev_idxs_1.clone();
+
+    let n_thread_per_group = std::cmp::min(n_blocks + 1, 1024);
+
+    let mut merge_tiles = 2;
+    while (merge_tiles / 2) < n_blocks {
+        dev_vals_in = if ping {
+            dev_vals_1.clone()
+        } else {
+            dev_vals_0.clone()
+        };
+        dev_idxs_in = if ping {
+            dev_idxs_1.clone()
+        } else {
+            dev_idxs_0.clone()
+        };
+        dev_vals_out = if ping {
+            dev_vals_0.clone()
+        } else {
+            dev_vals_1.clone()
+        };
+        dev_idxs_out = if ping {
+            dev_idxs_0.clone()
+        } else {
+            dev_idxs_1.clone()
+        };
+        ping = !ping;
+
+        // Do partition
+        {
+            let name = format!(
+                "partition_mbsort_{}_{}_bn{bn}_tn{tn}",
+                type_to_name(in_ty),
+                type_to_name(DType::U32)
+            );
+
+            let pipeline = kernels.load_pipeline(device, &name)?;
+
+            let encoder = ep.encoder();
+            let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+            encoder.set_compute_pipeline_state(&pipeline);
+
+            encoder.set_buffer(0, Some(&block_partitions), 0);
+            encoder.set_buffer(1, Some(&dev_vals_in), 0);
+            encoder.set_buffer(2, Some(&dev_idxs_in), 0);
+            <i32 as EncoderParam>::set_param(encoder, 3, size_sorted_axis as i32);
+            <i32 as EncoderParam>::set_param(encoder, 4, stride_sorted_axis as i32);
+            <i32 as EncoderParam>::set_param(encoder, 5, n_blocks as i32);
+
+            // Dispatch
+            let group_dims = MTLSize {
+                width: n_thread_per_group as u64,
+                height: 1,
+                depth: 1,
+            };
+            let grid_dims = MTLSize {
+                width: 1,
+                height: n_rows as u64,
+                depth: 1,
+            };
+            encoder.dispatch_thread_groups(grid_dims, group_dims);
+        }
+
+        // Do merge
+        {
+            let name = format!(
+                "merge_mbsort_{}_{}_bn{bn}_tn{tn}",
+                type_to_name(in_ty),
+                type_to_name(DType::U32)
+            );
+
+            let pipeline = kernels.load_pipeline(device, &name)?;
+
+            let encoder = ep.encoder();
+            let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+            encoder.set_compute_pipeline_state(&pipeline);
+
+            encoder.set_buffer(0, Some(&block_partitions), 0);
+            encoder.set_buffer(1, Some(&dev_vals_in), 0);
+            encoder.set_buffer(2, Some(&dev_idxs_in), 0);
+            encoder.set_buffer(3, Some(&dev_vals_out), 0);
+            encoder.set_buffer(4, Some(&dev_idxs_out), 0);
+            <i32 as EncoderParam>::set_param(encoder, 5, size_sorted_axis as i32);
+            <i32 as EncoderParam>::set_param(encoder, 6, merge_tiles as i32);
+            <i32 as EncoderParam>::set_param(encoder, 7, n_blocks as i32);
+
+            // Dispatch
+            let group_dims = MTLSize {
+                width: bn as u64,
+                height: 1,
+                depth: 1,
+            };
+            let grid_dims = MTLSize {
+                width: n_blocks as u64,
+                height: n_rows as u64,
+                depth: 1,
+            };
+            encoder.dispatch_thread_groups(grid_dims, group_dims);
+        }
+
+        merge_tiles *= 2;
+    }
+
+    // Copy outputs with appropriate strides
+    let mut strides = out_strides.to_vec();
+    for ax in axis + 1..strides.len() {
+        strides[ax] *= out_shape[axis];
+    }
+    strides[axis] = 1;
+
+    // https://github.com/ml-explore/mlx/blob/eebe73001affcb424171e9d49657e508f70a9201/mlx/backend/metal/copy.cpp#L12
+
+    todo!()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn call_block_sort(
+    metal_device: &MetalDevice,
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    axis: usize,
+    shape: &[usize],
+    strides: &[usize],
+    out_shape: &[usize],
     out_strides: &[usize],
     in_contiguous: bool,
     in_ty: DType,
@@ -1428,9 +1654,27 @@ fn call_block_sort(
     let n_per_block = bn * tn;
     let n_blocks = (size_sorted_axis + n_per_block - 1) / n_per_block;
     if n_blocks > 1 {
-        return Err(MetalKernelError::FailedToCreatePipeline(
-            "multi-block sort not yet implemented".into(),
-        ));
+        call_multi_block_sort(
+            metal_device,
+            device,
+            ep,
+            kernels,
+            axis,
+            shape,
+            strides,
+            out_shape,
+            out_strides,
+            in_contiguous,
+            in_ty,
+            out_ty,
+            bn,
+            tn,
+            n_blocks,
+            src,
+            src_offset,
+            dst,
+            argsort,
+        )
     } else {
         call_single_block_sort(
             device,
@@ -1456,12 +1700,14 @@ fn call_block_sort(
 /// Sorts values along the last axis of a contiguous tensor.
 #[allow(clippy::too_many_arguments)]
 pub fn call_sort(
+    metal_device: &MetalDevice,
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
     axis: usize,
     shape: &[usize],
     strides: &[usize],
+    out_shape: &[usize],
     out_strides: &[usize],
     in_contiguous: bool,
     in_ty: DType,
@@ -1471,12 +1717,14 @@ pub fn call_sort(
     dst: &Buffer,
 ) -> Result<(), MetalKernelError> {
     call_block_sort(
+        metal_device,
         device,
         ep,
         kernels,
         axis,
         shape,
         strides,
+        out_shape,
         out_strides,
         in_contiguous,
         in_ty,
@@ -1491,12 +1739,14 @@ pub fn call_sort(
 /// Returns the indices that would sort `src` along the last axis.
 #[allow(clippy::too_many_arguments)]
 pub fn call_argsort(
+    metal_device: &MetalDevice,
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
     axis: usize,
     shape: &[usize],
     strides: &[usize],
+    out_shape: &[usize],
     out_strides: &[usize],
     in_contiguous: bool,
     in_ty: DType,
@@ -1505,12 +1755,14 @@ pub fn call_argsort(
     dst: &Buffer, // must be `uint32`
 ) -> Result<(), MetalKernelError> {
     call_block_sort(
+        metal_device,
         device,
         ep,
         kernels,
         axis,
         shape,
         strides,
+        out_shape,
         out_strides,
         in_contiguous,
         in_ty,
