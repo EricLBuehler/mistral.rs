@@ -382,7 +382,7 @@ impl Sampler {
 
         // Top-P (nucleus)
         if top_p > 0.0 && top_p < 1.0 {
-            let sorted_probs = probs.fast_sort(D::Minus1)?;
+            let sorted_probs = probs.fast_sort_asc(D::Minus1)?;
 
             let cumsum = sorted_probs.fast_cumsum(D::Minus1)?;
 

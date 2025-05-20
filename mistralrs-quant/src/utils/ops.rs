@@ -1081,19 +1081,19 @@ impl CustomOp1 for Sort {
 /// Extension trait adding `argsort` / `sort` convenience calls on `Tensor`.
 pub trait SortOp {
     /// Returns the indices that would (ascending) sort the tensor along `axis`.
-    fn fast_argsort<D: Dim>(&self, axis: D) -> Result<Tensor>;
+    fn fast_argsort_asc<D: Dim>(&self, axis: D) -> Result<Tensor>;
     /// Returns the tensor's values (ascending) sorted along `axis`.
-    fn fast_sort<D: Dim>(&self, axis: D) -> Result<Tensor>;
+    fn fast_sort_asc<D: Dim>(&self, axis: D) -> Result<Tensor>;
 }
 
 impl SortOp for Tensor {
-    fn fast_argsort<D: Dim>(&self, axis: D) -> Result<Tensor> {
+    fn fast_argsort_asc<D: Dim>(&self, axis: D) -> Result<Tensor> {
         self.apply_op1_no_bwd(&ArgSort {
             axis: axis.to_index(self.shape(), "argsort")?,
         })
     }
 
-    fn fast_sort<D: Dim>(&self, axis: D) -> Result<Tensor> {
+    fn fast_sort_asc<D: Dim>(&self, axis: D) -> Result<Tensor> {
         self.apply_op1_no_bwd(&Sort {
             axis: axis.to_index(self.shape(), "sort")?,
         })
@@ -1896,11 +1896,11 @@ mod tests {
         let a = Tensor::from_vec(vec![3i32, 1, 4, 2], &[4], &device).unwrap();
 
         // sort (ascending)
-        let sorted = a.fast_sort(0).unwrap().to_vec1::<i32>().unwrap();
+        let sorted = a.fast_sort_asc(0).unwrap().to_vec1::<i32>().unwrap();
         assert_eq!(sorted, [1, 2, 3, 4]);
 
         // argsort (ascending indices)
-        let idx = a.fast_argsort(0).unwrap().to_vec1::<u32>().unwrap();
+        let idx = a.fast_argsort_asc(0).unwrap().to_vec1::<u32>().unwrap();
         assert_eq!(idx, [1, 3, 0, 2]);
     }
 
@@ -1917,11 +1917,11 @@ mod tests {
         let a = Tensor::from_vec(vec![3i32, 1, 2, 0, 4, 5], &[2, 3], &device).unwrap();
 
         // Sort along axis=1 (second dimension)
-        let sorted = a.fast_sort(1).unwrap().to_vec2::<i32>().unwrap();
+        let sorted = a.fast_sort_asc(1).unwrap().to_vec2::<i32>().unwrap();
         assert_eq!(sorted, [[1, 2, 3], [0, 4, 5]]);
 
         // ArgSort indices along axis=1
-        let idx = a.fast_argsort(1).unwrap().to_vec2::<u32>().unwrap();
+        let idx = a.fast_argsort_asc(1).unwrap().to_vec2::<u32>().unwrap();
         assert_eq!(idx, [[1, 2, 0], [0, 1, 2]]);
     }
 
@@ -1941,12 +1941,12 @@ mod tests {
         let a = Tensor::from_vec(vals.clone(), &[N], &device).unwrap();
 
         // ---- sort (ascending) ---------------------------------------------------------
-        let sorted = a.fast_sort(0).unwrap().to_vec1::<i32>().unwrap();
+        let sorted = a.fast_sort_asc(0).unwrap().to_vec1::<i32>().unwrap();
         let expected: Vec<i32> = (0..N as i32).collect();
         assert_eq!(sorted, expected);
 
         // ---- argsort (indices that would sort) ---------------------------------------
-        let idx = a.fast_argsort(0).unwrap().to_vec1::<u32>().unwrap();
+        let idx = a.fast_argsort_asc(0).unwrap().to_vec1::<u32>().unwrap();
         // Because the input is reversed, the correct indices are likewise reversed
         for (i, &v) in idx.iter().enumerate() {
             assert_eq!(v as usize, N - 1 - i);
