@@ -899,22 +899,31 @@ impl CustomOp1 for ArgSort {
         // Output buffer holds the sorted indices → always `U32`
         let output = device.new_buffer(elem_count, candle_core::DType::U32, "argsort")?;
 
-        // Launch the Metal kernel (new argument order & style)
+        // ------------------------------------------------------------------
+        // Build the unified SortArgs payload
+        // ------------------------------------------------------------------
+        let sort_args = crate::metal_kernels::SortArgs {
+            axis: self.axis,
+            shape: l1.dims(),
+            strides: l1.stride(),
+            out_shape: l1.dims(), // same as input for argsort
+            out_strides: l1.stride(),
+            in_contiguous: l1.is_contiguous(),
+            in_ty: s1.dtype(),
+            out_ty: candle_core::DType::U32,
+            src: s1.buffer(),
+            src_offset: l1.start_offset(), // element offset
+            dst: &output,
+        };
+
+        // Launch the Metal kernel via the new API
         crate::metal_kernels::call_argsort(
-            device,
-            device.device(),
-            &command_buffer,
+            device,          // &MetalDevice
+            device.device(), // &metal::Device
+            &command_buffer, // impl EncoderProvider
             &crate::metal_kernels::Kernels::new(),
-            self.axis,
-            l1.dims(),
-            l1.stride(),
-            l1.dims(),
-            l1.stride(),
-            l1.is_contiguous(),
-            s1.dtype(),
-            s1.buffer(),
-            l1.start_offset() * s1.dtype().size_in_bytes(),
-            &output,
+            &sort_args,
+            &crate::metal_kernels::MultiBlockSortCache::None,
         )
         .map_err(candle_core::Error::wrap)?;
 
@@ -968,23 +977,31 @@ impl CustomOp1 for Sort {
         // Output buffer keeps the same dtype as the input (these are the reordered values)
         let output = device.new_buffer(elem_count, s1.dtype(), "sort")?;
 
-        // Launch the Metal kernel (new argument order & style)
+        // ------------------------------------------------------------------
+        // Build the unified SortArgs payload
+        // ------------------------------------------------------------------
+        let sort_args = crate::metal_kernels::SortArgs {
+            axis: self.axis,
+            shape: l1.dims(),
+            strides: l1.stride(),
+            out_shape: l1.dims(), // same shape for value sort
+            out_strides: l1.stride(),
+            in_contiguous: l1.is_contiguous(),
+            in_ty: s1.dtype(),
+            out_ty: s1.dtype(),
+            src: s1.buffer(),
+            src_offset: l1.start_offset(), // element offset
+            dst: &output,
+        };
+
+        // Launch the Metal kernel via the new API
         crate::metal_kernels::call_sort(
-            device,
-            device.device(),
-            &command_buffer,
+            device,          // &MetalDevice
+            device.device(), // &metal::Device
+            &command_buffer, // impl EncoderProvider
             &crate::metal_kernels::Kernels::new(),
-            self.axis,
-            l1.dims(),
-            l1.stride(),
-            l1.dims(),
-            l1.stride(),
-            l1.is_contiguous(),
-            s1.dtype(),
-            s1.dtype(),
-            s1.buffer(),
-            l1.start_offset() * s1.dtype().size_in_bytes(),
-            &output,
+            &sort_args,
+            &crate::metal_kernels::MultiBlockSortCache::None,
         )
         .map_err(candle_core::Error::wrap)?;
 

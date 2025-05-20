@@ -1239,6 +1239,58 @@ pub fn call_scan(
     Ok(())
 }
 
+/// Immutable parameters that fully describe a single `sort` / `argsort`
+/// operation.  Bundling them keeps the public API readable as the kernel
+/// signatures grow.
+///
+/// All slice references point into caller‑owned data – the struct itself
+/// owns **no** memory.
+#[derive(Debug)]
+pub struct SortArgs<'a> {
+    /// Axis along which the values are sorted.
+    pub axis: usize,
+    /// Shape of the input tensor.
+    pub shape: &'a [usize],
+    /// Strides (element‑wise) for the input tensor.
+    pub strides: &'a [usize],
+    /// Shape of the output tensor.
+    pub out_shape: &'a [usize],
+    /// Strides (element‑wise) for the output tensor.
+    pub out_strides: &'a [usize],
+    /// Whether the input tensor is already contiguous in memory.
+    pub in_contiguous: bool,
+    /// Element type of the input tensor.
+    pub in_ty: DType,
+    /// Element type of the output tensor (`u32` for `argsort`).
+    pub out_ty: DType,
+    /// GPU buffer holding the input tensor elements.
+    pub src: &'a Buffer,
+    /// Element offset into `src` where the region to be sorted begins.
+    pub src_offset: usize,
+    /// GPU buffer that will receive the sorted values / indices.
+    pub dst: &'a Buffer,
+}
+
+/// Scratch buffers that can be reused between consecutive multi‑block sort
+/// calls.  Providing them avoids the internal allocations performed each
+/// time by `call_multi_block_sort`.
+///
+/// The enum is kept deliberately non‑exhaustive so that additional cached
+/// resources can be introduced without breaking existing code.
+#[derive(Debug)]
+pub enum MultiBlockSortCache<'a> {
+    /// Let the helper allocate fresh scratch buffers for this invocation.
+    None,
+    /// Re‑use caller‑provided temporary buffers.
+    External {
+        dev_vals_ping: &'a Buffer,
+        dev_vals_pong: &'a Buffer,
+        dev_idxs_ping: &'a Buffer,
+        dev_idxs_pong: &'a Buffer,
+        block_partitions: &'a Buffer,
+    },
+}
+
 /// How the copy kernel should behave.
 #[derive(Copy, Clone)]
 enum CopyType {
@@ -1457,24 +1509,26 @@ fn call_copy_gpu_inplace(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn call_single_block_sort(
+fn call_single_block_sort<'a>(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
-    axis: usize,
-    shape: &[usize],
-    strides: &[usize],
-    out_strides: &[usize],
-    in_contiguous: bool,
-    in_ty: DType,
-    out_ty: DType,
+    args: &SortArgs<'a>,
     bn: usize,
     tn: usize,
-    src: &Buffer,
-    src_offset: usize,
-    dst: &Buffer,
     argsort: bool,
 ) -> Result<(), MetalKernelError> {
+    // --- destructure helper -------------------------------------------------
+    let axis = args.axis;
+    let shape = args.shape;
+    let strides = args.strides;
+    let out_strides = args.out_strides;
+    let in_contiguous = args.in_contiguous;
+    let in_ty = args.in_ty;
+    let out_ty = args.out_ty;
+    let src = args.src;
+    let src_offset = args.src_offset;
+    let dst = args.dst;
     let n_rows = shape.iter().product::<usize>() / shape[axis];
 
     let mut in_nc_str = strides.iter().map(|x| *x as i64).collect::<Vec<_>>();
@@ -1601,26 +1655,28 @@ fn call_single_block_sort(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn call_multi_block_sort(
+fn call_multi_block_sort<'a>(
     metal_device: &MetalDevice,
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
-    axis: usize,
-    shape: &[usize],
-    strides: &[usize],
-    out_shape: &[usize],
-    out_strides: &[usize],
-    in_ty: DType,
-    out_ty: DType,
+    args: &SortArgs<'a>,
     bn: usize,
     tn: usize,
     n_blocks: usize,
-    src: &Buffer,
-    src_offset: usize,
-    dst: &Buffer,
     argsort: bool,
+    _cache: &MultiBlockSortCache<'a>,
 ) -> Result<(), MetalKernelError> {
+    // --- destructure helper -------------------------------------------------
+    let axis = args.axis;
+    let shape = args.shape;
+    let strides = args.strides;
+    let out_strides = args.out_strides;
+    let in_ty = args.in_ty;
+    let out_ty = args.out_ty;
+    let src = args.src;
+    let src_offset = args.src_offset;
+    let dst = args.dst;
     let n_rows = shape.iter().product::<usize>() / shape[axis];
 
     let mut nc_str = strides.iter().map(|x| *x as i64).collect::<Vec<_>>();
@@ -1816,7 +1872,7 @@ fn call_multi_block_sort(
     // Copy outputs with appropriate strides
     let mut strides = out_strides.to_vec();
     for ax in axis + 1..strides.len() {
-        strides[ax] *= out_shape[axis];
+        strides[ax] *= args.out_shape[axis];
     }
     strides[axis] = 1;
 
@@ -1827,7 +1883,7 @@ fn call_multi_block_sort(
         ep,
         kernels,
         out_ty,
-        out_shape,
+        args.out_shape,
         &strides,
         out_strides,
         &copy_src,
@@ -1845,24 +1901,20 @@ fn call_multi_block_sort(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn call_block_sort(
+fn call_block_sort<'a>(
     metal_device: &MetalDevice,
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
-    axis: usize,
-    shape: &[usize],
-    strides: &[usize],
-    out_shape: &[usize],
-    out_strides: &[usize],
-    in_contiguous: bool,
-    in_ty: DType,
-    out_ty: DType,
-    src: &Buffer,
-    src_offset: usize,
-    dst: &Buffer,
+    args: &SortArgs<'a>,
     argsort: bool,
+    cache: &MultiBlockSortCache<'a>,
 ) -> Result<(), MetalKernelError> {
+    // --- destructure helper -------------------------------------------------
+    let axis = args.axis;
+    let shape = args.shape;
+    let in_ty = args.in_ty;
+
     let size_sorted_axis = shape[axis];
 
     let tn = 4usize;
@@ -1879,121 +1931,61 @@ fn call_block_sort(
     let n_per_block = bn * tn;
     let n_blocks = (size_sorted_axis + n_per_block - 1) / n_per_block;
     if n_blocks > 1 {
+        // multi‑block path
         call_multi_block_sort(
             metal_device,
             device,
             ep,
             kernels,
-            axis,
-            shape,
-            strides,
-            out_shape,
-            out_strides,
-            in_ty,
-            out_ty,
+            args,
             bn,
             tn,
             n_blocks,
-            src,
-            src_offset,
-            dst,
             argsort,
+            cache,
         )
     } else {
-        call_single_block_sort(
-            device,
-            ep,
-            kernels,
-            axis,
-            shape,
-            strides,
-            out_strides,
-            in_contiguous,
-            in_ty,
-            out_ty,
-            bn,
-            tn,
-            src,
-            src_offset,
-            dst,
-            argsort,
-        )
+        // single‑block path
+        call_single_block_sort(device, ep, kernels, args, bn, tn, argsort)
     }
 }
 
 /// Sorts values along the last axis of a contiguous tensor.
-#[allow(clippy::too_many_arguments)]
-pub fn call_sort(
+pub fn call_sort<'a>(
     metal_device: &MetalDevice,
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
-    axis: usize,
-    shape: &[usize],
-    strides: &[usize],
-    out_shape: &[usize],
-    out_strides: &[usize],
-    in_contiguous: bool,
-    in_ty: DType,
-    out_ty: DType,
-    src: &Buffer,
-    src_offset: usize,
-    dst: &Buffer,
+    args: &SortArgs<'a>,
+    cache: &MultiBlockSortCache<'a>,
 ) -> Result<(), MetalKernelError> {
     call_block_sort(
         metal_device,
         device,
         ep,
         kernels,
-        axis,
-        shape,
-        strides,
-        out_shape,
-        out_strides,
-        in_contiguous,
-        in_ty,
-        out_ty,
-        src,
-        src_offset,
-        dst,
-        false,
+        args,
+        /* argsort = */ false,
+        cache,
     )
 }
 
 /// Returns the indices that would sort `src` along the last axis.
-#[allow(clippy::too_many_arguments)]
-pub fn call_argsort(
+pub fn call_argsort<'a>(
     metal_device: &MetalDevice,
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
-    axis: usize,
-    shape: &[usize],
-    strides: &[usize],
-    out_shape: &[usize],
-    out_strides: &[usize],
-    in_contiguous: bool,
-    in_ty: DType,
-    src: &Buffer,
-    src_offset: usize,
-    dst: &Buffer, // must be `uint32`
+    args: &SortArgs<'a>,
+    cache: &MultiBlockSortCache<'a>,
 ) -> Result<(), MetalKernelError> {
     call_block_sort(
         metal_device,
         device,
         ep,
         kernels,
-        axis,
-        shape,
-        strides,
-        out_shape,
-        out_strides,
-        in_contiguous,
-        in_ty,
-        DType::U32,
-        src,
-        src_offset,
-        dst,
+        args,
         /* argsort = */ true,
+        cache,
     )
 }
