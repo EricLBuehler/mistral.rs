@@ -637,15 +637,15 @@
 <a href=#637 id=637 data-nosnippet>637</a>                .expect(<span class="string">"bos_token_id/eos_token_id missing in generation_config.json"</span>)
 <a href=#638 id=638 data-nosnippet>638</a>        });
 <a href=#639 id=639 data-nosnippet>639</a>
-<a href=#640 id=640 data-nosnippet>640</a>        <span class="kw">let </span>chat_template = get_chat_template(
-<a href=#641 id=641 data-nosnippet>641</a>            paths,
-<a href=#642 id=642 data-nosnippet>642</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.jinja_explicit,
-<a href=#643 id=643 data-nosnippet>643</a>            <span class="kw-2">&amp;</span>paths
-<a href=#644 id=644 data-nosnippet>644</a>                .get_chat_template_explicit()
-<a href=#645 id=645 data-nosnippet>645</a>                .as_ref()
-<a href=#646 id=646 data-nosnippet>646</a>                .map(|x| x.to_string_lossy().to_string())
-<a href=#647 id=647 data-nosnippet>647</a>                .clone(),
-<a href=#648 id=648 data-nosnippet>648</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template,
+<a href=#640 id=640 data-nosnippet>640</a>        <span class="kw">let </span>chat_template_explicit = paths
+<a href=#641 id=641 data-nosnippet>641</a>            .get_chat_template_explicit()
+<a href=#642 id=642 data-nosnippet>642</a>            .as_ref()
+<a href=#643 id=643 data-nosnippet>643</a>            .map(|x| x.to_string_lossy().to_string());
+<a href=#644 id=644 data-nosnippet>644</a>        <span class="kw">let </span>chat_template = get_chat_template(
+<a href=#645 id=645 data-nosnippet>645</a>            paths,
+<a href=#646 id=646 data-nosnippet>646</a>            <span class="self">self</span>.jinja_explicit.as_ref(),
+<a href=#647 id=647 data-nosnippet>647</a>            chat_template_explicit.as_ref(),
+<a href=#648 id=648 data-nosnippet>648</a>            <span class="self">self</span>.chat_template.as_ref(),
 <a href=#649 id=649 data-nosnippet>649</a>            <span class="prelude-val">None</span>,
 <a href=#650 id=650 data-nosnippet>650</a>        );
 <a href=#651 id=651 data-nosnippet>651</a>

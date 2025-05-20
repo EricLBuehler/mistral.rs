@@ -347,15 +347,15 @@
 <a href=#347 id=347 data-nosnippet>347</a>            serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap())
 <a href=#348 id=348 data-nosnippet>348</a>                .expect(<span class="string">"bos_token_id/eos_token_id missing in generation_config.json"</span>)
 <a href=#349 id=349 data-nosnippet>349</a>        });
-<a href=#350 id=350 data-nosnippet>350</a>        <span class="kw">let </span>chat_template = get_chat_template(
-<a href=#351 id=351 data-nosnippet>351</a>            paths,
-<a href=#352 id=352 data-nosnippet>352</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.jinja_explicit,
-<a href=#353 id=353 data-nosnippet>353</a>            <span class="kw-2">&amp;</span>paths
-<a href=#354 id=354 data-nosnippet>354</a>                .get_chat_template_explicit()
-<a href=#355 id=355 data-nosnippet>355</a>                .as_ref()
-<a href=#356 id=356 data-nosnippet>356</a>                .map(|x| x.to_string_lossy().to_string())
-<a href=#357 id=357 data-nosnippet>357</a>                .clone(),
-<a href=#358 id=358 data-nosnippet>358</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template,
+<a href=#350 id=350 data-nosnippet>350</a>        <span class="kw">let </span>chat_template_explicit = paths
+<a href=#351 id=351 data-nosnippet>351</a>            .get_chat_template_explicit()
+<a href=#352 id=352 data-nosnippet>352</a>            .as_ref()
+<a href=#353 id=353 data-nosnippet>353</a>            .map(|x| x.to_string_lossy().to_string());
+<a href=#354 id=354 data-nosnippet>354</a>        <span class="kw">let </span>chat_template = get_chat_template(
+<a href=#355 id=355 data-nosnippet>355</a>            paths,
+<a href=#356 id=356 data-nosnippet>356</a>            <span class="self">self</span>.jinja_explicit.as_ref(),
+<a href=#357 id=357 data-nosnippet>357</a>            chat_template_explicit.as_ref(),
+<a href=#358 id=358 data-nosnippet>358</a>            <span class="self">self</span>.chat_template.as_ref(),
 <a href=#359 id=359 data-nosnippet>359</a>            <span class="prelude-val">None</span>,
 <a href=#360 id=360 data-nosnippet>360</a>        );
 <a href=#361 id=361 data-nosnippet>361</a>

@@ -96,19 +96,19 @@
 <a href=#96 id=96 data-nosnippet>96</a>        <span class="kw">let </span>filenames = get_model_paths(
 <a href=#97 id=97 data-nosnippet>97</a>            revision.clone(),
 <a href=#98 id=98 data-nosnippet>98</a>            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$token_source</span>,
-<a href=#99 id=99 data-nosnippet>99</a>            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$quantized_model_id</span>,
-<a href=#100 id=100 data-nosnippet>100</a>            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$quantized_filename</span>,
+<a href=#99 id=99 data-nosnippet>99</a>            <span class="macro-nonterminal">$quantized_model_id</span>.as_ref(),
+<a href=#100 id=100 data-nosnippet>100</a>            <span class="macro-nonterminal">$quantized_filename</span>.as_ref(),
 <a href=#101 id=101 data-nosnippet>101</a>            <span class="kw-2">&amp;</span>api,
 <a href=#102 id=102 data-nosnippet>102</a>            <span class="kw-2">&amp;</span>model_id,
 <a href=#103 id=103 data-nosnippet>103</a>            <span class="macro-nonterminal">$loading_uqff</span>,
 <a href=#104 id=104 data-nosnippet>104</a>        )<span class="question-mark">?</span>;
 <a href=#105 id=105 data-nosnippet>105</a>        <span class="kw">let </span>adapter_paths = get_xlora_paths(
 <a href=#106 id=106 data-nosnippet>106</a>            <span class="macro-nonterminal">$this</span>.model_id.clone(),
-<a href=#107 id=107 data-nosnippet>107</a>            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$this</span>.xlora_model_id,
-<a href=#108 id=108 data-nosnippet>108</a>            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$this</span>.lora_adapter_ids,
+<a href=#107 id=107 data-nosnippet>107</a>            <span class="macro-nonterminal">$this</span>.xlora_model_id.as_ref(),
+<a href=#108 id=108 data-nosnippet>108</a>            <span class="macro-nonterminal">$this</span>.lora_adapter_ids.as_ref(),
 <a href=#109 id=109 data-nosnippet>109</a>            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$token_source</span>,
 <a href=#110 id=110 data-nosnippet>110</a>            revision.clone(),
-<a href=#111 id=111 data-nosnippet>111</a>            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$this</span>.xlora_order,
+<a href=#111 id=111 data-nosnippet>111</a>            <span class="macro-nonterminal">$this</span>.xlora_order.as_ref(),
 <a href=#112 id=112 data-nosnippet>112</a>        )<span class="question-mark">?</span>;
 <a href=#113 id=113 data-nosnippet>113</a>        <span class="kw">let </span>gen_conf = <span class="kw">if </span><span class="macro-nonterminal">$</span><span class="macro">crate::api_dir_list!</span>(<span class="macro-nonterminal">api</span>, model_id)
 <a href=#114 id=114 data-nosnippet>114</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
@@ -283,8 +283,8 @@
 <a href=#283 id=283 data-nosnippet>283</a>        <span class="kw">let </span>filenames = get_model_paths(
 <a href=#284 id=284 data-nosnippet>284</a>            revision.clone(),
 <a href=#285 id=285 data-nosnippet>285</a>            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$token_source</span>,
-<a href=#286 id=286 data-nosnippet>286</a>            <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(<span class="macro-nonterminal">$quantized_model_id</span>),
-<a href=#287 id=287 data-nosnippet>287</a>            <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(<span class="macro-nonterminal">$quantized_filenames</span>),
+<a href=#286 id=286 data-nosnippet>286</a>            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$quantized_model_id</span>),
+<a href=#287 id=287 data-nosnippet>287</a>            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$quantized_filenames</span>),
 <a href=#288 id=288 data-nosnippet>288</a>            <span class="kw-2">&amp;</span>api,
 <a href=#289 id=289 data-nosnippet>289</a>            <span class="kw-2">&amp;</span>model_id,
 <a href=#290 id=290 data-nosnippet>290</a>            <span class="bool-val">false</span>, <span class="comment">// Never loading UQFF
@@ -292,11 +292,11 @@
 <a href=#292 id=292 data-nosnippet>292</a>
 <a href=#293 id=293 data-nosnippet>293</a>        <span class="kw">let </span>adapter_paths = get_xlora_paths(
 <a href=#294 id=294 data-nosnippet>294</a>            this_model_id.clone(),
-<a href=#295 id=295 data-nosnippet>295</a>            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$this</span>.xlora_model_id,
-<a href=#296 id=296 data-nosnippet>296</a>            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$this</span>.lora_adapter_ids,
+<a href=#295 id=295 data-nosnippet>295</a>            <span class="macro-nonterminal">$this</span>.xlora_model_id.as_ref(),
+<a href=#296 id=296 data-nosnippet>296</a>            <span class="macro-nonterminal">$this</span>.lora_adapter_ids.as_ref(),
 <a href=#297 id=297 data-nosnippet>297</a>            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$token_source</span>,
 <a href=#298 id=298 data-nosnippet>298</a>            revision.clone(),
-<a href=#299 id=299 data-nosnippet>299</a>            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$this</span>.xlora_order,
+<a href=#299 id=299 data-nosnippet>299</a>            <span class="macro-nonterminal">$this</span>.xlora_order.as_ref(),
 <a href=#300 id=300 data-nosnippet>300</a>        )<span class="question-mark">?</span>;
 <a href=#301 id=301 data-nosnippet>301</a>
 <a href=#302 id=302 data-nosnippet>302</a>        <span class="kw">let </span>gen_conf = <span class="kw">if </span><span class="macro-nonterminal">$</span><span class="macro">crate::api_dir_list!</span>(<span class="macro-nonterminal">api</span>, model_id)

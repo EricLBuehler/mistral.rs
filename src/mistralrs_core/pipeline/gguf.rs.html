@@ -490,15 +490,15 @@
 <a href=#490 id=490 data-nosnippet>490</a>            serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap())
 <a href=#491 id=491 data-nosnippet>491</a>                .expect(<span class="string">"bos_token_id/eos_token_id missing in generation_config.json"</span>)
 <a href=#492 id=492 data-nosnippet>492</a>        });
-<a href=#493 id=493 data-nosnippet>493</a>        <span class="kw">let </span><span class="kw-2">mut </span>chat_template = get_chat_template(
-<a href=#494 id=494 data-nosnippet>494</a>            paths,
-<a href=#495 id=495 data-nosnippet>495</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.jinja_explicit,
-<a href=#496 id=496 data-nosnippet>496</a>            <span class="kw-2">&amp;</span>paths
-<a href=#497 id=497 data-nosnippet>497</a>                .get_chat_template_explicit()
-<a href=#498 id=498 data-nosnippet>498</a>                .as_ref()
-<a href=#499 id=499 data-nosnippet>499</a>                .map(|x| x.to_string_lossy().to_string())
-<a href=#500 id=500 data-nosnippet>500</a>                .clone(),
-<a href=#501 id=501 data-nosnippet>501</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template,
+<a href=#493 id=493 data-nosnippet>493</a>        <span class="kw">let </span>chat_template_explicit = paths
+<a href=#494 id=494 data-nosnippet>494</a>            .get_chat_template_explicit()
+<a href=#495 id=495 data-nosnippet>495</a>            .as_ref()
+<a href=#496 id=496 data-nosnippet>496</a>            .map(|x| x.to_string_lossy().to_string());
+<a href=#497 id=497 data-nosnippet>497</a>        <span class="kw">let </span><span class="kw-2">mut </span>chat_template = get_chat_template(
+<a href=#498 id=498 data-nosnippet>498</a>            paths,
+<a href=#499 id=499 data-nosnippet>499</a>            <span class="self">self</span>.jinja_explicit.as_ref(),
+<a href=#500 id=500 data-nosnippet>500</a>            chat_template_explicit.as_ref(),
+<a href=#501 id=501 data-nosnippet>501</a>            <span class="self">self</span>.chat_template.as_ref(),
 <a href=#502 id=502 data-nosnippet>502</a>            gguf_chat_template,
 <a href=#503 id=503 data-nosnippet>503</a>        );
 <a href=#504 id=504 data-nosnippet>504</a>
