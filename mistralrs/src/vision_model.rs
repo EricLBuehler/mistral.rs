@@ -273,12 +273,17 @@ impl VisionModelBuilder {
                     .get_metadata()
                     .cache_config
                     .as_ref()
-                    .unwrap()
-                    .clone();
+                    .cloned();
 
-                SchedulerConfig::PagedAttentionMeta {
-                    max_num_seqs: self.max_num_seqs,
-                    config,
+                if let Some(config) = config {
+                    SchedulerConfig::PagedAttentionMeta {
+                        max_num_seqs: self.max_num_seqs,
+                        config,
+                    }
+                } else {
+                    SchedulerConfig::DefaultScheduler {
+                        method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
+                    }
                 }
             }
             None => SchedulerConfig::DefaultScheduler {

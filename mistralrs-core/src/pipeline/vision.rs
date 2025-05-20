@@ -612,7 +612,7 @@ impl Loader for VisionLoader {
         }
 
         // Only if loading from UQFF
-        if loading_isq || (self.config.topology.is_some() && self.config.from_uqff.is_none()) {
+        if (loading_isq || self.config.topology.is_some()) && self.config.from_uqff.is_none() {
             let imatrix_source = match (
                 self.config.imatrix.as_ref(),
                 self.config.calibration_file.is_some(),
