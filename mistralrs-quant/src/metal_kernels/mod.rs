@@ -1351,7 +1351,7 @@ fn call_copy_gpu_inplace(
 
     // The original MLX kernels encode source/destination dtypes in the mangled
     // name, even when they are the same.
-    kernel_name.push_str(&format!("_copy_{}_{}", type_to_name(ty), type_to_name(ty)));
+    kernel_name.push_str(&format!("_copy{}{}", type_to_name(ty), type_to_name(ty)));
 
     // === Pipeline & encoder ==================================================
     let pipeline = kernels.load_pipeline(device, &kernel_name)?;
@@ -1705,7 +1705,9 @@ fn call_multi_block_sort(
 
     // Do merges
     let mut ping = false;
+    #[allow(unused_assignments)]
     let mut dev_vals_in = dev_vals_0.clone();
+    #[allow(unused_assignments)]
     let mut dev_idxs_in = dev_idxs_0.clone();
     let mut dev_vals_out = dev_vals_1.clone();
     let mut dev_idxs_out = dev_idxs_1.clone();

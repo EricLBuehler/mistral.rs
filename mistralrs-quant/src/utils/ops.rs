@@ -1841,4 +1841,32 @@ mod tests {
         let idx = a.fast_argsort(1).unwrap().to_vec2::<u32>().unwrap();
         assert_eq!(idx, [[1, 2, 0], [0, 1, 2]]);
     }
+
+    // ─────────────────────────────── 2 048-element vector ────────────────────────────────
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_sort_and_argsort_vector_2048_metal() {
+        use crate::utils::ops::SortOp;
+        use candle_core::Tensor;
+
+        const N: usize = 4096;
+
+        let device = candle_core::Device::new_metal(0).expect("Metal device");
+
+        // Create a descending vector [4095, 4094, …, 0]
+        let vals: Vec<i32> = (0..N as i32).rev().collect();
+        let a = Tensor::from_vec(vals.clone(), &[N], &device).unwrap();
+
+        // ---- sort (ascending) ---------------------------------------------------------
+        let sorted = a.fast_sort(0).unwrap().to_vec1::<i32>().unwrap();
+        let expected: Vec<i32> = (0..N as i32).collect();
+        assert_eq!(sorted, expected);
+
+        // ---- argsort (indices that would sort) ---------------------------------------
+        let idx = a.fast_argsort(0).unwrap().to_vec1::<u32>().unwrap();
+        // Because the input is reversed, the correct indices are likewise reversed
+        for (i, &v) in idx.iter().enumerate() {
+            assert_eq!(v as usize, N - 1 - i);
+        }
+    }
 }
