@@ -1756,7 +1756,7 @@ fn call_multi_block_sort(
             encoder.set_buffer(1, Some(&dev_vals_in), 0);
             encoder.set_buffer(2, Some(&dev_idxs_in), 0);
             <i32 as EncoderParam>::set_param(encoder, 3, size_sorted_axis as i32);
-            <i32 as EncoderParam>::set_param(encoder, 4, stride_sorted_axis as i32);
+            <i32 as EncoderParam>::set_param(encoder, 4, merge_tiles as i32);
             <i32 as EncoderParam>::set_param(encoder, 5, n_blocks as i32);
 
             // Dispatch

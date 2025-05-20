@@ -382,14 +382,7 @@ impl Sampler {
 
         // Top-P (nucleus)
         if top_p > 0.0 && top_p < 1.0 {
-            let sorted_indices = probs.fast_argsort(D::Minus1)?;
-            let sorted_probs = probs.gather(&sorted_indices, D::Minus1)?;
-
-            let cpu = probs.to_device(&Device::Cpu)?; // cheap copy
-            let v: Vec<f32> = cpu.to_vec1()?;
-            if let Some(pos) = v.iter().position(|x| !x.is_finite()) {
-                eprintln!("‼️  NaN at index {pos}");
-            }
+            let sorted_probs = probs.fast_sort(D::Minus1)?;
 
             let cumsum = sorted_probs.fast_cumsum(D::Minus1)?;
 
