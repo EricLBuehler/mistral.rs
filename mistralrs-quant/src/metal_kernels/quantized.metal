@@ -1001,7 +1001,6 @@ struct BlockLoaderT {
 } // namespace steel
 } // namespace mlx
 
-
 MLX_MTL_CONST int SIMD_SIZE = 32;
 MLX_MTL_CONST int QUAD_SIZE = 4;
 

@@ -9,7 +9,8 @@ use std::{collections::HashMap, sync::OnceLock};
 
 pub mod utils;
 use utils::{
-    get_2d_grid_dims, get_2d_grid_dims_divisor, linear_split, EncoderParam, EncoderProvider,
+    get_2d_grid_dims, get_2d_grid_dims_divisor, get_block_dims, linear_split, EncoderParam,
+    EncoderProvider,
 };
 
 use crate::set_params;
@@ -1238,6 +1239,15 @@ pub fn call_scan(
     Ok(())
 }
 
+/// How the copy kernel should behave.
+#[derive(Copy, Clone)]
+enum CopyType {
+    /// The last axis is contiguous – we can treat the tensor as a 1‑D slice.
+    Vector,
+    /// Arbitrary layout – we need to jump using the supplied strides.
+    General,
+}
+
 fn type_to_name(dt: DType) -> &'static str {
     match dt {
         DType::F32 => "float32",
@@ -1249,6 +1259,201 @@ fn type_to_name(dt: DType) -> &'static str {
         DType::U8 => "uint8",
         _ => "unknown",
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn call_copy_gpu_inplace(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    shape: &[usize],
+    src_strides: &[usize],
+    dst_strides: &[usize],
+    src: &Buffer,
+    src_offset: usize,
+    dst: &Buffer,
+    dst_offset: usize,
+    copy_type: CopyType,
+) -> Result<(), MetalKernelError> {
+    // === Constants & helpers =================================================
+    const MAX_COPY_SPECIALIZED_DIMS: usize = 3;
+
+    /// https://github.com/ml-explore/mlx/blob/eebe73001affcb424171e9d49657e508f70a9201/mlx/backend/metal/utils.h#L87
+    #[inline]
+    fn work_per_thread_for_dtype(dt: DType) -> usize {
+        let wpt = 8 / dt.size_in_bytes().max(1);
+        wpt.max(1)
+    }
+
+    #[inline]
+    fn ceil_div(x: usize, y: usize) -> usize {
+        (x + y - 1) / y
+    }
+
+    // === Sanity checks =======================================================
+    if shape.is_empty() {
+        // Nothing to do – mimic early‑return in the C++ version.
+        return Ok(());
+    }
+    assert!(
+        shape.len() == src_strides.len() && shape.len() == dst_strides.len(),
+        "shape/stride rank mismatch in call_copy_gpu_inplace"
+    );
+
+    // === Derived sizes / flags ==============================================
+    let elem_count: usize = shape.iter().product();
+    let large = match copy_type {
+        CopyType::General => {
+            // Allow negative strides – original code switches to 32‑bit indexing once strides
+            // are flattened, but here we only care about the element count threshold.
+            elem_count > i32::MAX as usize
+        }
+        CopyType::Vector => elem_count > u32::MAX as usize,
+    };
+    let work_per_thread = match copy_type {
+        CopyType::Vector => work_per_thread_for_dtype(ty),
+        CopyType::General => {
+            if shape.len() > MAX_COPY_SPECIALIZED_DIMS {
+                if large {
+                    4
+                } else {
+                    2
+                }
+            } else {
+                1
+            }
+        }
+    };
+
+    // === Kernel name construction ===========================================
+    let mut kernel_name = match copy_type {
+        CopyType::Vector => {
+            if large {
+                "v2".to_owned()
+            } else {
+                "v".to_owned()
+            }
+        }
+        CopyType::General => "g".to_owned(),
+    };
+
+    if matches!(copy_type, CopyType::General) {
+        if shape.len() <= MAX_COPY_SPECIALIZED_DIMS {
+            kernel_name.push_str(&shape.len().to_string());
+        } else {
+            kernel_name.push_str(&format!("n{}", work_per_thread));
+        }
+        if large {
+            kernel_name.push_str("large");
+        }
+    }
+
+    // The original MLX kernels encode source/destination dtypes in the mangled
+    // name, even when they are the same.
+    kernel_name.push_str(&format!("_copy_{}_{}", type_to_name(ty), type_to_name(ty)));
+
+    // === Pipeline & encoder ==================================================
+    let pipeline = kernels.load_pipeline(device, &kernel_name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    // === Buffers (slots 0/1) =================================================
+    let byte_offset_src = src_offset * ty.size_in_bytes();
+    let byte_offset_dst = dst_offset * ty.size_in_bytes();
+    encoder.set_buffer(0, Some(src), byte_offset_src as u64);
+    encoder.set_buffer(1, Some(dst), byte_offset_dst as u64);
+
+    // === Specialisation for each CopyType ===================================
+    match copy_type {
+        // ---------------------------------------------------------------------
+        CopyType::Vector => {
+            // Slot 2 – total elements (32‑ or 64‑bit depending on `large`)
+            if large {
+                <i64 as EncoderParam>::set_param(encoder, 2, elem_count as i64);
+            } else {
+                <i32 as EncoderParam>::set_param(encoder, 2, elem_count as i32);
+            }
+
+            // Grid
+            let nthreads = ceil_div(elem_count, work_per_thread);
+            let tg_size = pipeline.max_total_threads_per_threadgroup() as usize;
+            let tg_size = tg_size.min(nthreads);
+
+            let group_dims = MTLSize {
+                width: tg_size as u64,
+                height: 1,
+                depth: 1,
+            };
+            let grid_dims = if large {
+                // 64‑bit indexing path – fall back to 2‑D tiling helper.
+                get_2d_grid_dims_divisor(shape, dst_strides, work_per_thread)
+            } else {
+                MTLSize {
+                    width: nthreads as u64,
+                    height: 1,
+                    depth: 1,
+                }
+            };
+            encoder.dispatch_threads(grid_dims, group_dims);
+        }
+
+        // ---------------------------------------------------------------------
+        CopyType::General => {
+            let ndim = shape.len() as i32;
+
+            // ---- Shape / stride descriptors ---------------------------------
+            if shape.len() > 3 {
+                let shape_i32: Vec<i32> = shape.iter().map(|&x| x as i32).collect();
+                encoder.set_bytes(
+                    2,
+                    (std::mem::size_of::<i32>() * shape_i32.len()) as u64,
+                    shape_i32.as_ptr() as *const _,
+                );
+            }
+            // Strides – always required (slot 3)
+            let strides_in_i64: Vec<i64> = src_strides.iter().map(|&x| x as i64).collect();
+            encoder.set_bytes(
+                3,
+                (std::mem::size_of::<i64>() * strides_in_i64.len()) as u64,
+                strides_in_i64.as_ptr() as *const _,
+            );
+
+            // If the kernel is the generic “gn*” variant we also pass `ndim`
+            if shape.len() > MAX_COPY_SPECIALIZED_DIMS {
+                <i32 as EncoderParam>::set_param(encoder, 5, ndim);
+            }
+
+            // ---- Thread/work‑grid ------------------------------------------
+            let mut dim0 = *shape.last().unwrap_or(&1);
+            let dim1 = if shape.len() > 1 {
+                shape[shape.len() - 2]
+            } else {
+                1
+            };
+            let rest = elem_count / (dim0 * dim1);
+            if shape.len() > MAX_COPY_SPECIALIZED_DIMS {
+                dim0 = ceil_div(dim0, work_per_thread);
+            }
+
+            assert_eq!(
+                pipeline.max_total_threads_per_threadgroup(),
+                1024,
+                "copy kernels expect a 1024-lane threadgroup"
+            );
+            let group_dims = get_block_dims(dim0, dim1, rest, 10);
+            let grid_dims = MTLSize {
+                width: dim0 as u64,
+                height: dim1 as u64,
+                depth: rest as u64,
+            };
+            encoder.dispatch_threads(grid_dims, group_dims);
+        }
+    }
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1406,7 +1611,6 @@ fn call_multi_block_sort(
     strides: &[usize],
     out_shape: &[usize],
     out_strides: &[usize],
-    in_contiguous: bool,
     in_ty: DType,
     out_ty: DType,
     bn: usize,
@@ -1614,9 +1818,28 @@ fn call_multi_block_sort(
     }
     strides[axis] = 1;
 
-    // https://github.com/ml-explore/mlx/blob/eebe73001affcb424171e9d49657e508f70a9201/mlx/backend/metal/copy.cpp#L12
+    let copy_src = if argsort { dev_idxs_out } else { dev_vals_out };
 
-    todo!()
+    call_copy_gpu_inplace(
+        device,
+        ep,
+        kernels,
+        out_ty,
+        out_shape,
+        &strides,
+        out_strides,
+        &copy_src,
+        0,
+        dst,
+        0,
+        if axis == shape.len() - 1 {
+            CopyType::Vector
+        } else {
+            CopyType::General
+        },
+    )?;
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1664,7 +1887,6 @@ fn call_block_sort(
             strides,
             out_shape,
             out_strides,
-            in_contiguous,
             in_ty,
             out_ty,
             bn,

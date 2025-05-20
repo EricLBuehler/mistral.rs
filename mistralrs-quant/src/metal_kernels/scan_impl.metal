@@ -1,7 +1,7 @@
-#include <metal_stdlib>
 #include <metal_integer>
 #include <metal_math>
 #include <metal_simdgroup>
+#include <metal_stdlib>
 
 #include "utils.metal"
 

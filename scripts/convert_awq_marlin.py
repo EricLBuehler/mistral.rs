@@ -8,15 +8,16 @@ import argparse
 import os
 import shutil
 
+
 def get_scale_perms():
     scale_perm: List[int] = []
     for i in range(8):
         scale_perm.extend([i + 8 * j for j in range(8)])
     scale_perm_single: List[int] = []
     for i in range(4):
-        scale_perm_single.extend(
-            [2 * i + j for j in [0, 1, 8, 9, 16, 17, 24, 25]])
+        scale_perm_single.extend([2 * i + j for j in [0, 1, 8, 9, 16, 17, 24, 25]])
     return scale_perm, scale_perm_single
+
 
 def pack_cols(
     q_w: torch.Tensor,
@@ -43,6 +44,7 @@ def pack_cols(
 
     return q_res
 
+
 def unpack_cols(
     packed_q_w: torch.Tensor,
     num_bits: int,
@@ -51,10 +53,11 @@ def unpack_cols(
 ):
     pack_factor = 32 // num_bits
     assert size_n % pack_factor == 0
-    assert packed_q_w.shape == (
-        size_k, size_n // pack_factor
-    ), "packed_q_w.shape = {} size_k = {}, size_n = {} pack_Factor = {}".format(
-        packed_q_w.shape, size_k, size_n, pack_factor)
+    assert packed_q_w.shape == (size_k, size_n // pack_factor), (
+        "packed_q_w.shape = {} size_k = {}, size_n = {} pack_Factor = {}".format(
+            packed_q_w.shape, size_k, size_n, pack_factor
+        )
+    )
 
     orig_device = packed_q_w.device
 
@@ -72,8 +75,10 @@ def unpack_cols(
 
     return q_res
 
-def marlin_zero_points(zp: torch.Tensor, size_k: int, size_n: int,
-                       num_bits: int) -> torch.Tensor:
+
+def marlin_zero_points(
+    zp: torch.Tensor, size_k: int, size_n: int, num_bits: int
+) -> torch.Tensor:
     # Permute zero-points in a similar way to scales, but do not use the
     # "single" permutation, since zero-points are applied on every MMA
     scale_perm, _ = get_scale_perms()
@@ -94,8 +99,9 @@ def marlin_zero_points(zp: torch.Tensor, size_k: int, size_n: int,
     return zp
 
 
-def awq_to_marlin_zero_points(q_zp_packed: torch.Tensor, size_k: int,
-                              size_n: int, num_bits: int) -> torch.Tensor:
+def awq_to_marlin_zero_points(
+    q_zp_packed: torch.Tensor, size_k: int, size_n: int, num_bits: int
+) -> torch.Tensor:
     # AWQ zero-points are quantized and packed on the column dim.
     # In addition, the values are permuted based on dequantizer.
     # Here we undo both of these, and then apply marlin permutation
@@ -117,7 +123,6 @@ def awq_to_marlin_zero_points(q_zp_packed: torch.Tensor, size_k: int,
     return marlin_zp
 
 
-
 def transform_file(src_folder, dst_folder, bits):
     """
     Transform and save safetensors file.
@@ -132,7 +137,7 @@ def transform_file(src_folder, dst_folder, bits):
     tgt_dict = {}
 
     files = os.listdir(src_folder)
-    files = [k for k in files if k.endswith(".safetensors") and k.find("model") >= 0 ]
+    files = [k for k in files if k.endswith(".safetensors") and k.find("model") >= 0]
     if len(files) > 1:
         files = list(sorted(files, key=lambda x: int(x[6:11])))
 
@@ -145,50 +150,60 @@ def transform_file(src_folder, dst_folder, bits):
             if key.endswith(".qzeros"):
                 print(f"Transforming tensor: {key}")
                 pack_factor = 32 // bits
-                qzeros = awq_to_marlin_zero_points(tensor, tensor.shape[0], tensor.shape[1] * pack_factor, bits)
+                qzeros = awq_to_marlin_zero_points(
+                    tensor, tensor.shape[0], tensor.shape[1] * pack_factor, bits
+                )
                 tgt_dict[key] = qzeros
             else:
                 tgt_dict[key] = tensor
         save_file(tgt_dict, dst_f)
     print("Transformation complete.")
 
+
 import json
+
+
 def load_json(json_path, fn):
     json_fn = os.path.join(json_path, fn)
     with open(json_fn, "r", encoding="utf-8") as f_json:
         json_dict = json.load(f_json)
     return json_dict
 
+
 def main():
     """
     Main function to handle command-line arguments for transforming safetensors files.
     """
-    parser = argparse.ArgumentParser(description="Transform AWQ zeros to Marlin format.")
-    parser.add_argument(
-        "--src", 
-        type=str, 
-        required=False, 
-        help="Path to the source safetensors single file."
+    parser = argparse.ArgumentParser(
+        description="Transform AWQ zeros to Marlin format."
     )
     parser.add_argument(
-        "--dst", 
-        type=str, 
-        required=True, 
-        help="Path to save the transformed safetensors file."
+        "--src",
+        type=str,
+        required=False,
+        help="Path to the source safetensors single file.",
+    )
+    parser.add_argument(
+        "--dst",
+        type=str,
+        required=True,
+        help="Path to save the transformed safetensors file.",
     )
 
     parser.add_argument(
-        "--bits", 
-        type=int, 
-        required=True, 
-        default=4,
-        help="Weight bits."
+        "--bits", type=int, required=True, default=4, help="Weight bits."
     )
 
     args = parser.parse_args()
-    assert args.src != "" and os.path.exists(args.src), "Must provide src folder (or src folder not found)!"
-    assert args.dst != "" and not os.path.exists(args.dst), "Must provide dst folder (or dst folder must be empty)!"
-    assert args.bits == 8 or args.bits == 4, "only 4-bit and 8-bit models are supported!"
+    assert args.src != "" and os.path.exists(args.src), (
+        "Must provide src folder (or src folder not found)!"
+    )
+    assert args.dst != "" and not os.path.exists(args.dst), (
+        "Must provide dst folder (or dst folder must be empty)!"
+    )
+    assert args.bits == 8 or args.bits == 4, (
+        "only 4-bit and 8-bit models are supported!"
+    )
 
     try:
         src_directory = args.src
@@ -203,6 +218,7 @@ def main():
 
     except Exception as e:
         print(f"Error: {e}")
+
 
 if __name__ == "__main__":
     main()

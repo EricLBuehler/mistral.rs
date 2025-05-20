@@ -613,7 +613,12 @@ instantiate_metal_simd_reduction_funcs(bfloat16_t, bfloat16_t, float);
 
 } // namespace metal
 
-
+// Work per thread values for different types. The values here are expected to
+// match get_work_per_thread in mlx/backend/metal/utils.h
+template <typename U> struct WorkPerThread {
+  static_assert(sizeof(U) <= 8, "Type too large");
+  static constexpr int constant n = 8 / sizeof(U);
+};
 
 ///////////////////////////////////////////////////////////////////////////////
 // Type limits utils
@@ -961,38 +966,21 @@ template <typename T, typename U> struct ConditionalType<true, T, U> {
 
 #define MLX_MTL_CONST static constant constexpr const
 
-
 struct Add {
-  template <typename T>
-  T operator()(T x, T y) {
-    return x + y;
-  }
+  template <typename T> T operator()(T x, T y) { return x + y; }
 };
 
 struct FloorDivide {
-  template <typename T>
-  T operator()(T x, T y) {
-    return x / y;
-  }
-  template <>
-  float operator()(float x, float y) {
-    return trunc(x / y);
-  }
-  template <>
-  half operator()(half x, half y) {
-    return trunc(x / y);
-  }
-  template <>
-  bfloat16_t operator()(bfloat16_t x, bfloat16_t y) {
+  template <typename T> T operator()(T x, T y) { return x / y; }
+  template <> float operator()(float x, float y) { return trunc(x / y); }
+  template <> half operator()(half x, half y) { return trunc(x / y); }
+  template <> bfloat16_t operator()(bfloat16_t x, bfloat16_t y) {
     return trunc(x / y);
   }
 };
 
 struct Divide {
-  template <typename T>
-  T operator()(T x, T y) {
-    return x / y;
-  }
+  template <typename T> T operator()(T x, T y) { return x / y; }
 };
 
 struct Remainder {
@@ -1021,50 +1009,33 @@ struct Remainder {
 };
 
 struct Equal {
-  template <typename T>
-  bool operator()(T x, T y) {
-    return x == y;
-  }
+  template <typename T> bool operator()(T x, T y) { return x == y; }
 };
 
 struct NaNEqual {
-  template <typename T>
-  bool operator()(T x, T y) {
+  template <typename T> bool operator()(T x, T y) {
     return x == y || (metal::isnan(x) && metal::isnan(y));
   }
 };
 
 struct Greater {
-  template <typename T>
-  bool operator()(T x, T y) {
-    return x > y;
-  }
+  template <typename T> bool operator()(T x, T y) { return x > y; }
 };
 
 struct GreaterEqual {
-  template <typename T>
-  bool operator()(T x, T y) {
-    return x >= y;
-  }
+  template <typename T> bool operator()(T x, T y) { return x >= y; }
 };
 
 struct Less {
-  template <typename T>
-  bool operator()(T x, T y) {
-    return x < y;
-  }
+  template <typename T> bool operator()(T x, T y) { return x < y; }
 };
 
 struct LessEqual {
-  template <typename T>
-  bool operator()(T x, T y) {
-    return x <= y;
-  }
+  template <typename T> bool operator()(T x, T y) { return x <= y; }
 };
 
 struct LogAddExp {
-  template <typename T>
-  T operator()(T x, T y) {
+  template <typename T> T operator()(T x, T y) {
     if (metal::isnan(x) || metal::isnan(y)) {
       return metal::numeric_limits<T>::quiet_NaN();
     }
@@ -1072,8 +1043,8 @@ struct LogAddExp {
     T maxval = metal::max(x, y);
     T minval = metal::min(x, y);
     return (minval == -inf || maxval == inf)
-        ? maxval
-        : (maxval + log1p(metal::exp(minval - maxval)));
+               ? maxval
+               : (maxval + log1p(metal::exp(minval - maxval)));
   };
 };
 
@@ -1108,17 +1079,11 @@ struct Minimum {
 };
 
 struct Multiply {
-  template <typename T>
-  T operator()(T x, T y) {
-    return x * y;
-  }
+  template <typename T> T operator()(T x, T y) { return x * y; }
 };
 
 struct NotEqual {
-  template <typename T>
-  bool operator()(T x, T y) {
-    return x != y;
-  }
+  template <typename T> bool operator()(T x, T y) { return x != y; }
 };
 
 struct Power {
@@ -1142,76 +1107,48 @@ struct Power {
 };
 
 struct Subtract {
-  template <typename T>
-  T operator()(T x, T y) {
-    return x - y;
-  }
+  template <typename T> T operator()(T x, T y) { return x - y; }
 };
 
 struct LogicalAnd {
-  template <typename T>
-  T operator()(T x, T y) {
-    return x && y;
-  };
+  template <typename T> T operator()(T x, T y) { return x && y; };
 };
 
 struct LogicalOr {
-  template <typename T>
-  T operator()(T x, T y) {
-    return x || y;
-  };
+  template <typename T> T operator()(T x, T y) { return x || y; };
 };
 
 struct BitwiseAnd {
-  template <typename T>
-  T operator()(T x, T y) {
-    return x & y;
-  };
+  template <typename T> T operator()(T x, T y) { return x & y; };
 };
 
 struct BitwiseOr {
-  template <typename T>
-  T operator()(T x, T y) {
-    return x | y;
-  };
+  template <typename T> T operator()(T x, T y) { return x | y; };
 };
 
 struct BitwiseXor {
-  template <typename T>
-  T operator()(T x, T y) {
-    return x ^ y;
-  };
+  template <typename T> T operator()(T x, T y) { return x ^ y; };
 };
 
 struct LeftShift {
-  template <typename T>
-  T operator()(T x, T y) {
-    return x << y;
-  };
+  template <typename T> T operator()(T x, T y) { return x << y; };
 };
 
 struct RightShift {
-  template <typename T>
-  T operator()(T x, T y) {
-    return x >> y;
-  };
+  template <typename T> T operator()(T x, T y) { return x >> y; };
 };
 
 struct ArcTan2 {
-  template <typename T>
-  T operator()(T y, T x) {
+  template <typename T> T operator()(T y, T x) {
     return metal::precise::atan2(y, x);
   }
 };
 
 struct DivMod {
-  template <typename T>
-  metal::array<T, 2> operator()(T x, T y) {
+  template <typename T> metal::array<T, 2> operator()(T x, T y) {
     return {FloorDivide{}(x, y), Remainder{}(x, y)};
   };
 };
-
-
 
 // Instantiate a templated kernel.
 // Extra args are used as template parameters:

@@ -155,7 +155,7 @@ fn main() -> Result<(), String> {
         use std::process::Command;
         use std::{env, str};
 
-        const METAL_SOURCES: [&str; 7] = [
+        const METAL_SOURCES: [&str; 8] = [
             "bitwise",
             "blockwise_fp8",
             "bnb_dequantize",
@@ -163,8 +163,9 @@ fn main() -> Result<(), String> {
             "quantized",
             "scan",
             "sort",
+            "copy",
         ];
-        const HEADER_SOURCES: [&str; 4] = ["utils", "bf16", "scan_impl", "sort_impl"];
+        const HEADER_SOURCES: [&str; 5] = ["utils", "bf16", "scan_impl", "sort_impl", "copy_impl"];
         for src in METAL_SOURCES {
             println!("cargo::rerun-if-changed=src/metal_kernels/{src}.metal");
         }

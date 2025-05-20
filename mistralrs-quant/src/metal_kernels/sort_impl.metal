@@ -16,32 +16,23 @@ using namespace metal;
 // Thread-level sort
 ///////////////////////////////////////////////////////////////////////////////
 
-template <typename T>
-METAL_FUNC void thread_swap(thread T& a, thread T& b) {
+template <typename T> METAL_FUNC void thread_swap(thread T &a, thread T &b) {
   T w = a;
   a = b;
   b = w;
 }
 
-template <typename T>
-struct LessThan {
+template <typename T> struct LessThan {
   static constexpr constant T init = Limits<T>::max;
 
-  METAL_FUNC bool operator()(T a, T b) {
-    return a < b;
-  }
+  METAL_FUNC bool operator()(T a, T b) { return a < b; }
 };
 
-template <
-    typename ValT,
-    typename IdxT,
-    bool ARG_SORT,
-    short N_PER_THREAD,
-    typename CompareOp>
+template <typename ValT, typename IdxT, bool ARG_SORT, short N_PER_THREAD,
+          typename CompareOp>
 struct ThreadSort {
-  static METAL_FUNC void sort(
-      thread ValT (&vals)[N_PER_THREAD],
-      thread IdxT (&idxs)[N_PER_THREAD]) {
+  static METAL_FUNC void sort(thread ValT (&vals)[N_PER_THREAD],
+                              thread IdxT (&idxs)[N_PER_THREAD]) {
     CompareOp op;
     MLX_MTL_LOOP_UNROLL
     for (short i = 0; i < N_PER_THREAD; ++i) {
@@ -60,22 +51,14 @@ struct ThreadSort {
 // Threadgroup-level sort
 ///////////////////////////////////////////////////////////////////////////////
 
-template <
-    typename ValT,
-    typename IdxT,
-    bool ARG_SORT,
-    short BLOCK_THREADS,
-    short N_PER_THREAD,
-    typename CompareOp>
+template <typename ValT, typename IdxT, bool ARG_SORT, short BLOCK_THREADS,
+          short N_PER_THREAD, typename CompareOp>
 struct BlockMergeSort {
   using thread_sort_t =
       ThreadSort<ValT, IdxT, ARG_SORT, N_PER_THREAD, CompareOp>;
-  static METAL_FUNC int merge_partition(
-      const threadgroup ValT* As,
-      const threadgroup ValT* Bs,
-      short A_sz,
-      short B_sz,
-      short sort_md) {
+  static METAL_FUNC int merge_partition(const threadgroup ValT *As,
+                                        const threadgroup ValT *Bs, short A_sz,
+                                        short B_sz, short sort_md) {
     CompareOp op;
 
     short A_st = max(0, sort_md - B_sz);
@@ -96,15 +79,11 @@ struct BlockMergeSort {
     return A_ed;
   }
 
-  static METAL_FUNC void merge_step(
-      const threadgroup ValT* As,
-      const threadgroup ValT* Bs,
-      const threadgroup IdxT* As_idx,
-      const threadgroup IdxT* Bs_idx,
-      short A_sz,
-      short B_sz,
-      thread ValT (&vals)[N_PER_THREAD],
-      thread IdxT (&idxs)[N_PER_THREAD]) {
+  static METAL_FUNC void
+  merge_step(const threadgroup ValT *As, const threadgroup ValT *Bs,
+             const threadgroup IdxT *As_idx, const threadgroup IdxT *Bs_idx,
+             short A_sz, short B_sz, thread ValT (&vals)[N_PER_THREAD],
+             thread IdxT (&idxs)[N_PER_THREAD]) {
     CompareOp op;
     short a_idx = 0;
     short b_idx = 0;
@@ -122,11 +101,10 @@ struct BlockMergeSort {
     }
   }
 
-  static METAL_FUNC void sort(
-      threadgroup ValT* tgp_vals [[threadgroup(0)]],
-      threadgroup IdxT* tgp_idxs [[threadgroup(1)]],
-      int size_sorted_axis,
-      uint3 lid [[thread_position_in_threadgroup]]) {
+  static METAL_FUNC void sort(threadgroup ValT *tgp_vals [[threadgroup(0)]],
+                              threadgroup IdxT *tgp_idxs [[threadgroup(1)]],
+                              int size_sorted_axis,
+                              uint3 lid [[thread_position_in_threadgroup]]) {
     // Get thread location
     int idx = lid.x * N_PER_THREAD;
 
@@ -172,8 +150,8 @@ struct BlockMergeSort {
       int B_st = sort_st + sort_sz / 2;
       int B_ed = sort_st + sort_sz;
 
-      const threadgroup ValT* As = tgp_vals + A_st;
-      const threadgroup ValT* Bs = tgp_vals + B_st;
+      const threadgroup ValT *As = tgp_vals + A_st;
+      const threadgroup ValT *Bs = tgp_vals + B_st;
       int A_sz = A_ed - A_st;
       int B_sz = B_ed - B_st;
 
@@ -190,9 +168,9 @@ struct BlockMergeSort {
       A_sz -= partition;
       B_sz -= sort_md - partition;
 
-      const threadgroup IdxT* As_idx =
+      const threadgroup IdxT *As_idx =
           ARG_SORT ? tgp_idxs + A_st + partition : nullptr;
-      const threadgroup IdxT* Bs_idx =
+      const threadgroup IdxT *Bs_idx =
           ARG_SORT ? tgp_idxs + B_st + sort_md - partition : nullptr;
 
       // Merge starting at the partition and store results in thread registers
@@ -214,37 +192,23 @@ struct BlockMergeSort {
 // Kernel sort
 ///////////////////////////////////////////////////////////////////////////////
 
-template <
-    typename T,
-    typename U,
-    bool ARG_SORT,
-    short BLOCK_THREADS,
-    short N_PER_THREAD,
-    typename CompareOp = LessThan<T>>
+template <typename T, typename U, bool ARG_SORT, short BLOCK_THREADS,
+          short N_PER_THREAD, typename CompareOp = LessThan<T>>
 struct KernelMergeSort {
   using ValT = T;
   using IdxT = uint;
-  using block_merge_sort_t = BlockMergeSort<
-      ValT,
-      IdxT,
-      ARG_SORT,
-      BLOCK_THREADS,
-      N_PER_THREAD,
-      CompareOp>;
+  using block_merge_sort_t = BlockMergeSort<ValT, IdxT, ARG_SORT, BLOCK_THREADS,
+                                            N_PER_THREAD, CompareOp>;
 
   MLX_MTL_CONST short N_PER_BLOCK = BLOCK_THREADS * N_PER_THREAD;
 
   static METAL_FUNC void block_sort(
-      const device T* inp,
-      device U* out,
-      const constant int& size_sorted_axis,
-      const constant int& in_stride_sorted_axis,
-      const constant int& out_stride_sorted_axis,
-      const constant int& in_stride_segment_axis,
-      const constant int& out_stride_segment_axis,
-      threadgroup ValT* tgp_vals,
-      threadgroup IdxT* tgp_idxs,
-      uint3 tid [[threadgroup_position_in_grid]],
+      const device T *inp, device U *out, const constant int &size_sorted_axis,
+      const constant int &in_stride_sorted_axis,
+      const constant int &out_stride_sorted_axis,
+      const constant int &in_stride_segment_axis,
+      const constant int &out_stride_segment_axis, threadgroup ValT *tgp_vals,
+      threadgroup IdxT *tgp_idxs, uint3 tid [[threadgroup_position_in_grid]],
       uint3 lid [[thread_position_in_threadgroup]]) {
     // tid.y tells us the segment index
     inp += tid.y * in_stride_segment_axis;
@@ -277,22 +241,17 @@ struct KernelMergeSort {
   }
 };
 
-template <
-    typename T,
-    typename U,
-    bool ARG_SORT,
-    short BLOCK_THREADS,
-    short N_PER_THREAD>
-[[kernel, max_total_threads_per_threadgroup(BLOCK_THREADS)]] void block_sort(
-    const device T* inp [[buffer(0)]],
-    device U* out [[buffer(1)]],
-    const constant int& size_sorted_axis [[buffer(2)]],
-    const constant int& in_stride_sorted_axis [[buffer(3)]],
-    const constant int& out_stride_sorted_axis [[buffer(4)]],
-    const constant int& in_stride_segment_axis [[buffer(5)]],
-    const constant int& out_stride_segment_axis [[buffer(6)]],
-    uint3 tid [[threadgroup_position_in_grid]],
-    uint3 lid [[thread_position_in_threadgroup]]) {
+template <typename T, typename U, bool ARG_SORT, short BLOCK_THREADS,
+          short N_PER_THREAD>
+[[kernel, max_total_threads_per_threadgroup(BLOCK_THREADS)]] void
+block_sort(const device T *inp [[buffer(0)]], device U *out [[buffer(1)]],
+           const constant int &size_sorted_axis [[buffer(2)]],
+           const constant int &in_stride_sorted_axis [[buffer(3)]],
+           const constant int &out_stride_sorted_axis [[buffer(4)]],
+           const constant int &in_stride_segment_axis [[buffer(5)]],
+           const constant int &out_stride_segment_axis [[buffer(6)]],
+           uint3 tid [[threadgroup_position_in_grid]],
+           uint3 lid [[thread_position_in_threadgroup]]) {
   using sort_kernel =
       KernelMergeSort<T, U, ARG_SORT, BLOCK_THREADS, N_PER_THREAD>;
   using ValT = typename sort_kernel::ValT;
@@ -301,55 +260,34 @@ template <
   if (ARG_SORT) {
     threadgroup ValT tgp_vals[sort_kernel::N_PER_BLOCK];
     threadgroup IdxT tgp_idxs[sort_kernel::N_PER_BLOCK];
-    sort_kernel::block_sort(
-        inp,
-        out,
-        size_sorted_axis,
-        in_stride_sorted_axis,
-        out_stride_sorted_axis,
-        in_stride_segment_axis,
-        out_stride_segment_axis,
-        tgp_vals,
-        tgp_idxs,
-        tid,
-        lid);
+    sort_kernel::block_sort(inp, out, size_sorted_axis, in_stride_sorted_axis,
+                            out_stride_sorted_axis, in_stride_segment_axis,
+                            out_stride_segment_axis, tgp_vals, tgp_idxs, tid,
+                            lid);
   } else {
     threadgroup ValT tgp_vals[sort_kernel::N_PER_BLOCK];
-    sort_kernel::block_sort(
-        inp,
-        out,
-        size_sorted_axis,
-        in_stride_sorted_axis,
-        out_stride_sorted_axis,
-        in_stride_segment_axis,
-        out_stride_segment_axis,
-        tgp_vals,
-        nullptr,
-        tid,
-        lid);
+    sort_kernel::block_sort(inp, out, size_sorted_axis, in_stride_sorted_axis,
+                            out_stride_sorted_axis, in_stride_segment_axis,
+                            out_stride_segment_axis, tgp_vals, nullptr, tid,
+                            lid);
   }
 }
 
 constant constexpr const int zero_helper = 0;
 
-template <
-    typename T,
-    typename U,
-    bool ARG_SORT,
-    short BLOCK_THREADS,
-    short N_PER_THREAD>
-[[kernel, max_total_threads_per_threadgroup(BLOCK_THREADS)]] void block_sort_nc(
-    const device T* inp [[buffer(0)]],
-    device U* out [[buffer(1)]],
-    const constant int& size_sorted_axis [[buffer(2)]],
-    const constant int& in_stride_sorted_axis [[buffer(3)]],
-    const constant int& out_stride_sorted_axis [[buffer(4)]],
-    const constant int& nc_dim [[buffer(5)]],
-    const constant int* nc_shape [[buffer(6)]],
-    const constant int64_t* in_nc_strides [[buffer(7)]],
-    const constant int64_t* out_nc_strides [[buffer(8)]],
-    uint3 tid [[threadgroup_position_in_grid]],
-    uint3 lid [[thread_position_in_threadgroup]]) {
+template <typename T, typename U, bool ARG_SORT, short BLOCK_THREADS,
+          short N_PER_THREAD>
+[[kernel, max_total_threads_per_threadgroup(BLOCK_THREADS)]] void
+block_sort_nc(const device T *inp [[buffer(0)]], device U *out [[buffer(1)]],
+              const constant int &size_sorted_axis [[buffer(2)]],
+              const constant int &in_stride_sorted_axis [[buffer(3)]],
+              const constant int &out_stride_sorted_axis [[buffer(4)]],
+              const constant int &nc_dim [[buffer(5)]],
+              const constant int *nc_shape [[buffer(6)]],
+              const constant int64_t *in_nc_strides [[buffer(7)]],
+              const constant int64_t *out_nc_strides [[buffer(8)]],
+              uint3 tid [[threadgroup_position_in_grid]],
+              uint3 lid [[thread_position_in_threadgroup]]) {
   using sort_kernel =
       KernelMergeSort<T, U, ARG_SORT, BLOCK_THREADS, N_PER_THREAD>;
   using ValT = typename sort_kernel::ValT;
@@ -363,63 +301,32 @@ template <
   if (ARG_SORT) {
     threadgroup ValT tgp_vals[sort_kernel::N_PER_BLOCK];
     threadgroup IdxT tgp_idxs[sort_kernel::N_PER_BLOCK];
-    sort_kernel::block_sort(
-        inp,
-        out,
-        size_sorted_axis,
-        in_stride_sorted_axis,
-        out_stride_sorted_axis,
-        zero_helper,
-        zero_helper,
-        tgp_vals,
-        tgp_idxs,
-        tid,
-        lid);
+    sort_kernel::block_sort(inp, out, size_sorted_axis, in_stride_sorted_axis,
+                            out_stride_sorted_axis, zero_helper, zero_helper,
+                            tgp_vals, tgp_idxs, tid, lid);
   } else {
     threadgroup ValT tgp_vals[sort_kernel::N_PER_BLOCK];
-    sort_kernel::block_sort(
-        inp,
-        out,
-        size_sorted_axis,
-        in_stride_sorted_axis,
-        out_stride_sorted_axis,
-        zero_helper,
-        zero_helper,
-        tgp_vals,
-        nullptr,
-        tid,
-        lid);
+    sort_kernel::block_sort(inp, out, size_sorted_axis, in_stride_sorted_axis,
+                            out_stride_sorted_axis, zero_helper, zero_helper,
+                            tgp_vals, nullptr, tid, lid);
   }
 }
 
-template <
-    typename ValT,
-    typename IdxT,
-    bool ARG_SORT,
-    short BLOCK_THREADS,
-    short N_PER_THREAD,
-    typename CompareOp = LessThan<ValT>>
+template <typename ValT, typename IdxT, bool ARG_SORT, short BLOCK_THREADS,
+          short N_PER_THREAD, typename CompareOp = LessThan<ValT>>
 struct KernelMultiBlockMergeSort {
-  using block_merge_sort_t = BlockMergeSort<
-      ValT,
-      IdxT,
-      ARG_SORT,
-      BLOCK_THREADS,
-      N_PER_THREAD,
-      CompareOp>;
+  using block_merge_sort_t = BlockMergeSort<ValT, IdxT, ARG_SORT, BLOCK_THREADS,
+                                            N_PER_THREAD, CompareOp>;
 
   MLX_MTL_CONST short N_PER_BLOCK = BLOCK_THREADS * N_PER_THREAD;
 
-  static METAL_FUNC void block_sort(
-      const device ValT* inp,
-      device ValT* out_vals,
-      device IdxT* out_idxs,
-      const constant int& size_sorted_axis,
-      const constant int& stride_sorted_axis,
-      threadgroup ValT* tgp_vals,
-      threadgroup IdxT* tgp_idxs,
-      uint3 tid [[threadgroup_position_in_grid]],
-      uint3 lid [[thread_position_in_threadgroup]]) {
+  static METAL_FUNC void
+  block_sort(const device ValT *inp, device ValT *out_vals,
+             device IdxT *out_idxs, const constant int &size_sorted_axis,
+             const constant int &stride_sorted_axis, threadgroup ValT *tgp_vals,
+             threadgroup IdxT *tgp_idxs,
+             uint3 tid [[threadgroup_position_in_grid]],
+             uint3 lid [[thread_position_in_threadgroup]]) {
     // tid.y tells us the segment index
     int base_idx = tid.x * N_PER_BLOCK;
 
@@ -448,12 +355,9 @@ struct KernelMultiBlockMergeSort {
     }
   }
 
-  static METAL_FUNC int merge_partition(
-      const device ValT* As,
-      const device ValT* Bs,
-      int A_sz,
-      int B_sz,
-      int sort_md) {
+  static METAL_FUNC int merge_partition(const device ValT *As,
+                                        const device ValT *Bs, int A_sz,
+                                        int B_sz, int sort_md) {
     CompareOp op;
 
     int A_st = max(0, sort_md - B_sz);
@@ -475,29 +379,21 @@ struct KernelMultiBlockMergeSort {
   }
 };
 
-template <
-    typename ValT,
-    typename IdxT,
-    bool ARG_SORT,
-    short BLOCK_THREADS,
-    short N_PER_THREAD>
-[[kernel, max_total_threads_per_threadgroup(BLOCK_THREADS)]] void mb_block_sort(
-    const device ValT* inp [[buffer(0)]],
-    device ValT* out_vals [[buffer(1)]],
-    device IdxT* out_idxs [[buffer(2)]],
-    const constant int& size_sorted_axis [[buffer(3)]],
-    const constant int& stride_sorted_axis [[buffer(4)]],
-    const constant int& nc_dim [[buffer(5)]],
-    const constant int* nc_shape [[buffer(6)]],
-    const constant int64_t* nc_strides [[buffer(7)]],
-    uint3 tid [[threadgroup_position_in_grid]],
-    uint3 lid [[thread_position_in_threadgroup]]) {
-  using sort_kernel = KernelMultiBlockMergeSort<
-      ValT,
-      IdxT,
-      ARG_SORT,
-      BLOCK_THREADS,
-      N_PER_THREAD>;
+template <typename ValT, typename IdxT, bool ARG_SORT, short BLOCK_THREADS,
+          short N_PER_THREAD>
+[[kernel, max_total_threads_per_threadgroup(BLOCK_THREADS)]] void
+mb_block_sort(const device ValT *inp [[buffer(0)]],
+              device ValT *out_vals [[buffer(1)]],
+              device IdxT *out_idxs [[buffer(2)]],
+              const constant int &size_sorted_axis [[buffer(3)]],
+              const constant int &stride_sorted_axis [[buffer(4)]],
+              const constant int &nc_dim [[buffer(5)]],
+              const constant int *nc_shape [[buffer(6)]],
+              const constant int64_t *nc_strides [[buffer(7)]],
+              uint3 tid [[threadgroup_position_in_grid]],
+              uint3 lid [[thread_position_in_threadgroup]]) {
+  using sort_kernel = KernelMultiBlockMergeSort<ValT, IdxT, ARG_SORT,
+                                                BLOCK_THREADS, N_PER_THREAD>;
 
   auto block_idx = elem_to_loc(tid.y, nc_shape, nc_strides, nc_dim);
   inp += block_idx;
@@ -507,40 +403,24 @@ template <
   threadgroup ValT tgp_vals[sort_kernel::N_PER_BLOCK];
   threadgroup IdxT tgp_idxs[sort_kernel::N_PER_BLOCK];
 
-  sort_kernel::block_sort(
-      inp,
-      out_vals,
-      out_idxs,
-      size_sorted_axis,
-      stride_sorted_axis,
-      tgp_vals,
-      tgp_idxs,
-      tid,
-      lid);
+  sort_kernel::block_sort(inp, out_vals, out_idxs, size_sorted_axis,
+                          stride_sorted_axis, tgp_vals, tgp_idxs, tid, lid);
 }
 
-template <
-    typename ValT,
-    typename IdxT,
-    bool ARG_SORT,
-    short BLOCK_THREADS,
-    short N_PER_THREAD>
-[[kernel]] void mb_block_partition(
-    device IdxT* block_partitions [[buffer(0)]],
-    const device ValT* dev_vals [[buffer(1)]],
-    const device IdxT* dev_idxs [[buffer(2)]],
-    const constant int& size_sorted_axis [[buffer(3)]],
-    const constant int& merge_tiles [[buffer(4)]],
-    const constant int& n_blocks [[buffer(5)]],
-    uint3 tid [[threadgroup_position_in_grid]],
-    uint3 lid [[thread_position_in_threadgroup]],
-    uint3 tgp_dims [[threads_per_threadgroup]]) {
-  using sort_kernel = KernelMultiBlockMergeSort<
-      ValT,
-      IdxT,
-      ARG_SORT,
-      BLOCK_THREADS,
-      N_PER_THREAD>;
+template <typename ValT, typename IdxT, bool ARG_SORT, short BLOCK_THREADS,
+          short N_PER_THREAD>
+[[kernel]] void
+mb_block_partition(device IdxT *block_partitions [[buffer(0)]],
+                   const device ValT *dev_vals [[buffer(1)]],
+                   const device IdxT *dev_idxs [[buffer(2)]],
+                   const constant int &size_sorted_axis [[buffer(3)]],
+                   const constant int &merge_tiles [[buffer(4)]],
+                   const constant int &n_blocks [[buffer(5)]],
+                   uint3 tid [[threadgroup_position_in_grid]],
+                   uint3 lid [[thread_position_in_threadgroup]],
+                   uint3 tgp_dims [[threads_per_threadgroup]]) {
+  using sort_kernel = KernelMultiBlockMergeSort<ValT, IdxT, ARG_SORT,
+                                                BLOCK_THREADS, N_PER_THREAD>;
 
   block_partitions += tid.y * tgp_dims.x;
   dev_vals += tid.y * size_sorted_axis;
@@ -560,43 +440,30 @@ template <
     int B_ed = min(size_sorted_axis, B_st + sort_sz / 2);
 
     int partition_at = min(B_ed - A_st, sort_kernel::N_PER_BLOCK * merge_lane);
-    int partition = sort_kernel::merge_partition(
-        dev_vals + A_st,
-        dev_vals + B_st,
-        A_ed - A_st,
-        B_ed - B_st,
-        partition_at);
+    int partition =
+        sort_kernel::merge_partition(dev_vals + A_st, dev_vals + B_st,
+                                     A_ed - A_st, B_ed - B_st, partition_at);
 
     block_partitions[i] = A_st + partition;
   }
 }
 
-template <
-    typename ValT,
-    typename IdxT,
-    bool ARG_SORT,
-    short BLOCK_THREADS,
-    short N_PER_THREAD,
-    typename CompareOp = LessThan<ValT>>
+template <typename ValT, typename IdxT, bool ARG_SORT, short BLOCK_THREADS,
+          short N_PER_THREAD, typename CompareOp = LessThan<ValT>>
 [[kernel, max_total_threads_per_threadgroup(BLOCK_THREADS)]] void
-mb_block_merge(
-    const device IdxT* block_partitions [[buffer(0)]],
-    const device ValT* dev_vals_in [[buffer(1)]],
-    const device IdxT* dev_idxs_in [[buffer(2)]],
-    device ValT* dev_vals_out [[buffer(3)]],
-    device IdxT* dev_idxs_out [[buffer(4)]],
-    const constant int& size_sorted_axis [[buffer(5)]],
-    const constant int& merge_tiles [[buffer(6)]],
-    const constant int& num_tiles [[buffer(7)]],
-    uint3 tid [[threadgroup_position_in_grid]],
-    uint3 lid [[thread_position_in_threadgroup]]) {
-  using sort_kernel = KernelMultiBlockMergeSort<
-      ValT,
-      IdxT,
-      ARG_SORT,
-      BLOCK_THREADS,
-      N_PER_THREAD,
-      CompareOp>;
+mb_block_merge(const device IdxT *block_partitions [[buffer(0)]],
+               const device ValT *dev_vals_in [[buffer(1)]],
+               const device IdxT *dev_idxs_in [[buffer(2)]],
+               device ValT *dev_vals_out [[buffer(3)]],
+               device IdxT *dev_idxs_out [[buffer(4)]],
+               const constant int &size_sorted_axis [[buffer(5)]],
+               const constant int &merge_tiles [[buffer(6)]],
+               const constant int &num_tiles [[buffer(7)]],
+               uint3 tid [[threadgroup_position_in_grid]],
+               uint3 lid [[thread_position_in_threadgroup]]) {
+  using sort_kernel =
+      KernelMultiBlockMergeSort<ValT, IdxT, ARG_SORT, BLOCK_THREADS,
+                                N_PER_THREAD, CompareOp>;
 
   using block_sort_t = typename sort_kernel::block_merge_sort_t;
 
@@ -615,9 +482,8 @@ mb_block_merge(
   int A_st = block_partitions[block_idx + 0];
   int A_ed = block_partitions[block_idx + 1];
   int B_st = min(size_sorted_axis, 2 * sort_st + sort_sz / 2 + sort_md - A_st);
-  int B_ed = min(
-      size_sorted_axis,
-      2 * sort_st + sort_sz / 2 + sort_md + sort_kernel::N_PER_BLOCK - A_ed);
+  int B_ed = min(size_sorted_axis, 2 * sort_st + sort_sz / 2 + sort_md +
+                                       sort_kernel::N_PER_BLOCK - A_ed);
 
   if ((block_idx % merge_tiles) == merge_tiles - 1) {
     A_ed = min(size_sorted_axis, sort_st + sort_sz / 2);
@@ -657,8 +523,8 @@ mb_block_merge(
   // Merge
   int sort_md_local = min(A_sz + B_sz, N_PER_THREAD * int(lid.x));
 
-  int A_st_local = block_sort_t::merge_partition(
-      tgp_vals, tgp_vals + A_sz, A_sz, B_sz, sort_md_local);
+  int A_st_local = block_sort_t::merge_partition(tgp_vals, tgp_vals + A_sz,
+                                                 A_sz, B_sz, sort_md_local);
   int A_ed_local = A_sz;
 
   int B_st_local = sort_md_local - A_st_local;
@@ -669,14 +535,9 @@ mb_block_merge(
 
   // Do merge
   block_sort_t::merge_step(
-      tgp_vals + A_st_local,
-      tgp_vals + A_ed_local + B_st_local,
-      tgp_idxs + A_st_local,
-      tgp_idxs + A_ed_local + B_st_local,
-      A_sz_local,
-      B_sz_local,
-      thread_vals,
-      thread_idxs);
+      tgp_vals + A_st_local, tgp_vals + A_ed_local + B_st_local,
+      tgp_idxs + A_st_local, tgp_idxs + A_ed_local + B_st_local, A_sz_local,
+      B_sz_local, thread_vals, thread_idxs);
 
   threadgroup_barrier(mem_flags::mem_threadgroup);
   for (int i = 0; i < N_PER_THREAD; ++i) {
