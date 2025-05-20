@@ -96,19 +96,19 @@ macro_rules! get_paths {
         let filenames = get_model_paths(
             revision.clone(),
             &$token_source,
-            &$quantized_model_id,
-            &$quantized_filename,
+            $quantized_model_id.as_ref(),
+            $quantized_filename.as_ref(),
             &api,
             &model_id,
             $loading_uqff,
         )?;
         let adapter_paths = get_xlora_paths(
             $this.model_id.clone(),
-            &$this.xlora_model_id,
-            &$this.lora_adapter_ids,
+            $this.xlora_model_id.as_ref(),
+            $this.lora_adapter_ids.as_ref(),
             &$token_source,
             revision.clone(),
-            &$this.xlora_order,
+            $this.xlora_order.as_ref(),
         )?;
         let gen_conf = if $crate::api_dir_list!(api, model_id)
             .collect::<Vec<_>>()
@@ -283,8 +283,8 @@ macro_rules! get_paths_gguf {
         let filenames = get_model_paths(
             revision.clone(),
             &$token_source,
-            &Some($quantized_model_id),
-            &Some($quantized_filenames),
+            Some(&$quantized_model_id),
+            Some(&$quantized_filenames),
             &api,
             &model_id,
             false, // Never loading UQFF
@@ -292,11 +292,11 @@ macro_rules! get_paths_gguf {
 
         let adapter_paths = get_xlora_paths(
             this_model_id.clone(),
-            &$this.xlora_model_id,
-            &$this.lora_adapter_ids,
+            $this.xlora_model_id.as_ref(),
+            $this.lora_adapter_ids.as_ref(),
             &$token_source,
             revision.clone(),
-            &$this.xlora_order,
+            $this.xlora_order.as_ref(),
         )?;
 
         let gen_conf = if $crate::api_dir_list!(api, model_id)
