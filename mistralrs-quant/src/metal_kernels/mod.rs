@@ -1252,45 +1252,59 @@ fn type_to_name(dt: DType) -> &'static str {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn call_block_sort(
+fn call_single_block_sort(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
-    in_ty: DType,  // dtype of the elements to sort
-    out_ty: DType, // dtype of the output (same as input for `sort`,
-    // or `uint32` for `argsort`)
-    n_rows: usize,         // product of dimensions except the sorted axis
-    n_cols: usize,         // length of the axis being sorted
-    stride_in_axis: usize, // stride (in elements) for the sorted axis
+    axis: usize,
+    shape: &[usize],
+    strides: &[usize],
+    out_strides: &[usize],
+    in_contiguous: bool,
+    in_ty: DType,
+    out_ty: DType,
+    bn: usize,
+    tn: usize,
     src: &Buffer,
     src_offset: usize,
     dst: &Buffer,
     argsort: bool,
 ) -> Result<(), MetalKernelError> {
-    // --- choose tile sizes --------------------------------------------------
-    let tn = 4usize;
-    let mut bn = match (n_cols + tn - 1) / tn {
-        v if v > 256 => 512,
-        v if v > 128 => 256,
-        v if v > 64 => 128,
-        v if v > 32 => 64,
-        _ => 32,
-    };
-    if bn == 512 && in_ty.size_in_bytes() > 4 {
-        bn = 256;
-    }
-    let n_per_block = bn * tn;
-    let n_blocks = (n_cols + n_per_block - 1) / n_per_block;
-    if n_blocks > 1 {
-        return Err(MetalKernelError::FailedToCreatePipeline(
-            "multi-block sort not yet implemented".into(),
-        ));
-    }
+    let n_rows = shape.iter().product::<usize>() / shape[axis];
 
-    // --- kernel name --------------------------------------------------------
+    let mut in_nc_str = strides.iter().map(|x| *x as i64).collect::<Vec<_>>();
+    in_nc_str.remove(axis);
+
+    let mut out_nc_str = out_strides.iter().map(|x| *x as i64).collect::<Vec<_>>();
+    out_nc_str.remove(axis);
+
+    let mut nc_shape = shape.iter().map(|x| *x as i32).collect::<Vec<_>>();
+    nc_shape.remove(axis);
+
+    let nc_dim = nc_shape.len();
+
+    let size_sorted_axis = shape[axis];
+    let in_stride_sorted_axis = strides[axis];
+    let out_stride_sorted_axis = out_strides[axis];
+
+    macro_rules! check_strides {
+        ($strides:expr, $sort_stride:expr) => {{
+            let min_stride = $strides.iter().min().unwrap();
+            let max_stride = $strides.iter().max().unwrap();
+            $sort_stride == *min_stride || $sort_stride == *max_stride
+        }};
+    }
+    let contiguous = in_contiguous
+        && check_strides!(strides, in_stride_sorted_axis)
+        && check_strides!(out_strides, out_stride_sorted_axis);
+
     use std::fmt::Write as _;
     let mut name = String::new();
-    name.push_str("c"); // contiguous path only for now
+    if contiguous {
+        name.push_str("c");
+    } else {
+        name.push_str("nc");
+    }
     if argsort {
         name.push_str("arg");
     }
@@ -1304,10 +1318,8 @@ fn call_block_sort(
     )
     .unwrap();
 
-    // --- pipeline -----------------------------------------------------------
     let pipeline = kernels.load_pipeline(device, &name)?;
 
-    // --- encode -------------------------------------------------------------
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -1317,11 +1329,56 @@ fn call_block_sort(
     encoder.set_buffer(1, Some(dst), 0);
 
     // Scalar params
-    <i32 as EncoderParam>::set_param(encoder, 2, n_cols as i32); // size_sorted_axis
-    <i32 as EncoderParam>::set_param(encoder, 3, stride_in_axis as i32); // in_stride_sorted_axis
-    <i32 as EncoderParam>::set_param(encoder, 4, stride_in_axis as i32); // out_stride_sorted_axis
-    <i32 as EncoderParam>::set_param(encoder, 5, 1); // in_stride_segment_axis
-    <i32 as EncoderParam>::set_param(encoder, 6, 1); // out_stride_segment_axis
+    <i32 as EncoderParam>::set_param(encoder, 2, size_sorted_axis as i32);
+    <i32 as EncoderParam>::set_param(encoder, 3, in_stride_sorted_axis as i32);
+    <i32 as EncoderParam>::set_param(encoder, 4, out_stride_sorted_axis as i32);
+
+    if contiguous {
+        let mut in_stride_segment_axis = i32::MAX;
+        let mut out_stride_segment_axis = i32::MAX;
+        for i in 0..in_nc_str.len() {
+            if nc_shape[i] == 1 {
+                continue;
+            }
+            if in_nc_str[i] > i32::MAX as i64 || out_nc_str[i] > i32::MAX as i64 {
+                panic!(
+                    "Stride too large in single_block_sort in {} out {}",
+                    in_nc_str[i], out_nc_str[i]
+                );
+            }
+            in_stride_segment_axis = in_stride_segment_axis.min(in_nc_str[i] as i32);
+            out_stride_segment_axis = out_stride_segment_axis.min(out_nc_str[i] as i32);
+        }
+
+        <i32 as EncoderParam>::set_param(encoder, 5, in_stride_segment_axis);
+        <i32 as EncoderParam>::set_param(encoder, 6, out_stride_segment_axis);
+    } else {
+        <i32 as EncoderParam>::set_param(encoder, 5, nc_dim as i32);
+        if nc_shape.is_empty() {
+            let shape = 0i32;
+            let stride = 0i64;
+
+            <i32 as EncoderParam>::set_param(encoder, 6, shape as i32);
+            <i64 as EncoderParam>::set_param(encoder, 7, stride as i64);
+            <i64 as EncoderParam>::set_param(encoder, 8, stride as i64);
+        } else {
+            encoder.set_bytes(
+                6,
+                (std::mem::size_of::<i32>() * nc_shape.len()) as u64,
+                nc_shape.as_ptr() as *const _,
+            );
+            encoder.set_bytes(
+                7,
+                (std::mem::size_of::<i64>() * in_nc_str.len()) as u64,
+                in_nc_str.as_ptr() as *const _,
+            );
+            encoder.set_bytes(
+                8,
+                (std::mem::size_of::<i64>() * out_nc_str.len()) as u64,
+                out_nc_str.as_ptr() as *const _,
+            );
+        }
+    }
 
     // Dispatch
     let group_dims = MTLSize {
@@ -1338,16 +1395,77 @@ fn call_block_sort(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn call_block_sort(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    axis: usize,
+    shape: &[usize],
+    strides: &[usize],
+    out_strides: &[usize],
+    in_contiguous: bool,
+    in_ty: DType,
+    out_ty: DType,
+    src: &Buffer,
+    src_offset: usize,
+    dst: &Buffer,
+    argsort: bool,
+) -> Result<(), MetalKernelError> {
+    let size_sorted_axis = shape[axis];
+
+    let tn = 4usize;
+    let mut bn = match (size_sorted_axis + tn - 1) / tn {
+        v if v > 256 => 512,
+        v if v > 128 => 256,
+        v if v > 64 => 128,
+        v if v > 32 => 64,
+        _ => 32,
+    };
+    if bn == 512 && in_ty.size_in_bytes() > 4 {
+        bn = 256;
+    }
+    let n_per_block = bn * tn;
+    let n_blocks = (size_sorted_axis + n_per_block - 1) / n_per_block;
+    if n_blocks > 1 {
+        return Err(MetalKernelError::FailedToCreatePipeline(
+            "multi-block sort not yet implemented".into(),
+        ));
+    } else {
+        call_single_block_sort(
+            device,
+            ep,
+            kernels,
+            axis,
+            shape,
+            strides,
+            out_strides,
+            in_contiguous,
+            in_ty,
+            out_ty,
+            bn,
+            tn,
+            src,
+            src_offset,
+            dst,
+            argsort,
+        )
+    }
+}
+
 /// Sorts values along the last axis of a contiguous tensor.
 #[allow(clippy::too_many_arguments)]
 pub fn call_sort(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
-    ty: DType,
-    n_rows: usize,
-    n_cols: usize,
-    stride_in_axis: usize,
+    axis: usize,
+    shape: &[usize],
+    strides: &[usize],
+    out_strides: &[usize],
+    in_contiguous: bool,
+    in_ty: DType,
+    out_ty: DType,
     src: &Buffer,
     src_offset: usize,
     dst: &Buffer,
@@ -1356,15 +1474,17 @@ pub fn call_sort(
         device,
         ep,
         kernels,
-        ty,
-        ty,
-        n_rows,
-        n_cols,
-        stride_in_axis,
+        axis,
+        shape,
+        strides,
+        out_strides,
+        in_contiguous,
+        in_ty,
+        out_ty,
         src,
         src_offset,
         dst,
-        /* argsort = */ false,
+        false,
     )
 }
 
@@ -1374,10 +1494,12 @@ pub fn call_argsort(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
-    ty: DType,
-    n_rows: usize,
-    n_cols: usize,
-    stride_in_axis: usize,
+    axis: usize,
+    shape: &[usize],
+    strides: &[usize],
+    out_strides: &[usize],
+    in_contiguous: bool,
+    in_ty: DType,
     src: &Buffer,
     src_offset: usize,
     dst: &Buffer, // must be `uint32`
@@ -1386,11 +1508,13 @@ pub fn call_argsort(
         device,
         ep,
         kernels,
-        ty,
+        axis,
+        shape,
+        strides,
+        out_strides,
+        in_contiguous,
+        in_ty,
         DType::U32,
-        n_rows,
-        n_cols,
-        stride_in_axis,
         src,
         src_offset,
         dst,
