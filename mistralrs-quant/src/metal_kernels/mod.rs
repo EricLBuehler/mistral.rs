@@ -4,7 +4,7 @@ use metal::{
     FunctionConstantValues, Library, MTLSize,
 };
 use std::os::raw::c_void;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::{collections::HashMap, sync::OnceLock};
 
 pub mod utils;
@@ -1269,26 +1269,160 @@ pub struct SortArgs<'a> {
     pub src_offset: usize,
     /// GPU buffer that will receive the sorted values / indices.
     pub dst: &'a Buffer,
+    pub bn: usize,
+    pub tn: usize,
+    pub n_blocks: usize,
 }
 
 /// Scratch buffers that can be reused between consecutive multi‑block sort
 /// calls.  Providing them avoids the internal allocations performed each
 /// time by `call_multi_block_sort`.
-///
-/// The enum is kept deliberately non‑exhaustive so that additional cached
-/// resources can be introduced without breaking existing code.
 #[derive(Debug)]
-pub enum MultiBlockSortCache<'a> {
-    /// Let the helper allocate fresh scratch buffers for this invocation.
-    None,
-    /// Re‑use caller‑provided temporary buffers.
-    External {
-        dev_vals_ping: &'a Buffer,
-        dev_vals_pong: &'a Buffer,
-        dev_idxs_ping: &'a Buffer,
-        dev_idxs_pong: &'a Buffer,
-        block_partitions: &'a Buffer,
-    },
+pub struct MultiBlockSortCache {
+    dev_vals_ping: Arc<Buffer>,
+    dev_vals_pong: Arc<Buffer>,
+    dev_idxs_ping: Arc<Buffer>,
+    dev_idxs_pong: Arc<Buffer>,
+    block_partitions: Arc<Buffer>,
+}
+
+// --------------------------------------------------------------------------
+// Simple LRU cache for scratch buffers used by multi‑block sort / argsort
+// --------------------------------------------------------------------------
+
+use std::collections::VecDeque;
+
+/// Uniquely identifies a scratch‑buffer layout.
+///
+/// We key only on the dimensions that impact required buffer sizes.  If two
+/// calls have the same `(rows, cols, dtype_size, blocks)` tuple they can
+/// safely reuse the same scratch buffers.
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
+struct CacheKey {
+    n_rows: usize,
+    size_sorted_axis: usize,
+    dtype_size: usize,
+    n_blocks: usize,
+}
+
+/// The buffers that can be reused between kernel launches.
+#[derive(Debug)]
+struct CachedBuffers {
+    dev_vals_ping: Arc<Buffer>,
+    dev_vals_pong: Arc<Buffer>,
+    dev_idxs_ping: Arc<Buffer>,
+    dev_idxs_pong: Arc<Buffer>,
+    block_partitions: Arc<Buffer>,
+}
+
+/// Thread‑safe LRU cache with a fixed maximum number of entries.
+///
+/// *   The cache is **thread‑safe** (internally uses a `RwLock`).
+/// *   Reuses scratch buffers across launches that share the same
+///     (`rows`, `cols`, `dtype`, `blocks`) tuple.
+pub struct SortScratchCache {
+    cap: usize,
+    map: RwLock<HashMap<CacheKey, CachedBuffers>>,
+    order: RwLock<VecDeque<CacheKey>>, // most‑recent access at the back
+}
+
+impl SortScratchCache {
+    /// Create a new cache that holds at most `cap` distinct buffer sets.
+    pub fn new(cap: usize) -> Self {
+        Self {
+            cap,
+            map: RwLock::new(HashMap::new()),
+            order: RwLock::new(VecDeque::new()),
+        }
+    }
+
+    /// Retrieve a set of scratch buffers (creating them if absent) and return
+    /// a `MultiBlockSortCache::External` pointing to them.
+    ///
+    /// The borrow lasts for `'a` (caller’s scope) and is safe because the
+    /// buffers live inside `self`.
+    pub fn checkout<'a>(
+        &'a self,
+        metal_device: &MetalDevice,
+        n_rows: usize,
+        size_sorted_axis: usize,
+        dtype: DType,
+        n_blocks: usize,
+    ) -> MultiBlockSortCache {
+        let key = CacheKey {
+            n_rows,
+            size_sorted_axis,
+            dtype_size: dtype.size_in_bytes(),
+            n_blocks,
+        };
+
+        // Fast path – try read‑lock first
+        if let Some(buffers) = self.map.read().unwrap().get(&key) {
+            // Touch LRU order (needs write lock)
+            self.touch_key(key);
+            return MultiBlockSortCache {
+                dev_vals_ping: buffers.dev_vals_ping.clone(),
+                dev_vals_pong: buffers.dev_vals_pong.clone(),
+                dev_idxs_ping: buffers.dev_idxs_ping.clone(),
+                dev_idxs_pong: buffers.dev_idxs_pong.clone(),
+                block_partitions: buffers.block_partitions.clone(),
+            };
+        }
+
+        // Slow path – allocate new buffers
+        let mut map_guard = self.map.write().unwrap();
+        let mut order_guard = self.order.write().unwrap();
+
+        // Evict least‑recently used if we’re at capacity
+        if map_guard.len() == self.cap {
+            if let Some(oldest) = order_guard.pop_front() {
+                map_guard.remove(&oldest);
+            }
+        }
+
+        // Allocate fresh buffers
+        let elem_vals = n_rows * size_sorted_axis;
+        let cached = CachedBuffers {
+            dev_vals_ping: metal_device
+                .new_buffer(elem_vals, dtype, "cache_vals_ping")
+                .expect("alloc dev_vals_ping"),
+            dev_vals_pong: metal_device
+                .new_buffer(elem_vals, dtype, "cache_vals_pong")
+                .expect("alloc dev_vals_pong"),
+            dev_idxs_ping: metal_device
+                .new_buffer(elem_vals, DType::U32, "cache_idxs_ping")
+                .expect("alloc dev_idxs_ping"),
+            dev_idxs_pong: metal_device
+                .new_buffer(elem_vals, DType::U32, "cache_idxs_pong")
+                .expect("alloc dev_idxs_pong"),
+            block_partitions: metal_device
+                .new_buffer(n_rows * (n_blocks + 1), DType::U32, "cache_partitions")
+                .expect("alloc block_partitions"),
+        };
+
+        map_guard.insert(key, cached);
+        order_guard.push_back(key);
+
+        // SAFETY: we must re‑borrow from the fresh entry since `map_guard`
+        // holds ownership of the buffers.
+        let buffers = map_guard.get(&key).unwrap();
+        MultiBlockSortCache {
+            dev_vals_ping: buffers.dev_vals_ping.clone(),
+            dev_vals_pong: buffers.dev_vals_pong.clone(),
+            dev_idxs_ping: buffers.dev_idxs_ping.clone(),
+            dev_idxs_pong: buffers.dev_idxs_pong.clone(),
+            block_partitions: buffers.block_partitions.clone(),
+        }
+    }
+
+    /// Move `key` to the back of the LRU order list.
+    fn touch_key(&self, key: CacheKey) {
+        let mut order = self.order.write().unwrap();
+        if let Some(pos) = order.iter().position(|k| *k == key) {
+            order.remove(pos);
+        }
+        order.push_back(key);
+    }
 }
 
 /// How the copy kernel should behave.
@@ -1656,7 +1790,6 @@ fn call_single_block_sort<'a>(
 
 #[allow(clippy::too_many_arguments)]
 fn call_multi_block_sort<'a>(
-    metal_device: &MetalDevice,
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
@@ -1665,7 +1798,7 @@ fn call_multi_block_sort<'a>(
     tn: usize,
     n_blocks: usize,
     argsort: bool,
-    _cache: &MultiBlockSortCache<'a>,
+    cache: &MultiBlockSortCache,
 ) -> Result<(), MetalKernelError> {
     // --- destructure helper -------------------------------------------------
     let axis = args.axis;
@@ -1695,24 +1828,16 @@ fn call_multi_block_sort<'a>(
     let size_sorted_axis = shape[axis];
     let stride_sorted_axis = strides[axis];
 
-    // Make temporary copies
-    let dev_vals_0 = metal_device
-        .new_buffer(n_rows * size_sorted_axis, in_ty, "dev_vals_0")
-        .unwrap();
-    let dev_vals_1 = metal_device
-        .new_buffer(n_rows * size_sorted_axis, in_ty, "dev_vals_1")
-        .unwrap();
+    // ------------------------------------------------------------------
+    // Acquire scratch buffers (either cached or freshly allocated)
+    // ------------------------------------------------------------------
 
-    let dev_idxs_0 = metal_device
-        .new_buffer(n_rows * size_sorted_axis, DType::U32, "dev_idxs_0")
-        .unwrap();
-    let dev_idxs_1 = metal_device
-        .new_buffer(n_rows * size_sorted_axis, DType::U32, "dev_idxs_1")
-        .unwrap();
-
-    let block_partitions = metal_device
-        .new_buffer(n_rows * (n_blocks + 1), DType::U32, "block_partitions")
-        .unwrap();
+    // Scratch buffers supplied by the caller (from SortScratchCache)
+    let dev_vals_0 = cache.dev_vals_ping.clone();
+    let dev_vals_1 = cache.dev_vals_pong.clone();
+    let dev_idxs_0 = cache.dev_idxs_ping.clone();
+    let dev_idxs_1 = cache.dev_idxs_pong.clone();
+    let block_partitions = cache.block_partitions.clone();
 
     // Do blockwise sort
     {
@@ -1729,8 +1854,8 @@ fn call_multi_block_sort<'a>(
         encoder.set_compute_pipeline_state(&pipeline);
 
         encoder.set_buffer(0, Some(src), src_offset as u64);
-        encoder.set_buffer(1, Some(&dev_vals_0), 0);
-        encoder.set_buffer(2, Some(&dev_idxs_0), 0);
+        encoder.set_buffer(1, Some(&*dev_vals_0), 0);
+        encoder.set_buffer(2, Some(&*dev_idxs_0), 0);
         <i32 as EncoderParam>::set_param(encoder, 3, size_sorted_axis as i32);
         <i32 as EncoderParam>::set_param(encoder, 4, stride_sorted_axis as i32);
         <i32 as EncoderParam>::set_param(encoder, 5, nc_dim as i32);
@@ -1808,9 +1933,9 @@ fn call_multi_block_sort<'a>(
             let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
             encoder.set_compute_pipeline_state(&pipeline);
 
-            encoder.set_buffer(0, Some(&block_partitions), 0);
-            encoder.set_buffer(1, Some(&dev_vals_in), 0);
-            encoder.set_buffer(2, Some(&dev_idxs_in), 0);
+            encoder.set_buffer(0, Some(&*block_partitions), 0);
+            encoder.set_buffer(1, Some(&*dev_vals_in), 0);
+            encoder.set_buffer(2, Some(&*dev_idxs_in), 0);
             <i32 as EncoderParam>::set_param(encoder, 3, size_sorted_axis as i32);
             <i32 as EncoderParam>::set_param(encoder, 4, merge_tiles as i32);
             <i32 as EncoderParam>::set_param(encoder, 5, n_blocks as i32);
@@ -1843,11 +1968,11 @@ fn call_multi_block_sort<'a>(
             let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
             encoder.set_compute_pipeline_state(&pipeline);
 
-            encoder.set_buffer(0, Some(&block_partitions), 0);
-            encoder.set_buffer(1, Some(&dev_vals_in), 0);
-            encoder.set_buffer(2, Some(&dev_idxs_in), 0);
-            encoder.set_buffer(3, Some(&dev_vals_out), 0);
-            encoder.set_buffer(4, Some(&dev_idxs_out), 0);
+            encoder.set_buffer(0, Some(&*block_partitions), 0);
+            encoder.set_buffer(1, Some(&*dev_vals_in), 0);
+            encoder.set_buffer(2, Some(&*dev_idxs_in), 0);
+            encoder.set_buffer(3, Some(&*dev_vals_out), 0);
+            encoder.set_buffer(4, Some(&*dev_idxs_out), 0);
             <i32 as EncoderParam>::set_param(encoder, 5, size_sorted_axis as i32);
             <i32 as EncoderParam>::set_param(encoder, 6, merge_tiles as i32);
             <i32 as EncoderParam>::set_param(encoder, 7, n_blocks as i32);
@@ -1886,7 +2011,7 @@ fn call_multi_block_sort<'a>(
         args.out_shape,
         &strides,
         out_strides,
-        &copy_src,
+        &*copy_src, // deref Arc
         0,
         dst,
         0,
@@ -1902,48 +2027,21 @@ fn call_multi_block_sort<'a>(
 
 #[allow(clippy::too_many_arguments)]
 fn call_block_sort<'a>(
-    metal_device: &MetalDevice,
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
     args: &SortArgs<'a>,
     argsort: bool,
-    cache: &MultiBlockSortCache<'a>,
+    cache: &MultiBlockSortCache,
 ) -> Result<(), MetalKernelError> {
     // --- destructure helper -------------------------------------------------
-    let axis = args.axis;
-    let shape = args.shape;
-    let in_ty = args.in_ty;
+    let bn = args.bn;
+    let tn = args.tn;
+    let n_blocks = args.n_blocks;
 
-    let size_sorted_axis = shape[axis];
-
-    let tn = 4usize;
-    let mut bn = match (size_sorted_axis + tn - 1) / tn {
-        v if v > 256 => 512,
-        v if v > 128 => 256,
-        v if v > 64 => 128,
-        v if v > 32 => 64,
-        _ => 32,
-    };
-    if bn == 512 && in_ty.size_in_bytes() > 4 {
-        bn = 256;
-    }
-    let n_per_block = bn * tn;
-    let n_blocks = (size_sorted_axis + n_per_block - 1) / n_per_block;
     if n_blocks > 1 {
         // multi‑block path
-        call_multi_block_sort(
-            metal_device,
-            device,
-            ep,
-            kernels,
-            args,
-            bn,
-            tn,
-            n_blocks,
-            argsort,
-            cache,
-        )
+        call_multi_block_sort(device, ep, kernels, args, bn, tn, n_blocks, argsort, cache)
     } else {
         // single‑block path
         call_single_block_sort(device, ep, kernels, args, bn, tn, argsort)
@@ -1952,40 +2050,22 @@ fn call_block_sort<'a>(
 
 /// Sorts values along the last axis of a contiguous tensor.
 pub fn call_sort<'a>(
-    metal_device: &MetalDevice,
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
     args: &SortArgs<'a>,
-    cache: &MultiBlockSortCache<'a>,
+    cache: &MultiBlockSortCache,
 ) -> Result<(), MetalKernelError> {
-    call_block_sort(
-        metal_device,
-        device,
-        ep,
-        kernels,
-        args,
-        /* argsort = */ false,
-        cache,
-    )
+    call_block_sort(device, ep, kernels, args, /* argsort = */ false, cache)
 }
 
 /// Returns the indices that would sort `src` along the last axis.
 pub fn call_argsort<'a>(
-    metal_device: &MetalDevice,
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
     args: &SortArgs<'a>,
-    cache: &MultiBlockSortCache<'a>,
+    cache: &MultiBlockSortCache,
 ) -> Result<(), MetalKernelError> {
-    call_block_sort(
-        metal_device,
-        device,
-        ep,
-        kernels,
-        args,
-        /* argsort = */ true,
-        cache,
-    )
+    call_block_sort(device, ep, kernels, args, /* argsort = */ true, cache)
 }

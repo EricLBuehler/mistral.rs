@@ -16,6 +16,14 @@ use candle_core::cuda::{cudarc::driver::DevicePtr, CudaStorage, WrapErr};
 #[cfg(feature = "cuda")]
 use std::ffi::c_void;
 
+#[cfg(feature = "metal")]
+use crate::metal_kernels::SortScratchCache; // re‑export for clarity
+#[cfg(feature = "metal")]
+use std::sync::OnceLock;
+
+#[cfg(feature = "metal")]
+static SORT_SCRATCH_CACHE: OnceLock<SortScratchCache> = OnceLock::new();
+
 struct Leftshift(usize);
 
 impl Leftshift {
@@ -900,6 +908,33 @@ impl CustomOp1 for ArgSort {
         let output = device.new_buffer(elem_count, candle_core::DType::U32, "argsort")?;
 
         // ------------------------------------------------------------------
+        // Obtain a scratch‑buffer set from the global LRU cache (cap=4)
+        // ------------------------------------------------------------------
+        let cache = SORT_SCRATCH_CACHE.get_or_init(|| SortScratchCache::new(4));
+
+        let dims = l1.dims();
+        let size_sorted_axis = dims[self.axis];
+        let n_rows = l1.shape().elem_count() / size_sorted_axis;
+
+        // Replicate the kernel’s internal block sizing to derive `n_blocks`
+        let tn = 4usize;
+        let mut bn = match (size_sorted_axis + tn - 1) / tn {
+            v if v > 256 => 512,
+            v if v > 128 => 256,
+            v if v > 64 => 128,
+            v if v > 32 => 64,
+            _ => 32,
+        };
+        if bn == 512 && s1.dtype().size_in_bytes() > 4 {
+            bn = 256;
+        }
+        let n_per_block = bn * tn;
+        let n_blocks = (size_sorted_axis + n_per_block - 1) / n_per_block;
+
+        // Borrow the buffers for this launch
+        let scratch = cache.checkout(device, n_rows, size_sorted_axis, s1.dtype(), n_blocks);
+
+        // ------------------------------------------------------------------
         // Build the unified SortArgs payload
         // ------------------------------------------------------------------
         let sort_args = crate::metal_kernels::SortArgs {
@@ -914,16 +949,18 @@ impl CustomOp1 for ArgSort {
             src: s1.buffer(),
             src_offset: l1.start_offset(), // element offset
             dst: &output,
+            bn,
+            tn,
+            n_blocks,
         };
 
         // Launch the Metal kernel via the new API
         crate::metal_kernels::call_argsort(
-            device,          // &MetalDevice
             device.device(), // &metal::Device
             &command_buffer, // impl EncoderProvider
             &crate::metal_kernels::Kernels::new(),
             &sort_args,
-            &crate::metal_kernels::MultiBlockSortCache::None,
+            &scratch,
         )
         .map_err(candle_core::Error::wrap)?;
 
@@ -978,6 +1015,33 @@ impl CustomOp1 for Sort {
         let output = device.new_buffer(elem_count, s1.dtype(), "sort")?;
 
         // ------------------------------------------------------------------
+        // Obtain a scratch‑buffer set from the global LRU cache (cap=4)
+        // ------------------------------------------------------------------
+        let cache = SORT_SCRATCH_CACHE.get_or_init(|| SortScratchCache::new(4));
+
+        let dims = l1.dims();
+        let size_sorted_axis = dims[self.axis];
+        let n_rows = l1.shape().elem_count() / size_sorted_axis;
+
+        // Replicate the kernel’s internal block sizing to derive `n_blocks`
+        let tn = 4usize;
+        let mut bn = match (size_sorted_axis + tn - 1) / tn {
+            v if v > 256 => 512,
+            v if v > 128 => 256,
+            v if v > 64 => 128,
+            v if v > 32 => 64,
+            _ => 32,
+        };
+        if bn == 512 && s1.dtype().size_in_bytes() > 4 {
+            bn = 256;
+        }
+        let n_per_block = bn * tn;
+        let n_blocks = (size_sorted_axis + n_per_block - 1) / n_per_block;
+
+        // Borrow the buffers for this launch
+        let scratch = cache.checkout(device, n_rows, size_sorted_axis, s1.dtype(), n_blocks);
+
+        // ------------------------------------------------------------------
         // Build the unified SortArgs payload
         // ------------------------------------------------------------------
         let sort_args = crate::metal_kernels::SortArgs {
@@ -992,16 +1056,18 @@ impl CustomOp1 for Sort {
             src: s1.buffer(),
             src_offset: l1.start_offset(), // element offset
             dst: &output,
+            bn,
+            tn,
+            n_blocks,
         };
 
         // Launch the Metal kernel via the new API
         crate::metal_kernels::call_sort(
-            device,          // &MetalDevice
             device.device(), // &metal::Device
             &command_buffer, // impl EncoderProvider
             &crate::metal_kernels::Kernels::new(),
             &sort_args,
-            &crate::metal_kernels::MultiBlockSortCache::None,
+            &scratch,
         )
         .map_err(candle_core::Error::wrap)?;
 
