@@ -1088,12 +1088,18 @@ pub trait SortOp {
 
 impl SortOp for Tensor {
     fn fast_argsort_asc<D: Dim>(&self, axis: D) -> Result<Tensor> {
+        if self.device().is_cpu() {
+            return self.arg_sort_last_dim(true);
+        }
         self.apply_op1_no_bwd(&ArgSort {
             axis: axis.to_index(self.shape(), "argsort")?,
         })
     }
 
     fn fast_sort_asc<D: Dim>(&self, axis: D) -> Result<Tensor> {
+        if self.device().is_cpu() {
+            return Ok(self.sort_last_dim(true)?.0);
+        }
         self.apply_op1_no_bwd(&Sort {
             axis: axis.to_index(self.shape(), "sort")?,
         })
