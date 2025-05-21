@@ -858,11 +858,13 @@ impl BitWiseOp for Tensor {
 
 // ────────────────────────────── ArgSort / Sort ────────────────────────────────
 
+#[allow(unused)]
 /// Configuration for an **argsort** (returns indices) operation.
 struct ArgSort {
     axis: usize,
 }
 
+#[allow(unused)]
 /// Configuration for a **sort** (returns re‑ordered values) operation.
 struct Sort {
     axis: usize,

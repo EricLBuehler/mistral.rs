@@ -330,6 +330,7 @@ impl Sampler {
         })
     }
 
+    #[allow(unused)]
     fn sample_fast(
         &self,
         logits: Tensor,
@@ -340,6 +341,10 @@ impl Sampler {
         min_p: f64,
     ) -> Result<Logprobs> {
         let mut probs = logits.to_dtype(DType::F32)?;
+
+        for processor in &self.logits_processors {
+            probs = processor.apply(&probs, context)?;
+        }
 
         let context = Tensor::new(context, logits.device())?;
         let mut counts = logits.zeros_like()?;
@@ -773,6 +778,7 @@ impl Sampler {
         Ok(())
     }
 
+    #[allow(unused)]
     /// Sample the provided tokens.
     ///
     /// If the temperature is `None`, argmax sampling is used. Otherwise, the selected sampling is used.
@@ -785,6 +791,7 @@ impl Sampler {
         rng: Arc<Mutex<Isaac64Rng>>,
         sample_speculative: bool,
     ) -> Result<Logprobs> {
+        #[cfg(feature = "metal")]
         return self.sample_fast(
             logits,
             context,

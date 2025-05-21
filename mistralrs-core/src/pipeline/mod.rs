@@ -300,19 +300,6 @@ impl ForwardInputsResult {
             }),
         }
     }
-
-    fn to_device(&self, device: &Device) -> candle_core::Result<Self> {
-        match self {
-            Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
-                logits: logits.to_device(device)?,
-            }),
-            Self::RawLogits { logits } => Ok(Self::RawLogits {
-                logits: logits.to_device(device)?,
-            }),
-            Self::Image { .. } => Ok(self.clone()),
-            Self::Speech { .. } => Ok(self.clone()),
-        }
-    }
 }
 
 #[async_trait::async_trait]
