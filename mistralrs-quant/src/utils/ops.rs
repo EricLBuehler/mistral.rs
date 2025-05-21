@@ -1428,7 +1428,7 @@ impl CustomOp1 for CumSum {
     }
 
     #[cfg(feature = "cuda")]
-    fn cuda_fwd(&self, s1: &CudaStorage, l1: &Layout) -> Result<(CudaStorage, Shape)> {
+    fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
         todo!()
     }
 
