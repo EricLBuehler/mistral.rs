@@ -382,7 +382,7 @@ impl Llama {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
-                &None,
+                &cfg.quantization_config,
                 false,
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?

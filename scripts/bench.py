@@ -51,7 +51,7 @@ async def timed_chat(client: AsyncOpenAI, messages):
 
 
 # Use the async-capable client
-client = AsyncOpenAI(api_key="foobar", base_url="http://localhost:8080/v1/")
+client = AsyncOpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 # Enable this to log requests and responses
 # client._client = httpx.AsyncClient(
