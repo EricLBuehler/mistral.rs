@@ -1575,7 +1575,7 @@ METAL_FUNC void qmv_fast_impl(const device uint32_t *w, const device T *scales,
                               device T *y, const constant int &in_vec_size,
                               const constant int &out_vec_size,
                               uint3 tid [[threadgroup_position_in_grid]],
-                              uint simd_gid [[simdgroup_index_in_threadgroup]],
+                              uint simd_gid [[simdgroup_index_in_simdgroup]],
                               uint simd_lid [[thread_index_in_simdgroup]]) {
   constexpr int power_of_2_bits = (bits & (bits - 1)) == 0;
   constexpr int packs_per_thread = bits == 2 ? 1 : 2;
@@ -1606,22 +1606,44 @@ METAL_FUNC void qmv_fast_impl(const device uint32_t *w, const device T *scales,
   x += tid.y * in_vec_size + simd_lid * values_per_thread;
   y += tid.y * out_vec_size + out_row;
 
+  /* --- Optimisation: pre‑compute stride constants & per‑row base pointers --- */
+  const int ws_block_step = block_size * bytes_per_pack / pack_factor;   // bytes to jump per K‑block
+  const int sb_block_step = block_size / group_size;                      // elements to jump per K‑block
+
+  // Cache per‑row pointers so we avoid recomputing `row * in_vec_size_*`
+  thread const device uint8_t *wl_ptrs[results_per_simdgroup];
+  thread const device T        *sl_ptrs[results_per_simdgroup];
+  thread const device T        *bl_ptrs[results_per_simdgroup];
+
+#pragma clang loop unroll(full)
+  for (int row = 0; row < results_per_simdgroup; ++row) {
+    wl_ptrs[row] = ws + row * in_vec_size_w;
+    sl_ptrs[row] = scales + row * in_vec_size_g;
+    bl_ptrs[row] = biases + row * in_vec_size_g;
+  }
+
+  // Stream over the input vector in blocks of `block_size`, re‑using the
+  // cached row‑relative pointers to minimise pointer arithmetic.
+#pragma clang loop unroll(enable)
   for (int k = 0; k < in_vec_size; k += block_size) {
+    // Load a block of `x` into registers and compute its running sum.
     U sum = load_vector<T, U, values_per_thread, bits>(x, x_thread);
 
-    for (int row = 0; row < results_per_simdgroup; row++) {
-      auto wl = (const device uint8_t *)(ws + row * in_vec_size_w);
-      const device T *sl = scales + row * in_vec_size_g;
-      const device T *bl = biases + row * in_vec_size_g;
+#pragma clang loop unroll(full)
+    for (int row = 0; row < results_per_simdgroup; ++row) {
+      U s = sl_ptrs[row][0];
+      U b = bl_ptrs[row][0];
 
-      U s = sl[0];
-      U b = bl[0];
-      result[row] += qdot<U, values_per_thread, bits>(wl, x_thread, s, b, sum);
+      result[row] += qdot<U, values_per_thread, bits>(wl_ptrs[row],
+                                                      x_thread, s, b, sum);
+
+      // Advance all cached pointers to the next K‑block.
+      wl_ptrs[row] += ws_block_step;
+      sl_ptrs[row] += sb_block_step;
+      bl_ptrs[row] += sb_block_step;
     }
 
-    ws += block_size * bytes_per_pack / pack_factor;
-    scales += block_size / group_size;
-    biases += block_size / group_size;
+    // Move `x` to the next K‑block (only once per SIMD‑lane).
     x += block_size;
   }
 
