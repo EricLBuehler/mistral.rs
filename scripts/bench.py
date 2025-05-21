@@ -1,6 +1,6 @@
-# cargo run --release --features metal '--' --port 1234 --isq 8 --paged-attn --max-seqs 1000 plain -m ../hf_models/llama3.2_3b --max-seq-len 131072      
+# cargo run --release --features metal '--' --port 1234 --isq 8 --paged-attn --max-seqs 1000 plain -m ../hf_models/llama3.2_3b --max-seq-len 131072
 # cargo run --release --features metal '--' --port 1234 --paged-attn --max-seqs 1000 plain -m mlx-community/Mistral-7B-Instruct-v0.3-4bit --max-seq-len 131072
-# mlx_lm.server --model mlx-community/Mistral-7B-Instruct-v0.3-4bit --port 8080 
+# mlx_lm.server --model mlx-community/Mistral-7B-Instruct-v0.3-4bit --port 8080
 
 import asyncio
 from openai import AsyncOpenAI
@@ -8,6 +8,10 @@ import httpx
 import textwrap
 import json
 import time
+
+NUM_USERS = 100
+REQUESTS_PER_USER = 8
+PORT = 1234
 
 
 def log_response(response: httpx.Response):
@@ -34,9 +38,13 @@ def log_response(response: httpx.Response):
         print(f"    {key}: {value}")
 
 
+# Use the async-capable client
+client = AsyncOpenAI(api_key="foobar", base_url=f"http://localhost:{PORT}/v1/")
+
+
 async def timed_chat(client: AsyncOpenAI, messages):
     """
-    Send one chat completion request and return (completion, elapsed_seconds).
+    Send one chat completion request and return (completion, elapsed_seconds, completion_tokens).
     """
     start = time.perf_counter()
     completion = await client.chat.completions.create(
@@ -47,56 +55,49 @@ async def timed_chat(client: AsyncOpenAI, messages):
         top_p=0.1,
         temperature=0,
     )
-    return completion, time.perf_counter() - start
+    elapsed = time.perf_counter() - start
+    # Safely get number of completion tokens, default to 0 if missing
+    completion_tokens = getattr(completion.usage, "completion_tokens", 0)
+    return completion, elapsed, completion_tokens
 
 
-# Use the async-capable client
-client = AsyncOpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
+async def user_task(client: AsyncOpenAI, system_prompt: str, user_message: str):
+    """
+    Returns list of (completion, elapsed_seconds, completion_tokens).
+    """
+    results = []
+    base_messages = []
+    if system_prompt:
+        base_messages.append({"role": "system", "content": system_prompt})
 
-# Enable this to log requests and responses
-# client._client = httpx.AsyncClient(
-#     event_hooks={"request": [print], "response": [log_response]}
-# )
+    for _ in range(REQUESTS_PER_USER):
+        messages = base_messages + [{"role": "user", "content": user_message}]
+        completion, elapsed, completion_tokens = await timed_chat(client, messages)
+        results.append((completion, elapsed, completion_tokens))
+    return results
 
 
 async def main() -> None:
     """
-    Simple REPL that fires **10 concurrent** chat completion requests for every user prompt.
+    Computes and prints overall average request time, total requests, and average T/s.
     """
-    messages = []
+    system_prompt = None  # "You are a helpful assistant."
+    user_message = "Say hello!"
 
-    # Optional system prompt
-    prompt = input("Enter system prompt >>> ")
-    if prompt:
-        messages.append({"role": "system", "content": prompt})
+    tasks = [user_task(client, system_prompt, user_message) for _ in range(NUM_USERS)]
+    all_results_nested = await asyncio.gather(*tasks)
+    all_results = [item for sublist in all_results_nested for item in sublist]
 
-    while True:
-        user_prompt = input(">>> ")
-        messages.append({"role": "user", "content": user_prompt})
+    total_requests = len(all_results)
+    total_time = sum(elapsed for _, elapsed, _ in all_results)
+    total_tokens = sum(tokens for _, _, tokens in all_results)
+    avg_time = total_time / total_requests if total_requests else 0.0
+    avg_tps = total_tokens / total_time if total_time > 0 else 0.0
 
-        # Create 10 concurrent requests
-        tasks = [timed_chat(client, list(messages)) for _ in range(30)]
-
-        # Wait for them all to finish
-        results = await asyncio.gather(*tasks)
-
-        elapsed_times = []
-        t_s = []
-        # Show the responses
-        for i, (completion, elapsed) in enumerate(results, 1):
-            usage = completion.usage
-            print(f"{elapsed:.2f}s {usage.total_tokens / elapsed:.2f} T/s")
-            t_s.append(usage.total_tokens / elapsed)
-            elapsed_times.append(elapsed)
-
-        print(
-            f"Average: {sum(elapsed_times) / len(elapsed_times):.2f}s {sum(t_s) / len(t_s):.2f} T/s"
-        )
-
-        # Keep only the first assistant reply in the conversation history
-        messages.append(
-            {"role": "assistant", "content": results[0][0].choices[0].message.content}
-        )
+    print(f"Total requests: {total_requests}")
+    print(f"Average request time: {avg_time:.2f}s")
+    print(f"Total tokens: {total_tokens}")
+    print(f"Average tokens per second (T/s): {avg_tps:.2f}")
 
 
 if __name__ == "__main__":
