@@ -1,5 +1,6 @@
 # cargo run --release --features metal '--' --port 1234 --isq 8 --paged-attn --max-seqs 1000 plain -m ../hf_models/llama3.2_3b --max-seq-len 131072
 # cargo run --release --features metal '--' --port 1234 --paged-attn --max-seqs 1000 plain -m mlx-community/Mistral-7B-Instruct-v0.3-4bit --max-seq-len 131072
+# ./llama-server -m ../gguf_models/Llama-3.2-3B-Instruct-Q8_0.gguf
 # mlx_lm.server --model mlx-community/Mistral-7B-Instruct-v0.3-4bit --port 8080
 
 import asyncio
@@ -9,7 +10,7 @@ import textwrap
 import json
 import time
 
-NUM_USERS = 30
+NUM_USERS = 8
 REQUESTS_PER_USER = 8
 PORT = 1234
 
