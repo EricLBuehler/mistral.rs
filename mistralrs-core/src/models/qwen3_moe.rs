@@ -54,6 +54,7 @@ pub struct Config {
     pub(crate) rope_theta: f64,
     pub(crate) sliding_window: Option<usize>,
     pub(crate) head_dim: Option<usize>,
+    #[serde(alias = "quantization")]
     pub(crate) quantization_config: Option<QuantizedConfig>,
     #[serde(default = "tie_word_embeddings")]
     pub(crate) tie_word_embeddings: bool,
@@ -691,7 +692,7 @@ impl Model {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
-                &None,
+                &cfg.quantization_config,
                 false,
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?

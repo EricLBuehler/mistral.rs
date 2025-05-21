@@ -17,6 +17,7 @@ use std::{
 use tracing::warn;
 
 use crate::{
+    engine::IntervalLogger,
     get_mut_arcmutex,
     paged_attention::BlockEngine,
     scheduler::{Scheduler, SchedulerOutput},
@@ -63,7 +64,7 @@ impl PagedAttentionScheduler {
         }
     }
 
-    pub fn schedule(&mut self) -> PagedAttentionSchedulerOutput {
+    pub fn schedule(&mut self, logger: &IntervalLogger) -> PagedAttentionSchedulerOutput {
         // If there are no swapped seqs (they have higher priority), add seqs that are in the
         // waiting queue to the running queue.
         if self.swapped_out.is_empty() {
@@ -119,6 +120,9 @@ impl PagedAttentionScheduler {
 
             // If we did schedule, or we ignored sequences.
             if !scheduled.is_empty() || did_ignore {
+                logger.set_num_running(self.running.len());
+                logger.set_num_waiting(self.waiting.len() + self.swapped_out.len());
+
                 return PagedAttentionSchedulerOutput {
                     scheduled: scheduled.into(),
                     blocks_to_swap_in: HashMap::new(),
@@ -222,6 +226,9 @@ impl PagedAttentionScheduler {
             });
             TERMINATE_ALL_NEXT_STEP.store(false, Ordering::SeqCst);
         }
+
+        logger.set_num_running(self.running.len());
+        logger.set_num_waiting(self.waiting.len() + self.swapped_out.len());
 
         PagedAttentionSchedulerOutput {
             scheduled: self.running.clone().into(), // Clone should be cheap.
@@ -359,9 +366,9 @@ impl Scheduler for PagedAttentionScheduler {
     fn add_seq(&mut self, seq: Sequence) {
         self.waiting.push_back(Arc::new(Mutex::new(seq)));
     }
-    fn schedule(&mut self) -> SchedulerOutput<'_> {
+    fn schedule(&mut self, logger: &IntervalLogger) -> SchedulerOutput<'_> {
         SchedulerOutput::PagedAttention {
-            output: self.schedule(),
+            output: self.schedule(logger),
         }
     }
     fn waiting_len(&self) -> usize {

@@ -45,6 +45,8 @@ pub struct Config {
     pub(crate) max_position_embeddings: usize,
     pub(crate) sliding_window: Option<usize>,
     pub(crate) original_max_position_embeddings: usize,
+
+    #[serde(alias = "quantization")]
     pub(crate) quantization_config: Option<QuantizedConfig>,
     pub(crate) lm_head_bias: bool,
     pub(crate) attention_bias: bool,
@@ -656,7 +658,7 @@ impl Model {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
-                &None,
+                &cfg.quantization_config,
                 cfg.lm_head_bias,
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?

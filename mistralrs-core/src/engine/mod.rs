@@ -14,7 +14,7 @@ use crate::{
 };
 use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::ParserFactory;
-use logger::IntervalLogger;
+pub use logger::IntervalLogger;
 use once_cell::sync::Lazy;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
@@ -172,7 +172,7 @@ impl Engine {
 
             let run_start = Instant::now();
             let mut scheduler = get_mut_arcmutex!(self.scheduler);
-            let scheduled = scheduler.schedule();
+            let scheduled = scheduler.schedule(&self.logger);
 
             match scheduled {
                 SchedulerOutput::DefaultScheduler {

@@ -6,6 +6,7 @@ pub use default_scheduler::{DefaultScheduler, DefaultSchedulerMethod, DefaultSch
 use tokio::sync::Mutex;
 
 use crate::{
+    engine::IntervalLogger,
     paged_attention::{
         BlockEngine, BlockTables, CacheConfig, PagedAttentionScheduler,
         PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
@@ -51,7 +52,7 @@ pub enum SchedulerOutput<'a> {
 }
 
 pub trait Scheduler: Send + Sync {
-    fn schedule(&mut self) -> SchedulerOutput<'_>;
+    fn schedule(&mut self, logger: &IntervalLogger) -> SchedulerOutput<'_>;
     fn waiting_len(&self) -> usize;
     fn running_len(&self) -> usize;
     fn add_seq(&mut self, seq: Sequence);
