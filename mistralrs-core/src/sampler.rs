@@ -341,17 +341,19 @@ impl Sampler {
         min_p: f64,
     ) -> Result<Logprobs> {
         let mut probs = logits.to_dtype(DType::F32)?;
+        probs = candle_nn::ops::softmax_last_dim(&(probs / self.temperature.unwrap_or(1.))?)?;
 
         // Top-K
         if top_k > 0 {
-            let TopKOutput {
-                values: topk_vals,
-                indices: _,
-            } = probs.topk(top_k as usize)?;
+            let sorted_values = probs.fast_sort_asc(D::Minus1)?;
+            let topk_values = sorted_values.narrow(
+                D::Minus1,
+                sorted_values.dim(D::Minus1)? - top_k as usize,
+                top_k as usize,
+            )?;
+
             // select the kth largest value as threshold
-            let threshold = topk_vals
-                .get_on_dim(D::Minus1, (top_k as i64 - 1) as usize)?
-                .unsqueeze(0)?;
+            let threshold = topk_values.get_on_dim(D::Minus1, 0)?.unsqueeze(0)?;
             let mask_topk = probs.broadcast_ge(&threshold)?;
             probs = mask_topk.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
         }
@@ -381,7 +383,6 @@ impl Sampler {
             probs = mask_minp.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
         }
 
-        probs = candle_nn::ops::softmax_last_dim(&(probs / self.temperature.unwrap_or(1.))?)?;
         let next_token = probs.argmax(D::Minus1)?.to_scalar::<u32>()?;
 
         let logprob = 1.;
