@@ -44,6 +44,7 @@ pub struct Config {
     pub final_logit_softcapping: Option<f64>,
     pub query_pre_attn_scalar: usize,
     pub max_position_embeddings: usize,
+    #[serde(alias = "quantization")]
     pub quantization_config: Option<QuantizedConfig>,
     #[allow(dead_code)]
     pub tie_word_embeddings: bool,

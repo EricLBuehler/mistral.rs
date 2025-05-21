@@ -93,6 +93,7 @@ pub struct DeepSeekV2Config {
     pub(crate) kv_lora_rank: usize,
     pub(crate) v_head_dim: usize,
     pub(crate) qk_nope_head_dim: usize,
+    #[serde(alias = "quantization")]
     pub(crate) quantization_config: Option<QuantizedConfig>,
     pub(crate) n_group: usize,
     pub(crate) topk_group: usize,
@@ -788,7 +789,7 @@ impl DeepSeekV2 {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
-                &None,
+                &cfg.quantization_config,
                 false,
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?

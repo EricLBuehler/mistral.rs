@@ -28,7 +28,7 @@ def log_response(response: httpx.Response):
         print(f"    {key}: {value}")
 
 
-client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
+client = OpenAI(api_key="foobar", base_url="http://localhost:8080/v1/")
 
 # Enable this to log requests and responses
 # client._client = httpx.Client(

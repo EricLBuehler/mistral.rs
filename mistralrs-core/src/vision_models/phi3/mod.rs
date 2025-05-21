@@ -75,6 +75,7 @@ pub struct Config {
     pub original_max_position_embeddings: usize,
     pub embd_layer: EmbedLayerConfig,
     pub img_processor: ImageProcessorConfig,
+    #[serde(alias = "quantization")]
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub tie_word_embeddings: bool,
@@ -1026,7 +1027,7 @@ impl Model {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
-                &None,
+                &cfg.quantization_config,
                 false,
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
