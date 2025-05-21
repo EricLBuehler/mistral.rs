@@ -9,7 +9,7 @@ import textwrap
 import json
 import time
 
-NUM_USERS = 100
+NUM_USERS = 30
 REQUESTS_PER_USER = 8
 PORT = 1234
 
