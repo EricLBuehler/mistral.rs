@@ -593,11 +593,8 @@ pub trait Pipeline:
                 let start = Instant::now();
                 let logits = logits
                     .into_iter()
-                    .map(|l| {
-                        l.expect("Did not get any inputs. This is shocking.")
-                            .to_device(&Device::Cpu)
-                    })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
+                    .map(|l| l.expect("Did not get any inputs. This is shocking."))
+                    .collect::<Vec<_>>();
 
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. } => unreachable!(),

@@ -17,8 +17,6 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIter
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 
-use crate::ops::{TopKLastDimOp, TopKOutput};
-
 static DRY_SEQUENCE_BREAKERS: Lazy<Vec<String>> =
     Lazy::new(|| ["\n", ":", "\"", "*"].map(String::from).to_vec());
 
@@ -335,12 +333,40 @@ impl Sampler {
     fn sample_fast(
         &self,
         logits: Tensor,
+        context: &[u32],
         return_logprobs: bool,
         top_k: i64,
         top_p: f64,
         min_p: f64,
     ) -> Result<Logprobs> {
         let mut probs = logits.to_dtype(DType::F32)?;
+
+        let context = Tensor::new(context, logits.device())?;
+        let mut counts = logits.zeros_like()?;
+        counts = counts.scatter_add(
+            &context,
+            &context.ones_like()?.to_dtype(counts.dtype())?,
+            D::Minus1,
+        )?;
+
+        let presence = counts
+            .gt(0.)?
+            .where_cond(&counts.ones_like()?, &counts.zeros_like()?)?;
+
+        match self.frequency_penalty {
+            Some(freq_penalty) if freq_penalty != 0. => {
+                probs = (probs - (freq_penalty as f64 * counts)?)?;
+            }
+            _ => (),
+        }
+
+        match self.presence_penalty {
+            Some(pres_penalty) if pres_penalty != 0. => {
+                probs = (probs - (pres_penalty as f64 * presence)?)?;
+            }
+            _ => (),
+        }
+
         probs = candle_nn::ops::softmax_last_dim(&(probs / self.temperature.unwrap_or(1.))?)?;
 
         // Top-K
@@ -385,9 +411,56 @@ impl Sampler {
 
         let next_token = probs.argmax(D::Minus1)?.to_scalar::<u32>()?;
 
-        let logprob = 1.;
+        // Extract the top‑n log‑probs if the caller asked for them.
+        let (top_logprobs, logprob) = if return_logprobs {
+            let k = self.top_n_logprobs;
 
-        let top_logprobs: Option<Vec<TopLogprob>> = None;
+            let sorted_values = probs.fast_sort_asc(D::Minus1)?;
+            let topk_values = sorted_values
+                .narrow(
+                    D::Minus1,
+                    sorted_values.dim(D::Minus1)? - top_k as usize,
+                    top_k as usize,
+                )?
+                .to_vec1::<f32>()?;
+
+            let sorted_idxs = probs.fast_argsort_asc(D::Minus1)?;
+            let topk_idxs = sorted_idxs
+                .narrow(
+                    D::Minus1,
+                    sorted_values.dim(D::Minus1)? - top_k as usize,
+                    top_k as usize,
+                )?
+                .to_vec1::<u32>()?;
+
+            let mut result = Vec::with_capacity(k);
+            if let Some(tokenizer) = &self.tokenizer {
+                for (prob, token) in topk_values.iter().zip(topk_idxs) {
+                    let decoded = tokenizer
+                        .decode(&[token], false)
+                        .map_err(|e| Error::Msg(e.to_string()))?;
+                    result.push(TopLogprob {
+                        token,
+                        logprob: prob.log(10.0),
+                        bytes: Some(decoded),
+                    });
+                }
+            } else {
+                for (prob, token) in topk_values.iter().zip(topk_idxs) {
+                    result.push(TopLogprob {
+                        token,
+                        logprob: prob.log(10.0),
+                        bytes: None,
+                    });
+                }
+            }
+
+            let logprob = result.last().map(|res| res.logprob).unwrap_or(1.);
+
+            (Some(result), logprob)
+        } else {
+            (None, 1.)
+        };
 
         let bytes = if let Some(tokenizer) = &self.tokenizer {
             Some(
@@ -712,7 +785,14 @@ impl Sampler {
         rng: Arc<Mutex<Isaac64Rng>>,
         sample_speculative: bool,
     ) -> Result<Logprobs> {
-        return self.sample_fast(logits, return_logprobs, self.top_k, self.top_p, self.min_p);
+        return self.sample_fast(
+            logits,
+            context,
+            return_logprobs,
+            self.top_k,
+            self.top_p,
+            self.min_p,
+        );
 
         let logits = logits.to_vec1()?;
         let mut logits = self.apply_penalties(logits, context)?;
