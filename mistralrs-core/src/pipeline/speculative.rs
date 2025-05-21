@@ -405,6 +405,7 @@ impl Pipeline for SpeculativePipeline {
                         rng.clone(),
                         false, // todo tune
                         true,
+                        false,
                     )
                     .await?;
                     seq.add_tmp_tok(sample.token);

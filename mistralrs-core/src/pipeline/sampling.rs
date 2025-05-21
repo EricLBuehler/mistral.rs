@@ -315,6 +315,7 @@ pub async fn sample_and_add_toks(
                 rng.clone(),
                 use_async_pool,
                 false,
+                use_async_pool,
             )
         })
         .collect();
@@ -345,6 +346,7 @@ pub async fn sample_sequence(
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     use_async_pool: bool,
     sample_speculative: bool,
+    multiple_sequences: bool,
 ) -> Result<Logprobs> {
     let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
 
@@ -360,6 +362,7 @@ pub async fn sample_sequence(
                 return_logprobs,
                 rng_clone,
                 sample_speculative,
+                multiple_sequences,
             )
         })
         .await?
@@ -370,6 +373,7 @@ pub async fn sample_sequence(
             return_logprobs,
             rng_clone,
             sample_speculative,
+            multiple_sequences,
         )?
     };
 
@@ -416,6 +420,7 @@ pub async fn sample_sequence(
                         return_logprobs,
                         rng_clone,
                         sample_speculative,
+                        multiple_sequences,
                     )
                 })
                 .await?
@@ -426,6 +431,7 @@ pub async fn sample_sequence(
                     return_logprobs,
                     rng_clone,
                     sample_speculative,
+                    multiple_sequences,
                 )?
             }
         }
@@ -481,6 +487,7 @@ pub async fn sample_target_sequence_speculative(
             rng.clone(),
             true, // TODO(EricLBuehler): does this hurt perf?
             true,
+            false,
         )
         .await?;
         let sampled_token = sample.token;

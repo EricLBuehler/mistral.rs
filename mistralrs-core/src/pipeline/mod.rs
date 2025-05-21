@@ -300,6 +300,19 @@ impl ForwardInputsResult {
             }),
         }
     }
+
+    fn to_device(&self, device: &Device) -> candle_core::Result<Self> {
+        match self {
+            Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
+                logits: logits.to_device(device)?,
+            }),
+            Self::RawLogits { logits } => Ok(Self::RawLogits {
+                logits: logits.to_device(device)?,
+            }),
+            Self::Image { .. } => Ok(self.clone()),
+            Self::Speech { .. } => Ok(self.clone()),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -430,10 +443,18 @@ pub trait Pipeline:
                 }
 
                 let start = Instant::now();
+                let logits_on_cpu = logits.len() > 1;
                 let logits = logits
                     .into_iter()
-                    .map(|l| l.expect("Did not get any inputs. This is shocking."))
-                    .collect::<Vec<_>>();
+                    .map(|l| {
+                        let l = l.expect("Did not get any inputs. This is shocking.");
+                        if logits_on_cpu {
+                            l.to_device(&Device::Cpu)
+                        } else {
+                            Ok(l)
+                        }
+                    })
+                    .collect::<candle_core::Result<Vec<_>>>()?;
 
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. } => unreachable!(),
@@ -578,10 +599,18 @@ pub trait Pipeline:
                 }
 
                 let start = Instant::now();
+                let logits_on_cpu = logits.len() > 1;
                 let logits = logits
                     .into_iter()
-                    .map(|l| l.expect("Did not get any inputs. This is shocking."))
-                    .collect::<Vec<_>>();
+                    .map(|l| {
+                        let l = l.expect("Did not get any inputs. This is shocking.");
+                        if logits_on_cpu {
+                            l.to_device(&Device::Cpu)
+                        } else {
+                            Ok(l)
+                        }
+                    })
+                    .collect::<candle_core::Result<Vec<_>>>()?;
 
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. } => unreachable!(),
