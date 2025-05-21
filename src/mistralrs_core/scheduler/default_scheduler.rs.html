@@ -5,7 +5,7 @@
 <a href=#5 id=5 data-nosnippet>5</a>};
 <a href=#6 id=6 data-nosnippet>6</a>
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use crate</span>::{
-<a href=#8 id=8 data-nosnippet>8</a>    engine::TERMINATE_ALL_NEXT_STEP,
+<a href=#8 id=8 data-nosnippet>8</a>    engine::{IntervalLogger, TERMINATE_ALL_NEXT_STEP},
 <a href=#9 id=9 data-nosnippet>9</a>    paged_attention::{BlockEngine, BlockTables},
 <a href=#10 id=10 data-nosnippet>10</a>    sequence::{Sequence, SequenceState, StopReason},
 <a href=#11 id=11 data-nosnippet>11</a>};
@@ -203,7 +203,7 @@
 <a href=#203 id=203 data-nosnippet>203</a>    }
 <a href=#204 id=204 data-nosnippet>204</a>
 <a href=#205 id=205 data-nosnippet>205</a>    <span class="doccomment">/// Schedule all sequences based on their state and the available space.
-<a href=#206 id=206 data-nosnippet>206</a>    </span><span class="kw">pub fn </span>schedule(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; DefaultSchedulerOutput {
+<a href=#206 id=206 data-nosnippet>206</a>    </span><span class="kw">pub fn </span>schedule(<span class="kw-2">&amp;mut </span><span class="self">self</span>, logger: <span class="kw-2">&amp;</span>IntervalLogger) -&gt; DefaultSchedulerOutput {
 <a href=#207 id=207 data-nosnippet>207</a>        <span class="comment">// Filter out all done sequences
 <a href=#208 id=208 data-nosnippet>208</a>        </span><span class="kw">let </span>running = std::mem::take(<span class="kw-2">&amp;mut </span><span class="self">self</span>.running);
 <a href=#209 id=209 data-nosnippet>209</a>        <span class="kw">let </span><span class="kw-2">mut </span>waiting = std::mem::take(<span class="kw-2">&amp;mut </span><span class="self">self</span>.waiting);
@@ -215,117 +215,126 @@
 <a href=#215 id=215 data-nosnippet>215</a>        <span class="kw">match </span>(waiting.len(), running.len()) {
 <a href=#216 id=216 data-nosnippet>216</a>            (<span class="number">0</span>, <span class="number">0</span>) =&gt; {
 <a href=#217 id=217 data-nosnippet>217</a>                <span class="self">self</span>.running = running;
-<a href=#218 id=218 data-nosnippet>218</a>                <span class="kw">return </span>DefaultSchedulerOutput {
-<a href=#219 id=219 data-nosnippet>219</a>                    prompt: <span class="macro">vec!</span>[].into(),
-<a href=#220 id=220 data-nosnippet>220</a>                    completion: <span class="macro">vec!</span>[].into(),
-<a href=#221 id=221 data-nosnippet>221</a>                };
-<a href=#222 id=222 data-nosnippet>222</a>            }
-<a href=#223 id=223 data-nosnippet>223</a>            (<span class="kw">_</span>, <span class="number">0</span>) =&gt; {
-<a href=#224 id=224 data-nosnippet>224</a>                <span class="kw">for </span>seq <span class="kw">in </span>waiting.into_iter() {
-<a href=#225 id=225 data-nosnippet>225</a>                    seq.set_state(SequenceState::RunningPrompt);
-<a href=#226 id=226 data-nosnippet>226</a>                    <span class="self">self</span>.running.push(seq);
-<a href=#227 id=227 data-nosnippet>227</a>                }
-<a href=#228 id=228 data-nosnippet>228</a>                <span class="self">self</span>.waiting = Backer::new();
-<a href=#229 id=229 data-nosnippet>229</a>                <span class="kw">let </span>running = std::mem::take(<span class="kw-2">&amp;mut </span><span class="self">self</span>.running);
-<a href=#230 id=230 data-nosnippet>230</a>                <span class="self">self</span>.running = <span class="self">self</span>.bucket_and_waitlist_seqs(running);
-<a href=#231 id=231 data-nosnippet>231</a>                <span class="kw">return </span>DefaultSchedulerOutput {
-<a href=#232 id=232 data-nosnippet>232</a>                    prompt: <span class="self">self</span>.running.iter_mut().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().into(),
-<a href=#233 id=233 data-nosnippet>233</a>                    completion: <span class="macro">vec!</span>[].into(),
-<a href=#234 id=234 data-nosnippet>234</a>                };
-<a href=#235 id=235 data-nosnippet>235</a>            }
-<a href=#236 id=236 data-nosnippet>236</a>            (<span class="number">0</span>, <span class="kw">_</span>) =&gt; {
-<a href=#237 id=237 data-nosnippet>237</a>                <span class="self">self</span>.running = <span class="self">self</span>.bucket_and_waitlist_seqs(running);
-<a href=#238 id=238 data-nosnippet>238</a>                <span class="kw">if </span>TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
-<a href=#239 id=239 data-nosnippet>239</a>                    <span class="self">self</span>.running
-<a href=#240 id=240 data-nosnippet>240</a>                        .iter_mut()
-<a href=#241 id=241 data-nosnippet>241</a>                        .for_each(|seq| seq.set_state(SequenceState::Done(StopReason::Canceled)));
-<a href=#242 id=242 data-nosnippet>242</a>                    TERMINATE_ALL_NEXT_STEP.store(<span class="bool-val">false</span>, Ordering::SeqCst);
-<a href=#243 id=243 data-nosnippet>243</a>                }
-<a href=#244 id=244 data-nosnippet>244</a>                <span class="kw">return </span>DefaultSchedulerOutput {
-<a href=#245 id=245 data-nosnippet>245</a>                    prompt: <span class="macro">vec!</span>[].into(),
-<a href=#246 id=246 data-nosnippet>246</a>                    completion: <span class="self">self</span>.running.iter_mut().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().into(),
-<a href=#247 id=247 data-nosnippet>247</a>                };
-<a href=#248 id=248 data-nosnippet>248</a>            }
-<a href=#249 id=249 data-nosnippet>249</a>            <span class="kw">_ </span>=&gt; {}
-<a href=#250 id=250 data-nosnippet>250</a>        }
-<a href=#251 id=251 data-nosnippet>251</a>
-<a href=#252 id=252 data-nosnippet>252</a>        <span class="comment">// Sort the waiting seqs
-<a href=#253 id=253 data-nosnippet>253</a>        </span>waiting.sort_ascending_ids();
-<a href=#254 id=254 data-nosnippet>254</a>
-<a href=#255 id=255 data-nosnippet>255</a>        <span class="comment">// If the waiting sequence will fit, add it. Otherwise remove it
-<a href=#256 id=256 data-nosnippet>256</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>new_waiting = Backer::new();
-<a href=#257 id=257 data-nosnippet>257</a>        <span class="kw">for </span>seq <span class="kw">in </span>waiting.into_iter() {
-<a href=#258 id=258 data-nosnippet>258</a>            <span class="kw">if </span><span class="self">self</span>.sequence_fits(<span class="kw-2">&amp;</span>running, <span class="kw-2">&amp;</span>seq) {
-<a href=#259 id=259 data-nosnippet>259</a>                <span class="kw">if </span>seq.is_waiting() {
-<a href=#260 id=260 data-nosnippet>260</a>                    seq.set_state(SequenceState::RunningPrompt);
-<a href=#261 id=261 data-nosnippet>261</a>                }
-<a href=#262 id=262 data-nosnippet>262</a>                running.push(seq);
-<a href=#263 id=263 data-nosnippet>263</a>            } <span class="kw">else </span>{
-<a href=#264 id=264 data-nosnippet>264</a>                new_waiting.add(seq);
-<a href=#265 id=265 data-nosnippet>265</a>            }
-<a href=#266 id=266 data-nosnippet>266</a>        }
-<a href=#267 id=267 data-nosnippet>267</a>
-<a href=#268 id=268 data-nosnippet>268</a>        <span class="kw">let </span>BucketedSeqs {
-<a href=#269 id=269 data-nosnippet>269</a>            running,
-<a href=#270 id=270 data-nosnippet>270</a>            waiting: new_waiting,
-<a href=#271 id=271 data-nosnippet>271</a>        } = <span class="self">self
-<a href=#272 id=272 data-nosnippet>272</a>            </span>.bucketing_manager
-<a href=#273 id=273 data-nosnippet>273</a>            .bucket_and_waitlist_seqs_waiting(running, new_waiting, <span class="bool-val">false</span>);
-<a href=#274 id=274 data-nosnippet>274</a>
-<a href=#275 id=275 data-nosnippet>275</a>        <span class="self">self</span>.running = running;
-<a href=#276 id=276 data-nosnippet>276</a>        <span class="self">self</span>.waiting = new_waiting;
-<a href=#277 id=277 data-nosnippet>277</a>
-<a href=#278 id=278 data-nosnippet>278</a>        <span class="kw">let </span><span class="kw-2">mut </span>completion = Vec::new();
-<a href=#279 id=279 data-nosnippet>279</a>        <span class="kw">let </span><span class="kw-2">mut </span>prompt = Vec::new();
-<a href=#280 id=280 data-nosnippet>280</a>        <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.running {
-<a href=#281 id=281 data-nosnippet>281</a>            <span class="kw">if </span>seq.is_completion() {
-<a href=#282 id=282 data-nosnippet>282</a>                completion.push(seq);
-<a href=#283 id=283 data-nosnippet>283</a>            } <span class="kw">else </span>{
-<a href=#284 id=284 data-nosnippet>284</a>                prompt.push(seq);
-<a href=#285 id=285 data-nosnippet>285</a>            }
-<a href=#286 id=286 data-nosnippet>286</a>        }
-<a href=#287 id=287 data-nosnippet>287</a>
-<a href=#288 id=288 data-nosnippet>288</a>        DefaultSchedulerOutput {
-<a href=#289 id=289 data-nosnippet>289</a>            completion: completion.into(),
-<a href=#290 id=290 data-nosnippet>290</a>            prompt: prompt.into(),
-<a href=#291 id=291 data-nosnippet>291</a>        }
-<a href=#292 id=292 data-nosnippet>292</a>    }
-<a href=#293 id=293 data-nosnippet>293</a>
-<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">fn </span>sequence_fits(<span class="kw-2">&amp;</span><span class="self">self</span>, running: <span class="kw-2">&amp;</span>[Sequence], _seq: <span class="kw-2">&amp;</span>Sequence) -&gt; bool {
-<a href=#295 id=295 data-nosnippet>295</a>        <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.method {
-<a href=#296 id=296 data-nosnippet>296</a>            DefaultSchedulerMethod::Fixed(n) =&gt; (running.len() + <span class="number">1</span>) &lt;= (<span class="kw-2">*</span>n).into(),
-<a href=#297 id=297 data-nosnippet>297</a>        }
-<a href=#298 id=298 data-nosnippet>298</a>    }
-<a href=#299 id=299 data-nosnippet>299</a>}
-<a href=#300 id=300 data-nosnippet>300</a>
-<a href=#301 id=301 data-nosnippet>301</a><span class="kw">impl </span>Scheduler <span class="kw">for </span>DefaultScheduler&lt;VecDeque&lt;Sequence&gt;&gt; {
-<a href=#302 id=302 data-nosnippet>302</a>    <span class="kw">fn </span>schedule(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; SchedulerOutput&lt;<span class="lifetime">'_</span>&gt; {
-<a href=#303 id=303 data-nosnippet>303</a>        SchedulerOutput::DefaultScheduler {
-<a href=#304 id=304 data-nosnippet>304</a>            output: <span class="self">self</span>.schedule(),
-<a href=#305 id=305 data-nosnippet>305</a>        }
-<a href=#306 id=306 data-nosnippet>306</a>    }
-<a href=#307 id=307 data-nosnippet>307</a>    <span class="kw">fn </span>waiting_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-<a href=#308 id=308 data-nosnippet>308</a>        <span class="self">self</span>.waiting.len()
-<a href=#309 id=309 data-nosnippet>309</a>    }
-<a href=#310 id=310 data-nosnippet>310</a>    <span class="kw">fn </span>running_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-<a href=#311 id=311 data-nosnippet>311</a>        <span class="self">self</span>.running.len()
-<a href=#312 id=312 data-nosnippet>312</a>    }
-<a href=#313 id=313 data-nosnippet>313</a>    <span class="kw">fn </span>add_seq(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seq: Sequence) {
-<a href=#314 id=314 data-nosnippet>314</a>        <span class="kw">if </span>seq.is_running() {
-<a href=#315 id=315 data-nosnippet>315</a>            <span class="comment">// prefill case
-<a href=#316 id=316 data-nosnippet>316</a>            </span><span class="self">self</span>.running.push(seq);
-<a href=#317 id=317 data-nosnippet>317</a>        } <span class="kw">else </span>{
-<a href=#318 id=318 data-nosnippet>318</a>            <span class="self">self</span>.waiting.add(seq);
-<a href=#319 id=319 data-nosnippet>319</a>        }
-<a href=#320 id=320 data-nosnippet>320</a>    }
-<a href=#321 id=321 data-nosnippet>321</a>    <span class="kw">fn </span>block_tables(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>BlockTables&gt; {
-<a href=#322 id=322 data-nosnippet>322</a>        <span class="prelude-val">None
-<a href=#323 id=323 data-nosnippet>323</a>    </span>}
-<a href=#324 id=324 data-nosnippet>324</a>    <span class="kw">fn </span>block_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt; {
-<a href=#325 id=325 data-nosnippet>325</a>        <span class="prelude-val">None
-<a href=#326 id=326 data-nosnippet>326</a>    </span>}
-<a href=#327 id=327 data-nosnippet>327</a>    <span class="kw">fn </span>free_finished_sequence_groups(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {}
-<a href=#328 id=328 data-nosnippet>328</a>    <span class="kw">fn </span>block_engine(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>BlockEngine&gt; {
-<a href=#329 id=329 data-nosnippet>329</a>        <span class="prelude-val">None
-<a href=#330 id=330 data-nosnippet>330</a>    </span>}
-<a href=#331 id=331 data-nosnippet>331</a>}</code></pre></div></section></main></body></html>
+<a href=#218 id=218 data-nosnippet>218</a>                logger.set_num_running(<span class="self">self</span>.running.len());
+<a href=#219 id=219 data-nosnippet>219</a>                logger.set_num_waiting(<span class="self">self</span>.waiting.len());
+<a href=#220 id=220 data-nosnippet>220</a>                <span class="kw">return </span>DefaultSchedulerOutput {
+<a href=#221 id=221 data-nosnippet>221</a>                    prompt: <span class="macro">vec!</span>[].into(),
+<a href=#222 id=222 data-nosnippet>222</a>                    completion: <span class="macro">vec!</span>[].into(),
+<a href=#223 id=223 data-nosnippet>223</a>                };
+<a href=#224 id=224 data-nosnippet>224</a>            }
+<a href=#225 id=225 data-nosnippet>225</a>            (<span class="kw">_</span>, <span class="number">0</span>) =&gt; {
+<a href=#226 id=226 data-nosnippet>226</a>                <span class="kw">for </span>seq <span class="kw">in </span>waiting.into_iter() {
+<a href=#227 id=227 data-nosnippet>227</a>                    seq.set_state(SequenceState::RunningPrompt);
+<a href=#228 id=228 data-nosnippet>228</a>                    <span class="self">self</span>.running.push(seq);
+<a href=#229 id=229 data-nosnippet>229</a>                }
+<a href=#230 id=230 data-nosnippet>230</a>                <span class="self">self</span>.waiting = Backer::new();
+<a href=#231 id=231 data-nosnippet>231</a>                <span class="kw">let </span>running = std::mem::take(<span class="kw-2">&amp;mut </span><span class="self">self</span>.running);
+<a href=#232 id=232 data-nosnippet>232</a>                <span class="self">self</span>.running = <span class="self">self</span>.bucket_and_waitlist_seqs(running);
+<a href=#233 id=233 data-nosnippet>233</a>                logger.set_num_running(<span class="self">self</span>.running.len());
+<a href=#234 id=234 data-nosnippet>234</a>                logger.set_num_waiting(<span class="self">self</span>.waiting.len());
+<a href=#235 id=235 data-nosnippet>235</a>                <span class="kw">return </span>DefaultSchedulerOutput {
+<a href=#236 id=236 data-nosnippet>236</a>                    prompt: <span class="self">self</span>.running.iter_mut().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().into(),
+<a href=#237 id=237 data-nosnippet>237</a>                    completion: <span class="macro">vec!</span>[].into(),
+<a href=#238 id=238 data-nosnippet>238</a>                };
+<a href=#239 id=239 data-nosnippet>239</a>            }
+<a href=#240 id=240 data-nosnippet>240</a>            (<span class="number">0</span>, <span class="kw">_</span>) =&gt; {
+<a href=#241 id=241 data-nosnippet>241</a>                <span class="self">self</span>.running = <span class="self">self</span>.bucket_and_waitlist_seqs(running);
+<a href=#242 id=242 data-nosnippet>242</a>                <span class="kw">if </span>TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
+<a href=#243 id=243 data-nosnippet>243</a>                    <span class="self">self</span>.running
+<a href=#244 id=244 data-nosnippet>244</a>                        .iter_mut()
+<a href=#245 id=245 data-nosnippet>245</a>                        .for_each(|seq| seq.set_state(SequenceState::Done(StopReason::Canceled)));
+<a href=#246 id=246 data-nosnippet>246</a>                    TERMINATE_ALL_NEXT_STEP.store(<span class="bool-val">false</span>, Ordering::SeqCst);
+<a href=#247 id=247 data-nosnippet>247</a>                }
+<a href=#248 id=248 data-nosnippet>248</a>                logger.set_num_running(<span class="self">self</span>.running.len());
+<a href=#249 id=249 data-nosnippet>249</a>                logger.set_num_waiting(<span class="self">self</span>.waiting.len());
+<a href=#250 id=250 data-nosnippet>250</a>                <span class="kw">return </span>DefaultSchedulerOutput {
+<a href=#251 id=251 data-nosnippet>251</a>                    prompt: <span class="macro">vec!</span>[].into(),
+<a href=#252 id=252 data-nosnippet>252</a>                    completion: <span class="self">self</span>.running.iter_mut().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().into(),
+<a href=#253 id=253 data-nosnippet>253</a>                };
+<a href=#254 id=254 data-nosnippet>254</a>            }
+<a href=#255 id=255 data-nosnippet>255</a>            <span class="kw">_ </span>=&gt; {}
+<a href=#256 id=256 data-nosnippet>256</a>        }
+<a href=#257 id=257 data-nosnippet>257</a>
+<a href=#258 id=258 data-nosnippet>258</a>        <span class="comment">// Sort the waiting seqs
+<a href=#259 id=259 data-nosnippet>259</a>        </span>waiting.sort_ascending_ids();
+<a href=#260 id=260 data-nosnippet>260</a>
+<a href=#261 id=261 data-nosnippet>261</a>        <span class="comment">// If the waiting sequence will fit, add it. Otherwise remove it
+<a href=#262 id=262 data-nosnippet>262</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>new_waiting = Backer::new();
+<a href=#263 id=263 data-nosnippet>263</a>        <span class="kw">for </span>seq <span class="kw">in </span>waiting.into_iter() {
+<a href=#264 id=264 data-nosnippet>264</a>            <span class="kw">if </span><span class="self">self</span>.sequence_fits(<span class="kw-2">&amp;</span>running, <span class="kw-2">&amp;</span>seq) {
+<a href=#265 id=265 data-nosnippet>265</a>                <span class="kw">if </span>seq.is_waiting() {
+<a href=#266 id=266 data-nosnippet>266</a>                    seq.set_state(SequenceState::RunningPrompt);
+<a href=#267 id=267 data-nosnippet>267</a>                }
+<a href=#268 id=268 data-nosnippet>268</a>                running.push(seq);
+<a href=#269 id=269 data-nosnippet>269</a>            } <span class="kw">else </span>{
+<a href=#270 id=270 data-nosnippet>270</a>                new_waiting.add(seq);
+<a href=#271 id=271 data-nosnippet>271</a>            }
+<a href=#272 id=272 data-nosnippet>272</a>        }
+<a href=#273 id=273 data-nosnippet>273</a>
+<a href=#274 id=274 data-nosnippet>274</a>        <span class="kw">let </span>BucketedSeqs {
+<a href=#275 id=275 data-nosnippet>275</a>            running,
+<a href=#276 id=276 data-nosnippet>276</a>            waiting: new_waiting,
+<a href=#277 id=277 data-nosnippet>277</a>        } = <span class="self">self
+<a href=#278 id=278 data-nosnippet>278</a>            </span>.bucketing_manager
+<a href=#279 id=279 data-nosnippet>279</a>            .bucket_and_waitlist_seqs_waiting(running, new_waiting, <span class="bool-val">false</span>);
+<a href=#280 id=280 data-nosnippet>280</a>
+<a href=#281 id=281 data-nosnippet>281</a>        <span class="self">self</span>.running = running;
+<a href=#282 id=282 data-nosnippet>282</a>        <span class="self">self</span>.waiting = new_waiting;
+<a href=#283 id=283 data-nosnippet>283</a>
+<a href=#284 id=284 data-nosnippet>284</a>        logger.set_num_running(<span class="self">self</span>.running.len());
+<a href=#285 id=285 data-nosnippet>285</a>        logger.set_num_waiting(<span class="self">self</span>.waiting.len());
+<a href=#286 id=286 data-nosnippet>286</a>
+<a href=#287 id=287 data-nosnippet>287</a>        <span class="kw">let </span><span class="kw-2">mut </span>completion = Vec::new();
+<a href=#288 id=288 data-nosnippet>288</a>        <span class="kw">let </span><span class="kw-2">mut </span>prompt = Vec::new();
+<a href=#289 id=289 data-nosnippet>289</a>        <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.running {
+<a href=#290 id=290 data-nosnippet>290</a>            <span class="kw">if </span>seq.is_completion() {
+<a href=#291 id=291 data-nosnippet>291</a>                completion.push(seq);
+<a href=#292 id=292 data-nosnippet>292</a>            } <span class="kw">else </span>{
+<a href=#293 id=293 data-nosnippet>293</a>                prompt.push(seq);
+<a href=#294 id=294 data-nosnippet>294</a>            }
+<a href=#295 id=295 data-nosnippet>295</a>        }
+<a href=#296 id=296 data-nosnippet>296</a>
+<a href=#297 id=297 data-nosnippet>297</a>        DefaultSchedulerOutput {
+<a href=#298 id=298 data-nosnippet>298</a>            completion: completion.into(),
+<a href=#299 id=299 data-nosnippet>299</a>            prompt: prompt.into(),
+<a href=#300 id=300 data-nosnippet>300</a>        }
+<a href=#301 id=301 data-nosnippet>301</a>    }
+<a href=#302 id=302 data-nosnippet>302</a>
+<a href=#303 id=303 data-nosnippet>303</a>    <span class="kw">fn </span>sequence_fits(<span class="kw-2">&amp;</span><span class="self">self</span>, running: <span class="kw-2">&amp;</span>[Sequence], _seq: <span class="kw-2">&amp;</span>Sequence) -&gt; bool {
+<a href=#304 id=304 data-nosnippet>304</a>        <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.method {
+<a href=#305 id=305 data-nosnippet>305</a>            DefaultSchedulerMethod::Fixed(n) =&gt; (running.len() + <span class="number">1</span>) &lt;= (<span class="kw-2">*</span>n).into(),
+<a href=#306 id=306 data-nosnippet>306</a>        }
+<a href=#307 id=307 data-nosnippet>307</a>    }
+<a href=#308 id=308 data-nosnippet>308</a>}
+<a href=#309 id=309 data-nosnippet>309</a>
+<a href=#310 id=310 data-nosnippet>310</a><span class="kw">impl </span>Scheduler <span class="kw">for </span>DefaultScheduler&lt;VecDeque&lt;Sequence&gt;&gt; {
+<a href=#311 id=311 data-nosnippet>311</a>    <span class="kw">fn </span>schedule(<span class="kw-2">&amp;mut </span><span class="self">self</span>, logger: <span class="kw-2">&amp;</span>IntervalLogger) -&gt; SchedulerOutput&lt;<span class="lifetime">'_</span>&gt; {
+<a href=#312 id=312 data-nosnippet>312</a>        SchedulerOutput::DefaultScheduler {
+<a href=#313 id=313 data-nosnippet>313</a>            output: <span class="self">self</span>.schedule(logger),
+<a href=#314 id=314 data-nosnippet>314</a>        }
+<a href=#315 id=315 data-nosnippet>315</a>    }
+<a href=#316 id=316 data-nosnippet>316</a>    <span class="kw">fn </span>waiting_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#317 id=317 data-nosnippet>317</a>        <span class="self">self</span>.waiting.len()
+<a href=#318 id=318 data-nosnippet>318</a>    }
+<a href=#319 id=319 data-nosnippet>319</a>    <span class="kw">fn </span>running_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#320 id=320 data-nosnippet>320</a>        <span class="self">self</span>.running.len()
+<a href=#321 id=321 data-nosnippet>321</a>    }
+<a href=#322 id=322 data-nosnippet>322</a>    <span class="kw">fn </span>add_seq(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seq: Sequence) {
+<a href=#323 id=323 data-nosnippet>323</a>        <span class="kw">if </span>seq.is_running() {
+<a href=#324 id=324 data-nosnippet>324</a>            <span class="comment">// prefill case
+<a href=#325 id=325 data-nosnippet>325</a>            </span><span class="self">self</span>.running.push(seq);
+<a href=#326 id=326 data-nosnippet>326</a>        } <span class="kw">else </span>{
+<a href=#327 id=327 data-nosnippet>327</a>            <span class="self">self</span>.waiting.add(seq);
+<a href=#328 id=328 data-nosnippet>328</a>        }
+<a href=#329 id=329 data-nosnippet>329</a>    }
+<a href=#330 id=330 data-nosnippet>330</a>    <span class="kw">fn </span>block_tables(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>BlockTables&gt; {
+<a href=#331 id=331 data-nosnippet>331</a>        <span class="prelude-val">None
+<a href=#332 id=332 data-nosnippet>332</a>    </span>}
+<a href=#333 id=333 data-nosnippet>333</a>    <span class="kw">fn </span>block_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt; {
+<a href=#334 id=334 data-nosnippet>334</a>        <span class="prelude-val">None
+<a href=#335 id=335 data-nosnippet>335</a>    </span>}
+<a href=#336 id=336 data-nosnippet>336</a>    <span class="kw">fn </span>free_finished_sequence_groups(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {}
+<a href=#337 id=337 data-nosnippet>337</a>    <span class="kw">fn </span>block_engine(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>BlockEngine&gt; {
+<a href=#338 id=338 data-nosnippet>338</a>        <span class="prelude-val">None
+<a href=#339 id=339 data-nosnippet>339</a>    </span>}
+<a href=#340 id=340 data-nosnippet>340</a>}</code></pre></div></section></main></body></html>

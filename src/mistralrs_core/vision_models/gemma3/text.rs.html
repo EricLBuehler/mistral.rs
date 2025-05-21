@@ -491,7 +491,7 @@
 <a href=#491 id=491 data-nosnippet>491</a>            ReplicatedLayer::new(
 <a href=#492 id=492 data-nosnippet>492</a>                cfg.hidden_size,
 <a href=#493 id=493 data-nosnippet>493</a>                cfg.vocab_size,
-<a href=#494 id=494 data-nosnippet>494</a>                <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+<a href=#494 id=494 data-nosnippet>494</a>                <span class="kw-2">&amp;</span>cfg.quantization_config,
 <a href=#495 id=495 data-nosnippet>495</a>                <span class="bool-val">false</span>,
 <a href=#496 id=496 data-nosnippet>496</a>                mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
 <a href=#497 id=497 data-nosnippet>497</a>            )<span class="question-mark">?
