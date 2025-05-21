@@ -5,7 +5,7 @@ pub mod log;
 mod ops;
 mod uqff;
 
-pub use ops::{BitWiseOp, LeftshiftOp, NonZeroOp};
+pub use ops::{BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
 pub use uqff::UQFF_QUANT_TYPE_OFFSET;
 pub(crate) use uqff::{
     deserialize_tensor, fake_deserialize_tensor, read_dtype, serialize_tensor,

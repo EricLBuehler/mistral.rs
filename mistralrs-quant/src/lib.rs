@@ -58,7 +58,7 @@ pub use lora::{
 };
 pub use unquantized::UnquantLinear;
 pub use utils::isq::apply_immediate_isq;
-pub use utils::{log, BitWiseOp, LeftshiftOp, NonZeroOp, UQFF_QUANT_TYPE_OFFSET};
+pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
 
 use candle_nn::{Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
