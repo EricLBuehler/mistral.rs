@@ -65,3 +65,6 @@ itertools = "0.13.0"
 [profile.release-with-debug]
 inherits = "release"
 debug = true
+
+[profile.release]
+lto = true
