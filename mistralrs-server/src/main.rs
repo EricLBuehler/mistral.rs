@@ -10,7 +10,7 @@ use clap::Parser;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, initialize_logging,
     paged_attn_supported, parse_isq_value, BertEmbeddingModel, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, IsqType, Loader, LoaderBuilder,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder,
     MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request,
     SchedulerConfig, TokenSource,
 };
@@ -119,8 +119,8 @@ struct Args {
     num_device_layers: Option<Vec<String>>,
 
     /// In-situ quantization to apply.
-    #[arg(long = "isq", value_parser = parse_isq_value)]
-    in_situ_quant: Option<IsqType>,
+    #[arg(long = "isq")]
+    in_situ_quant: Option<String>,
 
     /// GPU memory to allocate for KV cache with PagedAttention in MBs.
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
@@ -223,7 +223,7 @@ async fn re_isq(
 ) -> Result<String, String> {
     let repr = format!("Re ISQ: {:?}", request.ggml_type);
     MistralRs::maybe_log_request(state.clone(), repr.clone());
-    let request = Request::ReIsq(parse_isq_value(&request.ggml_type)?);
+    let request = Request::ReIsq(parse_isq_value(&request.ggml_type, None)?);
     state.get_sender().unwrap().send(request).await.unwrap();
     Ok(repr)
 }
@@ -300,7 +300,12 @@ async fn main() -> Result<()> {
         .build()?;
 
     #[cfg(feature = "metal")]
-    let device = Device::new_metal(0)?;
+    let device = if args.cpu {
+        args.no_paged_attn = true;
+        Device::Cpu
+    } else {
+        Device::new_metal(0)?
+    };
     #[cfg(not(feature = "metal"))]
     let device = if args.cpu {
         args.no_paged_attn = true;
@@ -426,6 +431,11 @@ async fn main() -> Result<()> {
         (_, _, _, _, _, _) => None,
     };
 
+    let isq = args
+        .in_situ_quant
+        .as_ref()
+        .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
+
     let pipeline = loader.load_model_from_hf(
         None,
         args.token_source,
@@ -433,7 +443,7 @@ async fn main() -> Result<()> {
         &device,
         false,
         mapper,
-        args.in_situ_quant,
+        isq,
         cache_config,
     )?;
     info!("Model loaded.");
