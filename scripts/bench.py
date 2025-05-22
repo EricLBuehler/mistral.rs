@@ -1,6 +1,9 @@
-# cargo run --release --features metal '--' --port 1234 --isq 8 --paged-attn --max-seqs 1000 plain -m ../hf_models/llama3.2_3b --max-seq-len 131072
-# cargo run --release --features metal '--' --port 1234 --paged-attn --max-seqs 1000 plain -m mlx-community/Mistral-7B-Instruct-v0.3-4bit --max-seq-len 131072
+## Comparing Llama 3.2 3b
+# cargo run --release --features metal '--' --port 1234 --isq 8 --paged-attn --max-seqs 128 plain -m ../hf_models/llama3.2_3b --max-seq-len 1024 --max-batch-size 128
 # ./llama-server -m ../gguf_models/Llama-3.2-3B-Instruct-Q8_0.gguf
+
+## Comparing Mistral 7b
+# cargo run --release --features metal '--' --port 1234 --paged-attn --max-seqs 128 plain -m mlx-community/Mistral-7B-Instruct-v0.3-4bit --max-seq-len 1024 --max-batch-size 128
 # mlx_lm.server --model mlx-community/Mistral-7B-Instruct-v0.3-4bit --port 8080
 
 import asyncio
