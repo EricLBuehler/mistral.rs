@@ -107,7 +107,7 @@ impl Topology {
             }
             let range = CustomRange { start, end };
             let isq = if let Some(isq) = isq {
-                Some(parse_isq_value(&isq).map_err(anyhow::Error::msg)?)
+                Some(parse_isq_value(&isq, None).map_err(anyhow::Error::msg)?)
             } else {
                 None
             };

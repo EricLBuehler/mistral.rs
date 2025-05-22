@@ -59,19 +59,20 @@ pub const UQFF_MULTI_FILE_DELIMITER: &str = ";";
 /// - `AFQ4`
 /// - `AFQ6`
 /// - `AFQ8`
-pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
+pub fn parse_isq_value(s: &str, device: Option<&Device>) -> Result<IsqType, String> {
+    let is_metal = device.map(|device| device.is_metal()).unwrap_or(false);
     let tp = match s.to_lowercase().as_str() {
-        "2" if cfg!(feature = "metal") => IsqType::AFQ2,
-        "2" if !cfg!(feature = "metal") => IsqType::Q2K,
-        "3" if cfg!(feature = "metal") => IsqType::AFQ3,
-        "3" if !cfg!(feature = "metal") => IsqType::Q3K,
-        "4" if cfg!(feature = "metal") => IsqType::AFQ4,
-        "4" if !cfg!(feature = "metal") => IsqType::Q4K,
+        "2" if is_metal => IsqType::AFQ2,
+        "2" if !is_metal => IsqType::Q2K,
+        "3" if is_metal => IsqType::AFQ3,
+        "3" if !is_metal => IsqType::Q3K,
+        "4" if is_metal => IsqType::AFQ4,
+        "4" if !is_metal => IsqType::Q4K,
         "5" => IsqType::Q5K,
-        "6" if cfg!(feature = "metal") => IsqType::AFQ6,
-        "6" if !cfg!(feature = "metal") => IsqType::Q6K,
-        "8" if cfg!(feature = "metal") => IsqType::AFQ8,
-        "8" if !cfg!(feature = "metal") => IsqType::Q8_0,
+        "6" if is_metal => IsqType::AFQ6,
+        "6" if !is_metal => IsqType::Q6K,
+        "8" if is_metal => IsqType::AFQ8,
+        "8" if !is_metal => IsqType::Q8_0,
         "q4_0" => IsqType::Q4_0,
         "q4_1" => IsqType::Q4_1,
         "q5_0" => IsqType::Q5_0,

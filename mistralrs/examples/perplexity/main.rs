@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     let quant = if let Some(isq) = &args.isq {
-        Some(parse_isq_value(isq).map_err(anyhow::Error::msg)?)
+        Some(parse_isq_value(isq, None).map_err(anyhow::Error::msg)?)
     } else {
         None
     };

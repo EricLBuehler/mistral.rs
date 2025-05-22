@@ -4,9 +4,9 @@ use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, initialize_logging, paged_attn_supported,
     parse_isq_value, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, DrySamplingParams, IsqType, Loader, LoaderBuilder, MemoryGpuConfig,
-    MistralRs, MistralRsBuilder, ModelSelected, NormalRequest, PagedAttentionConfig, Request,
-    RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
+    DeviceMapSetting, DrySamplingParams, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs,
+    MistralRsBuilder, ModelSelected, NormalRequest, PagedAttentionConfig, Request, RequestMessage,
+    Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
 use std::sync::Arc;
 use std::{fmt::Display, num::NonZeroUsize};
@@ -300,8 +300,8 @@ struct Args {
     num_device_layers: Option<Vec<String>>,
 
     /// In-situ quantization to apply.
-    #[arg(long = "isq", value_parser = parse_isq_value)]
-    in_situ_quant: Option<IsqType>,
+    #[arg(long = "isq")]
+    in_situ_quant: Option<String>,
 
     /// GPU memory to allocate for KV cache with PagedAttention in MBs.
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
@@ -490,6 +490,11 @@ fn main() -> anyhow::Result<()> {
         (_, _, _, _, _, _) => None,
     };
 
+    let isq = args
+        .in_situ_quant
+        .as_ref()
+        .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
+
     let pipeline = loader.load_model_from_hf(
         None,
         token_source,
@@ -497,7 +502,7 @@ fn main() -> anyhow::Result<()> {
         &device,
         false,
         mapper,
-        args.in_situ_quant,
+        isq,
         cache_config,
     )?;
     info!("Model loaded.");
