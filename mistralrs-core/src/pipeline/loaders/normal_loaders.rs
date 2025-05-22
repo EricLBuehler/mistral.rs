@@ -3004,8 +3004,8 @@ impl IsqModelLoader for Qwen3Loader {
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
-    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
-        self.isq_layer_regexes_moqe(config)
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -3188,6 +3188,9 @@ impl IsqModelLoader for Qwen3MoELoader {
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
     fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes_moqe(config)
