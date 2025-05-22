@@ -3004,8 +3004,8 @@
 <a href=#3004 id=3004 data-nosnippet>3004</a>            Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
 <a href=#3005 id=3005 data-nosnippet>3005</a>        ])
 <a href=#3006 id=3006 data-nosnippet>3006</a>    }
-<a href=#3007 id=3007 data-nosnippet>3007</a>    <span class="kw">fn </span>immediate_isq_predicates_moqe(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
-<a href=#3008 id=3008 data-nosnippet>3008</a>        <span class="self">self</span>.isq_layer_regexes_moqe(config)
+<a href=#3007 id=3007 data-nosnippet>3007</a>    <span class="kw">fn </span>immediate_isq_predicates(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
+<a href=#3008 id=3008 data-nosnippet>3008</a>        <span class="self">self</span>.isq_layer_regexes(config)
 <a href=#3009 id=3009 data-nosnippet>3009</a>    }
 <a href=#3010 id=3010 data-nosnippet>3010</a>}
 <a href=#3011 id=3011 data-nosnippet>3011</a>
@@ -3189,138 +3189,141 @@
 <a href=#3189 id=3189 data-nosnippet>3189</a>            Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
 <a href=#3190 id=3190 data-nosnippet>3190</a>        ])
 <a href=#3191 id=3191 data-nosnippet>3191</a>    }
-<a href=#3192 id=3192 data-nosnippet>3192</a>    <span class="kw">fn </span>immediate_isq_predicates_moqe(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
-<a href=#3193 id=3193 data-nosnippet>3193</a>        <span class="self">self</span>.isq_layer_regexes_moqe(config)
+<a href=#3192 id=3192 data-nosnippet>3192</a>    <span class="kw">fn </span>immediate_isq_predicates(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
+<a href=#3193 id=3193 data-nosnippet>3193</a>        <span class="self">self</span>.isq_layer_regexes(config)
 <a href=#3194 id=3194 data-nosnippet>3194</a>    }
-<a href=#3195 id=3195 data-nosnippet>3195</a>}
-<a href=#3196 id=3196 data-nosnippet>3196</a>
-<a href=#3197 id=3197 data-nosnippet>3197</a><span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>Qwen3MoELoader {
-<a href=#3198 id=3198 data-nosnippet>3198</a>    <span class="kw">fn </span>mapped_max_act_size_elems(
-<a href=#3199 id=3199 data-nosnippet>3199</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#3200 id=3200 data-nosnippet>3200</a>        config: <span class="kw-2">&amp;</span>str,
-<a href=#3201 id=3201 data-nosnippet>3201</a>        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
-<a href=#3202 id=3202 data-nosnippet>3202</a>        prompt_chunksize: usize,
-<a href=#3203 id=3203 data-nosnippet>3203</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#3204 id=3204 data-nosnippet>3204</a>        <span class="kw">let </span>AutoDeviceMapParams::Text {
-<a href=#3205 id=3205 data-nosnippet>3205</a>            max_seq_len: <span class="kw">_</span>,
-<a href=#3206 id=3206 data-nosnippet>3206</a>            max_batch_size,
-<a href=#3207 id=3207 data-nosnippet>3207</a>        } = params
-<a href=#3208 id=3208 data-nosnippet>3208</a>        <span class="kw">else </span>{
-<a href=#3209 id=3209 data-nosnippet>3209</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected text AutoDeviceMapParams for this model!"</span>)
-<a href=#3210 id=3210 data-nosnippet>3210</a>        };
-<a href=#3211 id=3211 data-nosnippet>3211</a>
-<a href=#3212 id=3212 data-nosnippet>3212</a>        <span class="kw">let </span>cfg: models::qwen3_moe::Config = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#3213 id=3213 data-nosnippet>3213</a>
-<a href=#3214 id=3214 data-nosnippet>3214</a>        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
-<a href=#3215 id=3215 data-nosnippet>3215</a>    }
-<a href=#3216 id=3216 data-nosnippet>3216</a>    <span class="kw">fn </span>non_mapped_max_act_size_elems(
-<a href=#3217 id=3217 data-nosnippet>3217</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#3218 id=3218 data-nosnippet>3218</a>        _config: <span class="kw-2">&amp;</span>str,
-<a href=#3219 id=3219 data-nosnippet>3219</a>        _params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
-<a href=#3220 id=3220 data-nosnippet>3220</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#3221 id=3221 data-nosnippet>3221</a>        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
-<a href=#3222 id=3222 data-nosnippet>3222</a>    }
-<a href=#3223 id=3223 data-nosnippet>3223</a>
-<a href=#3224 id=3224 data-nosnippet>3224</a>    <span class="kw">fn </span>non_mapped_size_in_bytes(
-<a href=#3225 id=3225 data-nosnippet>3225</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#3226 id=3226 data-nosnippet>3226</a>        config: <span class="kw-2">&amp;</span>str,
-<a href=#3227 id=3227 data-nosnippet>3227</a>        dtype: DType,
-<a href=#3228 id=3228 data-nosnippet>3228</a>        weight_pack_factor: usize,
-<a href=#3229 id=3229 data-nosnippet>3229</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#3230 id=3230 data-nosnippet>3230</a>        <span class="kw">let </span>cfg: models::qwen3_moe::Config = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#3231 id=3231 data-nosnippet>3231</a>        <span class="kw">let </span>elems = {
-<a href=#3232 id=3232 data-nosnippet>3232</a>            <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-<a href=#3233 id=3233 data-nosnippet>3233</a>            <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
-<a href=#3234 id=3234 data-nosnippet>3234</a>                cfg.hidden_size * cfg.vocab_size
-<a href=#3235 id=3235 data-nosnippet>3235</a>            } <span class="kw">else </span>{
-<a href=#3236 id=3236 data-nosnippet>3236</a>                <span class="number">0
-<a href=#3237 id=3237 data-nosnippet>3237</a>            </span>};
-<a href=#3238 id=3238 data-nosnippet>3238</a>            <span class="kw">let </span>norm = cfg.hidden_size;
-<a href=#3239 id=3239 data-nosnippet>3239</a>            embed_tokens + lm_head + norm
-<a href=#3240 id=3240 data-nosnippet>3240</a>        };
-<a href=#3241 id=3241 data-nosnippet>3241</a>        <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
-<a href=#3242 id=3242 data-nosnippet>3242</a>    }
-<a href=#3243 id=3243 data-nosnippet>3243</a>
-<a href=#3244 id=3244 data-nosnippet>3244</a>    <span class="kw">fn </span>layer_sizes_in_bytes(
-<a href=#3245 id=3245 data-nosnippet>3245</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#3246 id=3246 data-nosnippet>3246</a>        config: <span class="kw-2">&amp;</span>str,
-<a href=#3247 id=3247 data-nosnippet>3247</a>        dtype: DType,
-<a href=#3248 id=3248 data-nosnippet>3248</a>        weight_pack_factor: usize,
-<a href=#3249 id=3249 data-nosnippet>3249</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
-<a href=#3250 id=3250 data-nosnippet>3250</a>        <span class="kw">let </span>cfg: models::qwen3_moe::Config = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#3251 id=3251 data-nosnippet>3251</a>        <span class="kw">let </span><span class="kw-2">mut </span>layer_sizes_in_bytes = Vec::new();
-<a href=#3252 id=3252 data-nosnippet>3252</a>        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
-<a href=#3253 id=3253 data-nosnippet>3253</a>            <span class="kw">let </span>input_layernorm = cfg.hidden_size;
-<a href=#3254 id=3254 data-nosnippet>3254</a>            <span class="kw">let </span>post_attention_layernorm = cfg.hidden_size;
-<a href=#3255 id=3255 data-nosnippet>3255</a>
-<a href=#3256 id=3256 data-nosnippet>3256</a>            <span class="kw">let </span>size_in = cfg.hidden_size;
-<a href=#3257 id=3257 data-nosnippet>3257</a>            <span class="kw">let </span>size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
-<a href=#3258 id=3258 data-nosnippet>3258</a>            <span class="kw">let </span>size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
-<a href=#3259 id=3259 data-nosnippet>3259</a>            <span class="kw">let </span>q_proj = size_in * size_q / weight_pack_factor + size_q;
-<a href=#3260 id=3260 data-nosnippet>3260</a>            <span class="kw">let </span>k_proj = size_in * size_kv / weight_pack_factor + size_kv;
-<a href=#3261 id=3261 data-nosnippet>3261</a>            <span class="kw">let </span>v_proj = size_in * size_kv / weight_pack_factor + size_kv;
-<a href=#3262 id=3262 data-nosnippet>3262</a>            <span class="kw">let </span>o_proj = size_q * size_in / weight_pack_factor;
-<a href=#3263 id=3263 data-nosnippet>3263</a>
-<a href=#3264 id=3264 data-nosnippet>3264</a>            <span class="kw">let </span>mlp_size = <span class="kw">if </span>!cfg.mlp_only_layers.contains(<span class="kw-2">&amp;</span>layer_idx)
-<a href=#3265 id=3265 data-nosnippet>3265</a>                &amp;&amp; (cfg.num_experts &gt; <span class="number">0 </span>&amp;&amp; (layer_idx + <span class="number">1</span>) % cfg.decoder_sparse_step == <span class="number">0</span>)
-<a href=#3266 id=3266 data-nosnippet>3266</a>            {
-<a href=#3267 id=3267 data-nosnippet>3267</a>                <span class="kw">let </span>expert_size = {
-<a href=#3268 id=3268 data-nosnippet>3268</a>                    <span class="kw">let </span>h_size = cfg.hidden_size;
-<a href=#3269 id=3269 data-nosnippet>3269</a>                    <span class="kw">let </span>i_size = cfg.moe_intermediate_size;
-<a href=#3270 id=3270 data-nosnippet>3270</a>                    <span class="kw">let </span>gate_proj = h_size * i_size / weight_pack_factor;
-<a href=#3271 id=3271 data-nosnippet>3271</a>                    <span class="kw">let </span>up_proj = h_size * i_size / weight_pack_factor;
-<a href=#3272 id=3272 data-nosnippet>3272</a>                    <span class="kw">let </span>down_proj = i_size * h_size / weight_pack_factor;
-<a href=#3273 id=3273 data-nosnippet>3273</a>                    gate_proj + up_proj + down_proj
-<a href=#3274 id=3274 data-nosnippet>3274</a>                };
-<a href=#3275 id=3275 data-nosnippet>3275</a>                expert_size * cfg.num_experts
-<a href=#3276 id=3276 data-nosnippet>3276</a>            } <span class="kw">else </span>{
-<a href=#3277 id=3277 data-nosnippet>3277</a>                <span class="kw">let </span>h_size = cfg.hidden_size;
-<a href=#3278 id=3278 data-nosnippet>3278</a>                <span class="kw">let </span>i_size = cfg.intermediate_size;
-<a href=#3279 id=3279 data-nosnippet>3279</a>                <span class="kw">let </span>gate_proj = h_size * i_size / weight_pack_factor;
-<a href=#3280 id=3280 data-nosnippet>3280</a>                <span class="kw">let </span>up_proj = h_size * i_size / weight_pack_factor;
-<a href=#3281 id=3281 data-nosnippet>3281</a>                <span class="kw">let </span>down_proj = i_size * h_size / weight_pack_factor;
-<a href=#3282 id=3282 data-nosnippet>3282</a>                gate_proj + up_proj + down_proj
-<a href=#3283 id=3283 data-nosnippet>3283</a>            };
-<a href=#3284 id=3284 data-nosnippet>3284</a>
-<a href=#3285 id=3285 data-nosnippet>3285</a>            <span class="kw">let </span>q_norm = cfg.head_dim();
-<a href=#3286 id=3286 data-nosnippet>3286</a>            <span class="kw">let </span>k_norm = cfg.head_dim();
+<a href=#3195 id=3195 data-nosnippet>3195</a>    <span class="kw">fn </span>immediate_isq_predicates_moqe(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
+<a href=#3196 id=3196 data-nosnippet>3196</a>        <span class="self">self</span>.isq_layer_regexes_moqe(config)
+<a href=#3197 id=3197 data-nosnippet>3197</a>    }
+<a href=#3198 id=3198 data-nosnippet>3198</a>}
+<a href=#3199 id=3199 data-nosnippet>3199</a>
+<a href=#3200 id=3200 data-nosnippet>3200</a><span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>Qwen3MoELoader {
+<a href=#3201 id=3201 data-nosnippet>3201</a>    <span class="kw">fn </span>mapped_max_act_size_elems(
+<a href=#3202 id=3202 data-nosnippet>3202</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#3203 id=3203 data-nosnippet>3203</a>        config: <span class="kw-2">&amp;</span>str,
+<a href=#3204 id=3204 data-nosnippet>3204</a>        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+<a href=#3205 id=3205 data-nosnippet>3205</a>        prompt_chunksize: usize,
+<a href=#3206 id=3206 data-nosnippet>3206</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+<a href=#3207 id=3207 data-nosnippet>3207</a>        <span class="kw">let </span>AutoDeviceMapParams::Text {
+<a href=#3208 id=3208 data-nosnippet>3208</a>            max_seq_len: <span class="kw">_</span>,
+<a href=#3209 id=3209 data-nosnippet>3209</a>            max_batch_size,
+<a href=#3210 id=3210 data-nosnippet>3210</a>        } = params
+<a href=#3211 id=3211 data-nosnippet>3211</a>        <span class="kw">else </span>{
+<a href=#3212 id=3212 data-nosnippet>3212</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected text AutoDeviceMapParams for this model!"</span>)
+<a href=#3213 id=3213 data-nosnippet>3213</a>        };
+<a href=#3214 id=3214 data-nosnippet>3214</a>
+<a href=#3215 id=3215 data-nosnippet>3215</a>        <span class="kw">let </span>cfg: models::qwen3_moe::Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#3216 id=3216 data-nosnippet>3216</a>
+<a href=#3217 id=3217 data-nosnippet>3217</a>        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
+<a href=#3218 id=3218 data-nosnippet>3218</a>    }
+<a href=#3219 id=3219 data-nosnippet>3219</a>    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+<a href=#3220 id=3220 data-nosnippet>3220</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#3221 id=3221 data-nosnippet>3221</a>        _config: <span class="kw-2">&amp;</span>str,
+<a href=#3222 id=3222 data-nosnippet>3222</a>        _params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+<a href=#3223 id=3223 data-nosnippet>3223</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+<a href=#3224 id=3224 data-nosnippet>3224</a>        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+<a href=#3225 id=3225 data-nosnippet>3225</a>    }
+<a href=#3226 id=3226 data-nosnippet>3226</a>
+<a href=#3227 id=3227 data-nosnippet>3227</a>    <span class="kw">fn </span>non_mapped_size_in_bytes(
+<a href=#3228 id=3228 data-nosnippet>3228</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#3229 id=3229 data-nosnippet>3229</a>        config: <span class="kw-2">&amp;</span>str,
+<a href=#3230 id=3230 data-nosnippet>3230</a>        dtype: DType,
+<a href=#3231 id=3231 data-nosnippet>3231</a>        weight_pack_factor: usize,
+<a href=#3232 id=3232 data-nosnippet>3232</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+<a href=#3233 id=3233 data-nosnippet>3233</a>        <span class="kw">let </span>cfg: models::qwen3_moe::Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#3234 id=3234 data-nosnippet>3234</a>        <span class="kw">let </span>elems = {
+<a href=#3235 id=3235 data-nosnippet>3235</a>            <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+<a href=#3236 id=3236 data-nosnippet>3236</a>            <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
+<a href=#3237 id=3237 data-nosnippet>3237</a>                cfg.hidden_size * cfg.vocab_size
+<a href=#3238 id=3238 data-nosnippet>3238</a>            } <span class="kw">else </span>{
+<a href=#3239 id=3239 data-nosnippet>3239</a>                <span class="number">0
+<a href=#3240 id=3240 data-nosnippet>3240</a>            </span>};
+<a href=#3241 id=3241 data-nosnippet>3241</a>            <span class="kw">let </span>norm = cfg.hidden_size;
+<a href=#3242 id=3242 data-nosnippet>3242</a>            embed_tokens + lm_head + norm
+<a href=#3243 id=3243 data-nosnippet>3243</a>        };
+<a href=#3244 id=3244 data-nosnippet>3244</a>        <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
+<a href=#3245 id=3245 data-nosnippet>3245</a>    }
+<a href=#3246 id=3246 data-nosnippet>3246</a>
+<a href=#3247 id=3247 data-nosnippet>3247</a>    <span class="kw">fn </span>layer_sizes_in_bytes(
+<a href=#3248 id=3248 data-nosnippet>3248</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#3249 id=3249 data-nosnippet>3249</a>        config: <span class="kw-2">&amp;</span>str,
+<a href=#3250 id=3250 data-nosnippet>3250</a>        dtype: DType,
+<a href=#3251 id=3251 data-nosnippet>3251</a>        weight_pack_factor: usize,
+<a href=#3252 id=3252 data-nosnippet>3252</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
+<a href=#3253 id=3253 data-nosnippet>3253</a>        <span class="kw">let </span>cfg: models::qwen3_moe::Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#3254 id=3254 data-nosnippet>3254</a>        <span class="kw">let </span><span class="kw-2">mut </span>layer_sizes_in_bytes = Vec::new();
+<a href=#3255 id=3255 data-nosnippet>3255</a>        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
+<a href=#3256 id=3256 data-nosnippet>3256</a>            <span class="kw">let </span>input_layernorm = cfg.hidden_size;
+<a href=#3257 id=3257 data-nosnippet>3257</a>            <span class="kw">let </span>post_attention_layernorm = cfg.hidden_size;
+<a href=#3258 id=3258 data-nosnippet>3258</a>
+<a href=#3259 id=3259 data-nosnippet>3259</a>            <span class="kw">let </span>size_in = cfg.hidden_size;
+<a href=#3260 id=3260 data-nosnippet>3260</a>            <span class="kw">let </span>size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
+<a href=#3261 id=3261 data-nosnippet>3261</a>            <span class="kw">let </span>size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+<a href=#3262 id=3262 data-nosnippet>3262</a>            <span class="kw">let </span>q_proj = size_in * size_q / weight_pack_factor + size_q;
+<a href=#3263 id=3263 data-nosnippet>3263</a>            <span class="kw">let </span>k_proj = size_in * size_kv / weight_pack_factor + size_kv;
+<a href=#3264 id=3264 data-nosnippet>3264</a>            <span class="kw">let </span>v_proj = size_in * size_kv / weight_pack_factor + size_kv;
+<a href=#3265 id=3265 data-nosnippet>3265</a>            <span class="kw">let </span>o_proj = size_q * size_in / weight_pack_factor;
+<a href=#3266 id=3266 data-nosnippet>3266</a>
+<a href=#3267 id=3267 data-nosnippet>3267</a>            <span class="kw">let </span>mlp_size = <span class="kw">if </span>!cfg.mlp_only_layers.contains(<span class="kw-2">&amp;</span>layer_idx)
+<a href=#3268 id=3268 data-nosnippet>3268</a>                &amp;&amp; (cfg.num_experts &gt; <span class="number">0 </span>&amp;&amp; (layer_idx + <span class="number">1</span>) % cfg.decoder_sparse_step == <span class="number">0</span>)
+<a href=#3269 id=3269 data-nosnippet>3269</a>            {
+<a href=#3270 id=3270 data-nosnippet>3270</a>                <span class="kw">let </span>expert_size = {
+<a href=#3271 id=3271 data-nosnippet>3271</a>                    <span class="kw">let </span>h_size = cfg.hidden_size;
+<a href=#3272 id=3272 data-nosnippet>3272</a>                    <span class="kw">let </span>i_size = cfg.moe_intermediate_size;
+<a href=#3273 id=3273 data-nosnippet>3273</a>                    <span class="kw">let </span>gate_proj = h_size * i_size / weight_pack_factor;
+<a href=#3274 id=3274 data-nosnippet>3274</a>                    <span class="kw">let </span>up_proj = h_size * i_size / weight_pack_factor;
+<a href=#3275 id=3275 data-nosnippet>3275</a>                    <span class="kw">let </span>down_proj = i_size * h_size / weight_pack_factor;
+<a href=#3276 id=3276 data-nosnippet>3276</a>                    gate_proj + up_proj + down_proj
+<a href=#3277 id=3277 data-nosnippet>3277</a>                };
+<a href=#3278 id=3278 data-nosnippet>3278</a>                expert_size * cfg.num_experts
+<a href=#3279 id=3279 data-nosnippet>3279</a>            } <span class="kw">else </span>{
+<a href=#3280 id=3280 data-nosnippet>3280</a>                <span class="kw">let </span>h_size = cfg.hidden_size;
+<a href=#3281 id=3281 data-nosnippet>3281</a>                <span class="kw">let </span>i_size = cfg.intermediate_size;
+<a href=#3282 id=3282 data-nosnippet>3282</a>                <span class="kw">let </span>gate_proj = h_size * i_size / weight_pack_factor;
+<a href=#3283 id=3283 data-nosnippet>3283</a>                <span class="kw">let </span>up_proj = h_size * i_size / weight_pack_factor;
+<a href=#3284 id=3284 data-nosnippet>3284</a>                <span class="kw">let </span>down_proj = i_size * h_size / weight_pack_factor;
+<a href=#3285 id=3285 data-nosnippet>3285</a>                gate_proj + up_proj + down_proj
+<a href=#3286 id=3286 data-nosnippet>3286</a>            };
 <a href=#3287 id=3287 data-nosnippet>3287</a>
-<a href=#3288 id=3288 data-nosnippet>3288</a>            <span class="kw">let </span>size_elems = input_layernorm
-<a href=#3289 id=3289 data-nosnippet>3289</a>                + post_attention_layernorm
-<a href=#3290 id=3290 data-nosnippet>3290</a>                + q_proj
-<a href=#3291 id=3291 data-nosnippet>3291</a>                + k_proj
-<a href=#3292 id=3292 data-nosnippet>3292</a>                + v_proj
-<a href=#3293 id=3293 data-nosnippet>3293</a>                + o_proj
-<a href=#3294 id=3294 data-nosnippet>3294</a>                + mlp_size
-<a href=#3295 id=3295 data-nosnippet>3295</a>                + q_norm
-<a href=#3296 id=3296 data-nosnippet>3296</a>                + k_norm;
-<a href=#3297 id=3297 data-nosnippet>3297</a>
-<a href=#3298 id=3298 data-nosnippet>3298</a>            <span class="kw">let </span>size_in_bytes = size_elems * dtype.size_in_bytes();
-<a href=#3299 id=3299 data-nosnippet>3299</a>            layer_sizes_in_bytes.push(size_in_bytes);
-<a href=#3300 id=3300 data-nosnippet>3300</a>        }
-<a href=#3301 id=3301 data-nosnippet>3301</a>
-<a href=#3302 id=3302 data-nosnippet>3302</a>        <span class="prelude-val">Ok</span>(layer_sizes_in_bytes)
-<a href=#3303 id=3303 data-nosnippet>3303</a>    }
+<a href=#3288 id=3288 data-nosnippet>3288</a>            <span class="kw">let </span>q_norm = cfg.head_dim();
+<a href=#3289 id=3289 data-nosnippet>3289</a>            <span class="kw">let </span>k_norm = cfg.head_dim();
+<a href=#3290 id=3290 data-nosnippet>3290</a>
+<a href=#3291 id=3291 data-nosnippet>3291</a>            <span class="kw">let </span>size_elems = input_layernorm
+<a href=#3292 id=3292 data-nosnippet>3292</a>                + post_attention_layernorm
+<a href=#3293 id=3293 data-nosnippet>3293</a>                + q_proj
+<a href=#3294 id=3294 data-nosnippet>3294</a>                + k_proj
+<a href=#3295 id=3295 data-nosnippet>3295</a>                + v_proj
+<a href=#3296 id=3296 data-nosnippet>3296</a>                + o_proj
+<a href=#3297 id=3297 data-nosnippet>3297</a>                + mlp_size
+<a href=#3298 id=3298 data-nosnippet>3298</a>                + q_norm
+<a href=#3299 id=3299 data-nosnippet>3299</a>                + k_norm;
+<a href=#3300 id=3300 data-nosnippet>3300</a>
+<a href=#3301 id=3301 data-nosnippet>3301</a>            <span class="kw">let </span>size_in_bytes = size_elems * dtype.size_in_bytes();
+<a href=#3302 id=3302 data-nosnippet>3302</a>            layer_sizes_in_bytes.push(size_in_bytes);
+<a href=#3303 id=3303 data-nosnippet>3303</a>        }
 <a href=#3304 id=3304 data-nosnippet>3304</a>
-<a href=#3305 id=3305 data-nosnippet>3305</a>    <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#3306 id=3306 data-nosnippet>3306</a>        <span class="kw">let </span>cfg: models::qwen3_moe::Config = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#3307 id=3307 data-nosnippet>3307</a>        <span class="prelude-val">Ok</span>(cfg.num_hidden_layers)
-<a href=#3308 id=3308 data-nosnippet>3308</a>    }
-<a href=#3309 id=3309 data-nosnippet>3309</a>
-<a href=#3310 id=3310 data-nosnippet>3310</a>    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
-<a href=#3311 id=3311 data-nosnippet>3311</a>        <span class="kw">let </span>cfg: models::qwen3_moe::Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#3305 id=3305 data-nosnippet>3305</a>        <span class="prelude-val">Ok</span>(layer_sizes_in_bytes)
+<a href=#3306 id=3306 data-nosnippet>3306</a>    }
+<a href=#3307 id=3307 data-nosnippet>3307</a>
+<a href=#3308 id=3308 data-nosnippet>3308</a>    <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+<a href=#3309 id=3309 data-nosnippet>3309</a>        <span class="kw">let </span>cfg: models::qwen3_moe::Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#3310 id=3310 data-nosnippet>3310</a>        <span class="prelude-val">Ok</span>(cfg.num_hidden_layers)
+<a href=#3311 id=3311 data-nosnippet>3311</a>    }
 <a href=#3312 id=3312 data-nosnippet>3312</a>
-<a href=#3313 id=3313 data-nosnippet>3313</a>        <span class="kw">let </span>cfg = ModelConfigMetadata {
-<a href=#3314 id=3314 data-nosnippet>3314</a>            max_seq_len: cfg.max_position_embeddings,
-<a href=#3315 id=3315 data-nosnippet>3315</a>            num_layers: cfg.num_hidden_layers,
-<a href=#3316 id=3316 data-nosnippet>3316</a>            hidden_size: cfg.hidden_size,
-<a href=#3317 id=3317 data-nosnippet>3317</a>            num_kv_heads: cfg.num_key_value_heads,
-<a href=#3318 id=3318 data-nosnippet>3318</a>            num_attn_heads: cfg.num_attention_heads,
-<a href=#3319 id=3319 data-nosnippet>3319</a>            sliding_window: cfg.sliding_window,
-<a href=#3320 id=3320 data-nosnippet>3320</a>            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-<a href=#3321 id=3321 data-nosnippet>3321</a>            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-<a href=#3322 id=3322 data-nosnippet>3322</a>        };
-<a href=#3323 id=3323 data-nosnippet>3323</a>
-<a href=#3324 id=3324 data-nosnippet>3324</a>        <span class="prelude-val">Ok</span>(Box::new(cfg))
-<a href=#3325 id=3325 data-nosnippet>3325</a>    }
-<a href=#3326 id=3326 data-nosnippet>3326</a>}</code></pre></div></section></main></body></html>
+<a href=#3313 id=3313 data-nosnippet>3313</a>    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+<a href=#3314 id=3314 data-nosnippet>3314</a>        <span class="kw">let </span>cfg: models::qwen3_moe::Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#3315 id=3315 data-nosnippet>3315</a>
+<a href=#3316 id=3316 data-nosnippet>3316</a>        <span class="kw">let </span>cfg = ModelConfigMetadata {
+<a href=#3317 id=3317 data-nosnippet>3317</a>            max_seq_len: cfg.max_position_embeddings,
+<a href=#3318 id=3318 data-nosnippet>3318</a>            num_layers: cfg.num_hidden_layers,
+<a href=#3319 id=3319 data-nosnippet>3319</a>            hidden_size: cfg.hidden_size,
+<a href=#3320 id=3320 data-nosnippet>3320</a>            num_kv_heads: cfg.num_key_value_heads,
+<a href=#3321 id=3321 data-nosnippet>3321</a>            num_attn_heads: cfg.num_attention_heads,
+<a href=#3322 id=3322 data-nosnippet>3322</a>            sliding_window: cfg.sliding_window,
+<a href=#3323 id=3323 data-nosnippet>3323</a>            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+<a href=#3324 id=3324 data-nosnippet>3324</a>            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+<a href=#3325 id=3325 data-nosnippet>3325</a>        };
+<a href=#3326 id=3326 data-nosnippet>3326</a>
+<a href=#3327 id=3327 data-nosnippet>3327</a>        <span class="prelude-val">Ok</span>(Box::new(cfg))
+<a href=#3328 id=3328 data-nosnippet>3328</a>    }
+<a href=#3329 id=3329 data-nosnippet>3329</a>}</code></pre></div></section></main></body></html>
