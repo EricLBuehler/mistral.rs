@@ -790,16 +790,18 @@ impl Sampler {
         return_logprobs: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
         sample_speculative: bool,
+        multiple_sequences: bool,
     ) -> Result<Logprobs> {
-        #[cfg(feature = "metal")]
-        return self.sample_fast(
-            logits,
-            context,
-            return_logprobs,
-            self.top_k,
-            self.top_p,
-            self.min_p,
-        );
+        if cfg!(feature = "metal") && !multiple_sequences {
+            return self.sample_fast(
+                logits,
+                context,
+                return_logprobs,
+                self.top_k,
+                self.top_p,
+                self.min_p,
+            );
+        }
 
         let logits = logits.to_vec1()?;
         let mut logits = self.apply_penalties(logits, context)?;
@@ -867,7 +869,14 @@ mod tests {
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler
-            .sample(logits, &(0..1024).collect::<Vec<_>>(), false, rng, false)
+            .sample(
+                logits,
+                &(0..1024).collect::<Vec<_>>(),
+                false,
+                rng,
+                false,
+                false,
+            )
             .unwrap();
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);
@@ -888,7 +897,14 @@ mod tests {
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler
-            .sample(logits, &(0..1024).collect::<Vec<_>>(), false, rng, true)
+            .sample(
+                logits,
+                &(0..1024).collect::<Vec<_>>(),
+                false,
+                rng,
+                true,
+                false,
+            )
             .unwrap();
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);
