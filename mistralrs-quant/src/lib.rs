@@ -3,6 +3,7 @@ use std::{
     fmt::Debug,
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard, OnceLock},
+    str::FromStr,
 };
 
 use blockwise_fp8::blockwise_fp8_linear_b;
@@ -354,6 +355,49 @@ pub enum IsqType {
     AFQ4,
     AFQ3,
     AFQ2,
+}
+
+impl FromStr for IsqType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "2" if cfg!(feature = "metal") => Ok(Self::AFQ2),
+            "2" => Ok(Self::Q2K),
+            "3" if cfg!(feature = "metal") => Ok(Self::AFQ3),
+            "3" => Ok(Self::Q3K),
+            "4" if cfg!(feature = "metal") => Ok(Self::AFQ4),
+            "4" => Ok(Self::Q4K),
+            "5" => Ok(Self::Q5K),
+            "6" if cfg!(feature = "metal") => Ok(Self::AFQ6),
+            "6" => Ok(Self::Q6K),
+            "8" if cfg!(feature = "metal") => Ok(Self::AFQ8),
+            "8" => Ok(Self::Q8_0),
+            "q4_0" => Ok(Self::Q4_0),
+            "q4_1" => Ok(Self::Q4_1),
+            "q5_0" => Ok(Self::Q5_0),
+            "q5_1" => Ok(Self::Q5_1),
+            "q8_0" => Ok(Self::Q8_0),
+            "q8_1" => Ok(Self::Q8_1),
+            "q2k" => Ok(Self::Q2K),
+            "q3k" => Ok(Self::Q3K),
+            "q4k" => Ok(Self::Q4K),
+            "q5k" => Ok(Self::Q5K),
+            "q6k" => Ok(Self::Q6K),
+            "q8k" => Ok(Self::Q8K),
+            "hqq8" => Ok(Self::HQQ8),
+            "hqq4" => Ok(Self::HQQ4),
+            "fp8" => Ok(Self::F8E4M3),
+            "afq8" => Ok(Self::AFQ8),
+            "afq6" => Ok(Self::AFQ6),
+            "afq4" => Ok(Self::AFQ4),
+            "afq3" => Ok(Self::AFQ3),
+            "afq2" => Ok(Self::AFQ2),
+            _ => Err(format!(
+                "ISQ type {s} unknown, choose one of `2`, `3`, `4`, `6`, `8`, `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`, `AFQ8`, `AFQ6`, `AFQ4`, `AFQ3`, `AFQ2`."
+            )),
+        }
+    }
 }
 
 impl IsqType {
