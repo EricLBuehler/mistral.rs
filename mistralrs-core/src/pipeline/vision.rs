@@ -411,7 +411,7 @@ impl Loader for VisionLoader {
             let predicates = self.inner.immediate_isq_predicates(&config)?;
             info!("Applying ISQ to {in_situ_quant:?}");
             if predicates.is_empty() {
-                warn!("No predicates for this model and ISQ setting deteced. ISQ will not be applied to any weights!");
+                warn!("No predicates for this model and ISQ setting detected. ISQ will not be applied to any weights!");
             }
             mistralrs_quant::set_immediate_isq(in_situ_quant, predicates);
             false
