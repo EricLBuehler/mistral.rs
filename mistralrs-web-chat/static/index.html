@@ -31,9 +31,13 @@
       border-radius: var(--radius);
       padding: 1rem;
       overflow-y: auto;
+      padding-bottom: 4rem;
       flex: 1 1 auto;
     }
     #form {
+      position: sticky;
+      bottom: 0;
+      z-index: 1;
       background: #fff;
       border: 1px solid var(--border-color);
       border-radius: var(--radius);
@@ -41,6 +45,7 @@
       display: flex;
       align-items: center;
       gap: 0.5rem;
+      flex-shrink: 0;
     }
     #input {
       flex: 1 1 auto;
@@ -107,7 +112,7 @@
       flex: 1 1 auto;
       background: var(--chat-bg);
       padding: 1.5rem;
-      overflow: auto;
+      overflow: hidden;
       display: flex;
       flex-direction: column;
     }
@@ -130,9 +135,6 @@
     }
     /* ---------- Mobile tweaks ---------- */
     @media (max-width: 600px) {
-      html, body {
-        width: auto;
-      }
       body {
         flex-direction: column;
       }
@@ -164,7 +166,6 @@
       #main {
         padding: 1rem;
         flex: 1 1 auto;
-        overflow-y: auto;
       }
       .user,
       .assistant {
