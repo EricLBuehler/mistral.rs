@@ -41,7 +41,7 @@
       gap: 0.8rem;
     }
     #sidebar h2 { font-size:1.2rem;margin:0 0 0.5rem; }
-    #modelSelect, #clearBtn, #newChatBtn {
+    #modelSelect, #clearBtn, #newChatBtn, #renameBtn {
       width: 100%;
       box-sizing: border-box;
       font-family: inherit;
@@ -71,6 +71,19 @@
       transition:background 0.2s;
     }
     #clearBtn:hover { background:#d84340; }
+
+    /* Rename button styles */
+    #renameBtn {
+      padding: 0.55rem;
+      border: none;
+      border-radius: var(--radius);
+      background: #ffca28;
+      color: #fff;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #renameBtn:hover { background: #ffb300; }
+
     #chatList{
       list-style:none;
       padding:0;
@@ -183,7 +196,7 @@
         padding: 0.75rem 1rem;
       }
       #sidebar h2 { display:none; }
-      #modelSelect, #newChatBtn, #clearBtn { flex: 0 0 auto; }
+      #modelSelect, #newChatBtn, #clearBtn, #renameBtn { flex: 0 0 auto; }
       #chatList { display:none; }
       #main { padding: 1rem; }
       .user,.assistant{ max-width:100%; }
@@ -196,6 +209,7 @@
     <select id="modelSelect"></select>
     <button id="newChatBtn">➕ New chat</button>
     <button id="clearBtn">🗑️ Clear chat</button>
+    <button id="renameBtn">✏️ Rename chat</button>
     <ul id="chatList"></ul>
   </div>
 
@@ -222,20 +236,20 @@
       const modelSelect  = document.getElementById('modelSelect');
       const clearBtn     = document.getElementById('clearBtn');
       const newChatBtn   = document.getElementById('newChatBtn');
+      const renameBtn    = document.getElementById('renameBtn');
       const chatList     = document.getElementById('chatList');
       const imageInput   = document.getElementById('imageInput');
       const imageLabel   = document.getElementById('imageLabel');
       const mainArea     = document.getElementById('main');
+      const ws           = new WebSocket(`ws://${location.host}/ws`);
 
-      const ws = new WebSocket(`ws://${location.host}/ws`);
-      window.chatSocket = ws;
+      // track which chat is currently loaded
+      let pendingClear = false;
+      let currentChatId = null;
+      const CLEAR_CMD = "__CLEAR__";
 
       const models = Object.create(null); // name → kind
       let   prevModel = null;
-
-      /* ---------- helpers ---------- */
-      const CLEAR_CMD = "__CLEAR__";
-      let pendingClear = false;
 
       function renderMarkdown(src){
         const esc = src.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
@@ -263,14 +277,14 @@
         if(kind!=='vision') imageInput.value='';
       }
 
-      /* ---------- chat list ---------- */
       async function refreshChatList(){
         const res = await fetch('/api/list_chats');
         const data = await res.json();
         chatList.innerHTML='';
         data.chats.forEach((c,idx)=>{
           const li=document.createElement('li');
-          li.textContent = `Chat #${idx+1}`;
+          const display = c.title && c.title.trim() ? c.title : `Chat #${idx+1}`;
+          li.textContent = display;
           li.dataset.id  = c.id;
           li.onclick = ()=>loadChat(c.id);
           chatList.appendChild(li);
@@ -278,11 +292,15 @@
       }
 
       async function loadChat(id){
-        if(!maybeClearChat(true)){ return; }   // skip confirm on chat switch
-        const res = await fetch('/api/load_chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+        if(!maybeClearChat(true)) return;
+        const res = await fetch('/api/load_chat',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({id})
+        });
         if(!res.ok){ alert('Failed to load chat'); return; }
         const data = await res.json();
-        /* switch model if needed */
+        currentChatId = data.id;
         if(data.model && models[data.model]){
           modelSelect.value = data.model;
           prevModel = data.model;
@@ -291,14 +309,12 @@
         log.innerHTML='';
         data.messages.forEach(m=>{
           append(renderMarkdown(m.content), m.role==='user'?'user':'assistant');
-          /* replay to server so its context is rebuilt */
           if(ws.readyState===WebSocket.OPEN){
             ws.send(JSON.stringify({restore:m}));
           }
         });
       }
 
-      /* ---------- model discovery ---------- */
       async function refreshModels(){
         const res=await fetch('/api/list_models');
         const data=await res.json();
@@ -320,18 +336,22 @@
       }
 
       function maybeClearChat(skipConfirm = false){
-        if (log.children.length === 0) return true;           // nothing to clear
-        if (skipConfirm || confirm('Clear the current draft conversation?')) {
+        if(log.children.length===0) return true;
+        if(skipConfirm || confirm('Clear the current draft conversation?')){
           pendingClear = true;
-          if (ws.readyState === WebSocket.OPEN) ws.send(CLEAR_CMD);
-          log.innerHTML = '';
+          if(ws.readyState===WebSocket.OPEN) ws.send(CLEAR_CMD);
+          log.innerHTML='';
           return true;
         }
         return false;
       }
 
-      async function selectModel(name){
-        await fetch('/api/select_model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+      async function selectModel(name, notify=true){
+        await fetch('/api/select_model',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({name})
+        });
       }
 
       modelSelect.addEventListener('change',async()=>{
@@ -343,15 +363,20 @@
         await selectModel(name);
       });
 
-      /* ---------- new chat ---------- */
-      newChatBtn.addEventListener('click', async()=>{
-        if(!prevModel){ alert('Select a model first'); return; }
-        await fetch('/api/new_chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:prevModel})});
-        log.innerHTML='';
+      newChatBtn.addEventListener('click', async () => {
+        if (!prevModel) { alert('Select a model first'); return; }
+        const res = await fetch('/api/new_chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: prevModel })
+        });
+        if (!res.ok) { alert('Failed to create new chat'); return; }
+        const { id } = await res.json();
+        currentChatId = id;
+        log.innerHTML = '';
         await refreshChatList();
       });
 
-      /* ---------- Clear chat button ---------- */
       clearBtn.addEventListener('click', () => {
         if (log.children.length === 0) return;
         if (!confirm('Clear the chat history?')) return;
@@ -360,16 +385,33 @@
         log.innerHTML='';
       });
 
-      /* textarea auto-resize */
+      renameBtn.addEventListener('click', async () => {
+        if (!currentChatId) { alert('No chat selected'); return; }
+        const newTitle = prompt('Enter new chat name:', '');
+        if (newTitle && newTitle.trim()) {
+          const res = await fetch('/api/rename_chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: currentChatId, title: newTitle.trim() })
+          });
+          if (res.ok) {
+            await refreshChatList();
+          } else {
+            alert('Failed to rename chat');
+          }
+        }
+      });
+
+      // textarea auto-resize
       const maxH=parseFloat(getComputedStyle(input).lineHeight)*10;
       function fit(){ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,maxH)+'px'; }
       input.addEventListener('input',fit); fit();
 
-      /* ---------- websocket streaming ---------- */
+      // websocket streaming
       let assistantBuf='',assistantDiv=null;
       ws.addEventListener('message',ev=>{
-        if (ev.data === '[Context cleared]') { pendingClear=false; return; }
-        if (ev.data === 'Cannot clear while assistant is replying.') { pendingClear=false; alert(ev.data); return; }
+        if(ev.data==='[Context cleared]'){ pendingClear=false; return; }
+        if(ev.data==='Cannot clear while assistant is replying.'){ pendingClear=false; alert(ev.data); return; }
         if(!assistantDiv) assistantDiv=append('', 'assistant');
         assistantBuf+=ev.data;
         assistantDiv.innerHTML=renderMarkdown(assistantBuf);
@@ -377,49 +419,48 @@
         log.scrollTop=log.scrollHeight;
       });
 
-      /* send user messages */
-      function sendMessage() {
-        const msg = input.value.trim();
-        if (!msg) return;
-        append(renderMarkdown(msg), 'user');
-        assistantBuf = ''; assistantDiv = null;
+      // send user messages
+      function sendMessage(){
+        const msg=input.value.trim();
+        if(!msg) return;
+        append(renderMarkdown(msg),'user');
+        assistantBuf=''; assistantDiv=null;
         ws.send(msg);
         input.value=''; fit();
       }
-      form.addEventListener('submit', ev => { ev.preventDefault(); sendMessage(); });
-      input.addEventListener('keydown', ev=>{
+      form.addEventListener('submit',ev=>{ev.preventDefault();sendMessage();});
+      input.addEventListener('keydown',ev=>{
         if(ev.key==='Enter'&&!ev.shiftKey){
-          if(ev.ctrlKey||ev.metaKey){ ev.preventDefault(); sendMessage(); } else { ev.preventDefault(); }
+          if(ev.ctrlKey||ev.metaKey){ev.preventDefault();sendMessage();}
+          else ev.preventDefault();
         }
       });
 
-      /* image upload – file input */
-      imageInput.addEventListener('change', async () => {
-        const f = imageInput.files[0]; if (!f) return;
-        const img = document.createElement('img'); img.src = URL.createObjectURL(f); img.classList.add('chat-preview');
-        document.getElementById('image-container').appendChild(img);
-        const fd = new FormData(); fd.append('image', f);
-        const r = await fetch('/api/upload_image', { method: 'POST', body: fd });
-        if (r.ok && ws.readyState === WebSocket.OPEN) {
-          const j = await r.json(); ws.send(JSON.stringify({ image: j.url }));
-        }
-        imageInput.value='';
-      });
-
-      /* drag-and-drop image */
-      mainArea.addEventListener('dragover', e=>{ e.preventDefault(); mainArea.classList.add('drag-over'); });
-      mainArea.addEventListener('dragleave', e=>{ e.preventDefault(); mainArea.classList.remove('drag-over'); });
-      mainArea.addEventListener('drop', async e=>{
-        e.preventDefault(); mainArea.classList.remove('drag-over');
-        const f=Array.from(e.dataTransfer.files).find(file=>file.type.startsWith('image/')); if(!f) return;
+      // image upload
+      imageInput.addEventListener('change',async()=>{
+        const f=imageInput.files[0]; if(!f) return;
         const img=document.createElement('img'); img.src=URL.createObjectURL(f); img.classList.add('chat-preview');
         document.getElementById('image-container').appendChild(img);
         const fd=new FormData(); fd.append('image',f);
         const r=await fetch('/api/upload_image',{method:'POST',body:fd});
-        if(r.ok&&ws.readyState===WebSocket.OPEN){ const j=await r.json(); ws.send(JSON.stringify({ image: j.url })); }
+        if(r.ok&&ws.readyState===WebSocket.OPEN){const j=await r.json();ws.send(JSON.stringify({image:j.url}));}
+        imageInput.value='';
       });
 
-      refreshModels(); // boot-strap
+      // drag & drop
+      mainArea.addEventListener('dragover',e=>{e.preventDefault();mainArea.classList.add('drag-over');});
+      mainArea.addEventListener('dragleave',e=>{e.preventDefault();mainArea.classList.remove('drag-over');});
+      mainArea.addEventListener('drop',async e=>{
+        e.preventDefault(); mainArea.classList.remove('drag-over');
+        const f=Array.from(e.dataTransfer.files).find(f=>f.type.startsWith('image/')); if(!f) return;
+        const img=document.createElement('img'); img.src=URL.createObjectURL(f); img.classList.add('chat-preview');
+        document.getElementById('image-container').appendChild(img);
+        const fd=new FormData(); fd.append('image',f);
+        const r=await fetch('/api/upload_image',{method:'POST',body:fd});
+        if(r.ok&&ws.readyState===WebSocket.OPEN){const j=await r.json();ws.send(JSON.stringify({image:j.url}));}
+      });
+
+      refreshModels();
     </script>
   </div><!-- /#main -->
 </body>

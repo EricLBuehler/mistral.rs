@@ -62,6 +62,8 @@ struct ChatMessage {
 
 #[derive(Serialize, Deserialize)]
 struct ChatFile {
+    #[serde(default)]
+    title: Option<String>,
     model: String,
     kind: String,
     messages: Vec<ChatMessage>,
@@ -166,6 +168,7 @@ async fn main() -> Result<()> {
         .route("/api/list_chats", get(list_chats))
         .route("/api/new_chat", post(new_chat))
         .route("/api/load_chat", post(load_chat))
+        .route("/api/rename_chat", post(rename_chat))
         .nest_service(
             "/",
             get_service(ServeDir::new(concat!(
@@ -290,7 +293,13 @@ async fn list_chats(State(app): State<Arc<AppState>>) -> impl IntoResponse {
         while let Ok(Some(entry)) = dir.next_entry().await {
             if let Some(name) = entry.file_name().to_str() {
                 if name.ends_with(".json") {
-                    chats.push(json!({ "id": name.trim_end_matches(".json") }));
+                    let id = name.trim_end_matches(".json");
+                    let data = fs::read(format!("{}/{}", app.chats_dir, name)).await.ok();
+                    let title = data
+                        .and_then(|bytes| serde_json::from_slice::<ChatFile>(&bytes).ok())
+                        .and_then(|c| c.title)
+                        .unwrap_or_default();
+                    chats.push(json!({ "id": id, "title": title }));
                 }
             }
         }
@@ -326,6 +335,7 @@ async fn new_chat(
     .to_string();
 
     let chat = ChatFile {
+        title: None,
         model: req.model.clone(),
         kind,
         messages: Vec::new(),
@@ -365,6 +375,7 @@ async fn load_chat(
                 }
                 Json(json!({
                     "id": req.id,
+                    "title": chat.title.clone().unwrap_or_default(),
                     "model": chat.model,
                     "kind": chat.kind,
                     "messages": chat.messages
@@ -375,6 +386,29 @@ async fn load_chat(
         },
         Err(_) => (StatusCode::NOT_FOUND, "chat not found").into_response(),
     }
+}
+
+#[derive(Deserialize)]
+struct RenameChatRequest {
+    id: String,
+    title: String,
+}
+
+async fn rename_chat(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<RenameChatRequest>,
+) -> impl IntoResponse {
+    let path = format!("{}/{}.json", app.chats_dir, req.id);
+    if let Ok(data) = fs::read(&path).await {
+        if let Ok(mut chat) = serde_json::from_slice::<ChatFile>(&data) {
+            chat.title = Some(req.title.clone());
+            if let Ok(bytes) = serde_json::to_vec_pretty(&chat) {
+                let _ = tokio::fs::write(&path, bytes).await;
+                return (StatusCode::OK, "Renamed").into_response();
+            }
+        }
+    }
+    (StatusCode::INTERNAL_SERVER_ERROR, "rename failed").into_response()
 }
 
 async fn append_chat_message(app: &Arc<AppState>, role: &str, content: &str) -> Result<()> {
@@ -391,12 +425,14 @@ async fn append_chat_message(app: &Arc<AppState>, role: &str, content: &str) -> 
 
     let mut chat: ChatFile = if let Ok(data) = fs::read(&path).await {
         serde_json::from_slice(&data).unwrap_or(ChatFile {
+            title: None,
             model: app.current.read().await.clone().unwrap_or_default(),
             kind: String::new(),
             messages: Vec::new(),
         })
     } else {
         ChatFile {
+            title: None,
             model: app.current.read().await.clone().unwrap_or_default(),
             kind: String::new(),
             messages: Vec::new(),
