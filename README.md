@@ -77,7 +77,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     <summary>Show command</summary>
 
     ```bash
-    ./mistralrs-server --port 1234 diffusion-plain -m black-forest-labs/FLUX.1-schnell -a flux
+    ./mistralrs-server -i diffusion-plain -m black-forest-labs/FLUX.1-schnell -a flux
     ```
   </details>
 
