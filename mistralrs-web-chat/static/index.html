@@ -6,24 +6,43 @@
   <title>Mistral.rs Chat</title>
   <style>
     :root {
-      --accent: #3498db;
-      --accent-hov: #1f7ec5;
+      /* Light mode variables */
+      --accent: #3D6A9B;
+      --accent-hov: #315A8B;
       --radius: 8px;
-      --bg-light      : #f9f9f9;
-      --sidebar-bg    : #ffffff;
-      --chat-bg       : #ffffff;
-      --border-color  : #e0e0e0;
-      --text-muted    : #666666;
-      --primary       : #3498db;
-      --primary-hov   : #2980b9;
+      --bg-body: #f2f2f5;
+      --sidebar-bg: #ffffff;
+      --main-bg: #f9f9f9;
+      --chat-bg: #ffffff;
+      --border-color: #d1d1d6;
+      --text-color: #1c1c1e;
+      --text-muted: #6e6e73;
+      --primary: #3D6A9B;
+      --primary-hov: #315A8B;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        /* Dark mode variables */
+        --accent: #3D6A9B;
+        --accent-hov: #315A8B;
+        --bg-body: #1c1c1e;
+        --sidebar-bg: #2c2c2e;
+        --main-bg: #121212;
+        --chat-bg: #1e1e1f;
+        --border-color: #38383a;
+        --text-color: #f2f2f5;
+        --text-muted: #8e8e93;
+        --primary: #3D6A9B;
+        --primary-hov: #315A8B;
+      }
     }
     body {
       display: flex;
       font-family: 'Inter', sans-serif;
       margin: 0;
       height: 100vh;
-      background: var(--bg-light);
-      color: #333;
+      background: var(--bg-body);
+      color: var(--text-color);
     }
     /* ----- sidebar ----- */
     #sidebar {
@@ -35,7 +54,7 @@
       background: var(--sidebar-bg);
       box-shadow: 2px 0 8px rgba(0,0,0,0.05);
       padding: 1.5rem;
-      border-right: 1px solid #ccc;
+      border-right: 1px solid var(--border-color);
       display: flex;
       flex-direction: column;
       gap: 0.8rem;
@@ -50,39 +69,25 @@
       padding: 0.5rem;
       border: 1px solid var(--border-color);
       border-radius: var(--radius);
+      background: var(--chat-bg);
+      color: var(--text-color);
     }
-    #newChatBtn {
-      padding: 0.55rem;
-      border:none;
-      border-radius:var(--radius);
-      background:#4caf50;
-      color:#fff;
-      cursor:pointer;
-      transition:background 0.2s;
-    }
-    #newChatBtn:hover { background:#429846; }
-    #clearBtn {
-      padding: 0.55rem;
-      border:none;
-      border-radius:var(--radius);
-      background:#ef5350;
-      color:#fff;
-      cursor:pointer;
-      transition:background 0.2s;
-    }
-    #clearBtn:hover { background:#d84340; }
-
-    /* Rename button styles */
+    #newChatBtn,
+    #clearBtn,
     #renameBtn {
       padding: 0.55rem;
       border: none;
       border-radius: var(--radius);
-      background: #ffca28;
+      background: var(--primary);
       color: #fff;
       cursor: pointer;
       transition: background 0.2s;
     }
-    #renameBtn:hover { background: #ffb300; }
+    #newChatBtn:hover,
+    #clearBtn:hover,
+    #renameBtn:hover {
+      background: var(--primary-hov);
+    }
 
     #chatList{
       list-style:none;
@@ -97,7 +102,7 @@
       cursor:pointer;
       user-select:none;
     }
-    #chatList li:hover{ background:#f1f1f1; }
+    #chatList li:hover{ background: var(--main-bg); }
     #chatList li.active {
       font-weight: bold;
       /* highlight active chat with a border that follows the rounded corners */
@@ -107,7 +112,7 @@
     /* ----- main chat area ----- */
     #main {
       flex: 1 1 auto;
-      background: var(--chat-bg);
+      background: var(--main-bg);
       padding: 1.5rem;
       overflow: hidden;
       display: flex;
@@ -128,15 +133,22 @@
       border-radius: var(--radius);
       max-width: 70%;
       margin: 0.5rem 0;
+      color: var(--text-color);
     }
-    .user       { background:#e8f6ff; margin-left:auto; }
-    .assistant  { background:#f4f4f4; margin-right:auto; }
+    .user {
+      background: rgba(10, 132, 255, 0.1);
+      margin-left: auto;
+    }
+    .assistant {
+      background: rgba(142, 142, 147, 0.1);
+      margin-right: auto;
+    }
     /* ----- form ----- */
     #form {
       position: sticky;
       bottom: 0;
       z-index: 1;
-      background: #fff;
+      background: var(--chat-bg);
       border: 1px solid var(--border-color);
       border-radius: var(--radius);
       padding: 0.75rem;
@@ -144,6 +156,7 @@
       align-items: center;
       gap: 0.5rem;
       flex-shrink: 0;
+      margin-top: 1rem;
     }
     #input {
       flex: 1 1 auto;
@@ -151,7 +164,8 @@
       font-size: 1rem;
       border: 1px solid var(--border-color);
       border-radius: var(--radius);
-      background: #fff;
+      background: var(--chat-bg);
+      color: var(--text-color);
       resize: none;
       overflow: hidden;
       line-height: 1.4;
@@ -165,6 +179,7 @@
       border: none;
       padding: 0.6rem 1.2rem;
       border-radius: var(--radius);
+      transition: background 0.2s;
     }
     #form button[type="submit"]:hover {
       background: var(--primary-hov);
@@ -186,6 +201,7 @@
       border-radius: var(--radius);
       margin: 0.5rem 0;
       border: 1px solid var(--border-color);
+      background: var(--chat-bg);
     }
     #image-container {
       display: flex;
@@ -198,7 +214,7 @@
       body { flex-direction: column; }
       #sidebar {
         width: 100%; min-width: 0; max-width: none; flex-direction: row;
-        gap:0.5rem; overflow-x:auto; border-right:none; border-bottom:1px solid #ccc;
+        gap:0.5rem; overflow-x:auto; border-right:none; border-bottom:1px solid var(--border-color);
         padding: 0.75rem 1rem;
       }
       #sidebar h2 { display:none; }
