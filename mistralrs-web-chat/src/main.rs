@@ -170,6 +170,7 @@ async fn main() -> Result<()> {
         .route("/api/select_model", post(select_model))
         .route("/api/list_chats", get(list_chats))
         .route("/api/new_chat", post(new_chat))
+        .route("/api/delete_chat", post(delete_chat))
         .route("/api/load_chat", post(load_chat))
         .route("/api/rename_chat", post(rename_chat))
         .nest_service(
@@ -355,6 +356,30 @@ async fn new_chat(
     }
 
     Json(json!({ "id": chat_id }))
+}
+#[derive(Deserialize)]
+struct DeleteChatRequest {
+    id: String,
+}
+
+async fn delete_chat(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<DeleteChatRequest>,
+) -> impl IntoResponse {
+    let path = format!("{}/{}.json", app.chats_dir, req.id);
+    if let Err(e) = tokio::fs::remove_file(&path).await {
+        error!("delete chat error: {}", e);
+        return (StatusCode::NOT_FOUND, "chat not found").into_response();
+    }
+    {
+        let mut cur_chat = app.current_chat.write().await;
+        if cur_chat.as_ref() == Some(&req.id) {
+            *cur_chat = None;
+            let mut cur_model = app.current.write().await;
+            *cur_model = None;
+        }
+    }
+    (StatusCode::OK, "Deleted").into_response()
 }
 
 #[derive(Deserialize)]

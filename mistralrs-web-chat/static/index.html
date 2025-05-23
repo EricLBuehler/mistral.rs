@@ -60,7 +60,7 @@
       gap: 0.8rem;
     }
     #sidebar h2 { font-size:1.2rem;margin:0 0 0.5rem; }
-    #modelSelect, #clearBtn, #newChatBtn, #renameBtn {
+    #modelSelect, #clearBtn, #newChatBtn, #renameBtn, #deleteBtn {
       width: 100%;
       box-sizing: border-box;
       font-family: inherit;
@@ -74,7 +74,8 @@
     }
     #newChatBtn,
     #clearBtn,
-    #renameBtn {
+    #renameBtn,
+    #deleteBtn {
       padding: 0.55rem;
       border: none;
       border-radius: var(--radius);
@@ -85,7 +86,8 @@
     }
     #newChatBtn:hover,
     #clearBtn:hover,
-    #renameBtn:hover {
+    #renameBtn:hover,
+    #deleteBtn:hover {
       background: var(--primary-hov);
     }
 
@@ -105,7 +107,6 @@
     #chatList li:hover{ background: var(--main-bg); }
     #chatList li.active {
       font-weight: bold;
-      /* highlight active chat with a border that follows the rounded corners */
       border: 2px solid var(--accent);
       border-radius: var(--radius);
     }
@@ -218,7 +219,7 @@
         padding: 0.75rem 1rem;
       }
       #sidebar h2 { display:none; }
-      #modelSelect, #newChatBtn, #clearBtn, #renameBtn { flex: 0 0 auto; }
+      #modelSelect, #newChatBtn, #clearBtn, #renameBtn, #deleteBtn { flex: 0 0 auto; }
       #chatList { display:none; }
       #main { padding: 1rem; }
       .user,.assistant{ max-width:100%; }
@@ -232,6 +233,7 @@
     <button id="newChatBtn">➕ New chat</button>
     <button id="clearBtn">🗑️ Clear chat</button>
     <button id="renameBtn">✏️ Rename chat</button>
+    <button id="deleteBtn">🗑️ Delete chat</button>
     <ul id="chatList"></ul>
   </div>
 
@@ -259,6 +261,7 @@
       const clearBtn     = document.getElementById('clearBtn');
       const newChatBtn   = document.getElementById('newChatBtn');
       const renameBtn    = document.getElementById('renameBtn');
+      const deleteBtn    = document.getElementById('deleteBtn');
       const chatList     = document.getElementById('chatList');
       const imageInput   = document.getElementById('imageInput');
       const imageLabel   = document.getElementById('imageLabel');
@@ -319,11 +322,9 @@
             ? c.title
             : `Chat #${data.chats.length - idx}`;
 
-          // Title element
           const titleDiv = document.createElement('div');
           titleDiv.textContent = display;
 
-          // Creation timestamp
           const dateDiv = document.createElement('div');
           dateDiv.textContent = new Date(c.created_at).toLocaleString();
           dateDiv.style.fontSize = '0.8em';
@@ -345,7 +346,6 @@
         if(!res.ok){ alert('Failed to load chat'); return; }
         const data = await res.json();
         currentChatId = data.id;
-        // Update active chat highlight in the sidebar
         document.querySelectorAll('#chatList li').forEach(li => li.classList.remove('active'));
         const activeLi = document.querySelector(`#chatList li[data-id="${id}"]`);
         if (activeLi) activeLi.classList.add('active');
@@ -381,10 +381,7 @@
           await selectModel(prevModel,false);
         }
         await refreshChatList();
-        // Always start with a new chat on startup
-        if (!currentChatId) {
-          newChatBtn.click();
-        }
+        if (!currentChatId) newChatBtn.click();
       }
 
       function maybeClearChat(skipConfirm = false){
@@ -451,6 +448,27 @@
           } else {
             alert('Failed to rename chat');
           }
+        }
+      });
+
+      deleteBtn.addEventListener('click', async () => {
+        if (!currentChatId) { alert('No chat selected'); return; }
+        if (!confirm('Delete this chat permanently?')) return;
+        const res = await fetch('/api/delete_chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: currentChatId })
+        });
+        if (!res.ok) { alert('Failed to delete chat'); return; }
+        currentChatId = null;
+        log.innerHTML='';
+        await refreshChatList();
+        // Move to newest chat if any, otherwise create a fresh one
+        const firstLi = chatList.querySelector('li');
+        if(firstLi){
+          loadChat(firstLi.dataset.id);
+        }else if(prevModel){
+          newChatBtn.click();
         }
       });
 
