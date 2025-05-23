@@ -10,8 +10,8 @@ use axum::{
 };
 use futures_util::stream::StreamExt;
 use mistralrs::{
-    IsqType, Model, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
-    TextModelBuilder, VisionMessages, VisionModelBuilder,
+    IsqType, Model, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
+    VisionMessages, VisionModelBuilder,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -288,8 +288,8 @@ async fn handle_socket(mut socket: WebSocket, app: AppState) {
                 let msgs_snapshot = vision_msgs.clone();
                 if let Err(e) = stream_and_forward(&model, msgs_snapshot, &mut socket, |tok| {
                     // move the current value out, update, then place it back
-                    let cur = mem::take(&mut text_msgs);
-                    text_msgs = cur.add_message(TextMessageRole::Assistant, tok);
+                    let cur = mem::take(&mut vision_msgs);
+                    vision_msgs = cur.add_message(TextMessageRole::Assistant, tok);
                 })
                 .await
                 {
