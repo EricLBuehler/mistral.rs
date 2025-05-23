@@ -238,7 +238,6 @@ async fn handle_socket(mut socket: WebSocket, app: AppState) {
                 if let Ok(val) = serde_json::from_str::<Value>(&user_msg) {
                     // Case 1: pure image payload => buffer it and wait for a prompt
                     if let Some(url) = val.get("image").and_then(|v| v.as_str()) {
-                        dbg!(&url);
                         // load & decode
                         match tokio::fs::read(&url).await {
                             Ok(bytes) => match image::load_from_memory(&bytes) {

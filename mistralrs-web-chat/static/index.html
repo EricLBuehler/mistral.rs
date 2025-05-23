@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Mistral.rs Chat</title>
   <style>
+    :root {
+      --accent: #3498db;
+      --accent-hov: #1f7ec5;
+      --radius: 8px;
+    }
     body {
       display: flex;
       font-family: Arial, sans-serif;
@@ -53,7 +58,7 @@
     }
     #sidebar input,
     #sidebar select,
-    #sidebar button {
+    #sidebar button:not(.tab) {
       width: 100%;
       margin: 0.4em 0;
       box-sizing: border-box;
@@ -83,16 +88,45 @@
       margin       : 0.5rem 0;
       box-shadow   : var(--shadow);
     }
+    #modelTabs {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+    #modelTabs .tab {
+      flex: 1 0 auto;         /* allow grow, prevent shrink */
+      min-width: 100px;       /* ensure consistent width */
+      width: auto;            /* prevent full-sidebar width */
+      padding: 0.5rem;
+      background: #fff;
+      border: 1px solid #c5c9ce;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-family: inherit;
+    }
+    /* Inactive tabs: light grey background and muted text */
+    #modelTabs .tab:not(.active) {
+      background: #f0f0f0;
+      color: #555;
+    }
+    #modelTabs .tab.active {
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      /* keep a clear border for consistency */
+      border: 1px solid var(--accent);
+      padding: 0.5rem;
+    }
   </style>
 </head>
 <body>
   <div id="sidebar">
     <h2>Model control</h2>
     <input id="modelPath" type="text" placeholder="Path to model">
-    <select id="modelKind">
-      <option value="text">Text model</option>
-      <option value="vision">Vision model</option>
-    </select>
+    <div id="modelTabs">
+      <button class="tab active" data-kind="text">Text</button>
+      <button class="tab" data-kind="vision">Vision</button>
+    </div>
     <button id="loadBtn">Load</button>
     <div id="loadStatus" class="status"></div>
   </div>
@@ -120,7 +154,7 @@
 
     loadBtn.addEventListener('click', async () => {
       const path = modelPath.value.trim();
-      const kind = modelKind.value;
+      const kind = document.querySelector('#modelTabs .tab.active').dataset.kind;
       if (!path) {
         alert('Please enter a model path');
         return;
@@ -175,6 +209,25 @@
     const ws    = new WebSocket(`ws://${location.host}/ws`);
     window.chatSocket = ws;
 
+    // Tab switcher: show/hide image input based on selected model type
+    const tabs = document.querySelectorAll('#modelTabs .tab');
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        if (tab.dataset.kind === 'vision') {
+          imageLabel.style.display = 'inline-block';
+        } else {
+          imageLabel.style.display = 'none';
+          imageInput.value = '';
+        }
+      });
+    });
+    // Initialize visibility
+    if (document.querySelector('#modelTabs .tab.active').dataset.kind === 'text') {
+      imageLabel.style.display = 'none';
+    }
+ 
     let assistantBuffer = "";
     let assistantDiv    = null;
 
