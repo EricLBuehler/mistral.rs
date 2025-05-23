@@ -107,7 +107,7 @@
       flex: 1 1 auto;
       background: var(--chat-bg);
       padding: 1.5rem;
-      overflow: hidden;
+      overflow: auto;
       display: flex;
       flex-direction: column;
     }
@@ -130,6 +130,9 @@
     }
     /* ---------- Mobile tweaks ---------- */
     @media (max-width: 600px) {
+      html, body {
+        width: auto;
+      }
       body {
         flex-direction: column;
       }
@@ -142,6 +145,8 @@
         flex-wrap: wrap;
         align-items: center;
         gap: 0.5rem;
+        overflow-x: auto;
+        width: auto;
       }
       #sidebar h2 {
         flex: 1 0 100%;
@@ -158,7 +163,8 @@
       }
       #main {
         padding: 1rem;
-        height: calc(100vh - 170px);
+        flex: 1 1 auto;
+        overflow-y: auto;
       }
       .user,
       .assistant {
