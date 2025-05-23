@@ -12,8 +12,8 @@ use axum::{
 use clap::Parser;
 use futures_util::stream::StreamExt;
 use mistralrs::{
-    IsqType, Model, TextMessageRole, TextMessages, TextModelBuilder, VisionMessages,
-    VisionModelBuilder,
+    best_device, parse_isq_value, IsqType, Model, TextMessageRole, TextMessages, TextModelBuilder,
+    VisionMessages, VisionModelBuilder,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -28,6 +28,10 @@ use uuid::Uuid;
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
 struct Cli {
+    /// In-situ quantization to apply, defaults to 6-bit.
+    #[arg(long = "isq")]
+    isq: Option<String>,
+
     /// Repeated flag for text‑only models
     #[arg(long = "text-model")]
     text_models: Vec<String>,
@@ -57,11 +61,19 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    let isq = if cfg!(feature = "metal") {
+    let default_isq = if cfg!(feature = "metal") {
         IsqType::AFQ6
     } else {
         IsqType::Q6K
     };
+
+    let device = best_device(false)?;
+
+    let isq = cli
+        .isq
+        .as_ref()
+        .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
+
     let mut models: HashMap<String, LoadedModel> = HashMap::new();
 
     for path in cli.text_models {
@@ -72,7 +84,7 @@ async fn main() -> Result<()> {
             .to_string();
         println!("📝 Loading text model: {name}");
         let m = TextModelBuilder::new(path)
-            .with_isq(isq)
+            .with_isq(isq.unwrap_or(default_isq))
             .with_logging()
             .with_throughput_logging()
             .build()
@@ -88,7 +100,7 @@ async fn main() -> Result<()> {
             .to_string();
         println!("🖼️  Loading vision model: {name}");
         let m = VisionModelBuilder::new(path)
-            .with_isq(isq)
+            .with_isq(isq.unwrap_or(default_isq))
             .with_logging()
             .with_throughput_logging()
             .build()
