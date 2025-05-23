@@ -280,13 +280,26 @@
       async function refreshChatList(){
         const res = await fetch('/api/list_chats');
         const data = await res.json();
+        // Sort chats by creation timestamp, newest first
+        data.chats.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
         chatList.innerHTML='';
         data.chats.forEach((c,idx)=>{
-          const li=document.createElement('li');
+          const li = document.createElement('li');
           const display = c.title && c.title.trim() ? c.title : `Chat #${idx+1}`;
-          li.textContent = display;
-          li.dataset.id  = c.id;
-          li.onclick = ()=>loadChat(c.id);
+          li.dataset.id = c.id;
+          li.onclick = () => loadChat(c.id);
+
+          // Title
+          const titleDiv = document.createElement('div');
+          titleDiv.textContent = display;
+          // Creation date
+          const dateDiv = document.createElement('div');
+          dateDiv.textContent = new Date(c.created_at).toLocaleString();
+          dateDiv.style.fontSize = '0.8em';
+          dateDiv.style.color = 'var(--text-muted)';
+
+          li.appendChild(titleDiv);
+          li.appendChild(dateDiv);
           chatList.appendChild(li);
         });
       }

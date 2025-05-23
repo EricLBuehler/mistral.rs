@@ -1,5 +1,4 @@
 use anyhow::Result;
-const CLEAR_CMD: &str = "__CLEAR__";
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::DefaultBodyLimit,
@@ -9,6 +8,7 @@ use axum::{
     routing::{get, get_service, post},
     Json, Router,
 };
+use chrono::Utc;
 use clap::Parser;
 use futures_util::stream::StreamExt;
 use indexmap::IndexMap;
@@ -26,6 +26,8 @@ use tokio::{net::TcpListener, sync::RwLock};
 use tower_http::services::ServeDir;
 use tracing::error;
 use uuid::Uuid;
+
+const CLEAR_CMD: &str = "__CLEAR__";
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -66,6 +68,7 @@ struct ChatFile {
     title: Option<String>,
     model: String,
     kind: String,
+    created_at: String,
     messages: Vec<ChatMessage>,
 }
 
@@ -295,11 +298,12 @@ async fn list_chats(State(app): State<Arc<AppState>>) -> impl IntoResponse {
                 if name.ends_with(".json") {
                     let id = name.trim_end_matches(".json");
                     let data = fs::read(format!("{}/{}", app.chats_dir, name)).await.ok();
-                    let title = data
+                    let (title, created) = data
                         .and_then(|bytes| serde_json::from_slice::<ChatFile>(&bytes).ok())
-                        .and_then(|c| c.title)
-                        .unwrap_or_default();
-                    chats.push(json!({ "id": id, "title": title }));
+                        .map(|c| (c.title, c.created_at))
+                        .map(|(title, created)| (title.unwrap_or_default(), created))
+                        .unwrap_or_else(|| (String::new(), String::new()));
+                    chats.push(json!({ "id": id, "title": title, "created_at": created }));
                 }
             }
         }
@@ -338,6 +342,7 @@ async fn new_chat(
         title: None,
         model: req.model.clone(),
         kind,
+        created_at: Utc::now().to_rfc3339(),
         messages: Vec::new(),
     };
     let _ = fs::write(&path, serde_json::to_vec_pretty(&chat).unwrap()).await;
@@ -378,6 +383,7 @@ async fn load_chat(
                     "title": chat.title.clone().unwrap_or_default(),
                     "model": chat.model,
                     "kind": chat.kind,
+                    "created_at": chat.created_at.clone(),
                     "messages": chat.messages
                 }))
                 .into_response()
@@ -428,6 +434,7 @@ async fn append_chat_message(app: &Arc<AppState>, role: &str, content: &str) -> 
             title: None,
             model: app.current.read().await.clone().unwrap_or_default(),
             kind: String::new(),
+            created_at: Utc::now().to_rfc3339(),
             messages: Vec::new(),
         })
     } else {
@@ -435,6 +442,7 @@ async fn append_chat_message(app: &Arc<AppState>, role: &str, content: &str) -> 
             title: None,
             model: app.current.read().await.clone().unwrap_or_default(),
             kind: String::new(),
+            created_at: Utc::now().to_rfc3339(),
             messages: Vec::new(),
         }
     };
