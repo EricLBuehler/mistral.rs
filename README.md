@@ -522,27 +522,38 @@ Please submit more benchmarks via raising an issue!
 |Qwen 3| |
 </details>
 
-### Using derivative model
+### Using derivative and adapter models
 
-To use a derivative model, select the model architecture using the correct subcommand. To see what can be passed for the architecture, pass `--help` after the subcommand. For example, when using a different model than the default, specify the following for the following types of models:
+To use a derivative or adapter model (e.g., quantized, LoRA, X-LoRA, vision, etc.), select the correct architecture subcommand and pass the required arguments—typically model id, and for quantized/adapters, also the quantization filename, tokenizer, or adapter ordering if needed.
 
-- **Plain**: Model id
-- **Quantized**: Quantized model id, quantized filename, and tokenizer id
-- **X-LoRA**: Model id, X-LoRA ordering
-- **X-LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and X-LoRA ordering
-- **LoRA**: Model id
-- **LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and LoRA ordering
-- **Vision Plain**: Model id
+- **See all options:** Run `./mistralrs-server <subcommand> --help`  
+- **Docs:** [Adapter models](docs/ADAPTER_MODELS.md), [Chat templates](docs/CHAT_TOK.md)
 
-See [this](#adapter-ordering-file) section to determine if it is necessary to prepare an X-LoRA/LoRA ordering file, it is always necessary if the target modules or architecture changed, or if the adapter order changed.
+<details>
+<summary>Arguments by model type</summary>
 
-It is also important to check the chat template style of the model. If the HF hub repo has a `tokenizer_config.json` file, it is not necessary to specify. Otherwise, templates can be found in `chat_templates` and should be passed before the subcommand. If the model is not instruction tuned, no chat template will be found and the APIs will only accept a prompt, no messages.
+| Model Type          | Required Arguments                                                     |
+|---------------------|-----------------------------------------------------------------------|
+| Plain               | model id                                                              |
+| Quantized           | model id, quantized filename, tokenizer id                            |
+| X-LoRA              | model id, X-LoRA ordering (if not default)                            |
+| X-LoRA quantized    | model id, quantized filename, tokenizer id, X-LoRA ordering           |
+| LoRA                | model id, LoRA ordering (if not default)                              |
+| LoRA quantized      | model id, quantized filename, tokenizer id, LoRA ordering             |
+| Vision Plain        | model id                                                              |
 
-For example, when using a Zephyr model:
+</details>
 
-`./mistralrs-server --port 1234 --log output.txt gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
+<details>
+<summary>Example: Zephyr GGUF model</summary>
 
-### Adapter model support: X-LoRA and LoRA
+```bash
+./mistralrs-server --port 1234 --log output.txt gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf
+```
+</details>
+
+Chat template and tokenizer are usually auto-detected.  
+If you need to override, see the [chat templates doc](docs/CHAT_TOK.md).
 
 An adapter model is a model with X-LoRA or LoRA. X-LoRA support is provided by selecting the `x-lora-*` architecture, and LoRA support by selecting the `lora-*` architecture. Please find docs for adapter models [here](docs/ADAPTER_MODELS.md). Examples may be found [here](docs/LORA_XLORA.md).
 
