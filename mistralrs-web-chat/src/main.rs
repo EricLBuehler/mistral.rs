@@ -11,13 +11,13 @@ use axum::{
 };
 use clap::Parser;
 use futures_util::stream::StreamExt;
+use indexmap::IndexMap;
 use mistralrs::{
     best_device, parse_isq_value, IsqType, Model, TextMessageRole, TextMessages, TextModelBuilder,
     VisionMessages, VisionModelBuilder,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::mem;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{net::TcpListener, sync::RwLock};
@@ -39,6 +39,10 @@ struct Cli {
     /// Repeated flag for vision models
     #[arg(long = "vision-model")]
     vision_models: Vec<String>,
+
+    /// Port to listen on (default: 8080)
+    #[arg(long = "port")]
+    port: Option<u16>,
 }
 
 /// Distinguish at runtime which kind of model we have loaded.
@@ -49,7 +53,7 @@ enum LoadedModel {
 }
 
 struct AppState {
-    models: HashMap<String, LoadedModel>,
+    models: IndexMap<String, LoadedModel>,
     current: RwLock<Option<String>>,
 }
 
@@ -74,8 +78,9 @@ async fn main() -> Result<()> {
         .as_ref()
         .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
 
-    let mut models: HashMap<String, LoadedModel> = HashMap::new();
+    let mut models: IndexMap<String, LoadedModel> = IndexMap::new();
 
+    // Insert text models first
     for path in cli.text_models {
         let name = std::path::Path::new(&path)
             .file_name()
@@ -92,6 +97,7 @@ async fn main() -> Result<()> {
         models.insert(name, LoadedModel::Text(Arc::new(m)));
     }
 
+    // Then insert vision models (preserving order)
     for path in cli.vision_models {
         let name = std::path::Path::new(&path)
             .file_name()
@@ -128,7 +134,7 @@ async fn main() -> Result<()> {
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .with_state(app_state.clone());
 
-    let addr: SocketAddr = ([0, 0, 0, 0], 3000).into();
+    let addr: SocketAddr = ([0, 0, 0, 0], cli.port.unwrap_or(8080)).into();
     let listener = TcpListener::bind(addr).await?;
     println!("🔌 listening on http://{}", addr);
     axum::serve(listener, app).await?;

@@ -217,7 +217,7 @@
     <div id="log"></div>
 
     <form id="form" autocomplete="off">
-      <textarea id="input" placeholder="Type your message…" rows="1"></textarea>
+      <textarea id="input" placeholder="Type your message… (Press Ctrl+Enter to send)" rows="1"></textarea>
       <label id="imageLabel" for="imageInput">📎 Image</label>
       <input id="imageInput" type="file" accept="image/*" />
       <button type="submit">Send</button>
@@ -353,15 +353,28 @@
         log.scrollTop=log.scrollHeight;
       });
 
-      /* ---------- send user messages ---------- */
+      /* ---------- send user messages (Ctrl+Enter only) ---------- */
+      // Prevent Enter from submitting the form
       form.addEventListener('submit',ev=>{
         ev.preventDefault();
-        const msg=input.value.trim();
-        if(!msg) return;
-        append(renderMarkdown(msg),'user');
-        assistantBuf=''; assistantDiv=null;
-        ws.send(msg);
-        input.value=''; fit();
+      });
+      // Allow Ctrl+Enter (or Cmd+Enter) in textarea to send
+      input.addEventListener('keydown', function(ev) {
+        // On Enter (but not Shift+Enter), check for Ctrl or Cmd
+        if (ev.key === 'Enter' && !ev.shiftKey) {
+          if (ev.ctrlKey || ev.metaKey) {
+            ev.preventDefault();
+            const msg = input.value.trim();
+            if (!msg) return;
+            append(renderMarkdown(msg),'user');
+            assistantBuf=''; assistantDiv=null;
+            ws.send(msg);
+            input.value=''; fit();
+          } else {
+            // Prevent default Enter from submitting form
+            ev.preventDefault();
+          }
+        }
       });
 
       /* ---------- image upload: file input ---------- */

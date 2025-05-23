@@ -27,6 +27,7 @@ tower-http = { version = "0.6.4", features = ["fs"] }
 uuid = "1.17.0"
 image.workspace = true
 clap = { workspace = true, features = ["derive"] }
+indexmap.workspace = true
 
 [features]
 cuda = ["mistralrs/cuda"]

@@ -2722,6 +2722,7 @@ dependencies = [
  "clap",
  "futures-util",
  "image",
+ "indexmap",
  "mistralrs",
  "serde",
  "serde_json",
