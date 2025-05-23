@@ -25,6 +25,76 @@
       background: var(--bg-light);
       color: #333;
     }
+    /* ----- sidebar ----- */
+    #sidebar {
+      width: 260px;
+      min-width: 260px;
+      max-width: 260px;
+      flex-shrink: 0;
+      flex-grow: 0;
+      background: var(--sidebar-bg);
+      box-shadow: 2px 0 8px rgba(0,0,0,0.05);
+      padding: 1.5rem;
+      border-right: 1px solid #ccc;
+      display: flex;
+      flex-direction: column;
+      gap: 0.8rem;
+    }
+    #sidebar h2 { font-size:1.2rem;margin:0 0 0.5rem; }
+    #modelSelect, #clearBtn, #newChatBtn {
+      width: 100%;
+      box-sizing: border-box;
+      font-family: inherit;
+    }
+    #modelSelect {
+      padding: 0.5rem;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+    }
+    #newChatBtn {
+      padding: 0.55rem;
+      border:none;
+      border-radius:var(--radius);
+      background:#4caf50;
+      color:#fff;
+      cursor:pointer;
+      transition:background 0.2s;
+    }
+    #newChatBtn:hover { background:#429846; }
+    #clearBtn {
+      padding: 0.55rem;
+      border:none;
+      border-radius:var(--radius);
+      background:#ef5350;
+      color:#fff;
+      cursor:pointer;
+      transition:background 0.2s;
+    }
+    #clearBtn:hover { background:#d84340; }
+    #chatList{
+      list-style:none;
+      padding:0;
+      margin:0;
+      flex:1 1 auto;
+      overflow-y:auto;
+    }
+    #chatList li{
+      padding:0.4rem 0.5rem;
+      border-radius:var(--radius);
+      cursor:pointer;
+      user-select:none;
+    }
+    #chatList li:hover{ background:#f1f1f1; }
+    /* ----- main chat area ----- */
+    #main {
+      flex: 1 1 auto;
+      background: var(--chat-bg);
+      padding: 1.5rem;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: background 0.2s;
+    }
     #log {
       background: var(--chat-bg);
       border: 1px solid var(--border-color);
@@ -34,6 +104,15 @@
       padding-bottom: 4rem;
       flex: 1 1 auto;
     }
+    .user, .assistant {
+      padding: 0.75rem;
+      border-radius: var(--radius);
+      max-width: 70%;
+      margin: 0.5rem 0;
+    }
+    .user       { background:#e8f6ff; margin-left:auto; }
+    .assistant  { background:#f4f4f4; margin-right:auto; }
+    /* ----- form ----- */
     #form {
       position: sticky;
       bottom: 0;
@@ -71,62 +150,7 @@
     #form button[type="submit"]:hover {
       background: var(--primary-hov);
     }
-    .user, .assistant {
-      padding: 0.75rem;
-      border-radius: var(--radius);
-      max-width: 70%;
-      margin: 0.5rem 0;
-    }
-    .user       { background:#e8f6ff; margin-left:auto; }
-    .assistant  { background:#f4f4f4; margin-right:auto; }
-    #sidebar {
-      width: 260px;
-      min-width: 260px;
-      max-width: 260px;
-      flex-shrink: 0;
-      flex-grow: 0;
-      background: var(--sidebar-bg);
-      box-shadow: 2px 0 8px rgba(0,0,0,0.05);
-      padding: 1.5rem;
-      border-right: 1px solid #ccc;
-    }
-    #sidebar h2 { font-size:1.2rem;margin:0 0 1rem; }
-    #modelSelect, #clearBtn {
-      width: 100%;
-      box-sizing: border-box;
-      margin-bottom: 0.8rem;
-      font-family: inherit;
-    }
-    #modelSelect {
-      padding: 0.5rem;
-      border: 1px solid var(--border-color);
-      border-radius: var(--radius);
-    }
-    #clearBtn {
-      padding: 0.55rem;
-      border:none;
-      border-radius:var(--radius);
-      background:#ef5350;
-      color:#fff;
-      cursor:pointer;
-      transition:background 0.2s;
-    }
-    #clearBtn:hover { background:#d84340; }
-    #main {
-      flex: 1 1 auto;
-      background: var(--chat-bg);
-      padding: 1.5rem;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-      /* Add transition for drag-over feedback */
-      transition: background 0.2s;
-    }
-    /* Drag-and-drop highlight */
-    #main.drag-over {
-      background: #e3f3ff !important;
-      transition: background 0.2s;
-    }
+    /* ----- image previews ----- */
     #imageInput { display:none; }
     #imageLabel {
       padding:0.6rem 1.2rem;
@@ -140,8 +164,6 @@
     img.chat-preview {
       max-width: 150px;
       max-height: 150px;
-      height: auto;
-      width: auto;
       border-radius: var(--radius);
       margin: 0.5rem 0;
       border: 1px solid var(--border-color);
@@ -154,60 +176,17 @@
     }
     /* ---------- Mobile tweaks ---------- */
     @media (max-width: 600px) {
-      body {
-        flex-direction: column;
-      }
+      body { flex-direction: column; }
       #sidebar {
-        width: 100%;
-        min-width: 0;
-        max-width: none;
-        flex-shrink: 1;
-        flex-grow: 1;
-        border-right: none;
-        border-bottom: 1px solid #ccc;
+        width: 100%; min-width: 0; max-width: none; flex-direction: row;
+        gap:0.5rem; overflow-x:auto; border-right:none; border-bottom:1px solid #ccc;
         padding: 0.75rem 1rem;
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 0.5rem;
-        overflow-x: auto;
-        width: auto;
       }
-      #sidebar h2 {
-        flex: 1 0 100%;
-        margin: 0 0 0.5rem;
-        font-size: 1rem;
-      }
-      #modelSelect {
-        flex: 1 1 auto;
-        margin: 0;
-      }
-      #clearBtn {
-        flex: 0 0 auto;
-        margin: 0;
-      }
-      #main {
-        padding: 1rem;
-        flex: 1 1 auto;
-      }
-      .user,
-      .assistant {
-        max-width: 100%;
-      }
-      #form {
-        flex-wrap: nowrap;
-        gap: 0.5rem;
-      }
-      #input {
-        flex: 1 1 auto;
-        min-width: 0;
-        min-height: calc(1.4em * 2);
-        max-height: 40vh;
-      }
-      #imageLabel,
-      #form button[type="submit"] {
-        flex: 0 0 auto;
-      }
+      #sidebar h2 { display:none; }
+      #modelSelect, #newChatBtn, #clearBtn { flex: 0 0 auto; }
+      #chatList { display:none; }
+      #main { padding: 1rem; }
+      .user,.assistant{ max-width:100%; }
     }
   </style>
 </head>
@@ -215,12 +194,13 @@
   <div id="sidebar">
     <h2>Model control</h2>
     <select id="modelSelect"></select>
+    <button id="newChatBtn">➕ New chat</button>
     <button id="clearBtn">🗑️ Clear chat</button>
-    <div id="loadStatus" class="status"></div>
+    <ul id="chatList"></ul>
   </div>
 
   <div id="main">
-    <h1>Mistral.rs Chat</h1>
+    <h1 style="margin-top:0;">Mistral.rs Chat</h1>
 
     <div id="log"></div>
 
@@ -241,9 +221,10 @@
       const form         = document.getElementById('form');
       const modelSelect  = document.getElementById('modelSelect');
       const clearBtn     = document.getElementById('clearBtn');
+      const newChatBtn   = document.getElementById('newChatBtn');
+      const chatList     = document.getElementById('chatList');
       const imageInput   = document.getElementById('imageInput');
       const imageLabel   = document.getElementById('imageLabel');
-      const loadStatus   = document.getElementById('loadStatus');
       const mainArea     = document.getElementById('main');
 
       const ws = new WebSocket(`ws://${location.host}/ws`);
@@ -282,39 +263,75 @@
         if(kind!=='vision') imageInput.value='';
       }
 
+      /* ---------- chat list ---------- */
+      async function refreshChatList(){
+        const res = await fetch('/api/list_chats');
+        const data = await res.json();
+        chatList.innerHTML='';
+        data.chats.forEach((c,idx)=>{
+          const li=document.createElement('li');
+          li.textContent = `Chat #${idx+1}`;
+          li.dataset.id  = c.id;
+          li.onclick = ()=>loadChat(c.id);
+          chatList.appendChild(li);
+        });
+      }
+
+      async function loadChat(id){
+        if(!maybeClearChat(true)){ return; }   // skip confirm on chat switch
+        const res = await fetch('/api/load_chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+        if(!res.ok){ alert('Failed to load chat'); return; }
+        const data = await res.json();
+        /* switch model if needed */
+        if(data.model && models[data.model]){
+          modelSelect.value = data.model;
+          prevModel = data.model;
+          updateImageVisibility(models[data.model]);
+        }
+        log.innerHTML='';
+        data.messages.forEach(m=>{
+          append(renderMarkdown(m.content), m.role==='user'?'user':'assistant');
+          /* replay to server so its context is rebuilt */
+          if(ws.readyState===WebSocket.OPEN){
+            ws.send(JSON.stringify({restore:m}));
+          }
+        });
+      }
+
       /* ---------- model discovery ---------- */
       async function refreshModels(){
-        try{
-          const res=await fetch('/api/list_models'); const data=await res.json();
-          modelSelect.innerHTML=''; Object.keys(models).forEach(k=>delete models[k]);
-          data.models.forEach(m=>{
-            models[m.name]=m.kind;
-            const opt=document.createElement('option');
-            opt.value=m.name; opt.textContent=(m.kind==='vision'?'🖼️ ':'📝 ')+m.name;
-            modelSelect.appendChild(opt);
-          });
-          if(modelSelect.options.length){
-            modelSelect.selectedIndex=0;
-            prevModel=modelSelect.value;
-            updateImageVisibility(models[prevModel]);
-            await selectModel(prevModel,false);
-          }
-        }catch(e){ loadStatus.textContent='Unable to fetch model list'; }
+        const res=await fetch('/api/list_models');
+        const data=await res.json();
+        modelSelect.innerHTML='';
+        Object.keys(models).forEach(k=>delete models[k]);
+        data.models.forEach(m=>{
+          models[m.name]=m.kind;
+          const opt=document.createElement('option');
+          opt.value=m.name; opt.textContent=(m.kind==='vision'?'🖼️ ':'📝 ')+m.name;
+          modelSelect.appendChild(opt);
+        });
+        if(modelSelect.options.length){
+          modelSelect.selectedIndex=0;
+          prevModel=modelSelect.value;
+          updateImageVisibility(models[prevModel]);
+          await selectModel(prevModel,false);
+        }
+        await refreshChatList();
       }
 
-      function maybeClearChat(){
-        if(log.children.length===0) return true;
-        if(!confirm('Switching model will clear the chat. Continue?')) return false;
-        pendingClear = true;
-        if (ws.readyState === WebSocket.OPEN) ws.send(CLEAR_CMD);
-        return true;
+      function maybeClearChat(skipConfirm = false){
+        if (log.children.length === 0) return true;           // nothing to clear
+        if (skipConfirm || confirm('Clear the current draft conversation?')) {
+          pendingClear = true;
+          if (ws.readyState === WebSocket.OPEN) ws.send(CLEAR_CMD);
+          log.innerHTML = '';
+          return true;
+        }
+        return false;
       }
 
-      async function selectModel(name,clearConfirmed){
-        if(!clearConfirmed && log.children.length){ /* safeguard */ }
-        try{
-          await fetch('/api/select_model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
-        }catch{}
+      async function selectModel(name){
+        await fetch('/api/select_model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
       }
 
       modelSelect.addEventListener('change',async()=>{
@@ -323,7 +340,15 @@
         if(!maybeClearChat()){ modelSelect.value=prevModel; return; }
         updateImageVisibility(models[name]);
         prevModel=name;
-        await selectModel(name,true);
+        await selectModel(name);
+      });
+
+      /* ---------- new chat ---------- */
+      newChatBtn.addEventListener('click', async()=>{
+        if(!prevModel){ alert('Select a model first'); return; }
+        await fetch('/api/new_chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:prevModel})});
+        log.innerHTML='';
+        await refreshChatList();
       });
 
       /* ---------- Clear chat button ---------- */
@@ -332,9 +357,10 @@
         if (!confirm('Clear the chat history?')) return;
         pendingClear = true;
         if (ws.readyState === WebSocket.OPEN) ws.send(CLEAR_CMD);
+        log.innerHTML='';
       });
 
-      /* ---------- textarea auto-resize ---------- */
+      /* textarea auto-resize */
       const maxH=parseFloat(getComputedStyle(input).lineHeight)*10;
       function fit(){ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,maxH)+'px'; }
       input.addEventListener('input',fit); fit();
@@ -342,18 +368,8 @@
       /* ---------- websocket streaming ---------- */
       let assistantBuf='',assistantDiv=null;
       ws.addEventListener('message',ev=>{
-        if (ev.data === '[Context cleared]') {
-          if (pendingClear) {
-            log.innerHTML = '';
-            pendingClear = false;
-          }
-          return;
-        }
-        if (ev.data === 'Cannot clear while assistant is replying.') {
-          pendingClear = false;
-          alert(ev.data);
-          return;
-        }
+        if (ev.data === '[Context cleared]') { pendingClear=false; return; }
+        if (ev.data === 'Cannot clear while assistant is replying.') { pendingClear=false; alert(ev.data); return; }
         if(!assistantDiv) assistantDiv=append('', 'assistant');
         assistantBuf+=ev.data;
         assistantDiv.innerHTML=renderMarkdown(assistantBuf);
@@ -361,91 +377,49 @@
         log.scrollTop=log.scrollHeight;
       });
 
-      /* ---------- send user messages (Ctrl+Enter or submit button only) ---------- */
+      /* send user messages */
       function sendMessage() {
         const msg = input.value.trim();
         if (!msg) return;
         append(renderMarkdown(msg), 'user');
-        assistantBuf = '';
-        assistantDiv = null;
+        assistantBuf = ''; assistantDiv = null;
         ws.send(msg);
-        input.value = '';
-        fit();
+        input.value=''; fit();
       }
-
-      // Prevent Enter from submitting the form unless Ctrl+Enter/Cmd+Enter or button click
-      form.addEventListener('submit', ev => {
-        ev.preventDefault();
-        sendMessage();
-      });
-
-      // Allow Ctrl+Enter (or Cmd+Enter) in textarea to send, but not regular Enter
-      input.addEventListener('keydown', function(ev) {
-        if (ev.key === 'Enter' && !ev.shiftKey) {
-          if (ev.ctrlKey || ev.metaKey) {
-            ev.preventDefault();
-            sendMessage();
-          } else {
-            // Prevent default Enter from submitting form or adding newline
-            ev.preventDefault();
-          }
+      form.addEventListener('submit', ev => { ev.preventDefault(); sendMessage(); });
+      input.addEventListener('keydown', ev=>{
+        if(ev.key==='Enter'&&!ev.shiftKey){
+          if(ev.ctrlKey||ev.metaKey){ ev.preventDefault(); sendMessage(); } else { ev.preventDefault(); }
         }
       });
 
-      /* ---------- image upload: file input ---------- */
+      /* image upload – file input */
       imageInput.addEventListener('change', async () => {
-        const f = imageInput.files[0];
-        if (!f) return;
-
-        const img = document.createElement('img');
-        img.src = URL.createObjectURL(f);
-        img.classList.add('chat-preview');
-        const container = document.getElementById('image-container');
-        container.appendChild(img);
-
-        const fd = new FormData();
-        fd.append('image', f);
+        const f = imageInput.files[0]; if (!f) return;
+        const img = document.createElement('img'); img.src = URL.createObjectURL(f); img.classList.add('chat-preview');
+        document.getElementById('image-container').appendChild(img);
+        const fd = new FormData(); fd.append('image', f);
         const r = await fetch('/api/upload_image', { method: 'POST', body: fd });
         if (r.ok && ws.readyState === WebSocket.OPEN) {
-          const j = await r.json();
-          ws.send(JSON.stringify({ image: j.url }));
+          const j = await r.json(); ws.send(JSON.stringify({ image: j.url }));
         }
-        imageInput.value = '';
+        imageInput.value='';
       });
 
-      /* ---------- image upload: drag and drop ---------- */
-      mainArea.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        mainArea.classList.add('drag-over');
-      });
-      mainArea.addEventListener('dragleave', (e) => {
-        e.preventDefault();
-        mainArea.classList.remove('drag-over');
-      });
-      mainArea.addEventListener('drop', async (e) => {
-        e.preventDefault();
-        mainArea.classList.remove('drag-over');
-        const dt = e.dataTransfer;
-        if (!dt || !dt.files || !dt.files.length) return;
-        const f = Array.from(dt.files).find(file => file.type.startsWith('image/'));
-        if (!f) return;
-
-        const img = document.createElement('img');
-        img.src = URL.createObjectURL(f);
-        img.classList.add('chat-preview');
-        const container = document.getElementById('image-container');
-        container.appendChild(img);
-
-        const fd = new FormData();
-        fd.append('image', f);
-        const r = await fetch('/api/upload_image', { method: 'POST', body: fd });
-        if (r.ok && ws.readyState === WebSocket.OPEN) {
-          const j = await r.json();
-          ws.send(JSON.stringify({ image: j.url }));
-        }
+      /* drag-and-drop image */
+      mainArea.addEventListener('dragover', e=>{ e.preventDefault(); mainArea.classList.add('drag-over'); });
+      mainArea.addEventListener('dragleave', e=>{ e.preventDefault(); mainArea.classList.remove('drag-over'); });
+      mainArea.addEventListener('drop', async e=>{
+        e.preventDefault(); mainArea.classList.remove('drag-over');
+        const f=Array.from(e.dataTransfer.files).find(file=>file.type.startsWith('image/')); if(!f) return;
+        const img=document.createElement('img'); img.src=URL.createObjectURL(f); img.classList.add('chat-preview');
+        document.getElementById('image-container').appendChild(img);
+        const fd=new FormData(); fd.append('image',f);
+        const r=await fetch('/api/upload_image',{method:'POST',body:fd});
+        if(r.ok&&ws.readyState===WebSocket.OPEN){ const j=await r.json(); ws.send(JSON.stringify({ image: j.url })); }
       });
 
-      refreshModels();
+      refreshModels(); // boot-strap
     </script>
   </div><!-- /#main -->
 </body>
