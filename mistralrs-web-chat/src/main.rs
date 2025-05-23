@@ -137,7 +137,7 @@ async fn main() -> Result<()> {
         models.insert(name, LoadedModel::Vision(Arc::new(m)));
     }
 
-    let chats_dir = format!("{}/static/chats", env!("CARGO_MANIFEST_DIR"));
+    let chats_dir = format!("{}/cache/chats", env!("CARGO_MANIFEST_DIR"));
     tokio::fs::create_dir_all(&chats_dir).await?;
     let mut next_id = 1u32;
     if let Ok(mut dir) = fs::read_dir(&chats_dir).await {
@@ -190,7 +190,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Accepts multipart image upload, stores it under `static/uploads/`, and returns its URL.
+/// Accepts multipart image upload, stores it under `cache/uploads/`, and returns its URL.
 async fn upload_image(
     State(_app): State<Arc<AppState>>,
     mut multipart: Multipart,
@@ -217,7 +217,7 @@ async fn upload_image(
         };
 
         // Ensure dir exists
-        let upload_dir = format!("{}/static/uploads", env!("CARGO_MANIFEST_DIR"));
+        let upload_dir = format!("{}/cache/uploads", env!("CARGO_MANIFEST_DIR"));
         if let Err(e) = tokio::fs::create_dir_all(&upload_dir).await {
             error!("mkdir error: {}", e);
             return (StatusCode::INTERNAL_SERVER_ERROR, "server error").into_response();
