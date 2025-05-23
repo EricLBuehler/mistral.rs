@@ -127,8 +127,10 @@
     }
     #imageLabel:hover { background:var(--accent-hov); }
     img.chat-preview {
-      max-width: 100%;
+      max-width: 150px;  /* Set a fixed width for the thumbnail */
+      max-height: 150px; /* Set a fixed height for the thumbnail */
       height: auto;
+      width: auto;
       border-radius: var(--radius);
       margin: 0.5rem 0;
       border: 1px solid var(--border-color);
