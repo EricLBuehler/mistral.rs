@@ -57,7 +57,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     **Llama 3.2 vision:**
 
     ```
-    ./mistralrs-server -i --isq 4 vision-plain -m meta-llama/Llama-3.2-11B-Instruct
+    ./mistralrs-server -i --isq 4 vision-plain -m meta-llama/Llama-3.2-11B-Vision-Instruct
     ```
 
   </details>
