@@ -79,6 +79,7 @@ async fn load_model(
                 .with_isq(isq)
                 .with_logging()
                 .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+                .with_throughput_logging()
                 .build()
                 .await
                 .map(|m| LoadedModel::Text(Arc::new(m))),
@@ -86,6 +87,7 @@ async fn load_model(
                 .with_isq(isq)
                 .with_logging()
                 .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+                .with_throughput_logging()
                 .build()
                 .await
                 .map(|m| LoadedModel::Vision(Arc::new(m))),

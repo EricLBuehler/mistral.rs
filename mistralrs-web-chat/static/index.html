@@ -118,6 +118,15 @@
     });
     // --- end loader controls ---
 
+    // Render Markdown but escape raw HTML so tags like <think></think> are shown literally
+    function renderMarkdown(src) {
+      const escaped = src
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      return marked.parse(escaped);
+    }
+
     const log   = document.getElementById('log');
     const input = document.getElementById('input');
     const form  = document.getElementById('form');
@@ -171,7 +180,7 @@
         assistantDiv = appendHtml("", "assistant");
       }
       assistantBuffer += ev.data;
-      assistantDiv.innerHTML = marked.parse(assistantBuffer);
+      assistantDiv.innerHTML = renderMarkdown(assistantBuffer);
       addCopyButtons(assistantDiv);
       fixLinks(assistantDiv);
       log.scrollTop = log.scrollHeight;
@@ -183,7 +192,7 @@
       if (!msg) return;
 
       // Show what the user typed (rendered as Markdown)
-      appendHtml(marked.parse(msg), "user");
+      appendHtml(renderMarkdown(msg), "user");
 
       // Reset buffer for the next assistant reply
       assistantBuffer = "";
