@@ -135,6 +135,12 @@
       margin: 0.5rem 0;
       border: 1px solid var(--border-color);
     }
+    #image-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-top: 1rem;
+    }
     /* ---------- Mobile tweaks ---------- */
     @media (max-width: 600px) {
       body {
@@ -209,6 +215,8 @@
       <input id="imageInput" type="file" accept="image/*" />
       <button type="submit">Send</button>
     </form>
+
+    <div id="image-container">
 
     <!-- Markdown renderer -->
     <script src="marked.min.js"></script>
@@ -349,15 +357,24 @@
       });
 
       /* ---------- image upload ---------- */
-      imageInput.addEventListener('change',async()=>{
-        const f=imageInput.files[0]; if(!f) return;
-        append(`<img src="${URL.createObjectURL(f)}" class="chat-preview">`,'user');
-        const fd=new FormData(); fd.append('image',f);
-        const r=await fetch('/api/upload_image',{method:'POST',body:fd});
-        if(r.ok && ws.readyState===WebSocket.OPEN){
-          const j=await r.json(); ws.send(JSON.stringify({image:j.url}));
+      imageInput.addEventListener('change', async () => {
+        const f = imageInput.files[0];
+        if (!f) return;
+
+        const img = document.createElement('img');
+        img.src = URL.createObjectURL(f);
+        img.classList.add('chat-preview');
+        const container = document.getElementById('image-container');
+        container.appendChild(img);
+
+        const fd = new FormData();
+        fd.append('image', f);
+        const r = await fetch('/api/upload_image', { method: 'POST', body: fd });
+        if (r.ok && ws.readyState === WebSocket.OPEN) {
+          const j = await r.json();
+          ws.send(JSON.stringify({ image: j.url }));
         }
-        imageInput.value='';
+        imageInput.value = '';
       });
 
       refreshModels();
