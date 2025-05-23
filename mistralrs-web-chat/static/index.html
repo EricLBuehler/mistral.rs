@@ -1,40 +1,95 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>mistralrs chat</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mistral.rs Chat</title>
   <style>
-    body { font-family: sans-serif; max-width: 720px; margin: 2rem auto; }
-    #log { white-space: pre-wrap; border: 1px solid #ccc; padding: 1rem; height: 60vh; overflow-y: auto; }
-    #input { width: 100%; padding: .5rem; margin-top: 1rem; }
+    body {
+      font-family: Arial, sans-serif;
+      margin: 2em auto;
+      max-width: 640px;
+    }
+    #log {
+      border: 1px solid #ccc;
+      padding: 1em;
+      height: 400px;
+      overflow-y: auto;
+    }
+    #form {
+      margin-top: 1em;
+      display: flex;
+      gap: 0.5em;
+    }
+    #input {
+      flex: 1 1 auto;
+      padding: 0.5em;
+      font-size: 1em;
+    }
+    button {
+      padding: 0.5em 1em;
+      font-size: 1em;
+    }
+    .user       { margin: 1em 0; }
+    .assistant  { margin: 1em 0; background: #f7f7f7; padding: 0.5em; border-radius: 4px; }
+    pre         { background: #272822; color: #f8f8f2; padding: 0.5em; overflow-x: auto; }
   </style>
 </head>
 <body>
-  <h1>mistral.rs Web Chat</h1>
+  <h1>Mistral.rs Chat</h1>
+
   <div id="log"></div>
 
-  <form id="form">
-    <input id="input" autocomplete="off" placeholder="Type a message…" />
+  <form id="form" autocomplete="off">
+    <input id="input" placeholder="Type your message…" />
+    <button type="submit">Send</button>
   </form>
 
-  <script>
-    const log = document.getElementById('log');
-    const input = document.getElementById('input');
-    const form = document.getElementById('form');
-    const ws = new WebSocket(`ws://${location.host}/ws`);
+  <!-- Markdown renderer -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
-    ws.addEventListener('message', (ev) => {
-      log.textContent += ev.data;
+  <script>
+    const log   = document.getElementById('log');
+    const input = document.getElementById('input');
+    const form  = document.getElementById('form');
+    const ws    = new WebSocket(`ws://${location.host}/ws`);
+
+    let assistantBuffer = "";
+    let assistantDiv    = null;
+
+    function appendHtml(html, className = "") {
+      const div = document.createElement("div");
+      if (className) div.className = className;
+      div.innerHTML = html;
+      log.appendChild(div);
+      log.scrollTop = log.scrollHeight;
+      return div;
+    }
+
+    ws.addEventListener("message", ev => {
+      // Streamed token from assistant
+      if (!assistantDiv) {
+        assistantDiv = appendHtml("", "assistant");
+      }
+      assistantBuffer += ev.data;
+      assistantDiv.innerHTML = marked.parse(assistantBuffer);
       log.scrollTop = log.scrollHeight;
     });
 
-    form.addEventListener('submit', (ev) => {
+    form.addEventListener("submit", ev => {
       ev.preventDefault();
       const msg = input.value.trim();
       if (!msg) return;
-      log.textContent += `\n\n🧑‍💻  ${msg}\n\n`;
+
+      // Show what the user typed (rendered as Markdown)
+      appendHtml(marked.parse(msg), "user");
+
+      // Reset buffer for the next assistant reply
+      assistantBuffer = "";
+      assistantDiv    = null;
+
       ws.send(msg);
-      input.value = '';
+      input.value = "";
     });
   </script>
 </body>
