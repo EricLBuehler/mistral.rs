@@ -66,42 +66,43 @@
     #form button[type="submit"]:hover {
       background: var(--primary-hov);
     }
-    .user {
-      background: #e8f6ff;
-      color: #333;
+    .user, .assistant {
       padding: 0.75rem;
       border-radius: var(--radius);
       max-width: 70%;
-      margin: 0.5rem 0 0.5rem auto;
+      margin: 0.5rem 0;
     }
-    .assistant {
-      background: #f4f4f4;
-      color: #333;
-      padding: 0.75rem;
-      border-radius: var(--radius);
-      max-width: 70%;
-      margin: 0.5rem auto 0.5rem 0;
-    }
+    .user       { background:#e8f6ff; margin-left:auto; }
+    .assistant  { background:#f4f4f4; margin-right:auto; }
     #sidebar {
-      width: 240px;
+      width: 260px;
       background: var(--sidebar-bg);
       box-shadow: 2px 0 8px rgba(0,0,0,0.05);
       padding: 1.5rem;
       border-right: 1px solid #ccc;
     }
-    #sidebar h2 {
-      font-size: 1.2rem;
-      margin-bottom: 1rem;
-      margin-top: 0;
+    #sidebar h2 { font-size:1.2rem;margin:0 0 1rem; }
+    #modelSelect, #clearBtn {
+      width: 100%;
+      box-sizing: border-box;
+      margin-bottom: 0.8rem;
+      font-family: inherit;
     }
     #modelSelect {
-      width: 100%;
       padding: 0.5rem;
       border: 1px solid var(--border-color);
       border-radius: var(--radius);
-      font-family: inherit;
-      margin-bottom: 0.8rem;
     }
+    #clearBtn {
+      padding: 0.55rem;
+      border:none;
+      border-radius:var(--radius);
+      background:#ef5350;
+      color:#fff;
+      cursor:pointer;
+      transition:background 0.2s;
+    }
+    #clearBtn:hover { background:#d84340; }
     #main {
       flex: 1 1 auto;
       background: var(--chat-bg);
@@ -110,24 +111,21 @@
       display: flex;
       flex-direction: column;
     }
-    #imageInput { display: none; }          /* hide native input */
-
+    #imageInput { display:none; }
     #imageLabel {
-      padding       : 0.6rem 1.2rem;
-      border-radius : var(--radius);
-      background    : var(--accent);
-      color         : #fff;
-      cursor        : pointer;
-      transition    : background 0.2s ease;
+      padding:0.6rem 1.2rem;
+      border-radius:var(--radius);
+      background:var(--accent);
+      color:#fff;
+      cursor:pointer;
+      transition:background 0.2s;
     }
-    #imageLabel:hover { background: var(--accent-hov); }
-
+    #imageLabel:hover { background:var(--accent-hov); }
     img.chat-preview {
-      max-width    : 240px;
-      border-radius: var(--radius);
-      margin       : 0.5rem 0;
-      box-shadow   : none;
-      border       : 1px solid var(--border-color);
+      max-width:240px;
+      border-radius:var(--radius);
+      margin:0.5rem 0;
+      border:1px solid var(--border-color);
     }
   </style>
 </head>
@@ -135,6 +133,7 @@
   <div id="sidebar">
     <h2>Model control</h2>
     <select id="modelSelect"></select>
+    <button id="clearBtn">🗑️ Clear chat</button>
     <div id="loadStatus" class="status"></div>
   </div>
 
@@ -157,6 +156,7 @@
       const input        = document.getElementById('input');
       const form         = document.getElementById('form');
       const modelSelect  = document.getElementById('modelSelect');
+      const clearBtn     = document.getElementById('clearBtn');
       const imageInput   = document.getElementById('imageInput');
       const imageLabel   = document.getElementById('imageLabel');
       const loadStatus   = document.getElementById('loadStatus');
@@ -164,158 +164,141 @@
       const ws = new WebSocket(`ws://${location.host}/ws`);
       window.chatSocket = ws;
 
-      const models = Object.create(null);   // name → kind mapping
+      const models = Object.create(null); // name → kind
+      let   prevModel = null;
 
-      /* ---------- helper functions ---------- */
-      function renderMarkdown(src) {
-        const escaped = src
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;');
-        return marked.parse(escaped);
+      /* ---------- helpers ---------- */
+      const CLEAR_CMD = "__CLEAR__";
+      let pendingClear = false;   // wait for server ACK before wiping UI
+
+      function renderMarkdown(src){
+        const esc = src.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+        return marked.parse(esc);
       }
-
-      function appendHtml(html, cls = '') {
-        const div = document.createElement('div');
-        if (cls) div.className = cls;
-        div.innerHTML = html;
-        addCopyButtons(div);
-        fixLinks(div);
-        log.appendChild(div);
-        log.scrollTop = log.scrollHeight;
-        return div;
+      function append(html,cls=''){
+        const d=document.createElement('div');
+        if(cls) d.className=cls;
+        d.innerHTML=html;
+        addCopyBtns(d); fixLinks(d);
+        log.appendChild(d); log.scrollTop=log.scrollHeight; return d;
       }
-
-      function addCopyButtons(parent) {
-        parent.querySelectorAll('pre').forEach(pre => {
-          if (pre.querySelector('.copy-btn')) return;
-          const btn = document.createElement('button');
-          btn.textContent = 'Copy';
-          btn.className   = 'copy-btn';
-          btn.addEventListener('click', () => {
-            const text = (pre.querySelector('code') || pre).innerText;
-            navigator.clipboard.writeText(text.trim());
-            btn.textContent = '✔';
-            setTimeout(() => (btn.textContent = 'Copy'), 800);
-          });
-          pre.appendChild(btn);
+      function addCopyBtns(el){
+        el.querySelectorAll('pre').forEach(pre=>{
+          if(pre.querySelector('.copy-btn')) return;
+          const b=document.createElement('button');
+          b.textContent='Copy'; b.className='copy-btn';
+          b.onclick=()=>{navigator.clipboard.writeText((pre.querySelector('code')||pre).innerText.trim()); b.textContent='✔'; setTimeout(()=>b.textContent='Copy',800);};
+          pre.appendChild(b);
         });
       }
-
-      function fixLinks(parent) {
-        parent.querySelectorAll('a[href]').forEach(a => {
-          a.setAttribute('target', '_blank');
-          a.setAttribute('rel', 'noopener noreferrer');
-        });
-      }
-
-      function updateImageVisibility(kind) {
-        if (kind === 'vision') {
-          imageLabel.style.display = 'inline-block';
-        } else {
-          imageLabel.style.display = 'none';
-          imageInput.value = '';
-        }
+      function fixLinks(el){ el.querySelectorAll('a[href]').forEach(a=>{a.target='_blank';a.rel='noopener noreferrer';}); }
+      function updateImageVisibility(kind){
+        imageLabel.style.display = (kind==='vision') ? 'inline-block':'none';
+        if(kind!=='vision') imageInput.value='';
       }
 
       /* ---------- model discovery ---------- */
-      async function refreshModels() {
-        try {
-          const res  = await fetch('/api/list_models');
-          const data = await res.json();
-          modelSelect.innerHTML = '';
-          Object.keys(models).forEach(k => delete models[k]);
-
-          data.models.forEach(m => {
-            models[m.name] = m.kind;
-            const opt = document.createElement('option');
-            opt.value = m.name;
-            opt.textContent = m.kind === 'vision' ? `🖼️  ${m.name}` : `📝 ${m.name}`;
+      async function refreshModels(){
+        try{
+          const res=await fetch('/api/list_models'); const data=await res.json();
+          modelSelect.innerHTML=''; Object.keys(models).forEach(k=>delete models[k]);
+          data.models.forEach(m=>{
+            models[m.name]=m.kind;
+            const opt=document.createElement('option');
+            opt.value=m.name; opt.textContent=(m.kind==='vision'?'🖼️ ':'📝 ')+m.name;
             modelSelect.appendChild(opt);
           });
-
-          if (modelSelect.options.length) {
-            await selectModel(modelSelect.value); // pick first by default
+          if(modelSelect.options.length){
+            modelSelect.selectedIndex=0;
+            prevModel=modelSelect.value;
+            updateImageVisibility(models[prevModel]);
+            await selectModel(prevModel,false);
           }
-        } catch (e) {
-          loadStatus.textContent = 'Unable to fetch model list';
-        }
+        }catch(e){ loadStatus.textContent='Unable to fetch model list'; }
       }
 
-      async function selectModel(name) {
-        try {
-          await fetch('/api/select_model', {
-            method : 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body   : JSON.stringify({ name })
-          });
-          updateImageVisibility(models[name]);
-          log.innerHTML = '';       // clear chat on model change
-        } catch (e) {
-          loadStatus.textContent = 'Selection failed';
-        }
+      function maybeClearChat(){
+        if(log.children.length===0) return true;
+        if(!confirm('Switching model will clear the chat. Continue?')) return false;
+        pendingClear = true;
+        if (ws.readyState === WebSocket.OPEN) ws.send(CLEAR_CMD);
+        return true;
       }
 
-      modelSelect.addEventListener('change', () => selectModel(modelSelect.value));
-
-      /* ---------- input auto-resize ---------- */
-      const maxInputHeight = parseFloat(getComputedStyle(input).lineHeight) * 10;
-      function adjustInputHeight() {
-        input.style.height = 'auto';
-        input.style.height = Math.min(input.scrollHeight, maxInputHeight) + 'px';
+      async function selectModel(name,clearConfirmed){
+        if(!clearConfirmed && log.children.length){ /* safeguard */ }
+        try{
+          await fetch('/api/select_model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+        }catch{}
       }
-      input.addEventListener('input', adjustInputHeight);
-      adjustInputHeight();
 
-      /* ---------- websocket handling ---------- */
-      let assistantBuffer = '';
-      let assistantDiv    = null;
+      modelSelect.addEventListener('change',async()=>{
+        const name=modelSelect.value;
+        if(name===prevModel) return;
+        if(!maybeClearChat()){ modelSelect.value=prevModel; return; }
+        updateImageVisibility(models[name]);
+        prevModel=name;
+        await selectModel(name,true);
+      });
 
-      ws.addEventListener('message', ev => {
-        if (!assistantDiv) {
-          assistantDiv = appendHtml('', 'assistant');
+      /* ---------- Clear chat button ---------- */
+      clearBtn.addEventListener('click', () => {
+        if (log.children.length === 0) return;
+        if (!confirm('Clear the chat history?')) return;
+        pendingClear = true;
+        if (ws.readyState === WebSocket.OPEN) ws.send(CLEAR_CMD);
+      });
+
+      /* ---------- textarea auto-resize ---------- */
+      const maxH=parseFloat(getComputedStyle(input).lineHeight)*10;
+      function fit(){ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,maxH)+'px'; }
+      input.addEventListener('input',fit); fit();
+
+      /* ---------- websocket streaming ---------- */
+      let assistantBuf='',assistantDiv=null;
+      ws.addEventListener('message',ev=>{
+        if (ev.data === '[Context cleared]') {
+          if (pendingClear) {
+            log.innerHTML = '';
+            pendingClear = false;
+          }
+          return;
         }
-        assistantBuffer += ev.data;
-        assistantDiv.innerHTML = renderMarkdown(assistantBuffer);
-        addCopyButtons(assistantDiv);
-        fixLinks(assistantDiv);
-        log.scrollTop = log.scrollHeight;
+        if (ev.data === 'Cannot clear while assistant is replying.') {
+          pendingClear = false;
+          alert(ev.data);
+          return;
+        }
+        if(!assistantDiv) assistantDiv=append('', 'assistant');
+        assistantBuf+=ev.data;
+        assistantDiv.innerHTML=renderMarkdown(assistantBuf);
+        addCopyBtns(assistantDiv); fixLinks(assistantDiv);
+        log.scrollTop=log.scrollHeight;
       });
 
       /* ---------- send user messages ---------- */
-      form.addEventListener('submit', ev => {
+      form.addEventListener('submit',ev=>{
         ev.preventDefault();
-        const msg = input.value.trim();
-        if (!msg) return;
-        appendHtml(renderMarkdown(msg), 'user');
-        assistantBuffer = '';
-        assistantDiv    = null;
+        const msg=input.value.trim();
+        if(!msg) return;
+        append(renderMarkdown(msg),'user');
+        assistantBuf=''; assistantDiv=null;
         ws.send(msg);
-        input.value = '';
-        adjustInputHeight();
+        input.value=''; fit();
       });
 
       /* ---------- image upload ---------- */
-      imageInput.addEventListener('change', async () => {
-        const file = imageInput.files[0];
-        if (!file) return;
-
-        // local preview
-        const tmpUrl = URL.createObjectURL(file);
-        appendHtml(`<img src="${tmpUrl}" class="chat-preview">`, 'user');
-
-        // upload
-        const formData = new FormData();
-        formData.append('image', file);
-        const resp = await fetch('/api/upload_image', { method:'POST', body: formData });
-        if (resp.ok && ws.readyState === WebSocket.OPEN) {
-          const json = await resp.json();
-          ws.send(JSON.stringify({ image: json.url }));
+      imageInput.addEventListener('change',async()=>{
+        const f=imageInput.files[0]; if(!f) return;
+        append(`<img src="${URL.createObjectURL(f)}" class="chat-preview">`,'user');
+        const fd=new FormData(); fd.append('image',f);
+        const r=await fetch('/api/upload_image',{method:'POST',body:fd});
+        if(r.ok && ws.readyState===WebSocket.OPEN){
+          const j=await r.json(); ws.send(JSON.stringify({image:j.url}));
         }
-        imageInput.value = '';
+        imageInput.value='';
       });
 
-      /* ---------- kick things off ---------- */
       refreshModels();
     </script>
   </div><!-- /#main -->

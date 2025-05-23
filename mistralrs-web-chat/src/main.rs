@@ -1,4 +1,5 @@
 use anyhow::Result;
+const CLEAR_CMD: &str = "__CLEAR__";
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::DefaultBodyLimit,
@@ -209,15 +210,17 @@ async fn ws_handler(ws: WebSocketUpgrade, State(app): State<Arc<AppState>>) -> i
 }
 
 /// Generic helper to stream tokens and forward them to the websocket.
-async fn stream_and_forward<Msgs, F>(
+async fn stream_and_forward<Msgs, F, E>(
     model: &Arc<Model>,
     msgs: Msgs,
     socket: &mut WebSocket,
-    mut on_assistant_complete: F,
+    mut on_token: F,
+    mut on_end: E,
 ) -> Result<(), anyhow::Error>
 where
     Msgs: mistralrs::RequestLike + Send + 'static,
     F: FnMut(&str),
+    E: FnMut(),
 {
     match model.stream_chat_request(msgs).await {
         Ok(mut stream) => {
@@ -234,7 +237,8 @@ where
                     }
                 }
             }
-            on_assistant_complete(&assistant_reply);
+            on_token(&assistant_reply);
+            on_end();
             Ok(())
         }
         Err(e) => {
@@ -249,8 +253,26 @@ async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
     let mut text_msgs = TextMessages::new();
     let mut vision_msgs = VisionMessages::new();
     let mut image_buffer: Vec<image::DynamicImage> = Vec::new();
+    // `true` while we are streaming a reply back to the client.
+    let mut streaming = false;
 
     while let Some(Ok(Message::Text(user_msg))) = socket.next().await {
+        // Allow client to request a context reset without closing the socket
+        if user_msg == CLEAR_CMD {
+            if streaming {
+                let _ = socket
+                    .send(Message::Text(
+                        "Cannot clear while assistant is replying.".into(),
+                    ))
+                    .await;
+            } else {
+                text_msgs = TextMessages::new();
+                vision_msgs = VisionMessages::new();
+                image_buffer.clear();
+                let _ = socket.send(Message::Text("[Context cleared]".into())).await;
+            }
+            continue;
+        }
         let model_name_opt = { app.current.read().await.clone() };
         let Some(model_name) = model_name_opt else {
             let _ = socket
@@ -272,13 +294,19 @@ async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 text_msgs = text_msgs.add_message(TextMessageRole::User, &user_msg);
                 let msgs_snapshot = text_msgs.clone();
 
-                if let Err(e) = stream_and_forward(&model, msgs_snapshot, &mut socket, |tok| {
-                    // move the current value out, update, then place it back
-                    let cur = mem::take(&mut text_msgs);
-                    text_msgs = cur.add_message(TextMessageRole::Assistant, tok);
-                })
-                .await
-                {
+                streaming = true;
+                let stream_res = stream_and_forward(
+                    &model,
+                    msgs_snapshot,
+                    &mut socket,
+                    |tok| {
+                        let cur = mem::take(&mut text_msgs);
+                        text_msgs = cur.add_message(TextMessageRole::Assistant, tok);
+                    },
+                    || streaming = false,
+                )
+                .await;
+                if let Err(e) = stream_res {
                     error!("stream error: {}", e);
                 }
             }
@@ -334,13 +362,19 @@ async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 }
 
                 let msgs_snapshot = vision_msgs.clone();
-                if let Err(e) = stream_and_forward(&model, msgs_snapshot, &mut socket, |tok| {
-                    // move the current value out, update, then place it back
-                    let cur = mem::take(&mut vision_msgs);
-                    vision_msgs = cur.add_message(TextMessageRole::Assistant, tok);
-                })
-                .await
-                {
+                streaming = true;
+                let stream_res = stream_and_forward(
+                    &model,
+                    msgs_snapshot,
+                    &mut socket,
+                    |tok| {
+                        let cur = mem::take(&mut vision_msgs);
+                        vision_msgs = cur.add_message(TextMessageRole::Assistant, tok);
+                    },
+                    || streaming = false,
+                )
+                .await;
+                if let Err(e) = stream_res {
                     error!("stream error: {}", e);
                 }
             }
