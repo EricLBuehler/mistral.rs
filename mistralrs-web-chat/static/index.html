@@ -32,7 +32,8 @@
     }
     .user       { margin: 1em 0; }
     .assistant  { margin: 1em 0; background: #f7f7f7; padding: 0.5em; border-radius: 4px; }
-    pre         { background: #272822; color: #f8f8f2; padding: 0.5em; overflow-x: auto; }
+    pre         { background: #272822; color: #f8f8f2; padding: 0.5em; overflow-x: auto; position: relative; }
+    .copy-btn   { position: absolute; top: 4px; right: 4px; font-size: 0.75em; padding: 0.2em 0.4em; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -57,10 +58,31 @@
     let assistantBuffer = "";
     let assistantDiv    = null;
 
+    // Attach "Copy" buttons to every <pre> inside `parent`
+    function addCopyButtons(parent) {
+      parent.querySelectorAll('pre').forEach(pre => {
+        // Skip if button already present
+        if (pre.querySelector('.copy-btn')) return;
+
+        const btn = document.createElement('button');
+        btn.textContent = 'Copy';
+        btn.className = 'copy-btn';
+        btn.addEventListener('click', () => {
+          const codeElem = pre.querySelector('code');
+          const textToCopy = codeElem ? codeElem.innerText : pre.innerText;
+          navigator.clipboard.writeText(textToCopy.trim());
+          btn.textContent = '✔';
+          setTimeout(() => (btn.textContent = 'Copy'), 1000);
+        });
+        pre.appendChild(btn);
+      });
+    }
+
     function appendHtml(html, className = "") {
       const div = document.createElement("div");
       if (className) div.className = className;
       div.innerHTML = html;
+      addCopyButtons(div);
       log.appendChild(div);
       log.scrollTop = log.scrollHeight;
       return div;
@@ -73,6 +95,7 @@
       }
       assistantBuffer += ev.data;
       assistantDiv.innerHTML = marked.parse(assistantBuffer);
+      addCopyButtons(assistantDiv);
       log.scrollTop = log.scrollHeight;
     });
 
