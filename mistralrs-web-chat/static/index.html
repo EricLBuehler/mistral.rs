@@ -115,6 +115,13 @@
       overflow: hidden;
       display: flex;
       flex-direction: column;
+      /* Add transition for drag-over feedback */
+      transition: background 0.2s;
+    }
+    /* Drag-and-drop highlight */
+    #main.drag-over {
+      background: #e3f3ff !important;
+      transition: background 0.2s;
     }
     #imageInput { display:none; }
     #imageLabel {
@@ -127,8 +134,8 @@
     }
     #imageLabel:hover { background:var(--accent-hov); }
     img.chat-preview {
-      max-width: 150px;  /* Set a fixed width for the thumbnail */
-      max-height: 150px; /* Set a fixed height for the thumbnail */
+      max-width: 150px;
+      max-height: 150px;
       height: auto;
       width: auto;
       border-radius: var(--radius);
@@ -180,18 +187,18 @@
         max-width: 100%;
       }
       #form {
-        flex-wrap: nowrap;   /* keep controls on a single line */
+        flex-wrap: nowrap;
         gap: 0.5rem;
       }
       #input {
         flex: 1 1 auto;
-        min-width: 0;        /* allow input to shrink so buttons stay visible */
+        min-width: 0;
         min-height: calc(1.4em * 2);
         max-height: 40vh;
       }
       #imageLabel,
       #form button[type="submit"] {
-        flex: 0 0 auto;      /* prevent these controls from stretching */
+        flex: 0 0 auto;
       }
     }
   </style>
@@ -216,7 +223,7 @@
       <button type="submit">Send</button>
     </form>
 
-    <div id="image-container">
+    <div id="image-container"></div>
 
     <!-- Markdown renderer -->
     <script src="marked.min.js"></script>
@@ -229,6 +236,7 @@
       const imageInput   = document.getElementById('imageInput');
       const imageLabel   = document.getElementById('imageLabel');
       const loadStatus   = document.getElementById('loadStatus');
+      const mainArea     = document.getElementById('main');
 
       const ws = new WebSocket(`ws://${location.host}/ws`);
       window.chatSocket = ws;
@@ -238,7 +246,7 @@
 
       /* ---------- helpers ---------- */
       const CLEAR_CMD = "__CLEAR__";
-      let pendingClear = false;   // wait for server ACK before wiping UI
+      let pendingClear = false;
 
       function renderMarkdown(src){
         const esc = src.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
@@ -356,7 +364,7 @@
         input.value=''; fit();
       });
 
-      /* ---------- image upload ---------- */
+      /* ---------- image upload: file input ---------- */
       imageInput.addEventListener('change', async () => {
         const f = imageInput.files[0];
         if (!f) return;
@@ -375,6 +383,38 @@
           ws.send(JSON.stringify({ image: j.url }));
         }
         imageInput.value = '';
+      });
+
+      /* ---------- image upload: drag and drop ---------- */
+      mainArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        mainArea.classList.add('drag-over');
+      });
+      mainArea.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        mainArea.classList.remove('drag-over');
+      });
+      mainArea.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        mainArea.classList.remove('drag-over');
+        const dt = e.dataTransfer;
+        if (!dt || !dt.files || !dt.files.length) return;
+        const f = Array.from(dt.files).find(file => file.type.startsWith('image/'));
+        if (!f) return;
+
+        const img = document.createElement('img');
+        img.src = URL.createObjectURL(f);
+        img.classList.add('chat-preview');
+        const container = document.getElementById('image-container');
+        container.appendChild(img);
+
+        const fd = new FormData();
+        fd.append('image', f);
+        const r = await fetch('/api/upload_image', { method: 'POST', body: fd });
+        if (r.ok && ws.readyState === WebSocket.OPEN) {
+          const j = await r.json();
+          ws.send(JSON.stringify({ image: j.url }));
+        }
       });
 
       refreshModels();
