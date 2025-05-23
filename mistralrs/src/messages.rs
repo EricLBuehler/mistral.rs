@@ -156,7 +156,7 @@ impl VisionMessages {
         mut self,
         role: TextMessageRole,
         text: impl ToString,
-        image: DynamicImage,
+        images: Vec<DynamicImage>,
         model: &Model,
     ) -> anyhow::Result<Self> {
         let prefixer = match &model.config().category {
@@ -168,7 +168,15 @@ impl VisionMessages {
                 anyhow::bail!("`add_image_message` expects a vision model.")
             }
         };
-        self.images.push(image);
+
+        let n_added_images = images.len();
+        let prefixed = prefixer.prefix_image(
+            (self.images.len()..self.images.len() + n_added_images).collect(),
+            &text.to_string(),
+        );
+
+        self.images.extend(images);
+
         self.messages.push(IndexMap::from([
             ("role".to_string(), Either::Left(role.to_string())),
             (
@@ -177,13 +185,7 @@ impl VisionMessages {
                     IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
                     IndexMap::from([
                         ("type".to_string(), Value::String("text".to_string())),
-                        (
-                            "text".to_string(),
-                            Value::String(
-                                prefixer
-                                    .prefix_image(vec![self.images.len() - 1], &text.to_string()),
-                            ),
-                        ),
+                        ("text".to_string(), Value::String(prefixed)),
                     ]),
                 ]),
             ),

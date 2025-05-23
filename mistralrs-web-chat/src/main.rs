@@ -1,6 +1,7 @@
 use anyhow::Result;
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    extract::DefaultBodyLimit,
     extract::{Multipart, State},
     http::StatusCode,
     response::IntoResponse,
@@ -9,8 +10,8 @@ use axum::{
 };
 use futures_util::stream::StreamExt;
 use mistralrs::{
-    IsqType, Model, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
-    VisionMessages, VisionModelBuilder,
+    IsqType, Model, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
+    TextModelBuilder, VisionMessages, VisionModelBuilder,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -57,9 +58,10 @@ async fn main() -> Result<()> {
                 "/static"
             ))),
         )
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // allow uploads up to 50 MB
         .with_state(app_state);
 
-    let addr: SocketAddr = ([127, 0, 0, 1], 3000).into();
+    let addr: SocketAddr = ([0, 0, 0, 0], 3000).into();
     let listener = TcpListener::bind(addr).await?;
     println!("🔌 listening on http://{}", addr);
     axum::serve(listener, app).await?;
@@ -80,7 +82,12 @@ async fn upload_image(State(_app): State<AppState>, mut multipart: Multipart) ->
             Ok(b) => b,
             Err(e) => {
                 error!("multipart bytes error: {}", e);
-                return (StatusCode::BAD_REQUEST, "failed to read upload").into_response();
+                let msg = if e.to_string().contains("exceeded") {
+                    "image too large (limit 50 MB)"
+                } else {
+                    "failed to read upload"
+                };
+                return (StatusCode::BAD_REQUEST, msg).into_response();
             }
         };
 
@@ -198,6 +205,7 @@ where
 async fn handle_socket(mut socket: WebSocket, app: AppState) {
     let mut text_msgs = TextMessages::new();
     let mut vision_msgs = VisionMessages::new();
+    let mut image_buffer: Vec<image::DynamicImage> = Vec::new();
 
     while let Some(Ok(Message::Text(user_msg))) = socket.next().await {
         let model_opt = { app.model.read().await.clone() };
@@ -226,52 +234,62 @@ async fn handle_socket(mut socket: WebSocket, app: AppState) {
                 }
             }
             LoadedModel::Vision(model) => {
-                // determine if payload is {"image": "..."}
+                // --- Vision input routing ---
                 if let Ok(val) = serde_json::from_str::<Value>(&user_msg) {
+                    // Case 1: pure image payload => buffer it and wait for a prompt
                     if let Some(url) = val.get("image").and_then(|v| v.as_str()) {
-                        let bytes = tokio::fs::read(url).await;
-                        let bytes = match bytes {
-                            Ok(bytes) => bytes,
+                        dbg!(&url);
+                        // load & decode
+                        match tokio::fs::read(&url).await {
+                            Ok(bytes) => match image::load_from_memory(&bytes) {
+                                Ok(img) => {
+                                    image_buffer.push(img);
+                                }
+                                Err(e) => {
+                                    error!("image decode error: {}", e);
+                                    let _ =
+                                        socket.send(Message::Text(format!("Error: {}", e))).await;
+                                }
+                            },
                             Err(e) => {
-                                error!("image error (reqwest): {}", e);
+                                error!("image read error: {}", e);
                                 let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
-                                continue;
-                            }
-                        };
-                        let image = image::load_from_memory(&bytes);
-                        let image = match image {
-                            Ok(image) => image,
-                            Err(e) => {
-                                error!("image error (load): {}", e);
-                                let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
-                                continue;
-                            }
-                        };
-
-                        match vision_msgs.clone().add_image_message(
-                            TextMessageRole::User,
-                            &user_msg,
-                            image,
-                            &model,
-                        ) {
-                            Ok(updated_msgs) => vision_msgs = updated_msgs,
-                            Err(e) => {
-                                error!("image error (message): {}", e);
-                                let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
-                                continue;
                             }
                         }
+                        // Skip sending to model until we get a prompt
+                        continue;
                     } else {
+                        // Fallback: treat whole JSON as text
                         vision_msgs = vision_msgs.add_message(TextMessageRole::User, &user_msg);
                     }
                 } else {
-                    vision_msgs = vision_msgs.add_message(TextMessageRole::User, &user_msg);
+                    // Plain-text prompt arrives here
+                    if image_buffer.is_empty() {
+                        vision_msgs = vision_msgs.add_message(TextMessageRole::User, &user_msg);
+                    } else {
+                        match vision_msgs.clone().add_image_message(
+                            TextMessageRole::User,
+                            &user_msg,
+                            image_buffer.clone(),
+                            &model,
+                        ) {
+                            Ok(updated) => {
+                                vision_msgs = updated;
+                                image_buffer.clear();
+                            }
+                            Err(e) => {
+                                error!("image prompt error: {}", e);
+                                let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
+                            }
+                        }
+                    }
                 }
-                let msgs_snapshot = vision_msgs.clone();
 
+                let msgs_snapshot = vision_msgs.clone();
                 if let Err(e) = stream_and_forward(&model, msgs_snapshot, &mut socket, |tok| {
-                    let cur = mem::take(&mut vision_msgs);
-                    vision_msgs = cur.add_message(TextMessageRole::Assistant, tok);
+                    // move the current value out, update, then place it back
+                    let cur = mem::take(&mut text_msgs);
+                    text_msgs = cur.add_message(TextMessageRole::Assistant, tok);
                 })
                 .await
                 {
