@@ -106,6 +106,10 @@
         });
         const txt = await res.text();
         loadStatus.textContent = txt;
+        // Clear chat log on new model load
+        log.innerHTML = '';
+        assistantBuffer = '';
+        assistantDiv = null;
       } catch (err) {
         loadStatus.textContent = 'Error: ' + err;
       } finally {

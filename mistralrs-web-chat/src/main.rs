@@ -16,7 +16,7 @@ use serde::Deserialize;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{net::TcpListener, sync::RwLock};
 use tower_http::services::ServeDir;
-use tracing::{error, info};
+use tracing::error;
 
 /// Distinguish at runtime which kind of model we have loaded.
 #[derive(Clone)]
@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
 
     let addr: SocketAddr = ([127, 0, 0, 1], 3000).into();
     let listener = TcpListener::bind(addr).await?;
-    info!("🔌 listening on http://{}", addr);
+    println!("🔌 listening on http://{}", addr);
     axum::serve(listener, app).await?;
     Ok(())
 }
