@@ -29,101 +29,87 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 ## Quick examples
 
 *After following installation instructions*
+- 🔊 Run the **Dia 1.6b** model for highly-realistic dialogue generation: [documentation](docs/DIA.md)  
+  <details>
+    <summary>Show command</summary>
 
-Minimal Llama chat example:
-```
-./mistralrs-server -i plain -m meta-llama/Llama-3.2-3B-Instruct
-```
+    ```bash
+    ./mistralrs-server -i speech -m nari-labs/Dia-1.6B -a dia
+    ```
+  </details>
+
+- 🦙🦙🦙🦙 Run the **Llama 4** models with long context & vision support: [documentation](docs/LLAMA4.md)  
+  <details>
+    <summary>Show command</summary>
+
+    ```bash
+    ./mistralrs-server -i --isq q4k vision-plain -m meta-llama/Llama-4-Scout-17B-16E-Instruct
+    ```
+  </details>
+
+- 💎💎💎 Run the **Gemma 3** family (1b, 4b, 12b, 27b) with 128k context & vision support: [documentation](docs/GEMMA3.md)  
+  <details>
+    <summary>Show command</summary>
+
+    ```bash
+    ./mistralrs-server -i vision-plain -m google/gemma-3-4b-it
+    ```
+  </details>
+
+- 🌲📷 Run the **FLUX.1** diffusion model: [documentation](docs/FLUX.md)  
+  <details>
+    <summary>Show command</summary>
+
+    ```bash
+    ./mistralrs-server --port 1234 diffusion-plain -m black-forest-labs/FLUX.1-schnell -a flux
+    ```
+  </details>
+
+- 🧠 Run the **Qwen 3** hybrid-reasoning model with full tool-calling support: [documentation](docs/QWEN3.md)  
+  <details>
+    <summary>Show command</summary>
+
+    ```bash
+    ./mistralrs-server -i --isq 4 plain -m Qwen/Qwen3-8B
+    ```
+  </details>
 
 ## Description
-**Easy**:
-- Lightweight OpenAI API compatible HTTP server
-- Python API
-- Grammar support with JSON Schema, Regex, Lark, and Guidance via [LLGuidance library](https://github.com/microsoft/llguidance)
-- [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from 🤗 Hugging Face by quantizing in-place
-    - Enhance performance with an [imatrix](docs/IMATRIX.md)!
-- Automatic [device mapping](docs/DEVICE_MAPPING.md) to easily load and run models across multiple GPUs and CPU.
-- Specify custom chat templates easily: [chat templates](docs/CHAT_TOK.md)
 
-**Fast**:
-- Apple silicon support: ARM NEON, Accelerate, Metal
-- Accelerated CPU inference with MKL, AVX support
-- CUDA support with FlashAttention and cuDNN.
-- Automatic tensor-parallelism support with NCCL: [distributed documentation](docs/DISTRIBUTED.md)
+[mistral.rs](https://github.com/EricLBuehler/mistral.rs) is a blazing-fast, cross-platform LLM inference engine with support for text, vision, image generation, and speech.
 
-**Quantization**:
-- [Details](docs/QUANTS.md)
-- GGML: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit, with imatrix support
-- GPTQ: 2-bit, 3-bit, 4-bit and 8-bit, with [Marlin](https://github.com/IST-DASLab/marlin) kernel support in 4-bit and 8-bit.
-- AWQ: 4-bit and 8-bit (convert using [script](scripts/convert_awq_marlin.py))
-- AFQ: 🔥 2-bit, 3-bit, 4-bit, 6-bit and 8-bit, designed to be fast on Metal!
-- HQQ: 4-bit and 8 bit, with ISQ support
-- FP8
-- BNB: bitsandbytes int8, fp4, nf4 support
-- Easily run MLX prequantized models
-- Automatic ISQ to select the fastest and most accurate quantization method.
+**Key Benefits:**
 
-**Powerful**:
-- LoRA support with weight merging
-- First X-LoRA inference platform with first class support
-- [AnyMoE](docs/ANYMOE.md): Build a memory-efficient MoE model from anything, in seconds
-- Various [sampling and penalty](docs/SAMPLING.mds) methods
-- Native tool calling support for Llama, Mistral Small, Mistral Nemo, Hermes, and DeepSeek models: [docs](docs/TOOL_CALLING.md)
-- Prompt chunking: process large prompts in a more manageable way
+1. **Ease of Use**
+   - [OpenAI-compatible HTTP server](docs/HTTP.md)
+   - [Rust API](https://ericlbuehler.github.io/mistral.rs/mistralrs/) & [Python API](mistralrs-pyo3/API.md)
+   - [Automatic device mapping](docs/DEVICE_MAPPING.md) (multi-GPU, CPU)
+   - [Chat templates](docs/CHAT_TOK.md) & tokenizer auto-detection
 
-**Advanced features**:
-- [PagedAttention](docs/PAGED_ATTENTION.md) and continuous batching (CUDA and Metal support)
-- [FlashAttention](docs/FLASH_ATTENTION.md) V2/V3
-- Prefix caching, including support for multimodal prefix caching
-- [Topology](docs/TOPOLOGY.md): Configure ISQ and device mapping easily
-- [UQFF](docs/UQFF.md): Quantized file format for easy mixing of quants, [collection here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
-- Speculative Decoding: Mix supported models as the draft model or the target model
-- Dynamic LoRA adapter activation with adapter preloading: [examples and docs](docs/ADAPTER_MODELS.md#adapter-model-dynamic-adapter-activation)
-- Integrated agentic web search capabilities, enabling models to easily access the internet.
+2. **Performance**
+   - CPU acceleration (MKL, AVX, [NEON](docs/DEVICE_MAPPING.md#arm-neon), [Accelerate](docs/DEVICE_MAPPING.md#apple-accelerate))
+   - GPU acceleration ([CUDA](docs/HTTP.md#cuda-support) with [FlashAttention](docs/FLASH_ATTENTION.md) & [cuDNN](docs/HTTP.md#cudnn-support), [Metal](docs/HTTP.md#apple-silicon-support))
+   - Automatic tensor parallelism with [NCCL](docs/DISTRIBUTED.md)
 
-**Documentation for mistral.rs can be found [here](docs/README.md).**
+3. **Quantization**
+   - [In-place quantization (ISQ)](docs/ISQ.md) of Hugging Face models
+   - [GGML & GGUF support](docs/QUANTS.md): 2–8 bit
+   - [GPTQ](docs/QUANTS.md), [AWQ](scripts/convert_awq_marlin.py), [AFQ](docs/QUANTS.md#afq), [HQQ](docs/QUANTS.md#hqq), [FP8](docs/QUANTS.md), [BNB](https://github.com/TimDettmers/bitsandbytes) (int8/fp4/nf4)
+   - ⭐ Auto-select the fastest quant method
 
-This is a demo of interactive mode with streaming running Phi 3 128k mini with quantization via ISQ to Q4K.
+4. **Flexibility**
+   - [LoRA](docs/ADAPTER_MODELS.md) & [X-LoRA](docs/ADAPTER_MODELS.md) adapters with weight merging
+   - [AnyMoE](docs/ANYMOE.md): create MoE models on any base model
+   - [Sampling & penalty options](docs/SAMPLING.md)
+   - Prompt chunking for large inputs
+   - Integrated [tool calling](docs/TOOL_CALLING.md)
 
-<!-- Mistral GGUF demo, old API -->
-<!-- https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95e6-aa532db09415 -->
-
-https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-9006-4ec6ebc6473c
-
-<details>
-<summary>Show architecture support matrix</summary>
-
-> Note: See [supported models](#supported-models) for more information
-
-|Model|Supports quantization|Supports adapters|Supports device mapping|Supported by AnyMoE|
-|--|--|--|--|--|
-|Mistral v0.1/v0.2/v0.3|✅|✅|✅|✅|
-|Gemma|✅|✅|✅|✅|
-|Llama 3.1/3.2|✅|✅|✅|✅|
-|Mixtral|✅|✅|✅| |
-|Phi 2|✅|✅|✅|✅|
-|Phi 3|✅|✅|✅|✅|
-|Phi 3.5 MoE|✅| |✅| |
-|Qwen 2.5|✅| |✅|✅|
-|Phi 3 Vision|✅| |✅|✅|
-|Idefics 2|✅| |✅|✅|
-|Gemma 2|✅|✅|✅|✅|
-|Starcoder 2|✅|✅|✅|✅|
-|LLaVa Next|✅| |✅|✅|
-|LLaVa|✅| |✅|✅|
-|Llama 3.2 Vision|✅| |✅| |
-|Qwen2-VL|✅| |✅| |
-|Idefics 3|✅| |✅|✅|
-|DeepseekV2|✅| |✅| |
-|DeepseekV3|✅| |✅| |
-|MinCPM-O 2.6|✅| |✅| |
-|Phi 4 Multimodal|✅| |✅| |
-|Qwen2.5-VL|✅| |✅| |
-|Gemma 3|✅| |✅|✅|
-|Mistral 3|✅| |✅|✅|
-|Llama 4|✅| |✅| |
-|Qwen 3|✅| |✅| |
-</details>
+5. **Advanced Features**
+   - High-throughput with [PagedAttention](docs/PAGED_ATTENTION.md) & FlashAttention V2/V3
+   - Prefix caching (including multimodal)
+   - Customizable quantization with [topology](docs/TOPOLOGY.md) & [UQFF format](docs/UQFF.md)
+   - Speculative decoding across models
+   - ⭐ Agentic [web search integration](docs/TOOL_CALLING.md#agentic-web-search)
 
 ## APIs and Integrations
 

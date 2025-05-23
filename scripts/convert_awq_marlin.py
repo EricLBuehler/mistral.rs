@@ -1,6 +1,7 @@
 # convert awq models to marlin compatible format
 # example: python3 examples/convert_awq_marlin.py --src /home/Meta-Llama-3.1-8B-Instruct-AWQ-INT4/ --dst /home/Meta-Llama-3.1-8B-Instruct-AWQ-INT4-Marlin/ --bits 4
 
+from typing import List
 import torch
 import numpy
 from safetensors.torch import load_file, save_file
