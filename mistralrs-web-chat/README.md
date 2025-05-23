@@ -50,4 +50,3 @@ cargo run --release --features <specify feature(s) here> -- \
 ### Backend
 - See main.rs for server and model loading logic.
 - Models are managed via CLI arguments; hot reloading is not supported.
-- 
