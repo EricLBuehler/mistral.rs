@@ -9,29 +9,44 @@
       --accent: #3498db;
       --accent-hov: #1f7ec5;
       --radius: 8px;
+      --bg-light      : #f9f9f9;
+      --sidebar-bg    : #ffffff;
+      --chat-bg       : #ffffff;
+      --border-color  : #e0e0e0;
+      --text-muted    : #666666;
+      --primary       : #3498db;
+      --primary-hov   : #2980b9;
     }
     body {
       display: flex;
-      font-family: Arial, sans-serif;
+      font-family: 'Inter', sans-serif;
       margin: 0;
       height: 100vh;
+      background: var(--bg-light);
+      color: #333;
     }
     #log {
-      border: 1px solid #ccc;
-      padding: 1em;
+      background: var(--chat-bg);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      padding: 1rem;
       overflow-y: auto;
       flex: 1 1 auto;
     }
     #form {
-      margin-top: 1em;
+      background: #fff;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      padding: 0.75rem;
       display: flex;
-      gap: 0.5em;
+      align-items: center;
+      gap: 0.5rem;
     }
     #input {
       flex: 1 1 auto;
-      padding: 0.6rem 0.75rem;
+      padding: 0.5rem;
       font-size: 1rem;
-      border: 1px solid #c5c9ce;
+      border: 1px solid var(--border-color);
       border-radius: var(--radius);
       background: #fff;
       resize: none;
@@ -41,19 +56,42 @@
       max-height: calc(1.4em * 15);
       font-family: inherit;
     }
-    button {
-      padding: 0.5em 1em;
-      font-size: 1em;
+    #form button[type="submit"] {
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      padding: 0.6rem 1.2rem;
+      border-radius: var(--radius);
     }
-    .user       { margin: 1em 0; }
-    .assistant  { margin: 1em 0; background: #f7f7f7; padding: 0.5em; border-radius: 4px; }
+    #form button[type="submit"]:hover {
+      background: var(--primary-hov);
+    }
+    .user {
+      background: #e8f6ff;
+      color: #333;
+      padding: 0.75rem;
+      border-radius: var(--radius);
+      max-width: 70%;
+      margin: 0.5rem 0 0.5rem auto;
+    }
+    .assistant {
+      background: #f4f4f4;
+      color: #333;
+      padding: 0.75rem;
+      border-radius: var(--radius);
+      max-width: 70%;
+      margin: 0.5rem auto 0.5rem 0;
+    }
     #sidebar {
       width: 240px;
-      padding: 1em;
+      background: var(--sidebar-bg);
+      box-shadow: 2px 0 8px rgba(0,0,0,0.05);
+      padding: 1.5rem;
       border-right: 1px solid #ccc;
-      background: #fafafa;
     }
     #sidebar h2 {
+      font-size: 1.2rem;
+      margin-bottom: 1rem;
       margin-top: 0;
     }
     #sidebar input,
@@ -65,7 +103,8 @@
     }
     #main {
       flex: 1 1 auto;
-      padding: 2em;
+      background: var(--chat-bg);
+      padding: 1.5rem;
       overflow: hidden;
       display: flex;
       flex-direction: column;
@@ -86,7 +125,8 @@
       max-width    : 240px;
       border-radius: var(--radius);
       margin       : 0.5rem 0;
-      box-shadow   : var(--shadow);
+      box-shadow   : none;
+      border       : 1px solid var(--border-color);
     }
     #modelTabs {
       display: flex;
@@ -103,6 +143,7 @@
       border-radius: var(--radius);
       cursor: pointer;
       font-family: inherit;
+      transition: background 0.2s, color 0.2s;
     }
     /* Inactive tabs: light grey background and muted text */
     #modelTabs .tab:not(.active) {
@@ -116,6 +157,39 @@
       /* keep a clear border for consistency */
       border: 1px solid var(--accent);
       padding: 0.5rem;
+    }
+    #loadBtn {
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      padding: 0.75rem;
+      font-size: 1rem;
+      border-radius: var(--radius);
+      cursor: pointer;
+      width: 100%;
+      transition: background 0.2s;
+    }
+    #loadBtn:hover:not(:disabled) {
+      background: var(--primary-hov);
+    }
+    #loadBtn:disabled {
+      opacity: 0.6;
+    }
+    #loadStatus {
+      margin-top: 0.5rem;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+    /* Default tab appearance */
+    #modelTabs .tab {
+      background: var(--sidebar-bg);
+      color: var(--text-muted);
+    }
+    /* Active tab indicator */
+    #modelTabs .tab.active {
+      background: var(--primary);
+      color: #fff;
+      border: 1px solid var(--primary);
     }
   </style>
 </head>
@@ -143,8 +217,7 @@
   </form>
 
   <!-- Markdown renderer -->
-  </script>
-  </script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script>
     // --- model loader controls (sidebar) ---
     const loadBtn    = document.getElementById('loadBtn');
@@ -332,7 +405,6 @@
     // --- end image upload support ---
   </script>
   </div><!-- end #main -->
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
 </body>
 </html>
