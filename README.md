@@ -38,13 +38,28 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ```
   </details>
 
-- 🦙🦙🦙🦙 Run the **Llama 4** models with long context & vision support: [documentation](docs/LLAMA4.md)  
+- 🦙 Run the **Llama 3.\* and Llama 4** models with long context & vision support: [docs (llama 3.2)](docs/VLLAMA.md), [docs (llama 4)](docs/LLAMA4.md)  
   <details>
     <summary>Show command</summary>
 
+    **Llama 4:**
+
     ```bash
-    ./mistralrs-server -i --isq q4k vision-plain -m meta-llama/Llama-4-Scout-17B-16E-Instruct
+    ./mistralrs-server -i --isq 4 vision-plain -m meta-llama/Llama-4-Scout-17B-16E-Instruct
     ```
+
+    **Llama 3.1/3.2/3.3:**
+
+    ```
+    ./mistralrs-server -i --isq 4 plain -m meta-llama/Llama-3.2-3B-Instruct
+    ```
+
+    **Llama 3.2 vision:**
+
+    ```
+    ./mistralrs-server -i --isq 4 vision-plain -m meta-llama/Llama-3.2-11B-Instruct
+    ```
+
   </details>
 
 - 💎💎💎 Run the **Gemma 3** family (1b, 4b, 12b, 27b) with 128k context & vision support: [documentation](docs/GEMMA3.md)  
