@@ -122,10 +122,56 @@
     }
     #imageLabel:hover { background:var(--accent-hov); }
     img.chat-preview {
-      max-width:240px;
-      border-radius:var(--radius);
-      margin:0.5rem 0;
-      border:1px solid var(--border-color);
+      max-width: 100%;
+      height: auto;
+      border-radius: var(--radius);
+      margin: 0.5rem 0;
+      border: 1px solid var(--border-color);
+    }
+    /* ---------- Mobile tweaks ---------- */
+    @media (max-width: 600px) {
+      body {
+        flex-direction: column;
+      }
+      #sidebar {
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid #ccc;
+        padding: 0.75rem 1rem;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      #sidebar h2 {
+        flex: 1 0 100%;
+        margin: 0 0 0.5rem;
+        font-size: 1rem;
+      }
+      #modelSelect {
+        flex: 1 1 auto;
+        margin: 0;
+      }
+      #clearBtn {
+        flex: 0 0 auto;
+        margin: 0;
+      }
+      #main {
+        padding: 1rem;
+        height: calc(100vh - 170px);
+      }
+      .user,
+      .assistant {
+        max-width: 100%;
+      }
+      #form {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+      #input {
+        min-height: calc(1.4em * 2);
+        max-height: 40vh;
+      }
     }
   </style>
 </head>
