@@ -1,2 +1,2 @@
-window.ALL_CRATES = ["mistralrs","mistralrs_bench","mistralrs_core","mistralrs_paged_attn","mistralrs_quant","mistralrs_server","mistralrs_vision"];
-//{"start":21,"fragment_lengths":[11,18,17,23,18,19,19]}
+window.ALL_CRATES = ["mistralrs","mistralrs_bench","mistralrs_core","mistralrs_paged_attn","mistralrs_quant","mistralrs_server","mistralrs_vision","mistralrs_web_chat"];
+//{"start":21,"fragment_lengths":[11,18,17,23,18,19,19,21]}

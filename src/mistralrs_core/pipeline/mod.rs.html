@@ -243,7 +243,7 @@
 <a href=#243 id=243 data-nosnippet>243</a><span class="doccomment">/// Prepend a vision tag appropriate for the model to the prompt. Image indexing is assumed that start at 0.
 <a href=#244 id=244 data-nosnippet>244</a></span><span class="kw">pub trait </span>VisionPromptPrefixer: Send + Sync {
 <a href=#245 id=245 data-nosnippet>245</a>    <span class="doccomment">/// Prefix for inclusion in messages (may do nothing if the chat template handles it).
-<a href=#246 id=246 data-nosnippet>246</a>    </span><span class="kw">fn </span>prefix_image(<span class="kw-2">&amp;</span><span class="self">self</span>, image_indees: Vec&lt;usize&gt;, prompt: <span class="kw-2">&amp;</span>str) -&gt; String;
+<a href=#246 id=246 data-nosnippet>246</a>    </span><span class="kw">fn </span>prefix_image(<span class="kw-2">&amp;</span><span class="self">self</span>, image_indices: Vec&lt;usize&gt;, prompt: <span class="kw-2">&amp;</span>str) -&gt; String;
 <a href=#247 id=247 data-nosnippet>247</a>}
 <a href=#248 id=248 data-nosnippet>248</a>
 <a href=#249 id=249 data-nosnippet>249</a><span class="kw">pub enum </span>CacheBackendMetadata&lt;<span class="lifetime">'a</span>&gt; {
@@ -426,7 +426,7 @@
 <a href=#426 id=426 data-nosnippet>426</a>                    <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Unreachable POST cache op."</span>),
 <a href=#427 id=427 data-nosnippet>427</a>                }
 <a href=#428 id=428 data-nosnippet>428</a>
-<a href=#429 id=429 data-nosnippet>429</a>                <span class="kw">if </span>raw_out_logits[<span class="number">0</span>][<span class="number">0</span>].is_some() {
+<a href=#429 id=429 data-nosnippet>429</a>                <span class="kw">if </span>!raw_out_logits[<span class="number">0</span>].is_empty() &amp;&amp; raw_out_logits[<span class="number">0</span>][<span class="number">0</span>].is_some() {
 <a href=#430 id=430 data-nosnippet>430</a>                    <span class="kw">let </span>start = Instant::now();
 <a href=#431 id=431 data-nosnippet>431</a>                    response::send_raw_responses(
 <a href=#432 id=432 data-nosnippet>432</a>                        input_seqs,
@@ -582,7 +582,7 @@
 <a href=#582 id=582 data-nosnippet>582</a>                    }
 <a href=#583 id=583 data-nosnippet>583</a>                }
 <a href=#584 id=584 data-nosnippet>584</a>
-<a href=#585 id=585 data-nosnippet>585</a>                <span class="kw">if </span>raw_out_logits[<span class="number">0</span>][<span class="number">0</span>].is_some() {
+<a href=#585 id=585 data-nosnippet>585</a>                <span class="kw">if </span>!raw_out_logits[<span class="number">0</span>].is_empty() &amp;&amp; raw_out_logits[<span class="number">0</span>][<span class="number">0</span>].is_some() {
 <a href=#586 id=586 data-nosnippet>586</a>                    <span class="kw">let </span>start = Instant::now();
 <a href=#587 id=587 data-nosnippet>587</a>                    response::send_raw_responses(
 <a href=#588 id=588 data-nosnippet>588</a>                        input_seqs,

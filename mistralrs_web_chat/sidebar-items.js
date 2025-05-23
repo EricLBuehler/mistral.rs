@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CLEAR_CMD"],"enum":["LoadedModel"],"fn":["handle_socket","list_models","main","select_model","stream_and_forward","upload_image","ws_handler"],"struct":["AppState","Cli","SelectRequest"]};
