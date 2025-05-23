@@ -8,7 +8,7 @@ edition = "2021"
 tokio = { version = "1", features = ["full"] }
 
 # web framework + WebSocket extractor
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.7", features = ["ws", "multipart"] }
 
 # structured logging (optional but handy)
 tracing = "0.1"
@@ -24,6 +24,8 @@ mistralrs = { path = "../mistralrs" }
 futures-util = "0.3.31"
 axum_static = "1.7.1"
 tower-http = { version = "0.6.4", features = ["fs"] }
+uuid = "1.17.0"
+image.workspace = true
 
 [features]
 cuda = ["mistralrs/cuda"]

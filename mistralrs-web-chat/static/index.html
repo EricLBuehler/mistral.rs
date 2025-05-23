@@ -56,6 +56,24 @@
       display: flex;
       flex-direction: column;
     }
+    #imageInput { display: none; }          /* hide native input */
+
+    #imageLabel {
+      padding       : 0.6rem 1.2rem;
+      border-radius : var(--radius);
+      background    : var(--accent);
+      color         : #fff;
+      cursor        : pointer;
+      transition    : background 0.2s ease;
+    }
+    #imageLabel:hover { background: var(--accent-hov); }
+
+    img.chat-preview {
+      max-width    : 240px;
+      border-radius: var(--radius);
+      margin       : 0.5rem 0;
+      box-shadow   : var(--shadow);
+    }
   </style>
 </head>
 <body>
@@ -76,6 +94,8 @@
 
   <form id="form" autocomplete="off">
     <input id="input" placeholder="Type your message…" />
+    <label id="imageLabel" for="imageInput">📎 Image</label>
+    <input id="imageInput" type="file" accept="image/*" />
     <button type="submit">Send</button>
   </form>
 
@@ -129,8 +149,11 @@
 
     const log   = document.getElementById('log');
     const input = document.getElementById('input');
+    const imageInput  = document.getElementById('imageInput');
+    const imageLabel  = document.getElementById('imageLabel');
     const form  = document.getElementById('form');
     const ws    = new WebSocket(`ws://${location.host}/ws`);
+    window.chatSocket = ws;
 
     let assistantBuffer = "";
     let assistantDiv    = null;
@@ -201,6 +224,36 @@
       ws.send(msg);
       input.value = "";
     });
+
+    // --- image upload support ---
+    imageInput.addEventListener('change', async () => {
+      const file = imageInput.files[0];
+      if (!file) return;
+
+      // Show local preview
+      const tmpUrl = URL.createObjectURL(file);
+      appendHtml(`<img src="${tmpUrl}" class="chat-preview">`, "user");
+
+      // Send multipart POST
+      const formData = new FormData();
+      formData.append('image', file);
+      let resp;
+      try {
+        resp = await fetch('/api/upload_image', { method: 'POST', body: formData });
+      } catch (e) {
+        console.error('upload error', e);
+        return;
+      }
+
+      if (resp.ok && window.chatSocket?.readyState === WebSocket.OPEN) {
+        const body = await resp.json();
+        if (body.url) {
+          window.chatSocket.send(JSON.stringify({ image: body.url }));
+        }
+      }
+      imageInput.value = "";
+    });
+    // --- end image upload support ---
   </script>
   </div><!-- end #main -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
