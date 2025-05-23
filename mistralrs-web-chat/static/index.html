@@ -294,8 +294,25 @@
       let   prevModel = null;
 
       function renderMarkdown(src){
-        const esc = src.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-        return marked.parse(esc);
+        // Helper: escape & < > once
+        const escape = s =>
+          s.replace(/&(?![a-zA-Z0-9#]+;)/g,'&amp;')
+           .replace(/</g,'&lt;')
+           .replace(/>/g,'&gt;');
+
+        // Split the markdown into segments that are either
+        // (1) fenced code blocks  ``` ... ```
+        // (2) inline code  `...`
+        // (3) normal text  (everything else)
+        //
+        // We only escape (3).
+        const pattern = /(```[\s\S]*?```|`[^`]*`)/g;
+        const escaped = src.split(pattern).map(seg=>{
+          // segments that start with back‑tick are code, keep raw
+          return seg.startsWith('`') ? seg : escape(seg);
+        }).join('');
+
+        return marked.parse(escaped);
       }
       function append(html,cls=''){
         const d=document.createElement('div');
