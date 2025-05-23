@@ -361,25 +361,32 @@
         log.scrollTop=log.scrollHeight;
       });
 
-      /* ---------- send user messages (Ctrl+Enter only) ---------- */
-      // Prevent Enter from submitting the form
-      form.addEventListener('submit',ev=>{
+      /* ---------- send user messages (Ctrl+Enter or submit button only) ---------- */
+      function sendMessage() {
+        const msg = input.value.trim();
+        if (!msg) return;
+        append(renderMarkdown(msg), 'user');
+        assistantBuf = '';
+        assistantDiv = null;
+        ws.send(msg);
+        input.value = '';
+        fit();
+      }
+
+      // Prevent Enter from submitting the form unless Ctrl+Enter/Cmd+Enter or button click
+      form.addEventListener('submit', ev => {
         ev.preventDefault();
+        sendMessage();
       });
-      // Allow Ctrl+Enter (or Cmd+Enter) in textarea to send
+
+      // Allow Ctrl+Enter (or Cmd+Enter) in textarea to send, but not regular Enter
       input.addEventListener('keydown', function(ev) {
-        // On Enter (but not Shift+Enter), check for Ctrl or Cmd
         if (ev.key === 'Enter' && !ev.shiftKey) {
           if (ev.ctrlKey || ev.metaKey) {
             ev.preventDefault();
-            const msg = input.value.trim();
-            if (!msg) return;
-            append(renderMarkdown(msg),'user');
-            assistantBuf=''; assistantDiv=null;
-            ws.send(msg);
-            input.value=''; fit();
+            sendMessage();
           } else {
-            // Prevent default Enter from submitting form
+            // Prevent default Enter from submitting form or adding newline
             ev.preventDefault();
           }
         }
