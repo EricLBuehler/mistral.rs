@@ -27,6 +27,13 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     - [OpenAI-compatible HTTP server](README.md#openai-http-server)
     - [Interactive mode](README.md#interactive-mode)
 
+---
+**Llama 3.2 3B running on an M3 Max with 8-bit ISQ:**
+
+<img src="./demo.gif" alt="Interactive demo" />
+
+---
+
 ## Quick examples
 
 *After following installation instructions*
