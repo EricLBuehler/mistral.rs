@@ -2719,6 +2719,7 @@ dependencies = [
  "anyhow",
  "axum",
  "axum_static",
+ "clap",
  "futures-util",
  "image",
  "mistralrs",

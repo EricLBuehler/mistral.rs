@@ -94,12 +94,13 @@
       margin-bottom: 1rem;
       margin-top: 0;
     }
-    #sidebar input,
-    #sidebar select,
-    #sidebar button:not(.tab) {
+    #modelSelect {
       width: 100%;
-      margin: 0.4em 0;
-      box-sizing: border-box;
+      padding: 0.5rem;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      font-family: inherit;
+      margin-bottom: 0.8rem;
     }
     #main {
       flex: 1 1 auto;
@@ -128,283 +129,195 @@
       box-shadow   : none;
       border       : 1px solid var(--border-color);
     }
-    #modelTabs {
-      display: flex;
-      gap: 0.5rem;
-      margin-bottom: 1rem;
-    }
-    #modelTabs .tab {
-      flex: 1 0 auto;         /* allow grow, prevent shrink */
-      min-width: 100px;       /* ensure consistent width */
-      width: auto;            /* prevent full-sidebar width */
-      padding: 0.5rem;
-      background: #fff;
-      border: 1px solid #c5c9ce;
-      border-radius: var(--radius);
-      cursor: pointer;
-      font-family: inherit;
-      transition: background 0.2s, color 0.2s;
-    }
-    /* Inactive tabs: light grey background and muted text */
-    #modelTabs .tab:not(.active) {
-      background: #f0f0f0;
-      color: #555;
-    }
-    #modelTabs .tab.active {
-      background: var(--accent);
-      color: #fff;
-      font-weight: 600;
-      /* keep a clear border for consistency */
-      border: 1px solid var(--accent);
-      padding: 0.5rem;
-    }
-    #loadBtn {
-      background: var(--primary);
-      color: #fff;
-      border: none;
-      padding: 0.75rem;
-      font-size: 1rem;
-      border-radius: var(--radius);
-      cursor: pointer;
-      width: 100%;
-      transition: background 0.2s;
-    }
-    #loadBtn:hover:not(:disabled) {
-      background: var(--primary-hov);
-    }
-    #loadBtn:disabled {
-      opacity: 0.6;
-    }
-    #loadStatus {
-      margin-top: 0.5rem;
-      font-size: 0.9rem;
-      color: var(--text-muted);
-    }
-    /* Default tab appearance */
-    #modelTabs .tab {
-      background: var(--sidebar-bg);
-      color: var(--text-muted);
-    }
-    /* Active tab indicator */
-    #modelTabs .tab.active {
-      background: var(--primary);
-      color: #fff;
-      border: 1px solid var(--primary);
-    }
   </style>
 </head>
 <body>
   <div id="sidebar">
     <h2>Model control</h2>
-    <input id="modelPath" type="text" placeholder="Path to model">
-    <div id="modelTabs">
-      <button class="tab active" data-kind="text">Text</button>
-      <button class="tab" data-kind="vision">Vision</button>
-    </div>
-    <button id="loadBtn">Load</button>
+    <select id="modelSelect"></select>
     <div id="loadStatus" class="status"></div>
   </div>
+
   <div id="main">
-  <h1>Mistral.rs Chat</h1>
+    <h1>Mistral.rs Chat</h1>
 
-  <div id="log"></div>
+    <div id="log"></div>
 
-  <form id="form" autocomplete="off">
-    <textarea id="input" placeholder="Type your message…" rows="1"></textarea>
-    <label id="imageLabel" for="imageInput">📎 Image</label>
-    <input id="imageInput" type="file" accept="image/*" />
-    <button type="submit">Send</button>
-  </form>
+    <form id="form" autocomplete="off">
+      <textarea id="input" placeholder="Type your message…" rows="1"></textarea>
+      <label id="imageLabel" for="imageInput">📎 Image</label>
+      <input id="imageInput" type="file" accept="image/*" />
+      <button type="submit">Send</button>
+    </form>
 
-  <!-- Markdown renderer -->
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script>
-    // --- model loader controls (sidebar) ---
-    const loadBtn    = document.getElementById('loadBtn');
-    const modelPath  = document.getElementById('modelPath');
-    const modelKind  = document.getElementById('modelKind');
-    const loadStatus = document.getElementById('loadStatus');
+    <!-- Markdown renderer -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+      const log          = document.getElementById('log');
+      const input        = document.getElementById('input');
+      const form         = document.getElementById('form');
+      const modelSelect  = document.getElementById('modelSelect');
+      const imageInput   = document.getElementById('imageInput');
+      const imageLabel   = document.getElementById('imageLabel');
+      const loadStatus   = document.getElementById('loadStatus');
 
-    loadBtn.addEventListener('click', async () => {
-      const path = modelPath.value.trim();
-      const kind = document.querySelector('#modelTabs .tab.active').dataset.kind;
-      if (!path) {
-        alert('Please enter a model path');
-        return;
+      const ws = new WebSocket(`ws://${location.host}/ws`);
+      window.chatSocket = ws;
+
+      const models = Object.create(null);   // name → kind mapping
+
+      /* ---------- helper functions ---------- */
+      function renderMarkdown(src) {
+        const escaped = src
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+        return marked.parse(escaped);
       }
-      loadBtn.disabled = true;
-      loadStatus.textContent = 'Loading…';
-      try {
-        const res  = await fetch('/api/load_model', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path, kind })
+
+      function appendHtml(html, cls = '') {
+        const div = document.createElement('div');
+        if (cls) div.className = cls;
+        div.innerHTML = html;
+        addCopyButtons(div);
+        fixLinks(div);
+        log.appendChild(div);
+        log.scrollTop = log.scrollHeight;
+        return div;
+      }
+
+      function addCopyButtons(parent) {
+        parent.querySelectorAll('pre').forEach(pre => {
+          if (pre.querySelector('.copy-btn')) return;
+          const btn = document.createElement('button');
+          btn.textContent = 'Copy';
+          btn.className   = 'copy-btn';
+          btn.addEventListener('click', () => {
+            const text = (pre.querySelector('code') || pre).innerText;
+            navigator.clipboard.writeText(text.trim());
+            btn.textContent = '✔';
+            setTimeout(() => (btn.textContent = 'Copy'), 800);
+          });
+          pre.appendChild(btn);
         });
-        const txt = await res.text();
-        loadStatus.textContent = txt;
-        // Clear chat log on new model load
-        log.innerHTML = '';
-        assistantBuffer = '';
-        assistantDiv = null;
-      } catch (err) {
-        loadStatus.textContent = 'Error: ' + err;
-      } finally {
-        loadBtn.disabled = false;
       }
-    });
-    // --- end loader controls ---
 
-    // Render Markdown but escape raw HTML so tags like <think></think> are shown literally
-    function renderMarkdown(src) {
-      const escaped = src
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-      return marked.parse(escaped);
-    }
+      function fixLinks(parent) {
+        parent.querySelectorAll('a[href]').forEach(a => {
+          a.setAttribute('target', '_blank');
+          a.setAttribute('rel', 'noopener noreferrer');
+        });
+      }
 
-    const log   = document.getElementById('log');
-    const input = document.getElementById('input');
-
-    // Auto-resize input textarea up to 10 lines
-    const maxInputHeight = parseFloat(getComputedStyle(input).lineHeight) * 10;
-    function adjustInputHeight() {
-      input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, maxInputHeight) + 'px';
-    }
-    input.addEventListener('input', adjustInputHeight);
-    // Initialize height
-    adjustInputHeight();
-
-    const imageInput  = document.getElementById('imageInput');
-    const imageLabel  = document.getElementById('imageLabel');
-    const form  = document.getElementById('form');
-    const ws    = new WebSocket(`ws://${location.host}/ws`);
-    window.chatSocket = ws;
-
-    // Tab switcher: show/hide image input based on selected model type
-    const tabs = document.querySelectorAll('#modelTabs .tab');
-    tabs.forEach(tab => {
-      tab.addEventListener('click', () => {
-        tabs.forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        if (tab.dataset.kind === 'vision') {
+      function updateImageVisibility(kind) {
+        if (kind === 'vision') {
           imageLabel.style.display = 'inline-block';
         } else {
           imageLabel.style.display = 'none';
           imageInput.value = '';
         }
-      });
-    });
-    // Initialize visibility
-    if (document.querySelector('#modelTabs .tab.active').dataset.kind === 'text') {
-      imageLabel.style.display = 'none';
-    }
- 
-    let assistantBuffer = "";
-    let assistantDiv    = null;
-
-    // Attach "Copy" buttons to every <pre> inside `parent`
-    function addCopyButtons(parent) {
-      parent.querySelectorAll('pre').forEach(pre => {
-        // Skip if button already present
-        if (pre.querySelector('.copy-btn')) return;
-
-        const btn = document.createElement('button');
-        btn.textContent = 'Copy';
-        btn.className = 'copy-btn';
-        btn.addEventListener('click', () => {
-          const codeElem = pre.querySelector('code');
-          const textToCopy = codeElem ? codeElem.innerText : pre.innerText;
-          navigator.clipboard.writeText(textToCopy.trim());
-          btn.textContent = '✔';
-          setTimeout(() => (btn.textContent = 'Copy'), 1000);
-        });
-        pre.appendChild(btn);
-      });
-    }
-
-    // Make all links open in a new tab / page
-    function fixLinks(parent) {
-      parent.querySelectorAll('a[href]').forEach(a => {
-        a.setAttribute('target', '_blank');
-        a.setAttribute('rel', 'noopener noreferrer');
-      });
-    }
-
-    function appendHtml(html, className = "") {
-      const div = document.createElement("div");
-      if (className) div.className = className;
-      div.innerHTML = html;
-      addCopyButtons(div);
-      fixLinks(div);
-      log.appendChild(div);
-      log.scrollTop = log.scrollHeight;
-      return div;
-    }
-
-    ws.addEventListener("message", ev => {
-      // Streamed token from assistant
-      if (!assistantDiv) {
-        assistantDiv = appendHtml("", "assistant");
-      }
-      assistantBuffer += ev.data;
-      assistantDiv.innerHTML = renderMarkdown(assistantBuffer);
-      addCopyButtons(assistantDiv);
-      fixLinks(assistantDiv);
-      log.scrollTop = log.scrollHeight;
-    });
-
-    form.addEventListener("submit", ev => {
-      ev.preventDefault();
-      const msg = input.value.trim();
-      if (!msg) return;
-
-      // Show what the user typed (rendered as Markdown)
-      appendHtml(renderMarkdown(msg), "user");
-
-      // Reset buffer for the next assistant reply
-      assistantBuffer = "";
-      assistantDiv    = null;
-
-      ws.send(msg);
-      input.value = "";
-      // Reset textarea height to one line after sending
-      input.style.height = 'auto';
-      adjustInputHeight();
-    });
-
-    // --- image upload support ---
-    imageInput.addEventListener('change', async () => {
-      const file = imageInput.files[0];
-      if (!file) return;
-
-      // Show local preview
-      const tmpUrl = URL.createObjectURL(file);
-      appendHtml(`<img src="${tmpUrl}" class="chat-preview">`, "user");
-
-      // Send multipart POST
-      const formData = new FormData();
-      formData.append('image', file);
-      let resp;
-      try {
-        resp = await fetch('/api/upload_image', { method: 'POST', body: formData });
-      } catch (e) {
-        console.error('upload error', e);
-        return;
       }
 
-      if (resp.ok && window.chatSocket?.readyState === WebSocket.OPEN) {
-        const body = await resp.json();
-        if (body.url) {
-          window.chatSocket.send(JSON.stringify({ image: body.url }));
+      /* ---------- model discovery ---------- */
+      async function refreshModels() {
+        try {
+          const res  = await fetch('/api/list_models');
+          const data = await res.json();
+          modelSelect.innerHTML = '';
+          Object.keys(models).forEach(k => delete models[k]);
+
+          data.models.forEach(m => {
+            models[m.name] = m.kind;
+            const opt = document.createElement('option');
+            opt.value = m.name;
+            opt.textContent = m.kind === 'vision' ? `🖼️  ${m.name}` : `📝 ${m.name}`;
+            modelSelect.appendChild(opt);
+          });
+
+          if (modelSelect.options.length) {
+            await selectModel(modelSelect.value); // pick first by default
+          }
+        } catch (e) {
+          loadStatus.textContent = 'Unable to fetch model list';
         }
       }
-      imageInput.value = "";
-    });
-    // --- end image upload support ---
-  </script>
-  </div><!-- end #main -->
 
+      async function selectModel(name) {
+        try {
+          await fetch('/api/select_model', {
+            method : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body   : JSON.stringify({ name })
+          });
+          updateImageVisibility(models[name]);
+          log.innerHTML = '';       // clear chat on model change
+        } catch (e) {
+          loadStatus.textContent = 'Selection failed';
+        }
+      }
+
+      modelSelect.addEventListener('change', () => selectModel(modelSelect.value));
+
+      /* ---------- input auto-resize ---------- */
+      const maxInputHeight = parseFloat(getComputedStyle(input).lineHeight) * 10;
+      function adjustInputHeight() {
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, maxInputHeight) + 'px';
+      }
+      input.addEventListener('input', adjustInputHeight);
+      adjustInputHeight();
+
+      /* ---------- websocket handling ---------- */
+      let assistantBuffer = '';
+      let assistantDiv    = null;
+
+      ws.addEventListener('message', ev => {
+        if (!assistantDiv) {
+          assistantDiv = appendHtml('', 'assistant');
+        }
+        assistantBuffer += ev.data;
+        assistantDiv.innerHTML = renderMarkdown(assistantBuffer);
+        addCopyButtons(assistantDiv);
+        fixLinks(assistantDiv);
+        log.scrollTop = log.scrollHeight;
+      });
+
+      /* ---------- send user messages ---------- */
+      form.addEventListener('submit', ev => {
+        ev.preventDefault();
+        const msg = input.value.trim();
+        if (!msg) return;
+        appendHtml(renderMarkdown(msg), 'user');
+        assistantBuffer = '';
+        assistantDiv    = null;
+        ws.send(msg);
+        input.value = '';
+        adjustInputHeight();
+      });
+
+      /* ---------- image upload ---------- */
+      imageInput.addEventListener('change', async () => {
+        const file = imageInput.files[0];
+        if (!file) return;
+
+        // local preview
+        const tmpUrl = URL.createObjectURL(file);
+        appendHtml(`<img src="${tmpUrl}" class="chat-preview">`, 'user');
+
+        // upload
+        const formData = new FormData();
+        formData.append('image', file);
+        const resp = await fetch('/api/upload_image', { method:'POST', body: formData });
+        if (resp.ok && ws.readyState === WebSocket.OPEN) {
+          const json = await resp.json();
+          ws.send(JSON.stringify({ image: json.url }));
+        }
+        imageInput.value = '';
+      });
+
+      /* ---------- kick things off ---------- */
+      refreshModels();
+    </script>
+  </div><!-- /#main -->
 </body>
 </html>

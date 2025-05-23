@@ -8,6 +8,7 @@ use axum::{
     routing::{get, get_service, post},
     Json, Router,
 };
+use clap::Parser;
 use futures_util::stream::StreamExt;
 use mistralrs::{
     IsqType, Model, TextMessageRole, TextMessages, TextModelBuilder, VisionMessages,
@@ -15,12 +16,25 @@ use mistralrs::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::mem;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{net::TcpListener, sync::RwLock};
 use tower_http::services::ServeDir;
 use tracing::error;
 use uuid::Uuid;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+struct Cli {
+    /// Repeated flag for text‑only models
+    #[arg(long = "text-model")]
+    text_models: Vec<String>,
+
+    /// Repeated flag for vision models
+    #[arg(long = "vision-model")]
+    vision_models: Vec<String>,
+}
 
 /// Distinguish at runtime which kind of model we have loaded.
 #[derive(Clone)]
@@ -29,28 +43,68 @@ enum LoadedModel {
     Vision(Arc<Model>),
 }
 
-#[derive(Clone)]
 struct AppState {
-    model: Arc<RwLock<Option<LoadedModel>>>,
-}
-
-#[derive(Deserialize)]
-struct LoadRequest {
-    path: String,
-    kind: String,
+    models: HashMap<String, LoadedModel>,
+    current: RwLock<Option<String>>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initially no model is loaded
-    let app_state = AppState {
-        model: Arc::new(RwLock::new(None)),
+    let cli = Cli::parse();
+    if cli.text_models.is_empty() && cli.vision_models.is_empty() {
+        eprintln!("At least one --text-model or --vision-model is required");
+        std::process::exit(1);
+    }
+
+    let isq = if cfg!(feature = "metal") {
+        IsqType::AFQ6
+    } else {
+        IsqType::Q6K
     };
+    let mut models: HashMap<String, LoadedModel> = HashMap::new();
+
+    for path in cli.text_models {
+        let name = std::path::Path::new(&path)
+            .file_name()
+            .and_then(|p| p.to_str())
+            .unwrap_or("text-model")
+            .to_string();
+        println!("📝 Loading text model: {name}");
+        let m = TextModelBuilder::new(path)
+            .with_isq(isq)
+            .with_logging()
+            .with_throughput_logging()
+            .build()
+            .await?;
+        models.insert(name, LoadedModel::Text(Arc::new(m)));
+    }
+
+    for path in cli.vision_models {
+        let name = std::path::Path::new(&path)
+            .file_name()
+            .and_then(|p| p.to_str())
+            .unwrap_or("vision-model")
+            .to_string();
+        println!("🖼️  Loading vision model: {name}");
+        let m = VisionModelBuilder::new(path)
+            .with_isq(isq)
+            .with_logging()
+            .with_throughput_logging()
+            .build()
+            .await?;
+        models.insert(name, LoadedModel::Vision(Arc::new(m)));
+    }
+
+    let app_state = Arc::new(AppState {
+        models,
+        current: RwLock::new(None),
+    });
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
-        .route("/api/load_model", post(load_model))
         .route("/api/upload_image", post(upload_image))
+        .route("/api/list_models", get(list_models))
+        .route("/api/select_model", post(select_model))
         .nest_service(
             "/",
             get_service(ServeDir::new(concat!(
@@ -58,8 +112,8 @@ async fn main() -> Result<()> {
                 "/static"
             ))),
         )
-        .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // allow uploads up to 50 MB
-        .with_state(app_state);
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
+        .with_state(app_state.clone());
 
     let addr: SocketAddr = ([0, 0, 0, 0], 3000).into();
     let listener = TcpListener::bind(addr).await?;
@@ -69,7 +123,10 @@ async fn main() -> Result<()> {
 }
 
 /// Accepts multipart image upload, stores it under `static/uploads/`, and returns its URL.
-async fn upload_image(State(_app): State<AppState>, mut multipart: Multipart) -> impl IntoResponse {
+async fn upload_image(
+    State(_app): State<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
     // Expect single "image" part
     if let Ok(Some(field)) = multipart.next_field().await {
         let ext = field
@@ -113,56 +170,41 @@ async fn upload_image(State(_app): State<AppState>, mut multipart: Multipart) ->
     (StatusCode::BAD_REQUEST, "no image field").into_response()
 }
 
-/// Loads a model from a path and kind.
-async fn load_model(
-    State(app): State<AppState>,
-    Json(req): Json<LoadRequest>,
+#[derive(Deserialize)]
+struct SelectRequest {
+    name: String,
+}
+
+async fn list_models(State(app): State<Arc<AppState>>) -> impl IntoResponse {
+    let items: Vec<_> = app
+        .models
+        .iter()
+        .map(|(n, m)| {
+            let kind = match m {
+                LoadedModel::Text(_) => "text",
+                LoadedModel::Vision(_) => "vision",
+            };
+            json!({ "name": n, "kind": kind })
+        })
+        .collect();
+    Json(json!({ "models": items }))
+}
+
+async fn select_model(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<SelectRequest>,
 ) -> impl IntoResponse {
-    let isq = if cfg!(feature = "metal") {
-        IsqType::AFQ6
+    if app.models.contains_key(&req.name) {
+        let mut cur = app.current.write().await;
+        *cur = Some(req.name.clone());
+        (StatusCode::OK, "Model selected").into_response()
     } else {
-        IsqType::Q6K
-    };
-
-    // use mistralrs::PagedAttentionMetaBuilder;
-    let result = (|| async {
-        match req.kind.as_str() {
-            "text" => TextModelBuilder::new(req.path)
-                .with_isq(isq)
-                .with_logging()
-                // .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
-                .with_throughput_logging()
-                .build()
-                .await
-                .map(|m| LoadedModel::Text(Arc::new(m))),
-            "vision" => VisionModelBuilder::new(req.path)
-                .with_isq(isq)
-                .with_logging()
-                // .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
-                .with_throughput_logging()
-                .build()
-                .await
-                .map(|m| LoadedModel::Vision(Arc::new(m))),
-            _ => Err(anyhow::anyhow!("unknown model kind")),
-        }
-    })()
-    .await;
-
-    match result {
-        Ok(model) => {
-            let mut guard = app.model.write().await;
-            *guard = Some(model);
-            (StatusCode::OK, "Model loaded successfully").into_response()
-        }
-        Err(e) => {
-            error!("load error: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e)).into_response()
-        }
+        (StatusCode::NOT_FOUND, "Model not found").into_response()
     }
 }
 
 /// Upgrades an HTTP request to a WebSocket connection.
-async fn ws_handler(ws: WebSocketUpgrade, State(app): State<AppState>) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(app): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, app))
 }
 
@@ -203,18 +245,24 @@ where
 }
 
 /// Per-connection task.
-async fn handle_socket(mut socket: WebSocket, app: AppState) {
+async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
     let mut text_msgs = TextMessages::new();
     let mut vision_msgs = VisionMessages::new();
     let mut image_buffer: Vec<image::DynamicImage> = Vec::new();
 
     while let Some(Ok(Message::Text(user_msg))) = socket.next().await {
-        let model_opt = { app.model.read().await.clone() };
-        let Some(model_loaded) = model_opt else {
+        let model_name_opt = { app.current.read().await.clone() };
+        let Some(model_name) = model_name_opt else {
             let _ = socket
                 .send(Message::Text(
-                    "No model loaded. Use the UI to load one.".into(),
+                    "No model selected. Choose one in the sidebar.".into(),
                 ))
+                .await;
+            continue;
+        };
+        let Some(model_loaded) = app.models.get(&model_name).cloned() else {
+            let _ = socket
+                .send(Message::Text("Selected model not found.".into()))
                 .await;
             continue;
         };
