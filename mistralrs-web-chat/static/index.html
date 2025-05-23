@@ -81,6 +81,10 @@
     .assistant  { background:#f4f4f4; margin-right:auto; }
     #sidebar {
       width: 260px;
+      min-width: 260px;
+      max-width: 260px;
+      flex-shrink: 0;
+      flex-grow: 0;
       background: var(--sidebar-bg);
       box-shadow: 2px 0 8px rgba(0,0,0,0.05);
       padding: 1.5rem;
@@ -155,6 +159,10 @@
       }
       #sidebar {
         width: 100%;
+        min-width: 0;
+        max-width: none;
+        flex-shrink: 1;
+        flex-grow: 1;
         border-right: none;
         border-bottom: 1px solid #ccc;
         padding: 0.75rem 1rem;
