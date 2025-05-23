@@ -24,7 +24,8 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 3) Deploy with our easy to use APIs
     - [Python](examples/python)
     - [Rust](mistralrs/examples)
-    - [OpenAI compatible HTTP server](docs/HTTP.md)
+    - [OpenAI-compatible HTTP server](README.md#openai-http-server)
+    - [Interactive mode](README.md#interactive-mode)
 
 ## Quick examples
 
@@ -309,6 +310,8 @@ You can launch an HTTP server by replacing `-i` with `--port <port>`. For instan
 ```bash
 ./mistralrs-server --port 1234 plain -m microsoft/Phi-3.5-MoE-instruct
 ```
+
+You can find documentation about the server itself [here](docs/HTTP.md).
 
 ### Structured selection with a `.toml` file
 
