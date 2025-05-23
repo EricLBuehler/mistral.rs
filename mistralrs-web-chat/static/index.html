@@ -24,8 +24,17 @@
     }
     #input {
       flex: 1 1 auto;
-      padding: 0.5em;
-      font-size: 1em;
+      padding: 0.6rem 0.75rem;
+      font-size: 1rem;
+      border: 1px solid #c5c9ce;
+      border-radius: var(--radius);
+      background: #fff;
+      resize: none;
+      overflow: hidden;
+      line-height: 1.4;
+      min-height: calc(1.4em * 1);
+      max-height: calc(1.4em * 15);
+      font-family: inherit;
     }
     button {
       padding: 0.5em 1em;
@@ -93,7 +102,7 @@
   <div id="log"></div>
 
   <form id="form" autocomplete="off">
-    <input id="input" placeholder="Type your message…" />
+    <textarea id="input" placeholder="Type your message…" rows="1"></textarea>
     <label id="imageLabel" for="imageInput">📎 Image</label>
     <input id="imageInput" type="file" accept="image/*" />
     <button type="submit">Send</button>
@@ -149,6 +158,17 @@
 
     const log   = document.getElementById('log');
     const input = document.getElementById('input');
+
+    // Auto-resize input textarea up to 10 lines
+    const maxInputHeight = parseFloat(getComputedStyle(input).lineHeight) * 10;
+    function adjustInputHeight() {
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, maxInputHeight) + 'px';
+    }
+    input.addEventListener('input', adjustInputHeight);
+    // Initialize height
+    adjustInputHeight();
+
     const imageInput  = document.getElementById('imageInput');
     const imageLabel  = document.getElementById('imageLabel');
     const form  = document.getElementById('form');
@@ -223,6 +243,9 @@
 
       ws.send(msg);
       input.value = "";
+      // Reset textarea height to one line after sending
+      input.style.height = 'auto';
+      adjustInputHeight();
     });
 
     // --- image upload support ---
