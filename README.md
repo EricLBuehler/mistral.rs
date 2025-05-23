@@ -51,13 +51,13 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     **Llama 3.1/3.2/3.3:**
 
     ```
-    ./mistralrs-server -i --isq 4 plain -m meta-llama/Llama-3.2-3B-Instruct
+    ./mistralrs-server -i --isq 8 plain -m meta-llama/Llama-3.2-3B-Instruct
     ```
 
     **Llama 3.2 vision:**
 
     ```
-    ./mistralrs-server -i --isq 4 vision-plain -m meta-llama/Llama-3.2-11B-Vision-Instruct
+    ./mistralrs-server -i --isq 8 vision-plain -m meta-llama/Llama-3.2-11B-Vision-Instruct
     ```
 
   </details>
@@ -67,7 +67,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     <summary>Show command</summary>
 
     ```bash
-    ./mistralrs-server -i vision-plain -m google/gemma-3-4b-it
+    ./mistralrs-server -i --isq 8 vision-plain -m google/gemma-3-4b-it
     ```
   </details>
 
@@ -85,7 +85,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     <summary>Show command</summary>
 
     ```bash
-    ./mistralrs-server -i --isq 4 plain -m Qwen/Qwen3-8B
+    ./mistralrs-server -i --isq 8 plain -m Qwen/Qwen3-8B
     ```
   </details>
 
@@ -162,21 +162,20 @@ OpenAI API compatible API server
 ---
 
 ## Supported accelerators
-- NVIDIA GPUs (CUDA):
-  - Compile with the `cuda` feature: `--features cuda`
-  - FlashAttention support: compile with the `flash-attn` feature
-  - cuDNN support: compile with the`cudnn` feature: `--features cudnn`
-- Apple Silicon GPU (Metal):
-  - Compile with the `metal` feature: `--features metal`
-- CPU:
-  - Intel MKL: compile with the `mkl` feature: `--features mkl`
-  - Apple Accelerate: compile with the `accelerate` feature: `--features accelerate`
-  - ARM NEON and AVX are used automatically
 
-Enabling features is done by passing `--features ...` to the build system. When using `cargo run` or `maturin develop`, pass the `--features` flag before the `--` separating build flags from runtime flags.
+| Accelerator              | Feature Flag  | Additional Flags       |
+|--------------------------|---------------|------------------------|
+| NVIDIA GPUs (CUDA)       | `cuda`        | `flash-attn`, `flash-attn-v3`, `cudnn`  |
+| Apple Silicon GPU (Metal)| `metal`       |                        |
+| CPU (Intel)              | `mkl`         |                        |
+| CPU (Apple Accelerate)   | `accelerate`  |                        |
+| Generic CPU (ARM/AVX)    | _none_        | ARM NEON / AVX enabled by default |
 
-- To enable a single feature like `metal`: `cargo build --release --features metal`.
-- To enable multiple features, specify them in quotes: `cargo build --release --features "cuda flash-attn cudnn"`.
+To enable one or more features, pass them to Cargo. For example:
+
+```bash
+cargo build --release --features "cuda flash-attn cudnn"
+```
 
 ## Installation and Build
 
