@@ -243,7 +243,7 @@ impl PartialEq for ModelCategory {
 /// Prepend a vision tag appropriate for the model to the prompt. Image indexing is assumed that start at 0.
 pub trait VisionPromptPrefixer: Send + Sync {
     /// Prefix for inclusion in messages (may do nothing if the chat template handles it).
-    fn prefix_image(&self, image_indees: Vec<usize>, prompt: &str) -> String;
+    fn prefix_image(&self, image_indices: Vec<usize>, prompt: &str) -> String;
 }
 
 pub enum CacheBackendMetadata<'a> {
@@ -426,7 +426,7 @@ pub trait Pipeline:
                     _ => unreachable!("Unreachable POST cache op."),
                 }
 
-                if raw_out_logits[0][0].is_some() {
+                if !raw_out_logits[0].is_empty() && raw_out_logits[0][0].is_some() {
                     let start = Instant::now();
                     response::send_raw_responses(
                         input_seqs,
@@ -582,7 +582,7 @@ pub trait Pipeline:
                     }
                 }
 
-                if raw_out_logits[0][0].is_some() {
+                if !raw_out_logits[0].is_empty() && raw_out_logits[0][0].is_some() {
                     let start = Instant::now();
                     response::send_raw_responses(
                         input_seqs,

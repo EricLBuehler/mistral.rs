@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
     messages = messages.add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
-        image,
+        vec![image],
         &model,
     )?;
     let resp = model
@@ -58,7 +58,8 @@ async fn main() -> Result<()> {
         };
     let image = image::load_from_memory(&bytes)?;
 
-    messages = messages.add_image_message(TextMessageRole::User, "What is this?", image, &model)?;
+    messages =
+        messages.add_image_message(TextMessageRole::User, "What is this?", vec![image], &model)?;
     let resp = model
         .send_chat_request(RequestBuilder::from(messages.clone()).set_sampler_max_len(100))
         .await?
@@ -78,7 +79,8 @@ async fn main() -> Result<()> {
         };
     let image = image::load_from_memory(&bytes)?;
 
-    messages = messages.add_image_message(TextMessageRole::User, "What is this?", image, &model)?;
+    messages =
+        messages.add_image_message(TextMessageRole::User, "What is this?", vec![image], &model)?;
     let resp = model
         .send_chat_request(RequestBuilder::from(messages.clone()).set_sampler_max_len(100))
         .await?

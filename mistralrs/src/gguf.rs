@@ -1,3 +1,4 @@
+use candle_core::Device;
 use mistralrs_core::*;
 use std::num::NonZeroUsize;
 
@@ -16,6 +17,7 @@ pub struct GgufModelBuilder {
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) search_bert_model: Option<BertEmbeddingModel>,
+    pub(crate) device: Option<Device>,
 
     // Model running
     pub(crate) prompt_chunksize: Option<NonZeroUsize>,
@@ -59,6 +61,7 @@ impl GgufModelBuilder {
             jinja_explicit: None,
             throughput_logging: false,
             search_bert_model: None,
+            device: None,
         }
     }
 
@@ -176,6 +179,12 @@ impl GgufModelBuilder {
         self
     }
 
+    /// Set the main device to load this model onto. Automatic device mapping will be performed starting with this device.
+    pub fn with_device(mut self, device: Device) -> Self {
+        self.device = Some(device);
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = GGUFSpecificConfig {
             prompt_chunksize: self.prompt_chunksize,
@@ -202,7 +211,7 @@ impl GgufModelBuilder {
             self.hf_revision,
             self.token_source,
             &ModelDType::Auto,
-            &best_device(self.force_cpu)?,
+            &self.device.unwrap_or(best_device(self.force_cpu).unwrap()),
             !self.with_logging,
             self.device_mapping
                 .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),

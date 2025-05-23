@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mistral.rs Chat</title>
+  <style>
+    :root {
+      --accent: #3498db;
+      --accent-hov: #1f7ec5;
+      --radius: 8px;
+      --bg-light      : #f9f9f9;
+      --sidebar-bg    : #ffffff;
+      --chat-bg       : #ffffff;
+      --border-color  : #e0e0e0;
+      --text-muted    : #666666;
+      --primary       : #3498db;
+      --primary-hov   : #2980b9;
+    }
+    body {
+      display: flex;
+      font-family: 'Inter', sans-serif;
+      margin: 0;
+      height: 100vh;
+      background: var(--bg-light);
+      color: #333;
+    }
+    #log {
+      background: var(--chat-bg);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      padding: 1rem;
+      overflow-y: auto;
+      padding-bottom: 4rem;
+      flex: 1 1 auto;
+    }
+    #form {
+      position: sticky;
+      bottom: 0;
+      z-index: 1;
+      background: #fff;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      padding: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-shrink: 0;
+    }
+    #input {
+      flex: 1 1 auto;
+      padding: 0.5rem;
+      font-size: 1rem;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      background: #fff;
+      resize: none;
+      overflow: hidden;
+      line-height: 1.4;
+      min-height: calc(1.4em * 1);
+      max-height: calc(1.4em * 15);
+      font-family: inherit;
+    }
+    #form button[type="submit"] {
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      padding: 0.6rem 1.2rem;
+      border-radius: var(--radius);
+    }
+    #form button[type="submit"]:hover {
+      background: var(--primary-hov);
+    }
+    .user, .assistant {
+      padding: 0.75rem;
+      border-radius: var(--radius);
+      max-width: 70%;
+      margin: 0.5rem 0;
+    }
+    .user       { background:#e8f6ff; margin-left:auto; }
+    .assistant  { background:#f4f4f4; margin-right:auto; }
+    #sidebar {
+      width: 260px;
+      min-width: 260px;
+      max-width: 260px;
+      flex-shrink: 0;
+      flex-grow: 0;
+      background: var(--sidebar-bg);
+      box-shadow: 2px 0 8px rgba(0,0,0,0.05);
+      padding: 1.5rem;
+      border-right: 1px solid #ccc;
+    }
+    #sidebar h2 { font-size:1.2rem;margin:0 0 1rem; }
+    #modelSelect, #clearBtn {
+      width: 100%;
+      box-sizing: border-box;
+      margin-bottom: 0.8rem;
+      font-family: inherit;
+    }
+    #modelSelect {
+      padding: 0.5rem;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+    }
+    #clearBtn {
+      padding: 0.55rem;
+      border:none;
+      border-radius:var(--radius);
+      background:#ef5350;
+      color:#fff;
+      cursor:pointer;
+      transition:background 0.2s;
+    }
+    #clearBtn:hover { background:#d84340; }
+    #main {
+      flex: 1 1 auto;
+      background: var(--chat-bg);
+      padding: 1.5rem;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      /* Add transition for drag-over feedback */
+      transition: background 0.2s;
+    }
+    /* Drag-and-drop highlight */
+    #main.drag-over {
+      background: #e3f3ff !important;
+      transition: background 0.2s;
+    }
+    #imageInput { display:none; }
+    #imageLabel {
+      padding:0.6rem 1.2rem;
+      border-radius:var(--radius);
+      background:var(--accent);
+      color:#fff;
+      cursor:pointer;
+      transition:background 0.2s;
+    }
+    #imageLabel:hover { background:var(--accent-hov); }
+    img.chat-preview {
+      max-width: 150px;
+      max-height: 150px;
+      height: auto;
+      width: auto;
+      border-radius: var(--radius);
+      margin: 0.5rem 0;
+      border: 1px solid var(--border-color);
+    }
+    #image-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+    /* ---------- Mobile tweaks ---------- */
+    @media (max-width: 600px) {
+      body {
+        flex-direction: column;
+      }
+      #sidebar {
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+        flex-shrink: 1;
+        flex-grow: 1;
+        border-right: none;
+        border-bottom: 1px solid #ccc;
+        padding: 0.75rem 1rem;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+        overflow-x: auto;
+        width: auto;
+      }
+      #sidebar h2 {
+        flex: 1 0 100%;
+        margin: 0 0 0.5rem;
+        font-size: 1rem;
+      }
+      #modelSelect {
+        flex: 1 1 auto;
+        margin: 0;
+      }
+      #clearBtn {
+        flex: 0 0 auto;
+        margin: 0;
+      }
+      #main {
+        padding: 1rem;
+        flex: 1 1 auto;
+      }
+      .user,
+      .assistant {
+        max-width: 100%;
+      }
+      #form {
+        flex-wrap: nowrap;
+        gap: 0.5rem;
+      }
+      #input {
+        flex: 1 1 auto;
+        min-width: 0;
+        min-height: calc(1.4em * 2);
+        max-height: 40vh;
+      }
+      #imageLabel,
+      #form button[type="submit"] {
+        flex: 0 0 auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <h2>Model control</h2>
+    <select id="modelSelect"></select>
+    <button id="clearBtn">🗑️ Clear chat</button>
+    <div id="loadStatus" class="status"></div>
+  </div>
+
+  <div id="main">
+    <h1>Mistral.rs Chat</h1>
+
+    <div id="log"></div>
+
+    <form id="form" autocomplete="off">
+      <textarea id="input" placeholder="Type your message… (Press Ctrl+Enter to send)" rows="1"></textarea>
+      <label id="imageLabel" for="imageInput">📎 Image</label>
+      <input id="imageInput" type="file" accept="image/*" />
+      <button type="submit">Send</button>
+    </form>
+
+    <div id="image-container"></div>
+
+    <!-- Markdown renderer -->
+    <script src="marked.min.js"></script>
+    <script>
+      const log          = document.getElementById('log');
+      const input        = document.getElementById('input');
+      const form         = document.getElementById('form');
+      const modelSelect  = document.getElementById('modelSelect');
+      const clearBtn     = document.getElementById('clearBtn');
+      const imageInput   = document.getElementById('imageInput');
+      const imageLabel   = document.getElementById('imageLabel');
+      const loadStatus   = document.getElementById('loadStatus');
+      const mainArea     = document.getElementById('main');
+
+      const ws = new WebSocket(`ws://${location.host}/ws`);
+      window.chatSocket = ws;
+
+      const models = Object.create(null); // name → kind
+      let   prevModel = null;
+
+      /* ---------- helpers ---------- */
+      const CLEAR_CMD = "__CLEAR__";
+      let pendingClear = false;
+
+      function renderMarkdown(src){
+        const esc = src.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+        return marked.parse(esc);
+      }
+      function append(html,cls=''){
+        const d=document.createElement('div');
+        if(cls) d.className=cls;
+        d.innerHTML=html;
+        addCopyBtns(d); fixLinks(d);
+        log.appendChild(d); log.scrollTop=log.scrollHeight; return d;
+      }
+      function addCopyBtns(el){
+        el.querySelectorAll('pre').forEach(pre=>{
+          if(pre.querySelector('.copy-btn')) return;
+          const b=document.createElement('button');
+          b.textContent='Copy'; b.className='copy-btn';
+          b.onclick=()=>{navigator.clipboard.writeText((pre.querySelector('code')||pre).innerText.trim()); b.textContent='✔'; setTimeout(()=>b.textContent='Copy',800);};
+          pre.appendChild(b);
+        });
+      }
+      function fixLinks(el){ el.querySelectorAll('a[href]').forEach(a=>{a.target='_blank';a.rel='noopener noreferrer';}); }
+      function updateImageVisibility(kind){
+        imageLabel.style.display = (kind==='vision') ? 'inline-block':'none';
+        if(kind!=='vision') imageInput.value='';
+      }
+
+      /* ---------- model discovery ---------- */
+      async function refreshModels(){
+        try{
+          const res=await fetch('/api/list_models'); const data=await res.json();
+          modelSelect.innerHTML=''; Object.keys(models).forEach(k=>delete models[k]);
+          data.models.forEach(m=>{
+            models[m.name]=m.kind;
+            const opt=document.createElement('option');
+            opt.value=m.name; opt.textContent=(m.kind==='vision'?'🖼️ ':'📝 ')+m.name;
+            modelSelect.appendChild(opt);
+          });
+          if(modelSelect.options.length){
+            modelSelect.selectedIndex=0;
+            prevModel=modelSelect.value;
+            updateImageVisibility(models[prevModel]);
+            await selectModel(prevModel,false);
+          }
+        }catch(e){ loadStatus.textContent='Unable to fetch model list'; }
+      }
+
+      function maybeClearChat(){
+        if(log.children.length===0) return true;
+        if(!confirm('Switching model will clear the chat. Continue?')) return false;
+        pendingClear = true;
+        if (ws.readyState === WebSocket.OPEN) ws.send(CLEAR_CMD);
+        return true;
+      }
+
+      async function selectModel(name,clearConfirmed){
+        if(!clearConfirmed && log.children.length){ /* safeguard */ }
+        try{
+          await fetch('/api/select_model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+        }catch{}
+      }
+
+      modelSelect.addEventListener('change',async()=>{
+        const name=modelSelect.value;
+        if(name===prevModel) return;
+        if(!maybeClearChat()){ modelSelect.value=prevModel; return; }
+        updateImageVisibility(models[name]);
+        prevModel=name;
+        await selectModel(name,true);
+      });
+
+      /* ---------- Clear chat button ---------- */
+      clearBtn.addEventListener('click', () => {
+        if (log.children.length === 0) return;
+        if (!confirm('Clear the chat history?')) return;
+        pendingClear = true;
+        if (ws.readyState === WebSocket.OPEN) ws.send(CLEAR_CMD);
+      });
+
+      /* ---------- textarea auto-resize ---------- */
+      const maxH=parseFloat(getComputedStyle(input).lineHeight)*10;
+      function fit(){ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,maxH)+'px'; }
+      input.addEventListener('input',fit); fit();
+
+      /* ---------- websocket streaming ---------- */
+      let assistantBuf='',assistantDiv=null;
+      ws.addEventListener('message',ev=>{
+        if (ev.data === '[Context cleared]') {
+          if (pendingClear) {
+            log.innerHTML = '';
+            pendingClear = false;
+          }
+          return;
+        }
+        if (ev.data === 'Cannot clear while assistant is replying.') {
+          pendingClear = false;
+          alert(ev.data);
+          return;
+        }
+        if(!assistantDiv) assistantDiv=append('', 'assistant');
+        assistantBuf+=ev.data;
+        assistantDiv.innerHTML=renderMarkdown(assistantBuf);
+        addCopyBtns(assistantDiv); fixLinks(assistantDiv);
+        log.scrollTop=log.scrollHeight;
+      });
+
+      /* ---------- send user messages (Ctrl+Enter or submit button only) ---------- */
+      function sendMessage() {
+        const msg = input.value.trim();
+        if (!msg) return;
+        append(renderMarkdown(msg), 'user');
+        assistantBuf = '';
+        assistantDiv = null;
+        ws.send(msg);
+        input.value = '';
+        fit();
+      }
+
+      // Prevent Enter from submitting the form unless Ctrl+Enter/Cmd+Enter or button click
+      form.addEventListener('submit', ev => {
+        ev.preventDefault();
+        sendMessage();
+      });
+
+      // Allow Ctrl+Enter (or Cmd+Enter) in textarea to send, but not regular Enter
+      input.addEventListener('keydown', function(ev) {
+        if (ev.key === 'Enter' && !ev.shiftKey) {
+          if (ev.ctrlKey || ev.metaKey) {
+            ev.preventDefault();
+            sendMessage();
+          } else {
+            // Prevent default Enter from submitting form or adding newline
+            ev.preventDefault();
+          }
+        }
+      });
+
+      /* ---------- image upload: file input ---------- */
+      imageInput.addEventListener('change', async () => {
+        const f = imageInput.files[0];
+        if (!f) return;
+
+        const img = document.createElement('img');
+        img.src = URL.createObjectURL(f);
+        img.classList.add('chat-preview');
+        const container = document.getElementById('image-container');
+        container.appendChild(img);
+
+        const fd = new FormData();
+        fd.append('image', f);
+        const r = await fetch('/api/upload_image', { method: 'POST', body: fd });
+        if (r.ok && ws.readyState === WebSocket.OPEN) {
+          const j = await r.json();
+          ws.send(JSON.stringify({ image: j.url }));
+        }
+        imageInput.value = '';
+      });
+
+      /* ---------- image upload: drag and drop ---------- */
+      mainArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        mainArea.classList.add('drag-over');
+      });
+      mainArea.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        mainArea.classList.remove('drag-over');
+      });
+      mainArea.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        mainArea.classList.remove('drag-over');
+        const dt = e.dataTransfer;
+        if (!dt || !dt.files || !dt.files.length) return;
+        const f = Array.from(dt.files).find(file => file.type.startsWith('image/'));
+        if (!f) return;
+
+        const img = document.createElement('img');
+        img.src = URL.createObjectURL(f);
+        img.classList.add('chat-preview');
+        const container = document.getElementById('image-container');
+        container.appendChild(img);
+
+        const fd = new FormData();
+        fd.append('image', f);
+        const r = await fetch('/api/upload_image', { method: 'POST', body: fd });
+        if (r.ok && ws.readyState === WebSocket.OPEN) {
+          const j = await r.json();
+          ws.send(JSON.stringify({ image: j.url }));
+        }
+      });
+
+      refreshModels();
+    </script>
+  </div><!-- /#main -->
+</body>
+</html>

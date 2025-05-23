@@ -27,6 +27,10 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     - [OpenAI-compatible HTTP server](README.md#openai-http-server)
     - [Interactive mode](README.md#interactive-mode)
 
+4) Try the **web chat app** for local in-browser conversation (text and vision support):
+    - Quickstart [here](mistralrs-web-chat/README.md#quickstart)
+    - Run the server and visit [http://localhost:8080](http://localhost:8080) by default.
+
 ---
 **Llama 3.2 3B running on an M3 Max with 8-bit ISQ:**
 

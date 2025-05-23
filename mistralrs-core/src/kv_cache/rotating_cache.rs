@@ -94,10 +94,7 @@ impl RotatingCache {
         };
 
         // Expand kv cache, this case is a little more complex.
-        if (self.current_seq_len + seq_len > self.capacity_seq_len
-            && self.current_seq_len + seq_len < self.max_seq_len)
-            || self.current_seq_len == 0
-        {
+        if self.current_seq_len + seq_len > self.capacity_seq_len || self.current_seq_len == 0 {
             let diff = self.current_seq_len + seq_len.saturating_sub(self.capacity_seq_len);
             let n_blocks_needed = diff.div_ceil(NormalCache::CACHE_GROW_SIZE);
             self.capacity_seq_len += n_blocks_needed * NormalCache::CACHE_GROW_SIZE;

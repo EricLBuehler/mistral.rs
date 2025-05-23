@@ -182,7 +182,8 @@ pub mod text_models_inputs_processor {
                 context_lens.push((0, ctxt.len()));
             } else {
                 context_lens.push((
-                    ctxt.len() - last_n_context_len.map(|(a, _)| a).unwrap_or(1),
+                    ctxt.len()
+                        .saturating_sub(last_n_context_len.map(|(a, _)| a).unwrap_or(1)),
                     last_n_context_len.map(|(a, _)| a).unwrap_or(1),
                 ));
             }
