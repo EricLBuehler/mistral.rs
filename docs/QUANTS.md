@@ -9,10 +9,15 @@ Mistral.rs supports the following quantization:
     - I quants coming!
     - CPU, CUDA, Metal (all supported devices)
     - 2, 3, 4, 5, 6, 8 bit
-- GPTQ
+- GPTQ (convert with [this script](../scripts/convert_to_gptq.py))
     - Supported in all plain/vision and adapter models
     - CUDA only
     - 2, 3, 4, 8 bit
+    - [Marlin](https://github.com/IST-DASLab/marlin) kernel support in 4-bit and 8-bit.
+- AWQ (convert with [this script](../scripts/convert_awq_marlin.py))
+    - Supported in all plain/vision and adapter models
+    - CUDA only
+    - 4 and 8 bit
     - [Marlin](https://github.com/IST-DASLab/marlin) kernel support in 4-bit and 8-bit.
 - HQQ
     - Supported in all plain/vision and adapter models via ISQ
