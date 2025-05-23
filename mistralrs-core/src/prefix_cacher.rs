@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-
 use candle_core::{Device, Result};
+use indexmap::IndexMap;
 use itertools::Itertools;
 use tracing::info;
 
@@ -33,7 +32,7 @@ struct CacheElement {
 }
 
 pub struct PrefixCacheManagerV2 {
-    caches: HashMap<Tokens, CacheElement>,
+    caches: IndexMap<Tokens, CacheElement>,
     n_on_device: usize,
     no_prefix_cache: bool,
 }
@@ -49,10 +48,10 @@ pub struct MatchingCache {
 impl PrefixCacheManagerV2 {
     pub fn new(n_on_device: usize, no_prefix_cache: bool) -> Self {
         if !no_prefix_cache {
-            info!("PrefixCacherV2 is enabled! Expect higher multi-turn prompt throughput.");
+            info!("PrefixCacherV2 is enabled. Expect higher multi-turn throughput for both text and multimodal.");
         }
         PrefixCacheManagerV2 {
-            caches: HashMap::new(),
+            caches: IndexMap::new(),
             n_on_device,
             no_prefix_cache,
         }
@@ -129,7 +128,7 @@ impl PrefixCacheManagerV2 {
 
         self.caches.retain(|_tokens, cache| !cache.cache.is_empty());
 
-        Ok(self.caches.len().saturating_sub(self.n_on_device))
+        Ok(n_evicted)
     }
 
     /// Evict all the caches.
@@ -174,7 +173,7 @@ impl PrefixCacheManagerV2 {
 
             if best_match
                 .as_ref()
-                .map_or(true, |(len, _, _)| match_len > *len)
+                .is_none_or(|(len, _, _)| match_len > *len)
             {
                 best_match = Some((match_len, v, images_match_until));
             }
@@ -189,7 +188,8 @@ impl PrefixCacheManagerV2 {
                 0
             };
             for layer in cache.cache.iter_mut().flatten() {
-                if layer.set_len(match_len).is_err() {
+                if let Err(e) = layer.set_len(match_len) {
+                    tracing::warn!("Failed to set cache length to {}: {:?}", match_len, e);
                     return Ok(None);
                 }
             }
