@@ -142,11 +142,20 @@
       });
     }
 
+    // Make all links open in a new tab / page
+    function fixLinks(parent) {
+      parent.querySelectorAll('a[href]').forEach(a => {
+        a.setAttribute('target', '_blank');
+        a.setAttribute('rel', 'noopener noreferrer');
+      });
+    }
+
     function appendHtml(html, className = "") {
       const div = document.createElement("div");
       if (className) div.className = className;
       div.innerHTML = html;
       addCopyButtons(div);
+      fixLinks(div);
       log.appendChild(div);
       log.scrollTop = log.scrollHeight;
       return div;
@@ -160,6 +169,7 @@
       assistantBuffer += ev.data;
       assistantDiv.innerHTML = marked.parse(assistantBuffer);
       addCopyButtons(assistantDiv);
+      fixLinks(assistantDiv);
       log.scrollTop = log.scrollHeight;
     });
 
