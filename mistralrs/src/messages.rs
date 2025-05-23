@@ -34,6 +34,7 @@ impl From<TextMessages> for Vec<IndexMap<String, MessageContent>> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 /// A chat message role.
 pub enum TextMessageRole {
     User,

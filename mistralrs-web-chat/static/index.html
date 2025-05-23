@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>mistralrs chat</title>
+  <style>
+    body { font-family: sans-serif; max-width: 720px; margin: 2rem auto; }
+    #log { white-space: pre-wrap; border: 1px solid #ccc; padding: 1rem; height: 60vh; overflow-y: auto; }
+    #input { width: 100%; padding: .5rem; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>mistral.rs Web Chat</h1>
+  <div id="log"></div>
+
+  <form id="form">
+    <input id="input" autocomplete="off" placeholder="Type a message…" />
+  </form>
+
+  <script>
+    const log = document.getElementById('log');
+    const input = document.getElementById('input');
+    const form = document.getElementById('form');
+    const ws = new WebSocket(`ws://${location.host}/ws`);
+
+    ws.addEventListener('message', (ev) => {
+      log.textContent += ev.data;
+      log.scrollTop = log.scrollHeight;
+    });
+
+    form.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const msg = input.value.trim();
+      if (!msg) return;
+      log.textContent += `\n\n🧑‍💻  ${msg}\n\n`;
+      ws.send(msg);
+      input.value = '';
+    });
+  </script>
+</body>
+</html>
