@@ -134,7 +134,7 @@ Rust multithreaded/async API for easy integration into any application.
 
 - [Docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/)
 - [Examples](mistralrs/examples/)
-- To install: Add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }`
+- To use: add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }` to your Cargo.toml
 
 ### Python API
 
@@ -151,11 +151,11 @@ Python API for mistral.rs.
 OpenAI API compatible API server
 
 - [API Docs](docs/HTTP.md).
-- [Running](README.md#run-with-the-cli)
+- [Launching the server or use the CLI](README.md#run-with-the-cli)
 - [Example](examples/server/chat.py)
 
 
-### Llama Index integration (Python)
+### Llama Index integration
 
 - Docs: https://docs.llamaindex.ai/en/stable/examples/llm/mistral_rs/
 
@@ -209,38 +209,19 @@ cargo build --release --features "cuda flash-attn cudnn"
     cd mistral.rs
     ```
 
-5) Build or install:
-    - Base build command
+5) Build or install `mistralrs-server`:
+    - Build the `mistralrs-server` binary, which can be found at `target/release/mistralrs-server`.
         ```bash
-        cargo build --release
-        ```
-    - Build with CUDA support
-        ```bash
-        cargo build --release --features cuda
-        ```
-    - Build with CUDA and Flash Attention V2 support
-        ```bash
-        cargo build --release --features "cuda flash-attn"
-        ```
-    - Build with Metal support
-        ```bash
-        cargo build --release --features metal
-        ```
-    - Build with Accelerate support
-        ```bash
-        cargo build --release --features accelerate
-        ```
-    - Build with MKL support
-        ```bash
-        cargo build --release --features mkl
+        cargo build --release --features <specify feature(s) here>
         ```
     - Install with `cargo install` for easy command line usage
 
         Pass the same values to `--features` as you would for `cargo build`
         ```bash
-        cargo install --path mistralrs-server --features cuda
+        cargo install --path mistralrs-server --features <specify feature(s) here>
         ```
-6) The build process will output a binary `mistralrs-server` at `./target/release/mistralrs-server`. We can switch to that directory so that the binary can be accessed as `./mistralrs-server` with the following command:
+
+6) (*If you used `cargo build`*) The build process will output a binary `mistralrs-server` at `./target/release/mistralrs-server`. We can switch to that directory so that the binary can be accessed as `./mistralrs-server` with the following command:
 
     *Example on Ubuntu:*
     ```
@@ -291,9 +272,52 @@ cargo build --release --features "cuda flash-attn cudnn"
 
 </details>
 
-## Run with the CLI
+## Using the CLI
 
 Mistral.rs uses subcommands to control the model type. Please run `./mistralrs-server --help` to see the subcommands which categorize the models by kind.
+
+### Interactive mode
+
+You can launch interactive mode, a simple chat application running in the terminal, by passing `-i`:
+
+```bash
+./mistralrs-server -i plain -m meta-llama/Llama-3.2-3B-Instruct
+```
+
+Vision models work seamlessly:
+
+```bash
+./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
+```
+
+Diffusion models can be run too:
+
+```bash
+./mistralrs-server -i diffusion-plain -m black-forest-labs/FLUX.1-schnell -a flux
+```
+
+And you can run speech generation in your terminal!
+
+```bash
+./mistralrs-server -i speech -m nari-labs/Dia-1.6B -a dia
+```
+
+### OpenAI HTTP server
+
+You can launch an HTTP server by replacing `-i` with `--port <port>`. For instance:
+
+```bash
+./mistralrs-server --port 1234 plain -m microsoft/Phi-3.5-MoE-instruct
+```
+
+### Structured selection with a `.toml` file
+
+We provide a method to select models with a `.toml` file. The keys are the same as the command line, with `no_kv_cache` and `tokenizer_json` being "global" keys.
+
+Example:
+```bash
+./mistralrs-server --port 1234 toml -f toml-selectors/gguf.toml
+```
 
 ### Architecture for plain models
 
@@ -361,49 +385,6 @@ If you do not specify the architecture, an attempt will be made to use the model
 - phi3
 
 </details>
-
-### Interactive mode
-
-You can launch interactive mode, a simple chat application running in the terminal, by passing `-i`:
-
-```bash
-./mistralrs-server -i plain -m meta-llama/Llama-3.2-3B-Instruct
-```
-
-Vision models work seamlessly:
-
-```bash
-./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
-```
-
-Diffusion models can be run too:
-
-```bash
-./mistralrs-server -i diffusion-plain -m black-forest-labs/FLUX.1-schnell -a flux
-```
-
-And you can run speech generation in your terminal!
-
-```bash
-./mistralrs-server -i speech -m nari-labs/Dia-1.6B -a dia
-```
-
-### OpenAI HTTP server
-
-You can an HTTP server
-
-```bash
-./mistralrs-server --port 1234 plain -m microsoft/Phi-3.5-MoE-instruct
-```
-
-### Structured selection with a `.toml` file
-
-We provide a method to select models with a `.toml` file. The keys are the same as the command line, with `no_kv_cache` and `tokenizer_json` being "global" keys.
-
-Example:
-```bash
-./mistralrs-server --port 1234 toml -f toml-selectors/gguf.toml
-```
 
 ---
 
