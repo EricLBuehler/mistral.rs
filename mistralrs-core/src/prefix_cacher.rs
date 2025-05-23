@@ -10,15 +10,13 @@ use crate::{pipeline::KvCache, sequence::Sequence};
 struct Tokens(Vec<u32>);
 
 impl Tokens {
-    /// Maximum index to where the two sets of tokens match
-    fn find_max_index(&self, x: &Self) -> Option<usize> {
+    /// Returns the length of the common prefix shared with `other`.
+    fn shared_prefix_len(&self, other: &Self) -> usize {
         self.0
             .iter()
-            .zip(x.0.iter())
-            .enumerate()
-            .take_while(|(_, (a, b))| a == b)
-            .map(|(index, _)| index)
-            .last()
+            .zip(other.0.iter())
+            .take_while(|(a, b)| a == b)
+            .count()
     }
 }
 
@@ -155,53 +153,54 @@ impl PrefixCacheManagerV2 {
 
         let toks = Tokens(toks.to_vec());
 
-        let mut longest_match = (0, None, 0);
-        for (k, v) in self.caches.iter() {
-            let match_len = toks.find_max_index(k);
-            if let Some(match_len) = match_len {
-                // Hashes must match
-                let images_match_until = match image_hashes {
-                    Some(input_hashes) => match &v.image_hashes {
-                        Some(cached_hashes) => input_hashes
-                            .iter()
-                            .zip(cached_hashes)
-                            .enumerate()
-                            .take_while(|(_, (a, b))| a == b)
-                            .map(|(index, _)| index + 1)
-                            .last()
-                            .unwrap_or(0),
-                        None => 0,
-                    },
+        let mut best_match: Option<(usize, &CacheElement, usize)> = None;
+        for (k, v) in &self.caches {
+            let match_len = toks.shared_prefix_len(k);
+            if match_len == 0 {
+                continue;
+            }
+
+            let images_match_until = match image_hashes {
+                Some(input_hashes) => match &v.image_hashes {
+                    Some(cached_hashes) => input_hashes
+                        .iter()
+                        .zip(cached_hashes)
+                        .take_while(|(a, b)| a == b)
+                        .count(),
                     None => 0,
-                };
-                if match_len > longest_match.0 {
-                    longest_match = (match_len, Some(v), images_match_until);
-                }
+                },
+                None => 0,
+            };
+
+            if best_match
+                .as_ref()
+                .map_or(true, |(len, _, _)| match_len > *len)
+            {
+                best_match = Some((match_len, v, images_match_until));
             }
         }
 
-        if let (match_len, Some(longest_match), images_match_until) = longest_match {
-            let mut cache = longest_match.clone();
+        if let Some((match_len, cache_element, images_match_until)) = best_match {
+            let mut cache = cache_element.clone();
             // Count how many input images are not already cached
             let images_to_keep = if let Some(input_hashes) = image_hashes {
-                input_hashes.len() - images_match_until
+                input_hashes.len().saturating_sub(images_match_until)
             } else {
                 0
             };
             for layer in cache.cache.iter_mut().flatten() {
-                match layer.set_len(match_len) {
-                    Ok(_) => (),
-                    Err(_) => return Ok(None),
+                if layer.set_len(match_len).is_err() {
+                    return Ok(None);
                 }
             }
-            Ok(Some(MatchingCache {
+            return Ok(Some(MatchingCache {
                 normal: cache.cache,
                 images_to_keep,
                 toks: toks.0[match_len..].to_vec(),
                 offset: match_len,
-            }))
-        } else {
-            Ok(None)
+            }));
         }
+
+        Ok(None)
     }
 }
