@@ -333,6 +333,10 @@
           await selectModel(prevModel,false);
         }
         await refreshChatList();
+        // Always start with a new chat on startup
+        if (!currentChatId) {
+          newChatBtn.click();
+        }
       }
 
       function maybeClearChat(skipConfirm = false){
