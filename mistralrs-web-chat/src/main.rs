@@ -67,17 +67,23 @@ async fn load_model(
     State(app): State<AppState>,
     Json(req): Json<LoadRequest>,
 ) -> impl IntoResponse {
+    let isq = if cfg!(feature = "metal") {
+        IsqType::AFQ6
+    } else {
+        IsqType::Q6K
+    };
+
     let result = (|| async {
         match req.kind.as_str() {
             "text" => TextModelBuilder::new(req.path)
-                .with_isq(IsqType::Q8_0)
+                .with_isq(isq)
                 .with_logging()
                 .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
                 .build()
                 .await
                 .map(|m| LoadedModel::Text(Arc::new(m))),
             "vision" => VisionModelBuilder::new(req.path)
-                .with_isq(IsqType::Q8_0)
+                .with_isq(isq)
                 .with_logging()
                 .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
                 .build()
