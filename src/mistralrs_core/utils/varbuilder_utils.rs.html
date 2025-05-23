@@ -75,7 +75,7 @@
 <a href=#75 id=75 data-nosnippet>75</a>    get_device_for_tensor: Arc&lt;<span class="kw">dyn </span>Fn(String) -&gt; DeviceForLoadTensor + Send + Sync + <span class="lifetime">'static</span>&gt;,
 <a href=#76 id=76 data-nosnippet>76</a>) -&gt; <span class="prelude-ty">Result</span>&lt;ShardedVarBuilder&gt; {
 <a href=#77 id=77 data-nosnippet>77</a>    <span class="comment">// No mmap for cuda.
-<a href=#78 id=78 data-nosnippet>78</a>    </span><span class="kw">if </span>xlora_paths.is_empty() &amp;&amp; base_device.is_cuda() {
+<a href=#78 id=78 data-nosnippet>78</a>    </span><span class="kw">if </span>xlora_paths.is_empty() &amp;&amp; !base_device.is_cuda() {
 <a href=#79 id=79 data-nosnippet>79</a>        <span class="kw">if </span>!silent {
 <a href=#80 id=80 data-nosnippet>80</a>            <span class="macro">tracing::info!</span>(<span class="string">"Loading model using mmap strategy."</span>);
 <a href=#81 id=81 data-nosnippet>81</a>        }
