@@ -224,6 +224,23 @@
       #main { padding: 1rem; }
       .user,.assistant{ max-width:100%; }
     }
+    /* ----- copy button style ----- */
+    pre { position: relative; }
+    .copy-btn {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      padding: 0.25rem 0.5rem;
+      font-size: 0.75rem;
+      border: none;
+      border-radius: var(--radius);
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+      opacity: 0.7;
+      transition: opacity 0.2s;
+    }
+    pre:hover .copy-btn { opacity: 1; }
   </style>
 </head>
 <body>
@@ -289,11 +306,36 @@
       }
       function addCopyBtns(el){
         el.querySelectorAll('pre').forEach(pre=>{
-          if(pre.querySelector('.copy-btn')) return;
-          const b=document.createElement('button');
-          b.textContent='Copy'; b.className='copy-btn';
-          b.onclick=()=>{navigator.clipboard.writeText((pre.querySelector('code')||pre).innerText.trim()); b.textContent='✔'; setTimeout(()=>b.textContent='Copy',800);};
-          pre.appendChild(b);
+          if(pre.querySelector('.copy-btn')) return;          // avoid duplicates
+          const btn = document.createElement('button');
+          btn.textContent = 'Copy';
+          btn.className   = 'copy-btn';
+
+          btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const codeEl = pre.querySelector('code') || pre;
+            const text   = codeEl.innerText.trim();
+
+            try {
+              await navigator.clipboard.writeText(text);      // modern clipboard API
+            } catch {
+              /* Fallback for older browsers */
+              const ta = document.createElement('textarea');
+              ta.value = text;
+              ta.style.position = 'fixed';
+              ta.style.opacity  = '0';
+              document.body.appendChild(ta);
+              ta.focus();
+              ta.select();
+              try { document.execCommand('copy'); } catch (_) {}
+              document.body.removeChild(ta);
+            }
+
+            btn.textContent = '✔';
+            setTimeout(() => (btn.textContent = 'Copy'), 800);
+          });
+
+          pre.appendChild(btn);
         });
       }
       function fixLinks(el){ el.querySelectorAll('a[href]').forEach(a=>{a.target='_blank';a.rel='noopener noreferrer';}); }
