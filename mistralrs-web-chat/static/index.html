@@ -98,6 +98,12 @@
       user-select:none;
     }
     #chatList li:hover{ background:#f1f1f1; }
+    #chatList li.active {
+      font-weight: bold;
+      /* highlight active chat with a border that follows the rounded corners */
+      border: 2px solid var(--accent);
+      border-radius: var(--radius);
+    }
     /* ----- main chat area ----- */
     #main {
       flex: 1 1 auto;
@@ -205,7 +211,7 @@
 </head>
 <body>
   <div id="sidebar">
-    <h2>Model control</h2>
+    <h2>Control panel  </h2>
     <select id="modelSelect"></select>
     <button id="newChatBtn">➕ New chat</button>
     <button id="clearBtn">🗑️ Clear chat</button>
@@ -285,14 +291,23 @@
         chatList.innerHTML='';
         data.chats.forEach((c,idx)=>{
           const li = document.createElement('li');
-          const display = c.title && c.title.trim() ? c.title : `Chat #${idx+1}`;
           li.dataset.id = c.id;
           li.onclick = () => loadChat(c.id);
+          // Highlight active chat
+          if (c.id === currentChatId) {
+            li.classList.add('active');
+          }
 
-          // Title
+          // Determine label: use title if set, otherwise reverse-number by creation order
+          const display = c.title && c.title.trim()
+            ? c.title
+            : `Chat #${data.chats.length - idx}`;
+
+          // Title element
           const titleDiv = document.createElement('div');
           titleDiv.textContent = display;
-          // Creation date
+
+          // Creation timestamp
           const dateDiv = document.createElement('div');
           dateDiv.textContent = new Date(c.created_at).toLocaleString();
           dateDiv.style.fontSize = '0.8em';
@@ -314,6 +329,10 @@
         if(!res.ok){ alert('Failed to load chat'); return; }
         const data = await res.json();
         currentChatId = data.id;
+        // Update active chat highlight in the sidebar
+        document.querySelectorAll('#chatList li').forEach(li => li.classList.remove('active'));
+        const activeLi = document.querySelector(`#chatList li[data-id="${id}"]`);
+        if (activeLi) activeLi.classList.add('active');
         if(data.model && models[data.model]){
           modelSelect.value = data.model;
           prevModel = data.model;
