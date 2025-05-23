@@ -172,12 +172,18 @@
         max-width: 100%;
       }
       #form {
-        flex-wrap: wrap;
+        flex-wrap: nowrap;   /* keep controls on a single line */
         gap: 0.5rem;
       }
       #input {
+        flex: 1 1 auto;
+        min-width: 0;        /* allow input to shrink so buttons stay visible */
         min-height: calc(1.4em * 2);
         max-height: 40vh;
+      }
+      #imageLabel,
+      #form button[type="submit"] {
+        flex: 0 0 auto;      /* prevent these controls from stretching */
       }
     }
   </style>
