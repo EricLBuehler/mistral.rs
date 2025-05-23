@@ -10,8 +10,8 @@ use axum::{
 };
 use futures_util::stream::StreamExt;
 use mistralrs::{
-    IsqType, Model, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
-    VisionMessages, VisionModelBuilder,
+    IsqType, Model, TextMessageRole, TextMessages, TextModelBuilder, VisionMessages,
+    VisionModelBuilder,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -124,12 +124,13 @@ async fn load_model(
         IsqType::Q6K
     };
 
+    // use mistralrs::PagedAttentionMetaBuilder;
     let result = (|| async {
         match req.kind.as_str() {
             "text" => TextModelBuilder::new(req.path)
                 .with_isq(isq)
                 .with_logging()
-                .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+                // .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
                 .with_throughput_logging()
                 .build()
                 .await
@@ -137,7 +138,7 @@ async fn load_model(
             "vision" => VisionModelBuilder::new(req.path)
                 .with_isq(isq)
                 .with_logging()
-                .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+                // .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
                 .with_throughput_logging()
                 .build()
                 .await
