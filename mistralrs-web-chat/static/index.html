@@ -6,15 +6,16 @@
   <title>Mistral.rs Chat</title>
   <style>
     body {
+      display: flex;
       font-family: Arial, sans-serif;
-      margin: 2em auto;
-      max-width: 640px;
+      margin: 0;
+      height: 100vh;
     }
     #log {
       border: 1px solid #ccc;
       padding: 1em;
-      height: 400px;
       overflow-y: auto;
+      flex: 1 1 auto;
     }
     #form {
       margin-top: 1em;
@@ -32,11 +33,43 @@
     }
     .user       { margin: 1em 0; }
     .assistant  { margin: 1em 0; background: #f7f7f7; padding: 0.5em; border-radius: 4px; }
-    pre         { background: #272822; color: #f8f8f2; padding: 0.5em; overflow-x: auto; position: relative; }
-    .copy-btn   { position: absolute; top: 4px; right: 4px; font-size: 0.75em; padding: 0.2em 0.4em; cursor: pointer; }
+    #sidebar {
+      width: 240px;
+      padding: 1em;
+      border-right: 1px solid #ccc;
+      background: #fafafa;
+    }
+    #sidebar h2 {
+      margin-top: 0;
+    }
+    #sidebar input,
+    #sidebar select,
+    #sidebar button {
+      width: 100%;
+      margin: 0.4em 0;
+      box-sizing: border-box;
+    }
+    #main {
+      flex: 1 1 auto;
+      padding: 2em;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
   </style>
 </head>
 <body>
+  <div id="sidebar">
+    <h2>Model control</h2>
+    <input id="modelPath" type="text" placeholder="Path to model">
+    <select id="modelKind">
+      <option value="text">Text model</option>
+      <option value="vision">Vision model</option>
+    </select>
+    <button id="loadBtn">Load</button>
+    <div id="loadStatus" class="status"></div>
+  </div>
+  <div id="main">
   <h1>Mistral.rs Chat</h1>
 
   <div id="log"></div>
@@ -47,9 +80,40 @@
   </form>
 
   <!-- Markdown renderer -->
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-
+  </script>
+  </script>
   <script>
+    // --- model loader controls (sidebar) ---
+    const loadBtn    = document.getElementById('loadBtn');
+    const modelPath  = document.getElementById('modelPath');
+    const modelKind  = document.getElementById('modelKind');
+    const loadStatus = document.getElementById('loadStatus');
+
+    loadBtn.addEventListener('click', async () => {
+      const path = modelPath.value.trim();
+      const kind = modelKind.value;
+      if (!path) {
+        alert('Please enter a model path');
+        return;
+      }
+      loadBtn.disabled = true;
+      loadStatus.textContent = 'Loading…';
+      try {
+        const res  = await fetch('/api/load_model', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path, kind })
+        });
+        const txt = await res.text();
+        loadStatus.textContent = txt;
+      } catch (err) {
+        loadStatus.textContent = 'Error: ' + err;
+      } finally {
+        loadBtn.disabled = false;
+      }
+    });
+    // --- end loader controls ---
+
     const log   = document.getElementById('log');
     const input = document.getElementById('input');
     const form  = document.getElementById('form');
@@ -115,5 +179,8 @@
       input.value = "";
     });
   </script>
+  </div><!-- end #main -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
 </body>
 </html>
