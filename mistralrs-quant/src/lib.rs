@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     fmt::Debug,
     num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard, OnceLock},
+    sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard},
 };
 
 use blockwise_fp8::blockwise_fp8_linear_b;
@@ -63,33 +63,26 @@ pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_Q
 use candle_nn::{Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ImmediateIsqParams {
     pub guard: QuantizeOntoGuard,
     pub ty: Option<IsqType>,
     pub predicates: Vec<Regex>,
 }
 
-static IMMEDIATE_ISQ: OnceLock<Mutex<ImmediateIsqParams>> = OnceLock::new();
+static IMMEDIATE_ISQ: Mutex<Option<ImmediateIsqParams>> = Mutex::new(None);
 
 pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>) {
-    IMMEDIATE_ISQ
-        .get_or_init(|| {
-            Mutex::new(ImmediateIsqParams {
-                guard: QuantizeOntoGuard::new(),
-                ty: None,
-                predicates,
-            })
-        })
-        .lock()
-        .unwrap()
-        .ty = isq;
+    let mut guard = IMMEDIATE_ISQ.lock().expect("IMMEDIATE_ISQ mutex poisoned");
+    *guard = Some(ImmediateIsqParams {
+        guard: QuantizeOntoGuard::new(),
+        ty: isq,
+        predicates,
+    });
 }
 
 pub fn get_immediate_isq() -> Option<ImmediateIsqParams> {
-    IMMEDIATE_ISQ
-        .get()
-        .map(|guard| guard.lock().unwrap().clone())
+    IMMEDIATE_ISQ.lock().ok().and_then(|guard| guard.clone())
 }
 
 pub fn should_apply_immediate_isq(vb: &ShardedVarBuilder) -> bool {
@@ -545,7 +538,7 @@ pub trait QuantizedSerde {
 }
 
 /// Used to gate access to quantizing onto the host device
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[allow(unused)]
 pub struct QuantizeOntoGuard(Arc<Mutex<()>>);
 
