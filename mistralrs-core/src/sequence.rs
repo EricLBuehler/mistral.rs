@@ -355,12 +355,12 @@ impl BlockEngineSequence for Sequence {
         self.id
     }
 
-    fn get_logical_token_blocks(&self) -> usize {
+    fn logical_token_blocks(&self) -> &[LogicalTokenBlock] {
         match &self.custom_metadata {
             SequenceCustomMetadata::PagedAttention {
                 logical_token_blocks,
                 block_size: _,
-            } => logical_token_blocks.len(),
+            } => logical_token_blocks,
             SequenceCustomMetadata::None => unreachable!(),
         }
     }

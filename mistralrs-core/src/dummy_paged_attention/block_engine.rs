@@ -8,6 +8,7 @@ use std::{
 
 use super::block_engine_sequence::BlockEngineSequence;
 
+#[derive(Debug)]
 pub struct LogicalTokenBlock {
     tokens: Vec<usize>,
     block_size: usize,
@@ -53,6 +54,21 @@ pub struct _PhysicalTokenBlock {
 }
 
 pub struct PhysicalTokenBlock(pub Mutex<_PhysicalTokenBlock>);
+
+impl std::fmt::Debug for PhysicalTokenBlock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0.lock() {
+            Ok(inner) => f
+                .debug_struct("PhysicalTokenBlock")
+                .field("block_id", &inner.block_id)
+                .field("block_size", &inner.block_size)
+                .field("refcount", &inner.refcount)
+                .field("is_gpu", &inner.is_gpu)
+                .finish(),
+            Err(_) => write!(f, "PhysicalTokenBlock(<locked>)"),
+        }
+    }
+}
 
 impl PhysicalTokenBlock {
     pub fn deref_mut(&self) -> MutexGuard<'_, _PhysicalTokenBlock> {
@@ -205,7 +221,7 @@ impl BlockEngine {
     }
 
     pub fn can_allocate(&self, seq: &impl BlockEngineSequence) -> AllocStatus {
-        let num_required_blocks = seq.get_logical_token_blocks();
+        let num_required_blocks = seq.logical_token_blocks().len();
         let num_free_gpu_blocks = self.gpu_allocator.get_num_free_blocks();
 
         if self.num_gpu_blocks < num_required_blocks {
@@ -219,7 +235,7 @@ impl BlockEngine {
 
     pub fn allocate(&mut self, seq: &impl BlockEngineSequence) {
         let mut block_table = Vec::new();
-        for _logcical_idx in 0..seq.get_logical_token_blocks() {
+        for _logcical_idx in 0..seq.logical_token_blocks().len() {
             block_table.push(self.gpu_allocator.allocate());
         }
         self.block_tables.insert(seq.get_id(), block_table.clone());
