@@ -191,13 +191,23 @@ body {
   font-family: inherit;
 }
 
-#form button[type="submit"] {
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: var(--primary);
   color: #fff;
   border: none;
   padding: 0.6rem 1.2rem;
   border-radius: var(--radius);
+  cursor: pointer;
   transition: background 0.2s;
+  font-family: inherit;
+  font-size: 1rem;
+}
+
+.btn:hover {
+  background: var(--primary-hov);
 }
 
 #form button[type="submit"]:hover {
@@ -207,19 +217,6 @@ body {
 /* ----- image previews ----- */
 #imageInput { 
   display:none; 
-}
-
-#imageLabel {
-  padding:0.6rem 1.2rem;
-  border-radius:var(--radius);
-  background:var(--accent);
-  color:#fff;
-  cursor:pointer;
-  transition:background 0.2s;
-}
-
-#imageLabel:hover { 
-  background:var(--accent-hov); 
 }
 
 img.chat-preview {

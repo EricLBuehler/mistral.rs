@@ -22,11 +22,18 @@
 
     <div id="log"></div>
 
-    <form id="form" autocomplete="off">
-      <textarea id="input" placeholder="Type your message… (Press Ctrl+Enter to send)" rows="1"></textarea>
-      <label id="imageLabel" for="imageInput">📎 Image</label>
-      <input id="imageInput" type="file" accept="image/*" />
-      <button type="submit">Send</button>
+    <form id="form">
+      <textarea
+        id="input"
+        placeholder="Type your message… (Press Ctrl+Enter to send)"
+      ></textarea>
+
+      <!-- hidden file input -->
+      <input type="file" id="imageInput" accept="image/*" hidden />
+
+      <!-- image label and send button share the same class -->
+      <label for="imageInput" class="btn" id="imageLabel">📎 Image</label>
+      <button type="submit" class="btn">Send</button>
     </form>
 
     <div id="image-container"></div>
