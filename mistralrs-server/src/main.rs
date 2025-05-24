@@ -11,17 +11,18 @@ use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, initialize_logging,
     paged_attn_supported, parse_isq_value, ApproximateUserLocation, BertEmbeddingModel,
     DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Function,
-    Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
-    PagedAttentionConfig, Request, SchedulerConfig, SearchContextSize, TokenSource, Tool,
-    ToolChoice, ToolType, WebSearchOptions, WebSearchUserLocation,
+    ImageGenerationResponseFormat, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs,
+    MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request, SchedulerConfig,
+    SearchContextSize, TokenSource, Tool, ToolChoice, ToolType, WebSearchOptions,
+    WebSearchUserLocation,
 };
 use openai::{
-    ChatCompletionRequest, CompletionRequest, FunctionCalled, Grammar, ImageGenerationRequest,
-    JsonSchemaResponseFormat, Message, MessageContent, MessageInnerContent, ModelObjects,
-    ResponseFormat, StopTokens, ToolCall,
+    AudioResponseFormat, ChatCompletionRequest, CompletionRequest, FunctionCalled, Grammar,
+    ImageGenerationRequest, JsonSchemaResponseFormat, Message, MessageContent, MessageInnerContent,
+    ModelObjects, ResponseFormat, SpeechGenerationRequest, StopTokens, ToolCall,
 };
 use serde::{Deserialize, Serialize};
-use speech_generation::speech_generation;
+use speech_generation::{__path_speech_generation, speech_generation};
 use std::{num::NonZeroUsize, sync::Arc};
 
 mod chat_completion;
@@ -35,8 +36,8 @@ mod util;
 use crate::openai::ModelObject;
 use crate::{
     chat_completion::{__path_chatcompletions, chatcompletions},
-    completions::completions,
-    image_generation::image_generation,
+    completions::{__path_completions, completions},
+    image_generation::{__path_image_generation, image_generation},
 };
 
 use interactive_mode::interactive_mode;
@@ -233,23 +234,27 @@ async fn re_isq(
 fn get_router(state: Arc<MistralRs>) -> Router {
     #[derive(OpenApi)]
     #[openapi(
-        paths(models, health, chatcompletions),
+        paths(models, health, chatcompletions, completions, re_isq, image_generation, speech_generation),
         components(schemas(
             ApproximateUserLocation,
+            AudioResponseFormat,
             ChatCompletionRequest,
             CompletionRequest,
             Function,
             FunctionCalled,
             Grammar,
             ImageGenerationRequest,
+            ImageGenerationResponseFormat,
             JsonSchemaResponseFormat,
             Message,
             MessageContent,
             MessageInnerContent,
             ModelObject,
             ModelObjects,
+            ReIsqRequest,
             ResponseFormat,
             SearchContextSize,
+            SpeechGenerationRequest,
             StopTokens,
             Tool,
             ToolCall,
