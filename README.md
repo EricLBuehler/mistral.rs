@@ -31,12 +31,27 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     - Quickstart [here](mistralrs-web-chat/README.md#quickstart)
     - Run the server and visit [http://localhost:8080](http://localhost:8080) by default.
 
----
-**Llama 3.2 3B running on an M3 Max with 8-bit ISQ:**
+<br>
 
-<img src="./res/demo.gif" alt="Interactive demo" />
+<!-- Web Chat App -->
+<details open>
+  <summary>🖥️ <strong>Web Chat App</strong></summary>
+  <br>
+  <img src="./res/chat.gif" alt="Web Chat UI Demo" />
+  <br>
+  Try our modern in-browser chat with text and vision support.
+</details>
 
----
+<!-- Interactive Mode -->
+<details>
+  <summary>💻 <strong>Terminal Interactive Mode</strong></summary>
+  <br>
+  <img src="./res/demo.gif" alt="Terminal Interactive Mode" />
+  <br>
+  Prefer the terminal? Use interactive mode for a classic CLI experience.
+</details>
+
+<br>
 
 ## Quick examples
 
@@ -289,6 +304,10 @@ cargo build --release --features "cuda flash-attn cudnn"
 Mistral.rs uses subcommands to control the model type. Please run `./mistralrs-server --help` to see the subcommands which categorize the models by kind.
 
 ### Interactive mode
+
+**Llama 3.2 3B running on an M3 Max with 8-bit ISQ:**
+
+<img src="./res/demo.gif" alt="Interactive demo" />
 
 You can launch interactive mode, a simple chat application running in the terminal, by passing `-i`:
 
