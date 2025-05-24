@@ -495,6 +495,12 @@ impl Mistral3VisionModel {
             uvb_pos.add_tensor("sin", self.patch_positional_embedding.sin.clone());
         }
 
+        for (layer_idx, layer) in self.transformer.layers.iter().enumerate() {
+            let uvb_l = uvb.pp("transformer").pp("layers").pp(layer_idx);
+            uvb_l.pp("attention_norm").add(&layer.attention_norm);
+            uvb_l.pp("ffn_norm").add(&layer.ffn_norm);
+        }
+
         uvb.to_safetensors()
     }
 }
