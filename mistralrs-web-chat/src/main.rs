@@ -8,17 +8,19 @@ use axum::{
     routing::{get, get_service, post},
     Json, Router,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::Utc;
 use clap::Parser;
 use futures_util::stream::StreamExt;
 use indexmap::IndexMap;
 use mistralrs::{
-    best_device, parse_isq_value, IsqType, Model, TextMessageRole, TextMessages, TextModelBuilder,
-    VisionMessages, VisionModelBuilder,
+    best_device, parse_isq_value, IsqType, Model, RequestLike, TextMessageRole, TextMessages,
+    TextModelBuilder, VisionMessages, VisionModelBuilder,
 };
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::io::Cursor;
 use std::mem;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::fs;
@@ -60,6 +62,8 @@ enum LoadedModel {
 struct ChatMessage {
     role: String,
     content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    images: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -442,9 +446,13 @@ async fn rename_chat(
     (StatusCode::INTERNAL_SERVER_ERROR, "rename failed").into_response()
 }
 
-async fn append_chat_message(app: &Arc<AppState>, role: &str, content: &str) -> Result<()> {
-    // Ignore replay helpers sent from the front‑end,
-    // which look like: {"restore":{...}}
+async fn append_chat_message(
+    app: &Arc<AppState>,
+    role: &str,
+    content: &str,
+    images: Option<Vec<String>>,
+) -> Result<()> {
+    // Ignore replay helpers sent from the front‑end
     if content.trim_start().starts_with("{\"restore\":") {
         return Ok(());
     }
@@ -475,6 +483,7 @@ async fn append_chat_message(app: &Arc<AppState>, role: &str, content: &str) -> 
     chat.messages.push(ChatMessage {
         role: role.into(),
         content: content.into(),
+        images,
     });
     fs::write(&path, serde_json::to_vec_pretty(&chat)?).await?;
     Ok(())
@@ -531,8 +540,25 @@ async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
     let mut image_buffer: Vec<image::DynamicImage> = Vec::new();
     // `true` while we are streaming a reply back to the client.
     let mut streaming = false;
+    // Track which chat file this websocket has prepared context for.
+    // When the user switches chats via /api/load_chat, app.current_chat changes;
+    // we must reset local state so conversations don't leak across chats.
+    let mut active_chat_id: Option<String> = {
+        // Whatever chat (if any) was active when the socket was opened.
+        app.current_chat.read().await.clone()
+    };
 
     while let Some(Ok(Message::Text(user_msg))) = socket.next().await {
+        // ----- Detect chat switch -----
+        let cur_chat_id = app.current_chat.read().await.clone();
+        if cur_chat_id != active_chat_id {
+            // A new chat has been selected: wipe the message buffers so
+            // previous conversation state does not bleed into this chat.
+            text_msgs = TextMessages::new();
+            vision_msgs = VisionMessages::new();
+            image_buffer.clear();
+            active_chat_id = cur_chat_id;
+        }
         // Allow client to request a context reset without closing the socket
         if user_msg == CLEAR_CMD {
             if streaming {
@@ -553,29 +579,81 @@ async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
         if user_msg.trim_start().starts_with("{\"restore\":") {
             if let Ok(val) = serde_json::from_str::<Value>(&user_msg) {
                 if let Some(obj) = val.get("restore") {
+                    // Handle restoring saved messages (with optional images)
                     if let (Some(role), Some(content)) = (
                         obj.get("role").and_then(|v| v.as_str()),
                         obj.get("content").and_then(|v| v.as_str()),
                     ) {
-                        // Push into the local context so the model sees the history
+                        let has_images = obj
+                            .get("images")
+                            .and_then(|v| v.as_array())
+                            .map_or(false, |arr| !arr.is_empty());
                         match app.current.read().await.as_deref() {
                             Some(model_name) if app.models.get(model_name).is_some() => {
                                 match app.models.get(model_name).unwrap() {
                                     LoadedModel::Text(_) => {
-                                        let role_enum = if role == "assistant" {
-                                            TextMessageRole::Assistant
-                                        } else {
-                                            TextMessageRole::User
-                                        };
-                                        text_msgs = text_msgs.add_message(role_enum, content);
+                                        // Text-only context
+                                        text_msgs = text_msgs.add_message(
+                                            if role == "assistant" {
+                                                TextMessageRole::Assistant
+                                            } else {
+                                                TextMessageRole::User
+                                            },
+                                            content,
+                                        );
                                     }
-                                    LoadedModel::Vision(_) => {
+                                    LoadedModel::Vision(model) => {
                                         let role_enum = if role == "assistant" {
                                             TextMessageRole::Assistant
                                         } else {
                                             TextMessageRole::User
                                         };
-                                        vision_msgs = vision_msgs.add_message(role_enum, content);
+                                        if has_images {
+                                            // Collect restored images
+                                            let mut imgs_b64 = Vec::new();
+                                            if let Some(arr) =
+                                                obj.get("images").and_then(|v| v.as_array())
+                                            {
+                                                for img_val in arr {
+                                                    if let Some(src) = img_val.as_str() {
+                                                        if let Some(idx) = src.find(',') {
+                                                            let b64_data = &src[idx + 1..];
+                                                            imgs_b64.push(format!(
+                                                                "data:image/png;base64,{}",
+                                                                b64_data
+                                                            ));
+                                                            if let Ok(img_bytes) =
+                                                                BASE64.decode(b64_data.as_bytes())
+                                                            {
+                                                                if let Ok(img) =
+                                                                    image::load_from_memory(
+                                                                        &img_bytes,
+                                                                    )
+                                                                {
+                                                                    image_buffer.push(img);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            // Restore as an image message
+                                            if let Ok(updated) =
+                                                vision_msgs.clone().add_image_message(
+                                                    role_enum,
+                                                    content,
+                                                    image_buffer.clone(),
+                                                    model,
+                                                )
+                                            {
+                                                vision_msgs = updated;
+                                            }
+                                            // Clear buffer after use
+                                            image_buffer.clear();
+                                        } else {
+                                            vision_msgs =
+                                                vision_msgs.add_message(role_enum, content);
+                                        }
                                     }
                                 }
                             }
@@ -606,7 +684,7 @@ async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
         match model_loaded {
             LoadedModel::Text(model) => {
                 text_msgs = text_msgs.add_message(TextMessageRole::User, &user_msg);
-                if let Err(e) = append_chat_message(&app, "user", &user_msg).await {
+                if let Err(e) = append_chat_message(&app, "user", &user_msg, None).await {
                     error!("chat save error: {}", e);
                 }
                 let mut assistant_content = String::new();
@@ -626,13 +704,15 @@ async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 )
                 .await;
                 if !assistant_content.is_empty() {
-                    let _ = append_chat_message(&app, "assistant", &assistant_content).await;
+                    let _ = append_chat_message(&app, "assistant", &assistant_content, None).await;
                 }
                 if let Err(e) = stream_res {
                     error!("stream error: {}", e);
                 }
             }
             LoadedModel::Vision(model) => {
+                // Track the exact set of messages that will be sent *this* turn.
+                let mut msgs_for_stream: Option<VisionMessages> = None;
                 // --- Vision input routing ---
                 if let Ok(val) = serde_json::from_str::<Value>(&user_msg) {
                     // Case 1: pure image payload => buffer it and wait for a prompt
@@ -659,7 +739,8 @@ async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                     } else {
                         // Fallback: treat whole JSON as text
                         vision_msgs = vision_msgs.add_message(TextMessageRole::User, &user_msg);
-                        if let Err(e) = append_chat_message(&app, "user", &user_msg).await {
+                        msgs_for_stream = Some(vision_msgs.clone());
+                        if let Err(e) = append_chat_message(&app, "user", &user_msg, None).await {
                             error!("chat save error: {}", e);
                         }
                     }
@@ -667,7 +748,9 @@ async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                     // Plain-text prompt arrives here
                     if image_buffer.is_empty() {
                         vision_msgs = vision_msgs.add_message(TextMessageRole::User, &user_msg);
-                        if let Err(e) = append_chat_message(&app, "user", &user_msg).await {
+                        // Send the text‑only context to the model
+                        msgs_for_stream = Some(vision_msgs.clone());
+                        if let Err(e) = append_chat_message(&app, "user", &user_msg, None).await {
                             error!("chat save error: {}", e);
                         }
                     } else {
@@ -678,7 +761,35 @@ async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                             &model,
                         ) {
                             Ok(updated) => {
-                                vision_msgs = updated;
+                                // Keep the *text‑only* conversation in our long‑term state,
+                                // but build a one‑off request that includes images.
+                                let temp_msgs = updated;
+                                vision_msgs =
+                                    vision_msgs.add_message(TextMessageRole::User, &user_msg);
+                                msgs_for_stream = Some(temp_msgs.clone());
+                                // ---- persist user message with images ----
+                                let mut imgs_b64 = Vec::new();
+                                for img in &image_buffer {
+                                    let mut buf = Vec::new();
+                                    if img
+                                        .write_to(
+                                            &mut Cursor::new(&mut buf),
+                                            image::ImageFormat::Png,
+                                        )
+                                        .is_ok()
+                                    {
+                                        imgs_b64.push(format!(
+                                            "data:image/png;base64,{}",
+                                            BASE64.encode(&buf)
+                                        ));
+                                    }
+                                }
+                                if let Err(e) =
+                                    append_chat_message(&app, "user", &user_msg, Some(imgs_b64))
+                                        .await
+                                {
+                                    error!("chat save error: {}", e);
+                                }
                                 image_buffer.clear();
                             }
                             Err(e) => {
@@ -689,12 +800,15 @@ async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                     }
                 }
 
-                let msgs_snapshot = vision_msgs.clone();
                 streaming = true;
                 let mut assistant_content = String::new();
+                dbg!(&msgs_for_stream
+                    .as_ref()
+                    .expect("msgs_for_stream must be set")
+                    .messages_ref());
                 let stream_res = stream_and_forward(
                     &model,
-                    msgs_snapshot,
+                    msgs_for_stream.expect("msgs_for_stream must be set"),
                     &mut socket,
                     |tok| {
                         assistant_content = tok.to_string();
@@ -705,7 +819,7 @@ async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 )
                 .await;
                 if !assistant_content.is_empty() {
-                    let _ = append_chat_message(&app, "assistant", &assistant_content).await;
+                    let _ = append_chat_message(&app, "assistant", &assistant_content, None).await;
                 }
                 if let Err(e) = stream_res {
                     error!("stream error: {}", e);

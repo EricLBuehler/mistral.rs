@@ -204,6 +204,11 @@
       border: 1px solid var(--border-color);
       background: var(--chat-bg);
     }
+
+    .chat-images img.chat-preview{
+      max-width: 160px;
+      max-height: 120px;
+    }
     #image-container {
       display: flex;
       flex-wrap: wrap;
@@ -245,7 +250,7 @@
 </head>
 <body>
   <div id="sidebar">
-    <h2>Control panel  </h2>
+    <h2>Control panel</h2>
     <select id="modelSelect"></select>
     <button id="newChatBtn">➕ New chat</button>
     <button id="clearBtn">🗑️ Clear chat</button>
@@ -285,6 +290,11 @@
       const mainArea     = document.getElementById('main');
       const ws           = new WebSocket(`ws://${location.host}/ws`);
 
+      function clearImagePreviews(){
+        const imgContainer = document.getElementById('image-container');
+        if (imgContainer) imgContainer.innerHTML = '';
+      }
+
       // track which chat is currently loaded
       let pendingClear = false;
       let currentChatId = null;
@@ -308,7 +318,7 @@
         // We only escape (3).
         const pattern = /(```[\s\S]*?```|`[^`]*`)/g;
         const escaped = src.split(pattern).map(seg=>{
-          // segments that start with back‑tick are code, keep raw
+          // segments that start with back-tick are code, keep raw
           return seg.startsWith('`') ? seg : escape(seg);
         }).join('');
 
@@ -414,12 +424,50 @@
           updateImageVisibility(models[data.model]);
         }
         log.innerHTML='';
+        clearImagePreviews();
         data.messages.forEach(m=>{
-          append(renderMarkdown(m.content), m.role==='user'?'user':'assistant');
-          if(ws.readyState===WebSocket.OPEN){
-            ws.send(JSON.stringify({restore:m}));
+          // ---- render text ----
+          const div = append(renderMarkdown(m.content),
+                             m.role==='user' ? 'user' : 'assistant');
+
+          // ---- render any saved images ----
+          if (m.images && m.images.length) {
+            const imgWrap = document.createElement('div');
+            imgWrap.className = 'chat-images';
+            imgWrap.style.display   = 'flex';
+            imgWrap.style.flexWrap  = 'wrap';
+            imgWrap.style.gap       = '1rem';
+            m.images.forEach(src=>{
+              const im = document.createElement('img');
+              im.src = src;
+              im.className = 'chat-preview';
+              imgWrap.appendChild(im);
+            });
+            div.appendChild(imgWrap);
+          }
+
+          // ---- replay minimal context to the server, now including images ----
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              restore: {
+                role: m.role,
+                content: m.content,
+                images: m.images || []
+              }
+            }));
           }
         });
+        // Show last user-sent images in the image-container preview
+        const lastUserMsg = data.messages.slice().reverse().find(m => m.role === 'user' && m.images && m.images.length);
+        if (lastUserMsg) {
+          clearImagePreviews();
+          lastUserMsg.images.forEach(src => {
+            const img = document.createElement('img');
+            img.src = src;
+            img.className = 'chat-preview';
+            document.getElementById('image-container').appendChild(img);
+          });
+        }
       }
 
       async function refreshModels(){
@@ -467,6 +515,7 @@
         if(name===prevModel) return;
         if(!maybeClearChat()){ modelSelect.value=prevModel; return; }
         updateImageVisibility(models[name]);
+        clearImagePreviews();
         prevModel=name;
         await selectModel(name);
       });
@@ -482,6 +531,7 @@
         const { id } = await res.json();
         currentChatId = id;
         log.innerHTML = '';
+        clearImagePreviews();
         await refreshChatList();
       });
 
@@ -491,6 +541,7 @@
         pendingClear = true;
         if (ws.readyState === WebSocket.OPEN) ws.send(CLEAR_CMD);
         log.innerHTML='';
+        clearImagePreviews();
       });
 
       renameBtn.addEventListener('click', async () => {
@@ -521,6 +572,7 @@
         if (!res.ok) { alert('Failed to delete chat'); return; }
         currentChatId = null;
         log.innerHTML='';
+        clearImagePreviews();
         await refreshChatList();
         // Move to newest chat if any, otherwise create a fresh one
         const firstLi = chatList.querySelector('li');
