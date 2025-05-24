@@ -553,7 +553,6 @@ impl Engine {
                     toks,
                     offset,
                 }) => {
-                    dbg!(&logical_blocks, &phyiscal_blocks, &toks, offset);
                     self.logger.add_prefix_cache_hit();
 
                     // seq.keep_num_images(images_to_keep);

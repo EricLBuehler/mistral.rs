@@ -252,12 +252,12 @@ impl BlockEngine {
     pub fn allocate(&mut self, seq: &impl BlockEngineSequence) {
         // If there are prefill physical blocks, use those here.
         if let Some(physical_blocks_prefill) = seq.physical_blocks_prefill() {
-            let mut block_table = Vec::new();
-            for physical_idx in physical_blocks_prefill {
-                dbg!(physical_idx);
+            let mut block_table = physical_blocks_prefill.clone();
+            for block in &mut block_table {
+                block.deref_mut().refcount = 1;
             }
-            todo!();
             self.block_tables.insert(seq.get_id(), block_table.clone());
+            dbg!(&self.block_tables);
         } else {
             let mut block_table = Vec::new();
             for _logcical_idx in 0..seq.logical_token_blocks().len() {
