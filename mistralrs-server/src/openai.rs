@@ -14,7 +14,7 @@ pub struct MessageInnerContent(
     #[serde(with = "either::serde_untagged")] pub Either<String, HashMap<String, String>>,
 );
 
-// The impl Deref was preventing the Derive ToSchema and schema macros from
+// The impl Deref was preventing the Derive ToSchema and #[schema] macros from
 // properly working, so manually impl ToSchema
 impl ToSchema<'_> for MessageInnerContent {
     fn schema() -> (&'static str, RefOr<Schema>) {
@@ -32,7 +32,7 @@ impl Deref for MessageInnerContent {
     }
 }
 
-// Since `Either` doesn't implement ToSchema, manually implement one
+// Implement ToSchema manually to handle `Either`
 fn message_inner_content_schema() -> Schema {
     Schema::OneOf(
         OneOfBuilder::new()
@@ -57,7 +57,7 @@ pub struct MessageContent(
     Either<String, Vec<HashMap<String, MessageInnerContent>>>,
 );
 
-// The impl Deref was preventing the Derive ToSchema and schema macros from
+// The impl Deref was preventing the Derive ToSchema and #[schema] macros from
 // properly working, so manually impl ToSchema
 impl ToSchema<'_> for MessageContent {
     fn schema() -> (&'static str, RefOr<Schema>) {
@@ -72,7 +72,7 @@ impl Deref for MessageContent {
     }
 }
 
-// Since `Either` doesn't implement ToSchema, manually implement one
+// Implement ToSchema manually to handle `Either`
 fn message_content_schema() -> Schema {
     Schema::OneOf(
         OneOfBuilder::new()
@@ -161,7 +161,7 @@ pub enum Grammar {
     Lark(String),
 }
 
-// Implement ToSchema manually to handle LlguidanceGrammar
+// Implement ToSchema manually to handle `LlguidanceGrammar`
 impl utoipa::ToSchema<'_> for Grammar {
     fn schema() -> (&'static str, RefOr<Schema>) {
         (
@@ -416,7 +416,7 @@ pub struct ChatCompletionRequest {
     pub enable_thinking: Option<bool>,
 }
 
-// Since `Either` doesn't implement ToSchema, manually implement one
+// Implement ToSchema manually to handle `Either`
 fn messages_schema() -> Schema {
     Schema::OneOf(
         OneOfBuilder::new()
