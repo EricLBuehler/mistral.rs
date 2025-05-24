@@ -283,6 +283,8 @@ impl IsqModel for Mistral3Model {
         let uvb = UnVarBuilder::new();
         uvb.pp("multi_modal_projector")
             .extend(self.mmproj.residual_tensors());
+        uvb.pp("vision_tower")
+            .extend(self.vision_model.residual_tensors());
         uvb.pp("language_model")
             .extend(self.text_model.residual_tensors());
 
