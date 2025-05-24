@@ -570,7 +570,6 @@ impl QuantizeOntoGuard {
         #[cfg(feature = "cuda")]
         {
             let _ = device;
-
             QuantizeOntoDropGuard::Fake
         }
 
@@ -582,6 +581,8 @@ impl QuantizeOntoGuard {
                 dev.flush_command_buffer()
                     .expect("Failed to flush command buffer.");
             }
+            #[cfg(not(feature = "metal"))]
+            let _ = device;
 
             QuantizeOntoDropGuard::Real(self.inner.lock().expect("QuantizeOntoGuard was poisoned!"))
         }
