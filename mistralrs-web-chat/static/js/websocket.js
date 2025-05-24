@@ -35,6 +35,9 @@ function handleWebSocketMessage(ev) {
   }
   
   if (!assistantDiv) {
+    // remove inline spinner when first assistant data arrives
+    const spinner = document.getElementById('spinner');
+    if (spinner) spinner.remove();
     assistantDiv = append('', 'assistant');
   }
   
@@ -58,6 +61,12 @@ function sendMessage() {
   assistantBuf = ''; 
   assistantDiv = null;
   ws.send(msg);
+  // dynamically add spinner in log area
+  const log = document.getElementById('log');
+  const spinnerEl = document.createElement('div');
+  spinnerEl.classList.add('spinner');
+  spinnerEl.id = 'spinner';
+  log.appendChild(spinnerEl);
   input.value = ''; 
   
   // Trigger textarea resize

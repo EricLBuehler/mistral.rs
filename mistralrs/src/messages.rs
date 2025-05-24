@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 /// A type which can be used as a chat request.
 pub trait RequestLike {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>];
+    fn images_ref(&self) -> &[DynamicImage];
     fn take_messages(&mut self) -> RequestMessage;
     fn take_logits_processors(&mut self) -> Option<Vec<Arc<dyn CustomLogitsProcessor>>>;
     fn take_adapters(&mut self) -> Option<Vec<String>>;
@@ -84,6 +85,9 @@ impl TextMessages {
 impl RequestLike for TextMessages {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>] {
         &self.0
+    }
+    fn images_ref(&self) -> &[DynamicImage] {
+        &[]
     }
     fn take_messages(&mut self) -> RequestMessage {
         let mut other = Vec::new();
@@ -204,6 +208,9 @@ impl VisionMessages {
 impl RequestLike for VisionMessages {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>] {
         &self.messages
+    }
+    fn images_ref(&self) -> &[DynamicImage] {
+        &self.images
     }
     fn take_messages(&mut self) -> RequestMessage {
         let mut other_messages = Vec::new();
@@ -521,6 +528,10 @@ impl RequestBuilder {
 impl RequestLike for RequestBuilder {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>] {
         &self.messages
+    }
+
+    fn images_ref(&self) -> &[DynamicImage] {
+        &self.images
     }
 
     fn take_messages(&mut self) -> RequestMessage {
