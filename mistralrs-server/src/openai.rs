@@ -4,12 +4,26 @@ use mistralrs_core::{
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, ops::Deref};
-use utoipa::ToSchema;
+use utoipa::{
+    openapi::{ArrayBuilder, ObjectBuilder, OneOfBuilder, RefOr, Schema, SchemaType},
+    ToSchema,
+};
 
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MessageInnerContent(
     #[serde(with = "either::serde_untagged")] pub Either<String, HashMap<String, String>>,
 );
+
+// The impl Deref was preventing the Derive ToSchema and schema macros from
+// properly working, so manually impl ToSchema
+impl ToSchema<'_> for MessageInnerContent {
+    fn schema() -> (&'static str, RefOr<Schema>) {
+        (
+            "MessageInnerContent",
+            RefOr::T(message_inner_content_schema()),
+        )
+    }
+}
 
 impl Deref for MessageInnerContent {
     type Target = Either<String, HashMap<String, String>>;
@@ -18,11 +32,38 @@ impl Deref for MessageInnerContent {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+// Since `Either` doesn't implement ToSchema, manually implement one
+fn message_inner_content_schema() -> Schema {
+    Schema::OneOf(
+        OneOfBuilder::new()
+            .item(Schema::Object(
+                ObjectBuilder::new().schema_type(SchemaType::String).build(),
+            ))
+            .item(Schema::Object(
+                ObjectBuilder::new()
+                    .schema_type(SchemaType::Object)
+                    .additional_properties(Some(RefOr::T(Schema::Object(
+                        ObjectBuilder::new().schema_type(SchemaType::String).build(),
+                    ))))
+                    .build(),
+            ))
+            .build(),
+    )
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MessageContent(
     #[serde(with = "either::serde_untagged")]
     Either<String, Vec<HashMap<String, MessageInnerContent>>>,
 );
+
+// The impl Deref was preventing the Derive ToSchema and schema macros from
+// properly working, so manually impl ToSchema
+impl ToSchema<'_> for MessageContent {
+    fn schema() -> (&'static str, RefOr<Schema>) {
+        ("MessageContent", RefOr::T(message_content_schema()))
+    }
+}
 
 impl Deref for MessageContent {
     type Target = Either<String, Vec<HashMap<String, MessageInnerContent>>>;
@@ -31,14 +72,37 @@ impl Deref for MessageContent {
     }
 }
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+// Since `Either` doesn't implement ToSchema, manually implement one
+fn message_content_schema() -> Schema {
+    Schema::OneOf(
+        OneOfBuilder::new()
+            .item(Schema::Object(
+                ObjectBuilder::new().schema_type(SchemaType::String).build(),
+            ))
+            .item(Schema::Array(
+                ArrayBuilder::new()
+                    .items(RefOr::T(Schema::Object(
+                        ObjectBuilder::new()
+                            .schema_type(SchemaType::Object)
+                            .additional_properties(Some(RefOr::Ref(
+                                utoipa::openapi::Ref::from_schema_name("MessageInnerContent"),
+                            )))
+                            .build(),
+                    )))
+                    .build(),
+            ))
+            .build(),
+    )
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, ToSchema)]
 pub struct FunctionCalled {
     pub name: String,
     #[serde(alias = "arguments")]
     pub parameters: String,
 }
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, ToSchema)]
 pub struct ToolCall {
     #[serde(rename = "type")]
     pub tp: ToolType,
@@ -116,7 +180,10 @@ pub enum ResponseFormat {
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ChatCompletionRequest {
-    #[schema(example = json!(vec![Message{content:"Why did the crab cross the road?".to_string(), role:"user".to_string(), name: None}]))]
+    #[schema(
+        schema_with = messages_schema,
+        example = json!(vec![Message{content:Some(MessageContent{0: either::Left(("Why did the crab cross the road?".to_string()))}), role:"user".to_string(), name: None, tool_calls: None}])
+    )]
     #[serde(with = "either::serde_untagged")]
     pub messages: Either<Vec<Message>, String>,
     #[schema(example = "mistral")]
@@ -175,6 +242,24 @@ pub struct ChatCompletionRequest {
     pub dry_sequence_breakers: Option<Vec<String>>,
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
+}
+
+// Since `Either` doesn't implement ToSchema, manually implement one
+fn messages_schema() -> Schema {
+    Schema::OneOf(
+        OneOfBuilder::new()
+            .item(Schema::Array(
+                ArrayBuilder::new()
+                    .items(RefOr::Ref(utoipa::openapi::Ref::from_schema_name(
+                        "Message",
+                    )))
+                    .build(),
+            ))
+            .item(Schema::Object(
+                ObjectBuilder::new().schema_type(SchemaType::String).build(),
+            ))
+            .build(),
+    )
 }
 
 #[derive(Debug, Serialize, ToSchema)]

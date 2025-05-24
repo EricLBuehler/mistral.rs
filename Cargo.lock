@@ -193,6 +193,7 @@ checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
 dependencies = [
  "async-trait",
  "axum-core",
+ "base64 0.22.1",
  "bytes",
  "futures-util",
  "http",
@@ -204,6 +205,7 @@ dependencies = [
  "matchit",
  "memchr",
  "mime",
+ "multer",
  "percent-encoding",
  "pin-project-lite",
  "rustversion",
@@ -211,8 +213,10 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_urlencoded",
+ "sha1",
  "sync_wrapper",
  "tokio",
+ "tokio-tungstenite",
  "tower",
  "tower-layer",
  "tower-service",
@@ -238,6 +242,16 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "axum_static"
+version = "1.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d134d2aeabd596bc82e44748f999c9b0e535a7b756cb36c62df0de6d2445d6e"
+dependencies = [
+ "axum",
+ "tower-http 0.5.2",
 ]
 
 [[package]]
@@ -389,7 +403,7 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 [[package]]
 name = "candle-core"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=cb2d8f5#cb2d8f59b4fbe1f69ef998233c40a87033a05b0d"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=34e5753b#34e5753b79ad2ac2300c86e4a4266a8214613c18"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -417,7 +431,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=cb2d8f5#cb2d8f59b4fbe1f69ef998233c40a87033a05b0d"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=34e5753b#34e5753b79ad2ac2300c86e4a4266a8214613c18"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -428,7 +442,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=cb2d8f5#cb2d8f59b4fbe1f69ef998233c40a87033a05b0d"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=34e5753b#34e5753b79ad2ac2300c86e4a4266a8214613c18"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -440,7 +454,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=cb2d8f5#cb2d8f59b4fbe1f69ef998233c40a87033a05b0d"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=34e5753b#34e5753b79ad2ac2300c86e4a4266a8214613c18"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -448,7 +462,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=cb2d8f5#cb2d8f59b4fbe1f69ef998233c40a87033a05b0d"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=34e5753b#34e5753b79ad2ac2300c86e4a4266a8214613c18"
 dependencies = [
  "metal",
  "once_cell",
@@ -459,7 +473,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=cb2d8f5#cb2d8f59b4fbe1f69ef998233c40a87033a05b0d"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=34e5753b#34e5753b79ad2ac2300c86e4a4266a8214613c18"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -511,9 +525,9 @@ dependencies = [
 
 [[package]]
 name = "chrono"
-version = "0.4.40"
+version = "0.4.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a7964611d71df112cb1730f2ee67324fcf4d0fc6606acbbe9bfe06df124637c"
+checksum = "c469d952047f47f91b68d1cba3f10d63c11d73e4636f24f08daf0278abf01c4d"
 dependencies = [
  "android-tzdata",
  "iana-time-zone",
@@ -886,6 +900,12 @@ dependencies = [
  "quote",
  "syn 2.0.100",
 ]
+
+[[package]]
+name = "data-encoding"
+version = "2.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
 
 [[package]]
 name = "data-url"
@@ -1767,6 +1787,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-range-header"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9171a2ea8a68358193d15dd5d70c1c10a2afc3e7e4c5bc92bc9f025cebd7359c"
+
+[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2574,7 +2600,7 @@ dependencies = [
  "tracing-subscriber",
  "urlencoding",
  "utoipa",
- "uuid 1.16.0",
+ "uuid 1.17.0",
  "variantly",
  "vob",
 ]
@@ -2671,7 +2697,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "toml",
- "tower-http",
+ "tower-http 0.5.2",
  "tracing",
  "url",
  "utoipa",
@@ -2685,6 +2711,29 @@ dependencies = [
  "candle-core",
  "image",
  "rayon",
+]
+
+[[package]]
+name = "mistralrs-web-chat"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "axum_static",
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "futures-util",
+ "image",
+ "indexmap",
+ "mistralrs",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http 0.6.4",
+ "tracing",
+ "tracing-subscriber",
+ "uuid 1.17.0",
 ]
 
 [[package]]
@@ -2706,6 +2755,23 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.100",
+]
+
+[[package]]
+name = "multer"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83e87776546dc87511aa5ee218730c92b666d7264ab6ed41f9d215af9cd5224b"
+dependencies = [
+ "bytes",
+ "encoding_rs",
+ "futures-util",
+ "http",
+ "httparse",
+ "memchr",
+ "mime",
+ "spin",
+ "version_check",
 ]
 
 [[package]]
@@ -2917,7 +2983,7 @@ dependencies = [
  "toml",
  "ureq",
  "url",
- "uuid 1.16.0",
+ "uuid 1.17.0",
  "walkdir",
 ]
 
@@ -3205,7 +3271,7 @@ dependencies = [
  "serde",
  "smallvec",
  "unindent",
- "uuid 1.16.0",
+ "uuid 1.17.0",
 ]
 
 [[package]]
@@ -3975,6 +4041,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
+]
+
+[[package]]
 name = "sha2"
 version = "0.10.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4089,6 +4166,12 @@ dependencies = [
  "serde",
  "vob",
 ]
+
+[[package]]
+name = "spin"
+version = "0.9.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 
 [[package]]
 name = "spm_precompiled"
@@ -4507,6 +4590,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-tungstenite"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
+dependencies = [
+ "futures-util",
+ "log",
+ "tokio",
+ "tungstenite",
+]
+
+[[package]]
 name = "tokio-util"
 version = "0.7.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4604,12 +4699,46 @@ checksum = "1e9cd434a998747dd2c4276bc96ee2e0c7a2eadf3cae88e52be55a05fa9053f5"
 dependencies = [
  "bitflags 2.9.0",
  "bytes",
+ "futures-util",
  "http",
  "http-body",
  "http-body-util",
+ "http-range-header",
+ "httpdate",
+ "mime",
+ "mime_guess",
+ "percent-encoding",
  "pin-project-lite",
+ "tokio",
+ "tokio-util",
  "tower-layer",
  "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "tower-http"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fdb0c213ca27a9f57ab69ddb290fd80d970922355b83ae380b395d3986b8a2e"
+dependencies = [
+ "bitflags 2.9.0",
+ "bytes",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-body-util",
+ "http-range-header",
+ "httpdate",
+ "mime",
+ "mime_guess",
+ "percent-encoding",
+ "pin-project-lite",
+ "tokio",
+ "tokio-util",
+ "tower-layer",
+ "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -4702,6 +4831,24 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "tungstenite"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18e5b8366ee7a95b16d32197d0b2604b43a0be89dc5fac9f8e96ccafbaedda8a"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "data-encoding",
+ "http",
+ "httparse",
+ "log",
+ "rand 0.8.5",
+ "sha1",
+ "thiserror 1.0.69",
+ "utf-8",
+]
 
 [[package]]
 name = "typenum"
@@ -4892,11 +5039,13 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.16.0"
+version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "458f7a779bf54acc9f347480ac654f68407d3aab21269a6e3c9f922acd9e2da9"
+checksum = "3cf4199d1e5d15ddd86a694e4d0dffa9c323ce759fea589f00fef9d81cc1931d"
 dependencies = [
  "getrandom 0.3.2",
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]

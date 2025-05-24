@@ -16,8 +16,9 @@ use mistralrs_core::{
     ToolChoice, ToolType, WebSearchOptions, WebSearchUserLocation,
 };
 use openai::{
-    ChatCompletionRequest, CompletionRequest, Grammar, ImageGenerationRequest,
-    JsonSchemaResponseFormat, Message, ModelObjects, ResponseFormat, StopTokens,
+    ChatCompletionRequest, CompletionRequest, FunctionCalled, Grammar, ImageGenerationRequest,
+    JsonSchemaResponseFormat, Message, MessageContent, MessageInnerContent, ModelObjects,
+    ResponseFormat, StopTokens, ToolCall,
 };
 use serde::{Deserialize, Serialize};
 use speech_generation::speech_generation;
@@ -233,25 +234,29 @@ fn get_router(state: Arc<MistralRs>) -> Router {
     #[derive(OpenApi)]
     #[openapi(
         paths(models, health, chatcompletions),
-                components(schemas(
-                ApproximateUserLocation,
-                ChatCompletionRequest,
-                CompletionRequest,
-                Function,
-                Grammar,
-                ImageGenerationRequest,
-                JsonSchemaResponseFormat,
-                Message,
-                ModelObject,
-                ModelObjects,
-                ResponseFormat,
-                SearchContextSize,
-                StopTokens,
-                Tool,
-                ToolChoice,
-                ToolType,
-                WebSearchOptions,
-                WebSearchUserLocation
+        components(schemas(
+            ApproximateUserLocation,
+            ChatCompletionRequest,
+            CompletionRequest,
+            Function,
+            FunctionCalled,
+            Grammar,
+            ImageGenerationRequest,
+            JsonSchemaResponseFormat,
+            Message,
+            MessageContent,
+            MessageInnerContent,
+            ModelObject,
+            ModelObjects,
+            ResponseFormat,
+            SearchContextSize,
+            StopTokens,
+            Tool,
+            ToolCall,
+            ToolChoice,
+            ToolType,
+            WebSearchOptions,
+            WebSearchUserLocation
         )),
         tags(
             (name = "Mistral.rs", description = "Mistral.rs API")
