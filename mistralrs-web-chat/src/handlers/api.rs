@@ -17,6 +17,31 @@ use crate::types::{
     SelectRequest,
 };
 
+fn validate_image_upload(
+    filename: Option<&str>,
+    content_type: Option<&str>,
+) -> Result<String, &'static str> {
+    // Check MIME type first
+    if let Some(mime) = content_type {
+        if !mime.starts_with("image/") {
+            return Err("File must be an image");
+        }
+    }
+
+    // Validate file extension
+    let ext = if let Some(name) = filename {
+        name.rsplit('.').next().unwrap_or("").to_lowercase()
+    } else {
+        return Err("No filename provided");
+    };
+
+    match ext.as_str() {
+        "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "svg" => Ok(ext),
+        "" => Err("No file extension"),
+        _ => Err("Unsupported image format"),
+    }
+}
+
 /// Accepts multipart image upload, stores it under `cache/uploads/`, and returns its URL.
 pub async fn upload_image(
     State(_app): State<Arc<AppState>>,
@@ -24,11 +49,15 @@ pub async fn upload_image(
 ) -> impl IntoResponse {
     // Expect single "image" part
     if let Ok(Some(field)) = multipart.next_field().await {
-        let ext = field
-            .file_name()
-            .and_then(|n| n.rsplit('.').next())
-            .unwrap_or("bin")
-            .to_string();
+        let filename = field.file_name();
+        let content_type = field.content_type();
+
+        let ext = match validate_image_upload(filename, content_type) {
+            Ok(extension) => extension,
+            Err(msg) => {
+                return (StatusCode::BAD_REQUEST, msg).into_response();
+            }
+        };
 
         let data = match field.bytes().await {
             Ok(b) => b,
@@ -43,6 +72,15 @@ pub async fn upload_image(
             }
         };
 
+        const MAX_SIZE: usize = 50 * 1024 * 1024; // 50MB
+        if data.len() > MAX_SIZE {
+            return (StatusCode::BAD_REQUEST, "image too large (limit 50 MB)").into_response();
+        }
+
+        if image::load_from_memory(&data).is_err() {
+            return (StatusCode::BAD_REQUEST, "invalid image file").into_response();
+        }
+
         // Ensure dir exists
         let upload_dir = format!("{}/cache/uploads", env!("CARGO_MANIFEST_DIR"));
         if let Err(e) = tokio::fs::create_dir_all(&upload_dir).await {
@@ -50,7 +88,7 @@ pub async fn upload_image(
             return (StatusCode::INTERNAL_SERVER_ERROR, "server error").into_response();
         }
 
-        // Build unique filename
+        // Build unique filename with validated extension
         let filename = format!("{}.{}", Uuid::new_v4(), ext);
         let path = format!("{}/{}", upload_dir, filename);
 

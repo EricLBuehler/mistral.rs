@@ -9,6 +9,7 @@ use mistralrs::{Model, TextMessageRole, TextMessages, VisionMessages};
 use serde_json::Value;
 use std::io::Cursor;
 use std::mem;
+use std::path::Path;
 use std::sync::Arc;
 use tracing::error;
 
@@ -62,6 +63,35 @@ where
             let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
             Err(e)
         }
+    }
+}
+
+/// Validate that a file path is safe and within the uploads directory
+fn validate_image_path(path: &str) -> Result<String, &'static str> {
+    let uploads_dir = format!("{}/cache/uploads", env!("CARGO_MANIFEST_DIR"));
+    let uploads_path = Path::new(&uploads_dir);
+
+    // Resolve the full path
+    let file_path = Path::new(path);
+
+    // Check if it's an absolute path and starts with our uploads directory
+    if !file_path.is_absolute() {
+        return Err("Path must be absolute");
+    }
+
+    // Normalize and check if the path is within uploads directory
+    match file_path.canonicalize() {
+        Ok(canonical_path) => match uploads_path.canonicalize() {
+            Ok(canonical_uploads) => {
+                if canonical_path.starts_with(canonical_uploads) {
+                    Ok(path.to_string())
+                } else {
+                    Err("Path is outside uploads directory")
+                }
+            }
+            Err(_) => Err("Uploads directory not found"),
+        },
+        Err(_) => Err("Invalid file path"),
     }
 }
 
@@ -306,20 +336,30 @@ async fn handle_vision_model(
     if let Ok(val) = serde_json::from_str::<Value>(user_msg) {
         // Case 1: pure image payload => buffer it and wait for a prompt
         if let Some(url) = val.get("image").and_then(|v| v.as_str()) {
-            // load & decode
-            match tokio::fs::read(url).await {
-                Ok(bytes) => match image::load_from_memory(&bytes) {
-                    Ok(img) => {
-                        image_buffer.push(img);
+            match validate_image_path(url) {
+                Ok(safe_path) => {
+                    // load & decode
+                    match tokio::fs::read(&safe_path).await {
+                        Ok(bytes) => match image::load_from_memory(&bytes) {
+                            Ok(img) => {
+                                image_buffer.push(img);
+                            }
+                            Err(e) => {
+                                error!("image decode error: {}", e);
+                                let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
+                            }
+                        },
+                        Err(e) => {
+                            error!("image read error: {}", e);
+                            let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
+                        }
                     }
-                    Err(e) => {
-                        error!("image decode error: {}", e);
-                        let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
-                    }
-                },
+                }
                 Err(e) => {
-                    error!("image read error: {}", e);
-                    let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
+                    error!("Invalid image path: {}", e);
+                    let _ = socket
+                        .send(Message::Text(format!("Error: Invalid image path - {}", e)))
+                        .await;
                 }
             }
             // Skip sending to model until we get a prompt

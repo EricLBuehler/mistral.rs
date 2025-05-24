@@ -5,6 +5,7 @@ const CLEAR_CMD = "__CLEAR__";
 let ws;
 let assistantBuf = '';
 let assistantDiv = null;
+let currentSpinner = null;
 
 /**
  * Initialize WebSocket connection
@@ -18,6 +19,36 @@ function initWebSocket() {
 }
 
 /**
+ * ✅ IMPROVEMENT: Helper function to manage spinner state
+ */
+function showSpinner() {
+  // Remove existing spinner if any
+  hideSpinner();
+  
+  const log = document.getElementById('log');
+  const spinnerEl = document.createElement('div');
+  spinnerEl.classList.add('spinner');
+  spinnerEl.id = 'spinner';
+  log.appendChild(spinnerEl);
+  currentSpinner = spinnerEl;
+}
+
+/**
+ * ✅ IMPROVEMENT: Helper function to hide spinner
+ */
+function hideSpinner() {
+  if (currentSpinner) {
+    currentSpinner.remove();
+    currentSpinner = null;
+  }
+  // Also clean up any orphaned spinners
+  const existingSpinner = document.getElementById('spinner');
+  if (existingSpinner) {
+    existingSpinner.remove();
+  }
+}
+
+/**
  * Handle incoming WebSocket messages
  */
 function handleWebSocketMessage(ev) {
@@ -25,6 +56,7 @@ function handleWebSocketMessage(ev) {
   
   if (ev.data === '[Context cleared]') { 
     pendingClear = false; 
+    hideSpinner();
     return; 
   }
   
@@ -35,9 +67,7 @@ function handleWebSocketMessage(ev) {
   }
   
   if (!assistantDiv) {
-    // remove inline spinner when first assistant data arrives
-    const spinner = document.getElementById('spinner');
-    if (spinner) spinner.remove();
+    hideSpinner();
     assistantDiv = append('', 'assistant');
   }
   
@@ -57,16 +87,18 @@ function sendMessage() {
   
   if (!msg) return;
   
+  if (ws.readyState !== WebSocket.OPEN) {
+    alert('Connection lost. Please refresh the page.');
+    return;
+  }
+  
   append(renderMarkdown(msg), 'user');
   assistantBuf = ''; 
   assistantDiv = null;
+  
+  showSpinner();
+  
   ws.send(msg);
-  // dynamically add spinner in log area
-  const log = document.getElementById('log');
-  const spinnerEl = document.createElement('div');
-  spinnerEl.classList.add('spinner');
-  spinnerEl.id = 'spinner';
-  log.appendChild(spinnerEl);
   input.value = ''; 
   
   // Trigger textarea resize
@@ -95,5 +127,15 @@ function initMessageSending() {
         ev.preventDefault();
       }
     }
+  });
+  
+  ws.addEventListener('close', () => {
+    hideSpinner();
+    console.warn('WebSocket connection closed');
+  });
+  
+  ws.addEventListener('error', (error) => {
+    hideSpinner();
+    console.error('WebSocket error:', error);
   });
 }
