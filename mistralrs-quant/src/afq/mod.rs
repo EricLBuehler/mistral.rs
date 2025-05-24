@@ -375,7 +375,7 @@ impl QuantizedSerde for AfqLayer {
 
         let has_bias = buffer.read_u8()? != 0;
 
-        let _acquired_load_guard = guard.acquire();
+        let _acquired_load_guard = guard.acquire(device);
         // Weight, scales, biases
         let w_q = deserialize_tensor(&mut buffer, device)?;
         let scales = deserialize_tensor(&mut buffer, device)?;
@@ -425,7 +425,7 @@ impl QuantizedSerde for AfqLayer {
 
         let has_bias = buffer.read_u8()? != 0;
 
-        let _acquired_load_guard = guard.acquire();
+        let _acquired_load_guard = guard.acquire(device);
         // Weight, scales, biases
         let w_q = deserialize_tensor(&mut buffer, device)?;
         let scales = deserialize_tensor(&mut buffer, device)?;

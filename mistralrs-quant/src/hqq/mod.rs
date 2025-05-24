@@ -596,7 +596,7 @@ impl QuantMethod for HqqLayer {
         imatrix_weight: Option<Vec<f32>>,
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        let _acquired_quantize_guard = guard.acquire();
+        let _acquired_quantize_guard = guard.acquire(&device);
         if imatrix_weight.is_some() {
             // TODO just warn?
             candle_core::bail!("HQQ does not support imatrix.");
@@ -745,7 +745,7 @@ impl QuantizedSerde for HqqLayer {
 
         let has_bias = buffer.read_u8()? != 0;
 
-        let _acquired_load_guard = guard.acquire();
+        let _acquired_load_guard = guard.acquire(device);
         let w_q = deserialize_tensor(&mut buffer, device)?;
         let scales = deserialize_tensor(&mut buffer, device)?;
         let zeros = deserialize_tensor(&mut buffer, device)?;
@@ -818,7 +818,7 @@ impl QuantizedSerde for HqqLayer {
 
         let has_bias = buffer.read_u8()? != 0;
 
-        let _acquired_load_guard = guard.acquire();
+        let _acquired_load_guard = guard.acquire(device);
         let w_q = deserialize_tensor(&mut buffer, device)?;
         let scales = deserialize_tensor(&mut buffer, device)?;
         let zeros = deserialize_tensor(&mut buffer, device)?;
