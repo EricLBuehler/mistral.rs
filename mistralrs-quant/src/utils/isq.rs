@@ -108,7 +108,7 @@ macro_rules! generate_isq {
             let initial = candle_core::quantized::QTensor::quantize(&$tensor, dtype)?;
             let data = initial.data()?;
 
-            let _acquired_quantize_guard = $guard.acquire();
+            let _acquired_quantize_guard = $guard.acquire(&$device);
             let qstorage = candle_core::quantized::QStorage::from_data(data, &$device, dtype)?;
 
             Arc::new(candle_core::quantized::QTensor::new(qstorage, $tensor.shape())?)
@@ -141,7 +141,7 @@ macro_rules! generate_isq_imatrix {
             } else {
                 let data = initial.data()?;
 
-                let _acquired_quantize_guard = $guard.acquire();
+                let _acquired_quantize_guard = $guard.acquire(&$device);
                 let qstorage = candle_core::quantized::QStorage::from_data(data, &$device, dtype)?;
 
                 Arc::new(candle_core::quantized::QTensor::new(qstorage, $tensor.shape())?)

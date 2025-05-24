@@ -34,7 +34,8 @@ pub(crate) fn afq_quantize_op(
         };
         let device = w_s.device();
 
-        let command_buffer = device.command_buffer()?;
+        // This is necessary to avoid the errors of "A command encoder is already encoding to this command buffer"
+        let command_buffer = device.new_command_buffer()?;
         command_buffer.set_label("afq-quantize");
 
         let mut wq_shape = w.dims().to_vec();
@@ -67,6 +68,9 @@ pub(crate) fn afq_quantize_op(
             bits,
         )
         .map_err(candle_core::Error::wrap)?;
+
+        // This is necessary to avoid the errors of "A command encoder is already encoding to this command buffer"
+        command_buffer.commit();
 
         let output = from_storage_no_op(
             Storage::Metal(MetalStorage::new(

@@ -540,7 +540,9 @@ pub trait QuantizedSerde {
 /// Used to gate access to quantizing onto the host device
 #[derive(Clone, Debug)]
 #[allow(unused)]
-pub struct QuantizeOntoGuard(Arc<Mutex<()>>);
+pub struct QuantizeOntoGuard {
+    pub inner: Arc<Mutex<()>>,
+}
 
 /// Real (for Metal) and Fake (for CUDA)
 pub enum QuantizeOntoDropGuard<'a> {
@@ -556,18 +558,32 @@ impl Default for QuantizeOntoGuard {
 
 impl QuantizeOntoGuard {
     pub fn new() -> Self {
-        Self(Arc::new(Mutex::new(())))
+        QuantizeOntoGuard {
+            inner: Arc::new(Mutex::new(())),
+        }
     }
 
-    pub fn acquire(&self) -> QuantizeOntoDropGuard<'_> {
+    /// Acquire the quantize drop guard to protect the critical section.
+    ///
+    /// On metal, this flushes the command buffer to avoid "A command encoder is already encoding to this command buffer"
+    pub fn acquire(&self, device: &Device) -> QuantizeOntoDropGuard<'_> {
         #[cfg(feature = "cuda")]
         {
+            let _ = device;
+
             QuantizeOntoDropGuard::Fake
         }
 
         #[cfg(not(feature = "cuda"))]
         {
-            QuantizeOntoDropGuard::Real(self.0.lock().expect("QuantizeOntoGuard was poisoned!"))
+            #[cfg(feature = "metal")]
+            if let Device::Metal(dev) = device {
+                // This is necessary to avoid the errors of "A command encoder is already encoding to this command buffer"
+                dev.flush_command_buffer()
+                    .expect("Failed to flush command buffer.");
+            }
+
+            QuantizeOntoDropGuard::Real(self.inner.lock().expect("QuantizeOntoGuard was poisoned!"))
         }
     }
 }
