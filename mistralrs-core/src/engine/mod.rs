@@ -1,7 +1,6 @@
 use crate::{
     distributed,
     embedding::bert::BertPipeline,
-    paged_attention::BlockEngineSequence,
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
@@ -120,17 +119,20 @@ impl Engine {
             None => None,
         };
 
+        let scheduler = config.into_scheduler();
+
         Ok(Self {
             rx: Arc::new(Mutex::new(rx)),
             pipeline,
             bert_pipeline: Arc::new(Mutex::new(bert_pipeline)),
-            scheduler: config.into_scheduler(),
+            scheduler: scheduler.clone(),
             id: Arc::new(Mutex::new(0)),
             truncate_sequence,
             no_kv_cache,
             prefix_cacher: Arc::new(Mutex::new(PrefixCacheManagerV2::new(
                 prefix_cache_n,
                 no_prefix_cache,
+                scheduler,
             ))),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
@@ -358,12 +360,6 @@ impl Engine {
                             .iter_mut()
                             .map(|seq| seq.lock().unwrap())
                             .collect::<Vec<_>>();
-
-                        if is_prompt {
-                            dbg!(&guards[0].logical_token_blocks());
-                            let block_engine = scheduler.block_engine().unwrap();
-                            dbg!(&block_engine.block_tables[guards[0].id()]);
-                        }
 
                         let mut guards_mut =
                             guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
