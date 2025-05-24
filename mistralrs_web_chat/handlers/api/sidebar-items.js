@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["delete_chat","list_chats","list_models","load_chat","new_chat","rename_chat","select_model","upload_image"]};
