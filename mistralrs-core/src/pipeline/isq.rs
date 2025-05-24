@@ -614,24 +614,42 @@ pub trait IsqModel {
                     .to_string_lossy()
                     .to_string();
 
-                let size_estimate_bytes = quantized_values
-                    .iter()
-                    .map(|(_, x)| x.elem_count() * x.dtype().size_in_bytes())
-                    .sum::<usize>();
-                let n_files = size_estimate_bytes.div_ceil(MAX_UQFF_SIZE_BYTES);
+                // Shard quantized values by cumulative byte size, max MAX_UQFF_SIZE_BYTES per file
+                let mut current_chunk = Vec::new();
+                let mut current_bytes: usize = 0;
+                let mut shard_index = 0;
 
-                if n_files == 1 {
-                    info!("Writing to `{}`", serialized.display());
-                    safetensors::serialize_to_file(quantized_values, &None, serialized)?;
-                } else {
-                    let chunksize = quantized_values.len() / n_files;
-                    let quantized_values_chunks = quantized_values.into_iter().chunks(chunksize);
-                    for (i, chunk) in quantized_values_chunks.into_iter().enumerate() {
-                        let mut name = parent.to_path_buf();
-                        name.push(format!("{file_stem}-{i}.uqff"));
-                        info!("Writing shard {i} to `{}`", name.display());
-                        safetensors::serialize_to_file(chunk, &None, &name)?;
+                // Every 10GB, flush the file. Then save any remaining tensors
+                for (name, tensor) in quantized_values {
+                    let tensor_bytes = tensor.elem_count() * tensor.dtype().size_in_bytes();
+                    if !current_chunk.is_empty()
+                        && current_bytes + tensor_bytes > MAX_UQFF_SIZE_BYTES
+                    {
+                        let mut shard_path = parent.to_path_buf();
+                        shard_path.push(format!("{file_stem}-{shard_index}.uqff"));
+                        info!(
+                            "Writing shard {} to `{}`",
+                            shard_index,
+                            shard_path.display()
+                        );
+                        safetensors::serialize_to_file(current_chunk.clone(), &None, &shard_path)?;
+                        shard_index += 1;
+                        current_chunk.clear();
+                        current_bytes = 0;
                     }
+                    current_bytes += tensor_bytes;
+                    current_chunk.push((name, tensor));
+                }
+
+                if !current_chunk.is_empty() {
+                    let mut shard_path = parent.to_path_buf();
+                    shard_path.push(format!("{file_stem}-{shard_index}.uqff"));
+                    info!(
+                        "Writing final shard {} to `{}`",
+                        shard_index,
+                        shard_path.display()
+                    );
+                    safetensors::serialize_to_file(current_chunk.clone(), &None, &shard_path)?;
                 }
 
                 let residual = match organization {
