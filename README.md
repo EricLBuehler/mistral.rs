@@ -28,7 +28,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     - [Interactive mode](README.md#interactive-mode)
 
 4) Try the **web chat app** for local in-browser conversation (text and vision support):
-    - Quickstart [here](mistralrs-web-chat/README.md#quickstart)
+    - Quickstart [here](mistralrs-web-chat/README.md)
     - Run the server and visit [http://localhost:8080](http://localhost:8080) by default.
 
 <br>
