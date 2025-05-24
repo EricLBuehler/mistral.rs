@@ -9,14 +9,15 @@ use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, initialize_logging,
-    paged_attn_supported, parse_isq_value, BertEmbeddingModel, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder,
-    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request,
-    SchedulerConfig, TokenSource,
+    paged_attn_supported, parse_isq_value, ApproximateUserLocation, BertEmbeddingModel,
+    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Function,
+    Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
+    PagedAttentionConfig, Request, SchedulerConfig, SearchContextSize, TokenSource, Tool,
+    ToolChoice, ToolType, WebSearchOptions, WebSearchUserLocation,
 };
 use openai::{
-    ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, Message, ModelObjects,
-    StopTokens,
+    ChatCompletionRequest, CompletionRequest, Grammar, ImageGenerationRequest,
+    JsonSchemaResponseFormat, Message, ModelObjects, ResponseFormat, StopTokens,
 };
 use serde::{Deserialize, Serialize};
 use speech_generation::speech_generation;
@@ -232,8 +233,26 @@ fn get_router(state: Arc<MistralRs>) -> Router {
     #[derive(OpenApi)]
     #[openapi(
         paths(models, health, chatcompletions),
-        components(
-            schemas(ModelObjects, ModelObject, ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, StopTokens, Message)),
+                components(schemas(
+                ApproximateUserLocation,
+                ChatCompletionRequest,
+                CompletionRequest,
+                Function,
+                Grammar,
+                ImageGenerationRequest,
+                JsonSchemaResponseFormat,
+                Message,
+                ModelObject,
+                ModelObjects,
+                ResponseFormat,
+                SearchContextSize,
+                StopTokens,
+                Tool,
+                ToolChoice,
+                ToolType,
+                WebSearchOptions,
+                WebSearchUserLocation
+        )),
         tags(
             (name = "Mistral.rs", description = "Mistral.rs API")
         ),
