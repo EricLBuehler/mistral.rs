@@ -2,6 +2,8 @@
 
 A minimal, fast, and modern web chat interface for [mistral.rs](https://github.com/EricBuehler/mistral.rs), supporting both text and vision models with drag-and-drop image upload, markdown rendering, and multi-model selection.
 
+<img src="../res/chat.gif" alt="Demonstration" />
+
 ---
 
 ## Features
