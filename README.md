@@ -34,7 +34,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 ---
 **Llama 3.2 3B running on an M3 Max with 8-bit ISQ:**
 
-<img src="./demo.gif" alt="Interactive demo" />
+<img src="./res/demo.gif" alt="Interactive demo" />
 
 ---
 

@@ -587,7 +587,7 @@ async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                         let has_images = obj
                             .get("images")
                             .and_then(|v| v.as_array())
-                            .map_or(false, |arr| !arr.is_empty());
+                            .is_some_and(|arr| !arr.is_empty());
                         match app.current.read().await.as_deref() {
                             Some(model_name) if app.models.get(model_name).is_some() => {
                                 match app.models.get(model_name).unwrap() {
