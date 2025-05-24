@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    hash::{DefaultHasher, Hash, Hasher},
+    sync::Arc,
+};
 
 use candle_core::{Device, Result};
 use indexmap::IndexMap;
@@ -40,6 +43,7 @@ struct CacheElement {
 
 pub struct PrefixCacheManagerV2 {
     caches: IndexMap<Tokens, CacheElement>,
+    block_caches: IndexMap<Vec<u64>, Vec<usize>>,
     n_on_device: usize,
     no_prefix_cache: bool,
     block_engine: Option<Arc<tokio::sync::Mutex<BlockEngine>>>,
@@ -64,6 +68,7 @@ impl PrefixCacheManagerV2 {
         }
         PrefixCacheManagerV2 {
             caches: IndexMap::new(),
+            block_caches: IndexMap::new(),
             n_on_device,
             no_prefix_cache,
             block_engine,
@@ -78,20 +83,42 @@ impl PrefixCacheManagerV2 {
         }
 
         if let Some(block_engine) = &self.block_engine {
-            dbg!(&seq.logical_token_blocks());
+            let logical_token_blocks = seq.logical_token_blocks();
             let block_engine = get_mut_arcmutex!(block_engine);
-            dbg!(&block_engine.block_tables[seq.id()]);
+            let block_table = &block_engine.block_tables[seq.id()];
+
+            let hashed_logical_blocks = logical_token_blocks
+                .iter()
+                .map(|block| {
+                    let mut hasher = DefaultHasher::new();
+                    block.hash(&mut hasher);
+                    hasher.finish()
+                })
+                .collect::<Vec<_>>();
+
+            let physical_block_ids = block_table
+                .iter()
+                .map(|block| {
+                    block.deref_mut().block_id += 1;
+                    get_mut_arcmutex!(block.0).block_id
+                })
+                .collect::<Vec<_>>();
+
+            self.block_caches
+                .insert(hashed_logical_blocks, physical_block_ids);
+            dbg!(&self.block_caches);
+            dbg!(block_engine.block_size());
+        } else {
+            let cache = seq.normal_cache().to_vec();
+
+            self.caches.insert(
+                seq.get_toks().to_vec().into(),
+                CacheElement {
+                    cache,
+                    image_hashes: seq.image_hashes().map(|x| x.to_vec()),
+                },
+            );
         }
-
-        let cache = seq.normal_cache().to_vec();
-
-        self.caches.insert(
-            seq.get_toks().to_vec().into(),
-            CacheElement {
-                cache,
-                image_hashes: seq.image_hashes().map(|x| x.to_vec()),
-            },
-        );
     }
 
     /// Evict the caches. This will evict the first k seqs such that the number of sequences on device after the copy is

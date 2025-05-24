@@ -45,6 +45,12 @@ impl LogicalTokenBlock {
     }
 }
 
+impl Hash for LogicalTokenBlock {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.tokens.hash(state);
+    }
+}
+
 #[derive(Hash, PartialEq, Eq)]
 pub struct _PhysicalTokenBlock {
     pub block_id: usize,
@@ -202,6 +208,7 @@ type SeqID = usize;
 /// These new tokens will be added to the logical token block for each sequence.
 pub struct BlockEngine {
     num_gpu_blocks: usize,
+    block_size: usize,
     gpu_allocator: Allocator<GPUAllocator>,
     cpu_allocator: Allocator<CPUAllocator>,
     pub block_tables: HashMap<SeqID, BlockTable>,
@@ -214,10 +221,15 @@ impl BlockEngine {
     pub fn new(block_size: usize, num_gpu_blocks: usize, num_cpu_blocks: usize) -> Self {
         Self {
             num_gpu_blocks,
+            block_size,
             gpu_allocator: Allocator::<GPUAllocator>::new(block_size, num_gpu_blocks),
             cpu_allocator: Allocator::<CPUAllocator>::new(block_size, num_cpu_blocks),
             block_tables: HashMap::new(),
         }
+    }
+
+    pub fn block_size(&self) -> usize {
+        self.block_size
     }
 
     pub fn can_allocate(&self, seq: &impl BlockEngineSequence) -> AllocStatus {
