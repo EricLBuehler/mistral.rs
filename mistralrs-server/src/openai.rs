@@ -148,7 +148,7 @@ fn default_response_format() -> ImageGenerationResponseFormat {
     ImageGenerationResponseFormat::Url
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", content = "value")]
 pub enum Grammar {
     #[serde(rename = "regex")]
@@ -159,6 +159,178 @@ pub enum Grammar {
     Llguidance(LlguidanceGrammar),
     #[serde(rename = "lark")]
     Lark(String),
+}
+
+// Implement ToSchema manually to handle LlguidanceGrammar
+impl utoipa::ToSchema<'_> for Grammar {
+    fn schema() -> (&'static str, RefOr<Schema>) {
+        (
+            "Grammar",
+            RefOr::T(Schema::OneOf(
+                OneOfBuilder::new()
+                    .item(Schema::Object(
+                        ObjectBuilder::new()
+                            .schema_type(SchemaType::Object)
+                            .property(
+                                "type",
+                                RefOr::T(Schema::Object(
+                                    ObjectBuilder::new()
+                                        .schema_type(SchemaType::String)
+                                        .enum_values(Some(vec![serde_json::Value::String(
+                                            "regex".to_string(),
+                                        )]))
+                                        .build(),
+                                )),
+                            )
+                            .property(
+                                "value",
+                                RefOr::T(Schema::Object(
+                                    ObjectBuilder::new().schema_type(SchemaType::String).build(),
+                                )),
+                            )
+                            .required("type")
+                            .required("value")
+                            .build(),
+                    ))
+                    .item(Schema::Object(
+                        ObjectBuilder::new()
+                            .schema_type(SchemaType::Object)
+                            .property(
+                                "type",
+                                RefOr::T(Schema::Object(
+                                    ObjectBuilder::new()
+                                        .schema_type(SchemaType::String)
+                                        .enum_values(Some(vec![serde_json::Value::String(
+                                            "json_schema".to_string(),
+                                        )]))
+                                        .build(),
+                                )),
+                            )
+                            .property(
+                                "value",
+                                RefOr::T(Schema::Object(
+                                    ObjectBuilder::new().schema_type(SchemaType::Object).build(),
+                                )),
+                            )
+                            .required("type")
+                            .required("value")
+                            .build(),
+                    ))
+                    .item(Schema::Object(
+                        ObjectBuilder::new()
+                            .schema_type(SchemaType::Object)
+                            .property(
+                                "type",
+                                RefOr::T(Schema::Object(
+                                    ObjectBuilder::new()
+                                        .schema_type(SchemaType::String)
+                                        .enum_values(Some(vec![serde_json::Value::String(
+                                            "llguidance".to_string(),
+                                        )]))
+                                        .build(),
+                                )),
+                            )
+                            .property("value", RefOr::T(llguidance_schema()))
+                            .required("type")
+                            .required("value")
+                            .build(),
+                    ))
+                    .item(Schema::Object(
+                        ObjectBuilder::new()
+                            .schema_type(SchemaType::Object)
+                            .property(
+                                "type",
+                                RefOr::T(Schema::Object(
+                                    ObjectBuilder::new()
+                                        .schema_type(SchemaType::String)
+                                        .enum_values(Some(vec![serde_json::Value::String(
+                                            "lark".to_string(),
+                                        )]))
+                                        .build(),
+                                )),
+                            )
+                            .property(
+                                "value",
+                                RefOr::T(Schema::Object(
+                                    ObjectBuilder::new().schema_type(SchemaType::String).build(),
+                                )),
+                            )
+                            .required("type")
+                            .required("value")
+                            .build(),
+                    ))
+                    .build(),
+            )),
+        )
+    }
+}
+
+fn llguidance_schema() -> Schema {
+    let grammar_with_lexer_schema = Schema::Object(
+        ObjectBuilder::new()
+            .schema_type(SchemaType::Object)
+            .property(
+                "name",
+                RefOr::T(Schema::Object(
+                    ObjectBuilder::new()
+                        .schema_type(SchemaType::String)
+                        .nullable(true)
+                        .description(Some(
+                            "The name of this grammar, can be used in GenGrammar nodes",
+                        ))
+                        .build(),
+                )),
+            )
+            .property(
+                "json_schema",
+                RefOr::T(Schema::Object(
+                    ObjectBuilder::new()
+                        .schema_type(SchemaType::Object)
+                        .nullable(true)
+                        .description(Some("The JSON schema that the grammar should generate"))
+                        .build(),
+                )),
+            )
+            .property(
+                "lark_grammar",
+                RefOr::T(Schema::Object(
+                    ObjectBuilder::new()
+                        .schema_type(SchemaType::String)
+                        .nullable(true)
+                        .description(Some("The Lark grammar that the grammar should generate"))
+                        .build(),
+                )),
+            )
+            .description(Some("Grammar configuration with lexer settings"))
+            .build(),
+    );
+
+    Schema::Object(
+        ObjectBuilder::new()
+            .schema_type(SchemaType::Object)
+            .property(
+                "grammars",
+                RefOr::T(Schema::Array(
+                    ArrayBuilder::new()
+                        .items(RefOr::T(grammar_with_lexer_schema))
+                        .description(Some("List of grammar configurations"))
+                        .build(),
+                )),
+            )
+            .property(
+                "max_tokens",
+                RefOr::T(Schema::Object(
+                    ObjectBuilder::new()
+                        .schema_type(SchemaType::Integer)
+                        .nullable(true)
+                        .description(Some("Maximum number of tokens to generate"))
+                        .build(),
+                )),
+            )
+            .required("grammars")
+            .description(Some("Top-level grammar configuration for LLGuidance"))
+            .build(),
+    )
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
