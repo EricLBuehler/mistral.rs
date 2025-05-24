@@ -8,7 +8,7 @@ use std::{
 
 use super::block_engine_sequence::BlockEngineSequence;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LogicalTokenBlock {
     tokens: Vec<usize>,
     block_size: usize,
@@ -22,6 +22,10 @@ impl LogicalTokenBlock {
             block_size,
             num_tokens: 0,
         }
+    }
+
+    pub fn num_tokens(&self) -> usize {
+        self.num_tokens
     }
 
     pub fn is_full(&self) -> bool {
@@ -246,11 +250,21 @@ impl BlockEngine {
     }
 
     pub fn allocate(&mut self, seq: &impl BlockEngineSequence) {
-        let mut block_table = Vec::new();
-        for _logcical_idx in 0..seq.logical_token_blocks().len() {
-            block_table.push(self.gpu_allocator.allocate());
+        // If there are prefill physical blocks, use those here.
+        if let Some(physical_blocks_prefill) = seq.physical_blocks_prefill() {
+            let mut block_table = Vec::new();
+            for physical_idx in physical_blocks_prefill {
+                dbg!(physical_idx);
+            }
+            todo!();
+            self.block_tables.insert(seq.get_id(), block_table.clone());
+        } else {
+            let mut block_table = Vec::new();
+            for _logcical_idx in 0..seq.logical_token_blocks().len() {
+                block_table.push(self.gpu_allocator.allocate());
+            }
+            self.block_tables.insert(seq.get_id(), block_table.clone());
         }
-        self.block_tables.insert(seq.get_id(), block_table.clone());
     }
 
     pub fn can_append_token_to_seq(&self, seq: &impl BlockEngineSequence) -> bool {

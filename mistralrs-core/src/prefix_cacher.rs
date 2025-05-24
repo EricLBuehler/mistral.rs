@@ -10,10 +10,21 @@ use tracing::info;
 
 use crate::{
     get_mut_arcmutex,
-    paged_attention::{BlockEngine, BlockEngineSequence},
+    paged_attention::{BlockEngine, BlockEngineSequence, LogicalTokenBlock},
     pipeline::KvCache,
-    sequence::Sequence,
+    sequence::{self, Sequence},
 };
+
+fn hash_logical_blocks(logical_blocks: &[LogicalTokenBlock]) -> Vec<u64> {
+    logical_blocks
+        .iter()
+        .map(|block| {
+            let mut hasher = DefaultHasher::new();
+            block.hash(&mut hasher);
+            hasher.finish()
+        })
+        .collect::<Vec<_>>()
+}
 
 #[derive(PartialEq, Eq, Debug, Hash)]
 struct Tokens(Vec<u32>);
@@ -43,18 +54,26 @@ struct CacheElement {
 
 pub struct PrefixCacheManagerV2 {
     caches: IndexMap<Tokens, CacheElement>,
-    block_caches: IndexMap<Vec<u64>, Vec<usize>>,
+    block_caches: IndexMap<Vec<u64>, (Vec<LogicalTokenBlock>, Vec<usize>)>, // (hashed logical blocks) => (logical blocks, hashed physical blocks)
     n_on_device: usize,
     no_prefix_cache: bool,
     block_engine: Option<Arc<tokio::sync::Mutex<BlockEngine>>>,
 }
 
 #[derive(Clone)]
-pub struct MatchingCache {
-    pub normal: Vec<Option<KvCache>>,
-    pub images_to_keep: usize,
-    pub toks: Vec<u32>,
-    pub offset: usize,
+pub enum MatchingCache {
+    Normal {
+        normal: Vec<Option<KvCache>>,
+        images_to_keep: usize,
+        toks: Vec<u32>,
+        offset: usize,
+    },
+    Paged {
+        logical_blocks: Vec<LogicalTokenBlock>,
+        phyiscal_blocks: Vec<usize>,
+        toks: Vec<u32>,
+        offset: usize,
+    },
 }
 
 impl PrefixCacheManagerV2 {
@@ -87,14 +106,7 @@ impl PrefixCacheManagerV2 {
             let block_engine = get_mut_arcmutex!(block_engine);
             let block_table = &block_engine.block_tables[seq.id()];
 
-            let hashed_logical_blocks = logical_token_blocks
-                .iter()
-                .map(|block| {
-                    let mut hasher = DefaultHasher::new();
-                    block.hash(&mut hasher);
-                    hasher.finish()
-                })
-                .collect::<Vec<_>>();
+            let hashed_logical_blocks = hash_logical_blocks(&logical_token_blocks);
 
             let physical_block_ids = block_table
                 .iter()
@@ -104,10 +116,10 @@ impl PrefixCacheManagerV2 {
                 })
                 .collect::<Vec<_>>();
 
-            self.block_caches
-                .insert(hashed_logical_blocks, physical_block_ids);
-            dbg!(&self.block_caches);
-            dbg!(block_engine.block_size());
+            self.block_caches.insert(
+                hashed_logical_blocks,
+                (logical_token_blocks.to_vec(), physical_block_ids),
+            );
         } else {
             let cache = seq.normal_cache().to_vec();
 
@@ -197,6 +209,50 @@ impl PrefixCacheManagerV2 {
             return Ok(None);
         }
 
+        if let Some(block_engine) = &self.block_engine {
+            let block_engine = get_mut_arcmutex!(block_engine);
+            let block_size = block_engine.block_size();
+            let mut test_logical_blocks = Vec::new();
+            for tok in toks {
+                sequence::util_append_token_to_blocks(
+                    *tok as usize,
+                    &mut test_logical_blocks,
+                    block_size,
+                );
+            }
+            let hashed_logical_blocks = hash_logical_blocks(&test_logical_blocks);
+
+            let mut best_match: Option<(usize, &[LogicalTokenBlock], &[usize])> = None;
+            for (logical, (logical_blocks, physical_hash)) in &self.block_caches {
+                let logical_matches_until = logical
+                    .iter()
+                    .zip(&hashed_logical_blocks)
+                    .take_while(|(a, b)| **a == **b)
+                    .count();
+                let matched_len: usize = logical_blocks[..logical_matches_until]
+                    .iter()
+                    .map(|block| block.num_tokens())
+                    .sum();
+
+                if best_match.is_some_and(|(best_match_len, _, _)| best_match_len < matched_len)
+                    || best_match.is_none()
+                {
+                    best_match = Some((matched_len, logical_blocks, physical_hash))
+                }
+            }
+
+            let Some((match_len, logical_blocks, physical_blocks)) = best_match else {
+                return Ok(None);
+            };
+
+            return Ok(Some(MatchingCache::Paged {
+                logical_blocks: logical_blocks.to_vec(),
+                phyiscal_blocks: physical_blocks.to_vec(),
+                toks: toks[match_len..].to_vec(),
+                offset: match_len,
+            }));
+        }
+
         let toks = Tokens(toks.to_vec());
 
         let mut best_match: Option<(usize, &CacheElement, usize)> = None;
@@ -240,7 +296,7 @@ impl PrefixCacheManagerV2 {
                     return Ok(None);
                 }
             }
-            return Ok(Some(MatchingCache {
+            return Ok(Some(MatchingCache::Normal {
                 normal: cache.cache,
                 images_to_keep,
                 toks: toks.0[match_len..].to_vec(),
