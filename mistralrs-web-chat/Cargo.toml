@@ -29,6 +29,7 @@ image.workspace = true
 clap = { workspace = true, features = ["derive"] }
 indexmap.workspace = true
 chrono = "0.4.41"
+base64.workspace = true
 
 [features]
 cuda = ["mistralrs/cuda"]
