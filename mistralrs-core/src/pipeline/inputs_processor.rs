@@ -210,23 +210,19 @@ pub mod text_models_inputs_processor {
                     .collect::<Vec<_>>();
 
                 let start_idx = if let Some(sliding_window) = paged_attn_metadata.sliding_window {
-                    if prompt_len > sliding_window {
-                        chunk_offset_toks.min(prompt_len - sliding_window)
-                    } else {
-                        chunk_offset_toks
-                    }
+                    prompt_len.saturating_sub(sliding_window)
                 } else {
-                    chunk_offset_toks
+                    0
                 };
 
                 let mut slot_mapping = Vec::new();
                 let mut ctxt_len = Vec::new();
-                for i in chunk_offset_toks..prompt_len + chunk_offset_toks {
+                for i in 0..prompt_len {
                     if i < start_idx {
                         // Pad [0,start_idx) with _PAD_TOKEN_ID
                         slot_mapping.push(_PAD_SLOT_ID);
                     }
-                    ctxt_len.push(i);
+                    ctxt_len.push(i + chunk_offset_toks);
 
                     let block_number = if i / paged_attn_metadata.block_size >= table.len() {
                         panic!(
@@ -248,6 +244,9 @@ pub mod text_models_inputs_processor {
             }
         }
 
+        println!("slot_mappings {slot_mappings:?}");
+        println!("paged_attn_context_lens {paged_attn_context_lens:?}");
+        println!("block_tables {block_tables:?}");
         let max_q = *seqlens_q.iter().max().unwrap();
         let max_k = *seqlens_k.iter().max().unwrap();
         let seqlens_q = Tensor::new(seqlens_q, device)?
@@ -384,14 +383,15 @@ pub mod text_models_inputs_processor {
                     .map(|block| block.deref_mut().block_id)
                     .collect::<Vec<_>>();
 
-                let block_number = if start_pos / paged_attn_metadata.block_size >= table.len() {
-                    panic!("Block table is too small (completion)! start_pos={} block_size={} table_len={}", start_pos, paged_attn_metadata.block_size, table.len());
+                let block_pos = start_pos - seq.token_offset();
+                let block_number = if block_pos / paged_attn_metadata.block_size >= table.len() {
+                    panic!("Block table is too small (completion)! start_pos={} block_size={} table_len={}", block_pos, paged_attn_metadata.block_size, table.len());
                 } else {
                     table
-                        .get(start_pos / paged_attn_metadata.block_size)
+                        .get(block_pos / paged_attn_metadata.block_size)
                         .unwrap()
                 };
-                let block_offset = start_pos % paged_attn_metadata.block_size;
+                let block_offset = block_pos % paged_attn_metadata.block_size;
                 let slot = block_number * paged_attn_metadata.block_size + block_offset;
                 let slot = slot.try_into().unwrap();
                 slot_mappings.push(vec![slot]);
@@ -560,11 +560,6 @@ pub mod text_models_inputs_processor {
             Box::new(outputs.into_iter())
         } else {
             let offset = input_seqs[0].token_offset();
-            if offset != 0 && paged_attn_metadata.is_some() {
-                return Box::new(std::iter::once(Err(anyhow::Error::msg(
-                    "PagedAttention does not yet support sequences with an offset != 0.",
-                ))));
-            }
             Box::new(std::iter::once(
                 make_prompt_chunk(
                     offset,

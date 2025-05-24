@@ -237,10 +237,17 @@ impl PrefixCacheManagerV2 {
             let Some((match_len, logical_blocks, physical_blocks)) = best_match else {
                 return Ok(None);
             };
+            dbg!(match_len);
+            let mut logical_blocks = logical_blocks[..2].to_vec();
+            if logical_blocks.last().unwrap().is_full() {
+                logical_blocks.push(LogicalTokenBlock::new(
+                    logical_blocks.last().unwrap().block_size(),
+                ));
+            }
 
             return Ok(Some(MatchingCache::Paged {
-                logical_blocks: logical_blocks.to_vec(),
-                phyiscal_blocks: physical_blocks.to_vec(),
+                logical_blocks,
+                phyiscal_blocks: physical_blocks[..2].to_vec(),
                 toks: toks[match_len..].to_vec(),
                 offset: match_len,
             }));

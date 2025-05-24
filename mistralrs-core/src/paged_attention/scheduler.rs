@@ -107,8 +107,8 @@ impl PagedAttentionScheduler {
                 }
                 if !did_ignore {
                     get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
-                    let seq_handle = get_mut_arcmutex!(seq);
-                    self._allocate(&seq_handle);
+                    let mut seq_handle = get_mut_arcmutex!(seq);
+                    self._allocate(&mut seq_handle);
                 }
 
                 let seq = self.waiting.pop_front().unwrap();
@@ -340,7 +340,7 @@ impl PagedAttentionScheduler {
         self.swapped_out.push_back(seq);
     }
 
-    fn _allocate(&mut self, seq: &Sequence) {
+    fn _allocate(&mut self, seq: &mut Sequence) {
         get_mut_arcmutex!(self.block_engine).allocate(seq)
     }
 

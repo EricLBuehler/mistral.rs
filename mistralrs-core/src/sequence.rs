@@ -379,14 +379,14 @@ impl BlockEngineSequence for Sequence {
         }
     }
 
-    fn physical_blocks_prefill(&self) -> &Option<Vec<Arc<PhysicalTokenBlock>>> {
-        match &self.custom_metadata {
+    fn take_physical_blocks_prefill(&mut self) -> Option<Vec<Arc<PhysicalTokenBlock>>> {
+        match &mut self.custom_metadata {
             SequenceCustomMetadata::PagedAttention {
                 logical_token_blocks: _,
                 physical_blocks_prefill,
                 block_size: _,
-            } => physical_blocks_prefill,
-            SequenceCustomMetadata::None => &None,
+            } => physical_blocks_prefill.take(),
+            SequenceCustomMetadata::None => None,
         }
     }
 }

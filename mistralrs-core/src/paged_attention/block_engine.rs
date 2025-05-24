@@ -24,6 +24,10 @@ impl LogicalTokenBlock {
         }
     }
 
+    pub fn block_size(&self) -> usize {
+        self.block_size
+    }
+
     pub fn num_tokens(&self) -> usize {
         self.num_tokens
     }
@@ -249,9 +253,9 @@ impl BlockEngine {
         }
     }
 
-    pub fn allocate(&mut self, seq: &impl BlockEngineSequence) {
+    pub fn allocate(&mut self, seq: &mut impl BlockEngineSequence) {
         // If there are prefill physical blocks, use those here.
-        if let Some(physical_blocks_prefill) = seq.physical_blocks_prefill() {
+        if let Some(physical_blocks_prefill) = seq.take_physical_blocks_prefill() {
             let mut block_table = physical_blocks_prefill.clone();
             for block in &mut block_table {
                 block.deref_mut().refcount = 1;
