@@ -40,7 +40,7 @@ pub trait InputsProcessor {
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
-        paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
+        paged_attn_metadata: Option<PagedAttentionMeta>,
         prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>>;
@@ -59,6 +59,7 @@ pub mod text_models_inputs_processor {
 
     use crate::{
         device_map::DeviceMapper,
+        get_mut_arcmutex,
         paged_attention::{BlockEngine, _PAD_SLOT_ID},
         sequence::Sequence,
     };
@@ -81,10 +82,10 @@ pub mod text_models_inputs_processor {
         Tensor::cat(&padded_x[..], 0).map_err(anyhow::Error::msg)
     }
 
-    pub struct PagedAttentionMeta<'a> {
+    pub struct PagedAttentionMeta {
         pub sliding_window: Option<usize>,
         pub block_size: usize,
-        pub block_engine: &'a mut BlockEngine,
+        pub block_engine: Arc<tokio::sync::Mutex<BlockEngine>>,
     }
 
     #[derive(Clone, Debug)]
@@ -143,7 +144,7 @@ pub mod text_models_inputs_processor {
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
-        mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Result<InputMetadata> {
         let max_len = toks
@@ -194,7 +195,8 @@ pub mod text_models_inputs_processor {
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
 
             if let Some(paged_attn_metadata) = &mut paged_attn_metadata {
-                let table = paged_attn_metadata.block_engine.block_tables.get(seq_id);
+                let block_engine = get_mut_arcmutex!(paged_attn_metadata.block_engine);
+                let table = block_engine.block_tables.get(seq_id);
 
                 if table.is_none() {
                     // Will be None during profiling.
@@ -347,7 +349,7 @@ pub mod text_models_inputs_processor {
         toks: Vec<&[T]>,
         input_seqs: &[&mut Sequence],
         device: &Device,
-        mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Result<InputMetadata> {
         // Pad each sequence by the padding token to the max len.
@@ -374,11 +376,8 @@ pub mod text_models_inputs_processor {
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
 
             if let Some(paged_attn_metadata) = &mut paged_attn_metadata {
-                let table = paged_attn_metadata
-                    .block_engine
-                    .block_tables
-                    .get(seq.id())
-                    .unwrap();
+                let block_engine = get_mut_arcmutex!(paged_attn_metadata.block_engine);
+                let table = block_engine.block_tables.get(seq.id()).unwrap();
 
                 let table = table
                     .iter()
@@ -514,7 +513,7 @@ pub mod text_models_inputs_processor {
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
-        paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+        paged_attn_metadata: Option<&mut PagedAttentionMeta>,
         prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = Result<InnerInputProcessorOutput>>> {
@@ -593,7 +592,7 @@ pub mod text_models_inputs_processor {
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
-        paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+        paged_attn_metadata: Option<&mut PagedAttentionMeta>,
         prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = Result<InnerInputProcessorOutput>>> {
@@ -647,7 +646,7 @@ pub mod text_models_inputs_processor {
             last_n_context_len: Option<(usize, usize)>,
             return_raw_logits: bool,
             _: Option<Arc<dyn Any>>,
-            mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
+            mut paged_attn_metadata: Option<PagedAttentionMeta>,
             prompt_chunksize: Option<NonZeroUsize>,
             mapper: Option<&dyn DeviceMapper>,
         ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>> {

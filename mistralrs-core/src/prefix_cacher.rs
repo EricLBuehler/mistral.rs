@@ -1,15 +1,9 @@
-use std::sync::Arc;
-
 use candle_core::{Device, Result};
 use indexmap::IndexMap;
 use itertools::Itertools;
-use tokio::sync::Mutex;
 use tracing::info;
 
-use crate::{
-    get_mut_arcmutex, paged_attention::BlockEngineSequence, pipeline::KvCache,
-    scheduler::Scheduler, sequence::Sequence,
-};
+use crate::{paged_attention::BlockEngineSequence, pipeline::KvCache, sequence::Sequence};
 
 #[derive(PartialEq, Eq, Debug, Hash)]
 struct Tokens(Vec<u32>);
@@ -41,7 +35,6 @@ pub struct PrefixCacheManagerV2 {
     caches: IndexMap<Tokens, CacheElement>,
     n_on_device: usize,
     no_prefix_cache: bool,
-    scheduler: Arc<Mutex<dyn Scheduler>>,
 }
 
 #[derive(Clone)]
@@ -53,11 +46,7 @@ pub struct MatchingCache {
 }
 
 impl PrefixCacheManagerV2 {
-    pub fn new(
-        n_on_device: usize,
-        no_prefix_cache: bool,
-        scheduler: Arc<Mutex<dyn Scheduler>>,
-    ) -> Self {
+    pub fn new(n_on_device: usize, no_prefix_cache: bool) -> Self {
         if !no_prefix_cache {
             info!("PrefixCacherV2 is enabled. Expect higher multi-turn throughput for both text and multimodal.");
         }
@@ -65,7 +54,6 @@ impl PrefixCacheManagerV2 {
             caches: IndexMap::new(),
             n_on_device,
             no_prefix_cache,
-            scheduler,
         }
     }
 
@@ -78,9 +66,9 @@ impl PrefixCacheManagerV2 {
 
         {
             dbg!(&seq.logical_token_blocks());
-            let mut scheduler = get_mut_arcmutex!(self.scheduler);
-            let block_engine = scheduler.block_engine().unwrap();
-            dbg!(&block_engine.block_tables[seq.id()]);
+            // let mut scheduler = get_mut_arcmutex!(self.scheduler);
+            // let block_engine = scheduler.block_engine().unwrap();
+            // dbg!(&block_engine.block_tables[seq.id()]);
         }
 
         let cache = seq.normal_cache().to_vec();

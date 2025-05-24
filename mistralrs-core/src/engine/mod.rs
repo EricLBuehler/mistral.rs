@@ -132,7 +132,6 @@ impl Engine {
             prefix_cacher: Arc::new(Mutex::new(PrefixCacheManagerV2::new(
                 prefix_cache_n,
                 no_prefix_cache,
-                scheduler,
             ))),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,

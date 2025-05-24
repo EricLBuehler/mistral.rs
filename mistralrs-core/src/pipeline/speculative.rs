@@ -337,7 +337,7 @@ impl Pipeline for SpeculativePipeline {
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
-        backend_metadata: CacheBackendMetadata<'_>,
+        backend_metadata: CacheBackendMetadata,
     ) -> Result<Duration> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
