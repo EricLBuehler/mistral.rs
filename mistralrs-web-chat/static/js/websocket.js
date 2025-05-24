@@ -92,7 +92,31 @@ function sendMessage() {
     return;
   }
   
-  append(renderMarkdown(msg), 'user');
+  // Create the user message div
+  const userDiv = append(renderMarkdown(msg), 'user');
+  
+  // Check if there are any images in the image-container
+  const imageContainer = document.getElementById('image-container');
+  const images = imageContainer.querySelectorAll('img');
+  
+  if (images.length > 0) {
+    // Add thumbnails to the user message
+    const imgWrap = document.createElement('div');
+    imgWrap.className = 'chat-images';
+    imgWrap.style.display = 'flex';
+    imgWrap.style.flexWrap = 'wrap';
+    imgWrap.style.gap = '1rem';
+    
+    images.forEach(img => {
+      const thumbnail = document.createElement('img');
+      thumbnail.src = img.src;
+      thumbnail.className = 'chat-preview';
+      imgWrap.appendChild(thumbnail);
+    });
+    
+    userDiv.appendChild(imgWrap);
+  }
+  
   assistantBuf = ''; 
   assistantDiv = null;
   
@@ -100,6 +124,9 @@ function sendMessage() {
   
   ws.send(msg);
   input.value = ''; 
+  
+  // Clear images after sending
+  clearImagePreviews();
   
   // Trigger textarea resize
   const event = new Event('input');

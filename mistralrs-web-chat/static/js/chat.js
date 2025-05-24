@@ -46,6 +46,56 @@ async function refreshChatList() {
 }
 
 /**
+ * Find the most recent blank chat for a given model
+ */
+async function findBlankChat(model) {
+  // Check if current chat is already blank
+  if (currentChatId) {
+    const currentRes = await fetch('/api/load_chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: currentChatId })
+    });
+    
+    if (currentRes.ok) {
+      const currentData = await currentRes.json();
+      if (currentData.model === model && currentData.messages.length === 0) {
+        return currentChatId;
+      }
+    }
+  }
+  
+  // Otherwise check all chats
+  const res = await fetch('/api/list_chats');
+  const data = await res.json();
+  
+  // Sort by creation time, newest first
+  data.chats.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  
+  // Find the first chat that matches the model
+  for (const chat of data.chats) {
+    // Skip the current chat since we already checked it
+    if (chat.id === currentChatId) continue;
+    
+    const chatRes = await fetch('/api/load_chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: chat.id })
+    });
+    
+    if (chatRes.ok) {
+      const chatData = await chatRes.json();
+      // Check if it's the same model and has no messages
+      if (chatData.model === model && chatData.messages.length === 0) {
+        return chat.id;
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
  * Load a specific chat
  */
 async function loadChat(id) {
@@ -157,6 +207,22 @@ function initChatHandlers() {
       alert('Select a model first'); 
       return; 
     }
+    
+    // Check if there's already a blank chat with the same model
+    const blankChatId = await findBlankChat(prevModel);
+    
+    if (blankChatId) {
+      // Clear current UI state before loading
+      document.getElementById('log').innerHTML = '';
+      clearImagePreviews();
+      
+      // Load the existing blank chat instead of creating a new one
+      await loadChat(blankChatId);
+      await refreshChatList();
+      return;
+    }
+    
+    // No blank chat found, create a new one
     const res = await fetch('/api/new_chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
