@@ -37,6 +37,7 @@ function handleWebSocketMessage(ev) {
   if (!assistantDiv) {
     assistantDiv = append('', 'assistant');
   }
+  document.getElementById('spinner').classList.add('hidden');
   
   assistantBuf += ev.data;
   assistantDiv.innerHTML = renderMarkdown(assistantBuf);
@@ -58,6 +59,7 @@ function sendMessage() {
   assistantBuf = ''; 
   assistantDiv = null;
   ws.send(msg);
+  document.getElementById('spinner').classList.remove('hidden');
   input.value = ''; 
   
   // Trigger textarea resize
