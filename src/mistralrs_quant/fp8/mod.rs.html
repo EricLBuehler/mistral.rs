@@ -252,7 +252,7 @@
 <a href=#252 id=252 data-nosnippet>252</a>
 <a href=#253 id=253 data-nosnippet>253</a>        <span class="kw">let </span>w = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
 <a href=#254 id=254 data-nosnippet>254</a>
-<a href=#255 id=255 data-nosnippet>255</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire();
+<a href=#255 id=255 data-nosnippet>255</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire(device);
 <a href=#256 id=256 data-nosnippet>256</a>        <span class="kw">let </span>dequant_w_scale = Tensor::new(buffer.read_f32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>, device)<span class="question-mark">?</span>;
 <a href=#257 id=257 data-nosnippet>257</a>        <span class="kw">let </span>dequant_x_scale = Tensor::new(buffer.read_f32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>, device)<span class="question-mark">?</span>;
 <a href=#258 id=258 data-nosnippet>258</a>        <span class="kw">let </span>quant_scale = Tensor::new(buffer.read_f32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>, device)<span class="question-mark">?</span>;
@@ -299,7 +299,7 @@
 <a href=#299 id=299 data-nosnippet>299</a>
 <a href=#300 id=300 data-nosnippet>300</a>        <span class="kw">let </span>has_bias = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
 <a href=#301 id=301 data-nosnippet>301</a>
-<a href=#302 id=302 data-nosnippet>302</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire();
+<a href=#302 id=302 data-nosnippet>302</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire(device);
 <a href=#303 id=303 data-nosnippet>303</a>        <span class="kw">let </span>w = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
 <a href=#304 id=304 data-nosnippet>304</a>
 <a href=#305 id=305 data-nosnippet>305</a>        <span class="kw">let </span>dequant_w_scale = Tensor::new(buffer.read_f32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>, device)<span class="question-mark">?</span>;

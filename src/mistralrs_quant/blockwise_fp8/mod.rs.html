@@ -104,7 +104,7 @@
 <a href=#104 id=104 data-nosnippet>104</a>        <span class="kw">match </span>dtype {
 <a href=#105 id=105 data-nosnippet>105</a>            <span class="comment">/*Some(IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
 <a href=#106 id=106 data-nosnippet>106</a>            </span><span class="prelude-val">Some</span>(IsqType::HQQ4 | IsqType::HQQ8) =&gt; {
-<a href=#107 id=107 data-nosnippet>107</a>                <span class="kw">let </span>_acquired_quantize_guard = guard.acquire();
+<a href=#107 id=107 data-nosnippet>107</a>                <span class="kw">let </span>_acquired_quantize_guard = guard.acquire(<span class="kw-2">&amp;</span>device);
 <a href=#108 id=108 data-nosnippet>108</a>                <span class="kw">if </span>imatrix_weight.is_some() {
 <a href=#109 id=109 data-nosnippet>109</a>                    <span class="comment">// TODO just warn?
 <a href=#110 id=110 data-nosnippet>110</a>                    </span><span class="macro">candle_core::bail!</span>(<span class="string">"HQQ does not support imatrix."</span>);
@@ -138,7 +138,7 @@
 <a href=#138 id=138 data-nosnippet>138</a>                }
 <a href=#139 id=139 data-nosnippet>139</a>            }
 <a href=#140 id=140 data-nosnippet>140</a>            <span class="prelude-val">Some</span>(IsqType::AFQ2 | IsqType::AFQ3 | IsqType::AFQ4 | IsqType::AFQ6 | IsqType::AFQ8) =&gt; {
-<a href=#141 id=141 data-nosnippet>141</a>                <span class="kw">let </span>_acquired_quantize_guard = guard.acquire();
+<a href=#141 id=141 data-nosnippet>141</a>                <span class="kw">let </span>_acquired_quantize_guard = guard.acquire(<span class="kw-2">&amp;</span>device);
 <a href=#142 id=142 data-nosnippet>142</a>                <span class="kw">if </span>imatrix_weight.is_some() {
 <a href=#143 id=143 data-nosnippet>143</a>                    <span class="comment">// TODO just warn?
 <a href=#144 id=144 data-nosnippet>144</a>                    </span><span class="macro">candle_core::bail!</span>(<span class="string">"AFQ does not support imatrix."</span>);
@@ -190,7 +190,7 @@
 <a href=#190 id=190 data-nosnippet>190</a>                })<span class="question-mark">?</span>))
 <a href=#191 id=191 data-nosnippet>191</a>            }
 <a href=#192 id=192 data-nosnippet>192</a>            <span class="prelude-val">Some</span>(IsqType::F8E4M3) =&gt; {
-<a href=#193 id=193 data-nosnippet>193</a>                <span class="kw">let </span>_acquired_quantize_guard = guard.acquire();
+<a href=#193 id=193 data-nosnippet>193</a>                <span class="kw">let </span>_acquired_quantize_guard = guard.acquire(<span class="kw-2">&amp;</span>device);
 <a href=#194 id=194 data-nosnippet>194</a>                <span class="kw">if </span>imatrix_weight.is_some() {
 <a href=#195 id=195 data-nosnippet>195</a>                    <span class="comment">// TODO just warn?
 <a href=#196 id=196 data-nosnippet>196</a>                    </span><span class="macro">candle_core::bail!</span>(<span class="string">"F8E4M3 does not support imatrix."</span>);
@@ -208,7 +208,7 @@
 <a href=#208 id=208 data-nosnippet>208</a>                })<span class="question-mark">?</span>))
 <a href=#209 id=209 data-nosnippet>209</a>            }
 <a href=#210 id=210 data-nosnippet>210</a>            <span class="prelude-val">None </span>=&gt; {
-<a href=#211 id=211 data-nosnippet>211</a>                <span class="kw">let </span>_acquired_quantize_guard = guard.acquire();
+<a href=#211 id=211 data-nosnippet>211</a>                <span class="kw">let </span>_acquired_quantize_guard = guard.acquire(<span class="kw-2">&amp;</span>device);
 <a href=#212 id=212 data-nosnippet>212</a>                <span class="comment">// Ignore imatrix altogether
 <a href=#213 id=213 data-nosnippet>213</a>
 <a href=#214 id=214 data-nosnippet>214</a>                </span><span class="kw">let </span>w = weight.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;

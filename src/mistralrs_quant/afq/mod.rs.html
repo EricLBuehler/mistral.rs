@@ -375,7 +375,7 @@
 <a href=#375 id=375 data-nosnippet>375</a>
 <a href=#376 id=376 data-nosnippet>376</a>        <span class="kw">let </span>has_bias = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
 <a href=#377 id=377 data-nosnippet>377</a>
-<a href=#378 id=378 data-nosnippet>378</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire();
+<a href=#378 id=378 data-nosnippet>378</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire(device);
 <a href=#379 id=379 data-nosnippet>379</a>        <span class="comment">// Weight, scales, biases
 <a href=#380 id=380 data-nosnippet>380</a>        </span><span class="kw">let </span>w_q = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
 <a href=#381 id=381 data-nosnippet>381</a>        <span class="kw">let </span>scales = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
@@ -425,7 +425,7 @@
 <a href=#425 id=425 data-nosnippet>425</a>
 <a href=#426 id=426 data-nosnippet>426</a>        <span class="kw">let </span>has_bias = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
 <a href=#427 id=427 data-nosnippet>427</a>
-<a href=#428 id=428 data-nosnippet>428</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire();
+<a href=#428 id=428 data-nosnippet>428</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire(device);
 <a href=#429 id=429 data-nosnippet>429</a>        <span class="comment">// Weight, scales, biases
 <a href=#430 id=430 data-nosnippet>430</a>        </span><span class="kw">let </span>w_q = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
 <a href=#431 id=431 data-nosnippet>431</a>        <span class="kw">let </span>scales = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;

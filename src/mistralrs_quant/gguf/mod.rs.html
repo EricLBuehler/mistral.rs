@@ -313,7 +313,7 @@
 <a href=#313 id=313 data-nosnippet>313</a>        <span class="kw">let </span><span class="kw-2">mut </span>tensor_data = <span class="macro">vec!</span>[<span class="number">0</span>; data_len];
 <a href=#314 id=314 data-nosnippet>314</a>        buffer.read_exact(<span class="kw-2">&amp;mut </span>tensor_data)<span class="question-mark">?</span>;
 <a href=#315 id=315 data-nosnippet>315</a>
-<a href=#316 id=316 data-nosnippet>316</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire();
+<a href=#316 id=316 data-nosnippet>316</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire(device);
 <a href=#317 id=317 data-nosnippet>317</a>        <span class="comment">// If we have bias
 <a href=#318 id=318 data-nosnippet>318</a>        </span><span class="kw">let </span>b = <span class="kw">if </span>has_bias {
 <a href=#319 id=319 data-nosnippet>319</a>            <span class="prelude-val">Some</span>(deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>)
@@ -383,7 +383,7 @@
 <a href=#383 id=383 data-nosnippet>383</a>        <span class="kw">let </span><span class="kw-2">mut </span>tensor_data = <span class="macro">vec!</span>[<span class="number">0</span>; data_len];
 <a href=#384 id=384 data-nosnippet>384</a>        buffer.read_exact(<span class="kw-2">&amp;mut </span>tensor_data)<span class="question-mark">?</span>;
 <a href=#385 id=385 data-nosnippet>385</a>
-<a href=#386 id=386 data-nosnippet>386</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire();
+<a href=#386 id=386 data-nosnippet>386</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire(device);
 <a href=#387 id=387 data-nosnippet>387</a>        <span class="comment">// If we have bias
 <a href=#388 id=388 data-nosnippet>388</a>        </span><span class="kw">let </span>b = <span class="kw">if </span>has_bias {
 <a href=#389 id=389 data-nosnippet>389</a>            <span class="prelude-val">Some</span>(deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>)

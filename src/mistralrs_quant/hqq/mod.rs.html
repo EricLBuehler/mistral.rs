@@ -596,7 +596,7 @@
 <a href=#596 id=596 data-nosnippet>596</a>        imatrix_weight: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
 <a href=#597 id=597 data-nosnippet>597</a>        guard: QuantizeOntoGuard,
 <a href=#598 id=598 data-nosnippet>598</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-<a href=#599 id=599 data-nosnippet>599</a>        <span class="kw">let </span>_acquired_quantize_guard = guard.acquire();
+<a href=#599 id=599 data-nosnippet>599</a>        <span class="kw">let </span>_acquired_quantize_guard = guard.acquire(<span class="kw-2">&amp;</span>device);
 <a href=#600 id=600 data-nosnippet>600</a>        <span class="kw">if </span>imatrix_weight.is_some() {
 <a href=#601 id=601 data-nosnippet>601</a>            <span class="comment">// TODO just warn?
 <a href=#602 id=602 data-nosnippet>602</a>            </span><span class="macro">candle_core::bail!</span>(<span class="string">"HQQ does not support imatrix."</span>);
@@ -745,7 +745,7 @@
 <a href=#745 id=745 data-nosnippet>745</a>
 <a href=#746 id=746 data-nosnippet>746</a>        <span class="kw">let </span>has_bias = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
 <a href=#747 id=747 data-nosnippet>747</a>
-<a href=#748 id=748 data-nosnippet>748</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire();
+<a href=#748 id=748 data-nosnippet>748</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire(device);
 <a href=#749 id=749 data-nosnippet>749</a>        <span class="kw">let </span>w_q = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
 <a href=#750 id=750 data-nosnippet>750</a>        <span class="kw">let </span>scales = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
 <a href=#751 id=751 data-nosnippet>751</a>        <span class="kw">let </span>zeros = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
@@ -818,7 +818,7 @@
 <a href=#818 id=818 data-nosnippet>818</a>
 <a href=#819 id=819 data-nosnippet>819</a>        <span class="kw">let </span>has_bias = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
 <a href=#820 id=820 data-nosnippet>820</a>
-<a href=#821 id=821 data-nosnippet>821</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire();
+<a href=#821 id=821 data-nosnippet>821</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire(device);
 <a href=#822 id=822 data-nosnippet>822</a>        <span class="kw">let </span>w_q = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
 <a href=#823 id=823 data-nosnippet>823</a>        <span class="kw">let </span>scales = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
 <a href=#824 id=824 data-nosnippet>824</a>        <span class="kw">let </span>zeros = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
