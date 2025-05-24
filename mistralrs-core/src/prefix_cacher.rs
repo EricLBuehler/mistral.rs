@@ -1,9 +1,16 @@
+use std::sync::Arc;
+
 use candle_core::{Device, Result};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use tracing::info;
 
-use crate::{paged_attention::BlockEngineSequence, pipeline::KvCache, sequence::Sequence};
+use crate::{
+    get_mut_arcmutex,
+    paged_attention::{BlockEngine, BlockEngineSequence},
+    pipeline::KvCache,
+    sequence::Sequence,
+};
 
 #[derive(PartialEq, Eq, Debug, Hash)]
 struct Tokens(Vec<u32>);
@@ -35,6 +42,7 @@ pub struct PrefixCacheManagerV2 {
     caches: IndexMap<Tokens, CacheElement>,
     n_on_device: usize,
     no_prefix_cache: bool,
+    block_engine: Option<Arc<tokio::sync::Mutex<BlockEngine>>>,
 }
 
 #[derive(Clone)]
@@ -46,7 +54,11 @@ pub struct MatchingCache {
 }
 
 impl PrefixCacheManagerV2 {
-    pub fn new(n_on_device: usize, no_prefix_cache: bool) -> Self {
+    pub fn new(
+        n_on_device: usize,
+        no_prefix_cache: bool,
+        block_engine: Option<Arc<tokio::sync::Mutex<BlockEngine>>>,
+    ) -> Self {
         if !no_prefix_cache {
             info!("PrefixCacherV2 is enabled. Expect higher multi-turn throughput for both text and multimodal.");
         }
@@ -54,6 +66,7 @@ impl PrefixCacheManagerV2 {
             caches: IndexMap::new(),
             n_on_device,
             no_prefix_cache,
+            block_engine,
         }
     }
 
@@ -64,11 +77,10 @@ impl PrefixCacheManagerV2 {
             return;
         }
 
-        {
+        if let Some(block_engine) = &self.block_engine {
             dbg!(&seq.logical_token_blocks());
-            // let mut scheduler = get_mut_arcmutex!(self.scheduler);
-            // let block_engine = scheduler.block_engine().unwrap();
-            // dbg!(&block_engine.block_tables[seq.id()]);
+            let block_engine = get_mut_arcmutex!(block_engine);
+            dbg!(&block_engine.block_tables[seq.id()]);
         }
 
         let cache = seq.normal_cache().to_vec();
