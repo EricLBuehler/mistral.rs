@@ -117,7 +117,14 @@ function sendMessage() {
     textFiles.forEach(preview => {
       const filename = preview.dataset.filename;
       const content = preview.dataset.content;
-      fileContents += `\n\n--- ${filename} ---\n${content}\n--- End of ${filename} ---\n`;
+      // Wrap file content in a fenced code block to preserve literal text
+      fileContents += `
+--- ${filename} ---
+\`\`\`text
+${content}
+\`\`\`
+--- End of ${filename} ---
+`;
     });
     
     if (msg) {
