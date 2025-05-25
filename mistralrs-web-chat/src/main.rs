@@ -15,6 +15,7 @@ mod chat;
 mod handlers;
 mod models;
 mod types;
+mod utils;
 
 use handlers::{api::*, websocket::ws_handler};
 use models::LoadedModel;
@@ -77,7 +78,10 @@ async fn main() -> Result<()> {
         models.insert(name, LoadedModel::Vision(Arc::new(m)));
     }
 
-    let chats_dir = format!("{}/cache/chats", env!("CARGO_MANIFEST_DIR"));
+    // Initialize cache directory and chats subdirectory
+    let base_cache = utils::get_cache_dir();
+    println!("🔧 Using cache directory: {}", base_cache.display());
+    let chats_dir = base_cache.join("chats").to_string_lossy().to_string();
     tokio::fs::create_dir_all(&chats_dir).await?;
     let mut next_id = 1u32;
     if let Ok(mut dir) = fs::read_dir(&chats_dir).await {

@@ -16,6 +16,7 @@ use tracing::error;
 use crate::chat::append_chat_message;
 use crate::models::LoadedModel;
 use crate::types::AppState;
+use crate::utils::get_cache_dir;
 
 const CLEAR_CMD: &str = "__CLEAR__";
 
@@ -68,8 +69,9 @@ where
 
 /// Validate that a file path is safe and within the uploads directory
 fn validate_image_path(path: &str) -> Result<String, &'static str> {
-    let uploads_dir = format!("{}/cache/uploads", env!("CARGO_MANIFEST_DIR"));
-    let uploads_path = Path::new(&uploads_dir);
+    // Determine upload directory under user cache
+    let uploads_dir = get_cache_dir().join("uploads");
+    let uploads_path = uploads_dir.as_path();
 
     // Resolve the full path
     let file_path = Path::new(path);

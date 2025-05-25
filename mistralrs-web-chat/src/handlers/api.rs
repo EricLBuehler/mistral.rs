@@ -23,6 +23,7 @@ use crate::types::{
     // Append partial assistant messages
     // (defined below)
 };
+use crate::utils::get_cache_dir;
 use serde::Deserialize;
 
 fn validate_image_upload(
@@ -166,23 +167,25 @@ pub async fn upload_image(
             return (StatusCode::BAD_REQUEST, "invalid image file").into_response();
         }
 
-        // Ensure dir exists
-        let upload_dir = format!("{}/cache/uploads", env!("CARGO_MANIFEST_DIR"));
+        // Determine upload directory under cache
+        let base_cache = get_cache_dir();
+        let upload_dir = base_cache.join("uploads");
         if let Err(e) = tokio::fs::create_dir_all(&upload_dir).await {
             error!("mkdir error: {}", e);
             return (StatusCode::INTERNAL_SERVER_ERROR, "server error").into_response();
         }
-
-        // Build unique filename with validated extension
+        // Build unique filename and write
         let filename = format!("{}.{}", Uuid::new_v4(), ext);
-        let path = format!("{}/{}", upload_dir, filename);
-
+        let path = upload_dir.join(&filename);
         if let Err(e) = tokio::fs::write(&path, &data).await {
             error!("write error: {}", e);
             return (StatusCode::INTERNAL_SERVER_ERROR, "server error").into_response();
         }
-
-        return (StatusCode::OK, Json(json!({ "url": path }))).into_response();
+        return (
+            StatusCode::OK,
+            Json(json!({ "url": path.to_string_lossy() })),
+        )
+            .into_response();
     }
 
     (StatusCode::BAD_REQUEST, "no image field").into_response()
