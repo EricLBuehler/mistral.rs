@@ -264,6 +264,37 @@ function initDragAndDrop() {
 }
 
 /**
+ * Initialize stop button functionality: abort assistant streaming
+ */
+function initStopButton() {
+  const stopBtn = document.getElementById('stopBtn');
+  if (!stopBtn) return;
+  stopBtn.addEventListener('click', async () => {
+    // Save partial assistant response
+    if (typeof assistantBuf !== 'undefined' && assistantBuf) {
+      if (typeof currentChatId !== 'undefined' && currentChatId) {
+        try {
+          await fetch('/api/append_message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: currentChatId, role: 'assistant', content: assistantBuf })
+          });
+        } catch (e) {
+          console.error('Failed to append partial message:', e);
+        }
+      }
+    }
+    // Close and reset WebSocket
+    if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+    hideSpinner();
+    assistantBuf = '';
+    assistantDiv = null;
+    // Reconnect WebSocket for further messages
+    initWebSocket();
+  });
+}
+
+/**
  * Initialize all UI interactions
  */
 function initUI() {
@@ -271,4 +302,5 @@ function initUI() {
   initImageUpload();
   initTextUpload();
   initDragAndDrop();
+  initStopButton();
 }

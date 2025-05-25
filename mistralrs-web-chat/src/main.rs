@@ -114,6 +114,7 @@ async fn main() -> Result<()> {
         .route("/api/delete_chat", post(delete_chat))
         .route("/api/load_chat", post(load_chat))
         .route("/api/rename_chat", post(rename_chat))
+        .route("/api/append_message", post(append_message))
         .nest_service(
             "/",
             get_service(ServeDir::new(concat!(

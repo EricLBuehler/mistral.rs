@@ -13,9 +13,17 @@ use uuid::Uuid;
 
 use crate::models::LoadedModel;
 use crate::types::{
-    AppState, ChatFile, DeleteChatRequest, LoadChatRequest, NewChatRequest, RenameChatRequest,
+    AppState,
+    ChatFile,
+    DeleteChatRequest,
+    LoadChatRequest,
+    NewChatRequest,
+    RenameChatRequest,
     SelectRequest,
+    // Append partial assistant messages
+    // (defined below)
 };
+use serde::Deserialize;
 
 fn validate_image_upload(
     filename: Option<&str>,
@@ -425,4 +433,28 @@ pub async fn rename_chat(
         }
     }
     (StatusCode::INTERNAL_SERVER_ERROR, "rename failed").into_response()
+}
+
+/// Request to append a (partial) assistant message to a chat
+#[derive(Deserialize)]
+pub struct AppendMessageRequest {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+    #[serde(default)]
+    pub images: Option<Vec<String>>,
+}
+
+/// Appends a partial assistant response (or any role) to the chat file.
+pub async fn append_message(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<AppendMessageRequest>,
+) -> impl IntoResponse {
+    if let Err(e) =
+        crate::chat::append_chat_message(&app, &req.id, &req.role, &req.content, req.images).await
+    {
+        error!("append message error: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "append failed").into_response();
+    }
+    (StatusCode::OK, "Appended").into_response()
 }
