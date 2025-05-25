@@ -42,6 +42,77 @@ fn validate_image_upload(
     }
 }
 
+fn validate_text_upload(
+    filename: Option<&str>,
+    content_type: Option<&str>,
+) -> Result<String, &'static str> {
+    // Check MIME type first (allow text/* and application/json)
+    if let Some(mime) = content_type {
+        if !mime.starts_with("text/")
+            && mime != "application/json"
+            && mime != "application/javascript"
+        {
+            // Also allow common binary MIME types that are actually text
+            if !matches!(
+                mime,
+                "application/octet-stream"
+                    | "application/x-python"
+                    | "application/x-rust"
+                    | "application/x-sh"
+            ) {
+                return Err("File must be a text file");
+            }
+        }
+    }
+
+    // Validate file extension
+    let ext = if let Some(name) = filename {
+        name.rsplit('.').next().unwrap_or("").to_lowercase()
+    } else {
+        return Err("No filename provided");
+    };
+
+    match ext.as_str() {
+        // Text files
+        "txt" | "md" | "markdown" | "log" | "csv" | "tsv" | "json" | "xml" | "yaml" | "yml"
+        | "toml" | "ini" | "cfg" | "conf" => Ok(ext),
+        // Code files
+        "rs" | "py" | "js" | "ts" | "jsx" | "tsx" | "html" | "htm" | "css" | "scss" | "sass"
+        | "less" => Ok(ext),
+        "c" | "cpp" | "cc" | "cxx" | "h" | "hpp" | "hxx" | "java" | "kt" | "swift" | "go"
+        | "rb" | "php" => Ok(ext),
+        "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" | "sql" | "dockerfile"
+        | "makefile" => Ok(ext),
+        "r" | "R" | "scala" | "clj" | "cljs" | "hs" | "elm" | "ex" | "exs" | "erl" | "fs"
+        | "fsx" | "ml" | "mli" => Ok(ext),
+        "vue" | "svelte" | "astro" | "lua" | "nim" | "zig" | "d" | "dart" | "jl" | "pl" | "pm"
+        | "tcl" => Ok(ext),
+        // Config and other text-like files
+        "gitignore" | "dockerignore" | "editorconfig" | "env" | "htaccess" => Ok(ext),
+        "" => {
+            // Files without extension - check the filename
+            if let Some(name) = filename {
+                let name_lower = name.to_lowercase();
+                if matches!(
+                    name_lower.as_str(),
+                    "readme"
+                        | "license"
+                        | "changelog"
+                        | "makefile"
+                        | "dockerfile"
+                        | "vagrantfile"
+                        | "gemfile"
+                        | "rakefile"
+                ) {
+                    return Ok("txt".to_string());
+                }
+            }
+            Err("No file extension")
+        }
+        _ => Err("Unsupported text file format"),
+    }
+}
+
 /// Accepts multipart image upload, stores it under `cache/uploads/`, and returns its URL.
 pub async fn upload_image(
     State(_app): State<Arc<AppState>>,
@@ -49,10 +120,12 @@ pub async fn upload_image(
 ) -> impl IntoResponse {
     // Expect single "image" part
     if let Ok(Some(field)) = multipart.next_field().await {
-        let filename = field.file_name();
-        let content_type = field.content_type();
+        // Clone filename and content type to avoid borrowing `field`
+        let orig_filename = field.file_name().map(|s| s.to_string());
+        let content_type_opt = field.content_type().map(|s| s.to_string());
 
-        let ext = match validate_image_upload(filename, content_type) {
+        let ext = match validate_image_upload(orig_filename.as_deref(), content_type_opt.as_deref())
+        {
             Ok(extension) => extension,
             Err(msg) => {
                 return (StatusCode::BAD_REQUEST, msg).into_response();
@@ -101,6 +174,75 @@ pub async fn upload_image(
     }
 
     (StatusCode::BAD_REQUEST, "no image field").into_response()
+}
+
+/// Accepts multipart text file upload and returns the file content
+pub async fn upload_text(
+    State(_app): State<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    // Expect single "file" part
+    if let Ok(Some(field)) = multipart.next_field().await {
+        // Clone filename and content type to avoid borrowing `field`
+        let orig_filename = field.file_name().map(|s| s.to_string());
+        let content_type_opt = field.content_type().map(|s| s.to_string());
+
+        let _ext = match validate_text_upload(orig_filename.as_deref(), content_type_opt.as_deref())
+        {
+            Ok(extension) => extension,
+            Err(msg) => {
+                return (StatusCode::BAD_REQUEST, msg).into_response();
+            }
+        };
+
+        let data = match field.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                error!("multipart bytes error: {}", e);
+                let msg = if e.to_string().contains("exceeded") {
+                    "file too large (limit 10 MB)"
+                } else {
+                    "failed to read upload"
+                };
+                return (StatusCode::BAD_REQUEST, msg).into_response();
+            }
+        };
+
+        const MAX_SIZE: usize = 10 * 1024 * 1024; // 10MB for text files
+        if data.len() > MAX_SIZE {
+            return (StatusCode::BAD_REQUEST, "file too large (limit 10 MB)").into_response();
+        }
+
+        // Try to decode as UTF-8
+        let content = match String::from_utf8(data.to_vec()) {
+            Ok(text) => text,
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, "file is not valid UTF-8 text").into_response();
+            }
+        };
+
+        // Limit content length for safety
+        const MAX_CHARS: usize = 1_000_000; // 1 million characters
+        if content.len() > MAX_CHARS {
+            return (
+                StatusCode::BAD_REQUEST,
+                "file content too large (limit 1M characters)",
+            )
+                .into_response();
+        }
+
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "content": content,
+                "filename": orig_filename.unwrap_or_else(|| "untitled".to_string()),
+                "size": data.len()
+            })),
+        )
+            .into_response();
+    }
+
+    (StatusCode::BAD_REQUEST, "no file field").into_response()
 }
 
 pub async fn list_models(State(app): State<Arc<AppState>>) -> impl IntoResponse {

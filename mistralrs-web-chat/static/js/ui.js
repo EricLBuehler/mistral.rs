@@ -34,30 +34,139 @@ async function handleImageUpload(file) {
     return;
   }
   
-  const img = document.createElement('img'); 
-  img.src = URL.createObjectURL(file); 
-  img.classList.add('chat-preview');
-  document.getElementById('image-container').appendChild(img);
+  const preview = createImagePreview(URL.createObjectURL(file));
+  document.getElementById('image-container').appendChild(preview);
   
   const fd = new FormData(); 
   fd.append('image', file);
   
   try {
     const r = await fetch('/api/upload_image', { method: 'POST', body: fd });
-    
-    if (r.ok && ws.readyState === WebSocket.OPEN) {
+    if (r.ok) {
       const j = await r.json();
-      ws.send(JSON.stringify({ image: j.url }));
+      // Record the server upload URL for use on send
+      preview.dataset.uploadUrl = j.url;
+    } else {
+      const errorText = await r.text();
+      alert(`Upload failed: ${errorText}`);
+      preview.remove();
+    }
+  } catch (error) {
+    alert(`Upload failed: ${error.message}`);
+    preview.remove();
+  }
+}
+
+/**
+ * Create a text file preview element
+ */
+function createTextFilePreview(filename, content, size) {
+  const preview = document.createElement('div');
+  preview.className = 'text-file-preview';
+  
+  // File header with name, size, and remove button
+  const header = document.createElement('div');
+  header.className = 'file-header';
+  
+  const fileName = document.createElement('div');
+  fileName.className = 'file-name';
+  fileName.textContent = filename;
+  fileName.title = filename; // Show full name on hover
+  
+  const fileSize = document.createElement('div');
+  fileSize.className = 'file-size';
+  fileSize.textContent = formatFileSize(size);
+  
+  const removeBtn = document.createElement('button');
+  removeBtn.className = 'remove-btn';
+  removeBtn.textContent = '×';
+  removeBtn.title = 'Remove file';
+  removeBtn.addEventListener('click', () => {
+    preview.remove();
+  });
+  
+  header.appendChild(fileName);
+  header.appendChild(fileSize);
+  header.appendChild(removeBtn);
+  
+  // File content preview (truncated)
+  const contentDiv = document.createElement('div');
+  contentDiv.className = 'file-content';
+  const truncatedContent = content.length > 500 ? content.substring(0, 500) + '...' : content;
+  contentDiv.textContent = truncatedContent;
+  
+  preview.appendChild(header);
+  preview.appendChild(contentDiv);
+  
+  // Store the full content as a data attribute
+  preview.dataset.content = content;
+  preview.dataset.filename = filename;
+  
+  return preview;
+}
+
+/**
+ * Format file size in human readable format
+ */
+function formatFileSize(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+/**
+ * Handle text file uploads
+ */
+async function handleTextUpload(file) {
+  // ✅ IMPROVEMENT: Validate file type before processing
+  const allowedTypes = [
+    'text/plain', 'text/markdown', 'text/csv', 'text/xml', 'text/yaml', 'text/css', 'text/html',
+    'application/json', 'application/javascript', 'application/xml', 'application/yaml',
+    'application/x-python', 'application/x-rust', 'application/x-sh', 'application/octet-stream'
+  ];
+  
+  const fileExt = file.name.split('.').pop()?.toLowerCase();
+  const allowedExtensions = [
+    'txt', 'md', 'markdown', 'py', 'js', 'ts', 'jsx', 'tsx', 'rs', 'html', 'htm', 'css', 'json', 
+    'xml', 'yaml', 'yml', 'toml', 'c', 'cpp', 'cc', 'h', 'hpp', 'java', 'go', 'rb', 'php', 
+    'sh', 'bash', 'sql', 'log', 'csv', 'tsv', 'ini', 'cfg', 'conf', 'dockerfile', 'makefile',
+    'gitignore', 'env', 'lock', 'swift', 'kt', 'scala', 'clj', 'hs', 'elm', 'ex', 'erl', 'fs', 
+    'ml', 'vue', 'svelte', 'lua', 'nim', 'zig', 'd', 'dart', 'jl', 'pl', 'tcl'
+  ];
+  
+  if (!allowedTypes.includes(file.type) && !allowedExtensions.includes(fileExt) && file.type !== '') {
+    alert('Please select a text or code file');
+    return;
+  }
+  
+  // ✅ IMPROVEMENT: Validate file size (10MB limit to match backend)
+  const maxSize = 10 * 1024 * 1024; // 10MB
+  if (file.size > maxSize) {
+    alert('Text file is too large. Maximum size is 10MB.');
+    return;
+  }
+  
+  const fd = new FormData(); 
+  fd.append('file', file);
+  
+  try {
+    const r = await fetch('/api/upload_text', { method: 'POST', body: fd });
+    
+    if (r.ok) {
+      const response = await r.json();
+      
+      // Create preview element
+      const preview = createTextFilePreview(response.filename, response.content, response.size);
+      document.getElementById('text-files-container').appendChild(preview);
     } else {
       // ✅ IMPROVEMENT: Better error handling
       const errorText = await r.text();
       alert(`Upload failed: ${errorText}`);
-      // Remove the preview image on error
-      img.remove();
     }
   } catch (error) {
     alert(`Upload failed: ${error.message}`);
-    img.remove();
   }
 }
 
@@ -73,6 +182,21 @@ function initImageUpload() {
     
     await handleImageUpload(f);
     imageInput.value = '';
+  });
+}
+
+/**
+ * Initialize text file upload functionality
+ */
+function initTextUpload() {
+  const textInput = document.getElementById('textInput');
+  
+  textInput.addEventListener('change', async () => {
+    const f = textInput.files[0]; 
+    if (!f) return;
+    
+    await handleTextUpload(f);
+    textInput.value = '';
   });
 }
 
@@ -96,14 +220,35 @@ function initDragAndDrop() {
     e.preventDefault(); 
     mainArea.classList.remove('drag-over');
     
-    const f = Array.from(e.dataTransfer.files).find(f => f.type.startsWith('image/')); 
-    if (!f) {
-      // ✅ IMPROVEMENT: Better feedback for non-image files
-      alert('Please drop an image file');
+    const files = Array.from(e.dataTransfer.files);
+    
+    // Handle image files
+    const imageFile = files.find(f => f.type.startsWith('image/'));
+    if (imageFile) {
+      await handleImageUpload(imageFile);
       return;
     }
     
-    await handleImageUpload(f);
+    // Handle text files
+    const textFile = files.find(f => {
+      const ext = f.name.split('.').pop()?.toLowerCase();
+      const allowedExtensions = [
+        'txt', 'md', 'markdown', 'py', 'js', 'ts', 'jsx', 'tsx', 'rs', 'html', 'htm', 'css', 'json', 
+        'xml', 'yaml', 'yml', 'toml', 'c', 'cpp', 'cc', 'h', 'hpp', 'java', 'go', 'rb', 'php', 
+        'sh', 'bash', 'sql', 'log', 'csv', 'tsv', 'ini', 'cfg', 'conf', 'dockerfile', 'makefile',
+        'gitignore', 'env', 'lock', 'swift', 'kt', 'scala', 'clj', 'hs', 'elm', 'ex', 'erl', 'fs', 
+        'ml', 'vue', 'svelte', 'lua', 'nim', 'zig', 'd', 'dart', 'jl', 'pl', 'tcl'
+      ];
+      return f.type.startsWith('text/') || allowedExtensions.includes(ext) || f.type === 'application/json';
+    });
+    
+    if (textFile) {
+      await handleTextUpload(textFile);
+      return;
+    }
+    
+    // No supported file type found
+    alert('Please drop an image file or text/code file');
   });
 }
 
@@ -113,5 +258,6 @@ function initDragAndDrop() {
 function initUI() {
   initTextareaResize();
   initImageUpload();
+  initTextUpload();
   initDragAndDrop();
 }

@@ -106,6 +106,7 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .route("/api/upload_image", post(upload_image))
+        .route("/api/upload_text", post(upload_text))
         .route("/api/list_models", get(list_models))
         .route("/api/select_model", post(select_model))
         .route("/api/list_chats", get(list_chats))

@@ -130,6 +130,7 @@ async function loadChat(id) {
   
   log.innerHTML = '';
   clearImagePreviews();
+  clearTextFilePreviews();
   
   data.messages.forEach(m => {
     // ---- render text ----
@@ -164,17 +165,7 @@ async function loadChat(id) {
     }
   });
   
-  // Show last user-sent images in the image-container preview
-  const lastUserMsg = data.messages.slice().reverse().find(m => m.role === 'user' && m.images && m.images.length);
-  if (lastUserMsg) {
-    clearImagePreviews();
-    lastUserMsg.images.forEach(src => {
-      const img = document.createElement('img');
-      img.src = src;
-      img.className = 'chat-preview';
-      document.getElementById('image-container').appendChild(img);
-    });
-  }
+  // No pending attachments to restore on chat load
 }
 
 /**
@@ -215,6 +206,7 @@ function initChatHandlers() {
       // Clear current UI state before loading
       document.getElementById('log').innerHTML = '';
       clearImagePreviews();
+      clearTextFilePreviews();
       
       // Load the existing blank chat instead of creating a new one
       await loadChat(blankChatId);
@@ -236,6 +228,7 @@ function initChatHandlers() {
     currentChatId = id;
     document.getElementById('log').innerHTML = '';
     clearImagePreviews();
+    clearTextFilePreviews();
     await refreshChatList();
   });
 
@@ -247,6 +240,7 @@ function initChatHandlers() {
     if (ws.readyState === WebSocket.OPEN) ws.send(CLEAR_CMD);
     log.innerHTML = '';
     clearImagePreviews();
+    clearTextFilePreviews();
   });
 
   renameBtn.addEventListener('click', async () => {
@@ -287,6 +281,7 @@ function initChatHandlers() {
     currentChatId = null;
     document.getElementById('log').innerHTML = '';
     clearImagePreviews();
+    clearTextFilePreviews();
     await refreshChatList();
     
     // Move to newest chat if any, otherwise create a fresh one

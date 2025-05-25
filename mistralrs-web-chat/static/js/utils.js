@@ -96,6 +96,14 @@ function clearImagePreviews() {
 }
 
 /**
+ * Clear text file previews from the text files container
+ */
+function clearTextFilePreviews() {
+  const textContainer = document.getElementById('text-files-container');
+  if (textContainer) textContainer.innerHTML = '';
+}
+
+/**
  * Update image input visibility based on model kind
  */
 function updateImageVisibility(kind) {
@@ -104,4 +112,57 @@ function updateImageVisibility(kind) {
   
   imageLabel.style.display = (kind === 'vision') ? 'inline-block' : 'none';
   if (kind !== 'vision') imageInput.value = '';
+}
+
+/**
+ * Create an image preview element with delete button
+ */
+function createImagePreview(imageSrc) {
+  const container = document.createElement('div');
+  container.className = 'image-preview-container';
+  container.style.position = 'relative';
+  container.style.display = 'inline-block';
+  
+  const img = document.createElement('img');
+  img.src = imageSrc;
+  img.className = 'chat-preview';
+  
+  const removeBtn = document.createElement('button');
+  removeBtn.className = 'image-remove-btn';
+  removeBtn.textContent = '×';
+  removeBtn.title = 'Remove image';
+  removeBtn.style.position = 'absolute';
+  removeBtn.style.top = '5px';
+  removeBtn.style.right = '5px';
+  removeBtn.style.background = 'rgba(0,0,0,0.7)';
+  removeBtn.style.color = 'white';
+  removeBtn.style.border = 'none';
+  removeBtn.style.borderRadius = '50%';
+  removeBtn.style.width = '20px';
+  removeBtn.style.height = '20px';
+  removeBtn.style.cursor = 'pointer';
+  removeBtn.style.fontSize = '12px';
+  removeBtn.style.display = 'flex';
+  removeBtn.style.alignItems = 'center';
+  removeBtn.style.justifyContent = 'center';
+  
+  removeBtn.addEventListener('click', () => {
+    container.remove();
+  });
+  
+  removeBtn.addEventListener('mouseenter', () => {
+    removeBtn.style.background = '#ff4444';
+  });
+  
+  removeBtn.addEventListener('mouseleave', () => {
+    removeBtn.style.background = 'rgba(0,0,0,0.7)';
+  });
+  
+  container.appendChild(img);
+  container.appendChild(removeBtn);
+
+  // Store the upload URL for sending to the server
+  container.dataset.uploadUrl = imageSrc;
+
+  return container;
 }

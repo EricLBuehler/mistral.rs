@@ -79,17 +79,48 @@ function handleWebSocketMessage(ev) {
 }
 
 /**
+ * Check if there are any uploaded files (images or text)
+ */
+function hasUploadedFiles() {
+  const imageContainer = document.getElementById('image-container');
+  const textContainer = document.getElementById('text-files-container');
+  const hasImages = imageContainer.querySelectorAll('.image-preview-container').length > 0;
+  const hasTextFiles = textContainer.querySelectorAll('.text-file-preview').length > 0;
+  return hasImages || hasTextFiles;
+}
+
+/**
  * Send a message through WebSocket
  */
 function sendMessage() {
   const input = document.getElementById('input');
-  const msg = input.value.trim();
+  let msg = input.value.trim();
   
-  if (!msg) return;
+  if (!msg && !hasUploadedFiles()) return;
   
   if (ws.readyState !== WebSocket.OPEN) {
     alert('Connection lost. Please refresh the page.');
     return;
+  }
+  
+  // Check if there are any uploaded text files to inject
+  const textFilesContainer = document.getElementById('text-files-container');
+  const textFiles = textFilesContainer.querySelectorAll('.text-file-preview');
+  
+  // Inject text file contents into the message
+  if (textFiles.length > 0) {
+    let fileContents = '';
+    textFiles.forEach(preview => {
+      const filename = preview.dataset.filename;
+      const content = preview.dataset.content;
+      fileContents += `\n\n--- ${filename} ---\n${content}\n--- End of ${filename} ---\n`;
+    });
+    
+    if (msg) {
+      msg = msg + fileContents;
+    } else {
+      msg = 'Here are the uploaded files:' + fileContents;
+    }
   }
   
   // Create the user message div
@@ -97,23 +128,34 @@ function sendMessage() {
   
   // Check if there are any images in the image-container
   const imageContainer = document.getElementById('image-container');
-  const images = imageContainer.querySelectorAll('img');
+  const imageContainers = imageContainer.querySelectorAll('.image-preview-container');
   
-  if (images.length > 0) {
+  if (imageContainers.length > 0) {
+    // Send images to server context (once per message)
+    imageContainers.forEach(container => {
+      const url = container.dataset.uploadUrl;
+      if (url) {
+        ws.send(JSON.stringify({ image: url }));
+      }
+    });
+
     // Add thumbnails to the user message
     const imgWrap = document.createElement('div');
     imgWrap.className = 'chat-images';
     imgWrap.style.display = 'flex';
     imgWrap.style.flexWrap = 'wrap';
     imgWrap.style.gap = '1rem';
-    
-    images.forEach(img => {
-      const thumbnail = document.createElement('img');
-      thumbnail.src = img.src;
-      thumbnail.className = 'chat-preview';
-      imgWrap.appendChild(thumbnail);
+
+    imageContainers.forEach(container => {
+      const img = container.querySelector('img');
+      if (img) {
+        const thumbnail = document.createElement('img');
+        thumbnail.src = img.src;
+        thumbnail.className = 'chat-preview';
+        imgWrap.appendChild(thumbnail);
+      }
     });
-    
+
     userDiv.appendChild(imgWrap);
   }
   
@@ -125,8 +167,9 @@ function sendMessage() {
   ws.send(msg);
   input.value = ''; 
   
-  // Clear images after sending
+  // Clear uploaded files after sending
   clearImagePreviews();
+  clearTextFilePreviews();
   
   // Trigger textarea resize
   const event = new Event('input');

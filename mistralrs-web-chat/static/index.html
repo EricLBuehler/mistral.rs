@@ -28,16 +28,19 @@
         placeholder="Type your message… (Press Ctrl+Enter to send)"
       ></textarea>
 
-      <!-- hidden file input -->
+      <!-- hidden file inputs -->
       <input type="file" id="imageInput" accept="image/*" hidden />
+      <input type="file" id="textInput" accept=".txt,.md,.markdown,.py,.js,.ts,.rs,.html,.css,.json,.xml,.yaml,.yml,.toml,.c,.cpp,.java,.go,.rb,.php,.sh,.sql,.log,.csv" hidden />
 
-      <!-- image label and send button share the same class -->
+      <!-- file upload buttons and send button share the same class -->
       <label for="imageInput" class="btn" id="imageLabel">📎 Image</label>
+      <label for="textInput" class="btn" id="textLabel">📄 File</label>
       <button type="submit" class="btn">Send</button>
       <div id="spinner" class="spinner hidden" aria-hidden="true"></div>
     </form>
 
     <div id="image-container"></div>
+    <div id="text-files-container"></div>
 
     <!-- External dependencies -->
     <script src="marked.min.js"></script>
