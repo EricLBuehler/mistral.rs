@@ -10,8 +10,8 @@ use clap::Parser;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, initialize_logging,
     paged_attn_supported, parse_isq_value, AutoDeviceMapParams, BertEmbeddingModel,
-    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, IsqType,
-    Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
+    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader,
+    LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
     PagedAttentionConfig, Pipeline, Request, SchedulerConfig, TokenSource,
 };
 use openai::{
@@ -145,8 +145,8 @@ pub struct Args {
     pub num_device_layers: Option<Vec<String>>,
 
     /// In-situ quantization to apply.
-    #[arg(long = "isq", value_parser = parse_isq_value)]
-    pub in_situ_quant: Option<IsqType>,
+    #[arg(long = "isq")]
+    in_situ_quant: Option<String>,
 
     /// GPU memory to allocate for KV cache with PagedAttention in MBs.
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
@@ -287,7 +287,7 @@ async fn re_isq(
 ) -> Result<String, String> {
     let repr = format!("Re ISQ: {:?}", request.ggml_type);
     MistralRs::maybe_log_request(state.clone(), repr.clone());
-    let request = Request::ReIsq(parse_isq_value(&request.ggml_type)?);
+    let request = Request::ReIsq(parse_isq_value(&request.ggml_type, None)?);
     state.get_sender().unwrap().send(request).await.unwrap();
     Ok(repr)
 }
@@ -438,6 +438,11 @@ pub async fn bootstrap_mistralrs(mut args: Args) -> Result<SharedMistralState> {
 
     print_mistral_server_info(&loader);
 
+    let isq = args
+        .in_situ_quant
+        .as_ref()
+        .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
+
     let pipeline: LoadedPipeline = loader.load_model_from_hf(
         None,
         args.token_source,
@@ -445,7 +450,7 @@ pub async fn bootstrap_mistralrs(mut args: Args) -> Result<SharedMistralState> {
         &device,
         false,
         mapper,
-        args.in_situ_quant,
+        isq,
         cache_config,
     )?;
     info!("Model loaded.");
@@ -477,7 +482,6 @@ pub async fn bootstrap_mistralrs(mut args: Args) -> Result<SharedMistralState> {
 
 // This was originally with the device config
 fn configure_args(mut args: Args) -> Args {
-    #[cfg(not(feature = "metal"))]
     if args.cpu {
         args.no_paged_attn = true;
     }
@@ -487,7 +491,11 @@ fn configure_args(mut args: Args) -> Args {
 
 fn init_device(force_cpu: bool, seed: Option<u64>) -> Result<candle_core::Device> {
     #[cfg(feature = "metal")]
-    let device = Device::new_metal(0)?;
+    let device = if force_cpu {
+        Device::Cpu
+    } else {
+        Device::new_metal(0)?
+    };
     #[cfg(not(feature = "metal"))]
     #[allow(clippy::if_same_then_else)]
     let device = if force_cpu {
