@@ -166,6 +166,10 @@ async function loadChat(id) {
   });
   
   // No pending attachments to restore on chat load
+  // Notify WebSocket of current chat ID
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ chat_id: id }));
+  }
 }
 
 /**
@@ -225,10 +229,8 @@ function initChatHandlers() {
       return; 
     }
     const { id } = await res.json();
-    currentChatId = id;
-    document.getElementById('log').innerHTML = '';
-    clearImagePreviews();
-    clearTextFilePreviews();
+    // Load and activate the new chat
+    await loadChat(id);
     await refreshChatList();
   });
 
