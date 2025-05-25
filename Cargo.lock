@@ -2740,7 +2740,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "toml",
- "tower-http",
+ "tower-http 0.5.2",
  "tracing",
  "url",
  "utoipa",
