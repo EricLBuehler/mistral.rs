@@ -129,11 +129,16 @@ async function handleTextUpload(file) {
   
   const fileExt = file.name.split('.').pop()?.toLowerCase();
   const allowedExtensions = [
-    'txt', 'md', 'markdown', 'py', 'js', 'ts', 'jsx', 'tsx', 'rs', 'html', 'htm', 'css', 'json', 
-    'xml', 'yaml', 'yml', 'toml', 'c', 'cpp', 'cc', 'h', 'hpp', 'java', 'go', 'rb', 'php', 
+    'txt', 'md', 'markdown', 'py', 'js', 'ts', 'jsx', 'tsx', 'rs', 'html', 'htm', 'css', 'json',
+    'xml', 'yaml', 'yml', 'toml', 'c', 'cpp', 'cc', 'cxx', 'h', 'hpp', 'hxx', 'java', 'kt', 'swift', 'go',
+    'rb', 'php',
+    // GPU and shader languages
+    'cu', 'cuh', 'cl', 'ptx', 'glsl', 'vert', 'frag', 'geom', 'comp', 'tesc', 'tese', 'hlsl', 'metal', 'wgsl',
+    // Shell and scripts
     'sh', 'bash', 'sql', 'log', 'csv', 'tsv', 'ini', 'cfg', 'conf', 'dockerfile', 'makefile',
-    'gitignore', 'env', 'lock', 'swift', 'kt', 'scala', 'clj', 'hs', 'elm', 'ex', 'erl', 'fs', 
-    'ml', 'vue', 'svelte', 'lua', 'nim', 'zig', 'd', 'dart', 'jl', 'pl', 'tcl'
+    'gitignore', 'env', 'lock',
+    'swift', 'kt', 'scala', 'clj', 'hs', 'elm', 'ex', 'erl', 'fs', 'fsx', 'ml', 'mli',
+    'vue', 'svelte', 'lua', 'nim', 'zig', 'd', 'dart', 'jl', 'pl', 'pm', 'tcl'
   ];
   
   if (!allowedTypes.includes(file.type) && !allowedExtensions.includes(fileExt) && file.type !== '') {
@@ -233,11 +238,17 @@ function initDragAndDrop() {
     const textFile = files.find(f => {
       const ext = f.name.split('.').pop()?.toLowerCase();
       const allowedExtensions = [
-        'txt', 'md', 'markdown', 'py', 'js', 'ts', 'jsx', 'tsx', 'rs', 'html', 'htm', 'css', 'json', 
-        'xml', 'yaml', 'yml', 'toml', 'c', 'cpp', 'cc', 'h', 'hpp', 'java', 'go', 'rb', 'php', 
+        'txt', 'md', 'markdown', 'py', 'js', 'ts', 'jsx', 'tsx', 'rs', 'html', 'htm', 'css', 'json',
+        'xml', 'yaml', 'yml', 'toml',
+        'c', 'cpp', 'cc', 'cxx', 'h', 'hpp', 'hxx', 'java', 'kt', 'swift', 'go',
+        'rb', 'php',
+        // GPU and shader languages
+        'cu', 'cuh', 'cl', 'ptx', 'glsl', 'vert', 'frag', 'geom', 'comp', 'tesc', 'tese', 'hlsl', 'metal', 'wgsl',
+        // Shell and scripts
         'sh', 'bash', 'sql', 'log', 'csv', 'tsv', 'ini', 'cfg', 'conf', 'dockerfile', 'makefile',
-        'gitignore', 'env', 'lock', 'swift', 'kt', 'scala', 'clj', 'hs', 'elm', 'ex', 'erl', 'fs', 
-        'ml', 'vue', 'svelte', 'lua', 'nim', 'zig', 'd', 'dart', 'jl', 'pl', 'tcl'
+        'gitignore', 'env', 'lock',
+        'swift', 'kt', 'scala', 'clj', 'hs', 'elm', 'ex', 'erl', 'fs', 'fsx', 'ml', 'mli',
+        'vue', 'svelte', 'lua', 'nim', 'zig', 'd', 'dart', 'jl', 'pl', 'pm', 'tcl'
       ];
       return f.type.startsWith('text/') || allowedExtensions.includes(ext) || f.type === 'application/json';
     });
