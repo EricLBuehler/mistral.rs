@@ -9,7 +9,8 @@ extend-ignore-identifiers-re = [
     "_thw",
     "thr",
     "nd",
-    "uneeded"
+    "uneeded",
+    "tese"
 ]
 
 [files]

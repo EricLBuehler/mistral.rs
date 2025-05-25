@@ -214,8 +214,8 @@ body {
   background: var(--primary-hov);
 }
 
-/* ----- image previews ----- */
-#imageInput { 
+/* ----- file upload and previews ----- */
+#imageInput, #textInput { 
   display:none; 
 }
 
@@ -233,15 +233,121 @@ img.chat-preview {
   max-height: 120px;
 }
 
-#image-container {
+#image-container, #text-files-container {
   display: flex;
   flex-wrap: wrap;
   gap: 1rem;
   margin-top: 1rem;
 }
 
+/* Image preview container styles */
+.image-preview-container {
+  position: relative;
+  display: inline-block;
+}
+
+.image-preview-container:hover .image-remove-btn {
+  opacity: 1;
+}
+
+.image-remove-btn {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.8;
+  transition: all 0.2s ease;
+}
+
+.image-remove-btn:hover {
+  background: #ff4444 !important;
+  opacity: 1;
+}
+
+/* Text file preview styles */
+.text-file-preview {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  background: var(--chat-bg);
+  max-width: 300px;
+  position: relative;
+}
+
+.text-file-preview .file-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  font-weight: bold;
+  font-size: 0.9rem;
+}
+
+.text-file-preview .file-name {
+  color: var(--primary);
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.text-file-preview .file-size {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin-left: 0.5rem;
+}
+
+.text-file-preview .remove-btn {
+  background: var(--text-muted);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.5rem;
+  transition: background 0.2s ease;
+}
+
+.text-file-preview .remove-btn:hover {
+  background: #ff4444;
+}
+
+.text-file-preview .file-content {
+  background: var(--main-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 0.5rem;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.8rem;
+  max-height: 100px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--text-color);
+}
+
 /* ---------- Mobile tweaks ---------- */
 @media (max-width: 600px) {
+/* ---------- Drag and drop highlight ---------- */
+#main.drag-over {
+  outline: 4px dashed var(--primary);
+  outline-offset: -4px;
+  cursor: copy;
+}
   body { 
     flex-direction: column; 
   }

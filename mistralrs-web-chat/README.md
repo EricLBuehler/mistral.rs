@@ -1,6 +1,6 @@
-# Mistral.rs Chat Web App
+# Mistral.rs Web Chat App
 
-A minimal, fast, and modern web chat interface for [mistral.rs](https://github.com/EricBuehler/mistral.rs), supporting both text and vision models with drag-and-drop image upload, markdown rendering, and multi-model selection.
+A minimal, fast, and modern web chat interface for [mistral.rs](https://github.com/EricBuehler/mistral.rs), supporting both text and vision models with drag-and-drop image and file upload, markdown rendering, and multi-model selection.
 
 <img src="../res/chat.gif" alt="Demonstration" />
 
@@ -9,6 +9,7 @@ A minimal, fast, and modern web chat interface for [mistral.rs](https://github.c
 ## Features
 
 - **Text & Vision Model Support:** Choose from multiple loaded models.
+- **File Upload:** Upload and work with files.
 - **Drag & Drop Image Upload:** Instantly preview and send images to vision models.
 - **Markdown Output:** Responses are rendered in markdown, including code blocks.
 - **Copy Button:** One-click copying for all code snippets.
@@ -26,7 +27,7 @@ A minimal, fast, and modern web chat interface for [mistral.rs](https://github.c
 > Note: choose the features based on [this guide](../README.md#supported-accelerators).
 
 ```bash
-cargo run --release --features <specify feature(s) here> -- \
+cargo run --release --features <specify feature(s) here> --bin mistralrs-web-chat -- \
   --text-model Qwen/Qwen3-4B \
   --vision-model google/gemma-3-4b-it \
 ```
