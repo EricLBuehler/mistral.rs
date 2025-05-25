@@ -19,6 +19,11 @@ use crate::types::AppState;
 use crate::utils::get_cache_dir;
 
 const CLEAR_CMD: &str = "__CLEAR__";
+/// Context for managing vision messages and image buffer.
+pub struct VisionContext<'a> {
+    pub msgs: &'a mut VisionMessages,
+    pub image_buffer: &'a mut Vec<image::DynamicImage>,
+}
 
 /// Upgrades an HTTP request to a WebSocket connection.
 pub async fn ws_handler(
@@ -179,11 +184,14 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 .await;
             }
             LoadedModel::Vision(model) => {
+                let mut vision_ctx = VisionContext {
+                    msgs: &mut vision_msgs,
+                    image_buffer: &mut image_buffer,
+                };
                 handle_vision_model(
                     &model,
                     &user_msg,
-                    &mut vision_msgs,
-                    &mut image_buffer,
+                    &mut vision_ctx,
                     &mut socket,
                     &app,
                     &mut streaming,
@@ -330,8 +338,7 @@ async fn handle_text_model(
 async fn handle_vision_model(
     model: &Arc<Model>,
     user_msg: &str,
-    vision_msgs: &mut VisionMessages,
-    image_buffer: &mut Vec<image::DynamicImage>,
+    vision_ctx: &mut VisionContext<'_>,
     socket: &mut WebSocket,
     app: &Arc<AppState>,
     streaming: &mut bool,
@@ -349,7 +356,7 @@ async fn handle_vision_model(
                     match tokio::fs::read(&safe_path).await {
                         Ok(bytes) => match image::load_from_memory(&bytes) {
                             Ok(img) => {
-                                image_buffer.push(img);
+                                vision_ctx.image_buffer.push(img);
                             }
                             Err(e) => {
                                 error!("image decode error: {}", e);
@@ -373,10 +380,11 @@ async fn handle_vision_model(
             return;
         } else {
             // Fallback: treat whole JSON as text
-            *vision_msgs = vision_msgs
+            *vision_ctx.msgs = vision_ctx
+                .msgs
                 .clone()
                 .add_message(TextMessageRole::User, user_msg);
-            msgs_for_stream = Some(vision_msgs.clone());
+            msgs_for_stream = Some(vision_ctx.msgs.clone());
             if let Some(chat_id) = active_chat_id {
                 if let Err(e) = append_chat_message(app, chat_id, "user", user_msg, None).await {
                     error!("chat save error: {}", e);
@@ -385,35 +393,37 @@ async fn handle_vision_model(
         }
     } else {
         // Plain-text prompt arrives here
-        if image_buffer.is_empty() {
-            *vision_msgs = vision_msgs
+        if vision_ctx.image_buffer.is_empty() {
+            *vision_ctx.msgs = vision_ctx
+                .msgs
                 .clone()
                 .add_message(TextMessageRole::User, user_msg);
             // Send the text‑only context to the model
-            msgs_for_stream = Some(vision_msgs.clone());
+            msgs_for_stream = Some(vision_ctx.msgs.clone());
             if let Some(chat_id) = active_chat_id {
                 if let Err(e) = append_chat_message(app, chat_id, "user", user_msg, None).await {
                     error!("chat save error: {}", e);
                 }
             }
         } else {
-            match vision_msgs.clone().add_image_message(
+            match vision_ctx.msgs.clone().add_image_message(
                 TextMessageRole::User,
                 user_msg,
-                image_buffer.clone(),
+                vision_ctx.image_buffer.clone(),
                 model,
             ) {
                 Ok(updated) => {
                     // Keep the *text‑only* conversation in our long‑term state,
                     // but build a one‑off request that includes images.
                     let temp_msgs = updated;
-                    *vision_msgs = vision_msgs
+                    *vision_ctx.msgs = vision_ctx
+                        .msgs
                         .clone()
                         .add_message(TextMessageRole::User, user_msg);
                     msgs_for_stream = Some(temp_msgs.clone());
                     // ---- persist user message with images ----
                     let mut imgs_b64 = Vec::new();
-                    for img in image_buffer.iter() {
+                    for img in vision_ctx.image_buffer.iter() {
                         let mut buf = Vec::new();
                         if img
                             .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
@@ -430,7 +440,7 @@ async fn handle_vision_model(
                             error!("chat save error: {}", e);
                         }
                     }
-                    image_buffer.clear();
+                    vision_ctx.image_buffer.clear();
                 }
                 Err(e) => {
                     error!("image prompt error: {}", e);
@@ -448,8 +458,8 @@ async fn handle_vision_model(
         socket,
         |tok| {
             assistant_content = tok.to_string();
-            let cur = mem::take(vision_msgs);
-            *vision_msgs = cur.add_message(TextMessageRole::Assistant, tok);
+            let cur = mem::take(vision_ctx.msgs);
+            *vision_ctx.msgs = cur.add_message(TextMessageRole::Assistant, tok);
         },
         || *streaming = false,
     )
