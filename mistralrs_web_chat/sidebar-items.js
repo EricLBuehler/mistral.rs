@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["main"],"mod":["chat","handlers","models","types"]};
+window.SIDEBAR_ITEMS = {"fn":["main"],"mod":["chat","handlers","models","types","utils"]};

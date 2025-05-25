@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["CLEAR_CMD"],"fn":["handle_restore_message","handle_socket","handle_text_model","handle_vision_model","stream_and_forward","ws_handler"]};
+window.SIDEBAR_ITEMS = {"constant":["CLEAR_CMD"],"fn":["handle_restore_message","handle_socket","handle_text_model","handle_vision_model","stream_and_forward","validate_image_path","ws_handler"],"struct":["VisionContext"]};
