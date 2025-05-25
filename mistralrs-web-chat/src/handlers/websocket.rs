@@ -199,6 +199,14 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 )
                 .await;
             }
+            // Speech models should use HTTP endpoint; not handled here
+            LoadedModel::Speech(_) => {
+                let _ = socket
+                    .send(Message::Text(
+                        "Speech models are not supported over WebSocket".into(),
+                    ))
+                    .await;
+            }
         }
     }
 }
@@ -283,6 +291,8 @@ async fn handle_restore_message(
                                         vision_msgs.clone().add_message(role_enum, content);
                                 }
                             }
+                            // Speech models do not support context restore over WebSocket
+                            LoadedModel::Speech(_) => {}
                         }
                     }
                     _ => {}

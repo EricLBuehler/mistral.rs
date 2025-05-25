@@ -18,8 +18,12 @@ async function refreshModels() {
   data.models.forEach(m => {
     models[m.name] = m.kind;
     const opt = document.createElement('option');
-    opt.value = m.name; 
-    opt.textContent = (m.kind === 'vision' ? '🖼️ ' : '📝 ') + m.name;
+    opt.value = m.name;
+    // Prefix icon based on model kind
+    let prefix = '📝 ';
+    if (m.kind === 'vision') prefix = '🖼️ ';
+    else if (m.kind === 'speech') prefix = '🔊 ';
+    opt.textContent = prefix + m.name;
     modelSelect.appendChild(opt);
   });
   

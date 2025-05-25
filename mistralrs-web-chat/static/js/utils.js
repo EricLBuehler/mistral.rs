@@ -109,9 +109,19 @@ function clearTextFilePreviews() {
 function updateImageVisibility(kind) {
   const imageLabel = document.getElementById('imageLabel');
   const imageInput = document.getElementById('imageInput');
+  const textLabel = document.getElementById('textLabel');
+  const textInput = document.getElementById('textInput');
   
-  imageLabel.style.display = (kind === 'vision') ? 'inline-block' : 'none';
-  if (kind !== 'vision') imageInput.value = '';
+  const isVision = (kind === 'vision');
+  const isText = (kind === 'text');
+  
+  // Toggle image upload only for vision models
+  imageLabel.style.display = isVision ? 'inline-block' : 'none';
+  if (!isVision) imageInput.value = '';
+  
+  // Toggle file upload only for text models
+  textLabel.style.display = isText ? 'inline-block' : 'none';
+  if (!isText) textInput.value = '';
 }
 
 /**

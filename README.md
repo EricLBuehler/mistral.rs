@@ -27,7 +27,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     - [OpenAI-compatible HTTP server](README.md#openai-http-server)
     - [Interactive mode](README.md#interactive-mode)
 
-4) Try the **web chat app** for local in-browser conversation (text and vision support):
+4) Try the **web chat app** for local in-browser conversation (text, vision, and speech support):
     - Quickstart [here](mistralrs-web-chat/README.md)
     - Run the server and visit [http://localhost:8080](http://localhost:8080) by default.
 
@@ -39,7 +39,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
   <br>
   <img src="./res/chat.gif" alt="Web Chat UI Demo" />
   <br>
-  Try our modern in-browser chat with text and vision support.
+  Try our modern in-browser chat with text, vision, and speech support (TTS generation).
 </details>
 
 <!-- Interactive Mode -->
