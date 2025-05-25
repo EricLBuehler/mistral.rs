@@ -104,6 +104,10 @@ function sendMessage() {
   const kind = models[modelSelect.value];
   if (kind === 'speech') {
     if (!msg) return;
+    // Display user prompt in chat log
+    append(renderMarkdown(msg), 'user');
+    // Clear input field
+    input.value = '';
     // Show spinner during generation
     showSpinner();
     fetch('/api/generate_speech', {
@@ -129,7 +133,6 @@ function sendMessage() {
         console.error(err);
         alert('Speech generation failed');
       });
-    input.value = '';
     return;
   }
   
