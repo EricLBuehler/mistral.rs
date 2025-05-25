@@ -243,10 +243,9 @@ pub mod text_models_inputs_processor {
                 paged_attn_context_lens.push(ctxt_len);
             }
         }
+        dbg!(&paged_attn_context_lens);
+        dbg!(&seqs_tensors);
 
-        println!("slot_mappings {slot_mappings:?}");
-        println!("paged_attn_context_lens {paged_attn_context_lens:?}");
-        println!("block_tables {block_tables:?}");
         let max_q = *seqlens_q.iter().max().unwrap();
         let max_k = *seqlens_k.iter().max().unwrap();
         let seqlens_q = Tensor::new(seqlens_q, device)?

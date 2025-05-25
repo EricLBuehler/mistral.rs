@@ -260,6 +260,7 @@ impl BlockEngine {
             for block in &mut block_table {
                 block.deref_mut().refcount = 1;
             }
+            block_table.push(self.gpu_allocator.allocate());
             self.block_tables.insert(seq.get_id(), block_table.clone());
             dbg!(&self.block_tables);
         } else {
