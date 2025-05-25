@@ -32,13 +32,16 @@ impl Deref for MessageInnerContent {
     }
 }
 
-// Implement ToSchema manually to handle `Either`
+// Implement ToSchema manually to handle `Either<String, HashMap<String, String>>`
+// Maps to oneOf: [string, object with string values]
 fn message_inner_content_schema() -> Schema {
     Schema::OneOf(
         OneOfBuilder::new()
+            // Either::Left - simple string
             .item(Schema::Object(
                 ObjectBuilder::new().schema_type(SchemaType::String).build(),
             ))
+            // Either::Right - object with string values
             .item(Schema::Object(
                 ObjectBuilder::new()
                     .schema_type(SchemaType::Object)
@@ -168,101 +171,55 @@ impl utoipa::ToSchema<'_> for Grammar {
             "Grammar",
             RefOr::T(Schema::OneOf(
                 OneOfBuilder::new()
-                    .item(Schema::Object(
-                        ObjectBuilder::new()
-                            .schema_type(SchemaType::Object)
-                            .property(
-                                "type",
-                                RefOr::T(Schema::Object(
-                                    ObjectBuilder::new()
-                                        .schema_type(SchemaType::String)
-                                        .enum_values(Some(vec![serde_json::Value::String(
-                                            "regex".to_string(),
-                                        )]))
-                                        .build(),
-                                )),
-                            )
-                            .property(
-                                "value",
-                                RefOr::T(Schema::Object(
-                                    ObjectBuilder::new().schema_type(SchemaType::String).build(),
-                                )),
-                            )
-                            .required("type")
-                            .required("value")
-                            .build(),
+                    .item(create_grammar_variant_schema(
+                        "regex",
+                        Schema::Object(
+                            ObjectBuilder::new().schema_type(SchemaType::String).build(),
+                        ),
                     ))
-                    .item(Schema::Object(
-                        ObjectBuilder::new()
-                            .schema_type(SchemaType::Object)
-                            .property(
-                                "type",
-                                RefOr::T(Schema::Object(
-                                    ObjectBuilder::new()
-                                        .schema_type(SchemaType::String)
-                                        .enum_values(Some(vec![serde_json::Value::String(
-                                            "json_schema".to_string(),
-                                        )]))
-                                        .build(),
-                                )),
-                            )
-                            .property(
-                                "value",
-                                RefOr::T(Schema::Object(
-                                    ObjectBuilder::new().schema_type(SchemaType::Object).build(),
-                                )),
-                            )
-                            .required("type")
-                            .required("value")
-                            .build(),
+                    .item(create_grammar_variant_schema(
+                        "json_schema",
+                        Schema::Object(
+                            ObjectBuilder::new().schema_type(SchemaType::Object).build(),
+                        ),
                     ))
-                    .item(Schema::Object(
-                        ObjectBuilder::new()
-                            .schema_type(SchemaType::Object)
-                            .property(
-                                "type",
-                                RefOr::T(Schema::Object(
-                                    ObjectBuilder::new()
-                                        .schema_type(SchemaType::String)
-                                        .enum_values(Some(vec![serde_json::Value::String(
-                                            "llguidance".to_string(),
-                                        )]))
-                                        .build(),
-                                )),
-                            )
-                            .property("value", RefOr::T(llguidance_schema()))
-                            .required("type")
-                            .required("value")
-                            .build(),
+                    .item(create_grammar_variant_schema(
+                        "llguidance",
+                        llguidance_schema(),
                     ))
-                    .item(Schema::Object(
-                        ObjectBuilder::new()
-                            .schema_type(SchemaType::Object)
-                            .property(
-                                "type",
-                                RefOr::T(Schema::Object(
-                                    ObjectBuilder::new()
-                                        .schema_type(SchemaType::String)
-                                        .enum_values(Some(vec![serde_json::Value::String(
-                                            "lark".to_string(),
-                                        )]))
-                                        .build(),
-                                )),
-                            )
-                            .property(
-                                "value",
-                                RefOr::T(Schema::Object(
-                                    ObjectBuilder::new().schema_type(SchemaType::String).build(),
-                                )),
-                            )
-                            .required("type")
-                            .required("value")
-                            .build(),
+                    .item(create_grammar_variant_schema(
+                        "lark",
+                        Schema::Object(
+                            ObjectBuilder::new().schema_type(SchemaType::String).build(),
+                        ),
                     ))
                     .build(),
             )),
         )
     }
+}
+
+// Helper function to create a grammar variant schema
+fn create_grammar_variant_schema(type_value: &str, value_schema: Schema) -> Schema {
+    Schema::Object(
+        ObjectBuilder::new()
+            .schema_type(SchemaType::Object)
+            .property(
+                "type",
+                RefOr::T(Schema::Object(
+                    ObjectBuilder::new()
+                        .schema_type(SchemaType::String)
+                        .enum_values(Some(vec![serde_json::Value::String(
+                            type_value.to_string(),
+                        )]))
+                        .build(),
+                )),
+            )
+            .property("value", RefOr::T(value_schema))
+            .required("type")
+            .required("value")
+            .build(),
+    )
 }
 
 fn llguidance_schema() -> Schema {
