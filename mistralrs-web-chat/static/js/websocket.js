@@ -73,9 +73,13 @@ function handleWebSocketMessage(ev) {
   
   assistantBuf += ev.data;
   assistantDiv.innerHTML = renderMarkdown(assistantBuf);
-  addCopyBtns(assistantDiv); 
+  addCopyBtns(assistantDiv);
   fixLinks(assistantDiv);
-  log.scrollTop = log.scrollHeight;
+  // Auto-scroll only if the user is already near the bottom
+  const threshold = 20;
+  if (log.scrollHeight - log.clientHeight - log.scrollTop < threshold) {
+    log.scrollTop = log.scrollHeight;
+  }
 }
 
 /**
