@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["append_message","delete_chat","list_chats","list_models","load_chat","new_chat","rename_chat","select_model","upload_image","upload_text","validate_image_upload","validate_text_upload"],"struct":["AppendMessageRequest"]};
+window.SIDEBAR_ITEMS = {"fn":["append_message","delete_chat","generate_speech","list_chats","list_models","load_chat","new_chat","rename_chat","select_model","upload_image","upload_text","validate_image_upload","validate_text_upload"],"struct":["AppendMessageRequest","GenerateSpeechRequest"]};
