@@ -11,9 +11,9 @@ use tokio::fs;
 use tracing::error;
 use uuid::Uuid;
 
+use mistralrs::speech_utils;
 use std::fs::File;
 use std::path::PathBuf;
-use mistralrs::speech_utils;
 
 use crate::models::LoadedModel;
 use crate::types::{
@@ -27,8 +27,8 @@ use crate::types::{
     // Append partial assistant messages
     // (defined below)
 };
-use serde::Deserialize;
 use crate::utils::get_cache_dir;
+use serde::Deserialize;
 
 fn validate_image_upload(
     filename: Option<&str>,
@@ -495,22 +495,34 @@ pub async fn generate_speech(
             Ok(res) => res,
             Err(e) => {
                 error!("speech generation error: {}", e);
-                return (StatusCode::INTERNAL_SERVER_ERROR, "speech generation failed").into_response();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "speech generation failed",
+                )
+                    .into_response();
             }
         };
         // Write WAV file
         let filename = format!("{}.wav", Uuid::new_v4());
         let filepath = PathBuf::from(&app.speech_dir).join(&filename);
-        if let Err(e) = File::create(&filepath)
-            .and_then(|mut f| speech_utils::write_pcm_as_wav(&mut f, &pcm, rate as u32, channels as u16))
-        {
+        if let Err(e) = File::create(&filepath).and_then(|mut f| {
+            speech_utils::write_pcm_as_wav(&mut f, &pcm, rate as u32, channels as u16)
+        }) {
             error!("failed to write wav file: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to write wav file").into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to write wav file",
+            )
+                .into_response();
         }
         // Return URL for client download
         let url = format!("/speech/{}", filename);
         (StatusCode::OK, Json(json!({ "url": url }))).into_response()
     } else {
-        (StatusCode::BAD_REQUEST, "Selected model is not a speech model").into_response()
+        (
+            StatusCode::BAD_REQUEST,
+            "Selected model is not a speech model",
+        )
+            .into_response()
     }
 }

@@ -6,7 +6,10 @@ use axum::{
 };
 use clap::Parser;
 use indexmap::IndexMap;
-use mistralrs::{best_device, parse_isq_value, IsqType, TextModelBuilder, VisionModelBuilder, SpeechModelBuilder, SpeechLoaderType};
+use mistralrs::{
+    best_device, parse_isq_value, IsqType, SpeechLoaderType, SpeechModelBuilder, TextModelBuilder,
+    VisionModelBuilder,
+};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{fs, net::TcpListener};
 use tower_http::services::ServeDir;
@@ -77,7 +80,7 @@ async fn main() -> Result<()> {
             .await?;
         models.insert(name, LoadedModel::Vision(Arc::new(m)));
     }
-    
+
     // Then insert speech models (text-to-speech)
     for path in cli.speech_models {
         let name = std::path::Path::new(&path)
@@ -141,10 +144,7 @@ async fn main() -> Result<()> {
         // Text-to-speech generation endpoint
         .route("/api/generate_speech", post(generate_speech))
         // Serve generated speech files
-        .nest_service(
-            "/speech",
-            get_service(ServeDir::new(speech_dir.clone())),
-        )
+        .nest_service("/speech", get_service(ServeDir::new(speech_dir.clone())))
         // Serve static assets
         .nest_service(
             "/",

@@ -201,9 +201,11 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             }
             // Speech models should use HTTP endpoint; not handled here
             LoadedModel::Speech(_) => {
-                let _ = socket.send(Message::Text(
-                    "Speech models are not supported over WebSocket".into(),
-                )).await;
+                let _ = socket
+                    .send(Message::Text(
+                        "Speech models are not supported over WebSocket".into(),
+                    ))
+                    .await;
             }
         }
     }
