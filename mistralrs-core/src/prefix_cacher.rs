@@ -237,17 +237,21 @@ impl PrefixCacheManagerV2 {
             let Some((match_len, logical_blocks, physical_blocks)) = best_match else {
                 return Ok(None);
             };
-            dbg!(match_len);
-            let mut logical_blocks = logical_blocks[..2].to_vec();
-            if logical_blocks.last().unwrap().is_full() {
-                logical_blocks.push(LogicalTokenBlock::new(
-                    logical_blocks.last().unwrap().block_size(),
+            // Determine how many blocks cover the matched prefix
+            let mut n_blocks = match_len / block_size;
+            n_blocks = n_blocks.min(logical_blocks.len());
+            // Take the first n_blocks of both logical and physical blocks
+            let mut logical_prefix = logical_blocks[..n_blocks].to_vec();
+            let physical_prefix = physical_blocks[..n_blocks].to_vec();
+            // If the last reused block is full, reserve an extra empty block for new tokens
+            if logical_prefix.last().unwrap().is_full() {
+                logical_prefix.push(LogicalTokenBlock::new(
+                    logical_prefix.last().unwrap().block_size(),
                 ));
             }
-
             return Ok(Some(MatchingCache::Paged {
-                logical_blocks,
-                phyiscal_blocks: physical_blocks[..2].to_vec(),
+                logical_blocks: logical_prefix,
+                phyiscal_blocks: physical_prefix,
                 toks: toks[match_len..].to_vec(),
                 offset: match_len,
             }));
