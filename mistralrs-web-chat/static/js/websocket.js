@@ -99,6 +99,39 @@ function hasUploadedFiles() {
 function sendMessage() {
   const input = document.getElementById('input');
   let msg = input.value.trim();
+  // If speech model is selected, handle text-to-speech via HTTP
+  const modelSelect = document.getElementById('modelSelect');
+  const kind = models[modelSelect.value];
+  if (kind === 'speech') {
+    if (!msg) return;
+    // Show spinner during generation
+    showSpinner();
+    fetch('/api/generate_speech', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: msg }),
+    })
+      .then(res => {
+        if (!res.ok) throw new Error('Network response was not ok');
+        return res.json();
+      })
+      .then(data => {
+        hideSpinner();
+        const div = append('', 'assistant');
+        const link = document.createElement('a');
+        link.href = data.url;
+        link.textContent = 'Download WAV file';
+        link.download = '';
+        div.appendChild(link);
+      })
+      .catch(err => {
+        hideSpinner();
+        console.error(err);
+        alert('Speech generation failed');
+      });
+    input.value = '';
+    return;
+  }
   
   if (!msg && !hasUploadedFiles()) return;
   

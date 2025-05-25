@@ -6,7 +6,7 @@ use axum::{
 };
 use clap::Parser;
 use indexmap::IndexMap;
-use mistralrs::{best_device, parse_isq_value, IsqType, TextModelBuilder, VisionModelBuilder};
+use mistralrs::{best_device, parse_isq_value, IsqType, TextModelBuilder, VisionModelBuilder, SpeechModelBuilder, SpeechLoaderType};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{fs, net::TcpListener};
 use tower_http::services::ServeDir;
@@ -24,8 +24,8 @@ use types::{AppState, Cli};
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    if cli.text_models.is_empty() && cli.vision_models.is_empty() {
-        eprintln!("At least one --text-model or --vision-model is required");
+    if cli.text_models.is_empty() && cli.vision_models.is_empty() && cli.speech_models.is_empty() {
+        eprintln!("At least one --text-model, --vision-model, or --speech-model is required");
         std::process::exit(1);
     }
 
@@ -77,12 +77,30 @@ async fn main() -> Result<()> {
             .await?;
         models.insert(name, LoadedModel::Vision(Arc::new(m)));
     }
+    
+    // Then insert speech models (text-to-speech)
+    for path in cli.speech_models {
+        let name = std::path::Path::new(&path)
+            .file_name()
+            .and_then(|p| p.to_str())
+            .unwrap_or("speech-model")
+            .to_string();
+        println!("🔊 Loading speech model: {name}");
+        let m = SpeechModelBuilder::new(path.clone(), SpeechLoaderType::Dia)
+            .with_logging()
+            .build()
+            .await?;
+        models.insert(name, LoadedModel::Speech(Arc::new(m)));
+    }
 
     // Initialize cache directory and chats subdirectory
     let base_cache = utils::get_cache_dir();
     println!("🔧 Using cache directory: {}", base_cache.display());
     let chats_dir = base_cache.join("chats").to_string_lossy().to_string();
     tokio::fs::create_dir_all(&chats_dir).await?;
+    // Initialize speech output directory for generated wav files
+    let speech_dir = base_cache.join("speech").to_string_lossy().to_string();
+    tokio::fs::create_dir_all(&speech_dir).await?;
     let mut next_id = 1u32;
     if let Ok(mut dir) = fs::read_dir(&chats_dir).await {
         while let Ok(Some(entry)) = dir.next_entry().await {
@@ -103,6 +121,7 @@ async fn main() -> Result<()> {
         models,
         current: tokio::sync::RwLock::new(None),
         chats_dir,
+        speech_dir: speech_dir.clone(),
         current_chat: tokio::sync::RwLock::new(None),
         next_chat_id: tokio::sync::RwLock::new(next_id),
     });
@@ -119,6 +138,14 @@ async fn main() -> Result<()> {
         .route("/api/load_chat", post(load_chat))
         .route("/api/rename_chat", post(rename_chat))
         .route("/api/append_message", post(append_message))
+        // Text-to-speech generation endpoint
+        .route("/api/generate_speech", post(generate_speech))
+        // Serve generated speech files
+        .nest_service(
+            "/speech",
+            get_service(ServeDir::new(speech_dir.clone())),
+        )
+        // Serve static assets
         .nest_service(
             "/",
             get_service(ServeDir::new(concat!(

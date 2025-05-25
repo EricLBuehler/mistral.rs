@@ -11,6 +11,10 @@ use tokio::fs;
 use tracing::error;
 use uuid::Uuid;
 
+use std::fs::File;
+use std::path::PathBuf;
+use mistralrs::speech_utils;
+
 use crate::models::LoadedModel;
 use crate::types::{
     AppState,
@@ -23,8 +27,8 @@ use crate::types::{
     // Append partial assistant messages
     // (defined below)
 };
-use crate::utils::get_cache_dir;
 use serde::Deserialize;
+use crate::utils::get_cache_dir;
 
 fn validate_image_upload(
     filename: Option<&str>,
@@ -268,6 +272,7 @@ pub async fn list_models(State(app): State<Arc<AppState>>) -> impl IntoResponse 
             let kind = match m {
                 LoadedModel::Text(_) => "text",
                 LoadedModel::Vision(_) => "vision",
+                LoadedModel::Speech(_) => "speech",
             };
             json!({ "name": n, "kind": kind })
         })
@@ -293,6 +298,7 @@ pub async fn select_model(
                     chat.kind = match model_loaded {
                         LoadedModel::Text(_) => "text".into(),
                         LoadedModel::Vision(_) => "vision".into(),
+                        LoadedModel::Speech(_) => "speech".into(),
                     };
                     // ignore write errors; not fatal for select_model
                     if let Ok(bytes) = serde_json::to_vec_pretty(&chat) {
@@ -344,6 +350,7 @@ pub async fn new_chat(
         match m {
             LoadedModel::Text(_) => "text",
             LoadedModel::Vision(_) => "vision",
+            LoadedModel::Speech(_) => "speech",
         }
     } else {
         "text"
@@ -460,4 +467,50 @@ pub async fn append_message(
         return (StatusCode::INTERNAL_SERVER_ERROR, "append failed").into_response();
     }
     (StatusCode::OK, "Appended").into_response()
+}
+/// Request to generate speech from text
+#[derive(Deserialize)]
+pub struct GenerateSpeechRequest {
+    pub text: String,
+}
+
+/// Endpoint to generate speech (.wav) for a given prompt using a speech model
+pub async fn generate_speech(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<GenerateSpeechRequest>,
+) -> impl IntoResponse {
+    // Determine selected model
+    let model_name = {
+        let cur = app.current.read().await;
+        if let Some(name) = &*cur {
+            name.clone()
+        } else {
+            return (StatusCode::BAD_REQUEST, "No model selected").into_response();
+        }
+    };
+    // Ensure model exists and is a speech model
+    if let Some(LoadedModel::Speech(m)) = app.models.get(&model_name) {
+        // Generate speech
+        let (pcm, rate, channels) = match m.generate_speech(req.text).await {
+            Ok(res) => res,
+            Err(e) => {
+                error!("speech generation error: {}", e);
+                return (StatusCode::INTERNAL_SERVER_ERROR, "speech generation failed").into_response();
+            }
+        };
+        // Write WAV file
+        let filename = format!("{}.wav", Uuid::new_v4());
+        let filepath = PathBuf::from(&app.speech_dir).join(&filename);
+        if let Err(e) = File::create(&filepath)
+            .and_then(|mut f| speech_utils::write_pcm_as_wav(&mut f, &pcm, rate as u32, channels as u16))
+        {
+            error!("failed to write wav file: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to write wav file").into_response();
+        }
+        // Return URL for client download
+        let url = format!("/speech/{}", filename);
+        (StatusCode::OK, Json(json!({ "url": url }))).into_response()
+    } else {
+        (StatusCode::BAD_REQUEST, "Selected model is not a speech model").into_response()
+    }
 }
