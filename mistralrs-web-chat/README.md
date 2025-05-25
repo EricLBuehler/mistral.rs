@@ -1,6 +1,6 @@
 # Mistral.rs Web Chat App
 
-A minimal, fast, and modern web chat interface for [mistral.rs](https://github.com/EricBuehler/mistral.rs), supporting both text and vision models with drag-and-drop image and file upload, markdown rendering, and multi-model selection.
+A minimal, fast, and modern web chat interface for [mistral.rs](https://github.com/EricBuehler/mistral.rs), supporting text, vision, and speech models with drag-and-drop image and file upload, markdown rendering, and multi-model selection.
 
 <img src="../res/chat.gif" alt="Demonstration" />
 
@@ -9,6 +9,7 @@ A minimal, fast, and modern web chat interface for [mistral.rs](https://github.c
 ## Features
 
 - **Text & Vision Model Support:** Choose from multiple loaded models.
+- **Speech Model Support:** Generate speech from text prompts and download as WAV files.
 - **File Upload:** Upload and work with files.
 - **Drag & Drop Image Upload:** Instantly preview and send images to vision models.
 - **Markdown Output:** Responses are rendered in markdown, including code blocks.
@@ -30,10 +31,11 @@ A minimal, fast, and modern web chat interface for [mistral.rs](https://github.c
 cargo run --release --features <specify feature(s) here> --bin mistralrs-web-chat -- \
   --text-model Qwen/Qwen3-4B \
   --vision-model google/gemma-3-4b-it \
+  --speech-model nari-labs/Dia-1.6B \
 ```
 
-- At least one model is required (text or vision).
-- Multiple `--text-model` or `--vision-model` can be specified.
+- At least one model is required (text, vision, or speech).
+- Multiple `--text-model`, `--vision-model`, or `--speech-model` can be specified.
 - `--port` is optional (defaults to 8080).
 
 ---

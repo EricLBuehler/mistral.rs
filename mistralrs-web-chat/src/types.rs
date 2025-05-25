@@ -20,6 +20,10 @@ pub struct Cli {
     #[arg(long = "vision-model")]
     pub vision_models: Vec<String>,
 
+    /// Repeated flag for speech models
+    #[arg(long = "speech-model")]
+    pub speech_models: Vec<String>,
+
     /// Port to listen on (default: 8080)
     #[arg(long = "port")]
     pub port: Option<u16>,
@@ -47,6 +51,8 @@ pub struct AppState {
     pub models: IndexMap<String, LoadedModel>,
     pub current: RwLock<Option<String>>,
     pub chats_dir: String,
+    /// Directory for storing generated speech wav files
+    pub speech_dir: String,
     pub current_chat: RwLock<Option<String>>,
     pub next_chat_id: RwLock<u32>,
 }
