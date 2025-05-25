@@ -243,8 +243,7 @@ pub mod text_models_inputs_processor {
                 paged_attn_context_lens.push(ctxt_len);
             }
         }
-        dbg!(&paged_attn_context_lens);
-        dbg!(&seqs_tensors);
+        println!("{slot_mappings:?}");
 
         let max_q = *seqlens_q.iter().max().unwrap();
         let max_k = *seqlens_k.iter().max().unwrap();
