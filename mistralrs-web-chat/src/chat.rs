@@ -1,44 +1,28 @@
 use anyhow::Result;
-use chrono::Utc;
 use std::sync::Arc;
 use tokio::fs;
 
 use crate::types::{AppState, ChatFile, ChatMessage};
 
+/// Append a chat message to the specified chat file.
 pub async fn append_chat_message(
     app: &Arc<AppState>,
+    chat_id: &str,
     role: &str,
     content: &str,
     images: Option<Vec<String>>,
 ) -> Result<()> {
-    // Ignore replay helpers sent from the front‑end
+    // Ignore replay helpers sent from the front-end
     if content.trim_start().starts_with("{\"restore\":") {
         return Ok(());
     }
-    let chat_opt = app.current_chat.read().await.clone();
-    let Some(chat_id) = chat_opt else {
-        return Ok(());
-    };
     let path = format!("{}/{}.json", app.chats_dir, chat_id);
-
-    let mut chat: ChatFile = if let Ok(data) = fs::read(&path).await {
-        serde_json::from_slice(&data).unwrap_or(ChatFile {
-            title: None,
-            model: app.current.read().await.clone().unwrap_or_default(),
-            kind: String::new(),
-            created_at: Utc::now().to_rfc3339(),
-            messages: Vec::new(),
-        })
-    } else {
-        ChatFile {
-            title: None,
-            model: app.current.read().await.clone().unwrap_or_default(),
-            kind: String::new(),
-            created_at: Utc::now().to_rfc3339(),
-            messages: Vec::new(),
-        }
+    // Read existing chat file
+    let data = match fs::read(&path).await {
+        Ok(d) => d,
+        Err(_) => return Ok(()),
     };
-
+    let mut chat: ChatFile = serde_json::from_slice(&data)?;
     chat.messages.push(ChatMessage {
         role: role.into(),
         content: content.into(),

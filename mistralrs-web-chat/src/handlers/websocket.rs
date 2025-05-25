@@ -102,24 +102,21 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
     let mut image_buffer: Vec<image::DynamicImage> = Vec::new();
     // `true` while we are streaming a reply back to the client.
     let mut streaming = false;
-    // Track which chat file this websocket has prepared context for.
-    // When the user switches chats via /api/load_chat, app.current_chat changes;
-    // we must reset local state so conversations don't leak across chats.
-    let mut active_chat_id: Option<String> = {
-        // Whatever chat (if any) was active when the socket was opened.
-        app.current_chat.read().await.clone()
-    };
+    // Track per-connection chat ID; set by client via WebSocket control
+    let mut active_chat_id: Option<String> = None;
 
     while let Some(Ok(Message::Text(user_msg))) = socket.next().await {
-        // ----- Detect chat switch -----
-        let cur_chat_id = app.current_chat.read().await.clone();
-        if cur_chat_id != active_chat_id {
-            // A new chat has been selected: wipe the message buffers so
-            // previous conversation state does not bleed into this chat.
-            text_msgs = TextMessages::new();
-            vision_msgs = VisionMessages::new();
-            image_buffer.clear();
-            active_chat_id = cur_chat_id;
+        // Handle per-connection chat ID setting
+        if let Ok(val) = serde_json::from_str::<Value>(&user_msg) {
+            if let Some(id) = val.get("chat_id").and_then(|v| v.as_str()) {
+                if active_chat_id.as_deref() != Some(id) {
+                    active_chat_id = Some(id.to_string());
+                    text_msgs = TextMessages::new();
+                    vision_msgs = VisionMessages::new();
+                    image_buffer.clear();
+                }
+                continue;
+            }
         }
         // Allow client to request a context reset without closing the socket
         if user_msg == CLEAR_CMD {
@@ -175,6 +172,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                     &mut socket,
                     &app,
                     &mut streaming,
+                    &active_chat_id,
                 )
                 .await;
             }
@@ -187,6 +185,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                     &mut socket,
                     &app,
                     &mut streaming,
+                    &active_chat_id,
                 )
                 .await;
             }
@@ -290,12 +289,15 @@ async fn handle_text_model(
     socket: &mut WebSocket,
     app: &Arc<AppState>,
     streaming: &mut bool,
+    active_chat_id: &Option<String>,
 ) {
     *text_msgs = text_msgs
         .clone()
         .add_message(TextMessageRole::User, user_msg);
-    if let Err(e) = append_chat_message(app, "user", user_msg, None).await {
-        error!("chat save error: {}", e);
+    if let Some(chat_id) = active_chat_id {
+        if let Err(e) = append_chat_message(app, chat_id, "user", user_msg, None).await {
+            error!("chat save error: {}", e);
+        }
     }
     let mut assistant_content = String::new();
     let msgs_snapshot = text_msgs.clone();
@@ -314,7 +316,9 @@ async fn handle_text_model(
     )
     .await;
     if !assistant_content.is_empty() {
-        let _ = append_chat_message(app, "assistant", &assistant_content, None).await;
+        if let Some(chat_id) = active_chat_id {
+            let _ = append_chat_message(app, chat_id, "assistant", &assistant_content, None).await;
+        }
     }
     if let Err(e) = stream_res {
         error!("stream error: {}", e);
@@ -329,6 +333,7 @@ async fn handle_vision_model(
     socket: &mut WebSocket,
     app: &Arc<AppState>,
     streaming: &mut bool,
+    active_chat_id: &Option<String>,
 ) {
     // Track the exact set of messages that will be sent *this* turn.
     let mut msgs_for_stream: Option<VisionMessages> = None;
@@ -370,8 +375,10 @@ async fn handle_vision_model(
                 .clone()
                 .add_message(TextMessageRole::User, user_msg);
             msgs_for_stream = Some(vision_msgs.clone());
-            if let Err(e) = append_chat_message(app, "user", user_msg, None).await {
-                error!("chat save error: {}", e);
+            if let Some(chat_id) = active_chat_id {
+                if let Err(e) = append_chat_message(app, chat_id, "user", user_msg, None).await {
+                    error!("chat save error: {}", e);
+                }
             }
         }
     } else {
@@ -382,8 +389,10 @@ async fn handle_vision_model(
                 .add_message(TextMessageRole::User, user_msg);
             // Send the text‑only context to the model
             msgs_for_stream = Some(vision_msgs.clone());
-            if let Err(e) = append_chat_message(app, "user", user_msg, None).await {
-                error!("chat save error: {}", e);
+            if let Some(chat_id) = active_chat_id {
+                if let Err(e) = append_chat_message(app, chat_id, "user", user_msg, None).await {
+                    error!("chat save error: {}", e);
+                }
             }
         } else {
             match vision_msgs.clone().add_image_message(
@@ -411,9 +420,13 @@ async fn handle_vision_model(
                             imgs_b64.push(format!("data:image/png;base64,{}", BASE64.encode(&buf)));
                         }
                     }
-                    if let Err(e) = append_chat_message(app, "user", user_msg, Some(imgs_b64)).await
-                    {
-                        error!("chat save error: {}", e);
+                    if let Some(chat_id) = active_chat_id {
+                        if let Err(e) =
+                            append_chat_message(app, chat_id, "user", user_msg, Some(imgs_b64))
+                                .await
+                        {
+                            error!("chat save error: {}", e);
+                        }
                     }
                     image_buffer.clear();
                 }
@@ -440,7 +453,9 @@ async fn handle_vision_model(
     )
     .await;
     if !assistant_content.is_empty() {
-        let _ = append_chat_message(app, "assistant", &assistant_content, None).await;
+        if let Some(chat_id) = active_chat_id {
+            let _ = append_chat_message(app, chat_id, "assistant", &assistant_content, None).await;
+        }
     }
     if let Err(e) = stream_res {
         error!("stream error: {}", e);

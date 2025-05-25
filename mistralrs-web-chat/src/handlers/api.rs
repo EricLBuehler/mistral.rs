@@ -82,9 +82,8 @@ fn validate_text_upload(
         "c" | "cpp" | "cc" | "cxx" | "h" | "hpp" | "hxx" | "java" | "kt" | "swift" | "go"
         | "rb" | "php" => Ok(ext),
         // GPU and shader languages
-        "cu" | "cuh" | "cl" | "ptx"
-        | "glsl" | "vert" | "frag" | "geom" | "comp" | "tesc" | "tese"
-        | "hlsl" | "metal" | "wgsl" => Ok(ext),
+        "cu" | "cuh" | "cl" | "ptx" | "glsl" | "vert" | "frag" | "geom" | "comp" | "tesc"
+        | "tese" | "hlsl" | "metal" | "wgsl" => Ok(ext),
         // Shell and other scripts
         "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" | "sql" | "dockerfile"
         | "makefile" => Ok(ext),
