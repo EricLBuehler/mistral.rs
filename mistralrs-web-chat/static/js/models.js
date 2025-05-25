@@ -62,6 +62,7 @@ function initModelSelection() {
     }
     updateImageVisibility(models[name]);
     clearImagePreviews();
+    clearTextFilePreviews();
     prevModel = name;
     await selectModel(name);
   });
