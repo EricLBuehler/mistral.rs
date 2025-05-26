@@ -2,36 +2,40 @@
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>serde_json::Value;
 <a href=#4 id=4 data-nosnippet>4</a>
-<a href=#5 id=5 data-nosnippet>5</a><span class="attr">#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-<a href=#6 id=6 data-nosnippet>6</a></span><span class="kw">pub enum </span>ToolType {
-<a href=#7 id=7 data-nosnippet>7</a>    <span class="attr">#[serde(rename = <span class="string">"function"</span>)]
-<a href=#8 id=8 data-nosnippet>8</a>    </span>Function,
-<a href=#9 id=9 data-nosnippet>9</a>}
-<a href=#10 id=10 data-nosnippet>10</a>
-<a href=#11 id=11 data-nosnippet>11</a><span class="attr">#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-<a href=#12 id=12 data-nosnippet>12</a></span><span class="kw">pub enum </span>ToolChoice {
-<a href=#13 id=13 data-nosnippet>13</a>    <span class="attr">#[serde(rename = <span class="string">"none"</span>)]
-<a href=#14 id=14 data-nosnippet>14</a>    </span><span class="doccomment">/// Disallow selection of tools.
-<a href=#15 id=15 data-nosnippet>15</a>    </span><span class="prelude-val">None</span>,
-<a href=#16 id=16 data-nosnippet>16</a>    <span class="attr">#[serde(rename = <span class="string">"auto"</span>)]
-<a href=#17 id=17 data-nosnippet>17</a>    </span><span class="doccomment">/// Allow automatic selection of any given tool, or none.
-<a href=#18 id=18 data-nosnippet>18</a>    </span>Auto,
-<a href=#19 id=19 data-nosnippet>19</a>    <span class="attr">#[serde(untagged)]
-<a href=#20 id=20 data-nosnippet>20</a>    </span><span class="doccomment">/// Force selection of a given tool.
-<a href=#21 id=21 data-nosnippet>21</a>    </span>Tool(Tool),
-<a href=#22 id=22 data-nosnippet>22</a>}
-<a href=#23 id=23 data-nosnippet>23</a>
-<a href=#24 id=24 data-nosnippet>24</a><span class="attr">#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-<a href=#25 id=25 data-nosnippet>25</a></span><span class="kw">pub struct </span>Function {
-<a href=#26 id=26 data-nosnippet>26</a>    <span class="kw">pub </span>description: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#27 id=27 data-nosnippet>27</a>    <span class="kw">pub </span>name: String,
-<a href=#28 id=28 data-nosnippet>28</a>    <span class="attr">#[serde(alias = <span class="string">"arguments"</span>)]
-<a href=#29 id=29 data-nosnippet>29</a>    </span><span class="kw">pub </span>parameters: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, Value&gt;&gt;,
-<a href=#30 id=30 data-nosnippet>30</a>}
-<a href=#31 id=31 data-nosnippet>31</a>
-<a href=#32 id=32 data-nosnippet>32</a><span class="attr">#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-<a href=#33 id=33 data-nosnippet>33</a></span><span class="kw">pub struct </span>Tool {
-<a href=#34 id=34 data-nosnippet>34</a>    <span class="attr">#[serde(rename = <span class="string">"type"</span>)]
-<a href=#35 id=35 data-nosnippet>35</a>    </span><span class="kw">pub </span>tp: ToolType,
-<a href=#36 id=36 data-nosnippet>36</a>    <span class="kw">pub </span>function: Function,
-<a href=#37 id=37 data-nosnippet>37</a>}</code></pre></div></section></main></body></html>
+<a href=#5 id=5 data-nosnippet>5</a><span class="attr">#[cfg_attr(feature = <span class="string">"utoipa"</span>, derive(utoipa::ToSchema))]
+<a href=#6 id=6 data-nosnippet>6</a>#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+<a href=#7 id=7 data-nosnippet>7</a></span><span class="kw">pub enum </span>ToolType {
+<a href=#8 id=8 data-nosnippet>8</a>    <span class="attr">#[serde(rename = <span class="string">"function"</span>)]
+<a href=#9 id=9 data-nosnippet>9</a>    </span>Function,
+<a href=#10 id=10 data-nosnippet>10</a>}
+<a href=#11 id=11 data-nosnippet>11</a>
+<a href=#12 id=12 data-nosnippet>12</a><span class="attr">#[cfg_attr(feature = <span class="string">"utoipa"</span>, derive(utoipa::ToSchema))]
+<a href=#13 id=13 data-nosnippet>13</a>#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+<a href=#14 id=14 data-nosnippet>14</a></span><span class="kw">pub enum </span>ToolChoice {
+<a href=#15 id=15 data-nosnippet>15</a>    <span class="attr">#[serde(rename = <span class="string">"none"</span>)]
+<a href=#16 id=16 data-nosnippet>16</a>    </span><span class="doccomment">/// Disallow selection of tools.
+<a href=#17 id=17 data-nosnippet>17</a>    </span><span class="prelude-val">None</span>,
+<a href=#18 id=18 data-nosnippet>18</a>    <span class="attr">#[serde(rename = <span class="string">"auto"</span>)]
+<a href=#19 id=19 data-nosnippet>19</a>    </span><span class="doccomment">/// Allow automatic selection of any given tool, or none.
+<a href=#20 id=20 data-nosnippet>20</a>    </span>Auto,
+<a href=#21 id=21 data-nosnippet>21</a>    <span class="attr">#[serde(untagged)]
+<a href=#22 id=22 data-nosnippet>22</a>    </span><span class="doccomment">/// Force selection of a given tool.
+<a href=#23 id=23 data-nosnippet>23</a>    </span>Tool(Tool),
+<a href=#24 id=24 data-nosnippet>24</a>}
+<a href=#25 id=25 data-nosnippet>25</a>
+<a href=#26 id=26 data-nosnippet>26</a><span class="attr">#[cfg_attr(feature = <span class="string">"utoipa"</span>, derive(utoipa::ToSchema))]
+<a href=#27 id=27 data-nosnippet>27</a>#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+<a href=#28 id=28 data-nosnippet>28</a></span><span class="kw">pub struct </span>Function {
+<a href=#29 id=29 data-nosnippet>29</a>    <span class="kw">pub </span>description: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#30 id=30 data-nosnippet>30</a>    <span class="kw">pub </span>name: String,
+<a href=#31 id=31 data-nosnippet>31</a>    <span class="attr">#[serde(alias = <span class="string">"arguments"</span>)]
+<a href=#32 id=32 data-nosnippet>32</a>    </span><span class="kw">pub </span>parameters: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, Value&gt;&gt;,
+<a href=#33 id=33 data-nosnippet>33</a>}
+<a href=#34 id=34 data-nosnippet>34</a>
+<a href=#35 id=35 data-nosnippet>35</a><span class="attr">#[cfg_attr(feature = <span class="string">"utoipa"</span>, derive(utoipa::ToSchema))]
+<a href=#36 id=36 data-nosnippet>36</a>#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+<a href=#37 id=37 data-nosnippet>37</a></span><span class="kw">pub struct </span>Tool {
+<a href=#38 id=38 data-nosnippet>38</a>    <span class="attr">#[serde(rename = <span class="string">"type"</span>)]
+<a href=#39 id=39 data-nosnippet>39</a>    </span><span class="kw">pub </span>tp: ToolType,
+<a href=#40 id=40 data-nosnippet>40</a>    <span class="kw">pub </span>function: Function,
+<a href=#41 id=41 data-nosnippet>41</a>}</code></pre></div></section></main></body></html>
