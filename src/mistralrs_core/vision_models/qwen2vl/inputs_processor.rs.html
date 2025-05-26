@@ -125,7 +125,7 @@
 <a href=#125 id=125 data-nosnippet>125</a>        last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
 <a href=#126 id=126 data-nosnippet>126</a>        return_raw_logits: bool,
 <a href=#127 id=127 data-nosnippet>127</a>        other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
-<a href=#128 id=128 data-nosnippet>128</a>        <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
+<a href=#128 id=128 data-nosnippet>128</a>        <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&gt;,
 <a href=#129 id=129 data-nosnippet>129</a>        prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 <a href=#130 id=130 data-nosnippet>130</a>        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
 <a href=#131 id=131 data-nosnippet>131</a>    ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InputProcessorOutput&gt;&gt;&gt; {

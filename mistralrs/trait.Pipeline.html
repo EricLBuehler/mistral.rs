@@ -28,7 +28,7 @@
 <span class="item-spacer"></span>    fn <a href="#tymethod.category" class="fn">category</a>(&amp;self) -&gt; <a class="enum" href="enum.ModelCategory.html" title="enum mistralrs::ModelCategory">ModelCategory</a>;
 
     // Provided method
-    fn <a href="#method.step" class="fn">step</a>&lt;'life0, 'life1, 'life2, 'life3, 'life4, 'async_trait&gt;(
+    fn <a href="#method.step" class="fn">step</a>&lt;'life0, 'life1, 'life2, 'life3, 'async_trait&gt;(
         &amp;'life0 mut self,
         input_seqs: &amp;'life1 mut [&amp;'life2 mut Sequence],
         is_prompt: <a class="primitive" href="https://doc.rust-lang.org/1.87.0/std/primitive.bool.html">bool</a>,
@@ -36,13 +36,12 @@
         prefix_cacher: &amp;'life3 mut PrefixCacheManagerV2,
         disable_eos_stop: <a class="primitive" href="https://doc.rust-lang.org/1.87.0/std/primitive.bool.html">bool</a>,
         rng: <a class="struct" href="https://doc.rust-lang.org/1.87.0/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.87.0/std/sync/poison/mutex/struct.Mutex.html" title="struct std::sync::poison::mutex::Mutex">Mutex</a>&lt;<a class="struct" href="https://docs.rs/rand_isaac/0.4.0/rand_isaac/isaac64/struct.Isaac64Rng.html" title="struct rand_isaac::isaac64::Isaac64Rng">Isaac64Rng</a>&gt;&gt;,
-        backend_metadata: CacheBackendMetadata&lt;'life4&gt;,
+        backend_metadata: CacheBackendMetadata,
     ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.87.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.87.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.87.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="enum" href="https://doc.rust-lang.org/1.87.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.87.0/core/time/struct.Duration.html" title="struct core::time::Duration">Duration</a>, Error&gt;&gt; + <a class="trait" href="https://doc.rust-lang.org/1.87.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;
        <span class="where">where 'life0: 'async_trait,
              'life1: 'async_trait,
              'life2: 'async_trait,
              'life3: 'async_trait,
-             'life4: 'async_trait,
              Self: 'async_trait</span> { ... }
 }</code></pre><h2 id="required-methods" class="section-header">Required Methods<a href="#required-methods" class="anchor">§</a></h2><div class="methods"><section id="tymethod.forward_inputs" class="method"><a class="src rightside" href="../src/mistralrs_core/pipeline/mod.rs.html#340-344">Source</a><h4 class="code-header">fn <a href="#tymethod.forward_inputs" class="fn">forward_inputs</a>(
     &amp;mut self,
@@ -60,7 +59,7 @@
     'life1: 'async_trait,
     'life2: 'async_trait,
     'life3: 'async_trait,
-    Self: 'async_trait,</div></h4></section><section id="tymethod.category" class="method"><a class="src rightside" href="../src/mistralrs_core/pipeline/mod.rs.html#696">Source</a><h4 class="code-header">fn <a href="#tymethod.category" class="fn">category</a>(&amp;self) -&gt; <a class="enum" href="enum.ModelCategory.html" title="enum mistralrs::ModelCategory">ModelCategory</a></h4></section></div><h2 id="provided-methods" class="section-header">Provided Methods<a href="#provided-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="method.step" class="method"><a class="src rightside" href="../src/mistralrs_core/pipeline/mod.rs.html#330">Source</a><h4 class="code-header">fn <a href="#method.step" class="fn">step</a>&lt;'life0, 'life1, 'life2, 'life3, 'life4, 'async_trait&gt;(
+    Self: 'async_trait,</div></h4></section><section id="tymethod.category" class="method"><a class="src rightside" href="../src/mistralrs_core/pipeline/mod.rs.html#696">Source</a><h4 class="code-header">fn <a href="#tymethod.category" class="fn">category</a>(&amp;self) -&gt; <a class="enum" href="enum.ModelCategory.html" title="enum mistralrs::ModelCategory">ModelCategory</a></h4></section></div><h2 id="provided-methods" class="section-header">Provided Methods<a href="#provided-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="method.step" class="method"><a class="src rightside" href="../src/mistralrs_core/pipeline/mod.rs.html#330">Source</a><h4 class="code-header">fn <a href="#method.step" class="fn">step</a>&lt;'life0, 'life1, 'life2, 'life3, 'async_trait&gt;(
     &amp;'life0 mut self,
     input_seqs: &amp;'life1 mut [&amp;'life2 mut Sequence],
     is_prompt: <a class="primitive" href="https://doc.rust-lang.org/1.87.0/std/primitive.bool.html">bool</a>,
@@ -68,12 +67,11 @@
     prefix_cacher: &amp;'life3 mut PrefixCacheManagerV2,
     disable_eos_stop: <a class="primitive" href="https://doc.rust-lang.org/1.87.0/std/primitive.bool.html">bool</a>,
     rng: <a class="struct" href="https://doc.rust-lang.org/1.87.0/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.87.0/std/sync/poison/mutex/struct.Mutex.html" title="struct std::sync::poison::mutex::Mutex">Mutex</a>&lt;<a class="struct" href="https://docs.rs/rand_isaac/0.4.0/rand_isaac/isaac64/struct.Isaac64Rng.html" title="struct rand_isaac::isaac64::Isaac64Rng">Isaac64Rng</a>&gt;&gt;,
-    backend_metadata: CacheBackendMetadata&lt;'life4&gt;,
+    backend_metadata: CacheBackendMetadata,
 ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.87.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.87.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.87.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="enum" href="https://doc.rust-lang.org/1.87.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.87.0/core/time/struct.Duration.html" title="struct core::time::Duration">Duration</a>, Error&gt;&gt; + <a class="trait" href="https://doc.rust-lang.org/1.87.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;<div class="where">where
     'life0: 'async_trait,
     'life1: 'async_trait,
     'life2: 'async_trait,
     'life3: 'async_trait,
-    'life4: 'async_trait,
     Self: 'async_trait,</div></h4></section></summary><div class="docblock"><p>Returns the total of model execution time.</p>
 </div></details></div><h2 id="implementors" class="section-header">Implementors<a href="#implementors" class="anchor">§</a></h2><div id="implementors-list"><section id="impl-Pipeline-for-AnyMoePipeline" class="impl"><a class="src rightside" href="../src/mistralrs_core/pipeline/amoe.rs.html#249">Source</a><a href="#impl-Pipeline-for-AnyMoePipeline" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.Pipeline.html" title="trait mistralrs::Pipeline">Pipeline</a> for <a class="struct" href="struct.AnyMoePipeline.html" title="struct mistralrs::AnyMoePipeline">AnyMoePipeline</a></h3></section><section id="impl-Pipeline-for-SpeculativePipeline" class="impl"><a class="src rightside" href="../src/mistralrs_core/pipeline/speculative.rs.html#314">Source</a><a href="#impl-Pipeline-for-SpeculativePipeline" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.Pipeline.html" title="trait mistralrs::Pipeline">Pipeline</a> for <a class="struct" href="struct.SpeculativePipeline.html" title="struct mistralrs::SpeculativePipeline">SpeculativePipeline</a></h3></section><section id="impl-Pipeline-for-SpeechPipeline" class="impl"><a class="src rightside" href="../src/mistralrs_core/pipeline/speech.rs.html#377">Source</a><a href="#impl-Pipeline-for-SpeechPipeline" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.Pipeline.html" title="trait mistralrs::Pipeline">Pipeline</a> for <a class="struct" href="struct.SpeechPipeline.html" title="struct mistralrs::SpeechPipeline">SpeechPipeline</a></h3></section></div><script src="../trait.impl/mistralrs_core/pipeline/trait.Pipeline.js" data-ignore-extern-crates="mistralrs_core" async></script></section></div></main></body></html>

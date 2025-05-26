@@ -119,7 +119,7 @@
 <a href=#119 id=119 data-nosnippet>119</a>        _last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
 <a href=#120 id=120 data-nosnippet>120</a>        _return_raw_logits: bool,
 <a href=#121 id=121 data-nosnippet>121</a>        _other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
-<a href=#122 id=122 data-nosnippet>122</a>        _paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
+<a href=#122 id=122 data-nosnippet>122</a>        _paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&gt;,
 <a href=#123 id=123 data-nosnippet>123</a>        prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 <a href=#124 id=124 data-nosnippet>124</a>        _mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
 <a href=#125 id=125 data-nosnippet>125</a>    ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InputProcessorOutput&gt;&gt;&gt; {

@@ -88,7 +88,7 @@
 <a href=#88 id=88 data-nosnippet>88</a>        last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
 <a href=#89 id=89 data-nosnippet>89</a>        return_raw_logits: bool,
 <a href=#90 id=90 data-nosnippet>90</a>        other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
-<a href=#91 id=91 data-nosnippet>91</a>        <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
+<a href=#91 id=91 data-nosnippet>91</a>        <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&gt;,
 <a href=#92 id=92 data-nosnippet>92</a>        prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 <a href=#93 id=93 data-nosnippet>93</a>        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
 <a href=#94 id=94 data-nosnippet>94</a>    ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = anyhow::Result&lt;InputProcessorOutput&gt;&gt;&gt; {

@@ -337,7 +337,7 @@
 <a href=#337 id=337 data-nosnippet>337</a>        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManagerV2,
 <a href=#338 id=338 data-nosnippet>338</a>        disable_eos_stop: bool,
 <a href=#339 id=339 data-nosnippet>339</a>        rng: Arc&lt;Mutex&lt;Isaac64Rng&gt;&gt;,
-<a href=#340 id=340 data-nosnippet>340</a>        backend_metadata: CacheBackendMetadata&lt;<span class="lifetime">'_</span>&gt;,
+<a href=#340 id=340 data-nosnippet>340</a>        backend_metadata: CacheBackendMetadata,
 <a href=#341 id=341 data-nosnippet>341</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Duration&gt; {
 <a href=#342 id=342 data-nosnippet>342</a>        <span class="kw">match </span>backend_metadata {
 <a href=#343 id=343 data-nosnippet>343</a>            CacheBackendMetadata::DefaultInstructions { pre_op, post_op } =&gt; {

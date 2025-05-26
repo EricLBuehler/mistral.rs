@@ -258,13 +258,13 @@
 <a href=#258 id=258 data-nosnippet>258</a>    </span><span class="kw">fn </span>prefix_image(<span class="kw-2">&amp;</span><span class="self">self</span>, image_indices: Vec&lt;usize&gt;, prompt: <span class="kw-2">&amp;</span>str) -&gt; String;
 <a href=#259 id=259 data-nosnippet>259</a>}
 <a href=#260 id=260 data-nosnippet>260</a>
-<a href=#261 id=261 data-nosnippet>261</a><span class="kw">pub enum </span>CacheBackendMetadata&lt;<span class="lifetime">'a</span>&gt; {
+<a href=#261 id=261 data-nosnippet>261</a><span class="kw">pub enum </span>CacheBackendMetadata {
 <a href=#262 id=262 data-nosnippet>262</a>    DefaultInstructions {
 <a href=#263 id=263 data-nosnippet>263</a>        pre_op: CacheInstruction,
 <a href=#264 id=264 data-nosnippet>264</a>        post_op: CacheInstruction,
 <a href=#265 id=265 data-nosnippet>265</a>    },
 <a href=#266 id=266 data-nosnippet>266</a>    PagedAttention {
-<a href=#267 id=267 data-nosnippet>267</a>        metadata: PagedAttentionMeta&lt;<span class="lifetime">'a</span>&gt;,
+<a href=#267 id=267 data-nosnippet>267</a>        metadata: PagedAttentionMeta,
 <a href=#268 id=268 data-nosnippet>268</a>        blocks_to_swap_in: HashMap&lt;usize, usize&gt;,
 <a href=#269 id=269 data-nosnippet>269</a>        blocks_to_swap_out: HashMap&lt;usize, usize&gt;,
 <a href=#270 id=270 data-nosnippet>270</a>        blocks_to_copy: HashMap&lt;usize, Vec&lt;usize&gt;&gt;,
@@ -353,7 +353,7 @@
 <a href=#353 id=353 data-nosnippet>353</a>        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManagerV2,
 <a href=#354 id=354 data-nosnippet>354</a>        disable_eos_stop: bool,
 <a href=#355 id=355 data-nosnippet>355</a>        rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
-<a href=#356 id=356 data-nosnippet>356</a>        backend_metadata: CacheBackendMetadata&lt;<span class="lifetime">'_</span>&gt;,
+<a href=#356 id=356 data-nosnippet>356</a>        backend_metadata: CacheBackendMetadata,
 <a href=#357 id=357 data-nosnippet>357</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Duration, candle_core::Error&gt; {
 <a href=#358 id=358 data-nosnippet>358</a>        <span class="kw">match </span>backend_metadata {
 <a href=#359 id=359 data-nosnippet>359</a>            CacheBackendMetadata::DefaultInstructions { pre_op, post_op } =&gt; {

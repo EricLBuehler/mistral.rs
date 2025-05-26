@@ -920,7 +920,7 @@
 <a href=#920 id=920 data-nosnippet>920</a>
 <a href=#921 id=921 data-nosnippet>921</a>        <span class="comment">// Replicate the kernel’s internal block sizing to derive `n_blocks`
 <a href=#922 id=922 data-nosnippet>922</a>        </span><span class="kw">let </span>tn = <span class="number">4usize</span>;
-<a href=#923 id=923 data-nosnippet>923</a>        <span class="kw">let </span><span class="kw-2">mut </span>bn = <span class="kw">match </span>(size_sorted_axis + tn - <span class="number">1</span>) / tn {
+<a href=#923 id=923 data-nosnippet>923</a>        <span class="kw">let </span><span class="kw-2">mut </span>bn = <span class="kw">match </span>size_sorted_axis.div_ceil(tn) {
 <a href=#924 id=924 data-nosnippet>924</a>            v <span class="kw">if </span>v &gt; <span class="number">256 </span>=&gt; <span class="number">512</span>,
 <a href=#925 id=925 data-nosnippet>925</a>            v <span class="kw">if </span>v &gt; <span class="number">128 </span>=&gt; <span class="number">256</span>,
 <a href=#926 id=926 data-nosnippet>926</a>            v <span class="kw">if </span>v &gt; <span class="number">64 </span>=&gt; <span class="number">128</span>,
@@ -931,7 +931,7 @@
 <a href=#931 id=931 data-nosnippet>931</a>            bn = <span class="number">256</span>;
 <a href=#932 id=932 data-nosnippet>932</a>        }
 <a href=#933 id=933 data-nosnippet>933</a>        <span class="kw">let </span>n_per_block = bn * tn;
-<a href=#934 id=934 data-nosnippet>934</a>        <span class="kw">let </span>n_blocks = (size_sorted_axis + n_per_block - <span class="number">1</span>) / n_per_block;
+<a href=#934 id=934 data-nosnippet>934</a>        <span class="kw">let </span>n_blocks = size_sorted_axis.div_ceil(n_per_block);
 <a href=#935 id=935 data-nosnippet>935</a>
 <a href=#936 id=936 data-nosnippet>936</a>        <span class="comment">// Borrow the buffers for this launch
 <a href=#937 id=937 data-nosnippet>937</a>        </span><span class="kw">let </span>scratch = cache.checkout(device, n_rows, size_sorted_axis, s1.dtype(), n_blocks);
@@ -1027,7 +1027,7 @@
 <a href=#1027 id=1027 data-nosnippet>1027</a>
 <a href=#1028 id=1028 data-nosnippet>1028</a>        <span class="comment">// Replicate the kernel’s internal block sizing to derive `n_blocks`
 <a href=#1029 id=1029 data-nosnippet>1029</a>        </span><span class="kw">let </span>tn = <span class="number">4usize</span>;
-<a href=#1030 id=1030 data-nosnippet>1030</a>        <span class="kw">let </span><span class="kw-2">mut </span>bn = <span class="kw">match </span>(size_sorted_axis + tn - <span class="number">1</span>) / tn {
+<a href=#1030 id=1030 data-nosnippet>1030</a>        <span class="kw">let </span><span class="kw-2">mut </span>bn = <span class="kw">match </span>size_sorted_axis.div_ceil(tn) {
 <a href=#1031 id=1031 data-nosnippet>1031</a>            v <span class="kw">if </span>v &gt; <span class="number">256 </span>=&gt; <span class="number">512</span>,
 <a href=#1032 id=1032 data-nosnippet>1032</a>            v <span class="kw">if </span>v &gt; <span class="number">128 </span>=&gt; <span class="number">256</span>,
 <a href=#1033 id=1033 data-nosnippet>1033</a>            v <span class="kw">if </span>v &gt; <span class="number">64 </span>=&gt; <span class="number">128</span>,
@@ -1038,7 +1038,7 @@
 <a href=#1038 id=1038 data-nosnippet>1038</a>            bn = <span class="number">256</span>;
 <a href=#1039 id=1039 data-nosnippet>1039</a>        }
 <a href=#1040 id=1040 data-nosnippet>1040</a>        <span class="kw">let </span>n_per_block = bn * tn;
-<a href=#1041 id=1041 data-nosnippet>1041</a>        <span class="kw">let </span>n_blocks = (size_sorted_axis + n_per_block - <span class="number">1</span>) / n_per_block;
+<a href=#1041 id=1041 data-nosnippet>1041</a>        <span class="kw">let </span>n_blocks = size_sorted_axis.div_ceil(n_per_block);
 <a href=#1042 id=1042 data-nosnippet>1042</a>
 <a href=#1043 id=1043 data-nosnippet>1043</a>        <span class="comment">// Borrow the buffers for this launch
 <a href=#1044 id=1044 data-nosnippet>1044</a>        </span><span class="kw">let </span>scratch = cache.checkout(device, n_rows, size_sorted_axis, s1.dtype(), n_blocks);
