@@ -275,23 +275,26 @@ impl PrefixCacheManagerV2 {
             else {
                 return Ok(None);
             };
+
             // Determine how many blocks cover the matched prefix
-            let mut n_blocks = match_len / block_size;
+            let mut n_blocks = match_len.div_ceil(block_size);
             n_blocks = n_blocks.min(logical_blocks.len());
+
+            if n_blocks == 0 {
+                return Ok(None);
+            }
+
             // Take the first n_blocks of both logical and physical blocks
             let mut logical_prefix = logical_blocks[..n_blocks].to_vec();
             let physical_prefix = physical_blocks[..n_blocks].to_vec();
+
             // If the last reused block is full, reserve an extra empty block for new tokens
             let new_toks = toks[match_len..].to_vec();
             for _ in 0..new_toks.len().div_ceil(block_size) {
-                logical_prefix.push(LogicalTokenBlock::new(
-                    logical_prefix.last().unwrap().block_size(),
-                ));
+                logical_prefix.push(LogicalTokenBlock::new(block_size));
             }
             if logical_prefix.last().is_some_and(|last| last.is_full()) {
-                logical_prefix.push(LogicalTokenBlock::new(
-                    logical_prefix.last().unwrap().block_size(),
-                ));
+                logical_prefix.push(LogicalTokenBlock::new(block_size));
             }
             let images_to_keep = if let Some(input_hashes) = image_hashes {
                 input_hashes.len().saturating_sub(images_match_until)
