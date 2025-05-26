@@ -262,7 +262,6 @@ impl BlockEngine {
             }
             block_table.push(self.gpu_allocator.allocate());
             self.block_tables.insert(seq.get_id(), block_table.clone());
-            dbg!(&self.block_tables);
         } else {
             let mut block_table = Vec::new();
             for _logcical_idx in 0..seq.logical_token_blocks().len() {

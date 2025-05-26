@@ -217,12 +217,12 @@ pub mod text_models_inputs_processor {
 
                 let mut slot_mapping = Vec::new();
                 let mut ctxt_len = Vec::new();
-                for i in 0..prompt_len {
+                for i in chunk_offset_toks..prompt_len + chunk_offset_toks {
                     if i < start_idx {
                         // Pad [0,start_idx) with _PAD_TOKEN_ID
                         slot_mapping.push(_PAD_SLOT_ID);
                     }
-                    ctxt_len.push(i + chunk_offset_toks);
+                    ctxt_len.push(i);
 
                     let block_number = if i / paged_attn_metadata.block_size >= table.len() {
                         panic!(
@@ -243,7 +243,6 @@ pub mod text_models_inputs_processor {
                 paged_attn_context_lens.push(ctxt_len);
             }
         }
-        println!("{slot_mappings:?}");
 
         let max_q = *seqlens_q.iter().max().unwrap();
         let max_k = *seqlens_k.iter().max().unwrap();
