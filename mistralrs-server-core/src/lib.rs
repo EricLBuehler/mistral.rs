@@ -6,13 +6,13 @@ use mistralrs_core::{initialize_logging, MistralRs, ModelSelected, Pipeline};
 
 pub mod chat_completion;
 mod completions;
+pub mod defaults;
 mod handlers;
 mod image_generation;
 pub mod openai;
 pub mod openapi_doc;
 pub mod router;
 pub mod server_builder;
-pub mod server_defaults;
 mod speech_generation;
 mod util;
 

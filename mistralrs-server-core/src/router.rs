@@ -10,10 +10,10 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::{
     chat_completion::chatcompletions,
     completions::completions,
+    defaults::MAX_BODY_LIMIT,
     handlers::{health, models, re_isq},
     image_generation::image_generation,
     openapi_doc::get_openapi_doc,
-    server_defaults::MAX_BODY_LIMIT,
     speech_generation::speech_generation,
     SharedMistralState,
 };

@@ -12,7 +12,7 @@ use mistralrs_core::{
 };
 use tracing::info;
 
-use crate::{server_defaults, LoadedPipeline, SharedMistralState};
+use crate::{defaults, LoadedPipeline, SharedMistralState};
 
 pub struct ServerBuilder {
     //   These are for router
@@ -159,24 +159,24 @@ impl Default for ServerBuilder {
             log: None,
             truncate_sequence: false,
             model: None,
-            max_seqs: server_defaults::MAX_SEQS,
-            no_kv_cache: server_defaults::NO_KV_CACHE,
+            max_seqs: defaults::MAX_SEQS,
+            no_kv_cache: defaults::NO_KV_CACHE,
             chat_template: None,
             jinja_explicit: None,
-            token_source: server_defaults::DEFAULT_TOKEN_SOURCE,
-            interactive_mode: server_defaults::INTERACTIVE_MODE,
-            prefix_cache_n: server_defaults::PREFIX_CACHE_N,
+            token_source: defaults::DEFAULT_TOKEN_SOURCE,
+            interactive_mode: defaults::INTERACTIVE_MODE,
+            prefix_cache_n: defaults::PREFIX_CACHE_N,
             num_device_layers: None,
             in_situ_quant: None,
             paged_attn_gpu_mem: None,
             paged_attn_gpu_mem_usage: None,
             paged_ctxt_len: None,
             paged_attn_block_size: None,
-            no_paged_attn: server_defaults::NO_PAGED_ATTN,
-            paged_attn: server_defaults::PAGED_ATTN,
+            no_paged_attn: defaults::NO_PAGED_ATTN,
+            paged_attn: defaults::PAGED_ATTN,
             prompt_chunksize: None,
-            cpu: server_defaults::CPU,
-            enable_search: server_defaults::ENABLE_SEARCH,
+            cpu: defaults::CPU,
+            enable_search: defaults::ENABLE_SEARCH,
             search_bert_model: None,
             // enable_thinking: server_defaults::ENABLE_THINKING,
         }
@@ -269,11 +269,6 @@ impl ServerBuilder {
     }
 
     pub fn with_paged_attn_gpu_mem_usage(mut self, paged_attn_gpu_mem_usage: f32) -> Self {
-        assert!(
-            (0.0..=1.0).contains(&paged_attn_gpu_mem_usage),
-            "GPU memory usage must be between 0 and 1"
-        );
-
         self.paged_attn_gpu_mem_usage = Some(paged_attn_gpu_mem_usage);
         self
     }
