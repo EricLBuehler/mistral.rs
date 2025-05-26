@@ -478,7 +478,7 @@ template <> inline float sum(half a) { return (float)a; }
 
 template <> inline float sum(half2 a) { return (float)a.x + (float)a.y; }
 
-template <> inline float sum(half4 a) { return sum(a.x) + sum(a.y); }
+template <> inline float sum(half4 a) { return a.x+a.y+a.z+a.w; }
 
 template <> inline float sum(Half8_ a) { return sum(a.x) + sum(a.y); }
 
