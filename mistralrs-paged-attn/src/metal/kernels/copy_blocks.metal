@@ -45,5 +45,6 @@ template <typename T>
                     uint tid [[thread_position_in_threadgroup]],               \
                     uint threads_per_threadgroup [[threads_per_threadgroup]]);
 
-instantiate_copy_blocks(float) instantiate_copy_blocks(bfloat16_t)
-    instantiate_copy_blocks(half)
+instantiate_copy_blocks(float);
+instantiate_copy_blocks(bfloat16_t);
+instantiate_copy_blocks(half);

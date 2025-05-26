@@ -69,5 +69,6 @@ template <typename T>
       uint tid [[thread_position_in_threadgroup]],                             \
       uint threads_per_threadgroup [[threads_per_threadgroup]]);
 
-instantiate_reshape_and_cache(float) instantiate_reshape_and_cache(bfloat16_t)
-    instantiate_reshape_and_cache(half)
+instantiate_reshape_and_cache(float);
+instantiate_reshape_and_cache(bfloat16_t);
+instantiate_reshape_and_cache(half);

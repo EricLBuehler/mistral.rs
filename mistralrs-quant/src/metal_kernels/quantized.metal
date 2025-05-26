@@ -1606,14 +1606,17 @@ METAL_FUNC void qmv_fast_impl(const device uint32_t *w, const device T *scales,
   x += tid.y * in_vec_size + simd_lid * values_per_thread;
   y += tid.y * out_vec_size + out_row;
 
-  /* --- Optimisation: pre‑compute stride constants & per‑row base pointers --- */
-  const int ws_block_step = block_size * bytes_per_pack / pack_factor;   // bytes to jump per K‑block
-  const int sb_block_step = block_size / group_size;                      // elements to jump per K‑block
+  /* --- Optimisation: pre‑compute stride constants & per‑row base pointers ---
+   */
+  const int ws_block_step =
+      block_size * bytes_per_pack / pack_factor; // bytes to jump per K‑block
+  const int sb_block_step =
+      block_size / group_size; // elements to jump per K‑block
 
   // Cache per‑row pointers so we avoid recomputing `row * in_vec_size_*`
   thread const device uint8_t *wl_ptrs[results_per_simdgroup];
-  thread const device T        *sl_ptrs[results_per_simdgroup];
-  thread const device T        *bl_ptrs[results_per_simdgroup];
+  thread const device T *sl_ptrs[results_per_simdgroup];
+  thread const device T *bl_ptrs[results_per_simdgroup];
 
 #pragma clang loop unroll(full)
   for (int row = 0; row < results_per_simdgroup; ++row) {
@@ -1634,8 +1637,8 @@ METAL_FUNC void qmv_fast_impl(const device uint32_t *w, const device T *scales,
       U s = sl_ptrs[row][0];
       U b = bl_ptrs[row][0];
 
-      result[row] += qdot<U, values_per_thread, bits>(wl_ptrs[row],
-                                                      x_thread, s, b, sum);
+      result[row] +=
+          qdot<U, values_per_thread, bits>(wl_ptrs[row], x_thread, s, b, sum);
 
       // Advance all cached pointers to the next K‑block.
       wl_ptrs[row] += ws_block_step;
