@@ -117,7 +117,7 @@ impl PrefixCacheManagerV2 {
                 block.deref_mut().increment_refcount();
             }
 
-            let hashed_logical_blocks = hash_logical_blocks(&logical_token_blocks);
+            let hashed_logical_blocks = hash_logical_blocks(logical_token_blocks);
 
             self.block_caches.insert(
                 hashed_logical_blocks,

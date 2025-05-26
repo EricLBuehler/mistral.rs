@@ -1216,7 +1216,7 @@ pub fn call_scan(
         let n_simdgroups = bn / n_reads;
         let thread_group_size = n_simdgroups * 32;
         let mut tmp_grid_dims = get_2d_grid_dims_divisor(shape, strides, size * stride);
-        if tmp_grid_dims.width.saturating_mul(stride_blocks as u64) <= u64::MAX {
+        if tmp_grid_dims.width <= (u32::MAX as u64) / (stride_blocks as u64) {
             tmp_grid_dims.width *= stride_blocks as u64;
         } else {
             tmp_grid_dims.height *= stride_blocks as u64;
@@ -1341,8 +1341,8 @@ impl SortScratchCache {
     ///
     /// The borrow lasts for `'a` (caller’s scope) and is safe because the
     /// buffers live inside `self`.
-    pub fn checkout<'a>(
-        &'a self,
+    pub fn checkout(
+        &self,
         metal_device: &MetalDevice,
         n_rows: usize,
         size_sorted_axis: usize,
@@ -1474,7 +1474,7 @@ fn call_copy_gpu_inplace(
 
     #[inline]
     fn ceil_div(x: usize, y: usize) -> usize {
-        (x + y - 1) / y
+        x.div_ceil(y)
     }
 
     // === Sanity checks =======================================================
@@ -1694,7 +1694,7 @@ fn call_single_block_sort<'a>(
     use std::fmt::Write as _;
     let mut name = String::new();
     if contiguous {
-        name.push_str("c");
+        name.push('c');
     } else {
         name.push_str("nc");
     }
@@ -1751,9 +1751,9 @@ fn call_single_block_sort<'a>(
             let shape = 0i32;
             let stride = 0i64;
 
-            <i32 as EncoderParam>::set_param(encoder, 6, shape as i32);
-            <i64 as EncoderParam>::set_param(encoder, 7, stride as i64);
-            <i64 as EncoderParam>::set_param(encoder, 8, stride as i64);
+            <i32 as EncoderParam>::set_param(encoder, 6, shape);
+            <i64 as EncoderParam>::set_param(encoder, 7, stride);
+            <i64 as EncoderParam>::set_param(encoder, 8, stride);
         } else {
             encoder.set_bytes(
                 6,
@@ -1996,8 +1996,8 @@ fn call_multi_block_sort<'a>(
 
     // Copy outputs with appropriate strides
     let mut strides = out_strides.to_vec();
-    for ax in axis + 1..strides.len() {
-        strides[ax] *= args.out_shape[axis];
+    for strides_ax in strides.iter_mut().skip(axis + 1) {
+        *strides_ax *= args.out_shape[axis];
     }
     strides[axis] = 1;
 
@@ -2011,7 +2011,7 @@ fn call_multi_block_sort<'a>(
         args.out_shape,
         &strides,
         out_strides,
-        &*copy_src, // deref Arc
+        &copy_src, // deref Arc
         0,
         dst,
         0,

@@ -538,16 +538,14 @@ impl Sequence {
         self.set_state(SequenceState::RunningPrefillPrompt);
         self.token_offset = offset;
 
-        match &mut self.custom_metadata {
-            SequenceCustomMetadata::PagedAttention {
-                logical_token_blocks,
-                physical_blocks_prefill,
-                block_size: _,
-            } => {
-                *logical_token_blocks = logical_blocks;
-                *physical_blocks_prefill = Some(physical_blocks);
-            }
-            _ => (),
+        if let SequenceCustomMetadata::PagedAttention {
+            logical_token_blocks,
+            physical_blocks_prefill,
+            block_size: _,
+        } = &mut self.custom_metadata
+        {
+            *logical_token_blocks = logical_blocks;
+            *physical_blocks_prefill = Some(physical_blocks);
         }
 
         self
