@@ -269,11 +269,6 @@ impl ServerBuilder {
     }
 
     pub fn with_paged_attn_gpu_mem_usage(mut self, paged_attn_gpu_mem_usage: f32) -> Self {
-        assert!(
-            (0.0..=1.0).contains(&paged_attn_gpu_mem_usage),
-            "GPU memory usage must be between 0 and 1"
-        );
-
         self.paged_attn_gpu_mem_usage = Some(paged_attn_gpu_mem_usage);
         self
     }
@@ -420,74 +415,139 @@ impl ServerBuilder {
 }
 
 pub async fn debug_build(
-    server_builder: &mut ServerBuilder,
+    // server_builder: &mut ServerBuilder,
     model: ModelSelected,
 ) -> Result<SharedMistralState> {
+    let mut max_seqs = server_defaults::MAX_SEQS;
+
+    let cpu = server_defaults::CPU;
+    let seed = None;
+    let num_device_layers = None;
+
+    let no_paged_attn = server_defaults::NO_PAGED_ATTN;
+    let paged_attn = server_defaults::PAGED_ATTN;
+    let paged_attn = true;
+
+    let paged_attn_block_size = None;
+    let paged_attn_gpu_mem = None;
+    let paged_attn_gpu_mem_usage = None;
+    let paged_ctxt_len = None;
+
+    let no_kv_cache = server_defaults::NO_KV_CACHE;
+    let chat_template = None;
+    let jinja_explicit = None;
+
+    let token_source = server_defaults::DEFAULT_TOKEN_SOURCE;
+
+    let interactive_mode = server_defaults::INTERACTIVE_MODE;
+    let log = None;
+    let truncate_sequence = server_defaults::TRUNCATE_SEQUENCE;
+    let prefix_cache_n = server_defaults::PREFIX_CACHE_N;
+
+    //
+
     // This was originally with the device config
-    if server_builder.cpu {
-        server_builder.no_paged_attn = true;
-    }
+    // if server_builder.cpu {
+    //     server_builder.no_paged_attn = true;
+    // }
 
     let tgt_non_granular_index = get_tgt_non_granular_index(&model);
     let dtype = get_model_dtype(&model)?;
     let auto_device_map_params = get_auto_device_map_params(&model)?;
 
     if tgt_non_granular_index.is_some() {
-        server_builder.max_seqs = 1;
+        max_seqs = 1;
     }
 
-    let prompt_chunksize = match server_builder.prompt_chunksize {
-        Some(0) => {
-            anyhow::bail!("`prompt_chunksize` must be a strictly positive integer, got 0.",)
-        }
-        Some(x) => Some(NonZeroUsize::new(x).unwrap()),
-        None => None,
-    };
+    let prompt_chunksize = None;
+
+    // let prompt_chunksize = match server_builder.prompt_chunksize {
+    //     Some(0) => {
+    //         anyhow::bail!("`prompt_chunksize` must be a strictly positive integer, got 0.",)
+    //     }
+    //     Some(x) => Some(NonZeroUsize::new(x).unwrap()),
+    //     None => None,
+    // };
 
     let max_seq_len = auto_device_map_params.max_seq_len();
 
-    let device = if let Some(device) = server_builder.device.clone() {
-        device
-    } else {
-        init_device(server_builder.cpu, server_builder.seed)?
-    };
+    // let device = if let Some(device) = server_builder.device.clone() {
+    //     device
+    // } else {
+    //     init_device(server_builder.cpu, server_builder.seed)?
+    // };
 
-    let mapper = init_mapper(&server_builder.num_device_layers, &auto_device_map_params);
-    let no_paged_attn = configure_no_paged_attn(
-        &device,
-        server_builder.no_paged_attn,
-        server_builder.paged_attn,
-    );
+    let device = init_device(cpu, seed)?;
+
+    // let mapper = init_mapper(&server_builder.num_device_layers, &auto_device_map_params);
+    // let no_paged_attn = configure_no_paged_attn(
+    //     &device,
+    //     server_builder.no_paged_attn,
+    //     server_builder.paged_attn,
+    // );
+
+    let mapper = init_mapper(&num_device_layers, &auto_device_map_params);
+    let no_paged_attn = configure_no_paged_attn(&device, no_paged_attn, paged_attn);
 
     // Allocate 0.5 GB of CPU memory just as a placeholder.
     // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
+    // let cache_config = init_cache_config(
+    //     server_builder.paged_attn_block_size,
+    //     server_builder.paged_attn_gpu_mem,
+    //     server_builder.paged_attn_gpu_mem_usage,
+    //     server_builder.paged_ctxt_len,
+    //     no_paged_attn,
+    //     max_seq_len,
+    // )?;
+
     let cache_config = init_cache_config(
-        server_builder.paged_attn_block_size,
-        server_builder.paged_attn_gpu_mem,
-        server_builder.paged_attn_gpu_mem_usage,
-        server_builder.paged_ctxt_len,
+        paged_attn_block_size,
+        paged_attn_gpu_mem,
+        paged_attn_gpu_mem_usage,
+        paged_ctxt_len,
         no_paged_attn,
         max_seq_len,
     )?;
 
     // Configure this last to prevent arg moves
+    // let loader: Box<dyn Loader> = LoaderBuilder::new(model)
+    //     .with_no_kv_cache(server_builder.no_kv_cache)
+    //     .with_chat_template(server_builder.chat_template.clone())
+    //     .with_prompt_chunksize(prompt_chunksize)
+    //     .with_jinja_explicit(server_builder.jinja_explicit.clone())
+    //     .build()?;
+
     let loader: Box<dyn Loader> = LoaderBuilder::new(model)
-        .with_no_kv_cache(server_builder.no_kv_cache)
-        .with_chat_template(server_builder.chat_template.clone())
+        .with_no_kv_cache(no_kv_cache)
+        .with_chat_template(chat_template.clone())
         .with_prompt_chunksize(prompt_chunksize)
-        .with_jinja_explicit(server_builder.jinja_explicit.clone())
+        .with_jinja_explicit(jinja_explicit.clone())
         .build()?;
 
     print_mistral_server_info(&loader);
 
-    let isq = server_builder
-        .in_situ_quant
-        .as_ref()
-        .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
+    // let isq = server_builder
+    //     .in_situ_quant
+    //     .as_ref()
+    //     .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
+
+    let isq = None;
+
+    // let pipeline: LoadedPipeline = loader.load_model_from_hf(
+    //     None,
+    //     server_builder.token_source.clone(),
+    //     &dtype,
+    //     &device,
+    //     false,
+    //     mapper,
+    //     isq,
+    //     cache_config,
+    // )?;
+    // info!("Model loaded.");
 
     let pipeline: LoadedPipeline = loader.load_model_from_hf(
         None,
-        server_builder.token_source.clone(),
+        token_source,
         &dtype,
         &device,
         false,
@@ -497,34 +557,46 @@ pub async fn debug_build(
     )?;
     info!("Model loaded.");
 
-    let scheduler_config =
-        init_scheduler_config(&cache_config, &pipeline, server_builder.max_seqs).await;
+    // let scheduler_config =
+    //     init_scheduler_config(&cache_config, &pipeline, server_builder.max_seqs).await;
 
-    let bert_model = if server_builder.enable_search {
-        Some(
-            server_builder
-                .search_bert_model
-                .clone()
-                .map(BertEmbeddingModel::Custom)
-                .unwrap_or_default(),
-        )
-    } else {
-        None
-    };
+    let scheduler_config = init_scheduler_config(&cache_config, &pipeline, max_seqs).await;
 
-    let mistralrs = MistralRsBuilder::new(
-        pipeline,
-        scheduler_config,
-        !server_builder.interactive_mode,
-        bert_model,
-    )
-    .with_opt_log(server_builder.log.clone())
-    .with_truncate_sequence(server_builder.truncate_sequence)
-    .with_no_kv_cache(server_builder.no_kv_cache)
-    .with_prefix_cache_n(server_builder.prefix_cache_n)
-    .build();
+    // let bert_model = if server_builder.enable_search {
+    //     Some(
+    //         server_builder
+    //             .search_bert_model
+    //             .clone()
+    //             .map(BertEmbeddingModel::Custom)
+    //             .unwrap_or_default(),
+    //     )
+    // } else {
+    //     None
+    // };
 
-    Ok(mistralrs.to_owned())
+    let bert_model = None;
+
+    // let mistralrs = MistralRsBuilder::new(
+    //     pipeline,
+    //     scheduler_config,
+    //     !server_builder.interactive_mode,
+    //     bert_model,
+    // )
+    // .with_opt_log(server_builder.log.clone())
+    // .with_truncate_sequence(server_builder.truncate_sequence)
+    // .with_no_kv_cache(server_builder.no_kv_cache)
+    // .with_prefix_cache_n(server_builder.prefix_cache_n)
+    // .build();
+
+    let mistralrs =
+        MistralRsBuilder::new(pipeline, scheduler_config, !interactive_mode, bert_model)
+            .with_opt_log(log.clone())
+            .with_truncate_sequence(truncate_sequence)
+            .with_no_kv_cache(no_kv_cache)
+            .with_prefix_cache_n(prefix_cache_n)
+            .build();
+
+    Ok(mistralrs)
 }
 
 fn init_device(force_cpu: bool, seed: Option<u64>) -> Result<candle_core::Device> {
