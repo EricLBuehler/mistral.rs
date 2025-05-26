@@ -83,7 +83,7 @@ pub enum MatchingCache {
     },
     Paged {
         logical_blocks: Vec<LogicalTokenBlock>,
-        phyiscal_blocks: Vec<Arc<PhysicalTokenBlock>>,
+        physical_blocks: Vec<Arc<PhysicalTokenBlock>>,
         toks: Vec<u32>,
         offset: usize,
         images_to_keep: usize,
@@ -303,7 +303,7 @@ impl PrefixCacheManagerV2 {
             };
             return Ok(Some(MatchingCache::Paged {
                 logical_blocks: logical_prefix,
-                phyiscal_blocks: physical_prefix,
+                physical_blocks: physical_prefix,
                 toks: new_toks,
                 offset: match_len,
                 images_to_keep,

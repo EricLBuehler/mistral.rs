@@ -549,7 +549,7 @@ impl Engine {
                 }
                 Some(MatchingCache::Paged {
                     logical_blocks,
-                    phyiscal_blocks,
+                    physical_blocks,
                     images_to_keep,
                     toks,
                     offset,
@@ -557,7 +557,7 @@ impl Engine {
                     self.logger.add_prefix_cache_hit();
 
                     seq.keep_num_images(images_to_keep);
-                    seq.prefill_v2_paged(logical_blocks, phyiscal_blocks, toks, offset)
+                    seq.prefill_v2_paged(logical_blocks, physical_blocks, toks, offset)
                 }
                 None => seq,
             };
