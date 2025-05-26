@@ -386,8 +386,8 @@ inline Float8_ fma(Bfloat8_ a, Bfloat8_ b, Float8_ c) {
 inline Bfloat8_ fma(Bfloat8_ a, Bfloat8_ b, Bfloat8_ c) {
   Bfloat8_ res;
   res.x = fma(a.x, b.x, c.x);
-  res.y = fma(a.y, b.x, c.y);
-  return c;
+  res.y = fma(a.y, b.y, c.y);
+  return res;
 }
 
 inline void from_float(thread bfloat16_t &dst, float src) {
@@ -478,7 +478,7 @@ template <> inline float sum(half a) { return (float)a; }
 
 template <> inline float sum(half2 a) { return (float)a.x + (float)a.y; }
 
-template <> inline float sum(half4 a) { return sum(a.x) + sum(a.y); }
+template <> inline float sum(half4 a) { return a.x+a.y+a.z+a.w; }
 
 template <> inline float sum(Half8_ a) { return sum(a.x) + sum(a.y); }
 
@@ -504,7 +504,7 @@ inline Half8_ fma(Half8_ a, Half8_ b, Half8_ c) {
   Half8_ res;
   res.x = fma(a.x, b.x, c.x);
   res.y = fma(a.y, b.y, c.y);
-  return c;
+  return res;
 }
 
 inline void from_float(thread half &dst, float src) {
