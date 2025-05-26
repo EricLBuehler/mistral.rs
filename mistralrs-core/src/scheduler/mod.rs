@@ -60,7 +60,7 @@ pub trait Scheduler: Send + Sync {
     fn free_finished_sequence_groups(&mut self);
 
     // PagedAttention metadata
-    fn block_tables(&self) -> Option<&BlockTables>;
+    fn block_tables(&self) -> Option<BlockTables>;
     fn block_size(&self) -> Option<usize>;
-    fn block_engine(&mut self) -> Option<&mut BlockEngine>;
+    fn block_engine(&self) -> Option<Arc<Mutex<BlockEngine>>>;
 }

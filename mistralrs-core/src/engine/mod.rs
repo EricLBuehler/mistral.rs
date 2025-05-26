@@ -106,8 +106,7 @@ impl Engine {
     ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
-        no_prefix_cache = matches!(config, SchedulerConfig::PagedAttentionMeta { .. })
-            || no_prefix_cache
+        no_prefix_cache = no_prefix_cache
             || no_kv_cache
             || get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache;
 
@@ -119,17 +118,21 @@ impl Engine {
             None => None,
         };
 
+        let scheduler = config.into_scheduler();
+        let block_engine = get_mut_arcmutex!(scheduler).block_engine();
+
         Ok(Self {
             rx: Arc::new(Mutex::new(rx)),
             pipeline,
             bert_pipeline: Arc::new(Mutex::new(bert_pipeline)),
-            scheduler: config.into_scheduler(),
+            scheduler: scheduler.clone(),
             id: Arc::new(Mutex::new(0)),
             truncate_sequence,
             no_kv_cache,
             prefix_cacher: Arc::new(Mutex::new(PrefixCacheManagerV2::new(
                 prefix_cache_n,
                 no_prefix_cache,
+                block_engine,
             ))),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,

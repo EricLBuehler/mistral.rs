@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     num::NonZeroUsize,
-    sync::atomic::Ordering,
+    sync::{atomic::Ordering, Arc},
 };
 
 use crate::{
@@ -327,14 +327,14 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
             self.waiting.add(seq);
         }
     }
-    fn block_tables(&self) -> Option<&BlockTables> {
+    fn block_tables(&self) -> Option<BlockTables> {
         None
     }
     fn block_size(&self) -> Option<usize> {
         None
     }
     fn free_finished_sequence_groups(&mut self) {}
-    fn block_engine(&mut self) -> Option<&mut BlockEngine> {
+    fn block_engine(&self) -> Option<Arc<tokio::sync::Mutex<BlockEngine>>> {
         None
     }
 }

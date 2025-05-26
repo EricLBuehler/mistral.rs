@@ -920,7 +920,7 @@ impl CustomOp1 for ArgSort {
 
         // Replicate the kernel’s internal block sizing to derive `n_blocks`
         let tn = 4usize;
-        let mut bn = match (size_sorted_axis + tn - 1) / tn {
+        let mut bn = match size_sorted_axis.div_ceil(tn) {
             v if v > 256 => 512,
             v if v > 128 => 256,
             v if v > 64 => 128,
@@ -931,7 +931,7 @@ impl CustomOp1 for ArgSort {
             bn = 256;
         }
         let n_per_block = bn * tn;
-        let n_blocks = (size_sorted_axis + n_per_block - 1) / n_per_block;
+        let n_blocks = size_sorted_axis.div_ceil(n_per_block);
 
         // Borrow the buffers for this launch
         let scratch = cache.checkout(device, n_rows, size_sorted_axis, s1.dtype(), n_blocks);
@@ -1027,7 +1027,7 @@ impl CustomOp1 for Sort {
 
         // Replicate the kernel’s internal block sizing to derive `n_blocks`
         let tn = 4usize;
-        let mut bn = match (size_sorted_axis + tn - 1) / tn {
+        let mut bn = match size_sorted_axis.div_ceil(tn) {
             v if v > 256 => 512,
             v if v > 128 => 256,
             v if v > 64 => 128,
@@ -1038,7 +1038,7 @@ impl CustomOp1 for Sort {
             bn = 256;
         }
         let n_per_block = bn * tn;
-        let n_blocks = (size_sorted_axis + n_per_block - 1) / n_per_block;
+        let n_blocks = size_sorted_axis.div_ceil(n_per_block);
 
         // Borrow the buffers for this launch
         let scratch = cache.checkout(device, n_rows, size_sorted_axis, s1.dtype(), n_blocks);

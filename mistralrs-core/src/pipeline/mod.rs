@@ -258,13 +258,13 @@ pub trait VisionPromptPrefixer: Send + Sync {
     fn prefix_image(&self, image_indices: Vec<usize>, prompt: &str) -> String;
 }
 
-pub enum CacheBackendMetadata<'a> {
+pub enum CacheBackendMetadata {
     DefaultInstructions {
         pre_op: CacheInstruction,
         post_op: CacheInstruction,
     },
     PagedAttention {
-        metadata: PagedAttentionMeta<'a>,
+        metadata: PagedAttentionMeta,
         blocks_to_swap_in: HashMap<usize, usize>,
         blocks_to_swap_out: HashMap<usize, usize>,
         blocks_to_copy: HashMap<usize, Vec<usize>>,
@@ -353,7 +353,7 @@ pub trait Pipeline:
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-        backend_metadata: CacheBackendMetadata<'_>,
+        backend_metadata: CacheBackendMetadata,
     ) -> Result<Duration, candle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {

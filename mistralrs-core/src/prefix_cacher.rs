@@ -1,9 +1,36 @@
+type BlockBestMatch<'a> = (
+    usize,                         // matched_len
+    &'a [LogicalTokenBlock],       // logical blocks
+    &'a [Arc<PhysicalTokenBlock>], // physical blocks
+    usize,                         // images_match_until
+);
+use std::{
+    hash::{DefaultHasher, Hash, Hasher},
+    sync::Arc,
+};
+
 use candle_core::{Device, Result};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use tracing::info;
 
-use crate::{pipeline::KvCache, sequence::Sequence};
+use crate::{
+    get_mut_arcmutex,
+    paged_attention::{BlockEngine, BlockEngineSequence, LogicalTokenBlock, PhysicalTokenBlock},
+    pipeline::KvCache,
+    sequence::{self, Sequence},
+};
+
+fn hash_logical_blocks(logical_blocks: &[LogicalTokenBlock]) -> Vec<u64> {
+    logical_blocks
+        .iter()
+        .map(|block| {
+            let mut hasher = DefaultHasher::new();
+            block.hash(&mut hasher);
+            hasher.finish()
+        })
+        .collect::<Vec<_>>()
+}
 
 #[derive(PartialEq, Eq, Debug, Hash)]
 struct Tokens(Vec<u32>);
@@ -31,29 +58,53 @@ struct CacheElement {
     image_hashes: Option<Vec<u64>>,
 }
 
+#[derive(Clone)]
+struct BlockCacheElement {
+    logical_blocks: Vec<LogicalTokenBlock>,
+    physical_blocks: Vec<Arc<PhysicalTokenBlock>>,
+    image_hashes: Option<Vec<u64>>,
+}
+
 pub struct PrefixCacheManagerV2 {
     caches: IndexMap<Tokens, CacheElement>,
+    block_caches: IndexMap<Vec<u64>, BlockCacheElement>, // (hashed logical blocks) => BlockCacheElement
     n_on_device: usize,
     no_prefix_cache: bool,
+    block_engine: Option<Arc<tokio::sync::Mutex<BlockEngine>>>,
 }
 
 #[derive(Clone)]
-pub struct MatchingCache {
-    pub normal: Vec<Option<KvCache>>,
-    pub images_to_keep: usize,
-    pub toks: Vec<u32>,
-    pub offset: usize,
+pub enum MatchingCache {
+    Normal {
+        normal: Vec<Option<KvCache>>,
+        images_to_keep: usize,
+        toks: Vec<u32>,
+        offset: usize,
+    },
+    Paged {
+        logical_blocks: Vec<LogicalTokenBlock>,
+        physical_blocks: Vec<Arc<PhysicalTokenBlock>>,
+        toks: Vec<u32>,
+        offset: usize,
+        images_to_keep: usize,
+    },
 }
 
 impl PrefixCacheManagerV2 {
-    pub fn new(n_on_device: usize, no_prefix_cache: bool) -> Self {
+    pub fn new(
+        n_on_device: usize,
+        no_prefix_cache: bool,
+        block_engine: Option<Arc<tokio::sync::Mutex<BlockEngine>>>,
+    ) -> Self {
         if !no_prefix_cache {
             info!("PrefixCacherV2 is enabled. Expect higher multi-turn throughput for both text and multimodal.");
         }
         PrefixCacheManagerV2 {
             caches: IndexMap::new(),
+            block_caches: IndexMap::new(),
             n_on_device,
             no_prefix_cache,
+            block_engine,
         }
     }
 
@@ -63,15 +114,36 @@ impl PrefixCacheManagerV2 {
         if self.no_prefix_cache {
             return;
         }
-        let cache = seq.normal_cache().to_vec();
 
-        self.caches.insert(
-            seq.get_toks().to_vec().into(),
-            CacheElement {
-                cache,
-                image_hashes: seq.image_hashes().map(|x| x.to_vec()),
-            },
-        );
+        if let Some(block_engine) = &self.block_engine {
+            let logical_token_blocks = seq.logical_token_blocks();
+            let block_engine = get_mut_arcmutex!(block_engine);
+            let block_table = &block_engine.block_tables[seq.id()];
+            for block in block_table {
+                block.deref_mut().increment_refcount();
+            }
+
+            let hashed_logical_blocks = hash_logical_blocks(logical_token_blocks);
+
+            self.block_caches.insert(
+                hashed_logical_blocks,
+                BlockCacheElement {
+                    logical_blocks: logical_token_blocks.to_vec(),
+                    physical_blocks: block_table.clone(),
+                    image_hashes: seq.image_hashes().map(|x| x.to_vec()),
+                },
+            );
+        } else {
+            let cache = seq.normal_cache().to_vec();
+
+            self.caches.insert(
+                seq.get_toks().to_vec().into(),
+                CacheElement {
+                    cache,
+                    image_hashes: seq.image_hashes().map(|x| x.to_vec()),
+                },
+            );
+        }
     }
 
     /// Evict the caches. This will evict the first k seqs such that the number of sequences on device after the copy is
@@ -150,6 +222,94 @@ impl PrefixCacheManagerV2 {
             return Ok(None);
         }
 
+        if let Some(block_engine) = &self.block_engine {
+            let block_engine = get_mut_arcmutex!(block_engine);
+            let block_size = block_engine.block_size();
+            let mut test_logical_blocks = Vec::new();
+            for tok in toks {
+                sequence::util_append_token_to_blocks(
+                    *tok as usize,
+                    &mut test_logical_blocks,
+                    block_size,
+                );
+            }
+            let hashed_logical_blocks = hash_logical_blocks(&test_logical_blocks);
+
+            let mut best_match: Option<BlockBestMatch> = None;
+            for (logical, cache_elem) in &self.block_caches {
+                let logical_matches_until = logical
+                    .iter()
+                    .zip(&hashed_logical_blocks)
+                    .take_while(|(a, b)| **a == **b)
+                    .count();
+                let matched_len: usize = cache_elem.logical_blocks[..logical_matches_until]
+                    .iter()
+                    .map(|block| block.num_tokens())
+                    .sum();
+
+                let images_match_until = if let (Some(input_hashes), Some(cached_hashes)) =
+                    (image_hashes, cache_elem.image_hashes.as_ref())
+                {
+                    input_hashes
+                        .iter()
+                        .zip(cached_hashes)
+                        .take_while(|(a, b)| a == b)
+                        .count()
+                } else {
+                    0
+                };
+
+                if best_match.is_some_and(|(best_match_len, _, _, _)| best_match_len < matched_len)
+                    || best_match.is_none()
+                {
+                    best_match = Some((
+                        matched_len,
+                        &cache_elem.logical_blocks,
+                        &cache_elem.physical_blocks,
+                        images_match_until,
+                    ))
+                }
+            }
+
+            let Some((match_len, logical_blocks, physical_blocks, images_match_until)) = best_match
+            else {
+                return Ok(None);
+            };
+
+            // Determine how many blocks cover the matched prefix
+            let mut n_blocks = match_len.div_ceil(block_size);
+            n_blocks = n_blocks.min(logical_blocks.len());
+
+            if n_blocks == 0 {
+                return Ok(None);
+            }
+
+            // Take the first n_blocks of both logical and physical blocks
+            let mut logical_prefix = logical_blocks[..n_blocks].to_vec();
+            let physical_prefix = physical_blocks[..n_blocks].to_vec();
+
+            // If the last reused block is full, reserve an extra empty block for new tokens
+            let new_toks = toks[match_len..].to_vec();
+            for _ in 0..new_toks.len().div_ceil(block_size) {
+                logical_prefix.push(LogicalTokenBlock::new(block_size));
+            }
+            if logical_prefix.last().is_some_and(|last| last.is_full()) {
+                logical_prefix.push(LogicalTokenBlock::new(block_size));
+            }
+            let images_to_keep = if let Some(input_hashes) = image_hashes {
+                input_hashes.len().saturating_sub(images_match_until)
+            } else {
+                0
+            };
+            return Ok(Some(MatchingCache::Paged {
+                logical_blocks: logical_prefix,
+                physical_blocks: physical_prefix,
+                toks: new_toks,
+                offset: match_len,
+                images_to_keep,
+            }));
+        }
+
         let toks = Tokens(toks.to_vec());
 
         let mut best_match: Option<(usize, &CacheElement, usize)> = None;
@@ -193,7 +353,7 @@ impl PrefixCacheManagerV2 {
                     return Ok(None);
                 }
             }
-            return Ok(Some(MatchingCache {
+            return Ok(Some(MatchingCache::Normal {
                 normal: cache.cache,
                 images_to_keep,
                 toks: toks.0[match_len..].to_vec(),

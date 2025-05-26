@@ -69,7 +69,7 @@ impl InputsProcessor for DiffusionInputsProcessor {
         _last_n_context_len: Option<(usize, usize)>,
         _return_raw_logits: bool,
         _other_config: Option<Arc<dyn Any>>,
-        _paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
+        _paged_attn_metadata: Option<PagedAttentionMeta>,
         prompt_chunksize: Option<NonZeroUsize>,
         _mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>> {
