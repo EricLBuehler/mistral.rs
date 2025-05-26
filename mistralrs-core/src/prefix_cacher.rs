@@ -52,9 +52,16 @@ struct CacheElement {
     image_hashes: Option<Vec<u64>>,
 }
 
+#[derive(Clone)]
+struct BlockCacheElement {
+    logical_blocks: Vec<LogicalTokenBlock>,
+    physical_blocks: Vec<Arc<PhysicalTokenBlock>>,
+    image_hashes: Option<Vec<u64>>,
+}
+
 pub struct PrefixCacheManagerV2 {
     caches: IndexMap<Tokens, CacheElement>,
-    block_caches: IndexMap<Vec<u64>, (Vec<LogicalTokenBlock>, Vec<Arc<PhysicalTokenBlock>>)>, // (hashed logical blocks) => (logical blocks, physical blocks)
+    block_caches: IndexMap<Vec<u64>, BlockCacheElement>, // (hashed logical blocks) => BlockCacheElement
     n_on_device: usize,
     no_prefix_cache: bool,
     block_engine: Option<Arc<tokio::sync::Mutex<BlockEngine>>>,
@@ -73,6 +80,7 @@ pub enum MatchingCache {
         phyiscal_blocks: Vec<Arc<PhysicalTokenBlock>>,
         toks: Vec<u32>,
         offset: usize,
+        images_to_keep: usize,
     },
 }
 
@@ -113,7 +121,11 @@ impl PrefixCacheManagerV2 {
 
             self.block_caches.insert(
                 hashed_logical_blocks,
-                (logical_token_blocks.to_vec(), block_table.clone()),
+                BlockCacheElement {
+                    logical_blocks: logical_token_blocks.to_vec(),
+                    physical_blocks: block_table.clone(),
+                    image_hashes: seq.image_hashes().map(|x| x.to_vec()),
+                },
             );
         } else {
             let cache = seq.normal_cache().to_vec();
@@ -217,27 +229,49 @@ impl PrefixCacheManagerV2 {
             }
             let hashed_logical_blocks = hash_logical_blocks(&test_logical_blocks);
 
-            let mut best_match: Option<(usize, &[LogicalTokenBlock], &[Arc<PhysicalTokenBlock>])> =
-                None;
-            for (logical, (logical_blocks, physical_blocks)) in &self.block_caches {
+            let mut best_match: Option<(
+                usize,
+                &[LogicalTokenBlock],
+                &[Arc<PhysicalTokenBlock>],
+                usize,
+            )> = None;
+            for (logical, cache_elem) in &self.block_caches {
                 let logical_matches_until = logical
                     .iter()
                     .zip(&hashed_logical_blocks)
                     .take_while(|(a, b)| **a == **b)
                     .count();
-                let matched_len: usize = logical_blocks[..logical_matches_until]
+                let matched_len: usize = cache_elem.logical_blocks[..logical_matches_until]
                     .iter()
                     .map(|block| block.num_tokens())
                     .sum();
 
-                if best_match.is_some_and(|(best_match_len, _, _)| best_match_len < matched_len)
+                let images_match_until = if let (Some(input_hashes), Some(cached_hashes)) =
+                    (image_hashes, cache_elem.image_hashes.as_ref())
+                {
+                    input_hashes
+                        .iter()
+                        .zip(cached_hashes)
+                        .take_while(|(a, b)| a == b)
+                        .count()
+                } else {
+                    0
+                };
+
+                if best_match.is_some_and(|(best_match_len, _, _, _)| best_match_len < matched_len)
                     || best_match.is_none()
                 {
-                    best_match = Some((matched_len, logical_blocks, physical_blocks))
+                    best_match = Some((
+                        matched_len,
+                        &cache_elem.logical_blocks,
+                        &cache_elem.physical_blocks,
+                        images_match_until,
+                    ))
                 }
             }
 
-            let Some((match_len, logical_blocks, physical_blocks)) = best_match else {
+            let Some((match_len, logical_blocks, physical_blocks, images_match_until)) = best_match
+            else {
                 return Ok(None);
             };
             // Determine how many blocks cover the matched prefix
@@ -258,11 +292,17 @@ impl PrefixCacheManagerV2 {
                     logical_prefix.last().unwrap().block_size(),
                 ));
             }
+            let images_to_keep = if let Some(input_hashes) = image_hashes {
+                input_hashes.len().saturating_sub(images_match_until)
+            } else {
+                0
+            };
             return Ok(Some(MatchingCache::Paged {
                 logical_blocks: logical_prefix,
                 phyiscal_blocks: physical_prefix,
                 toks: new_toks,
                 offset: match_len,
+                images_to_keep,
             }));
         }
 

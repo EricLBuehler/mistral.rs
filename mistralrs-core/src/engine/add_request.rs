@@ -550,12 +550,13 @@ impl Engine {
                 Some(MatchingCache::Paged {
                     logical_blocks,
                     phyiscal_blocks,
+                    images_to_keep,
                     toks,
                     offset,
                 }) => {
                     self.logger.add_prefix_cache_hit();
 
-                    // seq.keep_num_images(images_to_keep);
+                    seq.keep_num_images(images_to_keep);
                     seq.prefill_v2_paged(logical_blocks, phyiscal_blocks, toks, offset)
                 }
                 None => seq,
