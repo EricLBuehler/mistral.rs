@@ -67,6 +67,12 @@ pub struct _PhysicalTokenBlock {
     is_gpu: bool,
 }
 
+impl _PhysicalTokenBlock {
+    pub fn increment_refcount(&mut self) {
+        self.refcount += 1;
+    }
+}
+
 pub struct PhysicalTokenBlock(pub Mutex<_PhysicalTokenBlock>);
 
 impl std::fmt::Debug for PhysicalTokenBlock {
@@ -260,7 +266,10 @@ impl BlockEngine {
             for block in &mut block_table {
                 block.deref_mut().refcount = 1;
             }
-            block_table.push(self.gpu_allocator.allocate());
+            let n_extra_blocks = seq.logical_token_blocks().len() - block_table.len();
+            for _ in 0..n_extra_blocks {
+                block_table.push(self.gpu_allocator.allocate());
+            }
             self.block_tables.insert(seq.get_id(), block_table.clone());
         } else {
             let mut block_table = Vec::new();

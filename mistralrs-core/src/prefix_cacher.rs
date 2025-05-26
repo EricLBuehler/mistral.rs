@@ -105,6 +105,9 @@ impl PrefixCacheManagerV2 {
             let logical_token_blocks = seq.logical_token_blocks();
             let block_engine = get_mut_arcmutex!(block_engine);
             let block_table = &block_engine.block_tables[seq.id()];
+            for block in block_table {
+                block.deref_mut().increment_refcount();
+            }
 
             let hashed_logical_blocks = hash_logical_blocks(&logical_token_blocks);
 
@@ -244,7 +247,13 @@ impl PrefixCacheManagerV2 {
             let mut logical_prefix = logical_blocks[..n_blocks].to_vec();
             let physical_prefix = physical_blocks[..n_blocks].to_vec();
             // If the last reused block is full, reserve an extra empty block for new tokens
-            if logical_prefix.last().unwrap().is_full() {
+            let new_toks = toks[match_len..].to_vec();
+            for _ in 0..new_toks.len().div_ceil(block_size) {
+                logical_prefix.push(LogicalTokenBlock::new(
+                    logical_prefix.last().unwrap().block_size(),
+                ));
+            }
+            if logical_prefix.last().is_some_and(|last| last.is_full()) {
                 logical_prefix.push(LogicalTokenBlock::new(
                     logical_prefix.last().unwrap().block_size(),
                 ));
@@ -252,7 +261,7 @@ impl PrefixCacheManagerV2 {
             return Ok(Some(MatchingCache::Paged {
                 logical_blocks: logical_prefix,
                 phyiscal_blocks: physical_prefix,
-                toks: toks[match_len..].to_vec(),
+                toks: new_toks,
                 offset: match_len,
             }));
         }
