@@ -96,14 +96,22 @@ impl PagedAttentionScheduler {
                     _ => {}
                 }
 
-                let new_seq_has_images = get_mut_arcmutex!(seq).has_images();
-                // Only add it if has_images matches either current or there are none.
-                if !scheduled.is_empty()
-                    && get_mut_arcmutex!(scheduled[0]).has_images() != new_seq_has_images
-                {
-                    let seq = self.waiting.pop_front().unwrap();
-                    for_waiting_again.push_back(seq.clone());
-                    continue;
+                // Group by (has_images && is_prompt) and xLora adapter presence.
+                let new_has_images_and_prompt = {
+                    let h = get_mut_arcmutex!(seq);
+                    h.has_images() && h.is_prompt()
+                };
+                if !scheduled.is_empty() {
+                    let current = &scheduled[0];
+                    let current_group = {
+                        let h = get_mut_arcmutex!(current);
+                        h.has_images() && h.is_prompt()
+                    };
+                    if current_group != new_has_images_and_prompt {
+                        let seq = self.waiting.pop_front().unwrap();
+                        for_waiting_again.push_back(seq.clone());
+                        continue;
+                    }
                 }
                 if !did_ignore {
                     get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
@@ -175,14 +183,23 @@ impl PagedAttentionScheduler {
                     let seq_handle = get_mut_arcmutex!(seq);
                     self._append_token_slot_to_seq(&seq_handle, &mut blocks_to_copy);
                 }
-                let new_seq_has_images = get_mut_arcmutex!(seq).has_images();
-                // Only add it if has_images matches either current or there are none.
-                if running.is_empty()
-                    || get_mut_arcmutex!(running[0]).has_images() == new_seq_has_images
-                {
+                // Group by (has_images && is_prompt)
+                let new_has_images_and_prompt = {
+                    let h = get_mut_arcmutex!(seq);
+                    h.has_images() && h.is_prompt()
+                };
+                if running.is_empty() {
                     running.push_back(seq);
                 } else {
-                    self.running.push_back(seq);
+                    let current_group = {
+                        let current = get_mut_arcmutex!(running[0]);
+                        current.has_images() && current.is_prompt()
+                    };
+                    if current_group == new_has_images_and_prompt {
+                        running.push_back(seq);
+                    } else {
+                        self.running.push_back(seq);
+                    }
                 }
             }
         }
