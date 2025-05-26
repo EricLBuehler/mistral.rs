@@ -196,7 +196,7 @@ impl Allocator<CPUAllocator> {
                     block_id: id,
                     block_size,
                     refcount: 0,
-                    is_gpu: true,
+                    is_gpu: false,
                 },
             ))))
         }
