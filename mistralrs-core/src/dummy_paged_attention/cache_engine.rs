@@ -17,156 +17,28 @@ pub struct CacheConfig {
 pub type KVCache = (Tensor, Tensor);
 
 pub struct CacheEngine {
-    gpu_cache: Arc<Mutex<Vec<KVCache>>>,
-    cpu_cache: Vec<KVCache>,
-    num_layers: usize,
+    dummy_cache: Arc<Mutex<Vec<KVCache>>>,
 }
 
 impl CacheEngine {
     pub fn new(
-        model_config: &dyn ModelConfigLike,
-        cache_config: &CacheConfig,
-        dtype: DType,
-        device: &Device,
-        layer_devices: Vec<Option<Device>>,
+        _model_config: &dyn ModelConfigLike,
+        _cache_config: &CacheConfig,
+        _dtype: DType,
+        _device: &Device,
+        _layer_devices: Vec<Option<Device>>,
     ) -> Result<Self> {
         Ok(Self {
-            gpu_cache: Arc::new(Mutex::new(Self::allocate_gpu_cache(
-                model_config,
-                cache_config,
-                dtype,
-                device,
-                layer_devices,
-            )?)),
-            cpu_cache: Self::allocate_cpu_cache(model_config, cache_config, dtype, device)?,
-            num_layers: model_config.num_layers(),
+            dummy_cache: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
     pub fn get_kv_cache(&self) -> MutexGuard<'_, Vec<KVCache>> {
         loop {
-            if let Ok(v) = self.gpu_cache.try_lock() {
+            if let Ok(v) = self.dummy_cache.try_lock() {
                 return v;
             }
         }
-    }
-
-    fn allocate_gpu_cache(
-        model_config: &dyn ModelConfigLike,
-        cache_config: &CacheConfig,
-        dtype: DType,
-        device: &Device,
-        layer_devices: Vec<Option<Device>>,
-    ) -> Result<Vec<KVCache>> {
-        let key_block_shape =
-            Self::calculate_key_block_shape(model_config, dtype, cache_config.block_size);
-        let value_block_shape =
-            Self::calculate_value_block_shape(model_config, cache_config.block_size);
-        let mut gpu_cache = Vec::new();
-
-        for device in layer_devices
-            .iter()
-            .take(model_config.num_layers())
-            .map(|x| x.as_ref().unwrap_or(device))
-        {
-            let key_blocks = unsafe {
-                Tensor::empty(
-                    (
-                        cache_config.num_gpu_blocks,
-                        key_block_shape.0,
-                        key_block_shape.1,
-                        key_block_shape.2,
-                        key_block_shape.3,
-                    ),
-                    dtype,
-                    device,
-                )?
-            };
-            let value_blocks = unsafe {
-                Tensor::empty(
-                    (
-                        cache_config.num_gpu_blocks,
-                        value_block_shape.0,
-                        value_block_shape.1,
-                        value_block_shape.2,
-                    ),
-                    dtype,
-                    device,
-                )?
-            };
-            gpu_cache.push((key_blocks, value_blocks));
-        }
-        Ok(gpu_cache)
-    }
-
-    fn allocate_cpu_cache(
-        model_config: &dyn ModelConfigLike,
-        cache_config: &CacheConfig,
-        dtype: DType,
-        device: &Device,
-    ) -> Result<Vec<KVCache>> {
-        let key_block_shape =
-            Self::calculate_key_block_shape(model_config, dtype, cache_config.block_size);
-        let value_block_shape =
-            Self::calculate_value_block_shape(model_config, cache_config.block_size);
-        let mut cpu_cache = Vec::new();
-        for _ in 0..model_config.num_layers() {
-            let key_blocks = unsafe {
-                Tensor::empty(
-                    (
-                        cache_config.num_cpu_blocks,
-                        key_block_shape.0,
-                        key_block_shape.1,
-                        key_block_shape.2,
-                        key_block_shape.3,
-                    ),
-                    dtype,
-                    device,
-                )?
-            };
-            let value_blocks = unsafe {
-                Tensor::empty(
-                    (
-                        cache_config.num_cpu_blocks,
-                        value_block_shape.0,
-                        value_block_shape.1,
-                        value_block_shape.2,
-                    ),
-                    dtype,
-                    device,
-                )?
-            };
-            cpu_cache.push((key_blocks, value_blocks));
-        }
-        Ok(cpu_cache)
-    }
-}
-
-impl CacheEngine {
-    fn calculate_key_block_shape(
-        model_config: &dyn ModelConfigLike,
-        dtype: DType,
-        block_size: usize,
-    ) -> (usize, usize, usize, usize) {
-        let element_size = dtype.size_in_bytes();
-        let x = 16 / element_size;
-        (
-            model_config.num_kv_heads(),
-            model_config.k_head_dim() / x,
-            block_size,
-            x,
-        )
-    }
-
-    fn calculate_value_block_shape(
-        model_config: &dyn ModelConfigLike,
-        block_size: usize,
-    ) -> (usize, usize, usize) {
-        (
-            model_config.num_kv_heads(),
-            model_config.v_head_dim(),
-            block_size,
-        )
     }
 }
 

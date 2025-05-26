@@ -1,3 +1,9 @@
+type BlockBestMatch<'a> = (
+    usize,                         // matched_len
+    &'a [LogicalTokenBlock],       // logical blocks
+    &'a [Arc<PhysicalTokenBlock>], // physical blocks
+    usize,                         // images_match_until
+);
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
     sync::Arc,
@@ -229,12 +235,7 @@ impl PrefixCacheManagerV2 {
             }
             let hashed_logical_blocks = hash_logical_blocks(&test_logical_blocks);
 
-            let mut best_match: Option<(
-                usize,
-                &[LogicalTokenBlock],
-                &[Arc<PhysicalTokenBlock>],
-                usize,
-            )> = None;
+            let mut best_match: Option<BlockBestMatch> = None;
             for (logical, cache_elem) in &self.block_caches {
                 let logical_matches_until = logical
                     .iter()
