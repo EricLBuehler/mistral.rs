@@ -2599,6 +2599,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "urlencoding",
+ "utoipa",
  "uuid 1.17.0",
  "variantly",
  "vob",

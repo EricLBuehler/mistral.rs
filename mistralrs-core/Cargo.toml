@@ -71,6 +71,7 @@ bytemuck_derive = "1.7.0"
 mistralrs-paged-attn = { version = "0.5.0", path = "../mistralrs-paged-attn", optional = true }
 mistralrs-quant = { version = "0.5.0", path = "../mistralrs-quant" }
 uuid = { version = "1.10.0", features = ["v4"] }
+utoipa = { workspace = true, optional = true }
 schemars = "0.8.21"
 serde_yaml = "0.9.34"
 regex.workspace = true
@@ -119,6 +120,7 @@ flash-attn-v3 = ["cuda", "dep:candle-flash-attn-v3"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "mistralrs-quant/accelerate"]
 mkl = ["candle-core/mkl", "candle-nn/mkl"]
 nccl = ["cuda", "mistralrs-quant/nccl"]
+utoipa = ["dep:utoipa"]
 
 [build-dependencies]
 bindgen_cuda = { version = "0.1.5", optional = true }
