@@ -2655,6 +2655,7 @@ dependencies = [
  "float8",
  "half",
  "hf-hub",
+ "itertools 0.13.0",
  "lazy_static",
  "memmap2",
  "metal",

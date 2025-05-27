@@ -5,6 +5,8 @@ use candle_core::{
     Tensor, D,
 };
 
+use candle_core::quantized::{GgmlDType, GgmlType};
+
 use super::{AfqBits, AfqGroupSize};
 
 /// Returns (w_q, scales, biases)
@@ -508,9 +510,130 @@ mod metal_tests {
 //                    Portable CPU back‑end
 // ============================================================
 mod cpu_backend {
+    #[derive(Clone, Copy, Debug)]
+    pub struct BlockAfq<const BITS: usize, const GROUP: usize, const NQ: usize> {
+        /// Packed little‑endian codes.  One u32 holds `32 / BITS` values.
+        pub qs: [u32; NQ],
+        pub d: [f32; GROUP],
+        pub m: [f32; GROUP],
+    }
+
+    impl<const BITS: usize, const GROUP: usize, const NQ: usize> BlockAfq<BITS, GROUP, NQ> {
+        /// De‑quantise one block into `dst` (len == GROUP)
+        fn dequantize_row(&self, dst: &mut [f32]) {
+            let mask = (1u32 << BITS) - 1;
+            let vals_per_word = 32 / BITS;
+
+            for i in 0..GROUP {
+                let word_idx = i / vals_per_word;
+                let shift = (i % vals_per_word) * BITS;
+                let q = (self.qs[word_idx] >> shift) & mask;
+                dst[i] = self.m[i] + (q as f32) * self.d[i];
+            }
+        }
+
+        /// Quantise `src` (len == GROUP) into `self`.
+        fn quantize_row(src: &[f32], dst: &mut Self) {
+            assert_eq!(src.len(), GROUP);
+
+            let levels = ((1u32 << BITS) - 1) as f32;
+            dst.qs.fill(0);
+
+            for i in 0..GROUP {
+                let bias = *src
+                    .iter()
+                    .take(GROUP)
+                    .fold(&f32::MAX, |a, b| if b < a { b } else { a });
+                let max = *src
+                    .iter()
+                    .take(GROUP)
+                    .fold(&f32::MIN, |a, b| if b > a { b } else { a });
+                let scale = if (max - bias).abs() < 1e-12 {
+                    1.0
+                } else {
+                    (max - bias) / levels
+                };
+
+                dst.d[i] = scale;
+                dst.m[i] = bias;
+
+                // Quantise
+                let q_val = ((src[i] - bias) / scale).round().clamp(0.0, levels) as u32;
+                let vals_per_word = 32 / BITS;
+                let word_idx = i / vals_per_word;
+                let shift = (i % vals_per_word) * BITS;
+                dst.qs[word_idx] |= q_val << shift;
+            }
+        }
+    }
+
+    impl<const BITS: usize, const GROUP: usize, const NQ: usize> GgmlType
+        for BlockAfq<BITS, GROUP, NQ>
+    {
+        // Candle expects these two associated constants
+        const BLCK_SIZE: usize = GROUP;
+        const DTYPE: GgmlDType = match BITS {
+            2 => GgmlDType::Q2K,
+            3 => GgmlDType::Q3K,
+            4 => GgmlDType::Q4K,
+            6 => GgmlDType::Q6K,
+            8 => GgmlDType::Q8K,
+            _ => unreachable!(),
+        };
+
+        type VecDotType = Self; // dot product works block-vs-block
+
+        fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
+            if ys.len() != xs.len() * GROUP {
+                candle_core::bail!(
+                    "to_float: dst len {} must equal {}×{}",
+                    ys.len(),
+                    xs.len(),
+                    GROUP
+                );
+            }
+            for (blk_idx, blk) in xs.iter().enumerate() {
+                let off = blk_idx * GROUP;
+                blk.dequantize_row(&mut ys[off..off + GROUP]);
+            }
+            Ok(())
+        }
+
+        fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+            if xs.len() != ys.len() * GROUP {
+                candle_core::bail!(
+                    "from_float: src len {} must equal {}×{}",
+                    xs.len(),
+                    ys.len(),
+                    GROUP
+                );
+            }
+            for (blk_idx, blk) in ys.iter_mut().enumerate() {
+                let off = blk_idx * GROUP;
+                Self::quantize_row(&xs[off..off + GROUP], blk);
+            }
+            Ok(())
+        }
+
+        // ------------------------------------------------------------------
+        //      Dot-product stubs – provide specialised kernels later
+        // ------------------------------------------------------------------
+        fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
+            unimplemented!("vec_dot is not yet implemented for BlockAfq");
+        }
+
+        fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
+            unimplemented!("vec_dot_unopt is not yet implemented for BlockAfq");
+        }
+    }
+
     use super::*;
-    use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor, D};
+    use candle_core::{
+        quantized::{k_quants::BlockQ3K, GgmlDType},
+        DType, Device, Result, Tensor, D,
+    };
     use half::f16;
+    use itertools::izip;
 
     /// Simple scalar (reference) quantiser: per‑`group_size` affine.
     pub(crate) fn afq_quantize_op(
@@ -621,12 +744,51 @@ mod cpu_backend {
             },
             &device,
         )?;
+        // Show dimensions of the first row’s grouped structure for sanity.
         dbg!(
-            row_group_q.first().unwrap().len(),
-            row_group_q.first().unwrap()[0].len(),
-            row_group_scales.first().unwrap().len(),
-            row_group_biases.first().unwrap().len()
+            row_group_q[0].len(),    // number of groups
+            row_group_q[0][0].len(), // codes per group
+            row_group_scales[0][0],  // first scale
+            row_group_biases[0][0]   // first bias
         );
+
+        // ------------------------------------------------------------------
+        //  Build typed AFQ blocks (BlockAfq<4, 64>) for every row
+        // ------------------------------------------------------------------
+        if group_size != 64 || bits != 4 {
+            panic!("BlockAfq helper currently supports only group_size = 64 and bits = 4");
+        }
+
+        // One Vec<Vec<BlockAfq<4, 64>>> : outer rows → groups
+        let mut row_blocks: Vec<Vec<BlockAfq<4, 64, 16>>> = Vec::with_capacity(outer);
+
+        for (groups_q, groups_sc, groups_bs) in
+            izip!(&row_group_q, &row_group_scales, &row_group_biases)
+        {
+            let mut blocks: Vec<BlockAfq<4, 64, 16>> = Vec::with_capacity(groups_q.len());
+
+            for (q_codes, &scale, &bias) in
+                itertools::izip!(groups_q, groups_sc.iter(), groups_bs.iter())
+            {
+                // Pack 64 q-codes (4-bit) into 16 u32 words.
+                let mut blk = BlockAfq::<4, 64, 16> {
+                    qs: [0u32; 16],
+                    d: [scale; 64], // broadcast per-group scale
+                    m: [bias; 64],  // broadcast per-group bias
+                };
+
+                for (i, &q) in q_codes.iter().enumerate() {
+                    let word = i / 8; // 8 values per u32 when bits = 4
+                    let shift = (i % 8) * 4;
+                    blk.qs[word] |= (q & 0xF) << shift;
+                }
+
+                blocks.push(blk);
+            }
+
+            row_blocks.push(blocks);
+        }
+
         Ok((w_q, sc, bs))
     }
 

@@ -31,6 +31,7 @@ memmap2 = "0.9.5"
 safetensors.workspace = true
 regex.workspace = true
 hf-hub.workspace = true
+itertools.workspace = true
 
 [features]
 cuda = [
