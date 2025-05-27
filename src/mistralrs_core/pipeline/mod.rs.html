@@ -438,7 +438,7 @@
 <a href=#438 id=438 data-nosnippet>438</a>                    <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Unreachable POST cache op."</span>),
 <a href=#439 id=439 data-nosnippet>439</a>                }
 <a href=#440 id=440 data-nosnippet>440</a>
-<a href=#441 id=441 data-nosnippet>441</a>                <span class="kw">if </span>!raw_out_logits[<span class="number">0</span>].is_empty() &amp;&amp; raw_out_logits[<span class="number">0</span>][<span class="number">0</span>].is_some() {
+<a href=#441 id=441 data-nosnippet>441</a>                <span class="kw">if </span>raw_out_logits[<span class="number">0</span>][<span class="number">0</span>].is_some() {
 <a href=#442 id=442 data-nosnippet>442</a>                    <span class="kw">let </span>start = Instant::now();
 <a href=#443 id=443 data-nosnippet>443</a>                    response::send_raw_responses(
 <a href=#444 id=444 data-nosnippet>444</a>                        input_seqs,
@@ -594,7 +594,7 @@
 <a href=#594 id=594 data-nosnippet>594</a>                    }
 <a href=#595 id=595 data-nosnippet>595</a>                }
 <a href=#596 id=596 data-nosnippet>596</a>
-<a href=#597 id=597 data-nosnippet>597</a>                <span class="kw">if </span>!raw_out_logits[<span class="number">0</span>].is_empty() &amp;&amp; raw_out_logits[<span class="number">0</span>][<span class="number">0</span>].is_some() {
+<a href=#597 id=597 data-nosnippet>597</a>                <span class="kw">if </span>raw_out_logits[<span class="number">0</span>][<span class="number">0</span>].is_some() {
 <a href=#598 id=598 data-nosnippet>598</a>                    <span class="kw">let </span>start = Instant::now();
 <a href=#599 id=599 data-nosnippet>599</a>                    response::send_raw_responses(
 <a href=#600 id=600 data-nosnippet>600</a>                        input_seqs,
