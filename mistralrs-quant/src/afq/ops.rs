@@ -518,7 +518,7 @@ mod cpu_backend {
         group_size: usize,
         bits: usize,
     ) -> Result<(Tensor, Tensor, Tensor)> {
-        let device = Device::Cpu;
+        let device = w.device().clone();
         let levels = ((1u32 << bits) - 1) as f32;
 
         // Flatten everything except the last dim.
@@ -609,7 +609,7 @@ mod cpu_backend {
         group_size: usize,
         _bits: usize,
     ) -> Result<Tensor> {
-        let device = Device::Cpu;
+        let device = w_q.device().clone();
         let codes = w_q.flatten_all()?.to_vec1::<u32>()?;
         let sc = scales.flatten_all()?.to_vec1::<f32>()?;
         let bs = biases.flatten_all()?.to_vec1::<f32>()?;
