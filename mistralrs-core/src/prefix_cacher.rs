@@ -340,6 +340,11 @@ impl PrefixCacheManagerV2 {
         }
 
         if let Some((match_len, cache_element, images_match_until)) = best_match {
+            let new_toks = toks.0[match_len..].to_vec();
+            if new_toks.is_empty() {
+                return Ok(None);
+            }
+
             let mut cache = cache_element.clone();
             // Count how many input images are not already cached
             let images_to_keep = if let Some(input_hashes) = image_hashes {
@@ -356,7 +361,7 @@ impl PrefixCacheManagerV2 {
             return Ok(Some(MatchingCache::Normal {
                 normal: cache.cache,
                 images_to_keep,
-                toks: toks.0[match_len..].to_vec(),
+                toks: new_toks,
                 offset: match_len,
             }));
         }

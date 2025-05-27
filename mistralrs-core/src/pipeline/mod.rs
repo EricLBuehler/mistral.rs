@@ -438,7 +438,7 @@ pub trait Pipeline:
                     _ => unreachable!("Unreachable POST cache op."),
                 }
 
-                if !raw_out_logits[0].is_empty() && raw_out_logits[0][0].is_some() {
+                if raw_out_logits[0][0].is_some() {
                     let start = Instant::now();
                     response::send_raw_responses(
                         input_seqs,
@@ -594,7 +594,7 @@ pub trait Pipeline:
                     }
                 }
 
-                if !raw_out_logits[0].is_empty() && raw_out_logits[0][0].is_some() {
+                if raw_out_logits[0][0].is_some() {
                     let start = Instant::now();
                     response::send_raw_responses(
                         input_seqs,
