@@ -511,6 +511,9 @@ mod metal_tests {
 mod cpu_backend {
     use super::*;
     use candle_core::{DType, Device, Result, Tensor, D};
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    use core::arch::aarch64::*;
+    use half::f16;
 
     /// Simple scalar (reference) quantiser: per‑`group_size` affine.
     pub(crate) fn afq_quantize_op(
@@ -550,15 +553,16 @@ mod cpu_backend {
                 biases[row * groups_per_row + g] = bias;
 
                 for i in 0..group_size {
-                    let j = g * group_size + i;          // position in this row
-                    let bit_off = j * bits;              // overall bit offset
-                    let word_id = bit_off / 32;          // u32 index
-                    let shift   = bit_off % 32;          // intra‑word shift
+                    let j = g * group_size + i; // position in this row
+                    let bit_off = j * bits; // overall bit offset
+                    let word_id = bit_off / 32; // u32 index
+                    let shift = bit_off % 32; // intra‑word shift
 
                     let q_mask = ((1u32 << bits) - 1) as u32;
-                    let q_val  = ((w_vec[base + i] - bias) / scale)
+                    let q_val = ((w_vec[base + i] - bias) / scale)
                         .round()
-                        .clamp(0.0, levels) as u32 & q_mask;
+                        .clamp(0.0, levels) as u32
+                        & q_mask;
 
                     let row_base = row * packed_row;
                     q_codes[row_base + word_id] |= q_val << shift;
@@ -627,12 +631,13 @@ mod cpu_backend {
                     let j = g * group_size + i;
                     let bit_off = j * _bits;
                     let word_id = bit_off / 32;
-                    let shift   = bit_off % 32;
+                    let shift = bit_off % 32;
 
                     let row_base = row * packed_row;
                     let mut q = (codes[row_base + word_id] >> shift) & ((1u32 << _bits) - 1);
                     if shift + _bits > 32 {
-                        q |= (codes[row_base + word_id + 1] << (32 - shift)) & ((1u32 << _bits) - 1);
+                        q |=
+                            (codes[row_base + word_id + 1] << (32 - shift)) & ((1u32 << _bits) - 1);
                     }
 
                     let idx = row * inner + j;
@@ -651,6 +656,230 @@ mod cpu_backend {
         )
     }
 
+    /// Fast NEON implementation for 2‑D matrix multiply of F16 × (packed‑u32) with affine groups.
+    ///
+    /// Falls back to scalar path if:
+    /// * `transpose == true`
+    /// * `lhs_indices` / `rhs_indices` are supplied
+    /// * `bits > 8`
+    /// * the compiled target isn’t aarch64+neon
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    fn afq_mm_fast_neon(
+        x: &Tensor,
+        w: &Tensor,
+        scales: &Tensor,
+        biases: &Tensor,
+        group_size: usize,
+        bits: usize,
+    ) -> Result<Tensor> {
+        if x.rank() != 2 || w.rank() != 2 || scales.rank() != 2 || biases.rank() != 2 {
+            candle_core::bail!("afq_mm_fast_neon currently supports only 2‑D tensors");
+        }
+        // Layout: w is [K, packed_N]
+        let m = x.dim(D::Minus2)?; // batch
+        let k = x.dim(D::Minus1)?; // inner
+        let packed_n = w.dim(D::Minus1)?;
+        let n = packed_n * 32 / bits; // real output dim
+        let groups_per_row = n / group_size;
+        debug_assert_eq!(w.dim(D::Minus2)?, k);
+        debug_assert_eq!(scales.dim(D::Minus2)?, k);
+        debug_assert_eq!(biases.dim(D::Minus2)?, k);
+        debug_assert_eq!(scales.dim(D::Minus1)?, groups_per_row);
+        debug_assert_eq!(biases.dim(D::Minus1)?, groups_per_row);
+
+        // Flatten all tensors
+        let x_vec = x.flatten_all()?.to_dtype(DType::F16)?.to_vec1::<f16>()?;
+        let w_codes = w.flatten_all()?.to_vec1::<u32>()?;
+        let sc_vec = scales.flatten_all()?.to_vec1::<f32>()?;
+        let bs_vec = biases.flatten_all()?.to_vec1::<f32>()?;
+
+        let mut y = vec![0f32; m * n];
+
+        let mask = (1u32 << bits) - 1;
+        let codes_per_word = 32 / bits;
+        let words_per_group = group_size / codes_per_word;
+
+        for row_idx in 0..m {
+            let x_row = &x_vec[row_idx * k..(row_idx + 1) * k];
+            // Pointer to this output row
+            let y_row = &mut y[row_idx * n..(row_idx + 1) * n];
+
+            // zero‑init the row
+            for v in y_row.iter_mut() {
+                *v = 0.0;
+            }
+
+            for kk in 0..k {
+                let x_scalar = x_row[kk].to_f32();
+
+                // pre‑compute offset in w/scales/biases for this kk row
+                let w_row_base = kk * packed_n;
+                let sb_base = kk * groups_per_row;
+
+                for g in 0..groups_per_row {
+                    let scale = sc_vec[sb_base + g];
+                    let bias = bs_vec[sb_base + g];
+
+                    let x_scale = x_scalar * scale;
+                    let x_bias = x_scalar * bias;
+
+                    let y_group = &mut y_row[g * group_size..(g + 1) * group_size];
+
+                    let word_offset = w_row_base + g * words_per_group;
+
+                    // Process group_size elements (<=32). Work in 8‑value (u32) blocks (exact for bits 2‑8).
+                    let mut local_codes = [0u32; 32];
+                    for w_idx in 0..words_per_group {
+                        let word = w_codes[word_offset + w_idx];
+                        for c in 0..codes_per_word {
+                            local_codes[w_idx * codes_per_word + c] = (word >> (c * bits)) & mask;
+                        }
+                    }
+
+                    // NEON accumulate in 4‑wide lanes.
+                    unsafe {
+                        let bias_vec = vdupq_n_f32(x_bias);
+                        let mul_const = x_scale;
+
+                        for chunk in 0..(group_size / 4) {
+                            let q_u32 = vld1q_u32(local_codes.as_ptr().add(chunk * 4));
+                            let q_f32 = vcvtq_f32_u32(q_u32);
+                            let acc_ptr = y_group.as_mut_ptr().add(chunk * 4);
+                            let acc_old = vld1q_f32(acc_ptr);
+                            let acc_new = vmlaq_n_f32(bias_vec, q_f32, mul_const);
+                            // acc_old + acc_new
+                            let acc_sum = vaddq_f32(acc_old, acc_new);
+                            vst1q_f32(acc_ptr, acc_sum);
+                        }
+                    }
+                }
+            }
+        }
+
+        Tensor::from_vec(y, vec![m, n], &Device::Cpu)?.to_dtype(x.dtype())
+    }
+
+    /// NEON fast‑path where `transpose == true`.
+    ///
+    /// `w` is stored with shape **[packed_N, K]** (i.e., the affine‑quantised
+    /// matrix is already “row‑major” with respect to the *output*
+    /// dimension).  We multiply:
+    ///
+    ///    Y[M,K] = X[M,K] · Wᵀ[K,N]   (where N = packed_N * 32 / bits)
+    ///
+    /// so every output column in `Wᵀ` corresponds to one original
+    /// *group‑size* block in the packed rows.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    fn afq_mm_fast_neon_t(
+        x: &Tensor,
+        w: &Tensor,
+        scales: &Tensor,
+        biases: &Tensor,
+        group_size: usize,
+        bits: usize,
+    ) -> Result<Tensor> {
+        // Shapes check: X[M,K],  W[packed_N, K]  (packed along dim‑0)
+        if x.rank() != 2 || w.rank() != 2 || scales.rank() != 2 || biases.rank() != 2 {
+            candle_core::bail!("afq_mm_fast_neon_t supports only 2‑D tensors");
+        }
+
+        let m = x.dim(D::Minus2)?; // batch‑rows
+        let k = x.dim(D::Minus1)?; // shared dim
+        let packed_n = w.dim(D::Minus1)?; // packed columns (input dimension, packed)
+        let k_out = w.dim(D::Minus2)?; // number of output rows
+        let n = packed_n * 32 / bits; // real input dim (unpacked input)
+        let groups_per_row = n / group_size;
+
+        // Ensure X’s inner dimension matches the unpacked input dimension of W
+        if k != n {
+            candle_core::bail!("afq_mm_fast_neon_t: X inner dim {k} must equal unpacked dim {n}");
+        }
+        // Ensure scales / biases have one row per output channel
+        debug_assert_eq!(scales.dim(D::Minus2)?, k_out);
+        debug_assert_eq!(biases.dim(D::Minus2)?, k_out);
+        debug_assert_eq!(scales.dim(D::Minus1)?, groups_per_row);
+        debug_assert_eq!(biases.dim(D::Minus1)?, groups_per_row);
+
+        // Flatten everything
+        let x_vec = x.flatten_all()?.to_dtype(DType::F16)?.to_vec1::<f16>()?;
+        let w_codes = w.flatten_all()?.to_vec1::<u32>()?;
+        let sc_vec = scales.flatten_all()?.to_vec1::<f32>()?;
+        let bs_vec = biases.flatten_all()?.to_vec1::<f32>()?;
+
+        let mut y = vec![0f32; m * k_out];
+
+        let mask = (1u32 << bits) - 1;
+        let codes_per_word = 32 / bits;
+        let words_per_group = group_size / codes_per_word;
+
+        dbg!(m, k_out, packed_n, codes_per_word);
+        use rayon::prelude::*;
+        for row_idx in 0..m {
+            let x_row = &x_vec[row_idx * k..(row_idx + 1) * k];
+            let y_row = &mut y[row_idx * k_out..(row_idx + 1) * k_out];
+
+            // zero‑init the row
+            for v in y_row.iter_mut() {
+                *v = 0.0;
+            }
+
+            // Parallel over kk (output channels) for this row
+            y_row.par_iter_mut().enumerate().for_each(|(kk, y_slot)| {
+                let mut acc_vec = unsafe { vdupq_n_f32(0.0) };
+                let sb_base = kk * groups_per_row;
+
+                for packed_row_idx in 0..packed_n {
+                    // Row‑major access: row = kk (output), col = packed_row_idx (input packed)
+                    let word = w_codes[kk * packed_n + packed_row_idx];
+
+                    // Unpack codes_per_word values
+                    let mut local_codes = [0u32; 8]; // supports up to 8 codes per word
+                    for c in 0..codes_per_word {
+                        local_codes[c] = (word >> (c * bits)) & mask;
+                    }
+
+                    // Identify which group this packed_row_idx belongs to
+                    let g = packed_row_idx * codes_per_word / group_size;
+                    let scale = sc_vec[sb_base + g];
+                    let bias = bs_vec[sb_base + g];
+
+                    // For each code in this word (each input position)
+                    for c in 0..codes_per_word {
+                        let input_idx = packed_row_idx * codes_per_word + c;
+                        if input_idx >= n {
+                            break;
+                        }
+                        let x_scalar = x_row[input_idx].to_f32();
+                        let q_val = local_codes[c] as f32;
+                        let val = x_scalar * (q_val * scale + bias);
+
+                        // Accumulate val into the correct lane
+                        let lane = c % 4;
+                        let mut tmp = [0.0f32; 4];
+                        unsafe {
+                            vst1q_f32(tmp.as_mut_ptr(), acc_vec);
+                        }
+                        tmp[lane] += val;
+                        acc_vec = unsafe { vld1q_f32(tmp.as_ptr()) };
+                    }
+                }
+
+                // Horizontal sum -> scalar and store
+                unsafe {
+                    let pair_sum = vadd_f32(vget_high_f32(acc_vec), vget_low_f32(acc_vec));
+                    let scalar = vget_lane_f32(pair_sum, 0) + vget_lane_f32(pair_sum, 1);
+                    *y_slot = scalar;
+                }
+            });
+        }
+
+        Tensor::from_vec(y, vec![m, k_out], &Device::Cpu)?.to_dtype(x.dtype())
+    }
+
     /// Very simple (and slow) matmul after full de‑quantisation.  Handles 2‑D tensors.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn afq_mm_op(
@@ -664,6 +893,29 @@ mod cpu_backend {
         bits: usize,
         transpose: bool,
     ) -> Result<Tensor> {
+        // --- Try fast NEON path -------------------------------------------------
+        #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+        {
+            if _lhs_indices.is_none() && _rhs_indices.is_none() && bits <= 8 {
+                // dbg!(transpose);
+                // dbg!(&x.squeeze(0)?);
+                // dbg!(&w);
+                // dbg!(&scales);
+                // dbg!(&biases);
+                let try_fast = if !transpose {
+                    afq_mm_fast_neon(&x.squeeze(0)?, w, scales, biases, group_size, bits)
+                } else {
+                    afq_mm_fast_neon_t(&x.squeeze(0)?, w, scales, biases, group_size, bits)
+                };
+                // dbg!(&try_fast);
+                // dbg!(&try_fast);
+                if let Ok(t) = try_fast {
+                    return Ok(t.unsqueeze(0)?);
+                }
+            }
+            // Otherwise, fall through to the scalar fallback.
+        }
+        // ------------------------------------------------------------------------
         let w_f32 = afq_dequantize_op(w, scales, biases, group_size, bits)?.to_dtype(x.dtype())?;
         if transpose {
             x.broadcast_matmul(&w_f32.t()?)
