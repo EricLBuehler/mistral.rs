@@ -8,6 +8,47 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
     time::Instant,
 };
+/// Wrapper around a `Cow<'a, [u8]>` buffer that implements
+/// `safetensors::tensor::View`.
+///
+/// *Purpose*: lets us pass raw byte buffers to
+/// `safetensors::serialize_to_file` without cloning them into a `Vec<u8>` or
+/// converting to a higher‑level tensor type.  
+/// We expose the buffer as a 1‑D `u8` tensor of shape `[len]`.
+#[derive(Clone)]
+pub struct CowBytesView<'a> {
+    data: Cow<'a, [u8]>,
+    shape: [usize; 1],
+}
+
+impl<'a> CowBytesView<'a> {
+    /// Convenience constructor.
+    pub fn new(data: Cow<'a, [u8]>) -> Self {
+        let len = data.len();
+        Self { data, shape: [len] }
+    }
+}
+
+impl<'a> safetensors::tensor::View for CowBytesView<'a> {
+    fn dtype(&self) -> safetensors::tensor::Dtype {
+        // Serialize as raw bytes
+        safetensors::tensor::Dtype::U8
+    }
+
+    fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+
+    fn data(&self) -> Cow<[u8]> {
+        assert!(matches!(self.data, Cow::Borrowed(_)));
+        // Cloning a `Cow` is cheap (only clones the enum, not the data).
+        self.data.clone()
+    }
+
+    fn data_len(&self) -> usize {
+        self.data.len()
+    }
+}
 
 use anyhow::Result;
 use candle_core::{quantized, Context, Device, Tensor};
@@ -581,7 +622,10 @@ pub trait IsqModel {
                             .map(|(i, (layer, _))| {
                                 Ok((
                                     i.to_string(),
-                                    Tensor::new(Cow::into_owned(layer.serialize()?), &Device::Cpu)?,
+                                    match layer.serialize()? {
+                                        Cow::Borrowed(_) => unreachable!(),
+                                        Cow::Owned(owned) => owned,
+                                    },
                                 ))
                             })
                             .collect::<candle_core::Result<Vec<_>>>()
@@ -594,7 +638,10 @@ pub trait IsqModel {
                             .map(|(i, (layer, _))| {
                                 Ok((
                                     i.to_string(),
-                                    Tensor::new(Cow::into_owned(layer.serialize()?), &Device::Cpu)?,
+                                    match layer.serialize()? {
+                                        Cow::Borrowed(_) => unreachable!(),
+                                        Cow::Owned(owned) => owned,
+                                    },
                                 ))
                             })
                             .collect::<candle_core::Result<Vec<_>>>()
@@ -620,8 +667,8 @@ pub trait IsqModel {
                 let mut shard_index = 0;
 
                 // Every 10GB, flush the file. Then save any remaining tensors
-                for (name, tensor) in quantized_values {
-                    let tensor_bytes = tensor.elem_count() * tensor.dtype().size_in_bytes();
+                for (name, tensor) in quantized_values.iter() {
+                    let tensor_bytes = tensor.len();
                     if !current_chunk.is_empty()
                         && current_bytes + tensor_bytes > MAX_UQFF_SIZE_BYTES
                     {
@@ -638,7 +685,7 @@ pub trait IsqModel {
                         current_bytes = 0;
                     }
                     current_bytes += tensor_bytes;
-                    current_chunk.push((name, tensor));
+                    current_chunk.push((name, CowBytesView::new(Cow::Borrowed(tensor))));
                 }
 
                 if !current_chunk.is_empty() {
