@@ -107,7 +107,7 @@ pub(crate) fn afq_quantize_op(
     }
     #[cfg(not(feature = "metal"))]
     {
-        return cpu_backend::afq_quantize_op(w, group_size, bits);
+        cpu_backend::afq_quantize_op(w, group_size, bits)
     }
 }
 
@@ -200,7 +200,7 @@ pub(crate) fn afq_dequantize_op(
     }
     #[cfg(not(feature = "metal"))]
     {
-        return cpu_backend::afq_dequantize_op(w_q, scales, biases, group_size, bits);
+        cpu_backend::afq_dequantize_op(w_q, scales, biases, group_size, bits)
     }
 }
 
@@ -416,7 +416,7 @@ pub(crate) fn afq_mm_op(
     }
     #[cfg(not(feature = "metal"))]
     {
-        return cpu_backend::afq_mm_op(
+        cpu_backend::afq_mm_op(
             x,
             w,
             scales,
@@ -426,7 +426,7 @@ pub(crate) fn afq_mm_op(
             group_size,
             bits,
             transpose,
-        );
+        )
     }
 }
 
@@ -550,15 +550,16 @@ mod cpu_backend {
                 biases[row * groups_per_row + g] = bias;
 
                 for i in 0..group_size {
-                    let j = g * group_size + i;          // position in this row
-                    let bit_off = j * bits;              // overall bit offset
-                    let word_id = bit_off / 32;          // u32 index
-                    let shift   = bit_off % 32;          // intra‑word shift
+                    let j = g * group_size + i; // position in this row
+                    let bit_off = j * bits; // overall bit offset
+                    let word_id = bit_off / 32; // u32 index
+                    let shift = bit_off % 32; // intra‑word shift
 
-                    let q_mask = ((1u32 << bits) - 1) as u32;
-                    let q_val  = ((w_vec[base + i] - bias) / scale)
+                    let q_mask = (1u32 << bits) - 1;
+                    let q_val = ((w_vec[base + i] - bias) / scale)
                         .round()
-                        .clamp(0.0, levels) as u32 & q_mask;
+                        .clamp(0.0, levels) as u32
+                        & q_mask;
 
                     let row_base = row * packed_row;
                     q_codes[row_base + word_id] |= q_val << shift;
@@ -627,12 +628,13 @@ mod cpu_backend {
                     let j = g * group_size + i;
                     let bit_off = j * _bits;
                     let word_id = bit_off / 32;
-                    let shift   = bit_off % 32;
+                    let shift = bit_off % 32;
 
                     let row_base = row * packed_row;
                     let mut q = (codes[row_base + word_id] >> shift) & ((1u32 << _bits) - 1);
                     if shift + _bits > 32 {
-                        q |= (codes[row_base + word_id + 1] << (32 - shift)) & ((1u32 << _bits) - 1);
+                        q |=
+                            (codes[row_base + word_id + 1] << (32 - shift)) & ((1u32 << _bits) - 1);
                     }
 
                     let idx = row * inner + j;
