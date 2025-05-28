@@ -75,6 +75,25 @@ where
     let k_stride = k.stride();
     let v_stride = v.stride();
 
+    // Fast path for decode: q_len == 1
+    if q.shape().dims()[1] == 1 {
+        return flash_attn_cpu_single_q(
+            q_data,
+            k_data,
+            v_data,
+            mask_data,
+            q.shape().dims(),
+            k.shape().dims(),
+            v.shape().dims(),
+            &q_stride,
+            &k_stride,
+            &v_stride,
+            sdpa_params.softmax_scale,
+            0.0,
+            sdpa_params.softcap.unwrap_or(0.0),
+        );
+    }
+
     flash_attn_cpu(
         q_data,
         k_data,
@@ -90,6 +109,143 @@ where
         0.0,
         sdpa_params.softcap.unwrap_or(0.0),
     )
+}
+
+/// Optimised path for the common decode case: q_len == 1 but kv_len ≫ 1.
+/// We drop the inner q‑position loop and parallelise over `(batch, head)`.
+#[allow(clippy::too_many_arguments)]
+fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
+    q_data: &[T],
+    k_data: &[T],
+    v_data: &[T],
+    mask_vec: Option<&[T]>,
+    qshape: &[usize],
+    kshape: &[usize],
+    vshape: &[usize],
+    qstride: &[usize],
+    kstride: &[usize],
+    vstride: &[usize],
+    scale: f32,
+    max_bias: f32,
+    logit_softcap: f32,
+) -> Result<Tensor> {
+    // Shapes: (B, 1, H, D)
+    let (b, _q_len, h, d) = (
+        qshape[0] as usize,
+        qshape[1] as usize, // == 1
+        qshape[2] as usize,
+        qshape[3] as usize,
+    );
+    let kv_len = kshape[1] as usize;
+    let k_h = kshape[2] as usize;
+    let v_h = vshape[2] as usize;
+    let rk2 = h / k_h;
+    let rv2 = h / v_h;
+    let dv = d;
+
+    let n_head_log2 = 1u32 << ((h as f32).log2().floor() as u32);
+    let m0 = (-(max_bias) / n_head_log2 as f32).exp2();
+    let m1 = (-(max_bias / 2.0) / n_head_log2 as f32).exp2();
+
+    // Output buffer: (B, H, 1, D)
+    let mut out = vec![0f32; b * h * dv];
+
+    // Parallel over (batch, head)
+    out.par_chunks_mut(dv)
+        .enumerate()
+        .for_each(|(row_idx, out_chunk)| {
+            let b_i = row_idx / h;
+            let h_i = row_idx % h;
+
+            let slope = if max_bias > 0.0 {
+                if (h_i as u32) < n_head_log2 {
+                    m0.powi((h_i + 1) as i32)
+                } else {
+                    m1.powi((2 * (h_i as i32 - n_head_log2 as i32) + 1) as i32)
+                }
+            } else {
+                1.0
+            };
+
+            let k_head = h_i / rk2;
+            let v_head = h_i / rv2;
+
+            let mut vkq = vec![0f32; dv];
+            let mut s = 0.0f32;
+            let mut m = f32::NEG_INFINITY;
+
+            // ----- single Q row -----
+            let q_base = b_i * qstride[0] + /* q_pos = 0 */ h_i * qstride[2];
+            let mut q_row: Vec<T> = Vec::with_capacity(d);
+            for di in 0..d {
+                q_row.push(q_data[q_base + di * qstride[3]]);
+            }
+
+            // ----- iterate over KV positions -----
+            for kv_pos in 0..kv_len {
+                // Optional mask
+                let mv = if let Some(mv_vec) = mask_vec {
+                    let mval = mv_vec[(b_i * kv_len) + kv_pos];
+                    slope * mval.to_f64() as f32
+                } else {
+                    0.0
+                };
+                if mv == f32::NEG_INFINITY {
+                    continue;
+                }
+
+                // K row
+                let k_base = b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
+                let mut k_row: Vec<T> = Vec::with_capacity(d);
+                for di in 0..d {
+                    k_row.push(k_data[k_base + di * kstride[3]]);
+                }
+
+                // dot(Q, K)
+                let mut s_val = vec_dot::<T>(&q_row, &k_row);
+                let mut scale_applied = scale;
+                if logit_softcap != 0.0 {
+                    scale_applied /= logit_softcap;
+                }
+                s_val *= T::from_f64(scale_applied as f64);
+                if logit_softcap != 0.0 {
+                    s_val = T::from_f64(logit_softcap as f64 * s_val.to_f64().tanh());
+                }
+                s_val += T::from_f64(mv as f64);
+
+                // online softmax
+                let m_old = m;
+                let mut ms = 1.0f32;
+                let mut vs = 1.0f32;
+                if s_val.to_f64() as f32 > m {
+                    m = s_val.to_f64() as f32;
+                    ms = (m_old - m).exp();
+                    for v in vkq.iter_mut() {
+                        *v *= ms;
+                    }
+                } else {
+                    vs = (s_val.to_f64() as f32 - m).exp();
+                }
+
+                // V row
+                let v_base = b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
+                for d_i in 0..dv {
+                    vkq[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * vs;
+                }
+
+                s = s * ms + vs;
+            }
+
+            // normalise
+            let inv_s = 1.0 / s;
+            for v in vkq.iter_mut() {
+                *v *= inv_s;
+            }
+            out_chunk.copy_from_slice(&vkq);
+        });
+
+    let out_shape = (b, h, 1usize, dv);
+    Ok(Tensor::from_vec(out, out_shape, &Device::Cpu)?)
 }
 
 /// Main forward flash-attention CPU routine.
