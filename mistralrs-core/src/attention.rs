@@ -13,6 +13,7 @@ use std::{f32, iter::Sum};
 
 /// Dot product between two f16 slices, accumulated in f32
 #[inline]
+#[allow(dead_code)]
 fn vec_dot<T: WithDType + Sum>(a: &[T], b: &[T]) -> T {
     a.iter().zip(b.iter()).map(|(x, y)| *x * *y).sum::<T>()
 }
@@ -152,6 +153,7 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
 
     // Parallel over (batch, head)
     out.par_chunks_mut(dv)
+        .with_min_len(64)
         .enumerate()
         .for_each(|(row_idx, out_chunk)| {
             let b_i = row_idx / h;
@@ -176,10 +178,8 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
 
             // ----- single Q row -----
             let q_base = b_i * qstride[0] + /* q_pos = 0 */ h_i * qstride[2];
-            let mut q_row: Vec<T> = Vec::with_capacity(d);
-            for di in 0..d {
-                q_row.push(q_data[q_base + di * qstride[3]]);
-            }
+            debug_assert_eq!(qstride[3], 1, "D dimension must be contiguous");
+            let q_row = &q_data[q_base..q_base + d];
 
             // ----- iterate over KV positions -----
             for kv_pos in 0..kv_len {
@@ -194,37 +194,39 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
                     continue;
                 }
 
-                // K row
+                // K row (contiguous)
                 let k_base = b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
-                let mut k_row: Vec<T> = Vec::with_capacity(d);
+                debug_assert_eq!(kstride[3], 1, "D dimension must be contiguous");
+                let k_row = &k_data[k_base..k_base + d];
+
+                // dot(Q, K) – accumulate directly in f32
+                let mut s_val: f32 = 0.0;
                 for di in 0..d {
-                    k_row.push(k_data[k_base + di * kstride[3]]);
+                    s_val += q_row[di].to_f64() as f32 * k_row[di].to_f64() as f32;
                 }
 
-                // dot(Q, K)
-                let mut s_val = vec_dot::<T>(&q_row, &k_row);
                 let mut scale_applied = scale;
                 if logit_softcap != 0.0 {
                     scale_applied /= logit_softcap;
                 }
-                s_val *= T::from_f64(scale_applied as f64);
+                s_val *= scale_applied;
                 if logit_softcap != 0.0 {
-                    s_val = T::from_f64(logit_softcap as f64 * s_val.to_f64().tanh());
+                    s_val = logit_softcap * s_val.tanh();
                 }
-                s_val += T::from_f64(mv as f64);
+                s_val += mv;
 
                 // online softmax
                 let m_old = m;
                 let mut ms = 1.0f32;
                 let mut vs = 1.0f32;
-                if s_val.to_f64() as f32 > m {
-                    m = s_val.to_f64() as f32;
+                if s_val > m {
+                    m = s_val;
                     ms = (m_old - m).exp();
                     for v in vkq.iter_mut() {
                         *v *= ms;
                     }
                 } else {
-                    vs = (s_val.to_f64() as f32 - m).exp();
+                    vs = (s_val - m).exp();
                 }
 
                 // V row
@@ -302,6 +304,7 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
     // SAFETY: `par_chunks_mut` hands out non‑overlapping &mut [f32] slices,
     // so no two threads can write the same output area.
     out.par_chunks_mut(dv)
+        .with_min_len(64)
         .enumerate()
         .for_each(|(row_idx, out_chunk)| {
             // Decode flat index back to (batch, head, q_pos)
