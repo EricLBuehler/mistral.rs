@@ -392,7 +392,7 @@ pub(crate) fn naive_sdpa(
     mask: Option<&Tensor>,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
-    if mask.is_none() && q.device().is_cpu() {
+    if q.device().is_cpu() {
         if q.dtype() == DType::F32 {
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
