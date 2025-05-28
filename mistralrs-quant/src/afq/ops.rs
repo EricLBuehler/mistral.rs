@@ -629,7 +629,7 @@ mod cpu_backend {
 
     use super::*;
     use candle_core::{
-        quantized::{k_quants::BlockQ3K, GgmlDType},
+        quantized::{k_quants::BlockQ3K, GgmlDType, QStorage, QTensor},
         DType, Device, Result, Tensor, D,
     };
     use half::f16;
@@ -641,7 +641,7 @@ mod cpu_backend {
         group_size: usize,
         bits: usize,
     ) -> Result<(Tensor, Tensor, Tensor)> {
-        let device = Device::Cpu;
+        let device = w.device().clone();
         let levels = ((1u32 << bits) - 1) as f32;
 
         // Flatten everything except the last dim.
@@ -734,7 +734,8 @@ mod cpu_backend {
                 d
             },
             &device,
-        )?;
+        )?
+        .to_dtype(w.dtype())?;
         let bs = Tensor::from_vec(
             biases,
             {
@@ -743,7 +744,8 @@ mod cpu_backend {
                 d
             },
             &device,
-        )?;
+        )?
+        .to_dtype(w.dtype())?;
         // Show dimensions of the first row’s grouped structure for sanity.
         dbg!(
             row_group_q[0].len(),    // number of groups
@@ -759,14 +761,11 @@ mod cpu_backend {
             panic!("BlockAfq helper currently supports only group_size = 64 and bits = 4");
         }
 
-        // One Vec<Vec<BlockAfq<4, 64>>> : outer rows → groups
-        let mut row_blocks: Vec<Vec<BlockAfq<4, 64, 16>>> = Vec::with_capacity(outer);
+        let mut blocks: Vec<BlockAfq<4, 64, 16>> = Vec::new();
 
         for (groups_q, groups_sc, groups_bs) in
             izip!(&row_group_q, &row_group_scales, &row_group_biases)
         {
-            let mut blocks: Vec<BlockAfq<4, 64, 16>> = Vec::with_capacity(groups_q.len());
-
             for (q_codes, &scale, &bias) in
                 itertools::izip!(groups_q, groups_sc.iter(), groups_bs.iter())
             {
@@ -785,182 +784,17 @@ mod cpu_backend {
 
                 blocks.push(blk);
             }
-
-            row_blocks.push(blocks);
         }
+        let storage = QStorage::Cpu(Box::new(blocks));
+        let qx = QTensor::new(storage, w.shape())?;
+        println!(
+            "{}",
+            qx.dequantize(&Device::Cpu)?
+                .flatten_all()?
+                .to_vec1::<f32>()?
+                == w_vec
+        );
 
-        Ok((w_q, sc, bs))
-    }
-
-    /// Scalar de‑quantiser (inverse of the above).
-    pub(crate) fn afq_dequantize_op(
-        w_q: &Tensor,
-        scales: &Tensor,
-        biases: &Tensor,
-        group_size: usize,
-        _bits: usize,
-    ) -> Result<Tensor> {
-        let device = Device::Cpu;
-        let codes = w_q.flatten_all()?.to_vec1::<u32>()?;
-        let sc = scales.flatten_all()?.to_vec1::<f32>()?;
-        let bs = biases.flatten_all()?.to_vec1::<f32>()?;
-
-        let packed_row = w_q.dim(D::Minus1)?;
-        let outer = codes.len() / packed_row;
-        let inner = packed_row * 32 / _bits;
-        let groups_per_row = inner / group_size;
-
-        let mut out = vec![0f32; outer * inner];
-        for row in 0..outer {
-            for g in 0..groups_per_row {
-                let scale = sc[row * groups_per_row + g];
-                let bias = bs[row * groups_per_row + g];
-                for i in 0..group_size {
-                    let j = g * group_size + i;
-                    let bit_off = j * _bits;
-                    let word_id = bit_off / 32;
-                    let shift = bit_off % 32;
-
-                    let row_base = row * packed_row;
-                    let mut q = (codes[row_base + word_id] >> shift) & ((1u32 << _bits) - 1);
-                    if shift + _bits > 32 {
-                        q |=
-                            (codes[row_base + word_id + 1] << (32 - shift)) & ((1u32 << _bits) - 1);
-                    }
-
-                    let idx = row * inner + j;
-                    out[idx] = bias + q as f32 * scale;
-                }
-            }
-        }
-        Tensor::from_vec(
-            out,
-            {
-                let mut d = w_q.dims().to_vec();
-                *d.last_mut().unwrap() = inner;
-                d
-            },
-            &device,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn afq_mm_op(
-        x: &Tensor,
-        w: &Tensor,
-        scales: &Tensor,
-        biases: &Tensor,
-        _lhs_indices: Option<&Tensor>,
-        _rhs_indices: Option<&Tensor>,
-        group_size: usize,
-        bits: usize,
-        transpose: bool,
-    ) -> Result<Tensor> {
-        dbg!(&w, &scales, &biases);
-        let x_vec = x.flatten_all()?.to_dtype(DType::F16)?.to_vec1::<f16>()?;
-        let w_codes = w.flatten_all()?.to_vec1::<u32>()?;
-        let sc_vec = scales.flatten_all()?.to_vec1::<f32>()?;
-        let bs_vec = biases.flatten_all()?.to_vec1::<f32>()?;
-        todo!()
-    }
-}
-
-// ============================================================
-//                    Portable CPU back‑end
-// ============================================================
-#[cfg(not(feature = "metal"))]
-mod cpu_backend {
-    use super::*;
-    use candle_core::{DType, Device, Result, Tensor, D};
-
-    /// Simple scalar (reference) quantiser: per‑`group_size` affine.
-    pub(crate) fn afq_quantize_op(
-        w: &Tensor,
-        group_size: usize,
-        bits: usize,
-    ) -> Result<(Tensor, Tensor, Tensor)> {
-        let device = w.device().clone();
-        let levels = ((1u32 << bits) - 1) as f32;
-
-        // Flatten everything except the last dim.
-        let w_vec = w.flatten_all()?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
-        let outer: usize = w_vec.len() / w.dim(D::Minus1)?;
-        let inner = w.dim(D::Minus1)?;
-
-        let packed_row = inner * bits / 32;
-        let groups_per_row = inner / group_size;
-
-        let mut q_codes = vec![0u32; outer * packed_row];
-        let mut scales = vec![0f32; outer * groups_per_row];
-        let mut biases = vec![0f32; outer * groups_per_row];
-
-        for row in 0..outer {
-            for g in 0..groups_per_row {
-                let base = row * inner + g * group_size;
-                let slice = &w_vec[base..base + group_size];
-                let (min_v, max_v) = slice
-                    .iter()
-                    .fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
-                let scale = if (max_v - min_v).abs() < 1e-12 {
-                    1.0
-                } else {
-                    (max_v - min_v) / levels
-                };
-                let bias = min_v;
-                scales[row * groups_per_row + g] = scale;
-                biases[row * groups_per_row + g] = bias;
-
-                for i in 0..group_size {
-                    let j = g * group_size + i; // position in this row
-                    let bit_off = j * bits; // overall bit offset
-                    let word_id = bit_off / 32; // u32 index
-                    let shift = bit_off % 32; // intra‑word shift
-
-                    let q_mask = (1u32 << bits) - 1;
-                    let q_val = ((w_vec[base + i] - bias) / scale)
-                        .round()
-                        .clamp(0.0, levels) as u32
-                        & q_mask;
-
-                    let row_base = row * packed_row;
-                    q_codes[row_base + word_id] |= q_val << shift;
-                    if shift + bits > 32 {
-                        q_codes[row_base + word_id + 1] |= q_val >> (32 - shift);
-                    }
-                }
-            }
-        }
-
-        let w_q = Tensor::from_vec(
-            q_codes,
-            {
-                let mut d = w.dims().to_vec();
-                *d.last_mut().unwrap() = packed_row;
-                d
-            },
-            &device,
-        )?
-        .to_dtype(DType::U32)?;
-        let sc = Tensor::from_vec(
-            scales,
-            {
-                let mut d = w.dims().to_vec();
-                *d.last_mut().unwrap() = groups_per_row;
-                d
-            },
-            &device,
-        )?
-        .to_dtype(w.dtype())?;
-        let bs = Tensor::from_vec(
-            biases,
-            {
-                let mut d = w.dims().to_vec();
-                *d.last_mut().unwrap() = groups_per_row;
-                d
-            },
-            &device,
-        )?
-        .to_dtype(w.dtype())?;
         Ok((w_q, sc, bs))
     }
 
