@@ -5,15 +5,10 @@ use std::sync::atomic::AtomicUsize;
 
 use crate::{pipeline::text_models_inputs_processor::FlashParams, MemoryUsage};
 
-use candle_core::{DType, Device, Result, Tensor, WithDType};
+use candle_core::{Context, DType, Device, Result, Storage, Tensor, WithDType};
 use mistralrs_quant::MatMul;
 
 use std::{f32, iter::Sum};
-
-/// Convert a contiguous f16 tensor to a Vec<f16>
-fn to_vec<T: WithDType>(t: &Tensor) -> Result<Vec<T>> {
-    Ok(t.flatten_all()?.to_vec1::<T>()?)
-}
 
 /// Dot product between two f16 slices, accumulated in f32
 #[inline]
@@ -21,36 +16,102 @@ fn vec_dot<T: WithDType + Sum>(a: &[T], b: &[T]) -> T {
     a.iter().zip(b.iter()).map(|(x, y)| *x * *y).sum::<T>()
 }
 
-/// Main forward flash-attention CPU routine.
-/// Shapes follow Candle convention: (B, S, H, D)
-pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
+fn run_flash_attn_cpu<T>(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
     mask: Option<&Tensor>,
+    sdpa_params: &SdpaParams,
+) -> Result<Tensor>
+where
+    T: WithDType + Sum + num_traits::real::Real,
+{
+    // Inline CPU slice extraction for q, k, v, and optional mask
+    let (q_guard, q_layout) = q.storage_and_layout();
+    let q_data: &[T] = if let Storage::Cpu(cpu) = &*q_guard {
+        let data = cpu.as_slice::<T>().context("Expected CPU storage for q")?;
+        &data[q_layout.start_offset()..]
+    } else {
+        return Err(candle_core::Error::Msg("Expected CPU storage for q".into()));
+    };
+    let (k_guard, k_layout) = k.storage_and_layout();
+    let k_data: &[T] = if let Storage::Cpu(cpu) = &*k_guard {
+        let data = cpu.as_slice::<T>().context("Expected CPU storage for k")?;
+        &data[k_layout.start_offset()..]
+    } else {
+        return Err(candle_core::Error::Msg("Expected CPU storage for k".into()));
+    };
+    let (v_guard, v_layout) = v.storage_and_layout();
+    let v_data: &[T] = if let Storage::Cpu(cpu) = &*v_guard {
+        let data = cpu.as_slice::<T>().context("Expected CPU storage for v")?;
+        &data[v_layout.start_offset()..]
+    } else {
+        return Err(candle_core::Error::Msg("Expected CPU storage for v".into()));
+    };
+    let mask_guard = match mask {
+        Some(mask) => Some(mask.storage_and_layout().0),
+        None => None,
+    };
+    let mask_data: Option<&[T]> = if let Some(mask_guard) = &mask_guard {
+        let mask = mask.as_ref().unwrap();
+
+        if let Storage::Cpu(cpu) = &**mask_guard {
+            let data = cpu
+                .as_slice::<T>()
+                .context("Expected CPU storage for mask")?;
+            Some(&data[mask.layout().start_offset()..])
+        } else {
+            return Err(candle_core::Error::Msg(
+                "Expected CPU storage for mask".into(),
+            ));
+        }
+    } else {
+        None
+    };
+    // q_guard, k_guard, v_guard, and m_guard (if any) are kept in scope to hold storage alive
+
+    let q_stride = q.stride();
+    let k_stride = k.stride();
+    let v_stride = v.stride();
+
+    flash_attn_cpu(
+        q_data,
+        k_data,
+        v_data,
+        mask_data,
+        q.shape().dims(),
+        k.shape().dims(),
+        v.shape().dims(),
+        &q_stride,
+        &k_stride,
+        &v_stride,
+        sdpa_params.softmax_scale,
+        0.0,
+        sdpa_params.softcap.unwrap_or(0.0),
+    )
+}
+
+/// Main forward flash-attention CPU routine.
+/// Shapes follow Candle convention: (B, S, H, D)
+pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
+    q_data: &[T],
+    k_data: &[T],
+    v_data: &[T],
+    mask_vec: Option<&[T]>,
+    qshape: &[usize],
+    kshape: &[usize],
+    vshape: &[usize],
+    qstride: &[usize],
+    kstride: &[usize],
+    vstride: &[usize],
     scale: f32,
     max_bias: f32,
     logit_softcap: f32,
 ) -> Result<Tensor> {
     // Shapes: (B, S, H, D)
-    let qshape = q.shape().dims();
-    let kshape = k.shape().dims();
-    let vshape = v.shape().dims();
-
-    // Batch size, head count and head‑dim must match; K and V must share the same seq_len,
-    // but Q may have its own (decode step).
-    if qshape[0] != kshape[0]
-        || qshape[0] != vshape[0]
-        || qshape[2] != kshape[2]
-        || qshape[2] != vshape[2]
-        || qshape[3] != kshape[3]
-        || qshape[3] != vshape[3]
-        || kshape[1] != vshape[1]
-    {
-        candle_core::bail!(
-            "Mismatch: expected (B, *, H, D) equal across tensors and K/V seq_len equal; got q={qshape:?} k={kshape:?} v={vshape:?}"
-        )
-    }
+    let qshape = qshape;
+    let kshape = kshape;
+    let vshape = vshape;
 
     let (b, q_len, h, d) = (
         qshape[0] as usize,
@@ -75,17 +136,6 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
 
     let mut out = vec![0f32; b * q_len * h * dv];
 
-    // Flatten data for direct indexing
-    let q_data = to_vec::<T>(q)?; // len = b*s*h*d
-    let k_data = to_vec::<T>(k)?;
-    let v_data = to_vec::<T>(v)?;
-
-    let mask_vec = if let Some(m) = mask {
-        Some(to_vec::<T>(m)?)
-    } else {
-        None
-    };
-
     // Outer loops: batch, head, query position
     for b_i in 0..b {
         for h_i in 0..h {
@@ -107,14 +157,19 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
                 let mut s = 0.0f32;
                 let mut m = f32::NEG_INFINITY;
 
-                // Slice for current Q
-                let q_base = ((b_i * q_len + q_pos) * h + h_i) * d;
-                let q_row = &q_data[q_base..q_base + d];
+                // Strided base offset for current Q
+                let q_base = b_i * qstride[0] + q_pos * qstride[1] + h_i * qstride[2];
+                // contiguous copy of the strided row into a local buffer
+                let mut q_row_buf: Vec<T> = Vec::with_capacity(d);
+                for di in 0..d {
+                    q_row_buf.push(q_data[q_base + di * qstride[3]]);
+                }
+                let q_row: &[T] = &q_row_buf;
 
                 // Iterate over key/value positions
                 for kv_pos in 0..kv_len {
                     // Mask (optional)
-                    let mv = if let Some(mv_vec) = &mask_vec {
+                    let mv = if let Some(mv_vec) = mask_vec {
                         // Mask is stored per‑query row (q_pos) × key‑position.
                         let mval = mv_vec[((b_i * q_len + q_pos) * kv_len) + kv_pos];
                         slope * mval.to_f64() as f32
@@ -125,9 +180,13 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
                         continue;
                     }
 
-                    // K slice
-                    let k_base = ((b_i * kv_len + kv_pos) * k_h + k_head) * d;
-                    let k_row = &k_data[k_base..k_base + d];
+                    // Strided K slice
+                    let k_base = b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
+                    let mut k_row_buf: Vec<T> = Vec::with_capacity(d);
+                    for di in 0..d {
+                        k_row_buf.push(k_data[k_base + di * kstride[3]]);
+                    }
+                    let k_row: &[T] = &k_row_buf;
 
                     // dot(Q, K)
                     let mut s_val = vec_dot::<T>(q_row, k_row);
@@ -156,10 +215,10 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
                         vs = (s_val.to_f64() as f32 - m).exp();
                     }
 
-                    // V slice
-                    let v_base = ((b_i * kv_len + kv_pos) * v_h + v_head) * dv;
+                    // Strided V slice
+                    let v_base = b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
                     for d_i in 0..dv {
-                        vkq[d_i] += v_data[v_base + d_i].to_f64() as f32 * vs;
+                        vkq[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * vs;
                     }
 
                     s = s * ms + vs;
@@ -397,84 +456,59 @@ pub(crate) fn naive_sdpa(
         let k = k.transpose(1, 2)?;
         let v = v.transpose(1, 2)?;
 
-        if q.dtype() == DType::F32 {
-            return flash_attn_cpu::<f32>(
-                &q,
-                &k,
-                &v,
-                mask,
-                sdpa_params.softmax_scale,
-                0.,
-                sdpa_params.softcap.unwrap_or(0.),
-            );
-        } else if q.dtype() == DType::F16 {
-            return flash_attn_cpu::<half::f16>(
-                &q,
-                &k,
-                &v,
-                mask,
-                sdpa_params.softmax_scale,
-                0.,
-                sdpa_params.softcap.unwrap_or(0.),
-            );
-        } else if q.dtype() == DType::BF16 {
-            return flash_attn_cpu::<half::bf16>(
-                &q,
-                &k,
-                &v,
-                mask,
-                sdpa_params.softmax_scale,
-                0.,
-                sdpa_params.softcap.unwrap_or(0.),
-            );
-        } else {
-            panic!();
+        match q.dtype() {
+            DType::F32 => run_flash_attn_cpu::<f32>(&q, &k, &v, mask, sdpa_params),
+            DType::F16 => run_flash_attn_cpu::<half::f16>(&q, &k, &v, mask, sdpa_params),
+            DType::BF16 => run_flash_attn_cpu::<half::bf16>(&q, &k, &v, mask, sdpa_params),
+            _ => Err(candle_core::Error::Msg("Unsupported data type".into())),
         }
-    }
-    maybe_synchronize(q.device())?;
-
-    // Use faster softmax if mask is rank 2 or it's rank 3
-    if mask.is_some_and(|mask| mask.rank() == 2 || mask.rank() == 3) && supports_attn_softmax()? {
-        let mask = match mask {
-            Some(mask) if mask.rank() == 3 || mask.rank() == 2 => mask.clone(),
-            _ => candle_core::bail!("unsupported mask {mask:?}"),
-        };
-
-        let mut att = MatMul.matmul(q, &k.t()?)?;
-
-        candle_nn::ops::inplace_attn_softmax_last_dim(
-            &mut att,
-            &mask.contiguous()?,
-            sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0),
-        )?;
-
-        if let Some(softcap) = sdpa_params.softcap {
-            att = (att.tanh()? * softcap as f64)?;
-        }
-
-        MatMul.matmul(&att, v)
-    } else if let Some(mask) = mask {
-        let mut att = MatMul.matmul_affine_mul(q, &k.t()?, sdpa_params.softmax_scale.into())?;
-        if let Some(softcap) = sdpa_params.softcap {
-            att = (att / softcap as f64)?;
-            att = att.tanh()?;
-            att = (att * softcap as f64)?;
-        }
-
-        att = att.broadcast_add(mask)?;
-        candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
-
-        MatMul.matmul(&att, v)
     } else {
-        let mut att = MatMul.matmul_affine_mul(q, &k.t()?, sdpa_params.softmax_scale.into())?;
-        if let Some(softcap) = sdpa_params.softcap {
-            att = (att / softcap as f64)?;
-            att = att.tanh()?;
-            att = (att * softcap as f64)?;
-        }
+        maybe_synchronize(q.device())?;
 
-        candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
-        MatMul.matmul(&att, v)
+        // Use faster softmax if mask is rank 2 or it's rank 3
+        if mask.is_some_and(|mask| mask.rank() == 2 || mask.rank() == 3) && supports_attn_softmax()?
+        {
+            let mask = match mask {
+                Some(mask) if mask.rank() == 3 || mask.rank() == 2 => mask.clone(),
+                _ => candle_core::bail!("unsupported mask {mask:?}"),
+            };
+
+            let mut att = MatMul.matmul(q, &k.t()?)?;
+
+            candle_nn::ops::inplace_attn_softmax_last_dim(
+                &mut att,
+                &mask.contiguous()?,
+                sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0),
+            )?;
+
+            if let Some(softcap) = sdpa_params.softcap {
+                att = (att.tanh()? * softcap as f64)?;
+            }
+
+            MatMul.matmul(&att, v)
+        } else if let Some(mask) = mask {
+            let mut att = MatMul.matmul_affine_mul(q, &k.t()?, sdpa_params.softmax_scale.into())?;
+            if let Some(softcap) = sdpa_params.softcap {
+                att = (att / softcap as f64)?;
+                att = att.tanh()?;
+                att = (att * softcap as f64)?;
+            }
+
+            att = att.broadcast_add(mask)?;
+            candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
+
+            MatMul.matmul(&att, v)
+        } else {
+            let mut att = MatMul.matmul_affine_mul(q, &k.t()?, sdpa_params.softmax_scale.into())?;
+            if let Some(softcap) = sdpa_params.softcap {
+                att = (att / softcap as f64)?;
+                att = att.tanh()?;
+                att = (att * softcap as f64)?;
+            }
+
+            candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
+            MatMul.matmul(&att, v)
+        }
     }
 }
 
@@ -619,7 +653,6 @@ impl Sdpa {
                     &attention_scores,
                     // We save one allocation
                     Some(&q),
-                    None,
                     None,
                     None,
                     None,
