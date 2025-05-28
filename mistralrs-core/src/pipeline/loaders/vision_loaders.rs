@@ -178,7 +178,7 @@ impl VisionLoaderType {
             "MiniCPMO" => Ok(Self::MiniCpmO),
             "Phi4MMForCausalLM" => Ok(Self::Phi4MM),
             "Qwen2_5_VLForConditionalGeneration" => Ok(Self::Qwen2_5VL),
-            "Gemma3ForConditionalGeneration" => Ok(Self::Gemma3),
+            "Gemma3ForConditionalGeneration" | "Gemma3ForCausalLM" => Ok(Self::Gemma3),
             "Mistral3ForConditionalGeneration" => Ok(Self::Mistral3),
             "Llama4ForConditionalGeneration" => Ok(Self::Llama4),
             other => anyhow::bail!(

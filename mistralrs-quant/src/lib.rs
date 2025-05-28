@@ -480,6 +480,7 @@ impl TryFrom<GgmlDType> for IsqType {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum QuantizedSerdeType {
     Gguf = 0,
     Unquant = 1,
