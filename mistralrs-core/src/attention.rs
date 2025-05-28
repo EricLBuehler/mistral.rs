@@ -8,6 +8,7 @@ use crate::{pipeline::text_models_inputs_processor::FlashParams, MemoryUsage};
 use candle_core::{Context, DType, Device, Result, Storage, Tensor, WithDType};
 use mistralrs_quant::MatMul;
 
+use rayon::prelude::*;
 use std::{f32, iter::Sum};
 
 /// Dot product between two f16 slices, accumulated in f32
@@ -136,9 +137,24 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
 
     let mut out = vec![0f32; b * q_len * h * dv];
 
-    // Outer loops: batch, head, query position
-    for b_i in 0..b {
-        for h_i in 0..h {
+    // ------------------------------------------------------------------
+    // Rayon‑parallel version: each (b_i, h_i, q_pos) row is independent.
+    // ------------------------------------------------------------------
+
+    let _rows = b * h * q_len; // total independent work items
+
+    // SAFETY: `par_chunks_mut` hands out non‑overlapping &mut [f32] slices,
+    // so no two threads can write the same output area.
+    out.par_chunks_mut(dv)
+        .enumerate()
+        .for_each(|(row_idx, out_chunk)| {
+            // Decode flat index back to (batch, head, q_pos)
+            let rows_per_batch = h * q_len;
+            let b_i = row_idx / rows_per_batch;
+            let rem = row_idx % rows_per_batch;
+            let h_i = rem / q_len;
+            let q_pos = rem % q_len;
+
             let slope = if max_bias > 0.0 {
                 if (h_i as u32) < n_head_log2 {
                     m0.powi((h_i + 1) as i32)
@@ -148,94 +164,85 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
             } else {
                 1.0
             };
+
             // For grouped‑KV we collapse multiple query heads into the same K/V head.
             let k_head = h_i / rk2;
             let v_head = h_i / rv2;
-            for q_pos in 0..q_len {
-                // Buffers
-                let mut vkq = vec![0f32; dv];
-                let mut s = 0.0f32;
-                let mut m = f32::NEG_INFINITY;
 
-                // Strided base offset for current Q
-                let q_base = b_i * qstride[0] + q_pos * qstride[1] + h_i * qstride[2];
-                // contiguous copy of the strided row into a local buffer
-                let mut q_row_buf: Vec<T> = Vec::with_capacity(d);
-                for di in 0..d {
-                    q_row_buf.push(q_data[q_base + di * qstride[3]]);
-                }
-                let q_row: &[T] = &q_row_buf;
+            // Buffers local to this row
+            let mut vkq = vec![0f32; dv];
+            let mut s = 0.0f32;
+            let mut m = f32::NEG_INFINITY;
 
-                // Iterate over key/value positions
-                for kv_pos in 0..kv_len {
-                    // Mask (optional)
-                    let mv = if let Some(mv_vec) = mask_vec {
-                        // Mask is stored per‑query row (q_pos) × key‑position.
-                        let mval = mv_vec[((b_i * q_len + q_pos) * kv_len) + kv_pos];
-                        slope * mval.to_f64() as f32
-                    } else {
-                        0.0
-                    };
-                    if mv == f32::NEG_INFINITY {
-                        continue;
-                    }
-
-                    // Strided K slice
-                    let k_base = b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
-                    let mut k_row_buf: Vec<T> = Vec::with_capacity(d);
-                    for di in 0..d {
-                        k_row_buf.push(k_data[k_base + di * kstride[3]]);
-                    }
-                    let k_row: &[T] = &k_row_buf;
-
-                    // dot(Q, K)
-                    let mut s_val = vec_dot::<T>(q_row, k_row);
-                    let mut scale_applied = scale;
-                    if logit_softcap != 0.0 {
-                        scale_applied /= logit_softcap;
-                    }
-                    s_val *= T::from_f64(scale_applied as f64);
-                    if logit_softcap != 0.0 {
-                        s_val = T::from_f64(logit_softcap as f64 * s_val.to_f64().tanh());
-                    }
-                    s_val += T::from_f64(mv as f64);
-
-                    let m_old = m;
-                    let mut ms = 1.0f32; // scaling for existing accumulators
-                    let mut vs = 1.0f32; // contribution weight for V_row
-                    if s_val.to_f64() as f32 > m {
-                        m = s_val.to_f64() as f32;
-                        ms = (m_old - m).exp();
-                        // scale existing VKQ
-                        for v in vkq.iter_mut() {
-                            *v *= ms;
-                        }
-                        // vs remains 1.0
-                    } else {
-                        vs = (s_val.to_f64() as f32 - m).exp();
-                    }
-
-                    // Strided V slice
-                    let v_base = b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
-                    for d_i in 0..dv {
-                        vkq[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * vs;
-                    }
-
-                    s = s * ms + vs;
-                }
-
-                // Normalize
-                let inv_s = 1.0 / s;
-                for v in vkq.iter_mut() {
-                    *v *= inv_s;
-                }
-
-                // Write to out
-                let o_base = ((b_i * h + h_i) * q_len + q_pos) * dv;
-                out[o_base..o_base + dv].copy_from_slice(&vkq);
+            // ------------------- gather Q (strided) --------------------
+            let q_base = b_i * qstride[0] + q_pos * qstride[1] + h_i * qstride[2];
+            let mut q_row: Vec<T> = Vec::with_capacity(d);
+            for di in 0..d {
+                q_row.push(q_data[q_base + di * qstride[3]]);
             }
-        }
-    }
+
+            // ---------------- iterate over keys/values -----------------
+            for kv_pos in 0..kv_len {
+                // Mask (optional)
+                let mv = if let Some(mv_vec) = mask_vec {
+                    let mval = mv_vec[((b_i * q_len + q_pos) * kv_len) + kv_pos];
+                    slope * mval.to_f64() as f32
+                } else {
+                    0.0
+                };
+                if mv == f32::NEG_INFINITY {
+                    continue;
+                }
+
+                // K row (strided)
+                let k_base = b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
+                let mut k_row: Vec<T> = Vec::with_capacity(d);
+                for di in 0..d {
+                    k_row.push(k_data[k_base + di * kstride[3]]);
+                }
+
+                // dot(Q, K)
+                let mut s_val = vec_dot::<T>(&q_row, &k_row);
+                let mut scale_applied = scale;
+                if logit_softcap != 0.0 {
+                    scale_applied /= logit_softcap;
+                }
+                s_val *= T::from_f64(scale_applied as f64);
+                if logit_softcap != 0.0 {
+                    s_val = T::from_f64(logit_softcap as f64 * s_val.to_f64().tanh());
+                }
+                s_val += T::from_f64(mv as f64);
+
+                // online softmax
+                let m_old = m;
+                let mut ms = 1.0f32;
+                let mut vs = 1.0f32;
+                if s_val.to_f64() as f32 > m {
+                    m = s_val.to_f64() as f32;
+                    ms = (m_old - m).exp();
+                    for v in vkq.iter_mut() {
+                        *v *= ms;
+                    }
+                } else {
+                    vs = (s_val.to_f64() as f32 - m).exp();
+                }
+
+                // V row (strided)
+                let v_base = b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
+                for d_i in 0..dv {
+                    vkq[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * vs;
+                }
+
+                s = s * ms + vs;
+            }
+
+            // ------------------- normalise & write out ------------------
+            let inv_s = 1.0 / s;
+            for v in vkq.iter_mut() {
+                *v *= inv_s;
+            }
+            out_chunk.copy_from_slice(&vkq);
+        });
 
     // Build output tensor with shape (B, H, S, D) to match standard (permute 0,2,1,3)
     let out_shape = (b, h, q_len, dv);
