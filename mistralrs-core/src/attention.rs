@@ -142,9 +142,7 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
     let rv2 = h / v_h;
     let dv = d;
 
-    let n_head_log2 = 1u32 << ((h as f32).log2().floor() as u32);
-    let m0 = (-(max_bias) / n_head_log2 as f32).exp2();
-    let m1 = (-(max_bias / 2.0) / n_head_log2 as f32).exp2();
+    let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
 
     // Output buffer: (B, H, 1, D)
     let mut out = vec![0f32; b * h * dv];
@@ -162,17 +160,14 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
             let b_i = row_idx / h;
             let h_i = row_idx % h;
 
-            // Positional‑bias (same as before)
+            // ALiBi positional bias (standard formula)
             let slope = if max_bias > 0.0 {
-                if h_i < n_head_log2 as usize {
-                    m0.powi((h_i + 1) as i32)
-                } else {
-                    m1.powi(2 * (h_i as i32 - n_head_log2 as i32) + 1)
-                }
+                2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
             } else {
                 1.0
             };
 
+            // For grouped‑KV we collapse multiple query heads into the same K/V head.
             let k_head = h_i / rk2;
             let v_head = h_i / rv2;
 
@@ -214,10 +209,7 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
                         let k_row = &k_data[k_base..k_base + d];
 
                         // dot(Q, K)
-                        let mut s_val: f32 = 0.0;
-                        for di in 0..d {
-                            s_val += q_row[di].to_f64() as f32 * k_row[di].to_f64() as f32;
-                        }
+                        let mut s_val = vec_dot::<T>(&q_row, &k_row).to_f64() as f32;
 
                         let mut scale_applied = scale;
                         if logit_softcap != 0.0 {
@@ -319,10 +311,8 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
     let rv2 = h / v_h;
     let dv = d; // value dim = key dim in this kernel
 
-    // Precompute constants for positional bias
-    let n_head_log2 = 1u32 << ((h as f32).log2().floor() as u32);
-    let m0 = (-(max_bias) / n_head_log2 as f32).exp2();
-    let m1 = (-(max_bias / 2.0) / n_head_log2 as f32).exp2();
+    // Precompute value for ALiBi slope calculation
+    let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
 
     let mut out = vec![0f32; b * q_len * h * dv];
 
@@ -346,11 +336,7 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
             let q_pos = rem % q_len;
 
             let slope = if max_bias > 0.0 {
-                if (h_i as u32) < n_head_log2 {
-                    m0.powi((h_i + 1) as i32)
-                } else {
-                    m1.powi(2 * (h_i as i32 - n_head_log2 as i32) + 1)
-                }
+                2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
             } else {
                 1.0
             };
@@ -364,9 +350,13 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
             let mut s = 0.0f32;
             let mut m = f32::NEG_INFINITY;
 
+            // Allocate q_row and k_row once per row
+            let mut q_row: Vec<T> = Vec::with_capacity(d);
+            let mut k_row: Vec<T> = Vec::with_capacity(d);
+
             // ------------------- gather Q (strided) --------------------
             let q_base = b_i * qstride[0] + q_pos * qstride[1] + h_i * qstride[2];
-            let mut q_row: Vec<T> = Vec::with_capacity(d);
+            q_row.clear();
             for di in 0..d {
                 q_row.push(q_data[q_base + di * qstride[3]]);
             }
@@ -386,7 +376,7 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
 
                 // K row (strided)
                 let k_base = b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
-                let mut k_row: Vec<T> = Vec::with_capacity(d);
+                k_row.clear();
                 for di in 0..d {
                     k_row.push(k_data[k_base + di * kstride[3]]);
                 }
