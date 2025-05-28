@@ -393,13 +393,32 @@ pub(crate) fn naive_sdpa(
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
     if q.device().is_cpu() {
-        if q.dtype() == DType::F32 {
-            let q = q.transpose(1, 2)?;
-            let k = k.transpose(1, 2)?;
-            let v = v.transpose(1, 2)?;
-            // dbg!(&q,&k,&v);
+        let q = q.transpose(1, 2)?;
+        let k = k.transpose(1, 2)?;
+        let v = v.transpose(1, 2)?;
 
+        if q.dtype() == DType::F32 {
             return flash_attn_cpu::<f32>(
+                &q,
+                &k,
+                &v,
+                mask,
+                sdpa_params.softmax_scale,
+                0.,
+                sdpa_params.softcap.unwrap_or(0.),
+            );
+        } else if q.dtype() == DType::F16 {
+            return flash_attn_cpu::<half::f16>(
+                &q,
+                &k,
+                &v,
+                mask,
+                sdpa_params.softmax_scale,
+                0.,
+                sdpa_params.softcap.unwrap_or(0.),
+            );
+        } else if q.dtype() == DType::BF16 {
+            return flash_attn_cpu::<half::bf16>(
                 &q,
                 &k,
                 &v,
