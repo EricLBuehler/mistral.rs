@@ -1,4 +1,4 @@
-#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 #[cfg(feature = "metal")]
 use std::sync::atomic::AtomicUsize;
@@ -53,10 +53,7 @@ where
     } else {
         return Err(candle_core::Error::Msg("Expected CPU storage for v".into()));
     };
-    let mask_guard = match mask {
-        Some(mask) => Some(mask.storage_and_layout().0),
-        None => None,
-    };
+    let mask_guard = mask.map(|mask| mask.storage_and_layout().0);
     let mask_data: Option<&[T]> = if let Some(mask_guard) = &mask_guard {
         let mask = mask.as_ref().unwrap();
 
@@ -89,9 +86,9 @@ where
             q.shape().dims(),
             k.shape().dims(),
             v.shape().dims(),
-            &q_stride,
-            &k_stride,
-            &v_stride,
+            q_stride,
+            k_stride,
+            v_stride,
             sdpa_params.softmax_scale,
             0.0,
             sdpa_params.softcap.unwrap_or(0.0),
@@ -106,9 +103,9 @@ where
         q.shape().dims(),
         k.shape().dims(),
         v.shape().dims(),
-        &q_stride,
-        &k_stride,
-        &v_stride,
+        q_stride,
+        k_stride,
+        v_stride,
         sdpa_params.softmax_scale,
         0.0,
         sdpa_params.softcap.unwrap_or(0.0),
@@ -135,14 +132,12 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
 ) -> Result<Tensor> {
     // Shapes: (B, 1, H, D)
     let (b, _q_len, h, d) = (
-        qshape[0] as usize,
-        qshape[1] as usize, // == 1
-        qshape[2] as usize,
-        qshape[3] as usize,
+        qshape[0], qshape[1], // == 1
+        qshape[2], qshape[3],
     );
-    let kv_len = kshape[1] as usize;
-    let k_h = kshape[2] as usize;
-    let v_h = vshape[2] as usize;
+    let kv_len = kshape[1];
+    let k_h = kshape[2];
+    let v_h = vshape[2];
     let rk2 = h / k_h;
     let rv2 = h / v_h;
     let dv = d;
@@ -156,7 +151,7 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
 
     // Expose a second dimension of work: split the KV axis into tiles that
     // fit in the last‑level cache and let Rayon schedule them.
-    let kv_tiles = (kv_len + TILE_KV - 1) / TILE_KV;
+    let kv_tiles = kv_len.div_ceil(TILE_KV);
 
     // SAFETY: `par_chunks_mut` hands out non‑overlapping &mut slices, so no two
     // threads write the same output area.
@@ -169,10 +164,10 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
 
             // Positional‑bias (same as before)
             let slope = if max_bias > 0.0 {
-                if (h_i as u32) < n_head_log2 {
+                if h_i < n_head_log2 as usize {
                     m0.powi((h_i + 1) as i32)
                 } else {
-                    m1.powi((2 * (h_i as i32 - n_head_log2 as i32) + 1) as i32)
+                    m1.powi(2 * (h_i as i32 - n_head_log2 as i32) + 1)
                 }
             } else {
                 1.0
@@ -292,11 +287,12 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
         });
 
     let out_shape = (b, h, 1usize, dv);
-    Ok(Tensor::from_vec(out, out_shape, &Device::Cpu)?)
+    Tensor::from_vec(out, out_shape, &Device::Cpu)
 }
 
 /// Main forward flash-attention CPU routine.
 /// Shapes follow Candle convention: (B, S, H, D)
+#[allow(clippy::too_many_arguments)]
 pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
     q_data: &[T],
     k_data: &[T],
@@ -312,23 +308,13 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
     max_bias: f32,
     logit_softcap: f32,
 ) -> Result<Tensor> {
-    // Shapes: (B, S, H, D)
-    let qshape = qshape;
-    let kshape = kshape;
-    let vshape = vshape;
-
-    let (b, q_len, h, d) = (
-        qshape[0] as usize,
-        qshape[1] as usize,
-        qshape[2] as usize,
-        qshape[3] as usize,
-    );
-    let kv_len = kshape[1] as usize;
+    let (b, q_len, h, d) = (qshape[0], qshape[1], qshape[2], qshape[3]);
+    let kv_len = kshape[1];
     // --- Head broadcasting factors ----------------------------------------------------
     // Allows K and V to have fewer heads than Q (grouped‑KV); the ratio is an
     // integer factor.  rk2 = #Q‑heads / #K‑heads,  rv2 = #Q‑heads / #V‑heads.
-    let k_h = kshape[2] as usize;
-    let v_h = vshape[2] as usize;
+    let k_h = kshape[2];
+    let v_h = vshape[2];
     let rk2 = h / k_h; // must divide exactly; panic otherwise
     let rv2 = h / v_h;
     let dv = d; // value dim = key dim in this kernel
@@ -363,7 +349,7 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
                 if (h_i as u32) < n_head_log2 {
                     m0.powi((h_i + 1) as i32)
                 } else {
-                    m1.powi((2 * (h_i as i32 - n_head_log2 as i32) + 1) as i32)
+                    m1.powi(2 * (h_i as i32 - n_head_log2 as i32) + 1)
                 }
             } else {
                 1.0
@@ -450,7 +436,7 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
 
     // Build output tensor with shape (B, H, S, D) to match standard (permute 0,2,1,3)
     let out_shape = (b, h, q_len, dv);
-    Ok(Tensor::from_vec(out, out_shape, &Device::Cpu)?)
+    Tensor::from_vec(out, out_shape, &Device::Cpu)
 }
 
 #[cfg(feature = "metal")]
