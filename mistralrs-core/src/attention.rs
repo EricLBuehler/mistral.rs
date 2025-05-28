@@ -8,28 +8,7 @@ use crate::{pipeline::text_models_inputs_processor::FlashParams, MemoryUsage};
 use candle_core::{DType, Device, Result, Tensor, WithDType};
 use mistralrs_quant::MatMul;
 
-// flash_attn.rs
-// Port of ggml_compute_forward_flash_attn_ext_f16() to pure-Rust over Candle tensors.
-// We operate directly on the underlying data as Vec<T>, so no Candle ops are used
-// except for shape/stride metadata and wrapping results back into a Tensor.
-//
-// Assumptions / Simplifications
-// * Q, K are f16, V may be f16 or f32. dst is always f32.
-// * Tensor layout on entry is Candle default: (batch, seq, head, dim).  ggml is
-//   (dim, seq, head, batch) so we reverse the first/last dimensions while
-//   computing strides.
-// * We run on CPU only, single-threaded for clarity.  Plug in rayon over the
-//   outer loop on `n_rows` for parallel execution once correctness is proven.
-// * Does not yet implement per-type quantization paths (q_to_vec_dot, etc.).
-//   Everything is converted to f32 for dot products.
-// * Masks are optional; if provided they must be f16 with same (seq) length as K.
-// * "op_params" (scale, max_bias, logit_softcap) are passed explicitly.
-//
-use half::f16;
-use std::{
-    f32,
-    iter::{self, Sum},
-};
+use std::{f32, iter::Sum};
 
 /// Convert a contiguous f16 tensor to a Vec<f16>
 fn to_vec<T: WithDType>(t: &Tensor) -> Result<Vec<T>> {
@@ -81,7 +60,7 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
     );
     let kv_len = kshape[1] as usize;
     // --- Head broadcasting factors ----------------------------------------------------
-    // GGML allows K and V to have fewer heads than Q (grouped‑KV); the ratio is an
+    // Allows K and V to have fewer heads than Q (grouped‑KV); the ratio is an
     // integer factor.  rk2 = #Q‑heads / #K‑heads,  rv2 = #Q‑heads / #V‑heads.
     let k_h = kshape[2] as usize;
     let v_h = vshape[2] as usize;
@@ -89,7 +68,7 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
     let rv2 = h / v_h;
     let dv = d; // value dim = key dim in this kernel
 
-    // Precompute constants for positional bias (same logic as ggml)
+    // Precompute constants for positional bias
     let n_head_log2 = 1u32 << ((h as f32).log2().floor() as u32);
     let m0 = (-(max_bias) / n_head_log2 as f32).exp2();
     let m1 = (-(max_bias / 2.0) / n_head_log2 as f32).exp2();
@@ -125,8 +104,8 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
             for q_pos in 0..q_len {
                 // Buffers
                 let mut vkq = vec![0f32; dv];
-                let mut S = 0.0f32;
-                let mut M = f32::NEG_INFINITY;
+                let mut s = 0.0f32;
+                let mut m = f32::NEG_INFINITY;
 
                 // Slice for current Q
                 let q_base = ((b_i * q_len + q_pos) * h + h_i) * d;
@@ -162,19 +141,19 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
                     }
                     s_val += T::from_f64(mv as f64);
 
-                    let Mold = M;
+                    let m_old = m;
                     let mut ms = 1.0f32; // scaling for existing accumulators
                     let mut vs = 1.0f32; // contribution weight for V_row
-                    if s_val.to_f64() as f32 > M {
-                        M = s_val.to_f64() as f32;
-                        ms = (Mold - M).exp();
+                    if s_val.to_f64() as f32 > m {
+                        m = s_val.to_f64() as f32;
+                        ms = (m_old - m).exp();
                         // scale existing VKQ
                         for v in vkq.iter_mut() {
                             *v *= ms;
                         }
                         // vs remains 1.0
                     } else {
-                        vs = (s_val.to_f64() as f32 - M).exp();
+                        vs = (s_val.to_f64() as f32 - m).exp();
                     }
 
                     // V slice
@@ -183,11 +162,11 @@ pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
                         vkq[d_i] += v_data[v_base + d_i].to_f64() as f32 * vs;
                     }
 
-                    S = S * ms + vs;
+                    s = s * ms + vs;
                 }
 
                 // Normalize
-                let inv_s = 1.0 / S;
+                let inv_s = 1.0 / s;
                 for v in vkq.iter_mut() {
                     *v *= inv_s;
                 }
