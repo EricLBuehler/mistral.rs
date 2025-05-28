@@ -588,7 +588,8 @@ mod cpu_backend {
                 d
             },
             &device,
-        )?;
+        )?
+        .to_dtype(w.dtype())?;
         let bs = Tensor::from_vec(
             biases,
             {
@@ -597,7 +598,8 @@ mod cpu_backend {
                 d
             },
             &device,
-        )?;
+        )?
+        .to_dtype(w.dtype())?;
         Ok((w_q, sc, bs))
     }
 
@@ -611,8 +613,14 @@ mod cpu_backend {
     ) -> Result<Tensor> {
         let device = w_q.device().clone();
         let codes = w_q.flatten_all()?.to_vec1::<u32>()?;
-        let sc = scales.flatten_all()?.to_vec1::<f32>()?;
-        let bs = biases.flatten_all()?.to_vec1::<f32>()?;
+        let sc = scales
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
+        let bs = biases
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
 
         let packed_row = w_q.dim(D::Minus1)?;
         let outer = codes.len() / packed_row;
@@ -642,6 +650,7 @@ mod cpu_backend {
                 }
             }
         }
+
         Tensor::from_vec(
             out,
             {
@@ -650,7 +659,8 @@ mod cpu_backend {
                 d
             },
             &device,
-        )
+        )?
+        .to_dtype(scales.dtype())
     }
 
     /// Very simple (and slow) matmul after full de‑quantisation.  Handles 2‑D tensors.
