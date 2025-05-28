@@ -93,6 +93,7 @@ ordered-float = "5.0.0"
 hashbrown = "0.15.3"
 parking_lot = "0.12.3"
 ahash = "0.8.12"
+num-traits = "0.2.19"
 
 [features]
 pyo3_macros = ["pyo3"]

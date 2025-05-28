@@ -5,8 +5,204 @@ use std::sync::atomic::AtomicUsize;
 
 use crate::{pipeline::text_models_inputs_processor::FlashParams, MemoryUsage};
 
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor, WithDType};
 use mistralrs_quant::MatMul;
+
+// flash_attn.rs
+// Port of ggml_compute_forward_flash_attn_ext_f16() to pure-Rust over Candle tensors.
+// We operate directly on the underlying data as Vec<T>, so no Candle ops are used
+// except for shape/stride metadata and wrapping results back into a Tensor.
+//
+// Assumptions / Simplifications
+// * Q, K are f16, V may be f16 or f32. dst is always f32.
+// * Tensor layout on entry is Candle default: (batch, seq, head, dim).  ggml is
+//   (dim, seq, head, batch) so we reverse the first/last dimensions while
+//   computing strides.
+// * We run on CPU only, single-threaded for clarity.  Plug in rayon over the
+//   outer loop on `n_rows` for parallel execution once correctness is proven.
+// * Does not yet implement per-type quantization paths (q_to_vec_dot, etc.).
+//   Everything is converted to f32 for dot products.
+// * Masks are optional; if provided they must be f16 with same (seq) length as K.
+// * "op_params" (scale, max_bias, logit_softcap) are passed explicitly.
+//
+use half::f16;
+use std::{
+    f32,
+    iter::{self, Sum},
+};
+
+/// Convert a contiguous f16 tensor to a Vec<f16>
+fn to_vec<T: WithDType>(t: &Tensor) -> Result<Vec<T>> {
+    Ok(t.flatten_all()?.to_vec1::<T>()?)
+}
+
+/// Dot product between two f16 slices, accumulated in f32
+#[inline]
+fn vec_dot<T: WithDType + Sum>(a: &[T], b: &[T]) -> T {
+    a.iter().zip(b.iter()).map(|(x, y)| *x * *y).sum::<T>()
+}
+
+/// Main forward flash-attention CPU routine.
+/// Shapes follow Candle convention: (B, S, H, D)
+pub fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    mask: Option<&Tensor>,
+    scale: f32,
+    max_bias: f32,
+    logit_softcap: f32,
+) -> Result<Tensor> {
+    // Shapes: (B, S, H, D)
+    let qshape = q.shape().dims();
+    let kshape = k.shape().dims();
+    let vshape = v.shape().dims();
+
+    // Batch size, head count and head‑dim must match; K and V must share the same seq_len,
+    // but Q may have its own (decode step).
+    if qshape[0] != kshape[0]
+        || qshape[0] != vshape[0]
+        || qshape[2] != kshape[2]
+        || qshape[2] != vshape[2]
+        || qshape[3] != kshape[3]
+        || qshape[3] != vshape[3]
+        || kshape[1] != vshape[1]
+    {
+        candle_core::bail!(
+            "Mismatch: expected (B, *, H, D) equal across tensors and K/V seq_len equal; got q={qshape:?} k={kshape:?} v={vshape:?}"
+        )
+    }
+
+    let (b, q_len, h, d) = (
+        qshape[0] as usize,
+        qshape[1] as usize,
+        qshape[2] as usize,
+        qshape[3] as usize,
+    );
+    let kv_len = kshape[1] as usize;
+    // --- Head broadcasting factors ----------------------------------------------------
+    // GGML allows K and V to have fewer heads than Q (grouped‑KV); the ratio is an
+    // integer factor.  rk2 = #Q‑heads / #K‑heads,  rv2 = #Q‑heads / #V‑heads.
+    let k_h = kshape[2] as usize;
+    let v_h = vshape[2] as usize;
+    let rk2 = h / k_h; // must divide exactly; panic otherwise
+    let rv2 = h / v_h;
+    let dv = d; // value dim = key dim in this kernel
+
+    // Precompute constants for positional bias (same logic as ggml)
+    let n_head_log2 = 1u32 << ((h as f32).log2().floor() as u32);
+    let m0 = (-(max_bias) / n_head_log2 as f32).exp2();
+    let m1 = (-(max_bias / 2.0) / n_head_log2 as f32).exp2();
+
+    let mut out = vec![0f32; b * q_len * h * dv];
+
+    // Flatten data for direct indexing
+    let q_data = to_vec::<T>(q)?; // len = b*s*h*d
+    let k_data = to_vec::<T>(k)?;
+    let v_data = to_vec::<T>(v)?;
+
+    let mask_vec = if let Some(m) = mask {
+        Some(to_vec::<T>(m)?)
+    } else {
+        None
+    };
+
+    // Outer loops: batch, head, query position
+    for b_i in 0..b {
+        for h_i in 0..h {
+            let slope = if max_bias > 0.0 {
+                if (h_i as u32) < n_head_log2 {
+                    m0.powi((h_i + 1) as i32)
+                } else {
+                    m1.powi((2 * (h_i as i32 - n_head_log2 as i32) + 1) as i32)
+                }
+            } else {
+                1.0
+            };
+            // For grouped‑KV we collapse multiple query heads into the same K/V head.
+            let k_head = h_i / rk2;
+            let v_head = h_i / rv2;
+            for q_pos in 0..q_len {
+                // Buffers
+                let mut vkq = vec![0f32; dv];
+                let mut S = 0.0f32;
+                let mut M = f32::NEG_INFINITY;
+
+                // Slice for current Q
+                let q_base = ((b_i * q_len + q_pos) * h + h_i) * d;
+                let q_row = &q_data[q_base..q_base + d];
+
+                // Iterate over key/value positions
+                for kv_pos in 0..kv_len {
+                    // Mask (optional)
+                    let mv = if let Some(mv_vec) = &mask_vec {
+                        // Mask is stored per‑query row (q_pos) × key‑position.
+                        let mval = mv_vec[((b_i * q_len + q_pos) * kv_len) + kv_pos];
+                        slope * mval.to_f64() as f32
+                    } else {
+                        0.0
+                    };
+                    if mv == f32::NEG_INFINITY {
+                        continue;
+                    }
+
+                    // K slice
+                    let k_base = ((b_i * kv_len + kv_pos) * k_h + k_head) * d;
+                    let k_row = &k_data[k_base..k_base + d];
+
+                    // dot(Q, K)
+                    let mut s_val = vec_dot::<T>(q_row, k_row);
+                    let mut scale_applied = scale;
+                    if logit_softcap != 0.0 {
+                        scale_applied /= logit_softcap;
+                    }
+                    s_val *= T::from_f64(scale_applied as f64);
+                    if logit_softcap != 0.0 {
+                        s_val = T::from_f64(logit_softcap as f64 * s_val.to_f64().tanh());
+                    }
+                    s_val += T::from_f64(mv as f64);
+
+                    let Mold = M;
+                    let mut ms = 1.0f32; // scaling for existing accumulators
+                    let mut vs = 1.0f32; // contribution weight for V_row
+                    if s_val.to_f64() as f32 > M {
+                        M = s_val.to_f64() as f32;
+                        ms = (Mold - M).exp();
+                        // scale existing VKQ
+                        for v in vkq.iter_mut() {
+                            *v *= ms;
+                        }
+                        // vs remains 1.0
+                    } else {
+                        vs = (s_val.to_f64() as f32 - M).exp();
+                    }
+
+                    // V slice
+                    let v_base = ((b_i * kv_len + kv_pos) * v_h + v_head) * dv;
+                    for d_i in 0..dv {
+                        vkq[d_i] += v_data[v_base + d_i].to_f64() as f32 * vs;
+                    }
+
+                    S = S * ms + vs;
+                }
+
+                // Normalize
+                let inv_s = 1.0 / S;
+                for v in vkq.iter_mut() {
+                    *v *= inv_s;
+                }
+
+                // Write to out
+                let o_base = ((b_i * h + h_i) * q_len + q_pos) * dv;
+                out[o_base..o_base + dv].copy_from_slice(&vkq);
+            }
+        }
+    }
+
+    // Build output tensor with shape (B, H, S, D) to match standard (permute 0,2,1,3)
+    let out_shape = (b, h, q_len, dv);
+    Ok(Tensor::from_vec(out, out_shape, &Device::Cpu)?)
+}
 
 #[cfg(feature = "metal")]
 /// Initial, sentinel value is usize::MAX
@@ -217,6 +413,26 @@ pub(crate) fn naive_sdpa(
     mask: Option<&Tensor>,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
+    if mask.is_none() && q.device().is_cpu() {
+        if q.dtype() == DType::F32 {
+            let q = q.transpose(1, 2)?;
+            let k = k.transpose(1, 2)?;
+            let v = v.transpose(1, 2)?;
+            // dbg!(&q,&k,&v);
+
+            return flash_attn_cpu::<f32>(
+                &q,
+                &k,
+                &v,
+                mask,
+                sdpa_params.softmax_scale,
+                0.,
+                sdpa_params.softcap.unwrap_or(0.),
+            );
+        } else {
+            panic!();
+        }
+    }
     maybe_synchronize(q.device())?;
 
     // Use faster softmax if mask is rank 2 or it's rank 3
