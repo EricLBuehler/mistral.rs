@@ -15,7 +15,7 @@ const DOT_CHUNK: usize = 4;
 
 #[inline]
 fn vec_dot<T: WithDType + Sum + Copy + std::ops::Mul<Output = T>>(a: &[T], b: &[T]) -> T {
-    let mut sum = T::from_f64(0.0); // assuming T supports this; otherwise, replace with T::zero()
+    let mut sum = T::zero();
     let chunks = a.len() / DOT_CHUNK;
 
     for i in 0..chunks {
