@@ -5,6 +5,11 @@ use candle_core::{Context, Device, Result, Storage, Tensor, WithDType};
 use rayon::prelude::*;
 use rayon::ThreadPool;
 
+use std::sync::LazyLock;
+use std::{f32, iter::Sum};
+
+use crate::attention::SdpaParams;
+
 #[cfg(target_os = "macos")]
 /// Elevate the thread QoS so macOS prefers running it on Performance (P) cores.
 unsafe fn set_thread_affinity() {
@@ -31,10 +36,6 @@ static FLASH_ATTN_POOL: LazyLock<ThreadPool> = LazyLock::new(|| {
         .build()
         .expect("Failed to build custom Rayon thread‑pool for flash‑attention")
 });
-use std::sync::LazyLock;
-use std::{f32, iter::Sum};
-
-use crate::attention::SdpaParams;
 
 const DOT_CHUNK: usize = 4;
 
