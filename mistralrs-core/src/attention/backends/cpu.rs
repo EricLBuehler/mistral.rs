@@ -5,7 +5,7 @@ use candle_core::{Context, Device, Result, Storage, Tensor, WithDType};
 use rayon::prelude::*;
 use std::{f32, iter::Sum};
 
-use super::SdpaParams;
+use crate::attention::SdpaParams;
 
 const DOT_CHUNK: usize = 4;
 

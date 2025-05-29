@@ -1,9 +1,9 @@
 use candle_core::{Result, Tensor};
 
-use super::SdpaParams;
+use crate::attention::SdpaParams;
 
 #[cfg(feature = "flash-attn")]
-pub(super) fn flash_attn(
+pub(crate) fn flash_attn(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
@@ -60,7 +60,7 @@ pub(super) fn flash_attn(
 }
 
 #[cfg(feature = "flash-attn-v3")]
-pub(super) fn flash_attn(
+pub(crate) fn flash_attn(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
@@ -110,7 +110,7 @@ pub(super) fn flash_attn(
 }
 
 #[cfg(not(any(feature = "flash-attn", feature = "flash-attn-v3")))]
-pub(super) fn flash_attn(
+pub(crate) fn flash_attn(
     _: &Tensor,
     _: &Tensor,
     _: &Tensor,

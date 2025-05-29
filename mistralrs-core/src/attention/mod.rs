@@ -6,12 +6,10 @@ use std::sync::atomic::AtomicUsize;
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 
 use candle_core::{Device, Result, Tensor};
-use flash::flash_attn;
-pub(crate) use naive::naive_sdpa;
 
-mod cpu;
-mod flash;
-mod naive;
+mod backends;
+
+pub(crate) use backends::{flash_attn, naive_sdpa};
 
 fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
     if n_rep == 1 {

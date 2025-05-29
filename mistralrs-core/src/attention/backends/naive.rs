@@ -8,7 +8,9 @@ use crate::MemoryUsage;
 use candle_core::{DType, Device, Result, Tensor};
 use mistralrs_quant::MatMul;
 
-use super::{cpu, SdpaParams};
+use crate::attention::SdpaParams;
+
+use super::cpu;
 
 #[cfg(feature = "metal")]
 /// Initial, sentinel value is usize::MAX
