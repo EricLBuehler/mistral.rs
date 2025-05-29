@@ -363,9 +363,9 @@ impl Mlp {
 
 struct FastMoeMlp {
     gate: Arc<dyn QuantMethod>,
-    gate_proj: Vec<Arc<dyn QuantMethod>>,
-    up_proj: Vec<Arc<dyn QuantMethod>>,
-    down_proj: Vec<Arc<dyn QuantMethod>>,
+    fused_gate_proj: Arc<dyn QuantMethod>,
+    fused_up_proj: Arc<dyn QuantMethod>,
+    fused_down_proj: Arc<dyn QuantMethod>,
     act: Activation,
     norm_topk_prob: bool,
     num_experts_per_tok: usize,
@@ -390,7 +390,7 @@ impl FastMoeMlp {
             vb.pp("gate").set_device(layer_device),
         )?;
 
-        let gate_proj = AfqLayer::afq_packed_linear_b(
+        let fused_gate_proj = AfqLayer::afq_packed_linear_b(
             num_experts,
             cfg.hidden_size,
             cfg.moe_intermediate_size,
@@ -398,7 +398,7 @@ impl FastMoeMlp {
             false,
             vb.pp("switch_mlp.gate_proj"),
         )?;
-        let up_proj = AfqLayer::afq_packed_linear_b(
+        let fused_up_proj = AfqLayer::afq_packed_linear_b(
             num_experts,
             cfg.hidden_size,
             cfg.moe_intermediate_size,
@@ -406,7 +406,7 @@ impl FastMoeMlp {
             false,
             vb.pp("switch_mlp.up_proj"),
         )?;
-        let down_proj = AfqLayer::afq_packed_linear_b(
+        let fused_down_proj = AfqLayer::afq_packed_linear_b(
             num_experts,
             cfg.moe_intermediate_size,
             cfg.hidden_size,
@@ -417,12 +417,9 @@ impl FastMoeMlp {
 
         Ok(Self {
             gate,
-            // gate_proj,
-            // up_proj,
-            // down_proj,
-            gate_proj: vec![gate_proj],
-            up_proj: vec![up_proj],
-            down_proj: vec![down_proj],
+            fused_gate_proj,
+            fused_up_proj,
+            fused_down_proj,
             act: cfg.hidden_act,
             norm_topk_prob: cfg.norm_topk_prob,
             num_experts_per_tok: cfg.num_experts_per_tok,
@@ -446,19 +443,19 @@ impl FastMoeMlp {
             scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
         }
 
-        let ys = if self.gate_proj.len() == 1 {
+        let ys = {
             let xs = xs.reshape((b_size, seq_len, 1, 1, hidden_dim))?;
-            let gate = self.gate_proj[0]
+            let gate = self
+                .fused_gate_proj
                 .gather_forward_autocast(&xs.contiguous()?, &indices.contiguous()?)?;
-            let up = self.up_proj[0]
+            let up = self
+                .fused_up_proj
                 .gather_forward_autocast(&xs.contiguous()?, &indices.contiguous()?)?;
-            let xs = self.down_proj[0].gather_forward_autocast(
+            let xs = self.fused_down_proj.gather_forward_autocast(
                 &(up * gate.apply(&self.act)?)?.contiguous()?,
                 &indices.contiguous()?,
             )?;
             xs.squeeze(D::Minus2)?
-        } else {
-            todo!()
         };
 
         ys.broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
@@ -954,15 +951,9 @@ impl IsqModel for Model {
                     tensors.push((&mut layer.down_proj, Some(i)));
                 }
                 MoeOrMlp::FastMoe(layer) => {
-                    for g in &mut layer.gate_proj {
-                        tensors.push((g, Some(i)));
-                    }
-                    for u in &mut layer.up_proj {
-                        tensors.push((u, Some(i)));
-                    }
-                    for d in &mut layer.down_proj {
-                        tensors.push((d, Some(i)));
-                    }
+                    tensors.push((&mut layer.fused_gate_proj, Some(i)));
+                    tensors.push((&mut layer.fused_up_proj, Some(i)));
+                    tensors.push((&mut layer.fused_down_proj, Some(i)));
                 }
                 MoeOrMlp::SlowMoe(layer) => {
                     for expert in &mut layer.experts {
