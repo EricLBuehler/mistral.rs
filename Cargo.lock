@@ -2558,6 +2558,7 @@ dependencies = [
  "intel-mkl-src",
  "interprocess",
  "itertools 0.13.0",
+ "libc",
  "llguidance",
  "lrtable",
  "metal",
