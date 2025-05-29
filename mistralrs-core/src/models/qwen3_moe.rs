@@ -457,16 +457,21 @@ impl MoeMlp {
             candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?
                 .to_dtype(xs.dtype())?;
 
-        // let indices = routing_weights.fast_argsort_asc(D::Minus1)?.narrow(
+        // let indices = routing_weights.neg()?.fast_argsort_asc(D::Minus1)?.narrow(
         //     D::Minus1,
-        //     routing_weights.dim(D::Minus1)? - self.num_experts_per_tok,
+        //     0,
         //     self.num_experts_per_tok,
         // )?;
-        // let mut scores = routing_weights.gather(&indices.contiguous()?, D::Minus1)?;
-        let TopKOutput {
-            values: mut scores,
-            indices,
-        } = routing_weights.topk(self.num_experts_per_tok)?;
+        let indices = routing_weights.arg_sort_last_dim(false)?.narrow(
+            D::Minus1,
+            0,
+            self.num_experts_per_tok,
+        )?;
+        let mut scores = routing_weights.gather(&indices.contiguous()?, D::Minus1)?;
+        // let TopKOutput {
+        //     values: mut scores,
+        //     indices,
+        // } = routing_weights.topk(self.num_experts_per_tok)?;
 
         // println!("scores {scores}");
         // println!("indices {indices}");
@@ -479,11 +484,15 @@ impl MoeMlp {
             let xs = xs.reshape((b_size, seq_len, 1, 1, hidden_dim))?;
             // dbg!(&xs);
             // dbg!(&indices);
-            let gate = self.gate_proj[0].gather_forward_autocast(&xs, &indices)?;
+            let gate = self.gate_proj[0]
+                .gather_forward_autocast(&xs.contiguous()?, &indices.contiguous()?)?;
             // dbg!(&gate);
-            let up = self.up_proj[0].gather_forward_autocast(&xs, &indices)?;
-            let xs = self.down_proj[0]
-                .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, &indices)?;
+            let up = self.up_proj[0]
+                .gather_forward_autocast(&xs.contiguous()?, &indices.contiguous()?)?;
+            let xs = self.down_proj[0].gather_forward_autocast(
+                &(up * gate.apply(&self.act)?)?.contiguous()?,
+                &indices.contiguous()?,
+            )?;
             // dbg!(&xs);
             xs.squeeze(D::Minus2)?
         } else {
