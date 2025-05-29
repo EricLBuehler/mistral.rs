@@ -28,7 +28,7 @@ fn vec_dot<T: WithDType + Sum + Copy + std::ops::Mul<Output = T>>(a: &[T], b: &[
     }
 
     for i in (chunks * DOT_CHUNK)..a.len() {
-        sum = sum + a[i] * b[i];
+        sum += a[i] * b[i];
     }
     sum
 }
@@ -224,7 +224,7 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
                         let k_row = &k_data[k_base..k_base + d];
 
                         // dot(Q, K)
-                        let mut s_val = vec_dot::<T>(&q_row, &k_row).to_f64() as f32;
+                        let mut s_val = vec_dot::<T>(q_row, k_row).to_f64() as f32;
 
                         let mut scale_applied = scale;
                         if logit_softcap != 0.0 {
