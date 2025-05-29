@@ -32,7 +32,7 @@ impl QuantMethod for BlockwiseFP8Linear {
     {
         match method {
             QuantMethodConfig::Gguf { .. }
-            | QuantMethodConfig::Gptq { .. }
+            | QuantMethodConfig::GptqAwq { .. }
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::Unquantized(_)
@@ -104,7 +104,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         match dtype {
             /*Some(IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
             Some(IsqType::HQQ4 | IsqType::HQQ8) => {
-                let _acquired_quantize_guard = guard.acquire();
+                let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
                     // TODO just warn?
                     candle_core::bail!("HQQ does not support imatrix.");
@@ -138,7 +138,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                 }
             }
             Some(IsqType::AFQ2 | IsqType::AFQ3 | IsqType::AFQ4 | IsqType::AFQ6 | IsqType::AFQ8) => {
-                let _acquired_quantize_guard = guard.acquire();
+                let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
                     // TODO just warn?
                     candle_core::bail!("AFQ does not support imatrix.");
@@ -190,7 +190,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                 })?))
             }
             Some(IsqType::F8E4M3) => {
-                let _acquired_quantize_guard = guard.acquire();
+                let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
                     // TODO just warn?
                     candle_core::bail!("F8E4M3 does not support imatrix.");
@@ -208,7 +208,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                 })?))
             }
             None => {
-                let _acquired_quantize_guard = guard.acquire();
+                let _acquired_quantize_guard = guard.acquire(&device);
                 // Ignore imatrix altogether
 
                 let w = weight.to_device(&device)?;

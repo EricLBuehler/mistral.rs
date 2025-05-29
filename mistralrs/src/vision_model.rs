@@ -1,3 +1,4 @@
+use candle_core::Device;
 use mistralrs_core::*;
 use std::{
     num::NonZeroUsize,
@@ -25,6 +26,7 @@ pub struct VisionModelBuilder {
     pub(crate) max_edge: Option<u32>,
     pub(crate) hf_cache_path: Option<PathBuf>,
     pub(crate) search_bert_model: Option<BertEmbeddingModel>,
+    pub(crate) device: Option<Device>,
 
     // Model running
     pub(crate) prompt_chunksize: Option<NonZeroUsize>,
@@ -73,6 +75,7 @@ impl VisionModelBuilder {
             paged_attn_cfg: None,
             hf_cache_path: None,
             search_bert_model: None,
+            device: None,
         }
     }
 
@@ -227,6 +230,12 @@ impl VisionModelBuilder {
         self
     }
 
+    /// Set the main device to load this model onto. Automatic device mapping will be performed starting with this device.
+    pub fn with_device(mut self, device: Device) -> Self {
+        self.device = Some(device);
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = VisionSpecificConfig {
             prompt_chunksize: self.prompt_chunksize,
@@ -257,7 +266,7 @@ impl VisionModelBuilder {
             self.hf_revision,
             self.token_source,
             &self.dtype,
-            &best_device(self.force_cpu)?,
+            &self.device.unwrap_or(best_device(self.force_cpu).unwrap()),
             !self.with_logging,
             self.device_mapping
                 .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_vision())),
@@ -273,12 +282,17 @@ impl VisionModelBuilder {
                     .get_metadata()
                     .cache_config
                     .as_ref()
-                    .unwrap()
-                    .clone();
+                    .cloned();
 
-                SchedulerConfig::PagedAttentionMeta {
-                    max_num_seqs: self.max_num_seqs,
-                    config,
+                if let Some(config) = config {
+                    SchedulerConfig::PagedAttentionMeta {
+                        max_num_seqs: self.max_num_seqs,
+                        config,
+                    }
+                } else {
+                    SchedulerConfig::DefaultScheduler {
+                        method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
+                    }
                 }
             }
             None => SchedulerConfig::DefaultScheduler {

@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     fmt::Debug,
     num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard, OnceLock},
+    sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard},
 };
 
 use blockwise_fp8::blockwise_fp8_linear_b;
@@ -58,38 +58,31 @@ pub use lora::{
 };
 pub use unquantized::UnquantLinear;
 pub use utils::isq::apply_immediate_isq;
-pub use utils::{log, BitWiseOp, LeftshiftOp, NonZeroOp, UQFF_QUANT_TYPE_OFFSET};
+pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
 
 use candle_nn::{Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ImmediateIsqParams {
     pub guard: QuantizeOntoGuard,
     pub ty: Option<IsqType>,
     pub predicates: Vec<Regex>,
 }
 
-static IMMEDIATE_ISQ: OnceLock<Mutex<ImmediateIsqParams>> = OnceLock::new();
+static IMMEDIATE_ISQ: Mutex<Option<ImmediateIsqParams>> = Mutex::new(None);
 
 pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>) {
-    IMMEDIATE_ISQ
-        .get_or_init(|| {
-            Mutex::new(ImmediateIsqParams {
-                guard: QuantizeOntoGuard::new(),
-                ty: None,
-                predicates,
-            })
-        })
-        .lock()
-        .unwrap()
-        .ty = isq;
+    let mut guard = IMMEDIATE_ISQ.lock().expect("IMMEDIATE_ISQ mutex poisoned");
+    *guard = Some(ImmediateIsqParams {
+        guard: QuantizeOntoGuard::new(),
+        ty: isq,
+        predicates,
+    });
 }
 
 pub fn get_immediate_isq() -> Option<ImmediateIsqParams> {
-    IMMEDIATE_ISQ
-        .get()
-        .map(|guard| guard.lock().unwrap().clone())
+    IMMEDIATE_ISQ.lock().ok().and_then(|guard| guard.clone())
 }
 
 pub fn should_apply_immediate_isq(vb: &ShardedVarBuilder) -> bool {
@@ -108,10 +101,11 @@ pub fn should_apply_immediate_isq(vb: &ShardedVarBuilder) -> bool {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "quant_method", rename_all = "lowercase")]
 pub enum QuantizedConfig {
-    Gptq {
+    GptqAwq {
         bits: usize,
         group_size: usize,
         checkpoint_format: Option<String>,
+        is_awq: bool,
     },
     Fp8 {
         weight_block_size: Vec<usize>,
@@ -145,17 +139,18 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
         let raw = RawConfig::deserialize(deserializer)?;
 
         match &raw.quant_method {
-            Some(m) if m == "gptq" => {
+            Some(m) if m == "gptq" || m == "awq" => {
                 let bits = raw
                     .bits
                     .ok_or_else(|| serde::de::Error::missing_field("bits"))?;
                 let group_size = raw
                     .group_size
                     .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
-                Ok(QuantizedConfig::Gptq {
+                Ok(QuantizedConfig::GptqAwq {
                     bits,
                     group_size,
                     checkpoint_format: raw.checkpoint_format,
+                    is_awq: m == "awq",
                 })
             }
             Some(m) if m == "fp8" => {
@@ -198,7 +193,7 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
 impl QuantizedConfig {
     pub fn name(&self) -> &'static str {
         match self {
-            Self::Gptq { .. } => "gptq",
+            Self::GptqAwq { .. } => "gptq",
             Self::Fp8 { .. } => "fp8",
             Self::Bitsandbytes { .. } => "bitsandbytes",
             Self::Afq { .. } => "afq",
@@ -207,7 +202,7 @@ impl QuantizedConfig {
 
     pub fn get_bits_name(&self, _vb: &ShardedVarBuilder) -> String {
         match self {
-            Self::Gptq { bits, .. } => format!("{bits} bits"),
+            Self::GptqAwq { bits, .. } => format!("{bits} bits"),
             Self::Fp8 { .. } => "8 bits".to_string(),
             Self::Bitsandbytes {
                 bnb_4bit_quant_type: Some(_),
@@ -222,16 +217,17 @@ impl QuantizedConfig {
 
 #[derive(Debug, Clone)]
 pub enum QuantMethodConfig {
-    Gptq {
+    GptqAwq {
         bits: i32,
         use_exllama: bool,
         q_weight: Tensor,
-        gptq_qzeros: Option<Tensor>,
-        gptq_scales: Tensor,
+        qzeros: Option<Tensor>,
+        scales: Tensor,
         g_idx: Option<Tensor>,
         bias: Option<Tensor>,
         workspace: Option<Tensor>,
         is_marlin: bool,
+        is_awq: bool,
     },
     Gguf {
         q_weight: Arc<QTensor>,
@@ -358,42 +354,30 @@ impl IsqType {
     /// original size / pack factor = quantized size
     pub fn pack_factor(&self, dtype: DType) -> usize {
         match self {
-            Self::Q4_0 | Self::AFQ4 => {
-                (dtype.size_in_bytes() * GgmlDType::Q4_0.block_size()) / GgmlDType::Q4_0.type_size()
-            }
-            Self::Q4_1 => {
-                (dtype.size_in_bytes() * GgmlDType::Q4_1.block_size()) / GgmlDType::Q4_1.type_size()
-            }
-            Self::Q5_0 => {
-                (dtype.size_in_bytes() * GgmlDType::Q5_0.block_size()) / GgmlDType::Q5_0.type_size()
-            }
-            Self::Q5_1 => {
-                (dtype.size_in_bytes() * GgmlDType::Q5_1.block_size()) / GgmlDType::Q5_1.type_size()
-            }
-            Self::Q8_0 | Self::AFQ8 => {
-                (dtype.size_in_bytes() * GgmlDType::Q8_0.block_size()) / GgmlDType::Q8_0.type_size()
-            }
-            Self::Q8_1 => {
-                (dtype.size_in_bytes() * GgmlDType::Q8_1.block_size()) / GgmlDType::Q8_1.type_size()
-            }
-            Self::Q2K | Self::AFQ2 => {
-                (dtype.size_in_bytes() * GgmlDType::Q2K.block_size()) / GgmlDType::Q2K.type_size()
-            }
-            Self::Q3K | Self::AFQ3 => {
-                (dtype.size_in_bytes() * GgmlDType::Q3K.block_size()) / GgmlDType::Q3K.type_size()
-            }
-            Self::Q4K => {
-                (dtype.size_in_bytes() * GgmlDType::Q4K.block_size()) / GgmlDType::Q4K.type_size()
-            }
-            Self::Q5K => {
-                (dtype.size_in_bytes() * GgmlDType::Q5K.block_size()) / GgmlDType::Q5K.type_size()
-            }
-            Self::Q6K | Self::AFQ6 => {
-                (dtype.size_in_bytes() * GgmlDType::Q6K.block_size()) / GgmlDType::Q6K.type_size()
-            }
-            Self::Q8K => {
-                (dtype.size_in_bytes() * GgmlDType::Q8K.block_size()) / GgmlDType::Q8K.type_size()
-            }
+            Self::Q4_0 | Self::AFQ4 => (dtype.size_in_bytes() * GgmlDType::Q4_0.block_size())
+                .div_ceil(GgmlDType::Q4_0.type_size()),
+            Self::Q4_1 => (dtype.size_in_bytes() * GgmlDType::Q4_1.block_size())
+                .div_ceil(GgmlDType::Q4_1.type_size()),
+            Self::Q5_0 => (dtype.size_in_bytes() * GgmlDType::Q5_0.block_size())
+                .div_ceil(GgmlDType::Q5_0.type_size()),
+            Self::Q5_1 => (dtype.size_in_bytes() * GgmlDType::Q5_1.block_size())
+                .div_ceil(GgmlDType::Q5_1.type_size()),
+            Self::Q8_0 | Self::AFQ8 => (dtype.size_in_bytes() * GgmlDType::Q8_0.block_size())
+                .div_ceil(GgmlDType::Q8_0.type_size()),
+            Self::Q8_1 => (dtype.size_in_bytes() * GgmlDType::Q8_1.block_size())
+                .div_ceil(GgmlDType::Q8_1.type_size()),
+            Self::Q2K | Self::AFQ2 => (dtype.size_in_bytes() * GgmlDType::Q2K.block_size())
+                .div_ceil(GgmlDType::Q2K.type_size()),
+            Self::Q3K | Self::AFQ3 => (dtype.size_in_bytes() * GgmlDType::Q3K.block_size())
+                .div_ceil(GgmlDType::Q3K.type_size()),
+            Self::Q4K => (dtype.size_in_bytes() * GgmlDType::Q4K.block_size())
+                .div_ceil(GgmlDType::Q4K.type_size()),
+            Self::Q5K => (dtype.size_in_bytes() * GgmlDType::Q5K.block_size())
+                .div_ceil(GgmlDType::Q5K.type_size()),
+            Self::Q6K | Self::AFQ6 => (dtype.size_in_bytes() * GgmlDType::Q6K.block_size())
+                .div_ceil(GgmlDType::Q6K.type_size()),
+            Self::Q8K => (dtype.size_in_bytes() * GgmlDType::Q8K.block_size())
+                .div_ceil(GgmlDType::Q8K.type_size()),
             // Estimates
             Self::HQQ4 => 4,
             Self::HQQ8 => 2,
@@ -496,6 +480,7 @@ impl TryFrom<GgmlDType> for IsqType {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum QuantizedSerdeType {
     Gguf = 0,
     Unquant = 1,
@@ -554,9 +539,11 @@ pub trait QuantizedSerde {
 }
 
 /// Used to gate access to quantizing onto the host device
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[allow(unused)]
-pub struct QuantizeOntoGuard(Arc<Mutex<()>>);
+pub struct QuantizeOntoGuard {
+    pub inner: Arc<Mutex<()>>,
+}
 
 /// Real (for Metal) and Fake (for CUDA)
 pub enum QuantizeOntoDropGuard<'a> {
@@ -572,18 +559,33 @@ impl Default for QuantizeOntoGuard {
 
 impl QuantizeOntoGuard {
     pub fn new() -> Self {
-        Self(Arc::new(Mutex::new(())))
+        QuantizeOntoGuard {
+            inner: Arc::new(Mutex::new(())),
+        }
     }
 
-    pub fn acquire(&self) -> QuantizeOntoDropGuard<'_> {
+    /// Acquire the quantize drop guard to protect the critical section.
+    ///
+    /// On metal, this flushes the command buffer to avoid "A command encoder is already encoding to this command buffer"
+    pub fn acquire(&self, device: &Device) -> QuantizeOntoDropGuard<'_> {
         #[cfg(feature = "cuda")]
         {
+            let _ = device;
             QuantizeOntoDropGuard::Fake
         }
 
         #[cfg(not(feature = "cuda"))]
         {
-            QuantizeOntoDropGuard::Real(self.0.lock().expect("QuantizeOntoGuard was poisoned!"))
+            #[cfg(feature = "metal")]
+            if let Device::Metal(dev) = device {
+                // This is necessary to avoid the errors of "A command encoder is already encoding to this command buffer"
+                dev.flush_command_buffer()
+                    .expect("Failed to flush command buffer.");
+            }
+            #[cfg(not(feature = "metal"))]
+            let _ = device;
+
+            QuantizeOntoDropGuard::Real(self.inner.lock().expect("QuantizeOntoGuard was poisoned!"))
         }
     }
 }
@@ -702,7 +704,7 @@ pub fn linear_no_bias(
 
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
-            QuantizedConfig::Gptq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
             QuantizedConfig::Fp8 { .. } => {
                 blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, Default::default(), vb)?
             }
@@ -746,7 +748,7 @@ pub fn linear(
 
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
-            QuantizedConfig::Gptq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
             QuantizedConfig::Fp8 { .. } => {
                 blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, true, Default::default(), vb)?
             }

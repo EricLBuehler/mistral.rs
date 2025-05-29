@@ -458,10 +458,10 @@ impl DiaPipeline {
             if let Some(eos_countdown) = &mut eos_countdown {
                 let step_after_eos = max_delay_pattern - *eos_countdown;
                 for (i, d) in delay_pattern.iter().enumerate() {
-                    if step_after_eos == *d as usize {
-                        pred_c[i] = audio_eos_value;
-                    } else if step_after_eos > *d as usize {
-                        pred_c[i] = audio_pad_value;
+                    match step_after_eos.cmp(&(*d as usize)) {
+                        std::cmp::Ordering::Equal => pred_c[i] = audio_eos_value,
+                        std::cmp::Ordering::Greater => pred_c[i] = audio_pad_value,
+                        std::cmp::Ordering::Less => {}
                     }
                 }
                 *eos_countdown -= 1;

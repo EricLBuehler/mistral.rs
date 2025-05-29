@@ -94,7 +94,7 @@ impl QuantMethod for AfqLayer {
     {
         match method {
             QuantMethodConfig::Gguf { .. }
-            | QuantMethodConfig::Gptq { .. }
+            | QuantMethodConfig::GptqAwq { .. }
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
@@ -321,6 +321,9 @@ impl QuantizedSerde for AfqLayer {
     fn isq_serde_supported(&self) -> bool {
         true
     }
+    fn serialize(&self) -> Result<Cow<[u8]>> {
+        self.serialize_with_bias(self.bias.clone())
+    }
     fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<[u8]>> {
         let mut buffer = Vec::new();
 
@@ -375,7 +378,7 @@ impl QuantizedSerde for AfqLayer {
 
         let has_bias = buffer.read_u8()? != 0;
 
-        let _acquired_load_guard = guard.acquire();
+        let _acquired_load_guard = guard.acquire(device);
         // Weight, scales, biases
         let w_q = deserialize_tensor(&mut buffer, device)?;
         let scales = deserialize_tensor(&mut buffer, device)?;
@@ -425,7 +428,7 @@ impl QuantizedSerde for AfqLayer {
 
         let has_bias = buffer.read_u8()? != 0;
 
-        let _acquired_load_guard = guard.acquire();
+        let _acquired_load_guard = guard.acquire(device);
         // Weight, scales, biases
         let w_q = deserialize_tensor(&mut buffer, device)?;
         let scales = deserialize_tensor(&mut buffer, device)?;

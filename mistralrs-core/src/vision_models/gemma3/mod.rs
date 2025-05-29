@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
 use candle_core::{Context, DType, Device, Result, Tensor, D};
 use config::Gemma3Config;
@@ -134,7 +134,6 @@ impl Gemma3Model {
 
             input_embeds = x_flat.reshape(input_embeds.shape())?;
         };
-        let start = Instant::now();
         let res = self.language_model.forward_embeds(
             input_ids,
             input_embeds,
@@ -143,8 +142,6 @@ impl Gemma3Model {
             metadata,
             flash_params,
         )?;
-        let end = Instant::now();
-        println!("{:.3}ms", (end - start).as_secs_f32() * 1000.);
         Ok(res)
     }
 }

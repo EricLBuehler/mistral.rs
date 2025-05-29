@@ -9,12 +9,14 @@ extend-ignore-identifiers-re = [
     "_thw",
     "thr",
     "nd",
-    "uneeded"
+    "uneeded",
+    "tese"
 ]
 
 [files]
 extend-exclude = [
     "mistralrs-pyo3/pdoc/*",
     "examples/server/phi3_duckduckgo_mistral.rs.ipynb",
-    "calibration_data/*"
+    "calibration_data/*",
+    "mistralrs-web-chat/static*"
 ]

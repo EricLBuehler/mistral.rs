@@ -31,7 +31,7 @@ impl QuantMethod for UnquantLinear {
     {
         match method {
             QuantMethodConfig::Gguf { .. }
-            | QuantMethodConfig::Gptq { .. }
+            | QuantMethodConfig::GptqAwq { .. }
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
@@ -160,7 +160,7 @@ impl QuantMethod for UnquantLinear {
         match dtype {
             /*Some(IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
             Some(IsqType::HQQ4 | IsqType::HQQ8) => {
-                let _acquired_quantize_guard = guard.acquire();
+                let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
                     // TODO just warn?
                     candle_core::bail!("HQQ does not support imatrix.");
@@ -194,7 +194,7 @@ impl QuantMethod for UnquantLinear {
                 }
             }
             Some(IsqType::AFQ2 | IsqType::AFQ3 | IsqType::AFQ4 | IsqType::AFQ6 | IsqType::AFQ8) => {
-                let _acquired_quantize_guard = guard.acquire();
+                let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
                     // TODO just warn?
                     candle_core::bail!("AFQ does not support imatrix.");
@@ -246,7 +246,7 @@ impl QuantMethod for UnquantLinear {
                 })?))
             }
             Some(IsqType::F8E4M3) => {
-                let _acquired_quantize_guard = guard.acquire();
+                let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
                     // TODO just warn?
                     candle_core::bail!("F8E4M3 does not support imatrix.");
@@ -264,7 +264,7 @@ impl QuantMethod for UnquantLinear {
                 })?))
             }
             None => {
-                let _acquired_quantize_guard = guard.acquire();
+                let _acquired_quantize_guard = guard.acquire(&device);
                 // Ignore imatrix altogether
 
                 let w = self.w.to_device(&device)?;
@@ -374,7 +374,7 @@ impl QuantizedSerde for UnquantLinear {
 
         let has_bias = buffer.read_u8()? != 0;
 
-        let _acquired_load_guard = guard.acquire();
+        let _acquired_load_guard = guard.acquire(device);
         let w = deserialize_tensor(&mut buffer, device)?;
 
         let b = if has_bias {
@@ -410,7 +410,7 @@ impl QuantizedSerde for UnquantLinear {
 
         let has_bias = buffer.read_u8()? != 0;
 
-        let _acquired_load_guard = guard.acquire();
+        let _acquired_load_guard = guard.acquire(device);
         let w = deserialize_tensor(&mut buffer, device)?;
 
         let b = if has_bias {

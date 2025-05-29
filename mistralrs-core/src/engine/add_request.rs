@@ -1,5 +1,6 @@
 use crate::{
     pipeline::NormalCache,
+    prefix_cacher::MatchingCache,
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     sequence::SeqStepType,
     tools::{ToolCallingMatcher, ToolChoice},
@@ -533,17 +534,32 @@ impl Engine {
                 ),
                 request.response
             );
-            seq = if let Some(prefill_cache) = prefill_cache.clone() {
-                self.logger.add_prefix_cache_hit();
 
-                seq.keep_num_images(prefill_cache.images_to_keep);
-                seq.prefill_v2(
-                    prefill_cache.normal,
-                    prefill_cache.toks,
-                    prefill_cache.offset,
-                )
-            } else {
-                seq
+            seq = match prefill_cache.clone() {
+                Some(MatchingCache::Normal {
+                    normal,
+                    images_to_keep,
+                    toks,
+                    offset,
+                }) => {
+                    self.logger.add_prefix_cache_hit();
+
+                    seq.keep_num_images(images_to_keep);
+                    seq.prefill_v2_normal(normal, toks, offset)
+                }
+                Some(MatchingCache::Paged {
+                    logical_blocks,
+                    physical_blocks,
+                    images_to_keep,
+                    toks,
+                    offset,
+                }) => {
+                    self.logger.add_prefix_cache_hit();
+
+                    seq.keep_num_images(images_to_keep);
+                    seq.prefill_v2_paged(logical_blocks, physical_blocks, toks, offset)
+                }
+                None => seq,
             };
 
             *get_mut_arcmutex!(self.id) += 1;

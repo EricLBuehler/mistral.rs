@@ -206,12 +206,7 @@ impl MmapedSafetensors {
     }
 
     pub fn load(&self, name: &str, dev: &Device, dtype: Option<DType>) -> Result<Tensor> {
-        let t = self.get(name)?.load(dev, None)?;
-        if let Some(dt) = dtype {
-            t.to_dtype(dt)
-        } else {
-            Ok(t)
-        }
+        self.get(name)?.load(dev, dtype)
     }
 
     pub fn tensors(&self) -> Vec<(String, st::TensorView<'_>)> {

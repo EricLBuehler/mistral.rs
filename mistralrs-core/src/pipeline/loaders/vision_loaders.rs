@@ -178,7 +178,7 @@ impl VisionLoaderType {
             "MiniCPMO" => Ok(Self::MiniCpmO),
             "Phi4MMForCausalLM" => Ok(Self::Phi4MM),
             "Qwen2_5_VLForConditionalGeneration" => Ok(Self::Qwen2_5VL),
-            "Gemma3ForConditionalGeneration" => Ok(Self::Gemma3),
+            "Gemma3ForConditionalGeneration" | "Gemma3ForCausalLM" => Ok(Self::Gemma3),
             "Mistral3ForConditionalGeneration" => Ok(Self::Mistral3),
             "Llama4ForConditionalGeneration" => Ok(Self::Llama4),
             other => anyhow::bail!(
@@ -656,7 +656,8 @@ impl DeviceMappedModelLoader for Phi3VLoader {
 
             let size_in = cfg.hidden_size;
             let head_dim = cfg.head_dim();
-            let op_size = head_dim * head_dim + 2 * cfg.num_key_value_heads * head_dim;
+            let op_size =
+                cfg.num_attention_heads * head_dim + 2 * cfg.num_key_value_heads * head_dim;
             let qkv_proj = size_in * op_size / weight_pack_factor;
             let o_proj = (cfg.num_attention_heads * head_dim) * size_in / weight_pack_factor;
 
@@ -3082,7 +3083,8 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
 
             let size_in = cfg.hidden_size;
             let head_dim = cfg.head_dim();
-            let op_size = head_dim * head_dim + 2 * cfg.num_key_value_heads() * head_dim;
+            let op_size =
+                cfg.num_attention_heads * head_dim + 2 * cfg.num_key_value_heads() * head_dim;
             let qkv_proj = size_in * op_size / weight_pack_factor;
             let o_proj = (cfg.num_attention_heads * head_dim) * size_in / weight_pack_factor;
 

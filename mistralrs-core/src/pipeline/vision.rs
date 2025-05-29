@@ -406,8 +406,13 @@ impl Loader for VisionLoader {
         let mut loading_isq = if self.config.imatrix.is_none()
             && self.config.calibration_file.is_none()
             && !device.is_cuda()
+            && self.config.write_uqff.is_none()
         {
             let predicates = self.inner.immediate_isq_predicates(&config)?;
+            info!("Applying ISQ to {in_situ_quant:?}");
+            if predicates.is_empty() {
+                warn!("No predicates for this model and ISQ setting detected. ISQ will not be applied to any weights!");
+            }
             mistralrs_quant::set_immediate_isq(in_situ_quant, predicates);
             false
         } else {
@@ -521,15 +526,15 @@ impl Loader for VisionLoader {
             serde_json::from_str(&fs::read_to_string(f).unwrap())
                 .expect("bos_token_id/eos_token_id missing in generation_config.json")
         });
+        let chat_template_explicit = paths
+            .get_chat_template_explicit()
+            .as_ref()
+            .map(|x| x.to_string_lossy().to_string());
         let chat_template = get_chat_template(
             paths,
-            &self.jinja_explicit,
-            &paths
-                .get_chat_template_explicit()
-                .as_ref()
-                .map(|x| x.to_string_lossy().to_string())
-                .clone(),
-            &self.chat_template,
+            self.jinja_explicit.as_ref(),
+            chat_template_explicit.as_ref(),
+            self.chat_template.as_ref(),
             None,
         );
 
@@ -611,7 +616,7 @@ impl Loader for VisionLoader {
         }
 
         // Only if loading from UQFF
-        if loading_isq || (self.config.topology.is_some() && self.config.from_uqff.is_none()) {
+        if (loading_isq || self.config.topology.is_some()) && self.config.from_uqff.is_none() {
             let imatrix_source = match (
                 self.config.imatrix.as_ref(),
                 self.config.calibration_file.is_some(),

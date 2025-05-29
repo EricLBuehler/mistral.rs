@@ -1,5 +1,6 @@
 use crate::{
-    get_mut_group,
+    get_mut_arcmutex, get_mut_group,
+    paged_attention::PhysicalTokenBlock,
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
@@ -75,6 +76,7 @@ pub enum SequenceRecognizer {
 enum SequenceCustomMetadata {
     PagedAttention {
         logical_token_blocks: Vec<LogicalTokenBlock>,
+        physical_blocks_prefill: Option<Vec<Arc<PhysicalTokenBlock>>>,
         block_size: usize,
     },
     None,
@@ -92,29 +94,38 @@ macro_rules! blocks_to_add_new_tok {
     }};
 }
 
+pub(crate) fn util_append_token_to_blocks(
+    tok: usize,
+    logical_token_blocks: &mut Vec<LogicalTokenBlock>,
+    block_size: usize,
+) {
+    let last = logical_token_blocks.last_mut();
+    match last {
+        Some(last) => {
+            last.append_token_id(tok);
+        }
+        None => {
+            logical_token_blocks.push(LogicalTokenBlock::new(block_size));
+            logical_token_blocks
+                .last_mut()
+                .unwrap()
+                .append_token_id(tok);
+        }
+    }
+    if logical_token_blocks.last().as_ref().unwrap().is_full() {
+        logical_token_blocks.push(LogicalTokenBlock::new(block_size));
+    }
+}
+
 impl SequenceCustomMetadata {
     fn append_token_to_blocks(&mut self, tok: usize) {
         match self {
             Self::PagedAttention {
                 logical_token_blocks,
+                physical_blocks_prefill: _,
                 block_size,
             } => {
-                let last = logical_token_blocks.last_mut();
-                match last {
-                    Some(last) => {
-                        last.append_token_id(tok);
-                    }
-                    None => {
-                        logical_token_blocks.push(LogicalTokenBlock::new(*block_size));
-                        logical_token_blocks
-                            .last_mut()
-                            .unwrap()
-                            .append_token_id(tok);
-                    }
-                }
-                if logical_token_blocks.last().as_ref().unwrap().is_full() {
-                    logical_token_blocks.push(LogicalTokenBlock::new(*block_size));
-                }
+                util_append_token_to_blocks(tok, logical_token_blocks, *block_size);
             }
             Self::None => (),
         }
@@ -124,6 +135,7 @@ impl SequenceCustomMetadata {
         match self {
             Self::PagedAttention {
                 logical_token_blocks,
+                physical_blocks_prefill: _,
                 block_size: _,
             } => {
                 let last = logical_token_blocks.last_mut().unwrap();
@@ -343,6 +355,7 @@ impl BlockEngineSequence for Sequence {
         match &self.custom_metadata {
             SequenceCustomMetadata::PagedAttention {
                 logical_token_blocks,
+                physical_blocks_prefill: _,
                 block_size: _,
             } => {
                 blocks_to_add_new_tok!(logical_token_blocks)
@@ -355,13 +368,25 @@ impl BlockEngineSequence for Sequence {
         self.id
     }
 
-    fn get_logical_token_blocks(&self) -> usize {
+    fn logical_token_blocks(&self) -> &[LogicalTokenBlock] {
         match &self.custom_metadata {
             SequenceCustomMetadata::PagedAttention {
                 logical_token_blocks,
+                physical_blocks_prefill: _,
                 block_size: _,
-            } => logical_token_blocks.len(),
+            } => logical_token_blocks,
             SequenceCustomMetadata::None => unreachable!(),
+        }
+    }
+
+    fn take_physical_blocks_prefill(&mut self) -> Option<Vec<Arc<PhysicalTokenBlock>>> {
+        match &mut self.custom_metadata {
+            SequenceCustomMetadata::PagedAttention {
+                logical_token_blocks: _,
+                physical_blocks_prefill,
+                block_size: _,
+            } => physical_blocks_prefill.take(),
+            SequenceCustomMetadata::None => None,
         }
     }
 }
@@ -405,6 +430,7 @@ impl Sequence {
         let mut custom_metadata = if let Some(block_size) = block_size {
             SequenceCustomMetadata::PagedAttention {
                 logical_token_blocks: Vec::new(),
+                physical_blocks_prefill: None,
                 block_size,
             }
         } else {
@@ -488,20 +514,7 @@ impl Sequence {
         (self.scheduling_urgency as f64) + (self.len() as f64).log2()
     }
 
-    pub fn prefill(
-        mut self,
-        cache: LayerCaches,
-        xlora_cache: Option<LayerCaches>,
-        toks: Vec<u32>,
-    ) -> Self {
-        self.cache = cache;
-        self.xlora_cache = xlora_cache;
-        self.prefill_prompt_toks = Some(toks);
-        self.set_state(SequenceState::RunningPrefillPrompt);
-        self
-    }
-
-    pub fn prefill_v2(
+    pub fn prefill_v2_normal(
         mut self,
         cache: Vec<Option<KvCache>>,
         toks: Vec<u32>,
@@ -511,6 +524,30 @@ impl Sequence {
         self.prefill_prompt_toks = Some(toks);
         self.set_state(SequenceState::RunningPrefillPrompt);
         self.token_offset = offset;
+        self
+    }
+
+    pub fn prefill_v2_paged(
+        mut self,
+        logical_blocks: Vec<LogicalTokenBlock>,
+        physical_blocks: Vec<Arc<PhysicalTokenBlock>>,
+        toks: Vec<u32>,
+        offset: usize,
+    ) -> Self {
+        self.prefill_prompt_toks = Some(toks);
+        self.set_state(SequenceState::RunningPrefillPrompt);
+        self.token_offset = offset;
+
+        if let SequenceCustomMetadata::PagedAttention {
+            logical_token_blocks,
+            physical_blocks_prefill,
+            block_size: _,
+        } = &mut self.custom_metadata
+        {
+            *logical_token_blocks = logical_blocks;
+            *physical_blocks_prefill = Some(physical_blocks);
+        }
+
         self
     }
 
@@ -598,7 +635,7 @@ impl Sequence {
     pub(crate) fn set_toks_and_reallocate(
         &mut self,
         toks: Vec<u32>,
-        paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+        paged_attn_metadata: Option<&mut PagedAttentionMeta>,
     ) {
         self.tokens.clone_from(&toks);
         self.prompt_len = self.tokens.len();
@@ -606,6 +643,7 @@ impl Sequence {
         match &mut self.custom_metadata {
             SequenceCustomMetadata::PagedAttention {
                 logical_token_blocks,
+                physical_blocks_prefill: _,
                 block_size: _,
             } => {
                 logical_token_blocks.clear();
@@ -617,8 +655,8 @@ impl Sequence {
 
         if let Some(metadata) = paged_attn_metadata {
             // Free and then reallocate as appropriate
-            metadata.block_engine.free_sequence(*self.id());
-            metadata.block_engine.allocate(self);
+            get_mut_arcmutex!(metadata.block_engine).free_sequence(*self.id());
+            get_mut_arcmutex!(metadata.block_engine).allocate(self);
         }
     }
 

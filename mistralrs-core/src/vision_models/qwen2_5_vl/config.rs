@@ -73,6 +73,7 @@ pub struct Config {
     pub sliding_window: Option<usize>,
     pub vision_config: VisionConfig,
     pub rope_scaling: MRopeScaling,
+    #[serde(alias = "quantization")]
     pub quantization_config: Option<QuantizedConfig>,
     pub image_token_id: u32,
     pub video_token_id: u32,

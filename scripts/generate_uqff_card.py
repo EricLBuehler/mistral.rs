@@ -10,8 +10,6 @@ display_model_id = input(
     "Please enter the model ID where this model card will be displayed: "
 )
 is_vision = input("Is this a vision model (yes/no): ").strip().lower() == "yes"
-if is_vision:
-    arch = input("What is the vision model architecture?: ").strip().lower()
 
 output = f"""---
 tags:
@@ -55,6 +53,8 @@ try:
             f" NOTE: Next file. Have processed {n} files. Press CTRL-C now if there are no more."
         )
         file = input("Enter UQFF filename (with extension): ").strip()
+        if ";" in file:
+            file = f"\"{file}\""
 
         quants = input(
             "Enter quantization NAMES used to make that file (single quantization name, OR if multiple, comma delimited): "
@@ -74,12 +74,7 @@ try:
         else:
             cmd = "plain"
 
-        if is_vision:
-            arch = f"-a {arch}"
-        else:
-            arch = ""
-
-        output += f"`./mistralrs-server -i {cmd} -m {display_model_id} {arch} --from-uqff {file}`|\n"
+        output += f"`./mistralrs-server -i {cmd} -m {display_model_id} -f {file}`|\n"
         n += 1
         print()
 except KeyboardInterrupt:

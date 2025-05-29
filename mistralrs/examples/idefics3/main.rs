@@ -22,7 +22,7 @@ async fn main() -> Result<()> {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What type of flower is this?",
-        image,
+        vec![image],
         &model,
     )?;
 

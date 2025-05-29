@@ -1,17 +1,56 @@
-use ahash::AHasher;
-use candle_core::Result;
-use hashbrown::HashMap;
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+type BlockBestMatch<'a> = (
+    usize,                         // matched_len
+    &'a [LogicalTokenBlock],       // logical blocks
+    &'a [Arc<PhysicalTokenBlock>], // physical blocks
+    usize,                         // images_match_until
+);
 use std::{
-    hash::BuildHasherDefault,
-    sync::{Arc, Weak},
+    hash::{DefaultHasher, Hash, Hasher},
+    sync::Arc,
 };
+
+use candle_core::{Device, Result};
+use indexmap::IndexMap;
+use itertools::Itertools;
 use tracing::info;
 
-use crate::{pipeline::KvCache, sequence::Sequence};
+use crate::{
+    get_mut_arcmutex,
+    paged_attention::{BlockEngine, BlockEngineSequence, LogicalTokenBlock, PhysicalTokenBlock},
+    pipeline::KvCache,
+    sequence::{self, Sequence},
+};
 
-type AHashMap<K, V> = HashMap<K, V, BuildHasherDefault<AHasher>>;
-type NodeRef = Arc<RwLock<TrieNode>>;
+fn hash_logical_blocks(logical_blocks: &[LogicalTokenBlock]) -> Vec<u64> {
+    logical_blocks
+        .iter()
+        .map(|block| {
+            let mut hasher = DefaultHasher::new();
+            block.hash(&mut hasher);
+            hasher.finish()
+        })
+        .collect::<Vec<_>>()
+}
+
+#[derive(PartialEq, Eq, Debug, Hash)]
+struct Tokens(Vec<u32>);
+
+impl Tokens {
+    /// Returns the length of the common prefix shared with `other`.
+    fn shared_prefix_len(&self, other: &Self) -> usize {
+        self.0
+            .iter()
+            .zip(other.0.iter())
+            .take_while(|(a, b)| a == b)
+            .count()
+    }
+}
+
+impl From<Vec<u32>> for Tokens {
+    fn from(value: Vec<u32>) -> Self {
+        Self(value)
+    }
+}
 
 #[derive(Clone)]
 struct CacheElement {
@@ -20,240 +59,313 @@ struct CacheElement {
 }
 
 #[derive(Clone)]
-pub struct MatchingCache {
-    pub normal: Vec<Option<KvCache>>,
-    pub images_to_keep: usize,
-    pub toks: Vec<u32>,
-    pub offset: usize,
-}
-
-struct TrieNode {
-    children: AHashMap<u32, NodeRef>,
-    cache: Option<CacheElement>,
-    prev: Option<Weak<RwLock<TrieNode>>>,
-    next: Option<NodeRef>,
+struct BlockCacheElement {
+    logical_blocks: Vec<LogicalTokenBlock>,
+    physical_blocks: Vec<Arc<PhysicalTokenBlock>>,
+    image_hashes: Option<Vec<u64>>,
 }
 
 pub struct PrefixCacheManagerV2 {
-    root: NodeRef,
+    caches: IndexMap<Tokens, CacheElement>,
+    block_caches: IndexMap<Vec<u64>, BlockCacheElement>, // (hashed logical blocks) => BlockCacheElement
     n_on_device: usize,
     no_prefix_cache: bool,
-    lru_head: Option<NodeRef>,
-    lru_tail: Option<NodeRef>,
-    current_on_device: usize,
+    block_engine: Option<Arc<tokio::sync::Mutex<BlockEngine>>>,
+}
+
+#[derive(Clone)]
+pub enum MatchingCache {
+    Normal {
+        normal: Vec<Option<KvCache>>,
+        images_to_keep: usize,
+        toks: Vec<u32>,
+        offset: usize,
+    },
+    Paged {
+        logical_blocks: Vec<LogicalTokenBlock>,
+        physical_blocks: Vec<Arc<PhysicalTokenBlock>>,
+        toks: Vec<u32>,
+        offset: usize,
+        images_to_keep: usize,
+    },
 }
 
 impl PrefixCacheManagerV2 {
-    pub fn new(n_on_device: usize, no_prefix_cache: bool) -> Self {
+    pub fn new(
+        n_on_device: usize,
+        no_prefix_cache: bool,
+        block_engine: Option<Arc<tokio::sync::Mutex<BlockEngine>>>,
+    ) -> Self {
         if !no_prefix_cache {
-            info!("PrefixCacherV2 (RadixAttention) enabled - expect higher multi-turn throughput.");
+            info!("PrefixCacherV2 is enabled. Expect higher multi-turn throughput for both text and multimodal.");
         }
-        // Pre‑seed our hash map with a small capacity (common branching factor)
-        let root = Arc::new(RwLock::new(TrieNode {
-            children: AHashMap::with_capacity_and_hasher(8, Default::default()),
-            cache: None,
-            prev: None,
-            next: None,
-        }));
         PrefixCacheManagerV2 {
-            root,
+            caches: IndexMap::new(),
+            block_caches: IndexMap::new(),
             n_on_device,
             no_prefix_cache,
-            lru_head: None,
-            lru_tail: None,
-            current_on_device: 0,
+            block_engine,
         }
     }
 
-    /// Bump a node to the most‑recently‑used tail
-    fn touch_node(&mut self, node: &NodeRef) {
-        // Take a write lock to unlink & relink
-        let mut nb: RwLockWriteGuard<'_, TrieNode> = node.write();
-        // Unlink from list
-        if let Some(prev_w) = nb.prev.take() {
-            if let Some(prev) = prev_w.upgrade() {
-                let mut prev_nb = prev.write();
-                prev_nb.next = nb.next.clone();
-            }
-        } else {
-            // was head
-            self.lru_head = nb.next.clone();
-        }
-        if let Some(next) = nb.next.take() {
-            let mut next_nb = next.write();
-            next_nb.prev = nb.prev.clone();
-        } else {
-            // was tail
-            self.lru_tail = nb.prev.as_ref().and_then(|w| w.upgrade());
-        }
-        drop(nb);
-
-        // Link at tail
-        if let Some(old_tail) = self.lru_tail.take() {
-            {
-                let mut tail_nb = old_tail.write();
-                tail_nb.next = Some(Arc::clone(node));
-            }
-            let mut me_nb = node.write();
-            me_nb.prev = Some(Arc::downgrade(&old_tail));
-            me_nb.next = None;
-        } else {
-            // empty list
-            self.lru_head = Some(Arc::clone(node));
-            let mut me_nb = node.write();
-            me_nb.prev = None;
-            me_nb.next = None;
-        }
-        self.lru_tail = Some(Arc::clone(node));
-    }
-
-    /// Insert or update the cache for a full token sequence
+    /// This always keeps the cache on the device.
     pub fn add_sequence(&mut self, seq: &mut Sequence) {
+        // Do not cache if prefix caching disabled
         if self.no_prefix_cache {
             return;
         }
-        let data = seq.normal_cache().to_vec();
-        let img_hashes = seq.image_hashes().map(|v| v.to_vec());
-        let mut node = Arc::clone(&self.root);
 
-        // Walk/build trie
-        for &tok in seq.get_toks() {
-            let next = {
-                let mut nb = node.write();
-                nb.children
-                    .entry(tok)
-                    .or_insert_with(|| {
-                        Arc::new(RwLock::new(TrieNode {
-                            children: AHashMap::with_capacity_and_hasher(8, Default::default()),
-                            cache: None,
-                            prev: None,
-                            next: None,
-                        }))
-                    })
-                    .clone()
-            };
-            node = next;
-        }
-
-        {
-            let mut nb = node.write();
-            if nb.cache.is_none() {
-                self.current_on_device += 1;
+        if let Some(block_engine) = &self.block_engine {
+            let logical_token_blocks = seq.logical_token_blocks();
+            let block_engine = get_mut_arcmutex!(block_engine);
+            let block_table = &block_engine.block_tables[seq.id()];
+            for block in block_table {
+                block.deref_mut().increment_refcount();
             }
-            nb.cache = Some(CacheElement {
-                cache: data,
-                image_hashes: img_hashes,
-            });
-        }
 
-        self.touch_node(&node);
-        // Enforce capacity
-        let _ = self.evict_caches();
+            let hashed_logical_blocks = hash_logical_blocks(logical_token_blocks);
+
+            self.block_caches.insert(
+                hashed_logical_blocks,
+                BlockCacheElement {
+                    logical_blocks: logical_token_blocks.to_vec(),
+                    physical_blocks: block_table.clone(),
+                    image_hashes: seq.image_hashes().map(|x| x.to_vec()),
+                },
+            );
+        } else {
+            let cache = seq.normal_cache().to_vec();
+
+            self.caches.insert(
+                seq.get_toks().to_vec().into(),
+                CacheElement {
+                    cache,
+                    image_hashes: seq.image_hashes().map(|x| x.to_vec()),
+                },
+            );
+        }
     }
 
-    /// Evict least‑recently used entries until under capacity
+    /// Evict the caches. This will evict the first k seqs such that the number of sequences on device after the copy is
+    /// the maximum allowed. Returns the number of evicted sequences.
     pub fn evict_caches(&mut self) -> Result<usize> {
         if self.no_prefix_cache {
             return Ok(0);
         }
-        let mut evicted = 0;
-        while self.current_on_device > self.n_on_device {
-            if let Some(head) = self.lru_head.take() {
-                {
-                    let mut hb = head.write();
-                    if hb.cache.take().is_some() {
-                        evicted += 1;
-                        self.current_on_device -= 1;
-                    }
-                    // unlink head
-                    self.lru_head = hb.next.clone();
+        let mut n_on_device = 0;
+        for cache in self.caches.values() {
+            let first_non_none = cache.cache.iter().find_or_first(|x| x.is_some());
+            let Some(Some(first_non_none)) = first_non_none else {
+                continue;
+            };
+
+            let cache_device = match first_non_none {
+                KvCache::Normal { k, .. } => {
+                    k.all_data().as_ref().expect("No KV cache data").device()
                 }
-                if let Some(new_head) = &self.lru_head {
-                    let mut hnb = new_head.write();
-                    hnb.prev = None;
-                } else {
-                    self.lru_tail = None;
+                KvCache::Rotating { k, .. } => {
+                    k.all_data().as_ref().expect("No KV cache data").device()
                 }
-            } else {
-                break;
+            };
+
+            if !matches!(cache_device, Device::Cpu) {
+                n_on_device += 1;
             }
         }
-        Ok(evicted)
-    }
+        let mut n_evicted = 0;
+        // Intentionally evict the first ones first, as they are the oldest
+        for cache in self.caches.values_mut() {
+            if n_on_device - n_evicted <= self.n_on_device {
+                break;
+            }
+            let first_non_none = cache.cache.iter().find_or_first(|x| x.is_some());
+            let Some(Some(first_non_none)) = first_non_none else {
+                continue;
+            };
 
-    pub fn evict_all_caches(&mut self) -> Result<usize> {
-        let count = self.current_on_device;
-        {
-            let mut root_nb = self.root.write();
-            root_nb.children.clear();
-            root_nb.cache = None;
+            let cache_device = match first_non_none {
+                KvCache::Normal { k, .. } => {
+                    k.all_data().as_ref().expect("No KV cache data").device()
+                }
+                KvCache::Rotating { k, .. } => {
+                    k.all_data().as_ref().expect("No KV cache data").device()
+                }
+            };
+
+            if !matches!(cache_device, Device::Cpu) {
+                cache.cache.clear();
+                n_evicted += 1;
+            }
         }
-        self.lru_head = None;
-        self.lru_tail = None;
-        self.current_on_device = 0;
-        Ok(count)
+
+        self.caches.retain(|_tokens, cache| !cache.cache.is_empty());
+
+        Ok(n_evicted)
     }
 
-    /// Lookup the longest‐matching prefix cache for `toks`
+    /// Evict all the caches.
+    pub fn evict_all_caches(&mut self) -> Result<usize> {
+        let len = self.caches.len();
+        self.caches.clear();
+        Ok(len)
+    }
+
+    /// Search for a matching cache given some tokens. Image-containing sequences are now cached too.
     pub fn search_for_matching_cache(
         &mut self,
         toks: &[u32],
         image_hashes: Option<&[u64]>,
         _contains_images: bool,
     ) -> Result<Option<MatchingCache>> {
+        // Do not search if prefix caching disabled or no tokens
         if self.no_prefix_cache || toks.is_empty() {
             return Ok(None);
         }
 
-        let mut node = Arc::clone(&self.root);
-        let mut best: Option<NodeRef> = None;
-        let mut match_len = 0;
-        let mut img_match = 0;
+        if let Some(block_engine) = &self.block_engine {
+            let block_engine = get_mut_arcmutex!(block_engine);
+            let block_size = block_engine.block_size();
+            let mut test_logical_blocks = Vec::new();
+            for tok in toks {
+                sequence::util_append_token_to_blocks(
+                    *tok as usize,
+                    &mut test_logical_blocks,
+                    block_size,
+                );
+            }
+            let hashed_logical_blocks = hash_logical_blocks(&test_logical_blocks);
 
-        // Fast, shared‐read walk
-        for (i, &tok) in toks.iter().enumerate() {
-            // Acquire *shared* read lock just to access children map
-            let next_opt = {
-                let rb: RwLockReadGuard<'_, TrieNode> = node.read();
-                rb.children.get(&tok).cloned()
-            };
-            if let Some(child) = next_opt {
-                node = child;
-                let rb = node.read();
-                if rb.cache.is_some() {
-                    best = Some(Arc::clone(&node));
-                    match_len = i + 1;
-                    if let (Some(inp), Some(cached)) =
-                        (image_hashes, &rb.cache.as_ref().unwrap().image_hashes)
-                    {
-                        img_match = inp.iter().zip(cached).take_while(|(a, b)| a == b).count();
-                    }
+            let mut best_match: Option<BlockBestMatch> = None;
+            for (logical, cache_elem) in &self.block_caches {
+                let logical_matches_until = logical
+                    .iter()
+                    .zip(&hashed_logical_blocks)
+                    .take_while(|(a, b)| **a == **b)
+                    .count();
+                let matched_len: usize = cache_elem.logical_blocks[..logical_matches_until]
+                    .iter()
+                    .map(|block| block.num_tokens())
+                    .sum();
+
+                let images_match_until = if let (Some(input_hashes), Some(cached_hashes)) =
+                    (image_hashes, cache_elem.image_hashes.as_ref())
+                {
+                    input_hashes
+                        .iter()
+                        .zip(cached_hashes)
+                        .take_while(|(a, b)| a == b)
+                        .count()
+                } else {
+                    0
+                };
+
+                if best_match.is_some_and(|(best_match_len, _, _, _)| best_match_len < matched_len)
+                    || best_match.is_none()
+                {
+                    best_match = Some((
+                        matched_len,
+                        &cache_elem.logical_blocks,
+                        &cache_elem.physical_blocks,
+                        images_match_until,
+                    ))
                 }
+            }
+
+            let Some((match_len, logical_blocks, physical_blocks, images_match_until)) = best_match
+            else {
+                return Ok(None);
+            };
+
+            // Determine how many blocks cover the matched prefix
+            let mut n_blocks = match_len.div_ceil(block_size);
+            n_blocks = n_blocks.min(logical_blocks.len());
+
+            if n_blocks == 0 {
+                return Ok(None);
+            }
+
+            // Take the first n_blocks of both logical and physical blocks
+            let mut logical_prefix = logical_blocks[..n_blocks].to_vec();
+            let physical_prefix = physical_blocks[..n_blocks].to_vec();
+
+            // If the last reused block is full, reserve an extra empty block for new tokens
+            let new_toks = toks[match_len..].to_vec();
+            for _ in 0..new_toks.len().div_ceil(block_size) {
+                logical_prefix.push(LogicalTokenBlock::new(block_size));
+            }
+            if logical_prefix.last().is_some_and(|last| last.is_full()) {
+                logical_prefix.push(LogicalTokenBlock::new(block_size));
+            }
+            let images_to_keep = if let Some(input_hashes) = image_hashes {
+                input_hashes.len().saturating_sub(images_match_until)
             } else {
-                break;
-            }
-        }
-
-        if let Some(matched_node) = best {
-            // Bump in LRU
-            self.touch_node(&matched_node);
-
-            // Prepare result
-            let rb = matched_node.read();
-            let mut elem = rb.cache.clone().unwrap();
-            for layer in elem.cache.iter_mut().flatten() {
-                layer.set_len(match_len)?;
-            }
-            let keep_imgs = image_hashes.map_or(0, |inp| inp.len().saturating_sub(img_match));
-
-            Ok(Some(MatchingCache {
-                normal: elem.cache,
-                images_to_keep: keep_imgs,
-                toks: toks[match_len..].to_vec(),
+                0
+            };
+            return Ok(Some(MatchingCache::Paged {
+                logical_blocks: logical_prefix,
+                physical_blocks: physical_prefix,
+                toks: new_toks,
                 offset: match_len,
-            }))
-        } else {
-            Ok(None)
+                images_to_keep,
+            }));
         }
+
+        let toks = Tokens(toks.to_vec());
+
+        let mut best_match: Option<(usize, &CacheElement, usize)> = None;
+        for (k, v) in &self.caches {
+            let match_len = toks.shared_prefix_len(k);
+            if match_len == 0 {
+                continue;
+            }
+
+            let images_match_until = match image_hashes {
+                Some(input_hashes) => match &v.image_hashes {
+                    Some(cached_hashes) => input_hashes
+                        .iter()
+                        .zip(cached_hashes)
+                        .take_while(|(a, b)| a == b)
+                        .count(),
+                    None => 0,
+                },
+                None => 0,
+            };
+
+            if best_match
+                .as_ref()
+                .is_none_or(|(len, _, _)| match_len > *len)
+            {
+                best_match = Some((match_len, v, images_match_until));
+            }
+        }
+
+        if let Some((match_len, cache_element, images_match_until)) = best_match {
+            let new_toks = toks.0[match_len..].to_vec();
+            if new_toks.is_empty() {
+                return Ok(None);
+            }
+
+            let mut cache = cache_element.clone();
+            // Count how many input images are not already cached
+            let images_to_keep = if let Some(input_hashes) = image_hashes {
+                input_hashes.len().saturating_sub(images_match_until)
+            } else {
+                0
+            };
+            for layer in cache.cache.iter_mut().flatten() {
+                if let Err(e) = layer.set_len(match_len) {
+                    tracing::warn!("Failed to set cache length to {}: {:?}", match_len, e);
+                    return Ok(None);
+                }
+            }
+            return Ok(Some(MatchingCache::Normal {
+                normal: cache.cache,
+                images_to_keep,
+                toks: new_toks,
+                offset: match_len,
+            }));
+        }
+
+        Ok(None)
     }
 }

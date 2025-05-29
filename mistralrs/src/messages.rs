@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 /// A type which can be used as a chat request.
 pub trait RequestLike {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>];
+    fn images_ref(&self) -> &[DynamicImage];
     fn take_messages(&mut self) -> RequestMessage;
     fn take_logits_processors(&mut self) -> Option<Vec<Arc<dyn CustomLogitsProcessor>>>;
     fn take_adapters(&mut self) -> Option<Vec<String>>;
@@ -34,6 +35,7 @@ impl From<TextMessages> for Vec<IndexMap<String, MessageContent>> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 /// A chat message role.
 pub enum TextMessageRole {
     User,
@@ -83,6 +85,9 @@ impl TextMessages {
 impl RequestLike for TextMessages {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>] {
         &self.0
+    }
+    fn images_ref(&self) -> &[DynamicImage] {
+        &[]
     }
     fn take_messages(&mut self) -> RequestMessage {
         let mut other = Vec::new();
@@ -155,7 +160,7 @@ impl VisionMessages {
         mut self,
         role: TextMessageRole,
         text: impl ToString,
-        image: DynamicImage,
+        images: Vec<DynamicImage>,
         model: &Model,
     ) -> anyhow::Result<Self> {
         let prefixer = match &model.config().category {
@@ -167,7 +172,15 @@ impl VisionMessages {
                 anyhow::bail!("`add_image_message` expects a vision model.")
             }
         };
-        self.images.push(image);
+
+        let n_added_images = images.len();
+        let prefixed = prefixer.prefix_image(
+            (self.images.len()..self.images.len() + n_added_images).collect(),
+            &text.to_string(),
+        );
+
+        self.images.extend(images);
+
         self.messages.push(IndexMap::from([
             ("role".to_string(), Either::Left(role.to_string())),
             (
@@ -176,13 +189,7 @@ impl VisionMessages {
                     IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
                     IndexMap::from([
                         ("type".to_string(), Value::String("text".to_string())),
-                        (
-                            "text".to_string(),
-                            Value::String(
-                                prefixer
-                                    .prefix_image(vec![self.images.len() - 1], &text.to_string()),
-                            ),
-                        ),
+                        ("text".to_string(), Value::String(prefixed)),
                     ]),
                 ]),
             ),
@@ -201,6 +208,9 @@ impl VisionMessages {
 impl RequestLike for VisionMessages {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>] {
         &self.messages
+    }
+    fn images_ref(&self) -> &[DynamicImage] {
+        &self.images
     }
     fn take_messages(&mut self) -> RequestMessage {
         let mut other_messages = Vec::new();
@@ -518,6 +528,10 @@ impl RequestBuilder {
 impl RequestLike for RequestBuilder {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>] {
         &self.messages
+    }
+
+    fn images_ref(&self) -> &[DynamicImage] {
+        &self.images
     }
 
     fn take_messages(&mut self) -> RequestMessage {

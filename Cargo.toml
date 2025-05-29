@@ -9,6 +9,7 @@ members = [
     "mistralrs-quant",
     "mistralrs-paged-attn",
     "mistralrs-codex",
+    "mistralrs-web-chat",
 ]
 resolver = "2"
 
@@ -24,10 +25,10 @@ license = "MIT"
 rust-version = "1.82"
 
 [workspace.dependencies]
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "cb2d8f5" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "cb2d8f5" }
-candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "cb2d8f5" }
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "cb2d8f5" }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "34e5753b" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "34e5753b" }
+candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "34e5753b" }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "34e5753b" }
 # candle-core = { path = "../candle/candle-core" }
 # candle-nn = { path = "../candle/candle-nn" }
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }
@@ -54,6 +55,7 @@ base64 = "0.22.1"
 half = "2.4.0"
 rayon = "1.1.0"
 url = "2.5.2"
+utoipa = "4.2"
 data-url = "0.3.1"
 float8 = "0.2.1"
 regex = "1.10.6"
@@ -66,3 +68,11 @@ itertools = "0.13.0"
 [profile.release-with-debug]
 inherits = "release"
 debug = true
+
+[profile.release]
+lto = true
+opt-level = 3
+
+[profile.dev]
+debug = true
+opt-level = 3

@@ -44,6 +44,7 @@ pub struct Config {
     pub rope_theta: f32,
     pub max_position_embeddings: usize,
     pub rope_scaling: Option<Llama3RopeConfig>,
+    #[serde(alias = "quantization")]
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub tie_word_embeddings: bool,
@@ -381,7 +382,7 @@ impl Llama {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
-                &None,
+                &cfg.quantization_config,
                 false,
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?

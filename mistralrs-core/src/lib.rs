@@ -98,8 +98,8 @@ pub use pipeline::{
 };
 pub use request::{
     ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
-    LlguidanceGrammar, MessageContent, NormalRequest, Request, RequestMessage, TokenizationRequest,
-    WebSearchOptions, WebSearchUserLocation,
+    LlguidanceGrammar, MessageContent, NormalRequest, Request, RequestMessage, SearchContextSize,
+    TokenizationRequest, WebSearchOptions, WebSearchUserLocation,
 };
 pub use response::*;
 pub use sampler::{

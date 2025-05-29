@@ -59,7 +59,7 @@ impl RowParallelLayer {
             // GPTQ and BNB do not support tensor parallelism
             if matches!(
                 quant_conf,
-                QuantizedConfig::Gptq { .. }
+                QuantizedConfig::GptqAwq { .. }
                     | QuantizedConfig::Bitsandbytes { .. }
                     | QuantizedConfig::Afq { .. }
             ) && comm.world_size() != 1
@@ -71,7 +71,7 @@ impl RowParallelLayer {
             }
 
             match quant_conf {
-                QuantizedConfig::Gptq { .. } => {
+                QuantizedConfig::GptqAwq { .. } => {
                     gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
                 QuantizedConfig::Fp8 { .. } => {
@@ -269,19 +269,19 @@ impl ColumnParallelLayer {
             // GPTQ and BNB do not support tensor parallelism
             if matches!(
                 quant_conf,
-                QuantizedConfig::Gptq { .. }
+                QuantizedConfig::GptqAwq { .. }
                     | QuantizedConfig::Bitsandbytes { .. }
                     | QuantizedConfig::Afq { .. }
             ) && comm.world_size() != 1
             {
                 candle_core::bail!(
-                    "GPTQ and BNB and AFQ quantization types to not support tensor parallelism, but got a world size of {}",
+                    "GPTQ/AWQ and BNB and AFQ quantization types to not support tensor parallelism, but got a world size of {}",
                     comm.world_size()
                 );
             }
 
             match quant_conf {
-                QuantizedConfig::Gptq { .. } => {
+                QuantizedConfig::GptqAwq { .. } => {
                     gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
                 QuantizedConfig::Fp8 { .. } => {
@@ -480,7 +480,7 @@ impl ReplicatedLayer {
 
         let layer = if let Some(quant_conf) = &config {
             match quant_conf {
-                QuantizedConfig::Gptq { .. } => {
+                QuantizedConfig::GptqAwq { .. } => {
                     gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
                 QuantizedConfig::Fp8 { .. } => blockwise_fp8_linear_b(

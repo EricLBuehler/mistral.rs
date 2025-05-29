@@ -682,7 +682,7 @@ impl Runner {
 
         let device = get_device(seed).as_ref().map_err(PyApiErr::from)?;
         let isq = if let Some(isq) = in_situ_quant {
-            Some(parse_isq_value(&isq).map_err(PyApiErr::from)?)
+            Some(parse_isq_value(&isq, Some(device)).map_err(PyApiErr::from)?)
         } else {
             None
         };
@@ -1416,7 +1416,7 @@ impl Runner {
     /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
     /// then nothing will happen.
     fn send_re_isq(&self, dtype: String) -> PyApiResult<()> {
-        let request = _Request::ReIsq(parse_isq_value(&dtype)?);
+        let request = _Request::ReIsq(parse_isq_value(&dtype, None)?);
         self.runner.get_sender()?.blocking_send(request).unwrap();
         Ok(())
     }

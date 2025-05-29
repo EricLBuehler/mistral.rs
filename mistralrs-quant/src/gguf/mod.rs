@@ -34,7 +34,7 @@ impl QuantMethod for GgufMatMul {
                 w: QMatMul::from_arc(q_weight)?,
                 b,
             }),
-            QuantMethodConfig::Gptq { .. }
+            QuantMethodConfig::GptqAwq { .. }
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
@@ -313,7 +313,7 @@ impl QuantizedSerde for GgufMatMul {
         let mut tensor_data = vec![0; data_len];
         buffer.read_exact(&mut tensor_data)?;
 
-        let _acquired_load_guard = guard.acquire();
+        let _acquired_load_guard = guard.acquire(device);
         // If we have bias
         let b = if has_bias {
             Some(deserialize_tensor(&mut buffer, device)?)
@@ -383,7 +383,7 @@ impl QuantizedSerde for GgufMatMul {
         let mut tensor_data = vec![0; data_len];
         buffer.read_exact(&mut tensor_data)?;
 
-        let _acquired_load_guard = guard.acquire();
+        let _acquired_load_guard = guard.acquire(device);
         // If we have bias
         let b = if has_bias {
             Some(deserialize_tensor(&mut buffer, device)?)

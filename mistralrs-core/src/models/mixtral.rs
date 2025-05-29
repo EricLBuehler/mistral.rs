@@ -45,6 +45,7 @@ pub struct Config {
     pub(crate) sliding_window: Option<usize>,
     pub(crate) num_experts_per_tok: usize,
     pub(crate) num_local_experts: usize,
+    #[serde(alias = "quantization")]
     pub(crate) quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub(crate) tie_word_embeddings: bool,
@@ -580,7 +581,7 @@ impl Model {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
-                &None,
+                &cfg.quantization_config,
                 false,
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?

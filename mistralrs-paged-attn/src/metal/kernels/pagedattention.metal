@@ -386,8 +386,8 @@ inline Float8_ fma(Bfloat8_ a, Bfloat8_ b, Float8_ c) {
 inline Bfloat8_ fma(Bfloat8_ a, Bfloat8_ b, Bfloat8_ c) {
   Bfloat8_ res;
   res.x = fma(a.x, b.x, c.x);
-  res.y = fma(a.y, b.x, c.y);
-  return c;
+  res.y = fma(a.y, b.y, c.y);
+  return res;
 }
 
 inline void from_float(thread bfloat16_t &dst, float src) {
@@ -478,7 +478,7 @@ template <> inline float sum(half a) { return (float)a; }
 
 template <> inline float sum(half2 a) { return (float)a.x + (float)a.y; }
 
-template <> inline float sum(half4 a) { return sum(a.x) + sum(a.y); }
+template <> inline float sum(half4 a) { return a.x + a.y + a.z + a.w; }
 
 template <> inline float sum(Half8_ a) { return sum(a.x) + sum(a.y); }
 
@@ -504,7 +504,7 @@ inline Half8_ fma(Half8_ a, Half8_ b, Half8_ c) {
   Half8_ res;
   res.x = fma(a.x, b.x, c.x);
   res.y = fma(a.y, b.y, c.y);
-  return c;
+  return res;
 }
 
 inline void from_float(thread half &dst, float src) {
@@ -1127,68 +1127,61 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES,
 #define instantiate_paged_attention_heads(type, block_size, num_threads,       \
                                           num_simd_lanes, partition_size)      \
   instantiate_paged_attention_inner(type, 64, block_size, num_threads,         \
-                                    num_simd_lanes, partition_size)            \
-      instantiate_paged_attention_inner(type, 80, block_size, num_threads,     \
-                                        num_simd_lanes, partition_size)        \
-          instantiate_paged_attention_inner(type, 96, block_size, num_threads, \
-                                            num_simd_lanes, partition_size)    \
-              instantiate_paged_attention_inner(type, 112, block_size,         \
-                                                num_threads, num_simd_lanes,   \
-                                                partition_size)                \
-                  instantiate_paged_attention_inner(                           \
-                      type, 128, block_size, num_threads, num_simd_lanes,      \
-                      partition_size)                                          \
-                      instantiate_paged_attention_inner(                       \
-                          type, 192, block_size, num_threads, num_simd_lanes,  \
-                          partition_size)                                      \
-                          instantiate_paged_attention_inner(                   \
-                              type, 256, block_size, num_threads,              \
-                              num_simd_lanes, partition_size)
+                                    num_simd_lanes, partition_size);           \
+  instantiate_paged_attention_inner(type, 80, block_size, num_threads,         \
+                                    num_simd_lanes, partition_size);           \
+  instantiate_paged_attention_inner(type, 96, block_size, num_threads,         \
+                                    num_simd_lanes, partition_size);           \
+  instantiate_paged_attention_inner(type, 112, block_size, num_threads,        \
+                                    num_simd_lanes, partition_size);           \
+  instantiate_paged_attention_inner(type, 128, block_size, num_threads,        \
+                                    num_simd_lanes, partition_size);           \
+  instantiate_paged_attention_inner(type, 192, block_size, num_threads,        \
+                                    num_simd_lanes, partition_size);           \
+  instantiate_paged_attention_inner(type, 256, block_size, num_threads,        \
+                                    num_simd_lanes, partition_size);
 
 #define instantiate_paged_attention_v2_reduce_heads(                           \
     type, num_threads, num_simd_lanes, partition_size)                         \
   instantiate_paged_attention_v2_reduce_inner(type, 64, num_threads,           \
-                                              num_simd_lanes, partition_size)  \
-      instantiate_paged_attention_v2_reduce_inner(                             \
-          type, 80, num_threads, num_simd_lanes, partition_size)               \
-          instantiate_paged_attention_v2_reduce_inner(                         \
-              type, 96, num_threads, num_simd_lanes, partition_size)           \
-              instantiate_paged_attention_v2_reduce_inner(                     \
-                  type, 112, num_threads, num_simd_lanes, partition_size)      \
-                  instantiate_paged_attention_v2_reduce_inner(                 \
-                      type, 128, num_threads, num_simd_lanes, partition_size)  \
-                      instantiate_paged_attention_v2_reduce_inner(             \
-                          type, 192, num_threads, num_simd_lanes,              \
-                          partition_size)                                      \
-                          instantiate_paged_attention_v2_reduce_inner(         \
-                              type, 256, num_threads, num_simd_lanes,          \
-                              partition_size)
+                                              num_simd_lanes, partition_size); \
+  instantiate_paged_attention_v2_reduce_inner(type, 80, num_threads,           \
+                                              num_simd_lanes, partition_size); \
+  instantiate_paged_attention_v2_reduce_inner(type, 96, num_threads,           \
+                                              num_simd_lanes, partition_size); \
+  instantiate_paged_attention_v2_reduce_inner(type, 112, num_threads,          \
+                                              num_simd_lanes, partition_size); \
+  instantiate_paged_attention_v2_reduce_inner(type, 128, num_threads,          \
+                                              num_simd_lanes, partition_size); \
+  instantiate_paged_attention_v2_reduce_inner(type, 192, num_threads,          \
+                                              num_simd_lanes, partition_size); \
+  instantiate_paged_attention_v2_reduce_inner(type, 256, num_threads,          \
+                                              num_simd_lanes, partition_size);
 
 #define instantiate_paged_attention_block_size(type, num_threads,              \
                                                num_simd_lanes, partition_size) \
   instantiate_paged_attention_heads(type, 8, num_threads, num_simd_lanes,      \
-                                    partition_size)                            \
-      instantiate_paged_attention_heads(type, 16, num_threads, num_simd_lanes, \
-                                        partition_size)                        \
-          instantiate_paged_attention_heads(type, 32, num_threads,             \
-                                            num_simd_lanes, partition_size)
+                                    partition_size);                           \
+  instantiate_paged_attention_heads(type, 16, num_threads, num_simd_lanes,     \
+                                    partition_size);                           \
+  instantiate_paged_attention_heads(type, 32, num_threads, num_simd_lanes,     \
+                                    partition_size);
 
 // TODO: tune num_threads = 256
 // NOTE: partition_size = 0
 #define instantiate_paged_attention_v1(type, num_simd_lanes)                   \
-  instantiate_paged_attention_block_size(type, 256, num_simd_lanes, 0)
+  instantiate_paged_attention_block_size(type, 256, num_simd_lanes, 0);
 
 // TODO: tune num_threads = 256
 // NOTE: partition_size = 512
 #define instantiate_paged_attention_v2(type, num_simd_lanes)                   \
-  instantiate_paged_attention_block_size(type, 256, num_simd_lanes, 512)       \
-      instantiate_paged_attention_v2_reduce_heads(type, 256, num_simd_lanes,   \
-                                                  512)
+  instantiate_paged_attention_block_size(type, 256, num_simd_lanes, 512);      \
+  instantiate_paged_attention_v2_reduce_heads(type, 256, num_simd_lanes, 512);
 
-instantiate_paged_attention_v1(float, 32)
-    instantiate_paged_attention_v1(bfloat16_t, 32)
-        instantiate_paged_attention_v1(half, 32)
+instantiate_paged_attention_v1(float, 32);
+instantiate_paged_attention_v1(bfloat16_t, 32);
+instantiate_paged_attention_v1(half, 32);
 
-            instantiate_paged_attention_v2(float, 32)
-                instantiate_paged_attention_v2(bfloat16_t, 32)
-                    instantiate_paged_attention_v2(half, 32)
+instantiate_paged_attention_v2(float, 32);
+instantiate_paged_attention_v2(bfloat16_t, 32);
+instantiate_paged_attention_v2(half, 32);

@@ -6,6 +6,7 @@ use mistralrs_quant::{linear_b, QuantMethod, ShardedVarBuilder};
 use crate::{
     layers::{self, GetFloatInfo, RmsNorm},
     pipeline::NormalLoadingMetadata,
+    utils::unvarbuilder::UnVarBuilder,
 };
 
 fn default_act() -> candle_nn::Activation {
@@ -480,5 +481,26 @@ impl Mistral3VisionModel {
             tensors.push((&mut layer.feed_forward.down_proj, None));
         }
         tensors
+    }
+
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("patch_conv").add(&self.patch_conv);
+        uvb.pp("ln_pre").add(&self.ln_pre);
+
+        {
+            let uvb_pos = uvb.pp("patch_positional_embedding");
+            uvb_pos.add_tensor("cos", self.patch_positional_embedding.cos.clone());
+            uvb_pos.add_tensor("sin", self.patch_positional_embedding.sin.clone());
+        }
+
+        for (layer_idx, layer) in self.transformer.layers.iter().enumerate() {
+            let uvb_l = uvb.pp("transformer").pp("layers").pp(layer_idx);
+            uvb_l.pp("attention_norm").add(&layer.attention_norm);
+            uvb_l.pp("ffn_norm").add(&layer.ffn_norm);
+        }
+
+        uvb.to_safetensors()
     }
 }

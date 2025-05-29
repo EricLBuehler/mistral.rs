@@ -1470,7 +1470,8 @@ impl DeviceMappedModelLoader for Phi3Loader {
 
             let size_in = cfg.hidden_size;
             let head_dim = cfg.head_dim();
-            let op_size = head_dim * head_dim + 2 * cfg.num_key_value_heads * head_dim;
+            let op_size =
+                cfg.num_attention_heads * head_dim + 2 * cfg.num_key_value_heads * head_dim;
             let qkv_proj = size_in * op_size / weight_pack_factor;
             let o_proj =
                 (cfg.num_attention_heads * head_dim) * size_in / weight_pack_factor + size_in;
@@ -3003,8 +3004,8 @@ impl IsqModelLoader for Qwen3Loader {
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
-    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
-        self.isq_layer_regexes_moqe(config)
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }
 
@@ -3187,6 +3188,9 @@ impl IsqModelLoader for Qwen3MoELoader {
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$")?,
         ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
     fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes_moqe(config)

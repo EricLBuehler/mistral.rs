@@ -1,11 +1,11 @@
 use std::{
     collections::{HashMap, VecDeque},
     num::NonZeroUsize,
-    sync::atomic::Ordering,
+    sync::{atomic::Ordering, Arc},
 };
 
 use crate::{
-    engine::TERMINATE_ALL_NEXT_STEP,
+    engine::{IntervalLogger, TERMINATE_ALL_NEXT_STEP},
     paged_attention::{BlockEngine, BlockTables},
     sequence::{Sequence, SequenceState, StopReason},
 };
@@ -203,7 +203,7 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
     }
 
     /// Schedule all sequences based on their state and the available space.
-    pub fn schedule(&mut self) -> DefaultSchedulerOutput {
+    pub fn schedule(&mut self, logger: &IntervalLogger) -> DefaultSchedulerOutput {
         // Filter out all done sequences
         let running = std::mem::take(&mut self.running);
         let mut waiting = std::mem::take(&mut self.waiting);
@@ -215,6 +215,8 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
         match (waiting.len(), running.len()) {
             (0, 0) => {
                 self.running = running;
+                logger.set_num_running(self.running.len());
+                logger.set_num_waiting(self.waiting.len());
                 return DefaultSchedulerOutput {
                     prompt: vec![].into(),
                     completion: vec![].into(),
@@ -228,6 +230,8 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
                 self.waiting = Backer::new();
                 let running = std::mem::take(&mut self.running);
                 self.running = self.bucket_and_waitlist_seqs(running);
+                logger.set_num_running(self.running.len());
+                logger.set_num_waiting(self.waiting.len());
                 return DefaultSchedulerOutput {
                     prompt: self.running.iter_mut().collect::<Vec<_>>().into(),
                     completion: vec![].into(),
@@ -241,6 +245,8 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
                         .for_each(|seq| seq.set_state(SequenceState::Done(StopReason::Canceled)));
                     TERMINATE_ALL_NEXT_STEP.store(false, Ordering::SeqCst);
                 }
+                logger.set_num_running(self.running.len());
+                logger.set_num_waiting(self.waiting.len());
                 return DefaultSchedulerOutput {
                     prompt: vec![].into(),
                     completion: self.running.iter_mut().collect::<Vec<_>>().into(),
@@ -275,6 +281,9 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
         self.running = running;
         self.waiting = new_waiting;
 
+        logger.set_num_running(self.running.len());
+        logger.set_num_waiting(self.waiting.len());
+
         let mut completion = Vec::new();
         let mut prompt = Vec::new();
         for seq in &mut self.running {
@@ -299,9 +308,9 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
 }
 
 impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
-    fn schedule(&mut self) -> SchedulerOutput<'_> {
+    fn schedule(&mut self, logger: &IntervalLogger) -> SchedulerOutput<'_> {
         SchedulerOutput::DefaultScheduler {
-            output: self.schedule(),
+            output: self.schedule(logger),
         }
     }
     fn waiting_len(&self) -> usize {
@@ -318,14 +327,14 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
             self.waiting.add(seq);
         }
     }
-    fn block_tables(&self) -> Option<&BlockTables> {
+    fn block_tables(&self) -> Option<BlockTables> {
         None
     }
     fn block_size(&self) -> Option<usize> {
         None
     }
     fn free_finished_sequence_groups(&mut self) {}
-    fn block_engine(&mut self) -> Option<&mut BlockEngine> {
+    fn block_engine(&self) -> Option<Arc<tokio::sync::Mutex<BlockEngine>>> {
         None
     }
 }

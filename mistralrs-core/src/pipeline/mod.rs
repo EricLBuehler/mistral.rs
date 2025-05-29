@@ -224,6 +224,18 @@ pub enum ModelCategory {
     Speech,
 }
 
+impl std::fmt::Debug for ModelCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ModelCategory::Text => write!(f, "ModelCategory::Text"),
+            ModelCategory::Vision { .. } => write!(f, "ModelCategory::Vision {{ prefixer: .. }}"),
+            ModelCategory::Diffusion => write!(f, "ModelCategory::Diffusion"),
+            ModelCategory::Audio => write!(f, "ModelCategory::Audio"),
+            ModelCategory::Speech => write!(f, "ModelCategory::Speech"),
+        }
+    }
+}
+
 impl PartialEq for ModelCategory {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -243,16 +255,16 @@ impl PartialEq for ModelCategory {
 /// Prepend a vision tag appropriate for the model to the prompt. Image indexing is assumed that start at 0.
 pub trait VisionPromptPrefixer: Send + Sync {
     /// Prefix for inclusion in messages (may do nothing if the chat template handles it).
-    fn prefix_image(&self, image_indees: Vec<usize>, prompt: &str) -> String;
+    fn prefix_image(&self, image_indices: Vec<usize>, prompt: &str) -> String;
 }
 
-pub enum CacheBackendMetadata<'a> {
+pub enum CacheBackendMetadata {
     DefaultInstructions {
         pre_op: CacheInstruction,
         post_op: CacheInstruction,
     },
     PagedAttention {
-        metadata: PagedAttentionMeta<'a>,
+        metadata: PagedAttentionMeta,
         blocks_to_swap_in: HashMap<usize, usize>,
         blocks_to_swap_out: HashMap<usize, usize>,
         blocks_to_copy: HashMap<usize, Vec<usize>>,
@@ -341,7 +353,7 @@ pub trait Pipeline:
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-        backend_metadata: CacheBackendMetadata<'_>,
+        backend_metadata: CacheBackendMetadata,
     ) -> Result<Duration, candle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
@@ -443,11 +455,16 @@ pub trait Pipeline:
                 }
 
                 let start = Instant::now();
+                let logits_on_cpu = logits.len() > 1;
                 let logits = logits
                     .into_iter()
                     .map(|l| {
-                        l.expect("Did not get any inputs. This is shocking.")
-                            .to_device(&Device::Cpu)
+                        let l = l.expect("Did not get any inputs. This is shocking.");
+                        if logits_on_cpu {
+                            l.to_device(&Device::Cpu)
+                        } else {
+                            Ok(l)
+                        }
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
@@ -594,11 +611,16 @@ pub trait Pipeline:
                 }
 
                 let start = Instant::now();
+                let logits_on_cpu = logits.len() > 1;
                 let logits = logits
                     .into_iter()
                     .map(|l| {
-                        l.expect("Did not get any inputs. This is shocking.")
-                            .to_device(&Device::Cpu)
+                        let l = l.expect("Did not get any inputs. This is shocking.");
+                        if logits_on_cpu {
+                            l.to_device(&Device::Cpu)
+                        } else {
+                            Ok(l)
+                        }
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
 

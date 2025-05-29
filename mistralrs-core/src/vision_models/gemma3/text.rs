@@ -491,7 +491,7 @@ impl TextModel {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
-                &None,
+                &cfg.quantization_config,
                 false,
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
@@ -654,6 +654,14 @@ impl IsqModel for TextModel {
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l
+                .pp("self_attn")
+                .pp("q_norm")
+                .add(&layer.self_attn.q_norm.undo_gemma().unwrap());
+            uvb_l
+                .pp("self_attn")
+                .pp("k_norm")
+                .add(&layer.self_attn.k_norm.undo_gemma().unwrap());
             uvb_l
                 .pp("input_layernorm")
                 .add(&layer.input_layernorm.undo_gemma().unwrap());
