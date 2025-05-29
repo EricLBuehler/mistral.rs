@@ -268,6 +268,11 @@ pub fn blockwise_fp8_linear_b(
         candle_core::bail!("Unexpected quantization config.")
     };
 
+    // Handle the case where we actually have an unqiantzed
+    if vb.contains_tensor("weight") && !vb.contains_tensor("weight_scale_inv") {
+        return crate::linear_b(in_dim, out_dim, bias, &None, vb);
+    }
+
     // Handle the case where the layer is dummy (no tensors)
     if !(vb.contains_tensor("weight") && vb.contains_tensor("weight_scale_inv")) {
         let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;

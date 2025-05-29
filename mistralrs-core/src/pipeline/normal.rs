@@ -487,6 +487,7 @@ impl Loader for NormalLoader {
         } else {
             in_situ_quant.is_some()
         };
+        loading_isq = in_situ_quant.is_some();
 
         if let Some(ref topology) = self.config.topology {
             loading_isq |= topology
