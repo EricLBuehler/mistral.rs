@@ -2,8 +2,8 @@
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use mistralrs_quant::{
-    distributed::layers::PackedExperts, AfqLayer, ColumnParallelLayer, QuantMethod,
-    QuantizedConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, SortOp,
+    AfqLayer, ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
+    ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -14,7 +14,6 @@ use crate::{
     device_map::DeviceMapper,
     layers::{self, embedding, Activation, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
-    ops::{TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -362,7 +361,7 @@ impl Mlp {
     }
 }
 
-struct MoeMlp {
+struct FastMoeMlp {
     gate: Arc<dyn QuantMethod>,
     gate_proj: Vec<Arc<dyn QuantMethod>>,
     up_proj: Vec<Arc<dyn QuantMethod>>,
@@ -372,7 +371,7 @@ struct MoeMlp {
     num_experts_per_tok: usize,
 }
 
-impl MoeMlp {
+impl FastMoeMlp {
     fn new(
         cfg: &Config,
         vb: ShardedVarBuilder,
@@ -387,30 +386,6 @@ impl MoeMlp {
             vb.pp("gate").set_device(layer_device),
         )?;
 
-        // let experts_vb = vb.pp("experts");
-        // let mut experts = Vec::with_capacity(num_experts);
-        // for i in 0..num_experts {
-        //     experts.push(Mlp::new(
-        //         cfg,
-        //         experts_vb.pp(i),
-        //         comm,
-        //         cfg.moe_intermediate_size,
-        //     )?);
-        // }
-
-        // let PackedExperts {
-        //     gate_proj,
-        //     up_proj,
-        //     down_proj,
-        // } = PackedExperts::new(
-        //     num_experts,
-        //     cfg.hidden_size,
-        //     cfg.moe_intermediate_size,
-        //     &cfg.quantization_config,
-        //     false,
-        //     comm,
-        //     vb.pp("experts"),
-        // )?;
         let gate_proj = AfqLayer::afq_packed_linear_b(
             num_experts,
             cfg.hidden_size,
@@ -589,7 +564,8 @@ impl SlowMoeMlp {
 }
 
 enum MoeOrMlp {
-    Moe(MoeMlp),
+    FastMoe(FastMoeMlp),
+    SlowMoe(SlowMoeMlp),
     Mlp(Mlp),
 }
 
@@ -597,7 +573,8 @@ impl MoeOrMlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::Mlp(m) => m.forward(xs),
-            Self::Moe(m) => m.forward(xs),
+            Self::FastMoe(m) => m.forward(xs),
+            Self::SlowMoe(m) => m.forward(xs),
         }
     }
 }
@@ -635,15 +612,29 @@ impl DecoderLayer {
         let mlp = if !cfg.mlp_only_layers.contains(&layer_idx)
             && (cfg.num_experts > 0 && (layer_idx + 1) % cfg.decoder_sparse_step == 0)
         {
-            MoeOrMlp::Moe(MoeMlp::new(
-                cfg,
-                mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
-                mapper
-                    .device_for(layer_idx, false)
-                    .cloned()
-                    .unwrap_or(real_device),
-                comm,
-            )?)
+            let vb = mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq);
+
+            if vb.device().is_metal() {
+                MoeOrMlp::FastMoe(FastMoeMlp::new(
+                    cfg,
+                    mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+                    mapper
+                        .device_for(layer_idx, false)
+                        .cloned()
+                        .unwrap_or(real_device),
+                    comm,
+                )?)
+            } else {
+                MoeOrMlp::SlowMoe(SlowMoeMlp::new(
+                    cfg,
+                    mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+                    mapper
+                        .device_for(layer_idx, false)
+                        .cloned()
+                        .unwrap_or(real_device),
+                    comm,
+                )?)
+            }
         } else {
             MoeOrMlp::Mlp(Mlp::new(
                 cfg,
@@ -958,7 +949,7 @@ impl IsqModel for Model {
                     tensors.push((&mut layer.up_proj, Some(i)));
                     tensors.push((&mut layer.down_proj, Some(i)));
                 }
-                MoeOrMlp::Moe(layer) => {
+                MoeOrMlp::FastMoe(layer) => {
                     for g in &mut layer.gate_proj {
                         tensors.push((g, Some(i)));
                     }
@@ -967,6 +958,13 @@ impl IsqModel for Model {
                     }
                     for d in &mut layer.down_proj {
                         tensors.push((d, Some(i)));
+                    }
+                }
+                MoeOrMlp::SlowMoe(layer) => {
+                    for expert in &mut layer.experts {
+                        tensors.push((&mut expert.gate_proj, Some(i)));
+                        tensors.push((&mut expert.up_proj, Some(i)));
+                        tensors.push((&mut expert.down_proj, Some(i)));
                     }
                 }
             }
@@ -995,7 +993,9 @@ impl IsqModel for Model {
                 .pp("self_attn")
                 .pp("k_norm")
                 .add(&layer.self_attn.k_norm);
-            if let MoeOrMlp::Moe(layer) = &layer.mlp {
+            if let MoeOrMlp::FastMoe(layer) = &layer.mlp {
+                uvb_l.pp("mlp").pp("gate").add(&layer.gate);
+            } else if let MoeOrMlp::SlowMoe(layer) = &layer.mlp {
                 uvb_l.pp("mlp").pp("gate").add(&layer.gate);
             }
         }
