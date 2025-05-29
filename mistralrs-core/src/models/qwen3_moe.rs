@@ -390,30 +390,37 @@ impl FastMoeMlp {
             vb.pp("gate").set_device(layer_device),
         )?;
 
-        let fused_gate_proj = AfqLayer::afq_packed_linear_b(
-            num_experts,
-            cfg.hidden_size,
-            cfg.moe_intermediate_size,
-            cfg.quantization_config.as_ref().unwrap(),
-            false,
-            vb.pp("switch_mlp.gate_proj"),
-        )?;
-        let fused_up_proj = AfqLayer::afq_packed_linear_b(
-            num_experts,
-            cfg.hidden_size,
-            cfg.moe_intermediate_size,
-            cfg.quantization_config.as_ref().unwrap(),
-            false,
-            vb.pp("switch_mlp.up_proj"),
-        )?;
-        let fused_down_proj = AfqLayer::afq_packed_linear_b(
-            num_experts,
-            cfg.moe_intermediate_size,
-            cfg.hidden_size,
-            cfg.quantization_config.as_ref().unwrap(),
-            false,
-            vb.pp("switch_mlp.down_proj"),
-        )?;
+        let (fused_gate_proj, fused_up_proj, fused_down_proj) =
+            if let Some(quantization_config) = &cfg.quantization_config {
+                let fused_gate_proj = AfqLayer::afq_packed_linear_b(
+                    num_experts,
+                    cfg.hidden_size,
+                    cfg.moe_intermediate_size,
+                    quantization_config,
+                    false,
+                    vb.pp("switch_mlp.gate_proj"),
+                )?;
+                let fused_up_proj = AfqLayer::afq_packed_linear_b(
+                    num_experts,
+                    cfg.hidden_size,
+                    cfg.moe_intermediate_size,
+                    quantization_config,
+                    false,
+                    vb.pp("switch_mlp.up_proj"),
+                )?;
+                let fused_down_proj = AfqLayer::afq_packed_linear_b(
+                    num_experts,
+                    cfg.moe_intermediate_size,
+                    cfg.hidden_size,
+                    quantization_config,
+                    false,
+                    vb.pp("switch_mlp.down_proj"),
+                )?;
+
+                (fused_gate_proj, fused_up_proj, fused_down_proj)
+            } else {
+                todo!()
+            };
 
         Ok(Self {
             gate,
