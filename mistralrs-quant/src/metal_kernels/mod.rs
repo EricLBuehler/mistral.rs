@@ -7,9 +7,7 @@ use std::os::raw::c_void;
 use std::sync::{Arc, RwLock};
 use std::{collections::HashMap, sync::OnceLock};
 
-mod quantized;
 pub mod utils;
-pub use quantized::call_afq_qmm_new;
 use utils::{
     get_2d_grid_dims, get_2d_grid_dims_divisor, get_block_dims, linear_split, EncoderParam,
     EncoderProvider,

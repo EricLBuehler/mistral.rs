@@ -376,8 +376,12 @@ impl FastMoeMlp {
         cfg: &Config,
         vb: ShardedVarBuilder,
         layer_device: Device,
-        comm: &Arc<mistralrs_quant::Comm>,
+        _comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
+        if !vb.device().is_metal() {
+            candle_core::bail!("FastMoeMlp requires Metal.");
+        }
+
         let num_experts = cfg.num_experts;
         let gate = mistralrs_quant::linear_no_bias(
             cfg.hidden_size,
@@ -617,7 +621,7 @@ impl DecoderLayer {
             if vb.device().is_metal() {
                 MoeOrMlp::FastMoe(FastMoeMlp::new(
                     cfg,
-                    mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+                    vb,
                     mapper
                         .device_for(layer_idx, false)
                         .cloned()
@@ -627,7 +631,7 @@ impl DecoderLayer {
             } else {
                 MoeOrMlp::SlowMoe(SlowMoeMlp::new(
                     cfg,
-                    mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+                    vb,
                     mapper
                         .device_for(layer_idx, false)
                         .cloned()
