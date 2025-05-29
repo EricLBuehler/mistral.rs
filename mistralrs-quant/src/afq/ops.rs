@@ -292,9 +292,6 @@ pub(crate) fn afq_mm_op(
 
         let device = w_s.device();
 
-        let command_buffer = device.command_buffer()?;
-        command_buffer.set_label("afq-qmm");
-
         assert_eq!(x.layout().start_offset(), 0);
         assert_eq!(w.layout().start_offset(), 0);
         assert_eq!(scales.layout().start_offset(), 0);
@@ -335,6 +332,9 @@ pub(crate) fn afq_mm_op(
             out_shape.push(x.dim(D::Minus2)?);
             out_shape.push(w_outer_dims);
 
+            let command_buffer = device.command_buffer()?;
+            command_buffer.set_label("afq-qmm");
+
             let output =
                 device.new_buffer(out_shape.iter().product(), scales.dtype(), "afq-qmm-output")?;
 
@@ -368,6 +368,9 @@ pub(crate) fn afq_mm_op(
         } else {
             let mut out_shape = x.dims().to_vec();
             *out_shape.last_mut().unwrap() = w_outer_dims;
+
+            let command_buffer = device.command_buffer()?;
+            command_buffer.set_label("afq-qmm");
 
             let output =
                 device.new_buffer(out_shape.iter().product(), scales.dtype(), "afq-qmm-output")?;

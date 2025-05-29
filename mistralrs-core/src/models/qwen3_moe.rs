@@ -2,8 +2,8 @@
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder,
+    distributed::layers::PackedExperts, ColumnParallelLayer, QuantMethod, QuantizedConfig,
+    ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, SortOp,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -14,6 +14,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{self, embedding, Activation, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
+    ops::{TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -363,12 +364,122 @@ impl Mlp {
 
 struct MoeMlp {
     gate: candle_nn::Linear,
-    experts: Vec<Mlp>,
+    gate_proj: Vec<Arc<dyn QuantMethod>>,
+    up_proj: Vec<Arc<dyn QuantMethod>>,
+    down_proj: Vec<Arc<dyn QuantMethod>>,
+    act: Activation,
     norm_topk_prob: bool,
     num_experts_per_tok: usize,
 }
 
 impl MoeMlp {
+    fn new(
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        layer_device: Device,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        let num_experts = cfg.num_experts;
+        let gate = layers::linear_no_bias(
+            cfg.hidden_size,
+            num_experts,
+            vb.pp("gate").set_device(layer_device),
+        )?;
+
+        let experts_vb = vb.pp("experts");
+        let mut experts = Vec::with_capacity(num_experts);
+        for i in 0..num_experts {
+            experts.push(Mlp::new(
+                cfg,
+                experts_vb.pp(i),
+                comm,
+                cfg.moe_intermediate_size,
+            )?);
+        }
+
+        let PackedExperts {
+            gate_proj,
+            up_proj,
+            down_proj,
+        } = PackedExperts::new(
+            num_experts,
+            cfg.hidden_size,
+            cfg.moe_intermediate_size,
+            &cfg.quantization_config,
+            false,
+            comm,
+            vb.pp("experts"),
+        )?;
+
+        Ok(Self {
+            gate,
+            gate_proj,
+            up_proj,
+            down_proj,
+            act: cfg.hidden_act,
+            norm_topk_prob: cfg.norm_topk_prob,
+            num_experts_per_tok: cfg.num_experts_per_tok,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let (b_size, seq_len, hidden_dim) = xs.dims3()?;
+        let xs = xs.reshape(((), hidden_dim))?;
+        let router_logits = xs.apply(&self.gate)?;
+        let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
+        // let indices = routing_weights.fast_argsort_asc(D::Minus1)?.narrow(
+        //     D::Minus1,
+        //     routing_weights.dim(D::Minus1)? - self.num_experts_per_tok,
+        //     self.num_experts_per_tok,
+        // )?;
+        let TopKOutput {
+            values: mut scores,
+            indices,
+        } = routing_weights.topk(self.num_experts_per_tok)?;
+        // println!("scores {scores}");
+        // println!("indices {indices}");
+        // let mut scores = routing_weights.gather(&indices.contiguous()?, D::Minus1)?;
+
+        if self.norm_topk_prob {
+            scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
+        }
+
+        let ys = if self.gate_proj.len() == 1 {
+            // dbg!(&xs);
+            // xs.device().synchronize()?;
+            let gate = self.gate_proj[0].gather_forward_autocast(&xs, &indices)?;
+            // dbg!(&gate);
+            let up = self.up_proj[0].gather_forward_autocast(&xs, &indices)?;
+            // dbg!(&up);
+            let xs = self.down_proj[0]
+                // .gather_forward_autocast(&dbg!((up * gate.apply(&self.act)?)?), &indices)?
+                .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, &indices)?
+                .squeeze(D::Minus2)?;
+            // dbg!(&xs);
+            xs
+        } else {
+            todo!()
+        };
+        // dbg!(&ys);
+        // dbg!(&scores);
+
+        let ys = ys
+            .broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
+            .sum(D::Minus2)?
+            .reshape((b_size, seq_len, hidden_dim))?;
+
+        Ok(ys)
+    }
+}
+
+struct SlowMoeMlp {
+    gate: candle_nn::Linear,
+    experts: Vec<Mlp>,
+    norm_topk_prob: bool,
+    num_experts_per_tok: usize,
+}
+
+impl SlowMoeMlp {
     fn new(
         cfg: &Config,
         vb: ShardedVarBuilder,
@@ -800,6 +911,7 @@ impl Model {
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
                 flash_params,
             )?;
+            dbg!(&i);
         }
         let xs = xs.to_device(&self.device)?;
         let mut xs = xs.apply(&self.norm)?;
@@ -831,10 +943,14 @@ impl IsqModel for Model {
                     tensors.push((&mut layer.down_proj, Some(i)));
                 }
                 MoeOrMlp::Moe(layer) => {
-                    for layer in &mut layer.experts {
-                        tensors.push((&mut layer.gate_proj, Some(i)));
-                        tensors.push((&mut layer.up_proj, Some(i)));
-                        tensors.push((&mut layer.down_proj, Some(i)));
+                    for g in &mut layer.gate_proj {
+                        tensors.push((g, Some(i)));
+                    }
+                    for u in &mut layer.up_proj {
+                        tensors.push((u, Some(i)));
+                    }
+                    for d in &mut layer.down_proj {
+                        tensors.push((d, Some(i)));
                     }
                 }
             }
