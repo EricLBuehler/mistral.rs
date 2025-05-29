@@ -2,8 +2,8 @@
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use mistralrs_quant::{
-    distributed::layers::PackedExperts, ColumnParallelLayer, QuantMethod, QuantizedConfig,
-    ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, SortOp,
+    distributed::layers::PackedExperts, AfqLayer, ColumnParallelLayer, QuantMethod,
+    QuantizedConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, SortOp,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -55,7 +55,7 @@ pub struct Config {
     pub(crate) rope_theta: f64,
     pub(crate) sliding_window: Option<usize>,
     pub(crate) head_dim: Option<usize>,
-    #[serde(alias = "quantization")]
+    // #[serde(alias = "quantization")]
     pub(crate) quantization_config: Option<QuantizedConfig>,
     #[serde(default = "tie_word_embeddings")]
     pub(crate) tie_word_embeddings: bool,
@@ -363,7 +363,7 @@ impl Mlp {
 }
 
 struct MoeMlp {
-    gate: candle_nn::Linear,
+    gate: Arc<dyn QuantMethod>,
     gate_proj: Vec<Arc<dyn QuantMethod>>,
     up_proj: Vec<Arc<dyn QuantMethod>>,
     down_proj: Vec<Arc<dyn QuantMethod>>,
@@ -380,42 +380,70 @@ impl MoeMlp {
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let num_experts = cfg.num_experts;
-        let gate = layers::linear_no_bias(
+        let gate = mistralrs_quant::linear_no_bias(
             cfg.hidden_size,
             num_experts,
+            &cfg.quantization_config,
             vb.pp("gate").set_device(layer_device),
         )?;
 
-        let experts_vb = vb.pp("experts");
-        let mut experts = Vec::with_capacity(num_experts);
-        for i in 0..num_experts {
-            experts.push(Mlp::new(
-                cfg,
-                experts_vb.pp(i),
-                comm,
-                cfg.moe_intermediate_size,
-            )?);
-        }
+        // let experts_vb = vb.pp("experts");
+        // let mut experts = Vec::with_capacity(num_experts);
+        // for i in 0..num_experts {
+        //     experts.push(Mlp::new(
+        //         cfg,
+        //         experts_vb.pp(i),
+        //         comm,
+        //         cfg.moe_intermediate_size,
+        //     )?);
+        // }
 
-        let PackedExperts {
-            gate_proj,
-            up_proj,
-            down_proj,
-        } = PackedExperts::new(
+        // let PackedExperts {
+        //     gate_proj,
+        //     up_proj,
+        //     down_proj,
+        // } = PackedExperts::new(
+        //     num_experts,
+        //     cfg.hidden_size,
+        //     cfg.moe_intermediate_size,
+        //     &cfg.quantization_config,
+        //     false,
+        //     comm,
+        //     vb.pp("experts"),
+        // )?;
+        let gate_proj = AfqLayer::afq_packed_linear_b(
             num_experts,
             cfg.hidden_size,
             cfg.moe_intermediate_size,
-            &cfg.quantization_config,
+            cfg.quantization_config.as_ref().unwrap(),
             false,
-            comm,
-            vb.pp("experts"),
+            vb.pp("switch_mlp.gate_proj"),
+        )?;
+        let up_proj = AfqLayer::afq_packed_linear_b(
+            num_experts,
+            cfg.hidden_size,
+            cfg.moe_intermediate_size,
+            cfg.quantization_config.as_ref().unwrap(),
+            false,
+            vb.pp("switch_mlp.up_proj"),
+        )?;
+        let down_proj = AfqLayer::afq_packed_linear_b(
+            num_experts,
+            cfg.moe_intermediate_size,
+            cfg.hidden_size,
+            cfg.quantization_config.as_ref().unwrap(),
+            false,
+            vb.pp("switch_mlp.down_proj"),
         )?;
 
         Ok(Self {
             gate,
-            gate_proj,
-            up_proj,
-            down_proj,
+            // gate_proj,
+            // up_proj,
+            // down_proj,
+            gate_proj: vec![gate_proj],
+            up_proj: vec![up_proj],
+            down_proj: vec![down_proj],
             act: cfg.hidden_act,
             norm_topk_prob: cfg.norm_topk_prob,
             num_experts_per_tok: cfg.num_experts_per_tok,
@@ -424,49 +452,52 @@ impl MoeMlp {
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
-        let xs = xs.reshape(((), hidden_dim))?;
-        let router_logits = xs.apply(&self.gate)?;
-        let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
+        let router_logits = self.gate.forward_autocast(&xs)?;
+        let routing_weights =
+            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?
+                .to_dtype(xs.dtype())?;
+
         // let indices = routing_weights.fast_argsort_asc(D::Minus1)?.narrow(
         //     D::Minus1,
         //     routing_weights.dim(D::Minus1)? - self.num_experts_per_tok,
         //     self.num_experts_per_tok,
         // )?;
+        // let mut scores = routing_weights.gather(&indices.contiguous()?, D::Minus1)?;
         let TopKOutput {
             values: mut scores,
             indices,
         } = routing_weights.topk(self.num_experts_per_tok)?;
+
         // println!("scores {scores}");
         // println!("indices {indices}");
-        // let mut scores = routing_weights.gather(&indices.contiguous()?, D::Minus1)?;
 
         if self.norm_topk_prob {
             scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
         }
 
         let ys = if self.gate_proj.len() == 1 {
+            let xs = xs.reshape((b_size, seq_len, 1, 1, hidden_dim))?;
             // dbg!(&xs);
-            // xs.device().synchronize()?;
+            // dbg!(&indices);
             let gate = self.gate_proj[0].gather_forward_autocast(&xs, &indices)?;
             // dbg!(&gate);
             let up = self.up_proj[0].gather_forward_autocast(&xs, &indices)?;
-            // dbg!(&up);
             let xs = self.down_proj[0]
-                // .gather_forward_autocast(&dbg!((up * gate.apply(&self.act)?)?), &indices)?
-                .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, &indices)?
-                .squeeze(D::Minus2)?;
+                .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, &indices)?;
             // dbg!(&xs);
-            xs
+            xs.squeeze(D::Minus2)?
         } else {
             todo!()
         };
         // dbg!(&ys);
         // dbg!(&scores);
 
-        let ys = ys
-            .broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
-            .sum(D::Minus2)?
-            .reshape((b_size, seq_len, hidden_dim))?;
+        let ys = ys.broadcast_mul(&scores.unsqueeze(D::Minus1)?)?;
+        // dbg!(&ys);
+        let ys = ys.sum(D::Minus2)?;
+        // dbg!(&ys);
+        let ys = ys.reshape((b_size, seq_len, hidden_dim))?;
+        // dbg!(&ys);
 
         Ok(ys)
     }
@@ -911,7 +942,7 @@ impl Model {
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
                 flash_params,
             )?;
-            dbg!(&i);
+            // dbg!(&i);
         }
         let xs = xs.to_device(&self.device)?;
         let mut xs = xs.apply(&self.norm)?;
