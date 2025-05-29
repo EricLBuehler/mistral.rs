@@ -2,7 +2,6 @@
 
 use candle_core::{Context, Device, Result, Storage, Tensor, WithDType};
 
-use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use rayon::ThreadPool;
 
@@ -24,7 +23,7 @@ unsafe fn set_thread_affinity() {
 
 /// Rayon pool used by the flash‑attention CPU kernels, with a per‑thread
 /// start handler that applies our affinity hint exactly once.
-static FLASH_ATTN_POOL: Lazy<ThreadPool> = Lazy::new(|| {
+static FLASH_ATTN_POOL: LazyLock<ThreadPool> = LazyLock::new(|| {
     rayon::ThreadPoolBuilder::new()
         .start_handler(|_| unsafe {
             set_thread_affinity();
@@ -32,6 +31,7 @@ static FLASH_ATTN_POOL: Lazy<ThreadPool> = Lazy::new(|| {
         .build()
         .expect("Failed to build custom Rayon thread‑pool for flash‑attention")
 });
+use std::sync::LazyLock;
 use std::{f32, iter::Sum};
 
 use crate::attention::SdpaParams;
