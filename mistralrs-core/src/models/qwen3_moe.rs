@@ -452,29 +452,16 @@ impl MoeMlp {
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
-        let router_logits = self.gate.forward_autocast(&xs)?;
-        let routing_weights =
-            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?
-                .to_dtype(xs.dtype())?;
 
-        // let indices = routing_weights.neg()?.fast_argsort_asc(D::Minus1)?.narrow(
-        //     D::Minus1,
-        //     0,
-        //     self.num_experts_per_tok,
-        // )?;
+        let router_logits = self.gate.forward_autocast(&xs)?;
+        let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
+
         let indices = routing_weights.arg_sort_last_dim(false)?.narrow(
             D::Minus1,
             0,
             self.num_experts_per_tok,
         )?;
         let mut scores = routing_weights.gather(&indices.contiguous()?, D::Minus1)?;
-        // let TopKOutput {
-        //     values: mut scores,
-        //     indices,
-        // } = routing_weights.topk(self.num_experts_per_tok)?;
-
-        // println!("scores {scores}");
-        // println!("indices {indices}");
 
         if self.norm_topk_prob {
             scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
@@ -482,33 +469,22 @@ impl MoeMlp {
 
         let ys = if self.gate_proj.len() == 1 {
             let xs = xs.reshape((b_size, seq_len, 1, 1, hidden_dim))?;
-            // dbg!(&xs);
-            // dbg!(&indices);
             let gate = self.gate_proj[0]
                 .gather_forward_autocast(&xs.contiguous()?, &indices.contiguous()?)?;
-            // dbg!(&gate);
             let up = self.up_proj[0]
                 .gather_forward_autocast(&xs.contiguous()?, &indices.contiguous()?)?;
             let xs = self.down_proj[0].gather_forward_autocast(
                 &(up * gate.apply(&self.act)?)?.contiguous()?,
                 &indices.contiguous()?,
             )?;
-            // dbg!(&xs);
             xs.squeeze(D::Minus2)?
         } else {
             todo!()
         };
-        // dbg!(&ys);
-        // dbg!(&scores);
 
-        let ys = ys.broadcast_mul(&scores.unsqueeze(D::Minus1)?)?;
-        // dbg!(&ys);
-        let ys = ys.sum(D::Minus2)?;
-        // dbg!(&ys);
-        let ys = ys.reshape((b_size, seq_len, hidden_dim))?;
-        // dbg!(&ys);
-
-        Ok(ys)
+        ys.broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
+            .sum(D::Minus2)?
+            .reshape((b_size, seq_len, hidden_dim))
     }
 }
 
