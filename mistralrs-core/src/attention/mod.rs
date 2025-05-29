@@ -1,8 +1,5 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-#[cfg(feature = "metal")]
-use std::sync::atomic::AtomicUsize;
-
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 
 use candle_core::{Device, Result, Tensor};
