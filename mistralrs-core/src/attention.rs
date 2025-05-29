@@ -11,11 +11,26 @@ use mistralrs_quant::MatMul;
 use rayon::prelude::*;
 use std::{f32, iter::Sum};
 
-/// Dot product between two f16 slices, accumulated in f32
+const DOT_CHUNK: usize = 4;
+
 #[inline]
-#[allow(dead_code)]
-fn vec_dot<T: WithDType + Sum>(a: &[T], b: &[T]) -> T {
-    a.iter().zip(b.iter()).map(|(x, y)| *x * *y).sum::<T>()
+fn vec_dot<T: WithDType + Sum + Copy + std::ops::Mul<Output = T>>(a: &[T], b: &[T]) -> T {
+    let mut sum = T::from_f64(0.0); // assuming T supports this; otherwise, replace with T::zero()
+    let chunks = a.len() / DOT_CHUNK;
+
+    for i in 0..chunks {
+        let i_chunk = i * DOT_CHUNK;
+        sum = sum
+            + a[i_chunk] * b[i_chunk]
+            + a[i_chunk + 1] * b[i_chunk + 1]
+            + a[i_chunk + 2] * b[i_chunk + 2]
+            + a[i_chunk + 3] * b[i_chunk + 3];
+    }
+
+    for i in (chunks * DOT_CHUNK)..a.len() {
+        sum = sum + a[i] * b[i];
+    }
+    sum
 }
 
 /// Size (in KV positions) processed by each inner‑tile job.
