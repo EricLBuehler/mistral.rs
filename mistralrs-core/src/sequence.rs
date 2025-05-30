@@ -335,6 +335,7 @@ pub struct Sequence {
     stream_idx: usize,
     pub recognizer: SequenceRecognizer,
     scheduling_urgency: usize, // The number of passes since scheduling
+    waitlisted_count: usize, // Used in PagedAttention to alert the user when a sequence repeatedly cannot be scheduled
 
     // GPU things
     pub prompt_tok_per_sec: f32,
@@ -388,6 +389,12 @@ impl BlockEngineSequence for Sequence {
             } => physical_blocks_prefill.take(),
             SequenceCustomMetadata::None => None,
         }
+    }
+
+    fn increment_waitlist_count(&mut self) -> usize {
+        let prev = self.waitlisted_count;
+        self.waitlisted_count += 1;
+        prev
     }
 }
 
@@ -493,6 +500,7 @@ impl Sequence {
             token_offset: 0,
             eos_tokens,
             total_prompt_time: None,
+            waitlisted_count: 0,
         }
     }
 
