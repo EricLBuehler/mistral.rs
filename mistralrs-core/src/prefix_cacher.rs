@@ -1,9 +1,3 @@
-type BlockBestMatch<'a> = (
-    usize,                         // matched_len
-    &'a [LogicalTokenBlock],       // logical blocks
-    &'a [Arc<PhysicalTokenBlock>], // physical blocks
-    usize,                         // images_match_until
-);
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
     sync::Arc,
@@ -20,6 +14,13 @@ use crate::{
     pipeline::KvCache,
     sequence::{self, Sequence},
 };
+
+type BlockBestMatch<'a> = (
+    usize,                         // matched_len
+    &'a [LogicalTokenBlock],       // logical blocks
+    &'a [Arc<PhysicalTokenBlock>], // physical blocks
+    usize,                         // images_match_until
+);
 
 fn hash_logical_blocks(logical_blocks: &[LogicalTokenBlock]) -> Vec<u64> {
     logical_blocks
@@ -119,11 +120,13 @@ impl PrefixCacheManagerV2 {
             let logical_token_blocks = seq.logical_token_blocks();
             let block_engine = get_mut_arcmutex!(block_engine);
             let block_table = &block_engine.block_tables[seq.id()];
-            for block in block_table {
-                block.deref_mut().increment_refcount();
-            }
-
             let hashed_logical_blocks = hash_logical_blocks(logical_token_blocks);
+
+            if !self.block_caches.contains_key(&hashed_logical_blocks) {
+                for block in block_table {
+                    block.deref_mut().increment_refcount();
+                }
+            }
 
             self.block_caches.insert(
                 hashed_logical_blocks,
@@ -172,6 +175,12 @@ impl PrefixCacheManagerV2 {
                 n_on_device += 1;
             }
         }
+        // Count block‑caches that still reside on‑device.
+        for cache in self.block_caches.values() {
+            if !cache.physical_blocks.is_empty() {
+                n_on_device += 1;
+            }
+        }
         let mut n_evicted = 0;
         // Intentionally evict the first ones first, as they are the oldest
         for cache in self.caches.values_mut() {
@@ -198,7 +207,25 @@ impl PrefixCacheManagerV2 {
             }
         }
 
+        // Now evict block‑caches if we still exceed the on‑device limit.
+        for cache in self.block_caches.values_mut() {
+            if n_on_device - n_evicted <= self.n_on_device {
+                break;
+            }
+            if !cache.physical_blocks.is_empty() {
+                // Drop our strong references and decrement ref‑counts so the
+                // BlockEngine can reclaim the KV blocks.
+                for block in &cache.physical_blocks {
+                    block.deref_mut().decrement_refcount();
+                }
+                cache.physical_blocks.clear();
+                n_evicted += 1;
+            }
+        }
+
         self.caches.retain(|_tokens, cache| !cache.cache.is_empty());
+        self.block_caches
+            .retain(|_key, cache| !cache.physical_blocks.is_empty());
 
         Ok(n_evicted)
     }
@@ -206,7 +233,15 @@ impl PrefixCacheManagerV2 {
     /// Evict all the caches.
     pub fn evict_all_caches(&mut self) -> Result<usize> {
         let len = self.caches.len();
+
         self.caches.clear();
+
+        for cache in self.block_caches.values_mut() {
+            for block in &cache.physical_blocks {
+                block.deref_mut().decrement_refcount();
+            }
+        }
+        self.block_caches.clear();
         Ok(len)
     }
 

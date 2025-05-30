@@ -68,8 +68,15 @@ pub struct _PhysicalTokenBlock {
 }
 
 impl _PhysicalTokenBlock {
+    pub fn refcount(&self) -> usize {
+        self.refcount
+    }
     pub fn increment_refcount(&mut self) {
         self.refcount += 1;
+    }
+    pub fn decrement_refcount(&mut self) {
+        assert!(self.refcount >= 1);
+        self.refcount -= 1;
     }
 }
 
@@ -253,7 +260,6 @@ impl BlockEngine {
         if self.num_gpu_blocks < num_required_blocks {
             AllocStatus::Impossible
         } else if *num_free_gpu_blocks < num_required_blocks {
-            dbg!(num_free_gpu_blocks.0, num_required_blocks);
             AllocStatus::Later {
                 waitlisted_count: seq.increment_waitlist_count(),
             }
