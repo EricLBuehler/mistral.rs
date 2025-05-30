@@ -78,7 +78,7 @@ fn supports_attn_softmax() -> Result<bool> {
 }
 
 /// Not *really* sure why this is necessary but it is.
-fn maybe_synchronize(device: &Device) -> Result<()> {
+pub(crate) fn maybe_synchronize(device: &Device) -> Result<()> {
     // If less that 4 GB available, synchronize
     if MemoryUsage.get_memory_available(device)? < 4 * 1024 * (1024 * 1024) {
         device.synchronize()?;
