@@ -173,6 +173,7 @@ async fn main() -> Result<()> {
         .nest_service("/speech", get_service(ServeDir::new(speech_dir.clone())))
         // Serve embedded static assets for the root path
         .route("/", get(static_handler))
+        .route("/*path", get(static_handler))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .with_state(app_state.clone());
 
