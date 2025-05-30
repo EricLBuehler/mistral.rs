@@ -113,28 +113,19 @@ mod text_model;
 mod vision_model;
 mod xlora_model;
 
-/// This will be the API as of v0.4.0. Other APIs will *not* be deprecated, but moved into a module such as this one.
-pub mod v0_4_api {
-    pub use super::anymoe::AnyMoeModelBuilder;
-    pub use super::diffusion_model::DiffusionModelBuilder;
-    pub use super::gguf::GgufModelBuilder;
-    pub use super::gguf_lora_model::GgufLoraModelBuilder;
-    pub use super::gguf_xlora_model::GgufXLoraModelBuilder;
-    pub use super::lora_model::LoraModelBuilder;
-    pub use super::messages::{
-        RequestBuilder, RequestLike, TextMessageRole, TextMessages, VisionMessages,
-    };
-    pub use super::model::{best_device, Model};
-    pub use super::speculative::TextSpeculativeBuilder;
-    pub use super::speech_model::SpeechModelBuilder;
-    pub use super::text_model::{
-        PagedAttentionMetaBuilder, TextModelBuilder, UqffTextModelBuilder,
-    };
-    pub use super::vision_model::{UqffVisionModelBuilder, VisionModelBuilder};
-    pub use super::xlora_model::XLoraModelBuilder;
-}
-
-pub use v0_4_api::*;
+pub use anymoe::AnyMoeModelBuilder;
+pub use diffusion_model::DiffusionModelBuilder;
+pub use gguf::GgufModelBuilder;
+pub use gguf_lora_model::GgufLoraModelBuilder;
+pub use gguf_xlora_model::GgufXLoraModelBuilder;
+pub use lora_model::LoraModelBuilder;
+pub use messages::{RequestBuilder, RequestLike, TextMessageRole, TextMessages, VisionMessages};
+pub use model::{best_device, Model};
+pub use speculative::TextSpeculativeBuilder;
+pub use speech_model::SpeechModelBuilder;
+pub use text_model::{PagedAttentionMetaBuilder, TextModelBuilder, UqffTextModelBuilder};
+pub use vision_model::{UqffVisionModelBuilder, VisionModelBuilder};
+pub use xlora_model::XLoraModelBuilder;
 
 pub use candle_core::{DType, Device, Result, Tensor};
 pub use candle_nn::loss::cross_entropy as cross_entropy_loss;
