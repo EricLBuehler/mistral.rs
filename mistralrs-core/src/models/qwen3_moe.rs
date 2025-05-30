@@ -398,7 +398,7 @@ impl FastMoeMlp {
             cfg.moe_intermediate_size,
             cfg.num_experts,
             &cfg.quantization_config,
-            vb.set_dtype(DType::F32),
+            vb,
         )?;
 
         Ok(Self {
@@ -431,6 +431,7 @@ impl FastMoeMlp {
         if self.norm_topk_prob {
             scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
         }
+        let xs = xs.to_dtype(original_dtype)?;
 
         let ys = {
             let xs = xs.reshape((b_size, seq_len, 1, 1, hidden_dim))?;
@@ -447,7 +448,8 @@ impl FastMoeMlp {
             xs.squeeze(D::Minus2)?
         };
 
-        ys.broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
+        ys.to_dtype(DType::F32)?
+            .broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
             .sum(D::Minus2)?
             .reshape((b_size, seq_len, hidden_dim))?
             .to_dtype(original_dtype)
