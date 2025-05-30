@@ -130,26 +130,31 @@ impl DiaPipeline {
         Ok(prefill)
     }
 
-    fn prepare_text_prompt(&self, text: &str) -> Result<Tensor> {
+    fn prepare_text_prompt(&self, text_inputs: Vec<String>) -> Result<Tensor> {
         let text_pad_value = self.cfg.data.text_pad_value;
         let max_len = self.cfg.data.text_length;
 
-        let text = text.replace("[S1]", "\x01").replace("[S2]", "\x02");
-        let text_tokens = text.as_bytes();
+        let mut texts = Vec::new();
+        for text in text_inputs {
+            let text = text.replace("[S1]", "\x01").replace("[S2]", "\x02");
+            let text_tokens = text.as_bytes();
 
-        let current_len = text_tokens.len();
-        let padding_needed = max_len - current_len;
-        let padded_text_np = if max_len <= current_len {
-            let text_tokens = &text_tokens[..max_len];
-            Tensor::new(text_tokens, &self.device)?
-        } else {
-            let text = Tensor::new(text_tokens, &self.device)?;
-            let pad =
-                (Tensor::ones(padding_needed, DType::U8, &self.device)? * text_pad_value as f64)?;
-            Tensor::cat(&[text, pad], 0)?
-        };
+            let current_len = text_tokens.len();
+            let padding_needed = max_len - current_len;
+            let padded_text_np = if max_len <= current_len {
+                let text_tokens = &text_tokens[..max_len];
+                Tensor::new(text_tokens, &self.device)?
+            } else {
+                let text = Tensor::new(text_tokens, &self.device)?;
+                let pad = (Tensor::ones(padding_needed, DType::U8, &self.device)?
+                    * text_pad_value as f64)?;
+                Tensor::cat(&[text, pad], 0)?
+            };
 
-        padded_text_np.to_dtype(DType::U32)?.unsqueeze(0)
+            texts.push(padded_text_np.to_dtype(DType::U32)?);
+        }
+
+        Tensor::stack(&texts, 0)
     }
 
     /// Returns:
@@ -159,7 +164,7 @@ impl DiaPipeline {
     /// - encoder positions
     /// - cross cache
     /// - self cache
-    fn prepare_generation(&self, text: &str) -> Result<PrepareGenerationOutput> {
+    fn prepare_generation(&self, text: Vec<String>) -> Result<PrepareGenerationOutput> {
         let enc_input_cond = self.prepare_text_prompt(text)?;
         let enc_input_uncond = enc_input_cond.zeros_like()?;
         let enc_input = Tensor::cat(&[&enc_input_uncond, &enc_input_cond], 0)?;
@@ -379,7 +384,7 @@ impl DiaPipeline {
 
     pub fn generate(
         &self,
-        text: &str,
+        text: Vec<String>,
         cfg: &SpeechGenerationConfig,
     ) -> Result<SpeechGenerationOutput> {
         let SpeechGenerationConfig::Dia {
