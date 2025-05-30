@@ -124,18 +124,28 @@ impl PrefixCacheManagerV2 {
 
             if !self.block_caches.contains_key(&hashed_logical_blocks) {
                 for block in block_table {
+                    let id = block.deref_mut().block_id;
+                    for BlockCacheElement {
+                        physical_blocks, ..
+                    } in self.block_caches.values()
+                    {
+                        if physical_blocks.iter().any(|x| x.deref_mut().block_id == id) {
+                            return;
+                        }
+                    }
+
                     block.deref_mut().increment_refcount();
                 }
-            }
 
-            self.block_caches.insert(
-                hashed_logical_blocks,
-                BlockCacheElement {
-                    logical_blocks: logical_token_blocks.to_vec(),
-                    physical_blocks: block_table.clone(),
-                    image_hashes: seq.image_hashes().map(|x| x.to_vec()),
-                },
-            );
+                self.block_caches.insert(
+                    hashed_logical_blocks,
+                    BlockCacheElement {
+                        logical_blocks: logical_token_blocks.to_vec(),
+                        physical_blocks: block_table.clone(),
+                        image_hashes: seq.image_hashes().map(|x| x.to_vec()),
+                    },
+                );
+            }
         } else {
             let cache = seq.normal_cache().to_vec();
 
@@ -322,6 +332,9 @@ impl PrefixCacheManagerV2 {
             // Take the first n_blocks of both logical and physical blocks
             let mut logical_prefix = logical_blocks[..n_blocks].to_vec();
             let physical_prefix = physical_blocks[..n_blocks].to_vec();
+            for block in &physical_prefix {
+                block.deref_mut().increment_refcount();
+            }
 
             // If the last reused block is full, reserve an extra empty block for new tokens
             let new_toks = toks[match_len..].to_vec();

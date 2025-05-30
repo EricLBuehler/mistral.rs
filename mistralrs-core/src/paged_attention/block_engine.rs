@@ -272,9 +272,6 @@ impl BlockEngine {
         // If there are prefill physical blocks, use those here.
         if let Some(physical_blocks_prefill) = seq.take_physical_blocks_prefill() {
             let mut block_table = physical_blocks_prefill.clone();
-            for block in &mut block_table {
-                block.deref_mut().refcount = 1;
-            }
             let n_extra_blocks = seq.logical_token_blocks().len() - block_table.len();
             for _ in 0..n_extra_blocks {
                 block_table.push(self.gpu_allocator.allocate());
