@@ -386,7 +386,7 @@ impl FastMoeMlp {
             cfg.hidden_size,
             num_experts,
             &cfg.quantization_config,
-            vb.pp("gate").set_device(layer_device),
+            vb.pp("gate").set_device(layer_device).set_dtype(DType::F32),
         )?;
 
         let FusedExperts {
@@ -398,7 +398,7 @@ impl FastMoeMlp {
             cfg.moe_intermediate_size,
             cfg.num_experts,
             &cfg.quantization_config,
-            vb,
+            vb.set_dtype(DType::F32),
         )?;
 
         Ok(Self {
@@ -413,9 +413,12 @@ impl FastMoeMlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let original_dtype = xs.dtype();
+        let xs = xs.to_dtype(DType::F32)?;
+
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
 
-        let router_logits = self.gate.forward_autocast(xs)?;
+        let router_logits = self.gate.forward_autocast(&xs)?;
         let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
 
         let indices = routing_weights.arg_sort_last_dim(false)?.narrow(
@@ -446,7 +449,8 @@ impl FastMoeMlp {
 
         ys.broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
             .sum(D::Minus2)?
-            .reshape((b_size, seq_len, hidden_dim))
+            .reshape((b_size, seq_len, hidden_dim))?
+            .to_dtype(original_dtype)
     }
 }
 
