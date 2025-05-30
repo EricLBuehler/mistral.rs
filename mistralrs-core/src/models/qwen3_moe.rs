@@ -477,7 +477,7 @@ impl FastMoeMlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
 
-        let router_logits = self.gate.forward_autocast(&xs)?;
+        let router_logits = self.gate.forward_autocast(xs)?;
         let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
 
         let indices = routing_weights.arg_sort_last_dim(false)?.narrow(
@@ -814,13 +814,16 @@ impl Model {
                 )?),
             );
         }
+
+        let load_in_parallel =
+            !(normal_loading_metadata.real_device.is_metal() && cfg.quantization_config.is_none());
         let vb_l = vb_m.pp("layers");
         let layers: Vec<DecoderLayer> = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .par_iter_if_isq(|layer_idx| {
+        .run(load_in_parallel, |layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);

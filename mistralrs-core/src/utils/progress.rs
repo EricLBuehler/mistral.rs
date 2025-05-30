@@ -175,7 +175,6 @@ where
         F: Fn(<T as IntoParallelIterator>::Item) -> candle_core::Result<U> + Sync + Send,
         U: Send,
     {
-        let is_parallel = false;
         if is_parallel {
             self.into_par_iter().map(f).collect()
         } else {
