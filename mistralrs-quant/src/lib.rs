@@ -40,8 +40,8 @@ pub use afq::{AfqBits, AfqGroupSize, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
 pub use distributed::{
     layers::{
-        compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, ReplicatedLayer,
-        RowParallelLayer,
+        compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, FusedExperts, PackedExperts,
+        ReplicatedLayer, RowParallelLayer,
     },
     socket::{Client, Server},
     BarrierLike, Comm, Id, SumAllReduce,
@@ -211,6 +211,27 @@ impl QuantizedConfig {
                 bnb_4bit_quant_type: None,
             } => "8 bits".to_string(),
             Self::Afq { bits, .. } => format!("{bits} bits"),
+        }
+    }
+
+    pub fn pack_factor(&self, dtype: DType) -> usize {
+        match self {
+            Self::GptqAwq { bits, .. } | Self::Afq { bits, .. } => match bits {
+                2 => IsqType::Q2K.pack_factor(dtype),
+                3 => IsqType::Q3K.pack_factor(dtype),
+                4 => IsqType::Q4K.pack_factor(dtype),
+                5 => IsqType::Q5K.pack_factor(dtype),
+                6 => IsqType::Q6K.pack_factor(dtype),
+                8 => IsqType::Q8_0.pack_factor(dtype),
+                other => panic!("Unexpected bits in `pack_factor` {other}"),
+            },
+            Self::Fp8 { .. } => IsqType::Q8_0.pack_factor(dtype),
+            Self::Bitsandbytes {
+                bnb_4bit_quant_type: Some(_),
+            }
+            | Self::Bitsandbytes {
+                bnb_4bit_quant_type: None,
+            } => IsqType::Q4K.pack_factor(dtype),
         }
     }
 }

@@ -907,8 +907,6 @@ pub fn call_afq_qmm(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (w, scales, biases, x, out, d as i32, o as i32));
-
     encoder.set_buffer(0, Some(w), 0);
     encoder.set_buffer(1, Some(scales), 0);
     encoder.set_buffer(2, Some(biases), 0);
@@ -933,10 +931,10 @@ pub fn call_afq_qmm(
             offset + 1,
             &x_shape.iter().map(|x| *x as i32).collect::<Vec<_>>(),
         );
-        <&[i32] as EncoderParam>::set_param(
+        <&[i64] as EncoderParam>::set_param(
             encoder,
             offset + 2,
-            &x_stride.iter().map(|x| *x as i32).collect::<Vec<_>>(),
+            &x_stride.iter().map(|x| *x as i64).collect::<Vec<_>>(),
         );
         <i32 as EncoderParam>::set_param(encoder, offset + 3, w_batch_ndims as i32);
         <&[i32] as EncoderParam>::set_param(
@@ -944,20 +942,20 @@ pub fn call_afq_qmm(
             offset + 4,
             &w_shape.iter().map(|x| *x as i32).collect::<Vec<_>>(),
         );
-        <&[i32] as EncoderParam>::set_param(
+        <&[i64] as EncoderParam>::set_param(
             encoder,
             offset + 5,
-            &w_stride.iter().map(|x| *x as i32).collect::<Vec<_>>(),
+            &w_stride.iter().map(|x| *x as i64).collect::<Vec<_>>(),
         );
-        <&[i32] as EncoderParam>::set_param(
+        <&[i64] as EncoderParam>::set_param(
             encoder,
             offset + 6,
-            &s_stride.iter().map(|x| *x as i32).collect::<Vec<_>>(),
+            &s_stride.iter().map(|x| *x as i64).collect::<Vec<_>>(),
         );
-        <&[i32] as EncoderParam>::set_param(
+        <&[i64] as EncoderParam>::set_param(
             encoder,
             offset + 7,
-            &b_stride.iter().map(|x| *x as i32).collect::<Vec<_>>(),
+            &b_stride.iter().map(|x| *x as i64).collect::<Vec<_>>(),
         );
     }
     if gather {
@@ -974,15 +972,15 @@ pub fn call_afq_qmm(
         );
         encoder.set_buffer(offset + 10, Some(lhs_indices), 0);
         encoder.set_buffer(offset + 11, Some(rhs_indices), 0);
-        <&[i32] as EncoderParam>::set_param(
+        <&[i64] as EncoderParam>::set_param(
             encoder,
             offset + 12,
-            &lhs_strides.iter().map(|x| *x as i32).collect::<Vec<_>>(),
+            &lhs_strides.iter().map(|x| *x as i64).collect::<Vec<_>>(),
         );
-        <&[i32] as EncoderParam>::set_param(
+        <&[i64] as EncoderParam>::set_param(
             encoder,
             offset + 13,
-            &rhs_strides.iter().map(|x| *x as i32).collect::<Vec<_>>(),
+            &rhs_strides.iter().map(|x| *x as i64).collect::<Vec<_>>(),
         );
     }
 

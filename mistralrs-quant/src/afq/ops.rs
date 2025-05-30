@@ -212,11 +212,13 @@ fn make_dummy_indices(x: &Tensor) -> Result<Tensor> {
         .copied()
         .collect::<Vec<_>>();
 
-    (Tensor::ones(x_batches.iter().product::<usize>(), DType::F32, x.device())?
-        .cumsum(0)?
-        .to_dtype(DType::U32)?
-        - 1.)?
-        .reshape(x_batches)
+    Tensor::arange(0u32, x_batches.iter().product::<usize>() as u32, x.device())?.reshape(x_batches)
+
+    // (Tensor::ones(x_batches.iter().product::<usize>(), DType::F32, x.device())?
+    //     .cumsum(0)?
+    //     .to_dtype(DType::U32)?
+    //     - 1.)?
+    //     .reshape(x_batches)
 }
 
 /// The indices lhs_indices and rhs_indices contain flat indices along the batch dimensions (i.e. all but the last two dimensions) of a and b respectively.
@@ -292,9 +294,6 @@ pub(crate) fn afq_mm_op(
 
         let device = w_s.device();
 
-        let command_buffer = device.command_buffer()?;
-        command_buffer.set_label("afq-qmm");
-
         assert_eq!(x.layout().start_offset(), 0);
         assert_eq!(w.layout().start_offset(), 0);
         assert_eq!(scales.layout().start_offset(), 0);
@@ -309,6 +308,8 @@ pub(crate) fn afq_mm_op(
                 Some(rhs_indices) => rhs_indices.clone(),
                 None => make_dummy_indices(w)?,
             };
+            assert_eq!(lhs_indices.layout().start_offset(), 0);
+            assert_eq!(rhs_indices.layout().start_offset(), 0);
             if lhs_indices.dtype() != DType::U32 || rhs_indices.dtype() != DType::U32 {
                 candle_core::bail!("lhs and rhs indices must be u32.")
             }
@@ -334,6 +335,9 @@ pub(crate) fn afq_mm_op(
             let mut out_shape = lhs_indices.dims().to_vec();
             out_shape.push(x.dim(D::Minus2)?);
             out_shape.push(w_outer_dims);
+
+            let command_buffer = device.command_buffer()?;
+            command_buffer.set_label("afq-qmm");
 
             let output =
                 device.new_buffer(out_shape.iter().product(), scales.dtype(), "afq-qmm-output")?;
@@ -368,6 +372,9 @@ pub(crate) fn afq_mm_op(
         } else {
             let mut out_shape = x.dims().to_vec();
             *out_shape.last_mut().unwrap() = w_outer_dims;
+
+            let command_buffer = device.command_buffer()?;
+            command_buffer.set_label("afq-qmm");
 
             let output =
                 device.new_buffer(out_shape.iter().product(), scales.dtype(), "afq-qmm-output")?;

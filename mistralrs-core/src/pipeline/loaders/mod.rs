@@ -13,7 +13,8 @@ use anyhow::{Context, Result};
 use as_any::AsAny;
 use candle_core::{DType, Device};
 use itertools::Itertools;
-use mistralrs_quant::IsqType;
+use mistralrs_quant::{IsqType, QuantizedConfig};
+use serde::Deserialize;
 use tokio::sync::Mutex;
 
 pub use normal_loaders::{
@@ -433,6 +434,25 @@ fn calculate_value_block_shape(
         model_config.v_head_dim(),
         block_size,
     )
+}
+
+#[derive(Deserialize)]
+pub struct QuantizationConfigShim {
+    quantization_config: Option<QuantizedConfig>,
+}
+
+impl QuantizationConfigShim {
+    pub fn get_quant_config_pack_factor(config: &str, dtype: DType) -> Result<usize> {
+        let QuantizationConfigShim {
+            quantization_config,
+        } = serde_json::from_str(config)?;
+
+        if let Some(quantization_config) = quantization_config {
+            Ok(quantization_config.pack_factor(dtype))
+        } else {
+            Ok(1)
+        }
+    }
 }
 
 pub trait DeviceMappedModelLoader {
