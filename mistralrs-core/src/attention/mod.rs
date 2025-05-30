@@ -7,7 +7,7 @@ use candle_core::{Device, Result, Tensor};
 mod backends;
 
 #[allow(unused)]
-pub(crate) use backends::{flash_attn, naive_sdpa, maybe_synchronize};
+pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa};
 
 fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
     if n_rep == 1 {
