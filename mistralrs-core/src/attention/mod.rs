@@ -6,7 +6,8 @@ use candle_core::{Device, Result, Tensor};
 
 mod backends;
 
-pub(crate) use backends::{flash_attn, naive_sdpa};
+#[allow(unused)]
+pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa};
 
 fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
     if n_rep == 1 {
@@ -158,6 +159,7 @@ impl Sdpa {
                     &attention_scores,
                     // We save one allocation
                     Some(&q),
+                    None,
                     None,
                     None,
                     None,
