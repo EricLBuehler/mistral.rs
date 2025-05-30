@@ -924,19 +924,19 @@ impl FusedExperts {
                     let gate_proj = crate::linear_no_bias(
                         hidden_size,
                         moe_intermediate_size,
-                        &quantization_config,
+                        quantization_config,
                         vb.pp("gate_proj.weight"),
                     )?;
                     let up_proj = crate::linear_no_bias(
                         hidden_size,
                         moe_intermediate_size,
-                        &quantization_config,
+                        quantization_config,
                         vb.pp("up_proj.weight"),
                     )?;
                     let down_proj = crate::linear_no_bias(
                         moe_intermediate_size,
                         hidden_size,
-                        &quantization_config,
+                        quantization_config,
                         vb.pp("down_proj.weight"),
                     )?;
 
