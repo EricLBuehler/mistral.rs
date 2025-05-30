@@ -3251,6 +3251,7 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
         let cfg: models::qwen3_moe::Config = serde_json::from_str(config)?;
+
         let mut layer_sizes_in_bytes = Vec::new();
         for layer_idx in 0..cfg.num_hidden_layers {
             let input_layernorm = cfg.hidden_size;

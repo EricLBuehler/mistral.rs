@@ -17,6 +17,7 @@ use crate::kv_cache::{FullCacheManager, NormalCacheManager};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::llg::build_llg_factory;
+use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
 use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
@@ -345,10 +346,15 @@ impl Loader for VisionLoader {
                         layer_sizes_sum + non_mapped_size_in_bytes,
                     )
                 } else {
+                    // Be sure to get the weight pack factor here; we might be loading a prequantized model.
+                    let weight_pack_factor =
+                        QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?;
                     let layer_sizes_in_bytes =
-                        self.inner.layer_sizes_in_bytes(&config, dtype, 1)?;
+                        self.inner
+                            .layer_sizes_in_bytes(&config, dtype, weight_pack_factor)?;
                     let non_mapped_size_in_bytes =
-                        self.inner.non_mapped_size_in_bytes(&config, dtype, 1)?;
+                        self.inner
+                            .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
                     (
                         layer_sizes_in_bytes,
@@ -407,6 +413,7 @@ impl Loader for VisionLoader {
             && self.config.calibration_file.is_none()
             && !device.is_cuda()
             && self.config.write_uqff.is_none()
+            && in_situ_quant.is_some()
         {
             let predicates = self.inner.immediate_isq_predicates(&config)?;
             info!("Applying ISQ to {in_situ_quant:?}");
