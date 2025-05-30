@@ -1,164 +1,184 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-web-chat/src/main.rs`."><title>main.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-916cea96.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="mistralrs_web_chat" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0 (17067e9ac 2025-05-09)" data-channel="1.87.0" data-search-js="search-e7298875.js" data-settings-js="settings-d72f25bb.js" ><script src="../../static.files/storage-82c7156e.js"></script><script defer src="../../static.files/src-script-63605ae7.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-fb8c74a8.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_web_chat/</div>main.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>anyhow::Result;
-<a href=#2 id=2 data-nosnippet>2</a><span class="kw">use </span>axum::{
-<a href=#3 id=3 data-nosnippet>3</a>    extract::DefaultBodyLimit,
-<a href=#4 id=4 data-nosnippet>4</a>    routing::{get, get_service, post},
-<a href=#5 id=5 data-nosnippet>5</a>    Router,
-<a href=#6 id=6 data-nosnippet>6</a>};
-<a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>clap::Parser;
-<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>indexmap::IndexMap;
-<a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>mistralrs::{
-<a href=#10 id=10 data-nosnippet>10</a>    best_device, parse_isq_value, IsqType, SpeechLoaderType, SpeechModelBuilder, TextModelBuilder,
-<a href=#11 id=11 data-nosnippet>11</a>    VisionModelBuilder,
-<a href=#12 id=12 data-nosnippet>12</a>};
-<a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>std::{net::SocketAddr, sync::Arc};
-<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>tokio::{fs, net::TcpListener};
-<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>tower_http::services::ServeDir;
-<a href=#16 id=16 data-nosnippet>16</a>
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">mod </span>chat;
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">mod </span>handlers;
-<a href=#19 id=19 data-nosnippet>19</a><span class="kw">mod </span>models;
-<a href=#20 id=20 data-nosnippet>20</a><span class="kw">mod </span>types;
-<a href=#21 id=21 data-nosnippet>21</a><span class="kw">mod </span>utils;
-<a href=#22 id=22 data-nosnippet>22</a>
-<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>handlers::{api::<span class="kw-2">*</span>, websocket::ws_handler};
-<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>models::LoadedModel;
-<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>types::{AppState, Cli};
-<a href=#26 id=26 data-nosnippet>26</a>
-<a href=#27 id=27 data-nosnippet>27</a><span class="attr">#[tokio::main]
-<a href=#28 id=28 data-nosnippet>28</a></span><span class="kw">async fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#29 id=29 data-nosnippet>29</a>    <span class="kw">let </span>cli = Cli::parse();
-<a href=#30 id=30 data-nosnippet>30</a>    <span class="kw">if </span>cli.text_models.is_empty() &amp;&amp; cli.vision_models.is_empty() &amp;&amp; cli.speech_models.is_empty() {
-<a href=#31 id=31 data-nosnippet>31</a>        <span class="macro">eprintln!</span>(<span class="string">"At least one --text-model, --vision-model, or --speech-model is required"</span>);
-<a href=#32 id=32 data-nosnippet>32</a>        std::process::exit(<span class="number">1</span>);
-<a href=#33 id=33 data-nosnippet>33</a>    }
-<a href=#34 id=34 data-nosnippet>34</a>
-<a href=#35 id=35 data-nosnippet>35</a>    <span class="kw">let </span>default_isq = <span class="kw">if </span><span class="macro">cfg!</span>(feature = <span class="string">"metal"</span>) {
-<a href=#36 id=36 data-nosnippet>36</a>        IsqType::AFQ6
-<a href=#37 id=37 data-nosnippet>37</a>    } <span class="kw">else </span>{
-<a href=#38 id=38 data-nosnippet>38</a>        IsqType::Q6K
-<a href=#39 id=39 data-nosnippet>39</a>    };
-<a href=#40 id=40 data-nosnippet>40</a>
-<a href=#41 id=41 data-nosnippet>41</a>    <span class="kw">let </span>device = best_device(<span class="bool-val">false</span>)<span class="question-mark">?</span>;
-<a href=#42 id=42 data-nosnippet>42</a>
-<a href=#43 id=43 data-nosnippet>43</a>    <span class="kw">let </span>isq = cli
-<a href=#44 id=44 data-nosnippet>44</a>        .isq
-<a href=#45 id=45 data-nosnippet>45</a>        .as_ref()
-<a href=#46 id=46 data-nosnippet>46</a>        .and_then(|isq| parse_isq_value(isq, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>device)).ok());
-<a href=#47 id=47 data-nosnippet>47</a>
-<a href=#48 id=48 data-nosnippet>48</a>    <span class="kw">let </span><span class="kw-2">mut </span>models: IndexMap&lt;String, LoadedModel&gt; = IndexMap::new();
-<a href=#49 id=49 data-nosnippet>49</a>
-<a href=#50 id=50 data-nosnippet>50</a>    <span class="comment">// Insert text models first
-<a href=#51 id=51 data-nosnippet>51</a>    </span><span class="kw">for </span>path <span class="kw">in </span>cli.text_models {
-<a href=#52 id=52 data-nosnippet>52</a>        <span class="kw">let </span>name = std::path::Path::new(<span class="kw-2">&amp;</span>path)
-<a href=#53 id=53 data-nosnippet>53</a>            .file_name()
-<a href=#54 id=54 data-nosnippet>54</a>            .and_then(|p| p.to_str())
-<a href=#55 id=55 data-nosnippet>55</a>            .unwrap_or(<span class="string">"text-model"</span>)
-<a href=#56 id=56 data-nosnippet>56</a>            .to_string();
-<a href=#57 id=57 data-nosnippet>57</a>        <span class="macro">println!</span>(<span class="string">"📝 Loading text model: {name}"</span>);
-<a href=#58 id=58 data-nosnippet>58</a>        <span class="kw">let </span>m = TextModelBuilder::new(path)
-<a href=#59 id=59 data-nosnippet>59</a>            .with_isq(isq.unwrap_or(default_isq))
-<a href=#60 id=60 data-nosnippet>60</a>            .with_logging()
-<a href=#61 id=61 data-nosnippet>61</a>            .with_throughput_logging()
-<a href=#62 id=62 data-nosnippet>62</a>            .build()
-<a href=#63 id=63 data-nosnippet>63</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#64 id=64 data-nosnippet>64</a>        models.insert(name, LoadedModel::Text(Arc::new(m)));
-<a href=#65 id=65 data-nosnippet>65</a>    }
+<a href=#2 id=2 data-nosnippet>2</a><span class="kw">use </span>axum::body::Body;
+<a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>axum::{
+<a href=#4 id=4 data-nosnippet>4</a>    extract::DefaultBodyLimit,
+<a href=#5 id=5 data-nosnippet>5</a>    response::IntoResponse,
+<a href=#6 id=6 data-nosnippet>6</a>    routing::{get, get_service, post},
+<a href=#7 id=7 data-nosnippet>7</a>    Router,
+<a href=#8 id=8 data-nosnippet>8</a>};
+<a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>clap::Parser;
+<a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>http::{Response, StatusCode};
+<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>hyper::Uri;
+<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>include_dir::{include_dir, Dir};
+<a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>indexmap::IndexMap;
+<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>mistralrs::{
+<a href=#15 id=15 data-nosnippet>15</a>    best_device, parse_isq_value, IsqType, SpeechLoaderType, SpeechModelBuilder, TextModelBuilder,
+<a href=#16 id=16 data-nosnippet>16</a>    VisionModelBuilder,
+<a href=#17 id=17 data-nosnippet>17</a>};
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>std::{net::SocketAddr, sync::Arc};
+<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>tokio::{fs, net::TcpListener};
+<a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>tower_http::services::ServeDir;
+<a href=#21 id=21 data-nosnippet>21</a>
+<a href=#22 id=22 data-nosnippet>22</a><span class="kw">mod </span>chat;
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">mod </span>handlers;
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">mod </span>models;
+<a href=#25 id=25 data-nosnippet>25</a><span class="kw">mod </span>types;
+<a href=#26 id=26 data-nosnippet>26</a><span class="kw">mod </span>utils;
+<a href=#27 id=27 data-nosnippet>27</a>
+<a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>handlers::{api::<span class="kw-2">*</span>, websocket::ws_handler};
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>models::LoadedModel;
+<a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>types::{AppState, Cli};
+<a href=#31 id=31 data-nosnippet>31</a>
+<a href=#32 id=32 data-nosnippet>32</a><span class="kw">static </span>STATIC_DIR: Dir = <span class="macro">include_dir!</span>(<span class="string">"$CARGO_MANIFEST_DIR/static"</span>);
+<a href=#33 id=33 data-nosnippet>33</a>
+<a href=#34 id=34 data-nosnippet>34</a><span class="kw">async fn </span>static_handler(uri: Uri) -&gt; <span class="kw">impl </span>IntoResponse {
+<a href=#35 id=35 data-nosnippet>35</a>    <span class="kw">let </span>path = uri.path().trim_start_matches(<span class="string">'/'</span>);
+<a href=#36 id=36 data-nosnippet>36</a>    <span class="comment">// Serve index.html when requesting the root path
+<a href=#37 id=37 data-nosnippet>37</a>    </span><span class="kw">let </span>path = <span class="kw">if </span>path.is_empty() { <span class="string">"index.html" </span>} <span class="kw">else </span>{ path };
+<a href=#38 id=38 data-nosnippet>38</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(file) = STATIC_DIR.get_file(path) {
+<a href=#39 id=39 data-nosnippet>39</a>        <span class="kw">let </span>mime = mime_guess::from_path(path).first_or_octet_stream();
+<a href=#40 id=40 data-nosnippet>40</a>        Response::builder()
+<a href=#41 id=41 data-nosnippet>41</a>            .status(StatusCode::OK)
+<a href=#42 id=42 data-nosnippet>42</a>            .header(http::header::CONTENT_TYPE, mime.as_ref())
+<a href=#43 id=43 data-nosnippet>43</a>            .body(Body::from(file.contents()))
+<a href=#44 id=44 data-nosnippet>44</a>            .unwrap()
+<a href=#45 id=45 data-nosnippet>45</a>    } <span class="kw">else </span>{
+<a href=#46 id=46 data-nosnippet>46</a>        Response::builder()
+<a href=#47 id=47 data-nosnippet>47</a>            .status(StatusCode::NOT_FOUND)
+<a href=#48 id=48 data-nosnippet>48</a>            .body(Body::from(<span class="string">"Not Found"</span>))
+<a href=#49 id=49 data-nosnippet>49</a>            .unwrap()
+<a href=#50 id=50 data-nosnippet>50</a>    }
+<a href=#51 id=51 data-nosnippet>51</a>}
+<a href=#52 id=52 data-nosnippet>52</a>
+<a href=#53 id=53 data-nosnippet>53</a><span class="attr">#[tokio::main]
+<a href=#54 id=54 data-nosnippet>54</a></span><span class="kw">async fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#55 id=55 data-nosnippet>55</a>    <span class="kw">let </span>cli = Cli::parse();
+<a href=#56 id=56 data-nosnippet>56</a>    <span class="kw">if </span>cli.text_models.is_empty() &amp;&amp; cli.vision_models.is_empty() &amp;&amp; cli.speech_models.is_empty() {
+<a href=#57 id=57 data-nosnippet>57</a>        <span class="macro">eprintln!</span>(<span class="string">"At least one --text-model, --vision-model, or --speech-model is required"</span>);
+<a href=#58 id=58 data-nosnippet>58</a>        std::process::exit(<span class="number">1</span>);
+<a href=#59 id=59 data-nosnippet>59</a>    }
+<a href=#60 id=60 data-nosnippet>60</a>
+<a href=#61 id=61 data-nosnippet>61</a>    <span class="kw">let </span>default_isq = <span class="kw">if </span><span class="macro">cfg!</span>(feature = <span class="string">"metal"</span>) {
+<a href=#62 id=62 data-nosnippet>62</a>        IsqType::AFQ6
+<a href=#63 id=63 data-nosnippet>63</a>    } <span class="kw">else </span>{
+<a href=#64 id=64 data-nosnippet>64</a>        IsqType::Q6K
+<a href=#65 id=65 data-nosnippet>65</a>    };
 <a href=#66 id=66 data-nosnippet>66</a>
-<a href=#67 id=67 data-nosnippet>67</a>    <span class="comment">// Then insert vision models (preserving order)
-<a href=#68 id=68 data-nosnippet>68</a>    </span><span class="kw">for </span>path <span class="kw">in </span>cli.vision_models {
-<a href=#69 id=69 data-nosnippet>69</a>        <span class="kw">let </span>name = std::path::Path::new(<span class="kw-2">&amp;</span>path)
-<a href=#70 id=70 data-nosnippet>70</a>            .file_name()
-<a href=#71 id=71 data-nosnippet>71</a>            .and_then(|p| p.to_str())
-<a href=#72 id=72 data-nosnippet>72</a>            .unwrap_or(<span class="string">"vision-model"</span>)
-<a href=#73 id=73 data-nosnippet>73</a>            .to_string();
-<a href=#74 id=74 data-nosnippet>74</a>        <span class="macro">println!</span>(<span class="string">"🖼️  Loading vision model: {name}"</span>);
-<a href=#75 id=75 data-nosnippet>75</a>        <span class="kw">let </span>m = VisionModelBuilder::new(path)
-<a href=#76 id=76 data-nosnippet>76</a>            .with_isq(isq.unwrap_or(default_isq))
-<a href=#77 id=77 data-nosnippet>77</a>            .with_logging()
-<a href=#78 id=78 data-nosnippet>78</a>            .with_throughput_logging()
-<a href=#79 id=79 data-nosnippet>79</a>            .build()
-<a href=#80 id=80 data-nosnippet>80</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#81 id=81 data-nosnippet>81</a>        models.insert(name, LoadedModel::Vision(Arc::new(m)));
-<a href=#82 id=82 data-nosnippet>82</a>    }
-<a href=#83 id=83 data-nosnippet>83</a>
-<a href=#84 id=84 data-nosnippet>84</a>    <span class="comment">// Then insert speech models (text-to-speech)
-<a href=#85 id=85 data-nosnippet>85</a>    </span><span class="kw">for </span>path <span class="kw">in </span>cli.speech_models {
-<a href=#86 id=86 data-nosnippet>86</a>        <span class="kw">let </span>name = std::path::Path::new(<span class="kw-2">&amp;</span>path)
-<a href=#87 id=87 data-nosnippet>87</a>            .file_name()
-<a href=#88 id=88 data-nosnippet>88</a>            .and_then(|p| p.to_str())
-<a href=#89 id=89 data-nosnippet>89</a>            .unwrap_or(<span class="string">"speech-model"</span>)
-<a href=#90 id=90 data-nosnippet>90</a>            .to_string();
-<a href=#91 id=91 data-nosnippet>91</a>        <span class="macro">println!</span>(<span class="string">"🔊 Loading speech model: {name}"</span>);
-<a href=#92 id=92 data-nosnippet>92</a>        <span class="kw">let </span>m = SpeechModelBuilder::new(path.clone(), SpeechLoaderType::Dia)
-<a href=#93 id=93 data-nosnippet>93</a>            .with_logging()
-<a href=#94 id=94 data-nosnippet>94</a>            .build()
-<a href=#95 id=95 data-nosnippet>95</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#96 id=96 data-nosnippet>96</a>        models.insert(name, LoadedModel::Speech(Arc::new(m)));
-<a href=#97 id=97 data-nosnippet>97</a>    }
-<a href=#98 id=98 data-nosnippet>98</a>
-<a href=#99 id=99 data-nosnippet>99</a>    <span class="comment">// Initialize cache directory and chats subdirectory
-<a href=#100 id=100 data-nosnippet>100</a>    </span><span class="kw">let </span>base_cache = utils::get_cache_dir();
-<a href=#101 id=101 data-nosnippet>101</a>    <span class="macro">println!</span>(<span class="string">"🔧 Using cache directory: {}"</span>, base_cache.display());
-<a href=#102 id=102 data-nosnippet>102</a>    <span class="kw">let </span>chats_dir = base_cache.join(<span class="string">"chats"</span>).to_string_lossy().to_string();
-<a href=#103 id=103 data-nosnippet>103</a>    tokio::fs::create_dir_all(<span class="kw-2">&amp;</span>chats_dir).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#104 id=104 data-nosnippet>104</a>    <span class="comment">// Initialize speech output directory for generated wav files
-<a href=#105 id=105 data-nosnippet>105</a>    </span><span class="kw">let </span>speech_dir = base_cache.join(<span class="string">"speech"</span>).to_string_lossy().to_string();
-<a href=#106 id=106 data-nosnippet>106</a>    tokio::fs::create_dir_all(<span class="kw-2">&amp;</span>speech_dir).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#107 id=107 data-nosnippet>107</a>    <span class="kw">let </span><span class="kw-2">mut </span>next_id = <span class="number">1u32</span>;
-<a href=#108 id=108 data-nosnippet>108</a>    <span class="kw">if let </span><span class="prelude-val">Ok</span>(<span class="kw-2">mut </span>dir) = fs::read_dir(<span class="kw-2">&amp;</span>chats_dir).<span class="kw">await </span>{
-<a href=#109 id=109 data-nosnippet>109</a>        <span class="kw">while let </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(entry)) = dir.next_entry().<span class="kw">await </span>{
-<a href=#110 id=110 data-nosnippet>110</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(name) = entry.file_name().to_str() {
-<a href=#111 id=111 data-nosnippet>111</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(num) = name
-<a href=#112 id=112 data-nosnippet>112</a>                    .strip_prefix(<span class="string">"chat_"</span>)
-<a href=#113 id=113 data-nosnippet>113</a>                    .and_then(|s| s.strip_suffix(<span class="string">".json"</span>))
-<a href=#114 id=114 data-nosnippet>114</a>                {
-<a href=#115 id=115 data-nosnippet>115</a>                    <span class="kw">if let </span><span class="prelude-val">Ok</span>(n) = num.parse::&lt;u32&gt;() {
-<a href=#116 id=116 data-nosnippet>116</a>                        next_id = next_id.max(n + <span class="number">1</span>);
-<a href=#117 id=117 data-nosnippet>117</a>                    }
-<a href=#118 id=118 data-nosnippet>118</a>                }
-<a href=#119 id=119 data-nosnippet>119</a>            }
-<a href=#120 id=120 data-nosnippet>120</a>        }
-<a href=#121 id=121 data-nosnippet>121</a>    }
-<a href=#122 id=122 data-nosnippet>122</a>
-<a href=#123 id=123 data-nosnippet>123</a>    <span class="kw">let </span>app_state = Arc::new(AppState {
-<a href=#124 id=124 data-nosnippet>124</a>        models,
-<a href=#125 id=125 data-nosnippet>125</a>        current: tokio::sync::RwLock::new(<span class="prelude-val">None</span>),
-<a href=#126 id=126 data-nosnippet>126</a>        chats_dir,
-<a href=#127 id=127 data-nosnippet>127</a>        speech_dir: speech_dir.clone(),
-<a href=#128 id=128 data-nosnippet>128</a>        current_chat: tokio::sync::RwLock::new(<span class="prelude-val">None</span>),
-<a href=#129 id=129 data-nosnippet>129</a>        next_chat_id: tokio::sync::RwLock::new(next_id),
-<a href=#130 id=130 data-nosnippet>130</a>    });
-<a href=#131 id=131 data-nosnippet>131</a>
-<a href=#132 id=132 data-nosnippet>132</a>    <span class="kw">let </span>app = Router::new()
-<a href=#133 id=133 data-nosnippet>133</a>        .route(<span class="string">"/ws"</span>, get(ws_handler))
-<a href=#134 id=134 data-nosnippet>134</a>        .route(<span class="string">"/api/upload_image"</span>, post(upload_image))
-<a href=#135 id=135 data-nosnippet>135</a>        .route(<span class="string">"/api/upload_text"</span>, post(upload_text))
-<a href=#136 id=136 data-nosnippet>136</a>        .route(<span class="string">"/api/list_models"</span>, get(list_models))
-<a href=#137 id=137 data-nosnippet>137</a>        .route(<span class="string">"/api/select_model"</span>, post(select_model))
-<a href=#138 id=138 data-nosnippet>138</a>        .route(<span class="string">"/api/list_chats"</span>, get(list_chats))
-<a href=#139 id=139 data-nosnippet>139</a>        .route(<span class="string">"/api/new_chat"</span>, post(new_chat))
-<a href=#140 id=140 data-nosnippet>140</a>        .route(<span class="string">"/api/delete_chat"</span>, post(delete_chat))
-<a href=#141 id=141 data-nosnippet>141</a>        .route(<span class="string">"/api/load_chat"</span>, post(load_chat))
-<a href=#142 id=142 data-nosnippet>142</a>        .route(<span class="string">"/api/rename_chat"</span>, post(rename_chat))
-<a href=#143 id=143 data-nosnippet>143</a>        .route(<span class="string">"/api/append_message"</span>, post(append_message))
-<a href=#144 id=144 data-nosnippet>144</a>        <span class="comment">// Text-to-speech generation endpoint
-<a href=#145 id=145 data-nosnippet>145</a>        </span>.route(<span class="string">"/api/generate_speech"</span>, post(generate_speech))
-<a href=#146 id=146 data-nosnippet>146</a>        <span class="comment">// Serve generated speech files
-<a href=#147 id=147 data-nosnippet>147</a>        </span>.nest_service(<span class="string">"/speech"</span>, get_service(ServeDir::new(speech_dir.clone())))
-<a href=#148 id=148 data-nosnippet>148</a>        <span class="comment">// Serve static assets
-<a href=#149 id=149 data-nosnippet>149</a>        </span>.nest_service(
-<a href=#150 id=150 data-nosnippet>150</a>            <span class="string">"/"</span>,
-<a href=#151 id=151 data-nosnippet>151</a>            get_service(ServeDir::new(<span class="macro">concat!</span>(
-<a href=#152 id=152 data-nosnippet>152</a>                <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
-<a href=#153 id=153 data-nosnippet>153</a>                <span class="string">"/static"
-<a href=#154 id=154 data-nosnippet>154</a>            </span>))),
-<a href=#155 id=155 data-nosnippet>155</a>        )
-<a href=#156 id=156 data-nosnippet>156</a>        .layer(DefaultBodyLimit::max(<span class="number">50 </span>* <span class="number">1024 </span>* <span class="number">1024</span>))
-<a href=#157 id=157 data-nosnippet>157</a>        .with_state(app_state.clone());
-<a href=#158 id=158 data-nosnippet>158</a>
-<a href=#159 id=159 data-nosnippet>159</a>    <span class="kw">let </span>addr: SocketAddr = ([<span class="number">0</span>, <span class="number">0</span>, <span class="number">0</span>, <span class="number">0</span>], cli.port.unwrap_or(<span class="number">8080</span>)).into();
-<a href=#160 id=160 data-nosnippet>160</a>    <span class="kw">let </span>listener = TcpListener::bind(addr).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#161 id=161 data-nosnippet>161</a>    <span class="macro">println!</span>(<span class="string">"🔌 listening on http://{}"</span>, addr);
-<a href=#162 id=162 data-nosnippet>162</a>    axum::serve(listener, app).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#163 id=163 data-nosnippet>163</a>    <span class="prelude-val">Ok</span>(())
-<a href=#164 id=164 data-nosnippet>164</a>}</code></pre></div></section></main></body></html>
+<a href=#67 id=67 data-nosnippet>67</a>    <span class="kw">let </span>device = best_device(<span class="bool-val">false</span>)<span class="question-mark">?</span>;
+<a href=#68 id=68 data-nosnippet>68</a>
+<a href=#69 id=69 data-nosnippet>69</a>    <span class="kw">let </span>isq = cli
+<a href=#70 id=70 data-nosnippet>70</a>        .isq
+<a href=#71 id=71 data-nosnippet>71</a>        .as_ref()
+<a href=#72 id=72 data-nosnippet>72</a>        .and_then(|isq| parse_isq_value(isq, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>device)).ok());
+<a href=#73 id=73 data-nosnippet>73</a>
+<a href=#74 id=74 data-nosnippet>74</a>    <span class="kw">let </span><span class="kw-2">mut </span>models: IndexMap&lt;String, LoadedModel&gt; = IndexMap::new();
+<a href=#75 id=75 data-nosnippet>75</a>
+<a href=#76 id=76 data-nosnippet>76</a>    <span class="comment">// Insert text models first
+<a href=#77 id=77 data-nosnippet>77</a>    </span><span class="kw">for </span>path <span class="kw">in </span>cli.text_models {
+<a href=#78 id=78 data-nosnippet>78</a>        <span class="kw">let </span>name = std::path::Path::new(<span class="kw-2">&amp;</span>path)
+<a href=#79 id=79 data-nosnippet>79</a>            .file_name()
+<a href=#80 id=80 data-nosnippet>80</a>            .and_then(|p| p.to_str())
+<a href=#81 id=81 data-nosnippet>81</a>            .unwrap_or(<span class="string">"text-model"</span>)
+<a href=#82 id=82 data-nosnippet>82</a>            .to_string();
+<a href=#83 id=83 data-nosnippet>83</a>        <span class="macro">println!</span>(<span class="string">"📝 Loading text model: {name}"</span>);
+<a href=#84 id=84 data-nosnippet>84</a>        <span class="kw">let </span>m = TextModelBuilder::new(path)
+<a href=#85 id=85 data-nosnippet>85</a>            .with_isq(isq.unwrap_or(default_isq))
+<a href=#86 id=86 data-nosnippet>86</a>            .with_logging()
+<a href=#87 id=87 data-nosnippet>87</a>            .with_throughput_logging()
+<a href=#88 id=88 data-nosnippet>88</a>            .build()
+<a href=#89 id=89 data-nosnippet>89</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#90 id=90 data-nosnippet>90</a>        models.insert(name, LoadedModel::Text(Arc::new(m)));
+<a href=#91 id=91 data-nosnippet>91</a>    }
+<a href=#92 id=92 data-nosnippet>92</a>
+<a href=#93 id=93 data-nosnippet>93</a>    <span class="comment">// Then insert vision models (preserving order)
+<a href=#94 id=94 data-nosnippet>94</a>    </span><span class="kw">for </span>path <span class="kw">in </span>cli.vision_models {
+<a href=#95 id=95 data-nosnippet>95</a>        <span class="kw">let </span>name = std::path::Path::new(<span class="kw-2">&amp;</span>path)
+<a href=#96 id=96 data-nosnippet>96</a>            .file_name()
+<a href=#97 id=97 data-nosnippet>97</a>            .and_then(|p| p.to_str())
+<a href=#98 id=98 data-nosnippet>98</a>            .unwrap_or(<span class="string">"vision-model"</span>)
+<a href=#99 id=99 data-nosnippet>99</a>            .to_string();
+<a href=#100 id=100 data-nosnippet>100</a>        <span class="macro">println!</span>(<span class="string">"🖼️  Loading vision model: {name}"</span>);
+<a href=#101 id=101 data-nosnippet>101</a>        <span class="kw">let </span>m = VisionModelBuilder::new(path)
+<a href=#102 id=102 data-nosnippet>102</a>            .with_isq(isq.unwrap_or(default_isq))
+<a href=#103 id=103 data-nosnippet>103</a>            .with_logging()
+<a href=#104 id=104 data-nosnippet>104</a>            .with_throughput_logging()
+<a href=#105 id=105 data-nosnippet>105</a>            .build()
+<a href=#106 id=106 data-nosnippet>106</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#107 id=107 data-nosnippet>107</a>        models.insert(name, LoadedModel::Vision(Arc::new(m)));
+<a href=#108 id=108 data-nosnippet>108</a>    }
+<a href=#109 id=109 data-nosnippet>109</a>
+<a href=#110 id=110 data-nosnippet>110</a>    <span class="comment">// Then insert speech models (text-to-speech)
+<a href=#111 id=111 data-nosnippet>111</a>    </span><span class="kw">for </span>path <span class="kw">in </span>cli.speech_models {
+<a href=#112 id=112 data-nosnippet>112</a>        <span class="kw">let </span>name = std::path::Path::new(<span class="kw-2">&amp;</span>path)
+<a href=#113 id=113 data-nosnippet>113</a>            .file_name()
+<a href=#114 id=114 data-nosnippet>114</a>            .and_then(|p| p.to_str())
+<a href=#115 id=115 data-nosnippet>115</a>            .unwrap_or(<span class="string">"speech-model"</span>)
+<a href=#116 id=116 data-nosnippet>116</a>            .to_string();
+<a href=#117 id=117 data-nosnippet>117</a>        <span class="macro">println!</span>(<span class="string">"🔊 Loading speech model: {name}"</span>);
+<a href=#118 id=118 data-nosnippet>118</a>        <span class="kw">let </span>m = SpeechModelBuilder::new(path.clone(), SpeechLoaderType::Dia)
+<a href=#119 id=119 data-nosnippet>119</a>            .with_logging()
+<a href=#120 id=120 data-nosnippet>120</a>            .build()
+<a href=#121 id=121 data-nosnippet>121</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#122 id=122 data-nosnippet>122</a>        models.insert(name, LoadedModel::Speech(Arc::new(m)));
+<a href=#123 id=123 data-nosnippet>123</a>    }
+<a href=#124 id=124 data-nosnippet>124</a>
+<a href=#125 id=125 data-nosnippet>125</a>    <span class="comment">// Initialize cache directory and chats subdirectory
+<a href=#126 id=126 data-nosnippet>126</a>    </span><span class="kw">let </span>base_cache = utils::get_cache_dir();
+<a href=#127 id=127 data-nosnippet>127</a>    <span class="macro">println!</span>(<span class="string">"🔧 Using cache directory: {}"</span>, base_cache.display());
+<a href=#128 id=128 data-nosnippet>128</a>    <span class="kw">let </span>chats_dir = base_cache.join(<span class="string">"chats"</span>).to_string_lossy().to_string();
+<a href=#129 id=129 data-nosnippet>129</a>    tokio::fs::create_dir_all(<span class="kw-2">&amp;</span>chats_dir).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#130 id=130 data-nosnippet>130</a>    <span class="comment">// Initialize speech output directory for generated wav files
+<a href=#131 id=131 data-nosnippet>131</a>    </span><span class="kw">let </span>speech_dir = base_cache.join(<span class="string">"speech"</span>).to_string_lossy().to_string();
+<a href=#132 id=132 data-nosnippet>132</a>    tokio::fs::create_dir_all(<span class="kw-2">&amp;</span>speech_dir).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#133 id=133 data-nosnippet>133</a>    <span class="kw">let </span><span class="kw-2">mut </span>next_id = <span class="number">1u32</span>;
+<a href=#134 id=134 data-nosnippet>134</a>    <span class="kw">if let </span><span class="prelude-val">Ok</span>(<span class="kw-2">mut </span>dir) = fs::read_dir(<span class="kw-2">&amp;</span>chats_dir).<span class="kw">await </span>{
+<a href=#135 id=135 data-nosnippet>135</a>        <span class="kw">while let </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(entry)) = dir.next_entry().<span class="kw">await </span>{
+<a href=#136 id=136 data-nosnippet>136</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(name) = entry.file_name().to_str() {
+<a href=#137 id=137 data-nosnippet>137</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(num) = name
+<a href=#138 id=138 data-nosnippet>138</a>                    .strip_prefix(<span class="string">"chat_"</span>)
+<a href=#139 id=139 data-nosnippet>139</a>                    .and_then(|s| s.strip_suffix(<span class="string">".json"</span>))
+<a href=#140 id=140 data-nosnippet>140</a>                {
+<a href=#141 id=141 data-nosnippet>141</a>                    <span class="kw">if let </span><span class="prelude-val">Ok</span>(n) = num.parse::&lt;u32&gt;() {
+<a href=#142 id=142 data-nosnippet>142</a>                        next_id = next_id.max(n + <span class="number">1</span>);
+<a href=#143 id=143 data-nosnippet>143</a>                    }
+<a href=#144 id=144 data-nosnippet>144</a>                }
+<a href=#145 id=145 data-nosnippet>145</a>            }
+<a href=#146 id=146 data-nosnippet>146</a>        }
+<a href=#147 id=147 data-nosnippet>147</a>    }
+<a href=#148 id=148 data-nosnippet>148</a>
+<a href=#149 id=149 data-nosnippet>149</a>    <span class="kw">let </span>app_state = Arc::new(AppState {
+<a href=#150 id=150 data-nosnippet>150</a>        models,
+<a href=#151 id=151 data-nosnippet>151</a>        current: tokio::sync::RwLock::new(<span class="prelude-val">None</span>),
+<a href=#152 id=152 data-nosnippet>152</a>        chats_dir,
+<a href=#153 id=153 data-nosnippet>153</a>        speech_dir: speech_dir.clone(),
+<a href=#154 id=154 data-nosnippet>154</a>        current_chat: tokio::sync::RwLock::new(<span class="prelude-val">None</span>),
+<a href=#155 id=155 data-nosnippet>155</a>        next_chat_id: tokio::sync::RwLock::new(next_id),
+<a href=#156 id=156 data-nosnippet>156</a>    });
+<a href=#157 id=157 data-nosnippet>157</a>
+<a href=#158 id=158 data-nosnippet>158</a>    <span class="kw">let </span>app = Router::new()
+<a href=#159 id=159 data-nosnippet>159</a>        .route(<span class="string">"/ws"</span>, get(ws_handler))
+<a href=#160 id=160 data-nosnippet>160</a>        .route(<span class="string">"/api/upload_image"</span>, post(upload_image))
+<a href=#161 id=161 data-nosnippet>161</a>        .route(<span class="string">"/api/upload_text"</span>, post(upload_text))
+<a href=#162 id=162 data-nosnippet>162</a>        .route(<span class="string">"/api/list_models"</span>, get(list_models))
+<a href=#163 id=163 data-nosnippet>163</a>        .route(<span class="string">"/api/select_model"</span>, post(select_model))
+<a href=#164 id=164 data-nosnippet>164</a>        .route(<span class="string">"/api/list_chats"</span>, get(list_chats))
+<a href=#165 id=165 data-nosnippet>165</a>        .route(<span class="string">"/api/new_chat"</span>, post(new_chat))
+<a href=#166 id=166 data-nosnippet>166</a>        .route(<span class="string">"/api/delete_chat"</span>, post(delete_chat))
+<a href=#167 id=167 data-nosnippet>167</a>        .route(<span class="string">"/api/load_chat"</span>, post(load_chat))
+<a href=#168 id=168 data-nosnippet>168</a>        .route(<span class="string">"/api/rename_chat"</span>, post(rename_chat))
+<a href=#169 id=169 data-nosnippet>169</a>        .route(<span class="string">"/api/append_message"</span>, post(append_message))
+<a href=#170 id=170 data-nosnippet>170</a>        <span class="comment">// Text-to-speech generation endpoint
+<a href=#171 id=171 data-nosnippet>171</a>        </span>.route(<span class="string">"/api/generate_speech"</span>, post(generate_speech))
+<a href=#172 id=172 data-nosnippet>172</a>        <span class="comment">// Serve generated speech files
+<a href=#173 id=173 data-nosnippet>173</a>        </span>.nest_service(<span class="string">"/speech"</span>, get_service(ServeDir::new(speech_dir.clone())))
+<a href=#174 id=174 data-nosnippet>174</a>        <span class="comment">// Serve embedded static assets for the root path
+<a href=#175 id=175 data-nosnippet>175</a>        </span>.route(<span class="string">"/"</span>, get(static_handler))
+<a href=#176 id=176 data-nosnippet>176</a>        .layer(DefaultBodyLimit::max(<span class="number">50 </span>* <span class="number">1024 </span>* <span class="number">1024</span>))
+<a href=#177 id=177 data-nosnippet>177</a>        .with_state(app_state.clone());
+<a href=#178 id=178 data-nosnippet>178</a>
+<a href=#179 id=179 data-nosnippet>179</a>    <span class="kw">let </span>addr: SocketAddr = ([<span class="number">0</span>, <span class="number">0</span>, <span class="number">0</span>, <span class="number">0</span>], cli.port.unwrap_or(<span class="number">8080</span>)).into();
+<a href=#180 id=180 data-nosnippet>180</a>    <span class="kw">let </span>listener = TcpListener::bind(addr).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#181 id=181 data-nosnippet>181</a>    <span class="macro">println!</span>(<span class="string">"🔌 listening on http://{}"</span>, addr);
+<a href=#182 id=182 data-nosnippet>182</a>    axum::serve(listener, app).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#183 id=183 data-nosnippet>183</a>    <span class="prelude-val">Ok</span>(())
+<a href=#184 id=184 data-nosnippet>184</a>}</code></pre></div></section></main></body></html>

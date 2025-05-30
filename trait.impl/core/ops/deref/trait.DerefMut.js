@@ -1,9 +1,9 @@
 (function() {
-    var implementors = Object.fromEntries([["mistralrs",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/ops/deref/trait.DerefMut.html\" title=\"trait core::ops::deref::DerefMut\">DerefMut</a> for <a class=\"struct\" href=\"mistralrs/v0_4_api/struct.UqffTextModelBuilder.html\" title=\"struct mistralrs::v0_4_api::UqffTextModelBuilder\">UqffTextModelBuilder</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/ops/deref/trait.DerefMut.html\" title=\"trait core::ops::deref::DerefMut\">DerefMut</a> for <a class=\"struct\" href=\"mistralrs/v0_4_api/struct.UqffVisionModelBuilder.html\" title=\"struct mistralrs::v0_4_api::UqffVisionModelBuilder\">UqffVisionModelBuilder</a>"]]]]);
+    var implementors = Object.fromEntries([["mistralrs",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/ops/deref/trait.DerefMut.html\" title=\"trait core::ops::deref::DerefMut\">DerefMut</a> for <a class=\"struct\" href=\"mistralrs/struct.UqffTextModelBuilder.html\" title=\"struct mistralrs::UqffTextModelBuilder\">UqffTextModelBuilder</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/ops/deref/trait.DerefMut.html\" title=\"trait core::ops::deref::DerefMut\">DerefMut</a> for <a class=\"struct\" href=\"mistralrs/struct.UqffVisionModelBuilder.html\" title=\"struct mistralrs::UqffVisionModelBuilder\">UqffVisionModelBuilder</a>"]]]]);
     if (window.register_implementors) {
         window.register_implementors(implementors);
     } else {
         window.pending_implementors = implementors;
     }
 })()
-//{"start":57,"fragment_lengths":[681]}
+//{"start":57,"fragment_lengths":[643]}
