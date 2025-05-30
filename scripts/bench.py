@@ -1,3 +1,7 @@
+## Comparing Qwen 3 30B A3B
+# cargo run --release --features metal --' --port 1234 --paged-attn --max-seqs 128 plain -m mlx-community/Qwen3-30B-A3B-4bit--max-seq-len 1024 --max-batch-size 128
+# ./llama-server -m ../gguf_models/Qwen3-30B-A3B-Q4_K_M.gguf
+
 ## Comparing Llama 3.2 3b
 # cargo run --release --features metal '--' --port 1234 --isq 8 --paged-attn --max-seqs 128 plain -m ../hf_models/llama3.2_3b --max-seq-len 1024 --max-batch-size 128
 # ./llama-server -m ../gguf_models/Llama-3.2-3B-Instruct-Q8_0.gguf
