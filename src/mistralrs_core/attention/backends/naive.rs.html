@@ -78,7 +78,7 @@
 <a href=#78 id=78 data-nosnippet>78</a>}
 <a href=#79 id=79 data-nosnippet>79</a>
 <a href=#80 id=80 data-nosnippet>80</a><span class="doccomment">/// Not *really* sure why this is necessary but it is.
-<a href=#81 id=81 data-nosnippet>81</a></span><span class="kw">fn </span>maybe_synchronize(device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#81 id=81 data-nosnippet>81</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>maybe_synchronize(device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#82 id=82 data-nosnippet>82</a>    <span class="comment">// If less that 4 GB available, synchronize
 <a href=#83 id=83 data-nosnippet>83</a>    </span><span class="kw">if </span>MemoryUsage.get_memory_available(device)<span class="question-mark">? </span>&lt; <span class="number">4 </span>* <span class="number">1024 </span>* (<span class="number">1024 </span>* <span class="number">1024</span>) {
 <a href=#84 id=84 data-nosnippet>84</a>        device.synchronize()<span class="question-mark">?</span>;
