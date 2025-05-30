@@ -426,7 +426,7 @@ impl FastMoeMlp {
             0,
             self.num_experts_per_tok,
         )?;
-        let mut scores = routing_weights.gather(&indices.contiguous()?, D::Minus1)?;
+        let mut scores = routing_weights.gather(&indices, D::Minus1)?;
 
         if self.norm_topk_prob {
             scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
@@ -436,14 +436,11 @@ impl FastMoeMlp {
             let xs = xs.reshape((b_size, seq_len, 1, 1, hidden_dim))?;
             let gate = self
                 .fused_gate_proj
-                .gather_forward_autocast(&xs.contiguous()?, &indices.contiguous()?)?;
-            let up = self
-                .fused_up_proj
-                .gather_forward_autocast(&xs.contiguous()?, &indices.contiguous()?)?;
-            let xs = self.fused_down_proj.gather_forward_autocast(
-                &(up * gate.apply(&self.act)?)?.contiguous()?,
-                &indices.contiguous()?,
-            )?;
+                .gather_forward_autocast(&xs, &indices)?;
+            let up = self.fused_up_proj.gather_forward_autocast(&xs, &indices)?;
+            let xs = self
+                .fused_down_proj
+                .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, &indices)?;
             xs.squeeze(D::Minus2)?
         };
 
