@@ -268,36 +268,41 @@
 <a href=#268 id=268 data-nosnippet>268</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"Unexpected quantization config."</span>)
 <a href=#269 id=269 data-nosnippet>269</a>    };
 <a href=#270 id=270 data-nosnippet>270</a>
-<a href=#271 id=271 data-nosnippet>271</a>    <span class="comment">// Handle the case where the layer is dummy (no tensors)
-<a href=#272 id=272 data-nosnippet>272</a>    </span><span class="kw">if </span>!(vb.contains_tensor(<span class="string">"weight"</span>) &amp;&amp; vb.contains_tensor(<span class="string">"weight_scale_inv"</span>)) {
-<a href=#273 id=273 data-nosnippet>273</a>        <span class="kw">let </span>layer = &lt;DummyLayer <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>;
-<a href=#274 id=274 data-nosnippet>274</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;);
-<a href=#275 id=275 data-nosnippet>275</a>    }
-<a href=#276 id=276 data-nosnippet>276</a>
-<a href=#277 id=277 data-nosnippet>277</a>    <span class="kw">if </span>weight_block_size.len() != <span class="number">2 </span>{
-<a href=#278 id=278 data-nosnippet>278</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"Expected weight_block_size to have length 2, got {weight_block_size:?}"</span>)
-<a href=#279 id=279 data-nosnippet>279</a>    }
-<a href=#280 id=280 data-nosnippet>280</a>    <span class="kw">let </span>weight = vb.get_with_hints_dtype((out_dim, in_dim), <span class="string">"weight"</span>, hints, DType::F8E4M3)<span class="question-mark">?</span>;
-<a href=#281 id=281 data-nosnippet>281</a>    <span class="kw">let </span>weight_scale_inv = vb.get_with_hints_dtype(
-<a href=#282 id=282 data-nosnippet>282</a>        (
-<a href=#283 id=283 data-nosnippet>283</a>            out_dim.div_ceil(weight_block_size[<span class="number">0</span>]),
-<a href=#284 id=284 data-nosnippet>284</a>            in_dim.div_ceil(weight_block_size[<span class="number">1</span>]),
-<a href=#285 id=285 data-nosnippet>285</a>        ),
-<a href=#286 id=286 data-nosnippet>286</a>        <span class="string">"weight_scale_inv"</span>,
-<a href=#287 id=287 data-nosnippet>287</a>        hints,
-<a href=#288 id=288 data-nosnippet>288</a>        DType::F32,
-<a href=#289 id=289 data-nosnippet>289</a>    )<span class="question-mark">?</span>;
-<a href=#290 id=290 data-nosnippet>290</a>    <span class="kw">let </span>bias = <span class="kw">if </span>bias {
-<a href=#291 id=291 data-nosnippet>291</a>        <span class="prelude-val">Some</span>(vb.get((out_dim,), <span class="string">"bias"</span>)<span class="question-mark">?</span>)
-<a href=#292 id=292 data-nosnippet>292</a>    } <span class="kw">else </span>{
-<a href=#293 id=293 data-nosnippet>293</a>        <span class="prelude-val">None
-<a href=#294 id=294 data-nosnippet>294</a>    </span>};
-<a href=#295 id=295 data-nosnippet>295</a>
-<a href=#296 id=296 data-nosnippet>296</a>    <span class="prelude-val">Ok</span>(Arc::new(BlockwiseFP8Linear {
-<a href=#297 id=297 data-nosnippet>297</a>        weight,
-<a href=#298 id=298 data-nosnippet>298</a>        weight_block_size: weight_block_size.clone(),
-<a href=#299 id=299 data-nosnippet>299</a>        weight_scale_inv,
-<a href=#300 id=300 data-nosnippet>300</a>        bias,
-<a href=#301 id=301 data-nosnippet>301</a>        dequant_dtype: vb.dtype(),
-<a href=#302 id=302 data-nosnippet>302</a>    }))
-<a href=#303 id=303 data-nosnippet>303</a>}</code></pre></div></section></main></body></html>
+<a href=#271 id=271 data-nosnippet>271</a>    <span class="comment">// Handle the case where we actually have an unqiantzed
+<a href=#272 id=272 data-nosnippet>272</a>    </span><span class="kw">if </span>vb.contains_tensor(<span class="string">"weight"</span>) &amp;&amp; !vb.contains_tensor(<span class="string">"weight_scale_inv"</span>) {
+<a href=#273 id=273 data-nosnippet>273</a>        <span class="kw">return </span><span class="kw">crate</span>::linear_b(in_dim, out_dim, bias, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vb);
+<a href=#274 id=274 data-nosnippet>274</a>    }
+<a href=#275 id=275 data-nosnippet>275</a>
+<a href=#276 id=276 data-nosnippet>276</a>    <span class="comment">// Handle the case where the layer is dummy (no tensors)
+<a href=#277 id=277 data-nosnippet>277</a>    </span><span class="kw">if </span>!(vb.contains_tensor(<span class="string">"weight"</span>) &amp;&amp; vb.contains_tensor(<span class="string">"weight_scale_inv"</span>)) {
+<a href=#278 id=278 data-nosnippet>278</a>        <span class="kw">let </span>layer = &lt;DummyLayer <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>;
+<a href=#279 id=279 data-nosnippet>279</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;);
+<a href=#280 id=280 data-nosnippet>280</a>    }
+<a href=#281 id=281 data-nosnippet>281</a>
+<a href=#282 id=282 data-nosnippet>282</a>    <span class="kw">if </span>weight_block_size.len() != <span class="number">2 </span>{
+<a href=#283 id=283 data-nosnippet>283</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"Expected weight_block_size to have length 2, got {weight_block_size:?}"</span>)
+<a href=#284 id=284 data-nosnippet>284</a>    }
+<a href=#285 id=285 data-nosnippet>285</a>    <span class="kw">let </span>weight = vb.get_with_hints_dtype((out_dim, in_dim), <span class="string">"weight"</span>, hints, DType::F8E4M3)<span class="question-mark">?</span>;
+<a href=#286 id=286 data-nosnippet>286</a>    <span class="kw">let </span>weight_scale_inv = vb.get_with_hints_dtype(
+<a href=#287 id=287 data-nosnippet>287</a>        (
+<a href=#288 id=288 data-nosnippet>288</a>            out_dim.div_ceil(weight_block_size[<span class="number">0</span>]),
+<a href=#289 id=289 data-nosnippet>289</a>            in_dim.div_ceil(weight_block_size[<span class="number">1</span>]),
+<a href=#290 id=290 data-nosnippet>290</a>        ),
+<a href=#291 id=291 data-nosnippet>291</a>        <span class="string">"weight_scale_inv"</span>,
+<a href=#292 id=292 data-nosnippet>292</a>        hints,
+<a href=#293 id=293 data-nosnippet>293</a>        DType::F32,
+<a href=#294 id=294 data-nosnippet>294</a>    )<span class="question-mark">?</span>;
+<a href=#295 id=295 data-nosnippet>295</a>    <span class="kw">let </span>bias = <span class="kw">if </span>bias {
+<a href=#296 id=296 data-nosnippet>296</a>        <span class="prelude-val">Some</span>(vb.get((out_dim,), <span class="string">"bias"</span>)<span class="question-mark">?</span>)
+<a href=#297 id=297 data-nosnippet>297</a>    } <span class="kw">else </span>{
+<a href=#298 id=298 data-nosnippet>298</a>        <span class="prelude-val">None
+<a href=#299 id=299 data-nosnippet>299</a>    </span>};
+<a href=#300 id=300 data-nosnippet>300</a>
+<a href=#301 id=301 data-nosnippet>301</a>    <span class="prelude-val">Ok</span>(Arc::new(BlockwiseFP8Linear {
+<a href=#302 id=302 data-nosnippet>302</a>        weight,
+<a href=#303 id=303 data-nosnippet>303</a>        weight_block_size: weight_block_size.clone(),
+<a href=#304 id=304 data-nosnippet>304</a>        weight_scale_inv,
+<a href=#305 id=305 data-nosnippet>305</a>        bias,
+<a href=#306 id=306 data-nosnippet>306</a>        dequant_dtype: vb.dtype(),
+<a href=#307 id=307 data-nosnippet>307</a>    }))
+<a href=#308 id=308 data-nosnippet>308</a>}</code></pre></div></section></main></body></html>
