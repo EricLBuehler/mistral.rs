@@ -162,6 +162,7 @@ impl Sdpa {
                     None,
                     None,
                     None,
+                    None,
                 )?;
 
                 // Reshape to dims4
