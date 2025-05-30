@@ -1,10 +1,15 @@
 use anyhow::Result;
+use axum::body::Body;
 use axum::{
     extract::DefaultBodyLimit,
+    response::IntoResponse,
     routing::{get, get_service, post},
     Router,
 };
 use clap::Parser;
+use http::{Response, StatusCode};
+use hyper::Uri;
+use include_dir::{include_dir, Dir};
 use indexmap::IndexMap;
 use mistralrs::{
     best_device, parse_isq_value, IsqType, SpeechLoaderType, SpeechModelBuilder, TextModelBuilder,
@@ -23,6 +28,27 @@ mod utils;
 use handlers::{api::*, websocket::ws_handler};
 use models::LoadedModel;
 use types::{AppState, Cli};
+
+static STATIC_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/static");
+
+async fn static_handler(uri: Uri) -> impl IntoResponse {
+    let path = uri.path().trim_start_matches('/');
+    // Serve index.html when requesting the root path
+    let path = if path.is_empty() { "index.html" } else { path };
+    if let Some(file) = STATIC_DIR.get_file(path) {
+        let mime = mime_guess::from_path(path).first_or_octet_stream();
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(http::header::CONTENT_TYPE, mime.as_ref())
+            .body(Body::from(file.contents()))
+            .unwrap()
+    } else {
+        Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::from("Not Found"))
+            .unwrap()
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -145,14 +171,8 @@ async fn main() -> Result<()> {
         .route("/api/generate_speech", post(generate_speech))
         // Serve generated speech files
         .nest_service("/speech", get_service(ServeDir::new(speech_dir.clone())))
-        // Serve static assets
-        .nest_service(
-            "/",
-            get_service(ServeDir::new(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/static"
-            ))),
-        )
+        // Serve embedded static assets for the root path
+        .route("/", get(static_handler))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .with_state(app_state.clone());
 
