@@ -302,7 +302,7 @@ impl Loader for NormalLoader {
         device: &Device,
         silent: bool,
         mut mapper: DeviceMapSetting,
-        in_situ_quant: Option<IsqType>,
+        mut in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
@@ -345,6 +345,11 @@ impl Loader for NormalLoader {
         } else if let DeviceMapSetting::Auto(params) = mapper.clone() {
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
+
+            // Disable ISQ if we are loading a prequantized model.
+            if QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)? != 1 {
+                in_situ_quant = None;
+            }
 
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
