@@ -27,6 +27,9 @@ use crate::{
 
 use super::{block_engine::AllocStatus, BlockEngineSequence, BlockTables, CacheConfig};
 
+/// Allow sequences to wait for 64 scheduling passes before warning of deprivation.
+const WAITING_TIMEOUT: usize = 64;
+
 pub struct PagedAttentionSchedulerOutput {
     /// Either ALL prompt or ALL completion.
     pub scheduled: Vec<Arc<Mutex<Sequence>>>,
@@ -81,9 +84,56 @@ impl PagedAttentionScheduler {
 
                 // If we cannot allocate either now or in the future, either do not continue or remove the sequence.
                 let can_allocate =
-                    get_mut_arcmutex!(self.block_engine).can_allocate(&*get_mut_arcmutex!(seq));
+                    get_mut_arcmutex!(self.block_engine).can_allocate(&mut *get_mut_arcmutex!(seq));
                 match can_allocate {
-                    AllocStatus::Later => break, // If we can only allocate later, do not bother iterating over the rest.
+                    AllocStatus::Later { waitlisted_count } => {
+                        {
+                            // If the sequence has waited too long, try to free space by evicting a
+                            // low‑priority running sequence instead of permanently ignoring it.
+                            if waitlisted_count > WAITING_TIMEOUT {
+                                // Attempt to preempt the least‑recently created running sequence
+                                // (the back of the `running` queue after FCFS sort).
+                                if let Some(seq_to_preempt) = self.running.pop_back() {
+                                    // Move the running sequence back to the waiting queue, freeing its KV‑cache.
+                                    self._preempt_by_recompute(seq_to_preempt);
+
+                                    // Retry allocation for the current sequence now that space is freed.
+                                    if !matches!(
+                                        get_mut_arcmutex!(self.block_engine)
+                                            .can_allocate(&mut *get_mut_arcmutex!(seq)),
+                                        AllocStatus::Ok
+                                    ) {
+                                        // Even after eviction we still cannot fit the sequence – fall back to
+                                        // finishing it as ignored and restore the previous behaviour.
+                                        let id = *get_mut_arcmutex!(seq).id();
+                                        let len = get_mut_arcmutex!(seq).get_toks().len();
+                                        warn!(
+                                            "Sequence {id} with length of {len} tokens still exceeds KV cache size \
+                                             even after evicting another sequence.",
+                                        );
+                                        get_mut_arcmutex!(seq)
+                                            .set_state(SequenceState::FinishedIgnored);
+                                        did_ignore = true;
+                                    }
+                                } else {
+                                    // No running sequence is available to evict; keep the original ignore logic.
+                                    let id = *get_mut_arcmutex!(seq).id();
+                                    let len = get_mut_arcmutex!(seq).get_toks().len();
+                                    warn!(
+                                        "Sequence {id} with length of {len} tokens is too long and exceeds KV cache size. \
+                                         To fix, increase the maximum sequence length for the KV cache, for example with \
+                                         `--max-seq-len`/ `max_seq_len` in automatic device mapping parameters.",
+                                    );
+                                    get_mut_arcmutex!(seq)
+                                        .set_state(SequenceState::FinishedIgnored);
+                                    did_ignore = true;
+                                }
+                            } else {
+                                // Keep waiting until the timeout threshold is reached.
+                                break;
+                            }
+                        }
+                    }
                     AllocStatus::Impossible => {
                         let id = *get_mut_arcmutex!(seq).id();
                         let len = get_mut_arcmutex!(seq).get_toks().len();

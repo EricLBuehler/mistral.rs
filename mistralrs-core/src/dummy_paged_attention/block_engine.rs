@@ -68,8 +68,15 @@ pub struct _PhysicalTokenBlock {
 }
 
 impl _PhysicalTokenBlock {
+    pub fn refcount(&self) -> usize {
+        self.refcount
+    }
     pub fn increment_refcount(&mut self) {
         self.refcount += 1;
+    }
+    pub fn decrement_refcount(&mut self) {
+        assert!(self.refcount >= 1);
+        self.refcount -= 1;
     }
 }
 
@@ -210,7 +217,7 @@ impl Allocator<CPUAllocator> {
 #[derive(Debug)]
 pub enum AllocStatus {
     Ok,
-    Later,
+    Later { waitlisted_count: usize },
     Impossible,
 }
 
@@ -246,14 +253,16 @@ impl BlockEngine {
         self.block_size
     }
 
-    pub fn can_allocate(&self, seq: &impl BlockEngineSequence) -> AllocStatus {
+    pub fn can_allocate(&self, seq: &mut impl BlockEngineSequence) -> AllocStatus {
         let num_required_blocks = seq.logical_token_blocks().len();
         let num_free_gpu_blocks = self.gpu_allocator.get_num_free_blocks();
 
         if self.num_gpu_blocks < num_required_blocks {
             AllocStatus::Impossible
         } else if *num_free_gpu_blocks < num_required_blocks {
-            AllocStatus::Later
+            AllocStatus::Later {
+                waitlisted_count: seq.increment_waitlist_count(),
+            }
         } else {
             AllocStatus::Ok
         }
