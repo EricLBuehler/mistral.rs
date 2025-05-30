@@ -49,7 +49,6 @@ pub struct Config {
     pub max_position_embeddings: usize,
     pub sliding_window: Option<usize>,
     pub original_max_position_embeddings: usize,
-    #[serde(alias = "quantization")]
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub tie_word_embeddings: bool,

@@ -42,7 +42,6 @@ pub struct Config {
     pub(crate) rope_theta: f64,
     pub(crate) sliding_window: Option<usize>,
     pub(crate) head_dim: Option<usize>,
-    #[serde(alias = "quantization")]
     pub(crate) quantization_config: Option<QuantizedConfig>,
     #[serde(default = "tie_word_embeddings")]
     pub(crate) tie_word_embeddings: bool,

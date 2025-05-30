@@ -45,7 +45,6 @@ pub struct Config {
     pub(crate) sliding_window: Option<usize>,
     pub(crate) num_experts_per_tok: usize,
     pub(crate) num_local_experts: usize,
-    #[serde(alias = "quantization")]
     pub(crate) quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub(crate) tie_word_embeddings: bool,

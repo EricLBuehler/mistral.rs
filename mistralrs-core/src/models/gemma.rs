@@ -50,7 +50,6 @@ pub struct Config {
 
     #[serde(default = "default_max_position_embeddings")]
     pub max_position_embeddings: usize,
-    #[serde(alias = "quantization")]
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     #[allow(dead_code)]

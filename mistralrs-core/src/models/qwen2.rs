@@ -40,7 +40,6 @@ pub struct Config {
     pub rope_theta: f64,
     pub rms_norm_eps: f64,
     pub hidden_act: Activation,
-    #[serde(alias = "quantization")]
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub tie_word_embeddings: bool,

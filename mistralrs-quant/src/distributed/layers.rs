@@ -865,6 +865,148 @@ impl PackedExperts {
     }
 }
 
+pub struct FusedExperts {
+    pub fused_gate_proj: Arc<dyn QuantMethod>,
+    pub fused_up_proj: Arc<dyn QuantMethod>,
+    pub fused_down_proj: Arc<dyn QuantMethod>,
+}
+
+impl FusedExperts {
+    pub fn new(
+        hidden_size: usize,
+        moe_intermediate_size: usize,
+        num_experts: usize,
+        quantization_config: &Option<QuantizedConfig>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
+        if !vb.device().is_metal() {
+            candle_core::bail!("FastMoeMlp requires Metal.");
+        }
+
+        let (fused_gate_proj, fused_up_proj, fused_down_proj) =
+            if matches!(&quantization_config, Some(QuantizedConfig::Afq { .. })) {
+                let quantization_config = quantization_config.as_ref().unwrap();
+
+                let fused_gate_proj = AfqLayer::afq_packed_linear_b(
+                    num_experts,
+                    hidden_size,
+                    moe_intermediate_size,
+                    quantization_config,
+                    false,
+                    vb.pp("switch_mlp.gate_proj"),
+                )?;
+                let fused_up_proj = AfqLayer::afq_packed_linear_b(
+                    num_experts,
+                    hidden_size,
+                    moe_intermediate_size,
+                    quantization_config,
+                    false,
+                    vb.pp("switch_mlp.up_proj"),
+                )?;
+                let fused_down_proj = AfqLayer::afq_packed_linear_b(
+                    num_experts,
+                    moe_intermediate_size,
+                    hidden_size,
+                    quantization_config,
+                    false,
+                    vb.pp("switch_mlp.down_proj"),
+                )?;
+
+                (fused_gate_proj, fused_up_proj, fused_down_proj)
+            } else if matches!(&quantization_config, Some(QuantizedConfig::Fp8 { .. })) {
+                let experts_vb = vb.pp("experts");
+                let mut gate_proj_vec = Vec::new();
+                let mut up_proj_vec = Vec::new();
+                let mut down_proj_vec = Vec::new();
+                for i in 0..num_experts {
+                    let vb = experts_vb.pp(i);
+
+                    let gate_proj = crate::linear_no_bias(
+                        hidden_size,
+                        moe_intermediate_size,
+                        &quantization_config,
+                        vb.pp("gate_proj.weight"),
+                    )?;
+                    let up_proj = crate::linear_no_bias(
+                        hidden_size,
+                        moe_intermediate_size,
+                        &quantization_config,
+                        vb.pp("up_proj.weight"),
+                    )?;
+                    let down_proj = crate::linear_no_bias(
+                        moe_intermediate_size,
+                        hidden_size,
+                        &quantization_config,
+                        vb.pp("down_proj.weight"),
+                    )?;
+
+                    gate_proj_vec.push(gate_proj.dequantize_w()?);
+                    up_proj_vec.push(up_proj.dequantize_w()?);
+                    down_proj_vec.push(down_proj.dequantize_w()?);
+                }
+
+                let mut gate_proj: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                        Linear::new(Tensor::stack(&gate_proj_vec, 0)?, None),
+                    ))?);
+                let mut up_proj: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                        Linear::new(Tensor::stack(&up_proj_vec, 0)?, None),
+                    ))?);
+                let mut down_proj: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                        Linear::new(Tensor::stack(&down_proj_vec, 0)?, None),
+                    ))?);
+                gate_proj = apply_immediate_isq(gate_proj, vb.pp("gate_proj"))?;
+                up_proj = apply_immediate_isq(up_proj, vb.pp("up_proj"))?;
+                down_proj = apply_immediate_isq(down_proj, vb.pp("down_proj"))?;
+
+                (gate_proj, up_proj, down_proj)
+            } else {
+                let experts_vb = vb.pp("experts");
+                let mut gate_proj_vec = Vec::new();
+                let mut up_proj_vec = Vec::new();
+                let mut down_proj_vec = Vec::new();
+                for i in 0..num_experts {
+                    let vb = experts_vb.pp(i);
+                    let gate_proj =
+                        vb.get((moe_intermediate_size, hidden_size), "gate_proj.weight")?;
+                    let up_proj = vb.get((moe_intermediate_size, hidden_size), "up_proj.weight")?;
+                    let down_proj =
+                        vb.get((hidden_size, moe_intermediate_size), "down_proj.weight")?;
+
+                    gate_proj_vec.push(gate_proj);
+                    up_proj_vec.push(up_proj);
+                    down_proj_vec.push(down_proj);
+                }
+
+                let mut gate_proj: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                        Linear::new(Tensor::stack(&gate_proj_vec, 0)?, None),
+                    ))?);
+                let mut up_proj: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                        Linear::new(Tensor::stack(&up_proj_vec, 0)?, None),
+                    ))?);
+                let mut down_proj: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                        Linear::new(Tensor::stack(&down_proj_vec, 0)?, None),
+                    ))?);
+                gate_proj = apply_immediate_isq(gate_proj, vb.pp("gate_proj"))?;
+                up_proj = apply_immediate_isq(up_proj, vb.pp("up_proj"))?;
+                down_proj = apply_immediate_isq(down_proj, vb.pp("down_proj"))?;
+
+                (gate_proj, up_proj, down_proj)
+            };
+
+        Ok(Self {
+            fused_gate_proj,
+            fused_up_proj,
+            fused_down_proj,
+        })
+    }
+}
+
 /// Compute the appropriate KV shard. This handles KV head replication. Be sure to use `compute_n_kv_groups` in tandem.
 pub fn compute_kv_shard(total_num_kv_heads: usize, head_dim: usize, comm: &Comm) -> Shard {
     if comm.world_size() == 1 {

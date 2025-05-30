@@ -67,7 +67,6 @@ pub struct Phi4MMConfig {
     // pub audio_processor: Option<String>,
     pub vision_lora: StaticLoraConfig,
     pub speech_lora: StaticLoraConfig,
-    #[serde(alias = "quantization")]
     pub quantization_config: Option<QuantizedConfig>,
 }
 

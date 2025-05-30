@@ -46,7 +46,6 @@ pub struct Config {
     pub(crate) sliding_window: Option<usize>,
     pub(crate) original_max_position_embeddings: usize,
 
-    #[serde(alias = "quantization")]
     pub(crate) quantization_config: Option<QuantizedConfig>,
     pub(crate) lm_head_bias: bool,
     pub(crate) attention_bias: bool,

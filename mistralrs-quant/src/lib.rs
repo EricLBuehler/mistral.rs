@@ -40,8 +40,8 @@ pub use afq::{AfqBits, AfqGroupSize, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
 pub use distributed::{
     layers::{
-        compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, ReplicatedLayer,
-        RowParallelLayer,
+        compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, FusedExperts, PackedExperts,
+        ReplicatedLayer, RowParallelLayer,
     },
     socket::{Client, Server},
     BarrierLike, Comm, Id, SumAllReduce,

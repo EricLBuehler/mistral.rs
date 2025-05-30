@@ -24,7 +24,6 @@ pub struct TextConfig {
     pub rope_theta: f32,
     pub max_position_embeddings: usize,
     pub rope_scaling: Option<Llama3RopeConfig>,
-    #[serde(alias = "quantization")]
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub tie_word_embeddings: bool,

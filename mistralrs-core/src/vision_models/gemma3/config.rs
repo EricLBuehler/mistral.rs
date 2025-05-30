@@ -48,7 +48,6 @@ pub struct Gemma3TextConfig {
     pub query_pre_attn_scalar: usize,
     #[serde(default = "max_position_embeddings")]
     pub max_position_embeddings: usize,
-    #[serde(alias = "quantization")]
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default = "tie_word_embeddings")]
     pub tie_word_embeddings: bool,
