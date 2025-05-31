@@ -52,7 +52,7 @@ impl SpeechGenerationConfig {
 
 #[derive(Clone, Debug)]
 pub struct SpeechGenerationOutput {
-    pub pcm: Arc<Vec<f32>>,
+    pub pcms: Vec<Arc<Vec<f32>>>,
     pub rate: usize,
     pub channels: usize,
 }

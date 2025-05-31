@@ -100,7 +100,7 @@ pub struct SpeechInputsProcessor;
 
 #[derive(Clone)]
 pub struct ModelInputs {
-    pub(crate) prompt: String,
+    pub(crate) prompt: Vec<String>,
 }
 
 impl InputsProcessor for SpeechInputsProcessor {
@@ -130,7 +130,10 @@ impl InputsProcessor for SpeechInputsProcessor {
         } else {
             || {
                 let inputs = ModelInputs {
-                    prompt: input_seqs[0].get_initial_prompt().to_string(),
+                    prompt: input_seqs
+                        .iter()
+                        .map(|seq| seq.get_initial_prompt().to_string())
+                        .collect(),
                 };
                 Ok(InputProcessorOutput {
                     inputs: Box::new(inputs),
@@ -383,16 +386,18 @@ impl Pipeline for SpeechPipeline {
         assert!(!return_raw_logits);
 
         let ModelInputs { prompt } = *inputs.downcast().expect("Downcast failed.");
+        let batch_size = prompt.len();
+
         let SpeechGenerationOutput {
-            pcm,
+            pcms,
             rate,
             channels,
-        } = self.model.generate(&prompt, &self.cfg)?;
+        } = self.model.generate(prompt, &self.cfg)?;
 
         Ok(ForwardInputsResult::Speech {
-            pcms: vec![pcm],
-            rates: vec![rate],
-            channels: vec![channels],
+            pcms,
+            rates: vec![rate; batch_size],
+            channels: vec![channels; batch_size],
         })
     }
 
