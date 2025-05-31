@@ -15,12 +15,14 @@ use crate::{
 use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::ParserFactory;
 pub use logger::IntervalLogger;
+use mistralrs_quant::RingConfig;
 use once_cell::sync::Lazy;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
 use std::{
     collections::HashMap,
     io::{BufWriter, Write},
+    net::TcpListener,
     ops::Deref,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -497,6 +499,19 @@ impl Engine {
                 let req = format!("{}\n", serde_json::to_string(&request).unwrap());
                 writer.write_all(req.as_bytes()).unwrap();
             }
-        };
+        } else if !distributed::is_daemon() && cfg!(feature = "ring") {
+            let num_workers =
+                mistralrs_quant::distributed::get_global_tp_size_from_devices().unwrap() - 1;
+            let master_port = RingConfig::load().master_port;
+            let listener =
+                TcpListener::bind(format!("0.0.0.0:{master_port}")).expect("bind replicator");
+
+            for _ in 0..num_workers {
+                let (stream, _) = listener.accept().unwrap();
+                let mut writer = BufWriter::new(stream);
+                let req = format!("{}\n", serde_json::to_string(&request).unwrap());
+                writer.write_all(req.as_bytes()).unwrap();
+            }
+        }
     }
 }

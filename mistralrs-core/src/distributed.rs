@@ -5,25 +5,161 @@ use interprocess::local_socket::traits::{Listener, Stream};
 use interprocess::local_socket::{GenericNamespaced, Name, ToNsName};
 use interprocess::local_socket::{ListenerOptions, Stream as LocalStream};
 pub use mistralrs_quant::distributed::use_nccl;
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{RingConfig, ShardedVarBuilder};
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use std::env;
 use std::io::{BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::Arc;
+use tokio::runtime::Runtime;
+use tokio::sync::mpsc::Sender;
 use tracing::info;
 
 use crate::device_map::DeviceMapper;
 use crate::pipeline::{DeviceMappedModelLoader, IsqModelLoader};
 use crate::utils::varbuilder_utils::{self, DeviceForLoadTensor};
-use crate::{DeviceMapSetting, IsqOrganization, ModelPaths};
+use crate::{DeviceMapSetting, IsqOrganization, ModelPaths, Request};
 
 pub(crate) const IS_DAEMON_FLAG: &str = "__MISTRALRS_DAEMON_INTERNAL";
 
 pub fn is_daemon() -> bool {
-    std::env::var(IS_DAEMON_FLAG).is_ok()
+    #[cfg(feature = "cuda")]
+    {
+        std::env::var(IS_DAEMON_FLAG).is_ok()
+    }
+    #[cfg(feature = "ring")]
+    {
+        !RingConfig::load().is_master_rank()
+    }
+    #[cfg(not(any(feature = "cuda", feature = "ring")))]
+    false
+}
+
+pub fn nccl_daemon_replicator(request_sender: Sender<Request>) {
+    use std::io::BufRead;
+    use std::io::BufReader;
+
+    std::thread::spawn(move || {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async move {
+            use interprocess::local_socket::traits::Stream;
+            use interprocess::local_socket::Stream as LocalStream;
+
+            loop {
+                let name = ipc_name().unwrap();
+                if let Ok(stream) = LocalStream::connect(name) {
+                    let mut reader = BufReader::new(stream);
+                    let mut buf = String::new();
+                    reader.read_line(&mut buf).unwrap();
+                    let mut req: Request = serde_json::from_str(&buf).unwrap();
+
+                    req = match req {
+                        Request::ReIsq(x) => Request::ReIsq(x),
+                        Request::Terminate => Request::Terminate,
+                        Request::Detokenize(mut x) => {
+                            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+                            x.response = sender;
+                            let req = Request::Detokenize(x);
+
+                            request_sender.send(req).await.unwrap();
+                            let resp = receiver.recv().await.unwrap();
+                            resp.unwrap();
+                            continue;
+                        }
+                        Request::Tokenize(mut x) => {
+                            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+                            x.response = sender;
+                            let req = Request::Tokenize(x);
+
+                            request_sender.send(req).await.unwrap();
+                            let resp = receiver.recv().await.unwrap();
+                            resp.unwrap();
+                            continue;
+                        }
+                        Request::Normal(mut x) => {
+                            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+                            x.is_streaming = false;
+                            x.response = sender;
+                            let req = Request::Normal(x);
+
+                            request_sender.send(req).await.unwrap();
+                            let resp = receiver.recv().await.unwrap();
+                            resp.as_result().unwrap();
+                            continue;
+                        }
+                        Request::TerminateAllSeqsNextStep => Request::TerminateAllSeqsNextStep,
+                    };
+
+                    request_sender.send(req).await.unwrap();
+                }
+            }
+        });
+    });
+}
+
+pub fn ring_daemon_replicator(request_sender: Sender<Request>) {
+    use std::io::BufRead;
+    use std::io::BufReader;
+
+    let ring_config = RingConfig::load();
+
+    let master_ip = ring_config.master_ip();
+    let master_port = ring_config.master_port;
+    std::thread::spawn(move || {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async move {
+            loop {
+                if let Ok(stream) = TcpStream::connect(format!("{}:{}", master_ip, master_port)) {
+                    let mut reader = BufReader::new(stream);
+                    let mut buf = String::new();
+                    reader.read_line(&mut buf).unwrap();
+                    let mut req: Request = serde_json::from_str(&buf).unwrap();
+
+                    req = match req {
+                        Request::ReIsq(x) => Request::ReIsq(x),
+                        Request::Terminate => Request::Terminate,
+                        Request::Detokenize(mut x) => {
+                            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+                            x.response = sender;
+                            let req = Request::Detokenize(x);
+
+                            request_sender.send(req).await.unwrap();
+                            let resp = receiver.recv().await.unwrap();
+                            resp.unwrap();
+                            continue;
+                        }
+                        Request::Tokenize(mut x) => {
+                            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+                            x.response = sender;
+                            let req = Request::Tokenize(x);
+
+                            request_sender.send(req).await.unwrap();
+                            let resp = receiver.recv().await.unwrap();
+                            resp.unwrap();
+                            continue;
+                        }
+                        Request::Normal(mut x) => {
+                            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+                            x.is_streaming = false;
+                            x.response = sender;
+                            let req = Request::Normal(x);
+
+                            request_sender.send(req).await.unwrap();
+                            let resp = receiver.recv().await.unwrap();
+                            resp.as_result().unwrap();
+                            continue;
+                        }
+                        Request::TerminateAllSeqsNextStep => Request::TerminateAllSeqsNextStep,
+                    };
+
+                    request_sender.send(req).await.unwrap();
+                }
+            }
+        });
+    });
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -56,10 +192,11 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
     model: &T,
     paths: &dyn ModelPaths,
 ) -> anyhow::Result<(Box<dyn DeviceMapper + Send + Sync>, ShardedVarBuilder)> {
-    #[cfg(not(feature = "nccl"))]
-    tracing::warn!(
-        "NCCL support was included in the build, be sure to build with `--features nccl`."
-    );
+    if !(cfg!(feature = "cuda") || cfg!(feature = "ring")) {
+        tracing::warn!(
+            "Distributed support was not included in the build, be sure to build with `--features nccl`."
+        );
+    }
 
     // NCCL case!
 
@@ -96,6 +233,12 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
         let mut stream = LocalStream::connect(name)?;
         stream.write_all(b"ready\n")?;
         worker_rank + 1
+    } else if cfg!(feature = "ring") {
+        id = mistralrs_quant::Id::new();
+
+        let config = RingConfig::load();
+
+        config.rank
     } else {
         id = mistralrs_quant::Id::new();
         let num_workers = mistralrs_quant::distributed::get_global_tp_size_from_devices()? - 1;

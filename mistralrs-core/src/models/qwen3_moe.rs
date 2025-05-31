@@ -426,7 +426,7 @@ impl FastMoeMlp {
             0,
             self.num_experts_per_tok,
         )?;
-        let mut scores = routing_weights.gather(&indices, D::Minus1)?;
+        let mut scores = routing_weights.gather(&indices.contiguous()?, D::Minus1)?;
 
         if self.norm_topk_prob {
             scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;

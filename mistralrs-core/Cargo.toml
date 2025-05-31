@@ -123,6 +123,7 @@ accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "mistralrs-quant
 mkl = ["candle-core/mkl", "candle-nn/mkl"]
 nccl = ["cuda", "mistralrs-quant/nccl"]
 utoipa = ["dep:utoipa"]
+ring = ["mistralrs-quant/ring"]
 
 [build-dependencies]
 bindgen_cuda = { version = "0.1.5", optional = true }

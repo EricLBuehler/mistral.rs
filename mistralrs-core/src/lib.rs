@@ -10,8 +10,6 @@ pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
-use std::io::BufRead;
-use std::io::BufReader;
 use std::sync::OnceLock;
 use std::time::Instant;
 use std::{
@@ -362,64 +360,14 @@ impl MistralRs {
 
         if distributed::is_daemon() {
             let request_sender = sender.write().unwrap().clone();
-            thread::spawn(move || {
-                let rt = Runtime::new().unwrap();
-                rt.block_on(async move {
-                    use interprocess::local_socket::traits::Stream;
-                    use interprocess::local_socket::Stream as LocalStream;
 
-                    loop {
-                        let name = distributed::ipc_name().unwrap();
-                        if let Ok(stream) = LocalStream::connect(name) {
-                            let mut reader = BufReader::new(stream);
-                            let mut buf = String::new();
-                            reader.read_line(&mut buf).unwrap();
-                            let mut req: Request = serde_json::from_str(&buf).unwrap();
-
-                            req = match req {
-                                Request::ReIsq(x) => Request::ReIsq(x),
-                                Request::Terminate => Request::Terminate,
-                                Request::Detokenize(mut x) => {
-                                    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-                                    x.response = sender;
-                                    let req = Request::Detokenize(x);
-
-                                    request_sender.send(req).await.unwrap();
-                                    let resp = receiver.recv().await.unwrap();
-                                    resp.unwrap();
-                                    continue;
-                                }
-                                Request::Tokenize(mut x) => {
-                                    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-                                    x.response = sender;
-                                    let req = Request::Tokenize(x);
-
-                                    request_sender.send(req).await.unwrap();
-                                    let resp = receiver.recv().await.unwrap();
-                                    resp.unwrap();
-                                    continue;
-                                }
-                                Request::Normal(mut x) => {
-                                    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-                                    x.is_streaming = false;
-                                    x.response = sender;
-                                    let req = Request::Normal(x);
-
-                                    request_sender.send(req).await.unwrap();
-                                    let resp = receiver.recv().await.unwrap();
-                                    resp.as_result().unwrap();
-                                    continue;
-                                }
-                                Request::TerminateAllSeqsNextStep => {
-                                    Request::TerminateAllSeqsNextStep
-                                }
-                            };
-
-                            request_sender.send(req).await.unwrap();
-                        }
-                    }
-                });
-            });
+            if cfg!(feature = "ring") {
+                // Ring daemon replicator
+                distributed::ring_daemon_replicator(request_sender);
+            } else {
+                // NCCL daemon replicator
+                distributed::nccl_daemon_replicator(request_sender);
+            }
 
             #[allow(clippy::empty_loop)]
             loop {}

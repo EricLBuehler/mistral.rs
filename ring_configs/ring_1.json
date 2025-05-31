@@ -1,0 +1,8 @@
+{
+  "master_ip": "0.0.0.0",
+  "master_port": 1234,
+  "port": 12346,
+  "right_port": 12345,
+  "rank": 1,
+  "world_size": 2
+}

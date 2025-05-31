@@ -131,7 +131,9 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 2. **Performance**
    - CPU acceleration (MKL, AVX, [NEON](docs/DEVICE_MAPPING.md#arm-neon), [Accelerate](docs/DEVICE_MAPPING.md#apple-accelerate))
    - GPU acceleration ([CUDA](docs/HTTP.md#cuda-support) with [FlashAttention](docs/FLASH_ATTENTION.md) & [cuDNN](docs/HTTP.md#cudnn-support), [Metal](docs/HTTP.md#apple-silicon-support))
-   - Automatic tensor parallelism with [NCCL](docs/DISTRIBUTED.md)
+   - Automatic [tensor parallelism](docs/DISTRIBUTED/DISTRIBUTED.md) for splitting models across multiple devices
+     - CUDA-specialized [NCCL](docs/DISTRIBUTED/NCCL.md)
+     - Heterogeneous, flexible [Ring backend](docs/DISTRIBUTED/RING.md)
 
 3. **Quantization**
    - [In-place quantization (ISQ)](docs/ISQ.md) of Hugging Face models

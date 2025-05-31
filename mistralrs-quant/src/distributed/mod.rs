@@ -1,9 +1,50 @@
-use std::{fmt::Debug, sync::Barrier};
+use std::{fmt::Debug, fs::File, sync::Barrier};
 
 use candle_core::Result;
 pub use ops::{AllGather, Comm, Id, SumAllReduce};
 pub mod layers;
 pub mod socket;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RingConfig {
+    master_ip: Option<String>,
+    pub master_port: u16,
+    pub port: u16,
+    pub right_port: u16,
+    right_ip: Option<String>,
+    pub rank: usize,
+    pub world_size: usize,
+}
+
+impl RingConfig {
+    /// Loads the ring backend config from a path at `RING_CONFIG`
+    pub fn load() -> Self {
+        let config_json = std::env::var("RING_CONFIG").expect("RING_CONFIG must be set");
+        let config: RingConfig = serde_json::from_reader(
+            &File::open(config_json).expect("Could not access Ring config JSON"),
+        )
+        .expect("Invalid JSON config");
+
+        if config.master_ip.is_none() && !config.is_master_rank() {
+            panic!("Invalid Ring config. Non-master ranks (rank != 0) must specify master_ip.");
+        }
+        config
+    }
+
+    pub fn is_master_rank(&self) -> bool {
+        self.rank == 0
+    }
+
+    pub fn master_ip(&self) -> String {
+        self.master_ip.clone().unwrap_or("0.0.0.0".to_string())
+    }
+
+    pub fn right_ip(&self) -> String {
+        self.right_ip.clone().unwrap_or("0.0.0.0".to_string())
+    }
+}
 
 pub trait BarrierLike: Debug + Send + Sync {
     fn wait(&self) -> Result<()>;
@@ -24,7 +65,13 @@ pub fn get_global_tp_size_from_devices() -> Result<usize> {
             .w()
             .map(|x| x as usize)
     }
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(feature = "ring")]
+    {
+        let config = RingConfig::load();
+        Ok(config.world_size)
+    }
+
+    #[cfg(not(any(feature = "cuda", feature = "ring")))]
     Ok(1)
 }
 
@@ -267,7 +314,365 @@ mod ops {
     }
 }
 
-#[cfg(not(all(feature = "cuda", feature = "nccl")))]
+#[cfg(feature = "ring")]
+mod ops {
+    use std::{
+        collections::HashMap,
+        fmt::Debug,
+        sync::{Arc, Mutex, OnceLock},
+        time::{Duration, Instant},
+    };
+
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+
+    // Friendly aliases to tame type complexity.
+    type SharedTcpStream = Arc<Mutex<TcpStream>>;
+    type LeftRight = (SharedTcpStream, SharedTcpStream);
+
+    use candle_core::{
+        backend::BackendStorage, CpuStorage, Device, Result, Storage, Tensor, WithDType,
+    };
+
+    use super::RingConfig;
+
+    // Lazily–initialized pair of TCP streams shared by every ring‑based collective op
+    static LEFT_RIGHT_STREAMS: OnceLock<LeftRight> = OnceLock::new();
+
+    fn get_ring_streams(config: &RingConfig) -> LeftRight {
+        LEFT_RIGHT_STREAMS
+            .get_or_init(|| {
+                let cur_port = config.port;
+
+                let right_ip = config.right_ip();
+                let right_port = config.right_port;
+
+                let left_listener =
+                    TcpListener::bind(format!("0.0.0.0:{cur_port}")).expect("bind left");
+
+                let start = Instant::now();
+                // Connect to the right neighbor using the provided IP
+                let right = loop {
+                    match TcpStream::connect(format!("{}:{}", right_ip, right_port)) {
+                        Ok(s) => break s,
+                        Err(_) if start.elapsed() > Duration::from_secs(10) => {
+                            panic!("Failed to connect to right node due to 10-second timeout");
+                        }
+                        Err(_) => continue,
+                    }
+                };
+
+                // Accept connection from the left neighbour
+                let (left, _) = left_listener.accept().expect("accept left neighbour");
+
+                left.set_nodelay(true).unwrap();
+                left.set_nonblocking(false).unwrap();
+                right.set_nodelay(true).unwrap();
+                right.set_nonblocking(false).unwrap();
+
+                (Arc::new(Mutex::new(left)), Arc::new(Mutex::new(right)))
+            })
+            .clone()
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Id;
+
+    impl Default for Id {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Id {
+        pub fn new() -> Self {
+            Self
+        }
+
+        pub fn uninit(_internal: [::core::ffi::c_char; 128usize]) -> Self {
+            Self
+        }
+
+        pub fn internal(&self) -> &[::core::ffi::c_char; 128usize] {
+            static ZEROED_ID: [::core::ffi::c_char; 128] = [0; 128];
+            &ZEROED_ID
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct Comm {
+        config: RingConfig,
+    }
+
+    impl Comm {
+        pub fn from_device(
+            _id: Id,
+            _dev: &Device,
+            _rank: usize,
+            _world_size: usize,
+        ) -> Result<Self> {
+            let config = RingConfig::load();
+            // Validate ring configuration
+            if config.world_size < 2 {
+                candle_core::bail!(
+                    "Ring backend requires world_size >= 2, got {}",
+                    config.world_size
+                );
+            }
+            if config.rank >= config.world_size {
+                candle_core::bail!(
+                    "Ring backend invalid config: rank {} >= world_size {}",
+                    config.rank,
+                    config.world_size
+                );
+            }
+            Ok(Self { config })
+        }
+
+        pub fn rank(&self) -> usize {
+            self.config.rank
+        }
+
+        pub fn world_size(&self) -> usize {
+            self.config.world_size
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct SumAllReduce {
+        left: SharedTcpStream,
+        right: SharedTcpStream,
+        buffers: Arc<Mutex<HashMap<usize, Vec<u8>>>>,
+    }
+
+    impl SumAllReduce {
+        pub fn new(comm: &Arc<Comm>) -> Self {
+            let (left, right) = get_ring_streams(&comm.config);
+            Self {
+                left,
+                right,
+                buffers: Arc::new(Mutex::new(HashMap::new())),
+            }
+        }
+
+        fn run<T: WithDType + Copy>(
+            &self,
+            x: &[T],
+            dims: &[usize],
+            device: &Device,
+        ) -> Result<Tensor> {
+            let nbytes = x.len() * std::mem::size_of_val(x);
+            // dbg!(nbytes);
+
+            // --- ping‑pong to overlap latency ---------------------------------------
+            // Clone the Arc references
+            let right = self.right.clone();
+            let left = self.left.clone();
+
+            // View the local slice as bytes that can be written on the wire.
+            let data_bytes = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const u8, nbytes) };
+
+            // Re‑use (or allocate) a receive buffer of identical size.
+            let mut buffers_guard = self.buffers.lock().map_err(|e| {
+                candle_core::Error::msg(format!("Failed to lock buffers mutex: {:?}", e))
+            })?;
+            let recv_buf = buffers_guard
+                .entry(nbytes)
+                .or_insert_with(|| vec![0u8; nbytes]);
+
+            // Lock both sockets once to avoid per-call mutex overhead.
+            let mut right_guard = right.lock().map_err(|e| {
+                candle_core::Error::msg(format!("Failed to lock right stream mutex: {:?}", e))
+            })?;
+            let mut left_guard = left.lock().map_err(|e| {
+                candle_core::Error::msg(format!("Failed to lock left stream mutex: {:?}", e))
+            })?;
+
+            // For the typical tensor size we see (~ 6 KiB) a single
+            // write/read pair is faster than chunking because the extra
+            // system‑call and loop overhead dominates.  Only fall back to the
+            // chunked “ping‑pong” pipeline for larger transfers.
+            if nbytes <= 8 * 1024 {
+                // --- fast path: one shot ------------------------------------
+                right_guard
+                    .write_all(data_bytes)
+                    .map_err(|e| candle_core::Error::msg(format!("write error: {:?}", e)))?;
+
+                left_guard
+                    .read_exact(recv_buf)
+                    .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))?;
+            } else {
+                // --- slow path: chunked ping‑pong ---------------------------
+                const CHUNK_SIZE: usize = 64 * 1024; // 64 KiB
+                let mut offset = 0;
+
+                while offset < nbytes {
+                    let len = std::cmp::min(CHUNK_SIZE, nbytes - offset);
+
+                    // send this chunk to the right neighbour
+                    right_guard
+                        .write_all(&data_bytes[offset..offset + len])
+                        .map_err(|e| candle_core::Error::msg(format!("write error: {:?}", e)))?;
+
+                    // receive the matching chunk from the left neighbour
+                    left_guard
+                        .read_exact(&mut recv_buf[offset..offset + len])
+                        .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))?;
+
+                    offset += len;
+                }
+            }
+
+            drop(left_guard);
+            drop(right_guard);
+            // drop(buffers_guard);
+
+            // -------------------------------------------------------------------------
+            // Interpret the received bytes as a slice of T and add element‑wise into x
+            let received: &[T] =
+                unsafe { std::slice::from_raw_parts(recv_buf.as_ptr() as *const T, x.len()) };
+
+            Tensor::from_slice(received, dims, device)
+        }
+    }
+
+    impl SumAllReduce {
+        pub fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor> {
+            let storage = xs.storage_and_layout().0;
+            let cpu_storage = match &*storage {
+                Storage::Cpu(storage) => storage,
+                Storage::Cuda(storage) => &storage.to_cpu_storage()?,
+                Storage::Metal(storage) => &storage.to_cpu_storage()?,
+            };
+
+            let delta = match cpu_storage {
+                CpuStorage::BF16(x) => self.run(x.as_slice(), xs.dims(), xs.device())?,
+                CpuStorage::F32(x) => self.run(x.as_slice(), xs.dims(), xs.device())?,
+                CpuStorage::F16(x) => self.run(x.as_slice(), xs.dims(), xs.device())?,
+                _ => candle_core::bail!("Unsupported dtype for ring backend"),
+            };
+
+            xs + delta
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct AllGather {
+        left: SharedTcpStream,
+        right: SharedTcpStream,
+        buffers: Arc<Mutex<HashMap<usize, Vec<u8>>>>,
+        dim: usize,
+        world_size: usize,
+        rank: usize,
+    }
+
+    impl AllGather {
+        pub fn new(comm: &Arc<Comm>, dim: usize) -> Self {
+            let (left, right) = get_ring_streams(&comm.config);
+            Self {
+                left,
+                right,
+                buffers: Arc::new(Mutex::new(HashMap::new())),
+                dim,
+                world_size: comm.world_size(),
+                rank: comm.rank(),
+            }
+        }
+
+        fn run<T: WithDType + Copy + Default>(
+            &self,
+            x: &[T],
+            dims: &[usize],
+            device: &Device,
+        ) -> Result<Tensor> {
+            // Validate gather dimension
+            if self.dim >= dims.len() {
+                candle_core::bail!(
+                    "AllGather: invalid dimension {} for tensor of rank {}",
+                    self.dim,
+                    dims.len()
+                );
+            }
+            let elem_cnt = x.len();
+            let nbytes = elem_cnt * std::mem::size_of_val(x);
+
+            // Prepare output buffer that will hold slices from every rank.
+            let mut out: Vec<T> = vec![T::default(); elem_cnt * self.world_size];
+
+            // Copy this rank’s slice into its final slot.
+            let start = self.rank * elem_cnt;
+            out[start..start + elem_cnt].copy_from_slice(x);
+
+            let right = self.right.clone();
+            let left = self.left.clone();
+            let mut send_piece: &[T] = x;
+
+            for step in 0..(self.world_size - 1) {
+                // ---------- send to the right ----------
+                let bytes =
+                    unsafe { std::slice::from_raw_parts(send_piece.as_ptr() as *const u8, nbytes) };
+                {
+                    let mut rg = right.lock().map_err(|e| {
+                        candle_core::Error::msg(format!(
+                            "Failed to lock right stream mutex: {:?}",
+                            e
+                        ))
+                    })?;
+                    rg.write_all(bytes)
+                        .map_err(|e| candle_core::Error::msg(format!("write error: {:?}", e)))?;
+                }
+
+                // ---------- receive from the left ----------
+                let mut bg = self.buffers.lock().map_err(|e| {
+                    candle_core::Error::msg(format!("Failed to lock buffers mutex: {:?}", e))
+                })?;
+                let buf = bg.entry(nbytes).or_insert_with(|| vec![0u8; nbytes]);
+                {
+                    let mut lg = left.lock().map_err(|e| {
+                        candle_core::Error::msg(format!(
+                            "Failed to lock left stream mutex: {:?}",
+                            e
+                        ))
+                    })?;
+                    lg.read_exact(buf)
+                        .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))?;
+                }
+                let recv_piece: &[T] =
+                    unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const T, elem_cnt) };
+
+                // Determine which global rank the received slice came from.
+                let src_rank = (self.rank + self.world_size - step - 1) % self.world_size;
+                let dst = src_rank * elem_cnt;
+                out[dst..dst + elem_cnt].copy_from_slice(recv_piece);
+
+                // Forward that slice in the next iteration.
+                send_piece = recv_piece;
+            }
+
+            let mut out_dims = dims.to_vec();
+            out_dims[self.dim] *= self.world_size;
+            Tensor::from_slice(&out, out_dims, device)
+        }
+
+        pub fn all_gather(&self, xs: &Tensor) -> Result<Tensor> {
+            let storage = xs.storage_and_layout().0;
+            let cpu_storage = match &*storage {
+                Storage::Cpu(s) => s,
+                Storage::Cuda(s) => &s.to_cpu_storage()?,
+                Storage::Metal(s) => &s.to_cpu_storage()?,
+            };
+
+            match cpu_storage {
+                CpuStorage::BF16(x) => self.run(x.as_slice(), xs.dims(), xs.device()),
+                CpuStorage::F32(x) => self.run(x.as_slice(), xs.dims(), xs.device()),
+                CpuStorage::F16(x) => self.run(x.as_slice(), xs.dims(), xs.device()),
+                _ => candle_core::bail!("Unsupported dtype for ring backend"),
+            }
+        }
+    }
+}
+
+#[cfg(not(any(all(feature = "cuda", feature = "nccl"), feature = "ring")))]
 mod ops {
     use std::sync::Arc;
 

@@ -4,7 +4,7 @@ In mistral.rs, device mapping is **automatically managed** to be as performant a
 by default in the CLI/server and Python API and does not make any changes when the model fits entirely on the GPU.
 
 > [!NOTE]
-> If your system has more than one CUDA device, mistral.rs will automatically use [tensor parallelism](DISTRIBUTED.md). If the model does not
+> If your system has more than one CUDA device, mistral.rs will automatically use [tensor parallelism](DISTRIBUTED/DISTRIBUTED.md). If the model does not
 > completely fit on the available GPUs, or you wish to use automatic device mapping, you can disable tensor parallelism by setting `MISTRALRS_NO_NCCL=1`.
 
 Automatic device mapping works by prioritizing loading models into GPU memory, and any remaining parts are loaded into CPU memory.

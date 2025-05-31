@@ -75,7 +75,7 @@ pub(crate) fn from_mmaped_safetensors(
     get_device_for_tensor: Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>,
 ) -> Result<ShardedVarBuilder> {
     // No mmap for cuda.
-    if xlora_paths.is_empty() && !base_device.is_cuda() {
+    if xlora_paths.is_empty() && !base_device.is_cuda() || cfg!(feature = "ring") {
         if !silent {
             tracing::info!("Loading model using mmap strategy.");
         }
