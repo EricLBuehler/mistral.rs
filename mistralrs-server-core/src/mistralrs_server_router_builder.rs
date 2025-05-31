@@ -1,9 +1,12 @@
+/// Builder for mistral.rs for server
+use anyhow::Result;
 use axum::{
     extract::DefaultBodyLimit,
     http::{self, Method},
     routing::{get, post},
     Router,
 };
+use mistralrs_core::initialize_logging;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -18,7 +21,60 @@ use crate::{
     SharedMistralState,
 };
 
-pub fn get_router(
+pub struct MistralRsServerRouterBuilder {
+    mistralrs: Option<SharedMistralState>,
+    include_swagger_routes: bool,
+    base_path: Option<String>,
+}
+
+impl Default for MistralRsServerRouterBuilder {
+    fn default() -> Self {
+        Self {
+            mistralrs: None,
+            include_swagger_routes: true,
+            base_path: None,
+        }
+    }
+}
+
+impl MistralRsServerRouterBuilder {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    pub fn with_mistralrs(mut self, mistralrs: SharedMistralState) -> Self {
+        self.mistralrs = Some(mistralrs);
+        self
+    }
+
+    pub fn with_include_swagger_routes(mut self, include_swagger_routes: bool) -> Self {
+        self.include_swagger_routes = include_swagger_routes;
+        self
+    }
+
+    pub fn with_base_path(mut self, base_path: &str) -> Self {
+        self.base_path = Some(base_path.to_owned());
+        self
+    }
+
+    pub async fn build(mut self) -> Result<Router> {
+        initialize_logging();
+
+        let mistralrs = self.mistralrs.ok_or_else(|| {
+            anyhow::anyhow!("`mistralrs` instance must be set. Use `with_mistralrs`.")
+        })?;
+
+        let mistralrs_server_router = init_get_router(
+            mistralrs,
+            self.include_swagger_routes,
+            self.base_path.as_deref(),
+        );
+
+        Ok(mistralrs_server_router)
+    }
+}
+
+fn init_get_router(
     state: SharedMistralState,
     include_swagger_routes: bool,
     base_path: Option<&str>,

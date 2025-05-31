@@ -1,4 +1,4 @@
-/// Builder for mistral.rs server
+/// Builder for mistral.rs for server
 use std::num::NonZeroUsize;
 
 use anyhow::{Context, Result};
@@ -14,7 +14,7 @@ use tracing::info;
 
 use crate::{defaults, LoadedPipeline, SharedMistralState};
 
-pub struct ServerBuilder {
+pub struct MistralRsForServerBuilder {
     //   These are for router
     // mistralrs: Option<SharedMistralState>,
     // router: Option<Router>,
@@ -132,7 +132,7 @@ pub struct ServerBuilder {
     // enable_thinking: bool,
 }
 
-impl Default for ServerBuilder {
+impl Default for MistralRsForServerBuilder {
     fn default() -> Self {
         Self {
             // mistralrs: None,
@@ -183,7 +183,7 @@ impl Default for ServerBuilder {
     }
 }
 
-impl ServerBuilder {
+impl MistralRsForServerBuilder {
     pub fn new() -> Self {
         Default::default()
     }
@@ -367,7 +367,7 @@ impl ServerBuilder {
             .with_jinja_explicit(self.jinja_explicit)
             .build()?;
 
-        print_mistral_server_info(&loader);
+        mistralrs_instance_info(&loader);
 
         let isq = self
             .in_situ_quant
@@ -414,6 +414,7 @@ impl ServerBuilder {
     }
 }
 
+// TODO replace with best device?
 fn init_device(force_cpu: bool, seed: Option<u64>) -> Result<candle_core::Device> {
     #[cfg(feature = "metal")]
     let device = if force_cpu {
@@ -480,7 +481,7 @@ fn init_mapper(
 }
 
 #[allow(clippy::borrowed_box)]
-fn print_mistral_server_info(loader: &Box<dyn Loader>) {
+fn mistralrs_instance_info(loader: &Box<dyn Loader>) {
     info!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
         candle_core::utils::with_avx(),
