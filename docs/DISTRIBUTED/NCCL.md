@@ -1,4 +1,4 @@
-# Distributed inference in mistral.rs: Tensor parallelism and Multi-node support
+# NCCL in mistral.rs
 
 Mistral.rs supports distributed inference on CUDA with Tensor Parallelism via NCCL.
 

@@ -412,7 +412,20 @@ mod ops {
             _world_size: usize,
         ) -> Result<Self> {
             let config = RingConfig::load();
-
+            // Validate ring configuration
+            if config.world_size < 2 {
+                candle_core::bail!(
+                    "Ring backend requires world_size >= 2, got {}",
+                    config.world_size
+                );
+            }
+            if config.rank >= config.world_size {
+                candle_core::bail!(
+                    "Ring backend invalid config: rank {} >= world_size {}",
+                    config.rank,
+                    config.world_size
+                );
+            }
             Ok(Self { config })
         }
 
@@ -460,14 +473,20 @@ mod ops {
             let data_bytes = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const u8, nbytes) };
 
             // Re‑use (or allocate) a receive buffer of identical size.
-            let mut buffers_guard = self.buffers.lock().unwrap();
+            let mut buffers_guard = self.buffers.lock().map_err(|e| {
+                candle_core::Error::msg(format!("Failed to lock buffers mutex: {:?}", e))
+            })?;
             let recv_buf = buffers_guard
                 .entry(nbytes)
                 .or_insert_with(|| vec![0u8; nbytes]);
 
-            // Lock both sockets once to avoid per‑call mutex overhead.
-            let mut right_guard = right.lock().unwrap();
-            let mut left_guard = left.lock().unwrap();
+            // Lock both sockets once to avoid per-call mutex overhead.
+            let mut right_guard = right.lock().map_err(|e| {
+                candle_core::Error::msg(format!("Failed to lock right stream mutex: {:?}", e))
+            })?;
+            let mut left_guard = left.lock().map_err(|e| {
+                candle_core::Error::msg(format!("Failed to lock left stream mutex: {:?}", e))
+            })?;
 
             // For the typical tensor size we see (~ 6 KiB) a single
             // write/read pair is faster than chunking because the extra
@@ -566,6 +585,14 @@ mod ops {
             dims: &[usize],
             device: &Device,
         ) -> Result<Tensor> {
+            // Validate gather dimension
+            if self.dim >= dims.len() {
+                candle_core::bail!(
+                    "AllGather: invalid dimension {} for tensor of rank {}",
+                    self.dim,
+                    dims.len()
+                );
+            }
             let elem_cnt = x.len();
             let nbytes = elem_cnt * std::mem::size_of_val(x);
 
@@ -585,16 +612,28 @@ mod ops {
                 let bytes =
                     unsafe { std::slice::from_raw_parts(send_piece.as_ptr() as *const u8, nbytes) };
                 {
-                    let mut rg = right.lock().unwrap();
+                    let mut rg = right.lock().map_err(|e| {
+                        candle_core::Error::msg(format!(
+                            "Failed to lock right stream mutex: {:?}",
+                            e
+                        ))
+                    })?;
                     rg.write_all(bytes)
                         .map_err(|e| candle_core::Error::msg(format!("write error: {:?}", e)))?;
                 }
 
                 // ---------- receive from the left ----------
-                let mut bg = self.buffers.lock().unwrap();
+                let mut bg = self.buffers.lock().map_err(|e| {
+                    candle_core::Error::msg(format!("Failed to lock buffers mutex: {:?}", e))
+                })?;
                 let buf = bg.entry(nbytes).or_insert_with(|| vec![0u8; nbytes]);
                 {
-                    let mut lg = left.lock().unwrap();
+                    let mut lg = left.lock().map_err(|e| {
+                        candle_core::Error::msg(format!(
+                            "Failed to lock left stream mutex: {:?}",
+                            e
+                        ))
+                    })?;
                     lg.read_exact(buf)
                         .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))?;
                 }
