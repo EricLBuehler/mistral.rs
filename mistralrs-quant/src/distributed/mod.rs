@@ -294,29 +294,16 @@ mod ops {
         world_size: usize,
     }
 
-    impl RingConfig {
-        fn read() -> Self {
-            let config_json = std::env::var("RING_CONFIG").expect("RING_CONFIG must be set");
-            let config: RingConfig = serde_json::from_reader(
-                &File::open(config_json).expect("Could not access Ring config JSON"),
-            )
-            .expect("Invalid JSON config");
-            config
-        }
-    }
-
     // Lazily–initialized pair of TCP streams shared by every ring‑based collective op
     static LEFT_RIGHT_STREAMS: OnceLock<(Arc<Mutex<TcpStream>>, Arc<Mutex<TcpStream>>)> =
         OnceLock::new();
 
-    fn get_ring_streams() -> (Arc<Mutex<TcpStream>>, Arc<Mutex<TcpStream>>) {
+    fn get_ring_streams(config: &RingConfig) -> (Arc<Mutex<TcpStream>>, Arc<Mutex<TcpStream>>) {
         LEFT_RIGHT_STREAMS
             .get_or_init(|| {
-                let config = RingConfig::read();
-
                 let cur_port = config.port;
 
-                let right_ip = config.right_ip.unwrap_or("0.0.0.0".to_string());
+                let right_ip = config.right_ip.clone().unwrap_or("0.0.0.0".to_string());
                 let right_port = config.right_port;
 
                 let left_listener =
@@ -373,8 +360,7 @@ mod ops {
 
     #[derive(Debug)]
     pub struct Comm {
-        rank: usize,
-        world_size: usize,
+        config: RingConfig,
     }
 
     impl Comm {
@@ -384,20 +370,21 @@ mod ops {
             _rank: usize,
             _world_size: usize,
         ) -> Result<Self> {
-            let config = RingConfig::read();
+            let config_json = std::env::var("RING_CONFIG").expect("RING_CONFIG must be set");
+            let config: RingConfig = serde_json::from_reader(
+                &File::open(config_json).expect("Could not access Ring config JSON"),
+            )
+            .expect("Invalid JSON config");
 
-            Ok(Self {
-                rank: config.rank,
-                world_size: config.world_size,
-            })
+            Ok(Self { config })
         }
 
         pub fn rank(&self) -> usize {
-            self.rank
+            self.config.rank
         }
 
         pub fn world_size(&self) -> usize {
-            self.world_size
+            self.config.world_size
         }
     }
 
@@ -409,8 +396,8 @@ mod ops {
     }
 
     impl SumAllReduce {
-        pub fn new(_comm: &Arc<Comm>) -> Self {
-            let (left, right) = get_ring_streams();
+        pub fn new(comm: &Arc<Comm>) -> Self {
+            let (left, right) = get_ring_streams(&comm.config);
             Self {
                 left,
                 right,
@@ -527,7 +514,7 @@ mod ops {
 
     impl AllGather {
         pub fn new(comm: &Arc<Comm>, dim: usize) -> Self {
-            let (left, right) = get_ring_streams();
+            let (left, right) = get_ring_streams(&comm.config);
             Self {
                 left,
                 right,
