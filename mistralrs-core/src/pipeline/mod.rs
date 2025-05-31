@@ -501,9 +501,7 @@ pub trait Pipeline:
                                     #[allow(irrefutable_let_patterns)]
                                     let ForwardInputsResult::Image { images } = r
                                     else {
-                                        unreachable!(
-                                            "All results must have same type, `CausalGeneration`"
-                                        )
+                                        unreachable!("All results must have same type, `Image`")
                                     };
                                     images
                                         .into_iter()
@@ -514,12 +512,49 @@ pub trait Pipeline:
                         )
                         .await?;
                     }
-                    ForwardInputsResult::Speech {
-                        pcms,
-                        rates,
-                        channels,
-                    } => {
-                        response::send_speech_responses(input_seqs, pcms, rates, channels).await?;
+                    ForwardInputsResult::Speech { .. } => {
+                        let rates = logits
+                            .iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::Speech { rates, .. } = r
+                                else {
+                                    unreachable!("All results must have same type, `Speech`")
+                                };
+                                assert_eq!(rates.len(), 1, "Each sequence must have 1 PCM output.");
+                                *rates.first().unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        let channels = logits
+                            .iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::Speech { channels, .. } = r
+                                else {
+                                    unreachable!("All results must have same type, `Speech`")
+                                };
+                                assert_eq!(
+                                    channels.len(),
+                                    1,
+                                    "Each sequence must have 1 PCM output."
+                                );
+                                *channels.first().unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        let pcms = logits
+                            .into_iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::Speech { pcms, .. } = r
+                                else {
+                                    unreachable!("All results must have same type, `Speech`")
+                                };
+                                assert_eq!(pcms.len(), 1, "Each sequence must have 1 PCM output.");
+                                pcms.into_iter().nth(0).unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        response::send_speech_responses(input_seqs, &pcms, &rates, &channels)
+                            .await?;
                     }
                 }
                 let end = Instant::now();
@@ -655,9 +690,7 @@ pub trait Pipeline:
                                     #[allow(irrefutable_let_patterns)]
                                     let ForwardInputsResult::Image { images } = r
                                     else {
-                                        unreachable!(
-                                            "All results must have same type, `CausalGeneration`"
-                                        )
+                                        unreachable!("All results must have same type, `Image`")
                                     };
                                     images
                                         .into_iter()
@@ -668,12 +701,49 @@ pub trait Pipeline:
                         )
                         .await?;
                     }
-                    ForwardInputsResult::Speech {
-                        pcms,
-                        rates,
-                        channels,
-                    } => {
-                        response::send_speech_responses(input_seqs, pcms, rates, channels).await?;
+                    ForwardInputsResult::Speech { .. } => {
+                        let rates = logits
+                            .iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::Speech { rates, .. } = r
+                                else {
+                                    unreachable!("All results must have same type, `Speech`")
+                                };
+                                assert_eq!(rates.len(), 1, "Each sequence must have 1 PCM output.");
+                                *rates.first().unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        let channels = logits
+                            .iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::Speech { channels, .. } = r
+                                else {
+                                    unreachable!("All results must have same type, `Speech`")
+                                };
+                                assert_eq!(
+                                    channels.len(),
+                                    1,
+                                    "Each sequence must have 1 PCM output."
+                                );
+                                *channels.first().unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        let pcms = logits
+                            .into_iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::Speech { pcms, .. } = r
+                                else {
+                                    unreachable!("All results must have same type, `Speech`")
+                                };
+                                assert_eq!(pcms.len(), 1, "Each sequence must have 1 PCM output.");
+                                pcms.into_iter().nth(0).unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        response::send_speech_responses(input_seqs, &pcms, &rates, &channels)
+                            .await?;
                     }
                 }
                 let end = Instant::now();
