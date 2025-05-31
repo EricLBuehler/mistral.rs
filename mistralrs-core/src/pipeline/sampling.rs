@@ -84,7 +84,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         let (text_new, tool_calls) =
                             parse_text_tools(this, delta.as_str(), seq.tools.clone())
                                 .map_err(candle_core::Error::msg)?;
-                        if tool_calls.len() != 0 {
+                        if !tool_calls.is_empty() {
                             is_done = Some(StopReason::ToolCalls);
                         }
 
@@ -229,7 +229,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 let (text_new, tool_calls) =
                     parse_text_tools(this, text.as_str(), seq.tools.clone())
                         .map_err(candle_core::Error::msg)?;
-                if tool_calls.len() != 0 {
+                if !tool_calls.is_empty() {
                     reason = StopReason::ToolCalls;
                 }
 

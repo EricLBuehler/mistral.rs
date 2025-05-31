@@ -326,6 +326,10 @@ mod ops {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
 
+    // Friendly aliases to tame type complexity.
+    type SharedTcpStream = Arc<Mutex<TcpStream>>;
+    type LeftRight = (SharedTcpStream, SharedTcpStream);
+
     use candle_core::{
         backend::BackendStorage, CpuStorage, Device, Result, Storage, Tensor, WithDType,
     };
@@ -333,10 +337,9 @@ mod ops {
     use super::RingConfig;
 
     // Lazily–initialized pair of TCP streams shared by every ring‑based collective op
-    static LEFT_RIGHT_STREAMS: OnceLock<(Arc<Mutex<TcpStream>>, Arc<Mutex<TcpStream>>)> =
-        OnceLock::new();
+    static LEFT_RIGHT_STREAMS: OnceLock<LeftRight> = OnceLock::new();
 
-    fn get_ring_streams(config: &RingConfig) -> (Arc<Mutex<TcpStream>>, Arc<Mutex<TcpStream>>) {
+    fn get_ring_streams(config: &RingConfig) -> LeftRight {
         LEFT_RIGHT_STREAMS
             .get_or_init(|| {
                 let cur_port = config.port;
@@ -424,8 +427,8 @@ mod ops {
 
     #[derive(Clone, Debug)]
     pub struct SumAllReduce {
-        left: Arc<Mutex<TcpStream>>,
-        right: Arc<Mutex<TcpStream>>,
+        left: SharedTcpStream,
+        right: SharedTcpStream,
         buffers: Arc<Mutex<HashMap<usize, Vec<u8>>>>,
     }
 
@@ -439,13 +442,13 @@ mod ops {
             }
         }
 
-        fn run<T: WithDType + Copy + std::ops::AddAssign>(
+        fn run<T: WithDType + Copy>(
             &self,
-            x: &Vec<T>,
+            x: &[T],
             dims: &[usize],
             device: &Device,
         ) -> Result<Tensor> {
-            let nbytes = x.len() * std::mem::size_of::<T>();
+            let nbytes = x.len() * std::mem::size_of_val(x);
             // dbg!(nbytes);
 
             // --- ping‑pong to overlap latency ---------------------------------------
@@ -458,11 +461,9 @@ mod ops {
 
             // Re‑use (or allocate) a receive buffer of identical size.
             let mut buffers_guard = self.buffers.lock().unwrap();
-            let recv_buf = buffers_guard.entry(nbytes).or_insert_with(|| {
-                let mut v = Vec::<u8>::with_capacity(nbytes);
-                unsafe { v.set_len(nbytes) };
-                v
-            });
+            let recv_buf = buffers_guard
+                .entry(nbytes)
+                .or_insert_with(|| vec![0u8; nbytes]);
 
             // Lock both sockets once to avoid per‑call mutex overhead.
             let mut right_guard = right.lock().unwrap();
@@ -512,7 +513,7 @@ mod ops {
             let received: &[T] =
                 unsafe { std::slice::from_raw_parts(recv_buf.as_ptr() as *const T, x.len()) };
 
-            Tensor::from_slice(&received, dims, device)
+            Tensor::from_slice(received, dims, device)
         }
     }
 
@@ -526,9 +527,9 @@ mod ops {
             };
 
             let delta = match cpu_storage {
-                CpuStorage::BF16(x) => self.run(x, xs.dims(), xs.device())?,
-                CpuStorage::F32(x) => self.run(x, xs.dims(), xs.device())?,
-                CpuStorage::F16(x) => self.run(x, xs.dims(), xs.device())?,
+                CpuStorage::BF16(x) => self.run(x.as_slice(), xs.dims(), xs.device())?,
+                CpuStorage::F32(x) => self.run(x.as_slice(), xs.dims(), xs.device())?,
+                CpuStorage::F16(x) => self.run(x.as_slice(), xs.dims(), xs.device())?,
                 _ => candle_core::bail!("Unsupported dtype for ring backend"),
             };
 
@@ -538,8 +539,8 @@ mod ops {
 
     #[derive(Clone, Debug)]
     pub struct AllGather {
-        left: Arc<Mutex<TcpStream>>,
-        right: Arc<Mutex<TcpStream>>,
+        left: SharedTcpStream,
+        right: SharedTcpStream,
         buffers: Arc<Mutex<HashMap<usize, Vec<u8>>>>,
         dim: usize,
         world_size: usize,
@@ -559,18 +560,17 @@ mod ops {
             }
         }
 
-        fn run<T: WithDType + Copy>(
+        fn run<T: WithDType + Copy + Default>(
             &self,
-            x: &Vec<T>,
+            x: &[T],
             dims: &[usize],
             device: &Device,
         ) -> Result<Tensor> {
             let elem_cnt = x.len();
-            let nbytes = elem_cnt * std::mem::size_of::<T>();
+            let nbytes = elem_cnt * std::mem::size_of_val(x);
 
             // Prepare output buffer that will hold slices from every rank.
-            let mut out: Vec<T> = Vec::with_capacity(elem_cnt * self.world_size);
-            unsafe { out.set_len(elem_cnt * self.world_size) };
+            let mut out: Vec<T> = vec![T::default(); elem_cnt * self.world_size];
 
             // Copy this rank’s slice into its final slot.
             let start = self.rank * elem_cnt;
@@ -592,11 +592,7 @@ mod ops {
 
                 // ---------- receive from the left ----------
                 let mut bg = self.buffers.lock().unwrap();
-                let buf = bg.entry(nbytes).or_insert_with(|| {
-                    let mut v = Vec::with_capacity(nbytes);
-                    unsafe { v.set_len(nbytes) };
-                    v
-                });
+                let buf = bg.entry(nbytes).or_insert_with(|| vec![0u8; nbytes]);
                 {
                     let mut lg = left.lock().unwrap();
                     lg.read_exact(buf)
@@ -628,9 +624,9 @@ mod ops {
             };
 
             match cpu_storage {
-                CpuStorage::BF16(x) => self.run(x, xs.dims(), xs.device()),
-                CpuStorage::F32(x) => self.run(x, xs.dims(), xs.device()),
-                CpuStorage::F16(x) => self.run(x, xs.dims(), xs.device()),
+                CpuStorage::BF16(x) => self.run(x.as_slice(), xs.dims(), xs.device()),
+                CpuStorage::F32(x) => self.run(x.as_slice(), xs.dims(), xs.device()),
+                CpuStorage::F16(x) => self.run(x.as_slice(), xs.dims(), xs.device()),
                 _ => candle_core::bail!("Unsupported dtype for ring backend"),
             }
         }
