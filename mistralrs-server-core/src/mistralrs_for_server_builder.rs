@@ -41,8 +41,7 @@ pub mod defaults {
     pub const ENABLE_SEARCH: bool = false;
     pub const SEARCH_BERT_MODEL: Option<String> = None;
     pub const ENABLE_THINKING: bool = false;
-    pub const DEFAULT_TOKEN_SOURCE: mistralrs_core::TokenSource =
-        mistralrs_core::TokenSource::CacheToken;
+    pub const TOKEN_SOURCE: mistralrs_core::TokenSource = mistralrs_core::TokenSource::CacheToken;
 }
 
 pub struct MistralRsForServerBuilder {
@@ -158,7 +157,7 @@ impl Default for MistralRsForServerBuilder {
             no_kv_cache: defaults::NO_KV_CACHE,
             chat_template: defaults::CHAT_TEMPLATE,
             jinja_explicit: defaults::JINJA_EXPLICIT,
-            token_source: defaults::DEFAULT_TOKEN_SOURCE,
+            token_source: defaults::TOKEN_SOURCE,
             interactive_mode: defaults::INTERACTIVE_MODE,
             prefix_cache_n: defaults::PREFIX_CACHE_N,
             num_device_layers: defaults::NUM_DEVICE_LAYERS,
@@ -378,15 +377,7 @@ impl MistralRsForServerBuilder {
 
         let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
 
-        let bert_model = if self.enable_search {
-            Some(
-                self.search_bert_model
-                    .map(BertEmbeddingModel::Custom)
-                    .unwrap_or_default(),
-            )
-        } else {
-            None
-        };
+        let bert_model = get_bert_model(self.enable_search, self.search_bert_model);
 
         let mistralrs = MistralRsBuilder::new(
             pipeline,
@@ -579,5 +570,20 @@ async fn init_scheduler_config(
         SchedulerConfig::DefaultScheduler {
             method: DefaultSchedulerMethod::Fixed(args_max_seqs.try_into().unwrap()),
         }
+    }
+}
+
+pub fn get_bert_model(
+    enable_search: bool,
+    search_bert_model: Option<String>,
+) -> Option<BertEmbeddingModel> {
+    if enable_search {
+        Some(
+            search_bert_model
+                .map(BertEmbeddingModel::Custom)
+                .unwrap_or_default(),
+        )
+    } else {
+        None
     }
 }

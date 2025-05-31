@@ -2,6 +2,7 @@
 members = [
     "mistralrs-server-core",
     "mistralrs-server",
+    "mistralrs-server-2",
     "mistralrs-core",
     "mistralrs-pyo3",
     "mistralrs",
@@ -49,8 +50,29 @@ pyo3 = { version = "0.24.1", features = ["full", "extension-module", "either"] }
 tokio = { version = "1.44.2", features = ["full", "rt-multi-thread"] }
 once_cell = "1.19.0"
 # All features but avif, avif increases the msrv dramatically
-image = { version = "0.25.1", default-features = false, features = ['bmp', 'dds', 'exr', 'ff', 'gif', 'hdr', 'ico', 'jpeg', 'png', 'pnm', 'qoi', 'tga', 'tiff', 'webp']}
-reqwest = { version = "0.12.4", default-features = false, features = ["blocking", "rustls-tls", "charset", "http2", "macos-system-configuration"] }
+image = { version = "0.25.1", default-features = false, features = [
+    'bmp',
+    'dds',
+    'exr',
+    'ff',
+    'gif',
+    'hdr',
+    'ico',
+    'jpeg',
+    'png',
+    'pnm',
+    'qoi',
+    'tga',
+    'tiff',
+    'webp',
+] }
+reqwest = { version = "0.12.4", default-features = false, features = [
+    "blocking",
+    "rustls-tls",
+    "charset",
+    "http2",
+    "macos-system-configuration",
+] }
 base64 = "0.22.1"
 half = "2.4.0"
 rayon = "1.1.0"
@@ -62,7 +84,11 @@ regex = "1.10.6"
 metal = { version = "0.27.0", features = ["mps"] }
 safetensors = "0.4.5"
 toml = "0.8.12"
-hf-hub = { version = "0.4.1", default-features = false, features = ["ureq", "tokio", "rustls-tls"] }
+hf-hub = { version = "0.4.1", default-features = false, features = [
+    "ureq",
+    "tokio",
+    "rustls-tls",
+] }
 itertools = "0.13.0"
 
 [profile.release-with-debug]

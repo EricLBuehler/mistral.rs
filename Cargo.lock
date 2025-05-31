@@ -2716,6 +2716,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "mistralrs-server-2"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "ctrlc",
+ "directories 6.0.0",
+ "either",
+ "indexmap",
+ "mistralrs-core",
+ "mistralrs-server-core",
+ "once_cell",
+ "regex",
+ "rustyline",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "mistralrs-server-core"
 version = "0.6.0"
 dependencies = [

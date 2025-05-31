@@ -1,0 +1,61 @@
+[package]
+name = "mistralrs-server-2"
+readme = "README.md"
+authors = ["Eric Buehler"]
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
+default-run = "mistralrs-server-2"
+
+[dependencies]
+anyhow.workspace = true
+ctrlc = "3.4.4"
+# candle-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+axum = { version = "0.7.4", features = ["tokio"] }
+# tower-http = { version = "0.5.1", features = ["cors"] }
+# utoipa = { workspace = true, features = ["axum_extras"] }
+# utoipa-swagger-ui = { version = "7.1.0", features = ["axum"] }
+mistralrs-core = { version = "0.6.0", path = "../mistralrs-core", features = [
+  "utoipa",
+] }
+mistralrs-server-core = { version = "0.6.0", path = "../mistralrs-server-core" }
+rustyline = { version = "15.0.0", default-features = false, features = [
+  "with-file-history",
+] }
+indexmap.workspace = true
+# accelerate-src = { workspace = true, optional = true }
+# intel-mkl-src = { workspace = true, optional = true }
+# futures.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+either.workspace = true
+clap.workspace = true
+once_cell.workspace = true
+# reqwest.workspace = true
+# image.workspace = true
+# url.workspace = true
+# data-url.workspace = true
+regex.workspace = true
+# toml.workspace = true
+# itertools.workspace = true
+directories = "6.0.0"
+
+[features]
+cuda = ["mistralrs-core/cuda", "mistralrs-server-core/cuda"]
+cudnn = ["mistralrs-core/cudnn", "mistralrs-server-core/cudnn"]
+metal = ["mistralrs-core/metal", "mistralrs-server-core/metal"]
+flash-attn = [
+  "cuda",
+  "mistralrs-core/flash-attn",
+  "mistralrs-server-core/flash-attn",
+]
+accelerate = ["mistralrs-core/accelerate", "mistralrs-server-core/accelerate"]
+mkl = ["mistralrs-core/mkl", "mistralrs-server-core/mkl"]
+nccl = ["mistralrs-core/nccl", "mistralrs-server-core/nccl"]

@@ -1,6 +1,5 @@
 pub mod chat_completion;
 mod completions;
-pub mod defaults;
 mod handlers;
 mod image_generation;
 pub mod mistralrs_for_server_builder;
@@ -9,4 +8,4 @@ pub mod openai;
 pub mod openapi_doc;
 mod speech_generation;
 pub mod types;
-mod util;
+pub mod util;

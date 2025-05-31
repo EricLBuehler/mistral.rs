@@ -1,4 +1,4 @@
-/// Custom types.pub type SharedMistralState = Arc<MistralRs>;
+/// Custom types
 use std::sync::Arc;
 
 use axum::extract::State;
