@@ -300,12 +300,9 @@ mod ops {
                     .parse()
                     .expect("u16");
 
-                // Accept connection from the left neighbour.
+                // Connect to the right neighbour **before** accepting the left one.
                 let left_listener =
                     TcpListener::bind(format!("127.0.0.1:{cur_port}")).expect("bind left");
-                let (left, _) = left_listener.accept().expect("accept left neighbour");
-
-                // Connect to the right neighbour.
                 let start = Instant::now();
                 let right = loop {
                     match TcpStream::connect(format!("127.0.0.1:{right_port}")) {
@@ -316,6 +313,9 @@ mod ops {
                         Err(_) => continue,
                     }
                 };
+
+                // Accept connection from the left neighbour.
+                let (left, _) = left_listener.accept().expect("accept left neighbour");
 
                 left.set_nodelay(true).unwrap();
                 left.set_nonblocking(false).unwrap();
@@ -403,6 +403,7 @@ mod ops {
             device: &Device,
         ) -> Result<Tensor> {
             let nbytes = x.len() * std::mem::size_of::<T>();
+            dbg!(nbytes);
 
             // Clone the Arc references for use in spawned tasks
             let right = self.right.clone();
