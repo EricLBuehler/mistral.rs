@@ -522,7 +522,7 @@ pub trait Pipeline:
                                     unreachable!("All results must have same type, `Speech`")
                                 };
                                 assert_eq!(rates.len(), 1, "Each sequence must have 1 PCM output.");
-                                *rates.into_iter().nth(0).unwrap()
+                                *rates.first().unwrap()
                             })
                             .collect::<Vec<_>>();
                         let channels = logits
@@ -538,7 +538,7 @@ pub trait Pipeline:
                                     1,
                                     "Each sequence must have 1 PCM output."
                                 );
-                                *channels.into_iter().nth(0).unwrap()
+                                *channels.first().unwrap()
                             })
                             .collect::<Vec<_>>();
                         let pcms = logits
@@ -711,7 +711,7 @@ pub trait Pipeline:
                                     unreachable!("All results must have same type, `Speech`")
                                 };
                                 assert_eq!(rates.len(), 1, "Each sequence must have 1 PCM output.");
-                                *rates.into_iter().nth(0).unwrap()
+                                *rates.first().unwrap()
                             })
                             .collect::<Vec<_>>();
                         let channels = logits
@@ -727,7 +727,7 @@ pub trait Pipeline:
                                     1,
                                     "Each sequence must have 1 PCM output."
                                 );
-                                *channels.into_iter().nth(0).unwrap()
+                                *channels.first().unwrap()
                             })
                             .collect::<Vec<_>>();
                         let pcms = logits
