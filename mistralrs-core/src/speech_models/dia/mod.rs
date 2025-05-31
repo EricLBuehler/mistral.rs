@@ -17,7 +17,7 @@ use rand_isaac::Isaac64Rng;
 pub use config::DiaConfig;
 use tracing::info;
 
-use crate::ops::apply_triangular;
+use crate::ops::{apply_triangular, RepeatInterleaveOp};
 
 use super::{utils::normalize_loudness, SpeechGenerationConfig, SpeechGenerationOutput};
 
@@ -178,7 +178,9 @@ impl DiaPipeline {
                 .repeat((2 * batch_size, 1))?;
         let encoder_padding_mask = enc_input_cond
             .ne(self.cfg.data.text_pad_value)?
-            .repeat((2, 1))?;
+            .to_dtype(DType::F32)?
+            .repeat_interleave(2, 0)?
+            .to_dtype(DType::U8)?;
         let encoder_attn_mask = create_attn_mask(&encoder_padding_mask, &encoder_padding_mask)?;
         let encoder_out =
             self.model
@@ -458,7 +460,7 @@ impl DiaPipeline {
             let dec_positions = Tensor::full(dec_step as f32, (2 * batch_size, 1), &self.device)?;
             let current_tokens = generated_tokens
                 .i((.., dec_step..dec_step + 1, ..))? // (B, 1, C)
-                .repeat((2, 1, 1))?; // (2×B, 1, C)
+                .repeat_interleave(2, 0)?; // (2×B, 1, C)
 
             let mut pred_c = self.decoder_step(
                 &current_tokens.to_dtype(DType::U32)?,
@@ -576,6 +578,9 @@ impl DiaPipeline {
                     tokens_per_second as f32 / (end - start).as_secs_f32()
                 );
                 start = end;
+            }
+            if dec_step > 9*86 {
+                break;
             }
         }
 
