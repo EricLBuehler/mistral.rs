@@ -426,7 +426,7 @@
 <a href=#426 id=426 data-nosnippet>426</a>            <span class="number">0</span>,
 <a href=#427 id=427 data-nosnippet>427</a>            <span class="self">self</span>.num_experts_per_tok,
 <a href=#428 id=428 data-nosnippet>428</a>        )<span class="question-mark">?</span>;
-<a href=#429 id=429 data-nosnippet>429</a>        <span class="kw">let </span><span class="kw-2">mut </span>scores = routing_weights.gather(<span class="kw-2">&amp;</span>indices, D::Minus1)<span class="question-mark">?</span>;
+<a href=#429 id=429 data-nosnippet>429</a>        <span class="kw">let </span><span class="kw-2">mut </span>scores = routing_weights.gather(<span class="kw-2">&amp;</span>indices.contiguous()<span class="question-mark">?</span>, D::Minus1)<span class="question-mark">?</span>;
 <a href=#430 id=430 data-nosnippet>430</a>
 <a href=#431 id=431 data-nosnippet>431</a>        <span class="kw">if </span><span class="self">self</span>.norm_topk_prob {
 <a href=#432 id=432 data-nosnippet>432</a>            scores = scores.broadcast_div(<span class="kw-2">&amp;</span>scores.sum_keepdim(D::Minus1)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
