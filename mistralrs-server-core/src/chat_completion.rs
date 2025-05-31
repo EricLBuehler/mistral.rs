@@ -30,6 +30,10 @@ use mistralrs_core::{
 };
 use serde::Serialize;
 
+/// A hook that runs when a chunk is ready, receiving the chunk and allowing modification.
+pub type OnChunkCallback =
+    Box<dyn Fn(ChatCompletionChunkResponse) -> ChatCompletionChunkResponse + Send + Sync>;
+
 /// A hook that runs when the stream finishes, receiving all of the chunks.
 pub type OnDoneCallback = Box<dyn Fn(&[ChatCompletionChunkResponse]) + Send + Sync>;
 
@@ -54,6 +58,7 @@ pub struct Streamer {
     state: SharedMistralState,
     store_chunks: bool,
     chunks: Vec<ChatCompletionChunkResponse>,
+    on_chunk: Option<OnChunkCallback>,
     on_done: Option<OnDoneCallback>,
 }
 
@@ -98,12 +103,16 @@ impl futures::Stream for Streamer {
                     MistralRs::maybe_log_error(self.state.clone(), &*e);
                     Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
                 }
-                Response::Chunk(response) => {
+                Response::Chunk(mut response) => {
                     if response.choices.iter().all(|x| x.finish_reason.is_some()) {
                         self.done_state = DoneState::SendingDone;
                     }
                     // Done now, just need to send the [DONE]
                     MistralRs::maybe_log_response(self.state.clone(), &response);
+
+                    if let Some(on_chunk) = &self.on_chunk {
+                        response = on_chunk(response);
+                    }
 
                     if self.store_chunks {
                         self.chunks.push(response.clone());
@@ -460,7 +469,7 @@ pub async fn chatcompletions(
     }
 
     if is_streaming {
-        ChatCompletionResponder::Sse(create_chat_streamer(rx, state, None))
+        ChatCompletionResponder::Sse(create_chat_streamer(rx, state, None, None))
     } else {
         process_non_streaming_chat_response(&mut rx, state).await
     }
@@ -493,14 +502,18 @@ pub async fn send_request(state: &SharedMistralState, request: Request) -> Resul
 pub fn create_chat_streamer(
     rx: Receiver<Response>,
     state: SharedMistralState,
+    on_chunk: Option<OnChunkCallback>,
     on_done: Option<OnDoneCallback>,
 ) -> Sse<Streamer> {
+    let store_chunks = on_done.is_some();
+
     let streamer = Streamer {
         rx,
         done_state: DoneState::Running,
-        store_chunks: true,
+        store_chunks,
         state,
         chunks: Vec::new(),
+        on_chunk,
         on_done,
     };
 
