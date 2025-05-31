@@ -5,12 +5,44 @@
 use candle_core::{Device, Result, Tensor};
 use candle_nn::Activation as CandleActivation;
 use once_cell::sync::Lazy;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, Once};
+
+/// Controller for the CUBLASLT handle and inhibition flag.
+pub struct CublasLtController {
+    handle: Mutex<Option<&'static CublasLtWrapper>>,
+    inhibit: AtomicBool,
+}
+
+impl CublasLtController {
+    /// Set whether to inhibit CUBLASLT usage.
+    pub fn set_inhibit(&self, value: bool) {
+        self.inhibit.store(value, Ordering::SeqCst);
+    }
+
+    /// Get the handle if not inhibited.
+    pub fn get(&self) -> Option<&'static CublasLtWrapper> {
+        let handle_opt = self.handle.lock().unwrap();
+        if self.inhibit.load(Ordering::SeqCst) {
+            None
+        } else {
+            *handle_opt
+        }
+    }
+}
+
+pub static CUBLASLT_CONTROLLER: Lazy<CublasLtController> = Lazy::new(|| CublasLtController {
+    handle: Mutex::new(None),
+    inhibit: AtomicBool::new(false),
+});
 
 #[cfg(feature = "cuda")]
 mod api;
 #[cfg(feature = "cuda")]
 mod matmul;
+#[cfg(test)]
+#[cfg(feature = "cuda")]
+mod tests;
 
 #[cfg(feature = "cuda")]
 pub use api::{fused_batch_matmul, fused_batch_matmul_f8, CublasLt};
@@ -22,8 +54,6 @@ pub enum F8MatmulOutType {
 
 static INIT: Once = Once::new();
 static mut CUBLASLT: Option<CublasLtWrapper> = None;
-pub static CUBLASLT_HANDLE: Lazy<Mutex<Option<&'static CublasLtWrapper>>> =
-    Lazy::new(|| Mutex::new(None));
 
 pub fn maybe_init_cublas_lt_wrapper(device: Device) {
     unsafe {
@@ -48,7 +78,10 @@ pub fn maybe_init_cublas_lt_wrapper(device: Device) {
             }
             #[allow(static_mut_refs)]
             let cublaslt: Option<&'static CublasLtWrapper> = CUBLASLT.as_ref();
-            *CUBLASLT_HANDLE.lock().unwrap() = cublaslt;
+
+            // Set the controller handle
+            let mut handle_lock = CUBLASLT_CONTROLLER.handle.lock().unwrap();
+            *handle_lock = cublaslt;
         });
     }
 }
@@ -69,8 +102,7 @@ impl CublasLtWrapper {
     /// * `dequant_a_scale` - F32 scalar tensor, used to `a` the out tensor.
     /// * `dequant_b_scale` - F32 scalar tensor, used to `b` the out tensor.
     /// * `quantize_scale` - F32 scalar tensor, used to requantize.
-    /// * `out` - Optional Output tensor of size BxNxK.
-    ///           If set and beta != 0, will be added to the end result of A*B before `act`
+    /// * `out` - Optional Output tensor of size BxNxK. If set and beta != 0, will be added to the end result of A*B before `act`
     /// * `alpha` - Optional scaling factor for A*B
     /// * `beta` - Optional scaling factor for C
     /// * `bias` - Optional bias tensor of size M
@@ -131,8 +163,7 @@ impl CublasLtWrapper {
     ///
     /// * `a` - Input tensor of size BxMxK
     /// * `b` - Input tensor of size BxNxK
-    /// * `out` - Optional Output tensor of size BxNxK.
-    ///           If set and beta != 0, will be added to the end result of A*B before `act`
+    /// * `out` - Optional Output tensor of size BxNxK. If set and beta != 0, will be added to the end result of A*B before `act`
     /// * `alpha` - Optional scaling factor for A*B
     /// * `beta` - Optional scaling factor for C
     /// * `bias` - Optional bias tensor of size M

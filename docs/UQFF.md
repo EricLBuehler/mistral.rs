@@ -54,6 +54,13 @@ The following quantization formats are supported in UQFF. One can, of course, be
 - FP8:
     - FP8 E4M3 (4-bit exponent, 3-bit mantissa)
 
+- AFQ quantized (🔥 AFQ is fast on **Metal**):
+    - AFQ2
+    - AFQ3
+    - AFQ4
+    - AFQ6
+    - AFQ8
+
 ## Loading a UQFF model
 
 To load a UQFF model, one should specify the filename. This will be located based on the model ID, and can

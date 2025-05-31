@@ -75,7 +75,7 @@ impl Model {
         } else {
             (None, None)
         };
-        let request = Request::Normal(NormalRequest {
+        let request = Request::Normal(Box::new(NormalRequest {
             messages: request.take_messages(),
             sampling_params: request.take_sampling_params(),
             response: tx,
@@ -84,13 +84,12 @@ impl Model {
             id: 0,
             constraint: request.take_constraint(),
             suffix: None,
-            adapters: request.take_adapters(),
             tools,
             tool_choice,
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
-        });
+        }));
 
         self.runner.get_sender()?.send(request).await?;
 
@@ -111,7 +110,7 @@ impl Model {
         } else {
             (None, None)
         };
-        let request = Request::Normal(NormalRequest {
+        let request = Request::Normal(Box::new(NormalRequest {
             messages: request.take_messages(),
             sampling_params: request.take_sampling_params(),
             response: tx,
@@ -120,13 +119,12 @@ impl Model {
             id: 0,
             constraint: request.take_constraint(),
             suffix: None,
-            adapters: request.take_adapters(),
             tools,
             tool_choice,
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
-        });
+        }));
 
         self.runner.get_sender()?.send(request).await?;
 
@@ -156,7 +154,7 @@ impl Model {
         } else {
             (None, None)
         };
-        let request = Request::Normal(NormalRequest {
+        let request = Request::Normal(Box::new(NormalRequest {
             messages: request.take_messages(),
             sampling_params: request.take_sampling_params(),
             response: tx,
@@ -165,13 +163,12 @@ impl Model {
             id: 0,
             constraint: request.take_constraint(),
             suffix: None,
-            adapters: request.take_adapters(),
             tools,
             tool_choice,
             logits_processors: request.take_logits_processors(),
             return_raw_logits: true,
             web_search_options: request.take_web_search_options(),
-        });
+        }));
 
         self.runner.get_sender()?.send(request).await?;
 
@@ -198,7 +195,7 @@ impl Model {
     ) -> anyhow::Result<ImageGenerationResponse> {
         let (tx, mut rx) = channel(1);
 
-        let request = Request::Normal(NormalRequest {
+        let request = Request::Normal(Box::new(NormalRequest {
             id: 0,
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
@@ -211,13 +208,12 @@ impl Model {
             is_streaming: false,
             suffix: None,
             constraint: Constraint::None,
-            adapters: None,
             tool_choice: None,
             tools: None,
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
-        });
+        }));
 
         self.runner.get_sender()?.send(request).await?;
 
@@ -233,16 +229,49 @@ impl Model {
         Ok(response)
     }
 
-    /// Activate certain adapters on the model, they will be used for requests which do not specify unique adapters.
-    pub async fn activate_adapters<A: ToString>(&self, adapters: Vec<A>) -> anyhow::Result<()> {
-        let request = Request::ActivateAdapters(
-            adapters
-                .into_iter()
-                .map(|a| a.to_string())
-                .collect::<Vec<_>>(),
-        );
+    /// Generate audio given a (model specific) prompt.
+    ///
+    /// This returns: (pcm, sampling rate, channels)
+    pub async fn generate_speech(
+        &self,
+        prompt: impl ToString,
+    ) -> anyhow::Result<(Arc<Vec<f32>>, usize, usize)> {
+        let (tx, mut rx) = channel(1);
 
-        Ok(self.runner.get_sender()?.send(request).await?)
+        let request = Request::Normal(Box::new(NormalRequest {
+            id: 0,
+            messages: RequestMessage::SpeechGeneration {
+                prompt: prompt.to_string(),
+            },
+            sampling_params: SamplingParams::deterministic(),
+            response: tx,
+            return_logprobs: false,
+            is_streaming: false,
+            suffix: None,
+            constraint: Constraint::None,
+            tool_choice: None,
+            tools: None,
+            logits_processors: None,
+            return_raw_logits: false,
+            web_search_options: None,
+        }));
+
+        self.runner.get_sender()?.send(request).await?;
+
+        let ResponseOk::Speech {
+            pcm,
+            rate,
+            channels,
+        } = rx
+            .recv()
+            .await
+            .context("Channel was erroneously closed!")?
+            .as_result()?
+        else {
+            anyhow::bail!("Got unexpected response type.")
+        };
+
+        Ok((pcm, rate, channels))
     }
 
     /// Reapply ISQ to the model. This will be done on whatever device the model is already on.
@@ -260,6 +289,7 @@ impl Model {
         tools: Option<Vec<Tool>>,
         add_special_tokens: bool,
         add_generation_prompt: bool,
+        enable_thinking: Option<bool>,
     ) -> anyhow::Result<Vec<u32>> {
         let (tx, mut rx) = channel(1);
         let request = Request::Tokenize(TokenizationRequest {
@@ -268,6 +298,7 @@ impl Model {
             add_special_tokens,
             add_generation_prompt,
             response: tx,
+            enable_thinking,
         });
         self.runner.get_sender()?.send(request).await?;
 

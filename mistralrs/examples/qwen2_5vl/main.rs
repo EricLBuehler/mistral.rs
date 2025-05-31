@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 use mistralrs_core::initialize_logging;
 use tokio::task;
 
@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
 
     let image = image::load_from_memory(&bytes)?;
 
-    let model = VisionModelBuilder::new(args.model_id, VisionLoaderType::Qwen2_5VL)
+    let model = VisionModelBuilder::new(args.model_id)
         .with_isq(IsqType::Q8_0)
         .with_logging()
         .build()
@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here?",
-        image,
+        vec![image],
         &model,
     )?;
 

@@ -47,7 +47,7 @@ The image depicts a group of orange ants climbing over a black pole. The ants ar
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m HuggingFaceM4/idefics2-8b-chatty -a idefics2
+cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m HuggingFaceM4/idefics2-8b-chatty
 ```
 
 2) Send a request
@@ -97,13 +97,12 @@ This is a minimal example of running the Idefics 2 model with a dummy image.
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = VisionModelBuilder::new(
         "HuggingFaceM4/idefics2-8b-chatty",
-        VisionLoaderType::Idefics2,
     )
     .with_isq(IsqType::Q4K)
     .with_logging()

@@ -17,7 +17,7 @@ The Mistral Small 3.1 model itself does not come with the correct JINJA chat tem
 tool calling with Mistral Small 3.1, and you can use it by specifying the `jinja_explicit` parameter in the various APIs. For example:
 
 ```bash
-./mistralrs-server --port 1234 --isq q4k --jinja-explicit chat_templates/mistral_small_tool_call.jinja vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 -a mistral3  
+./mistralrs-server --port 1234 --isq q4k --jinja-explicit chat_templates/mistral_small_tool_call.jinja vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503  
 ```
 
 
@@ -57,7 +57,7 @@ If there's anything specific about this flower or its care that interests you fu
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --release --features ... -- --port 1234 vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 -a mistral3
+cargo run --release --features ... -- --port 1234 vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
 ```
 
 2) Send a request
@@ -81,7 +81,7 @@ completion = client.chat.completions.create(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                        "url": "https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg"
                     },
                 },
                 {
@@ -113,12 +113,12 @@ This is a minimal example of running the Mistral 3 model with a dummy image.
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model =
-        VisionModelBuilder::new("mistralai/Mistral-Small-3.1-24B-Instruct-2503", VisionLoaderType::Mistral3)
+        VisionModelBuilder::new("mistralai/Mistral-Small-3.1-24B-Instruct-2503")
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()

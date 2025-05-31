@@ -53,7 +53,7 @@ payload = {
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": str(encoded_string),
+                        "url": f"data:image/png;base64,{encoded_string}",
                     },
                 },
                 {

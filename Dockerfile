@@ -33,9 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy the built binaries from the builder stage
 COPY --from=builder /mistralrs/target/release/mistralrs-bench /usr/local/bin/
 COPY --from=builder /mistralrs/target/release/mistralrs-server /usr/local/bin/
+COPY --from=builder /mistralrs/target/release/mistralrs-web-chat /usr/local/bin/
 
 # Make the binaries executable
-RUN chmod +x /usr/local/bin/mistralrs-bench /usr/local/bin/mistralrs-server
-
-# Set the entrypoint
-ENTRYPOINT ["mistralrs-server", "--port", "80", "--token-source", "env:HUGGING_FACE_HUB_TOKEN"]
+RUN chmod +x /usr/local/bin/mistralrs-bench /usr/local/bin/mistralrs-server /usr/local/bin/mistralrs-web-chat

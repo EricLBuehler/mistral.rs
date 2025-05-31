@@ -8,7 +8,9 @@ use candle_core::{
     shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape, Tensor, D,
 };
 use either::Either;
-use mistralrs_quant::{QuantMethod, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder};
+use mistralrs_quant::{
+    BitWiseOp, NonZeroOp, QuantMethod, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder,
+};
 use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
 
 use crate::{
@@ -21,7 +23,6 @@ use crate::{
         PhiRotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
-    ops::{BitWiseOp, NonZeroOp},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -53,7 +54,6 @@ pub struct ImageProcessorConfig {
     pub type_feature: Option<String>,
 }
 
-serde_default_fn!(bool, d_flash_attn, false);
 serde_default_fn!(bool, word_emb_default, false);
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
@@ -71,12 +71,11 @@ pub struct Config {
     pub eos_token_id: Option<u32>,
     pub rope_scaling: Option<PhiRopeScalingConfig>,
     pub max_position_embeddings: usize,
-    #[serde(default = "d_flash_attn")]
-    pub use_flash_attn: bool,
     pub sliding_window: Option<usize>,
     pub original_max_position_embeddings: usize,
     pub embd_layer: EmbedLayerConfig,
     pub img_processor: ImageProcessorConfig,
+    #[serde(alias = "quantization")]
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub tie_word_embeddings: bool,
@@ -204,7 +203,6 @@ impl Attention {
             paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: num_heads / num_kv_heads,
-                use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: cfg.sliding_window,
@@ -972,6 +970,7 @@ impl Model {
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
         let vision_embed_tokens = ImageEmbedding::new(
             cfg,
@@ -979,7 +978,6 @@ impl Model {
             &cfg.embd_layer,
             mapper.set_nm_device(vb_m.pp("vision_embed_tokens"), false),
         )?;
-        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         let mut ropes = HashMap::new();
         for layer_idx in 0..cfg.num_hidden_layers {
@@ -991,11 +989,12 @@ impl Model {
                 Arc::new(PhiRotaryEmbedding::new(vb.dtype(), cfg.clone(), device)?),
             );
         }
-        for layer_idx in NiceProgressBar::<_, 'b'>(
+        let layers = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
-        ) {
+        )
+        .par_iter_if_isq(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -1009,17 +1008,16 @@ impl Model {
                     Some(PagedAttention::new(cfg.head_dim(), device, None)?)
                 }
             };
-            let layer = DecoderLayer::new(
-                rotary_emb.clone(),
+            DecoderLayer::new(
+                rotary_emb,
                 cfg,
                 vb_l.pp(layer_idx),
                 &*mapper,
                 layer_idx,
                 normal_loading_metadata.loading_isq,
                 paged_attn,
-            )?;
-            layers.push(layer)
-        }
+            )
+        })?;
         let norm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -1029,7 +1027,7 @@ impl Model {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
-                &None,
+                &cfg.quantization_config,
                 false,
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
@@ -1222,9 +1220,6 @@ impl VisionModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
-    }
-    fn has_conv2d(&self) -> bool {
-        true
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg

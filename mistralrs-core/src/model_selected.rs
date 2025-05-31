@@ -4,7 +4,7 @@ use clap::Subcommand;
 
 use crate::{
     pipeline::{AutoDeviceMapParams, IsqOrganization, NormalLoaderType, VisionLoaderType},
-    DiffusionLoaderType, ModelDType,
+    DiffusionLoaderType, ModelDType, SpeechLoaderType,
 };
 
 fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
@@ -16,6 +16,10 @@ fn parse_vision_arch(x: &str) -> Result<VisionLoaderType, String> {
 }
 
 fn parse_diffusion_arch(x: &str) -> Result<DiffusionLoaderType, String> {
+    x.parse()
+}
+
+fn parse_speech_arch(x: &str) -> Result<SpeechLoaderType, String> {
     x.parse()
 }
 
@@ -63,9 +67,9 @@ pub enum ModelSelected {
         #[arg(short, long)]
         write_uqff: Option<PathBuf>,
 
-        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;)
         #[arg(short, long)]
-        from_uqff: Option<PathBuf>,
+        from_uqff: Option<String>,
 
         /// .imatrix file to enhance GGUF quantizations with.
         /// Incompatible with `--calibration-file/-c`
@@ -86,7 +90,7 @@ pub enum ModelSelected {
         max_batch_size: usize,
 
         /// Cache path for Hugging Face models downloaded locally
-        #[arg(short, long)]
+        #[arg(long)]
         hf_cache_path: Option<PathBuf>,
     },
 
@@ -129,9 +133,9 @@ pub enum ModelSelected {
         #[arg(short, long)]
         write_uqff: Option<PathBuf>,
 
-        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;).
         #[arg(short, long)]
-        from_uqff: Option<PathBuf>,
+        from_uqff: Option<String>,
 
         /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
@@ -142,7 +146,7 @@ pub enum ModelSelected {
         max_batch_size: usize,
 
         /// Cache path for Hugging Face models downloaded locally
-        #[arg(short, long)]
+        #[arg(long)]
         hf_cache_path: Option<PathBuf>,
     },
 
@@ -158,11 +162,7 @@ pub enum ModelSelected {
 
         /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
-        adapters_model_id: String,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
+        adapter_model_id: String,
 
         /// The architecture of the model.
         #[arg(long, value_parser = parse_arch)]
@@ -180,9 +180,9 @@ pub enum ModelSelected {
         #[arg(short, long)]
         write_uqff: Option<PathBuf>,
 
-        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;).
         #[arg(short, long)]
-        from_uqff: Option<PathBuf>,
+        from_uqff: Option<String>,
 
         /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
@@ -193,7 +193,7 @@ pub enum ModelSelected {
         max_batch_size: usize,
 
         /// Cache path for Hugging Face models downloaded locally
-        #[arg(short, long)]
+        #[arg(long)]
         hf_cache_path: Option<PathBuf>,
     },
 
@@ -476,7 +476,7 @@ pub enum ModelSelected {
 
         /// The architecture of the model.
         #[arg(short, long, value_parser = parse_vision_arch)]
-        arch: VisionLoaderType,
+        arch: Option<VisionLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
@@ -490,9 +490,9 @@ pub enum ModelSelected {
         #[arg(short, long)]
         write_uqff: Option<PathBuf>,
 
-        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;).
         #[arg(short, long)]
-        from_uqff: Option<PathBuf>,
+        from_uqff: Option<String>,
 
         /// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
         /// This is only supported on the Qwen2-VL and Idefics models. Others handle this internally.
@@ -525,7 +525,7 @@ pub enum ModelSelected {
         max_image_length: usize,
 
         /// Cache path for Hugging Face models downloaded locally
-        #[arg(short, long)]
+        #[arg(long)]
         hf_cache_path: Option<PathBuf>,
     },
 
@@ -541,6 +541,25 @@ pub enum ModelSelected {
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        dtype: ModelDType,
+    },
+
+    Speech {
+        /// Model ID to load from. This may be a HF hub repo or a local path.
+        #[arg(short, long)]
+        model_id: String,
+
+        /// DAC Model ID to load from. If not provided, this is automatically downloaded from the default path for the model.
+        /// This may be a HF hub repo or a local path.
+        #[arg(short, long)]
+        dac_model_id: Option<String>,
+
+        /// The architecture of the model.
+        #[arg(short, long, value_parser = parse_speech_arch)]
+        arch: SpeechLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        #[arg(long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
     },
 }

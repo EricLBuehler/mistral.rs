@@ -40,7 +40,7 @@ pub trait InputsProcessor {
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
-        paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
+        paged_attn_metadata: Option<PagedAttentionMeta>,
         prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>>;
@@ -51,9 +51,7 @@ pub trait InputsProcessor {
 // ========================= Test models input processor
 
 pub mod text_models_inputs_processor {
-    use std::{
-        any::Any, collections::HashMap, fmt::Debug, iter::repeat, num::NonZeroUsize, sync::Arc,
-    };
+    use std::{any::Any, collections::HashMap, fmt::Debug, num::NonZeroUsize, sync::Arc};
 
     use anyhow::Result;
     use candle_core::{DType, Device, DeviceLocation, Tensor, WithDType};
@@ -61,6 +59,7 @@ pub mod text_models_inputs_processor {
 
     use crate::{
         device_map::DeviceMapper,
+        get_mut_arcmutex,
         paged_attention::{BlockEngine, _PAD_SLOT_ID},
         sequence::Sequence,
     };
@@ -83,10 +82,10 @@ pub mod text_models_inputs_processor {
         Tensor::cat(&padded_x[..], 0).map_err(anyhow::Error::msg)
     }
 
-    pub struct PagedAttentionMeta<'a> {
+    pub struct PagedAttentionMeta {
         pub sliding_window: Option<usize>,
         pub block_size: usize,
-        pub block_engine: &'a mut BlockEngine,
+        pub block_engine: Arc<tokio::sync::Mutex<BlockEngine>>,
     }
 
     #[derive(Clone, Debug)]
@@ -140,12 +139,12 @@ pub mod text_models_inputs_processor {
     #[allow(clippy::too_many_arguments)]
     pub fn make_prompt_chunk<T: WithDType + Debug>(
         chunk_offset_toks: usize,
-        toks: Vec<Vec<T>>,
+        toks: Vec<&[T]>,
         seq_ids: &[usize],
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
-        mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Result<InputMetadata> {
         let max_len = toks
@@ -164,13 +163,17 @@ pub mod text_models_inputs_processor {
         let mut paged_attn_context_lens = Vec::new();
         let mut seqlens_q = vec![0];
         let mut seqlens_k = vec![0];
-        for (seq_id, mut ctxt) in seq_ids.iter().zip(toks) {
+        for (seq_id, ctxt) in seq_ids.iter().zip(toks) {
             let prompt_len = ctxt.len();
             let offset = last_n_context_len.unwrap_or_default();
             seqlen_offsets.push(offset.1 + chunk_offset_toks);
 
             position_ids.push(ctxt.len() + chunk_offset_toks);
-            ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
+            let mut ctxt = ctxt.to_vec();
+            ctxt.extend(std::iter::repeat_n(
+                padding_tok,
+                max_len.saturating_sub(ctxt.len()),
+            ));
             // If we are returning raw logits, we want to not trim the logits at all.
             if return_raw_logits {
                 if last_n_context_len.is_some() {
@@ -180,7 +183,8 @@ pub mod text_models_inputs_processor {
                 context_lens.push((0, ctxt.len()));
             } else {
                 context_lens.push((
-                    ctxt.len() - last_n_context_len.map(|(a, _)| a).unwrap_or(1),
+                    ctxt.len()
+                        .saturating_sub(last_n_context_len.map(|(a, _)| a).unwrap_or(1)),
                     last_n_context_len.map(|(a, _)| a).unwrap_or(1),
                 ));
             }
@@ -191,7 +195,8 @@ pub mod text_models_inputs_processor {
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
 
             if let Some(paged_attn_metadata) = &mut paged_attn_metadata {
-                let table = paged_attn_metadata.block_engine.block_tables.get(seq_id);
+                let block_engine = get_mut_arcmutex!(paged_attn_metadata.block_engine);
+                let table = block_engine.block_tables.get(seq_id);
 
                 if table.is_none() {
                     // Will be None during profiling.
@@ -205,13 +210,9 @@ pub mod text_models_inputs_processor {
                     .collect::<Vec<_>>();
 
                 let start_idx = if let Some(sliding_window) = paged_attn_metadata.sliding_window {
-                    if prompt_len > sliding_window {
-                        chunk_offset_toks.min(prompt_len - sliding_window)
-                    } else {
-                        chunk_offset_toks
-                    }
+                    prompt_len.saturating_sub(sliding_window)
                 } else {
-                    chunk_offset_toks
+                    0
                 };
 
                 let mut slot_mapping = Vec::new();
@@ -341,10 +342,10 @@ pub mod text_models_inputs_processor {
     }
 
     fn make_completion_chunk<T: WithDType>(
-        toks: Vec<Vec<T>>,
+        toks: Vec<&[T]>,
         input_seqs: &[&mut Sequence],
         device: &Device,
-        mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Result<InputMetadata> {
         // Pad each sequence by the padding token to the max len.
@@ -371,25 +372,23 @@ pub mod text_models_inputs_processor {
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
 
             if let Some(paged_attn_metadata) = &mut paged_attn_metadata {
-                let table = paged_attn_metadata
-                    .block_engine
-                    .block_tables
-                    .get(seq.id())
-                    .unwrap();
+                let block_engine = get_mut_arcmutex!(paged_attn_metadata.block_engine);
+                let table = block_engine.block_tables.get(seq.id()).unwrap();
 
                 let table = table
                     .iter()
                     .map(|block| block.deref_mut().block_id)
                     .collect::<Vec<_>>();
 
-                let block_number = if start_pos / paged_attn_metadata.block_size >= table.len() {
-                    panic!("Block table is too small (completion)! start_pos={} block_size={} table_len={}", start_pos, paged_attn_metadata.block_size, table.len());
+                let block_pos = start_pos - seq.token_offset();
+                let block_number = if block_pos / paged_attn_metadata.block_size >= table.len() {
+                    panic!("Block table is too small (completion)! start_pos={} block_size={} table_len={}", block_pos, paged_attn_metadata.block_size, table.len());
                 } else {
                     table
-                        .get(start_pos / paged_attn_metadata.block_size)
+                        .get(block_pos / paged_attn_metadata.block_size)
                         .unwrap()
                 };
-                let block_offset = start_pos % paged_attn_metadata.block_size;
+                let block_offset = block_pos % paged_attn_metadata.block_size;
                 let slot = block_number * paged_attn_metadata.block_size + block_offset;
                 let slot = slot.try_into().unwrap();
                 slot_mappings.push(vec![slot]);
@@ -506,72 +505,58 @@ pub mod text_models_inputs_processor {
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn get_prompt_input<T: WithDType + std::fmt::Debug>(
-        toks: Vec<Vec<T>>,
+        toks: Vec<&[T]>,
         input_seqs: &[&mut Sequence],
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
-        mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+        paged_attn_metadata: Option<&mut PagedAttentionMeta>,
         prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = Result<InnerInputProcessorOutput>>> {
         if let (Some(prompt_chunksize), true) = (prompt_chunksize, paged_attn_metadata.is_none()) {
-            let mut seq_chunks = Vec::new();
-            let mut n_chunks = Vec::new();
-            let prompt_chunksize: usize = prompt_chunksize.into();
-
-            // This comes from prefix caching
-            // The invariant where all token offsets are the same is handled by the scheduler
+            let chunk_size = prompt_chunksize.get();
             let offset = input_seqs[0].token_offset();
+            // Determine the maximum number of chunks across all sequences
+            let num_chunks = toks
+                .iter()
+                .map(|ctxt| ctxt.len().div_ceil(chunk_size))
+                .max()
+                .unwrap_or(0);
 
-            // Pad each sequence by the padding token to the max len.
-            for ctxt in toks.iter() {
-                let chunks = ctxt.chunks(prompt_chunksize).collect::<Vec<_>>();
-                n_chunks.push(chunks.len());
-                seq_chunks.push(chunks);
-            }
-            // Basically convert the sequences and tok chunks into chunks of seqs and the corresp toks
-            let mut chunks_transposed: Vec<Vec<(Vec<T>, usize)>> = Vec::new();
-            for (seq_n, seq) in seq_chunks.into_iter().enumerate() {
-                for (i, chunk) in seq.into_iter().enumerate() {
-                    match chunks_transposed.get_mut(i) {
-                        Some(part) => part.push((chunk.to_vec(), seq_n)),
-                        None => chunks_transposed.push(vec![(chunk.to_vec(), seq_n)]),
+            let mut outputs = Vec::with_capacity(num_chunks);
+            for chunk_idx in 0..num_chunks {
+                let mut slices = Vec::new();
+                let mut seq_ids = Vec::new();
+                let mut seq_indices = Vec::new();
+                for (seq_n, ctxt) in toks.iter().enumerate() {
+                    let start = chunk_idx * chunk_size;
+                    if start < ctxt.len() {
+                        let end = (start + chunk_size).min(ctxt.len());
+                        slices.push(&ctxt[start..end]);
+                        seq_indices.push(seq_n);
+                        seq_ids.push(*input_seqs[seq_n].id());
                     }
                 }
+                let result = make_prompt_chunk(
+                    chunk_idx * chunk_size + offset,
+                    slices,
+                    &seq_ids,
+                    device,
+                    last_n_context_len,
+                    return_raw_logits,
+                    None,
+                    mapper,
+                )
+                .map(|inputs| InnerInputProcessorOutput {
+                    inputs,
+                    seq_indices,
+                });
+                outputs.push(result);
             }
-            let chunks = chunks_transposed
-                .into_iter()
-                .enumerate()
-                .map(|(i, chunk)| {
-                    let (toks, seq_ns): (Vec<Vec<T>>, Vec<usize>) = chunk.into_iter().unzip();
-                    make_prompt_chunk(
-                        i * prompt_chunksize + offset,
-                        toks,
-                        &seq_ns
-                            .iter()
-                            .map(|i| *input_seqs[*i].id())
-                            .collect::<Vec<_>>(),
-                        device,
-                        last_n_context_len,
-                        return_raw_logits,
-                        paged_attn_metadata.as_deref_mut(),
-                        mapper,
-                    )
-                    .map(|inputs| InnerInputProcessorOutput {
-                        inputs,
-                        seq_indices: seq_ns,
-                    })
-                })
-                .collect::<Vec<_>>();
-            Box::new(chunks.into_iter())
+            Box::new(outputs.into_iter())
         } else {
             let offset = input_seqs[0].token_offset();
-            if offset != 0 && paged_attn_metadata.is_some() {
-                return Box::new(std::iter::once(Err(anyhow::Error::msg(
-                    "PagedAttention does not yet support sequences with an offset != 0.",
-                ))));
-            }
             Box::new(std::iter::once(
                 make_prompt_chunk(
                     offset,
@@ -593,13 +578,13 @@ pub mod text_models_inputs_processor {
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn get_completion_input<T: WithDType + std::fmt::Debug>(
-        toks: Vec<Vec<T>>,
+        toks: Vec<&[T]>,
         input_seqs: &[&mut Sequence],
         device: &Device,
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
-        paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+        paged_attn_metadata: Option<&mut PagedAttentionMeta>,
         prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = Result<InnerInputProcessorOutput>>> {
@@ -653,7 +638,7 @@ pub mod text_models_inputs_processor {
             last_n_context_len: Option<(usize, usize)>,
             return_raw_logits: bool,
             _: Option<Arc<dyn Any>>,
-            mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
+            mut paged_attn_metadata: Option<PagedAttentionMeta>,
             prompt_chunksize: Option<NonZeroUsize>,
             mapper: Option<&dyn DeviceMapper>,
         ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>> {
@@ -662,7 +647,7 @@ pub mod text_models_inputs_processor {
                     get_prompt_input(
                         input_seqs
                             .iter()
-                            .map(|seq| seq.get_toks().to_vec())
+                            .map(|seq| seq.get_toks())
                             .collect::<Vec<_>>(),
                         input_seqs,
                         device,
@@ -675,7 +660,7 @@ pub mod text_models_inputs_processor {
                     .zip(get_completion_input(
                         input_seqs
                             .iter()
-                            .map(|seq| seq.get_toks().to_vec())
+                            .map(|seq| seq.get_toks())
                             .collect::<Vec<_>>(),
                         input_seqs,
                         device,
@@ -733,7 +718,7 @@ pub mod text_models_inputs_processor {
                     get_prompt_input(
                         input_seqs
                             .iter()
-                            .map(|seq| seq.get_toks().to_vec())
+                            .map(|seq| seq.get_toks())
                             .collect::<Vec<_>>(),
                         input_seqs,
                         device,
@@ -778,7 +763,7 @@ pub mod text_models_inputs_processor {
                     get_prompt_input(
                         input_seqs
                             .iter()
-                            .map(|seq| seq.get_toks().to_vec())
+                            .map(|seq| seq.get_toks())
                             .collect::<Vec<_>>(),
                         input_seqs,
                         device,
@@ -823,7 +808,7 @@ pub mod text_models_inputs_processor {
                     get_completion_input(
                         input_seqs
                             .iter()
-                            .map(|seq| seq.get_toks().to_vec())
+                            .map(|seq| seq.get_toks())
                             .collect::<Vec<_>>(),
                         input_seqs,
                         device,

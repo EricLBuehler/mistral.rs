@@ -2,12 +2,14 @@ use candle_core::cuda::cudarc::cublaslt::result::set_matrix_layout_attribute;
 use candle_core::cuda::cudarc::cublaslt::{result, result::CublasError, sys};
 use candle_core::cuda::cudarc::driver::sys::{CUdevice_attribute, CUdeviceptr, CUstream};
 use candle_core::cuda::cudarc::driver::{
-    CudaDevice, CudaSlice, DevicePtr, DevicePtrMut, DriverError,
+    CudaDevice, CudaSlice, DevicePtr, DevicePtrMut, DeviceRepr, DriverError,
 };
+use candle_core::cuda::CudaDType;
+use candle_core::DType;
 use core::ffi::c_int;
 use core::mem;
 use float8::F8E4M3;
-use half::bf16;
+use half::{bf16, f16};
 use std::sync::Arc;
 
 /// Wrapper around [sys::cublasLtHandle_t]
@@ -332,8 +334,35 @@ pub enum OutSlice<A: DevicePtrMut<F8E4M3>, B: DevicePtrMut<bf16>> {
     BF16(B),
 }
 
+pub enum CublasLTInternalDType {
+    F32,
+    BF16,
+    F16,
+    F8E4M3,
+}
+
+pub trait CublasLTDType: CudaDType + DeviceRepr {
+    const T: CublasLTInternalDType;
+}
+
+impl CublasLTDType for f32 {
+    const T: CublasLTInternalDType = CublasLTInternalDType::F32;
+}
+
+impl CublasLTDType for f16 {
+    const T: CublasLTInternalDType = CublasLTInternalDType::F16;
+}
+
+impl CublasLTDType for bf16 {
+    const T: CublasLTInternalDType = CublasLTInternalDType::BF16;
+}
+
+impl CublasLTDType for F8E4M3 {
+    const T: CublasLTInternalDType = CublasLTInternalDType::F8E4M3;
+}
+
 /// Matrix matrix multiplication with elements of type `T`.
-pub trait Matmul<T>: MatmulShared {
+pub trait Matmul<T: CublasLTDType>: MatmulShared {
     /// Underlying CUDA Type for `T`
     fn matrix_type() -> sys::cudaDataType;
 
@@ -384,27 +413,25 @@ pub trait Matmul<T>: MatmulShared {
         let matmul_desc = MatmulDesc::new(
             sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
             sys::cudaDataType_t::CUDA_R_32F,
-        )
-        .unwrap();
+        )?;
 
         // Set transa
-        matmul_desc.set_transpose(cfg.transa, Matrix::A).unwrap();
+        matmul_desc.set_transpose(cfg.transa, Matrix::A)?;
         // Set transb
-        matmul_desc.set_transpose(cfg.transb, Matrix::B).unwrap();
+        matmul_desc.set_transpose(cfg.transb, Matrix::B)?;
 
         // Creates matrix layouts
-        let a_layout = MatrixLayout::new(Self::matrix_type(), a_rows, a_cols, cfg.lda).unwrap();
+        let a_layout = MatrixLayout::new(Self::matrix_type(), a_rows, a_cols, cfg.lda)?;
         if let (Some(batch_size), Some(stride_a)) = (cfg.batch_size, cfg.stride_a) {
             a_layout.set_batch(batch_size, stride_a)?;
         }
 
-        let b_layout = MatrixLayout::new(Self::matrix_type(), b_rows, b_cols, cfg.ldb).unwrap();
+        let b_layout = MatrixLayout::new(Self::matrix_type(), b_rows, b_cols, cfg.ldb)?;
         if let (Some(batch_size), Some(stride_b)) = (cfg.batch_size, cfg.stride_b) {
             b_layout.set_batch(batch_size, stride_b)?;
         }
 
-        let c_layout =
-            MatrixLayout::new(sys::cudaDataType_t::CUDA_R_16BF, cfg.m, cfg.n, cfg.ldc).unwrap();
+        let c_layout = MatrixLayout::new(sys::cudaDataType_t::CUDA_R_16BF, cfg.m, cfg.n, cfg.ldc)?;
         if let (Some(batch_size), Some(stride_c)) = (cfg.batch_size, cfg.stride_c) {
             c_layout.set_batch(batch_size, stride_c)?;
         }
@@ -413,21 +440,15 @@ pub trait Matmul<T>: MatmulShared {
             OutSlice::F8(_) => Self::matrix_type(),
             OutSlice::BF16(_) => sys::cudaDataType_t::CUDA_R_16BF,
         };
-        let d_layout = MatrixLayout::new(out_ty, cfg.m, cfg.n, cfg.ldc).unwrap();
+        let d_layout = MatrixLayout::new(out_ty, cfg.m, cfg.n, cfg.ldc)?;
         if let (Some(batch_size), Some(stride_c)) = (cfg.batch_size, cfg.stride_c) {
             d_layout.set_batch(batch_size, stride_c)?;
         }
 
         // Set scale factors
-        matmul_desc
-            .set_scale_ptr(scale_a.device_ptr(), Matrix::A)
-            .unwrap();
-        matmul_desc
-            .set_scale_ptr(scale_b.device_ptr(), Matrix::B)
-            .unwrap();
-        matmul_desc
-            .set_scale_ptr(scale_d.device_ptr(), Matrix::D)
-            .unwrap();
+        matmul_desc.set_scale_ptr(scale_a.device_ptr(), Matrix::A)?;
+        matmul_desc.set_scale_ptr(scale_b.device_ptr(), Matrix::B)?;
+        matmul_desc.set_scale_ptr(scale_d.device_ptr(), Matrix::D)?;
 
         // Pass amaxd ptr
         // unsafe {
@@ -437,21 +458,17 @@ pub trait Matmul<T>: MatmulShared {
         //         amax_d.device_ptr_mut() as *const CUdeviceptr as *const _,
         //         mem::size_of::<CUdeviceptr>(),
         //     )
-        //     .unwrap();
+        //     ?;
         // }
 
         // Epilogue system can be leveraged to fuse add and activation operations
-        matmul_desc
-            .set_epilogue(act, bias.map(|b| b.device_ptr()), cfg.stride_bias)
-            .unwrap();
+        matmul_desc.set_epilogue(act, bias.map(|b| b.device_ptr()), cfg.stride_bias)?;
 
         // Create matmul heuristic search preferences
-        let matmul_pref = MatmulPref::new().unwrap();
+        let matmul_pref = MatmulPref::new()?;
 
         // Set workspace size
-        matmul_pref
-            .set_workspace_size(self.workspace().size)
-            .unwrap();
+        matmul_pref.set_workspace_size(self.workspace().size)?;
 
         // Get heuristic given Config, bias, act and workspace size
         let heuristic = result::get_matmul_algo_heuristic(
@@ -462,8 +479,7 @@ pub trait Matmul<T>: MatmulShared {
             c_layout.handle,
             d_layout.handle,
             matmul_pref.handle,
-        )
-        .unwrap();
+        )?;
 
         let out_ptr = match out {
             OutSlice::BF16(s) => s.device_ptr_mut(),
@@ -597,42 +613,22 @@ impl MatmulShared for CudaBlasLT {
     }
 }
 
-impl Matmul<f32> for CudaBlasLT {
+impl<T: CublasLTDType> Matmul<T> for CudaBlasLT {
     fn matrix_type() -> sys::cudaDataType {
-        sys::cudaDataType_t::CUDA_R_32F
+        match T::T {
+            CublasLTInternalDType::F32 => sys::cudaDataType_t::CUDA_R_32F,
+            CublasLTInternalDType::BF16 => sys::cudaDataType_t::CUDA_R_16BF,
+            CublasLTInternalDType::F16 => sys::cudaDataType_t::CUDA_R_16F,
+            CublasLTInternalDType::F8E4M3 => sys::cudaDataType_t::CUDA_R_8F_E4M3,
+        }
     }
 
     fn compute_type() -> sys::cublasComputeType_t {
-        sys::cublasComputeType_t::CUBLAS_COMPUTE_32F_FAST_TF32
-    }
-}
-
-impl Matmul<half::f16> for CudaBlasLT {
-    fn matrix_type() -> sys::cudaDataType {
-        sys::cudaDataType_t::CUDA_R_16F
-    }
-
-    fn compute_type() -> sys::cublasComputeType_t {
-        sys::cublasComputeType_t::CUBLAS_COMPUTE_32F
-    }
-}
-
-impl Matmul<half::bf16> for CudaBlasLT {
-    fn matrix_type() -> sys::cudaDataType {
-        sys::cudaDataType_t::CUDA_R_16BF
-    }
-
-    fn compute_type() -> sys::cublasComputeType_t {
-        sys::cublasComputeType_t::CUBLAS_COMPUTE_32F
-    }
-}
-
-impl Matmul<F8E4M3> for CudaBlasLT {
-    fn matrix_type() -> sys::cudaDataType {
-        sys::cudaDataType_t::CUDA_R_8F_E4M3
-    }
-
-    fn compute_type() -> sys::cublasComputeType_t {
-        sys::cublasComputeType_t::CUBLAS_COMPUTE_32F
+        match T::T {
+            CublasLTInternalDType::F32 => sys::cublasComputeType_t::CUBLAS_COMPUTE_32F_FAST_TF32,
+            CublasLTInternalDType::BF16
+            | CublasLTInternalDType::F16
+            | CublasLTInternalDType::F8E4M3 => sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+        }
     }
 }

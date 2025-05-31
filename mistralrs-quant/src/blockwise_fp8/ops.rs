@@ -228,6 +228,79 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
 
         Ok((res, weight_l.shape().clone()))
     }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        scale_s: &candle_core::MetalStorage,
+        scale_l: &candle_core::Layout,
+        weight_s: &candle_core::MetalStorage,
+        weight_l: &candle_core::Layout,
+    ) -> Result<(candle_core::MetalStorage, candle_core::Shape)> {
+        use candle_core::backend::BackendStorage;
+
+        if weight_l.start_offset() != 0
+            || !weight_l.is_contiguous()
+            || weight_s.dtype() != DType::F8E4M3
+        {
+            candle_core::bail!("Expected f8e4m3 weight to have start offset 0, continuous");
+        }
+        if scale_l.start_offset() != 0 || !scale_l.is_contiguous() || scale_s.dtype() != DType::F32
+        {
+            candle_core::bail!("Expected f32 scales to have start offset 0, continuous");
+        }
+        if weight_l.dims().len() != 2 {
+            candle_core::bail!("Expected weight to be rank 2");
+        }
+        if scale_l.dims().len() != 2 || self.weight_block_size.len() != 2 {
+            candle_core::bail!("Expected scale to be rank 2");
+        }
+
+        let command_buffer = weight_s.device().command_buffer()?;
+        command_buffer.set_label("dequant-blockwise-fp8");
+
+        let device = weight_s.device();
+
+        let out_shape = weight_l.shape().clone();
+
+        let output = device.new_buffer(
+            out_shape.elem_count(),
+            weight_s.dtype(),
+            "dequant-blockwise-fp8",
+        )?;
+
+        let weight_height = weight_l.dim(0)? as u32;
+        let weight_block_size_x = self.weight_block_size[0] as u32;
+        let weight_width = weight_l.dim(1)? as u32;
+        let weight_block_size_y = self.weight_block_size[1] as u32;
+        let scale_stride = scale_l.stride()[0] as u32;
+        let weight_row_stride = weight_l.stride()[0] as u32;
+
+        crate::metal_kernels::call_dequant_blockwise_fp8(
+            device.device(),
+            &command_buffer,
+            &crate::metal_kernels::Kernels::new(),
+            self.out_ty,
+            weight_s.buffer(),
+            scale_s.buffer(),
+            &output,
+            weight_height,
+            weight_width,
+            weight_row_stride,
+            scale_stride,
+            weight_block_size_y,
+            weight_block_size_x,
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        let newstorage = candle_core::MetalStorage::new(
+            output,
+            device.clone(),
+            out_shape.elem_count(),
+            self.out_ty,
+        );
+        Ok((newstorage, out_shape))
+    }
 }
 
 /// FP8 blockwise dequantize.

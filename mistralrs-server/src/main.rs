@@ -9,16 +9,20 @@ use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, initialize_logging,
-    paged_attn_supported, parse_isq_value, BertEmbeddingModel, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, IsqType, Loader, LoaderBuilder,
-    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request,
-    SchedulerConfig, TokenSource,
+    paged_attn_supported, parse_isq_value, ApproximateUserLocation, BertEmbeddingModel,
+    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Function,
+    ImageGenerationResponseFormat, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs,
+    MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request, SchedulerConfig,
+    SearchContextSize, TokenSource, Tool, ToolChoice, ToolType, WebSearchOptions,
+    WebSearchUserLocation,
 };
 use openai::{
-    ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, Message, ModelObjects,
-    StopTokens,
+    AudioResponseFormat, ChatCompletionRequest, CompletionRequest, FunctionCalled, Grammar,
+    ImageGenerationRequest, JsonSchemaResponseFormat, Message, MessageContent, MessageInnerContent,
+    ModelObjects, ResponseFormat, SpeechGenerationRequest, StopTokens, ToolCall,
 };
 use serde::{Deserialize, Serialize};
+use speech_generation::{__path_speech_generation, speech_generation};
 use std::{num::NonZeroUsize, sync::Arc};
 
 mod chat_completion;
@@ -26,18 +30,19 @@ mod completions;
 mod image_generation;
 mod interactive_mode;
 mod openai;
+mod speech_generation;
 mod util;
 
 use crate::openai::ModelObject;
 use crate::{
     chat_completion::{__path_chatcompletions, chatcompletions},
-    completions::completions,
-    image_generation::image_generation,
+    completions::{__path_completions, completions},
+    image_generation::{__path_image_generation, image_generation},
 };
 
 use interactive_mode::interactive_mode;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing::{info, warn};
+use tracing::info;
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -117,8 +122,8 @@ struct Args {
     num_device_layers: Option<Vec<String>>,
 
     /// In-situ quantization to apply.
-    #[arg(long = "isq", value_parser = parse_isq_value)]
-    in_situ_quant: Option<IsqType>,
+    #[arg(long = "isq")]
+    in_situ_quant: Option<String>,
 
     /// GPU memory to allocate for KV cache with PagedAttention in MBs.
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
@@ -153,10 +158,6 @@ struct Args {
     #[arg(long = "paged-attn", default_value_t = false)]
     paged_attn: bool,
 
-    /// Enable server throughput logging, supported in the server and with interactive mode
-    #[arg(long = "throughput", default_value_t = false)]
-    throughput_log: bool,
-
     /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     #[arg(long = "prompt-batchsize")]
     prompt_chunksize: Option<usize>,
@@ -165,10 +166,6 @@ struct Args {
     #[arg(long)]
     cpu: bool,
 
-    /// Enable web searching for interactive mode.
-    #[arg(long = "interactive-search")]
-    interactive_search: bool,
-
     /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
     #[arg(long = "enable-search")]
     enable_search: bool,
@@ -176,6 +173,10 @@ struct Args {
     /// Specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
     #[arg(long = "search-bert-model")]
     search_bert_model: Option<String>,
+
+    /// Enable thinking for interactive mode and models that support it.
+    #[arg(long = "enable-thinking")]
+    enable_thinking: bool,
 }
 
 #[utoipa::path(
@@ -207,30 +208,6 @@ async fn health() -> &'static str {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
-struct AdapterActivationRequest {
-    #[schema(example = json!(vec!["adapter_1","adapter_2"]))]
-    adapter_names: Vec<String>,
-}
-
-#[utoipa::path(
-    post,
-    tag = "Mistral.rs",
-    path = "/activate_adapters",
-    request_body = AdapterActivationRequest,
-    responses((status = 200, description = "Activate a set of pre-loaded LoRA adapters"))
-)]
-async fn activate_adapters(
-    State(state): State<Arc<MistralRs>>,
-    Json(request): Json<AdapterActivationRequest>,
-) -> String {
-    let repr = format!("Adapter activation: {:?}", request.adapter_names);
-    MistralRs::maybe_log_request(state.clone(), repr.clone());
-    let request = Request::ActivateAdapters(request.adapter_names);
-    state.get_sender().unwrap().send(request).await.unwrap();
-    repr
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 struct ReIsqRequest {
     #[schema(example = "Q4K")]
     ggml_type: String,
@@ -249,7 +226,7 @@ async fn re_isq(
 ) -> Result<String, String> {
     let repr = format!("Re ISQ: {:?}", request.ggml_type);
     MistralRs::maybe_log_request(state.clone(), repr.clone());
-    let request = Request::ReIsq(parse_isq_value(&request.ggml_type)?);
+    let request = Request::ReIsq(parse_isq_value(&request.ggml_type, None)?);
     state.get_sender().unwrap().send(request).await.unwrap();
     Ok(repr)
 }
@@ -257,9 +234,35 @@ async fn re_isq(
 fn get_router(state: Arc<MistralRs>) -> Router {
     #[derive(OpenApi)]
     #[openapi(
-        paths(models, health, chatcompletions),
-        components(
-            schemas(ModelObjects, ModelObject, ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, StopTokens, Message)),
+        paths(models, health, chatcompletions, completions, re_isq, image_generation, speech_generation),
+        components(schemas(
+            ApproximateUserLocation,
+            AudioResponseFormat,
+            ChatCompletionRequest,
+            CompletionRequest,
+            Function,
+            FunctionCalled,
+            Grammar,
+            ImageGenerationRequest,
+            ImageGenerationResponseFormat,
+            JsonSchemaResponseFormat,
+            Message,
+            MessageContent,
+            MessageInnerContent,
+            ModelObject,
+            ModelObjects,
+            ReIsqRequest,
+            ResponseFormat,
+            SearchContextSize,
+            SpeechGenerationRequest,
+            StopTokens,
+            Tool,
+            ToolCall,
+            ToolChoice,
+            ToolType,
+            WebSearchOptions,
+            WebSearchUserLocation
+        )),
         tags(
             (name = "Mistral.rs", description = "Mistral.rs API")
         ),
@@ -287,9 +290,9 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .route("/v1/models", get(models))
         .route("/health", get(health))
         .route("/", get(health))
-        .route("/activate_adapters", post(activate_adapters))
         .route("/re_isq", post(re_isq))
         .route("/v1/images/generations", post(image_generation))
+        .route("/v1/audio/speech", post(speech_generation))
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(N_INPUT_SIZE * MB_TO_B))
         .with_state(state)
@@ -299,8 +302,6 @@ fn get_router(state: Arc<MistralRs>) -> Router {
 async fn main() -> Result<()> {
     let mut args = Args::parse();
     initialize_logging();
-
-    let use_flash_attn = mistralrs_core::using_flash_attn();
 
     let tgt_non_granular_index = get_tgt_non_granular_index(&args.model);
     let dtype = get_model_dtype(&args.model)?;
@@ -323,13 +324,17 @@ async fn main() -> Result<()> {
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
         .with_no_kv_cache(args.no_kv_cache)
         .with_chat_template(args.chat_template)
-        .with_use_flash_attn(use_flash_attn)
         .with_prompt_chunksize(prompt_chunksize)
         .with_jinja_explicit(args.jinja_explicit)
         .build()?;
 
     #[cfg(feature = "metal")]
-    let device = Device::new_metal(0)?;
+    let device = if args.cpu {
+        args.no_paged_attn = true;
+        Device::Cpu
+    } else {
+        Device::new_metal(0)?
+    };
     #[cfg(not(feature = "metal"))]
     let device = if args.cpu {
         args.no_paged_attn = true;
@@ -352,12 +357,6 @@ async fn main() -> Result<()> {
         candle_core::utils::with_f16c()
     );
     info!("Sampling method: penalties -> temperature -> topk -> topp -> minp -> multinomial");
-    if use_flash_attn {
-        info!("Using flash attention.");
-    }
-    if use_flash_attn && loader.get_kind().is_quantized() {
-        warn!("Using flash attention with a quantized model has no effect!")
-    }
     info!("Model kind is: {}", loader.get_kind().to_string());
 
     // Parse device mapper
@@ -461,6 +460,11 @@ async fn main() -> Result<()> {
         (_, _, _, _, _, _) => None,
     };
 
+    let isq = args
+        .in_situ_quant
+        .as_ref()
+        .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
+
     let pipeline = loader.load_model_from_hf(
         None,
         args.token_source,
@@ -468,7 +472,7 @@ async fn main() -> Result<()> {
         &device,
         false,
         mapper,
-        args.in_situ_quant,
+        isq,
         cache_config,
     )?;
     info!("Model loaded.");
@@ -504,7 +508,7 @@ async fn main() -> Result<()> {
         pipeline,
         scheduler_config,
         !args.interactive_mode,
-        bert_model,
+        bert_model.clone(),
     )
     .with_opt_log(args.log)
     .with_truncate_sequence(args.truncate_sequence)
@@ -513,7 +517,12 @@ async fn main() -> Result<()> {
     .build();
 
     if args.interactive_mode {
-        interactive_mode(mistralrs, args.throughput_log, args.interactive_search).await;
+        interactive_mode(
+            mistralrs,
+            bert_model.is_some(),
+            args.enable_thinking.then_some(true),
+        )
+        .await;
         return Ok(());
     }
 

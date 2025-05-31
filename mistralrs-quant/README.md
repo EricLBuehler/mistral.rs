@@ -1,8 +1,13 @@
 # `mistralrs-quant`
 
-An advanced and highly diverse set of quantization techniques. This crate supports both quantization and optimized inference, making it truly unique in its breadth of useability.
+An advanced and highly diverse set of quantization techniques. This crate supports both quantization and optimized inference.
 
-It is used by `mistral.rs` to power ISQ, imatrix collection, and general quantization features.
+It has grown beyon simply quantization and is used by `mistral.rs` to power:
+- ISQ
+- Imatrix collection
+- General quantization features
+- Specific CUDA and Metal features
+- cuBLASlt integration
 
 Currently supported:
 - GGUF: `GgufMatMul`(2-8 bit quantization, with imatrix)

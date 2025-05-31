@@ -16,6 +16,10 @@
 - [DeepSeek V2](DEEPSEEKV2.md)
 - [DeepSeek V3](DEEPSEEKV3.md)
 - [MiniCPM-O 2.6](MINICPMO_2_6.md)
+- [Gemma 3](GEMMA3.md)
+- [Mistral 3](MISTRAL3.md)
+- [Llama 4](LLAMA4.md)
+- [Qwen 3](QWEN3.md)
 
 ## Adapters
 - [Docs](ADAPTER_MODELS.md)

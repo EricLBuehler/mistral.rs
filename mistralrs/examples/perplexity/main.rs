@@ -33,7 +33,7 @@ struct Args {
 async fn process_chunk(runner: &MistralRs, chunk: Vec<u32>) -> anyhow::Result<(Tensor, Vec<u32>)> {
     let (tx, mut rx) = channel(1);
 
-    let request = Request::Normal(NormalRequest {
+    let request = Request::Normal(Box::new(NormalRequest {
         messages: mistralrs::RequestMessage::CompletionTokens(chunk),
         sampling_params: SamplingParams {
             max_len: Some(0),
@@ -45,13 +45,12 @@ async fn process_chunk(runner: &MistralRs, chunk: Vec<u32>) -> anyhow::Result<(T
         id: 0,
         constraint: Constraint::None,
         suffix: None,
-        adapters: None,
         tools: None,
         tool_choice: None,
         logits_processors: None,
         return_raw_logits: true,
         web_search_options: None,
-    });
+    }));
 
     runner.get_sender()?.send(request).await?;
 
@@ -75,7 +74,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     let quant = if let Some(isq) = &args.isq {
-        Some(parse_isq_value(isq).map_err(anyhow::Error::msg)?)
+        Some(parse_isq_value(isq, None).map_err(anyhow::Error::msg)?)
     } else {
         None
     };
@@ -93,10 +92,10 @@ async fn main() -> Result<()> {
 
     let text = read_to_string(&args.file)?;
     let tokens = model
-        .tokenize(Either::Right(text), None, false, false)
+        .tokenize(Either::Right(text), None, false, false, None)
         .await?;
     let bos_token = model
-        .tokenize(Either::Right(" ".to_string()), None, true, false)
+        .tokenize(Either::Right(" ".to_string()), None, true, false, None)
         .await?[0];
     let inner = model.inner();
 

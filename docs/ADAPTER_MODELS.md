@@ -59,7 +59,7 @@ An ordering JSON file for LoRA contains 2 major parts:
     - Specifies the adapter name and the model ID to find them, which may be a local path.
 
 ### Preparing the ordering file (LoRA or X-LoRA cases)
-There are 2 scripts to prepare the ordering file and which work for both X-LoRA and LoRA. The ordering file is specific to each architecture and set of target modules. Therefore, if either are changed, it is necessary to create a new ordering file using the first option. If only the adapter order or adapters changed, then it the second option should be used.
+There are 2 scripts to prepare the ordering file and which work for both X-LoRA and LoRA. The ordering file is specific to each architecture and set of target modules. Therefore, if either are changed, it is necessary to create a new ordering file using the first option. If only the adapter order or adapters changed, then the second option should be used.
 
 1) From scratch: No ordering file for the architecture and target modules
 

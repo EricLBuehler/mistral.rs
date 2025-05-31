@@ -1,6 +1,6 @@
 use std::{collections::HashMap, iter::zip, ops::Mul, sync::Arc};
 
-use candle_core::{bail, DType, Module, Result, Tensor};
+use candle_core::{DType, Module, Result, Tensor};
 use candle_nn::Linear;
 use either::Either;
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear};
@@ -8,8 +8,8 @@ use mistralrs_quant::{QuantMethod, QuantMethodConfig, ShardedVarBuilder, Unquant
 use crate::layers::MatMul;
 
 use super::{
-    apply_scalings_to_x, get_maybe_topk_scalings, make_adapter, Adapter, AdapterSwapper,
-    LinearLayerLike, LoraConfig, LoraLinearConfig, Merge,
+    apply_scalings_to_x, get_maybe_topk_scalings, make_adapter, Adapter, LinearLayerLike,
+    LoraConfig, LoraLinearConfig, Merge,
 };
 
 pub struct LoraLinear {
@@ -125,40 +125,6 @@ impl LoraLinear {
                 adapters,
             })
         }
-    }
-}
-
-impl AdapterSwapper for LoraLinear {
-    fn _activate_adapters(&mut self, adapter_names: &[String]) -> Result<()> {
-        match (
-            &mut self.a_adapters,
-            &mut self.b_adapters,
-            &mut self.scale_adapters,
-        ) {
-            (Either::Left(a), Either::Left(b), s) => {
-                a.clear();
-                b.clear();
-                s.clear();
-                for adapter_name in adapter_names {
-                    let Adapter {
-                        a: a_w,
-                        b: b_w,
-                        scale,
-                    } = match self.adapters.get(adapter_name) {
-                        Some(a) => a,
-                        None => bail!("Cannot load adapter `{adapter_name}`."),
-                    };
-                    a.push(a_w.clone());
-                    b.push(b_w.clone());
-                    s.push(*scale);
-                }
-            }
-            _ => unreachable!("Adapters should not be stacked if new ones are being activated."),
-        }
-        Ok(())
-    }
-    fn can_load(&self) -> bool {
-        true
     }
 }
 

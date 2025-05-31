@@ -1,0 +1,485 @@
+use axum::{
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    extract::State,
+    response::IntoResponse,
+};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use futures_util::stream::StreamExt;
+use mistralrs::{Model, TextMessageRole, TextMessages, VisionMessages};
+use serde_json::Value;
+use std::io::Cursor;
+use std::mem;
+use std::path::Path;
+use std::sync::Arc;
+use tracing::error;
+
+use crate::chat::append_chat_message;
+use crate::models::LoadedModel;
+use crate::types::AppState;
+use crate::utils::get_cache_dir;
+
+const CLEAR_CMD: &str = "__CLEAR__";
+/// Context for managing vision messages and image buffer.
+pub struct VisionContext<'a> {
+    pub msgs: &'a mut VisionMessages,
+    pub image_buffer: &'a mut Vec<image::DynamicImage>,
+}
+
+/// Upgrades an HTTP request to a WebSocket connection.
+pub async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(app): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_socket(socket, app))
+}
+
+/// Generic helper to stream tokens and forward them to the websocket.
+async fn stream_and_forward<Msgs, F, E>(
+    model: &Arc<Model>,
+    msgs: Msgs,
+    socket: &mut WebSocket,
+    mut on_token: F,
+    mut on_end: E,
+) -> Result<(), anyhow::Error>
+where
+    Msgs: mistralrs::RequestLike + Send + 'static,
+    F: FnMut(&str),
+    E: FnMut(),
+{
+    match model.stream_chat_request(msgs).await {
+        Ok(mut stream) => {
+            let mut assistant_reply = String::new();
+            while let Some(chunk) = stream.next().await {
+                if let mistralrs::Response::Chunk(resp) = chunk {
+                    if let Some(choice) = resp.choices.first() {
+                        if let Some(token) = &choice.delta.content {
+                            if socket.send(Message::Text(token.clone())).await.is_err() {
+                                break;
+                            }
+                            assistant_reply.push_str(token);
+                        }
+                    }
+                }
+            }
+            on_token(&assistant_reply);
+            on_end();
+            Ok(())
+        }
+        Err(e) => {
+            let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
+            Err(e)
+        }
+    }
+}
+
+/// Validate that a file path is safe and within the uploads directory
+fn validate_image_path(path: &str) -> Result<String, &'static str> {
+    // Determine upload directory under user cache
+    let uploads_dir = get_cache_dir().join("uploads");
+    let uploads_path = uploads_dir.as_path();
+
+    // Resolve the full path
+    let file_path = Path::new(path);
+
+    // Check if it's an absolute path and starts with our uploads directory
+    if !file_path.is_absolute() {
+        return Err("Path must be absolute");
+    }
+
+    // Normalize and check if the path is within uploads directory
+    match file_path.canonicalize() {
+        Ok(canonical_path) => match uploads_path.canonicalize() {
+            Ok(canonical_uploads) => {
+                if canonical_path.starts_with(canonical_uploads) {
+                    Ok(path.to_string())
+                } else {
+                    Err("Path is outside uploads directory")
+                }
+            }
+            Err(_) => Err("Uploads directory not found"),
+        },
+        Err(_) => Err("Invalid file path"),
+    }
+}
+
+/// Per-connection task.
+pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
+    let mut text_msgs = TextMessages::new();
+    let mut vision_msgs = VisionMessages::new();
+    let mut image_buffer: Vec<image::DynamicImage> = Vec::new();
+    // `true` while we are streaming a reply back to the client.
+    let mut streaming = false;
+    // Track per-connection chat ID; set by client via WebSocket control
+    let mut active_chat_id: Option<String> = None;
+
+    while let Some(Ok(Message::Text(user_msg))) = socket.next().await {
+        // Handle per-connection chat ID setting
+        if let Ok(val) = serde_json::from_str::<Value>(&user_msg) {
+            if let Some(id) = val.get("chat_id").and_then(|v| v.as_str()) {
+                if active_chat_id.as_deref() != Some(id) {
+                    active_chat_id = Some(id.to_string());
+                    text_msgs = TextMessages::new();
+                    vision_msgs = VisionMessages::new();
+                    image_buffer.clear();
+                }
+                continue;
+            }
+        }
+        // Allow client to request a context reset without closing the socket
+        if user_msg == CLEAR_CMD {
+            if streaming {
+                let _ = socket
+                    .send(Message::Text(
+                        "Cannot clear while assistant is replying.".into(),
+                    ))
+                    .await;
+            } else {
+                text_msgs = TextMessages::new();
+                vision_msgs = VisionMessages::new();
+                image_buffer.clear();
+                let _ = socket.send(Message::Text("[Context cleared]".into())).await;
+            }
+            continue;
+        }
+        // Handle front‑end replay helper messages without triggering inference
+        if user_msg.trim_start().starts_with("{\"restore\":") {
+            handle_restore_message(
+                &user_msg,
+                &app,
+                &mut text_msgs,
+                &mut vision_msgs,
+                &mut image_buffer,
+            )
+            .await;
+            continue;
+        }
+
+        let model_name_opt = { app.current.read().await.clone() };
+        let Some(model_name) = model_name_opt else {
+            let _ = socket
+                .send(Message::Text(
+                    "No model selected. Choose one in the sidebar.".into(),
+                ))
+                .await;
+            continue;
+        };
+        let Some(model_loaded) = app.models.get(&model_name).cloned() else {
+            let _ = socket
+                .send(Message::Text("Selected model not found.".into()))
+                .await;
+            continue;
+        };
+
+        match model_loaded {
+            LoadedModel::Text(model) => {
+                handle_text_model(
+                    &model,
+                    &user_msg,
+                    &mut text_msgs,
+                    &mut socket,
+                    &app,
+                    &mut streaming,
+                    &active_chat_id,
+                )
+                .await;
+            }
+            LoadedModel::Vision(model) => {
+                let mut vision_ctx = VisionContext {
+                    msgs: &mut vision_msgs,
+                    image_buffer: &mut image_buffer,
+                };
+                handle_vision_model(
+                    &model,
+                    &user_msg,
+                    &mut vision_ctx,
+                    &mut socket,
+                    &app,
+                    &mut streaming,
+                    &active_chat_id,
+                )
+                .await;
+            }
+            // Speech models should use HTTP endpoint; not handled here
+            LoadedModel::Speech(_) => {
+                let _ = socket
+                    .send(Message::Text(
+                        "Speech models are not supported over WebSocket".into(),
+                    ))
+                    .await;
+            }
+        }
+    }
+}
+
+async fn handle_restore_message(
+    user_msg: &str,
+    app: &Arc<AppState>,
+    text_msgs: &mut TextMessages,
+    vision_msgs: &mut VisionMessages,
+    image_buffer: &mut Vec<image::DynamicImage>,
+) {
+    if let Ok(val) = serde_json::from_str::<Value>(user_msg) {
+        if let Some(obj) = val.get("restore") {
+            // Handle restoring saved messages (with optional images)
+            if let (Some(role), Some(content)) = (
+                obj.get("role").and_then(|v| v.as_str()),
+                obj.get("content").and_then(|v| v.as_str()),
+            ) {
+                let has_images = obj
+                    .get("images")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|arr| !arr.is_empty());
+                match app.current.read().await.as_deref() {
+                    Some(model_name) if app.models.get(model_name).is_some() => {
+                        match app.models.get(model_name).unwrap() {
+                            LoadedModel::Text(_) => {
+                                // Text-only context
+                                *text_msgs = text_msgs.clone().add_message(
+                                    if role == "assistant" {
+                                        TextMessageRole::Assistant
+                                    } else {
+                                        TextMessageRole::User
+                                    },
+                                    content,
+                                );
+                            }
+                            LoadedModel::Vision(model) => {
+                                let role_enum = if role == "assistant" {
+                                    TextMessageRole::Assistant
+                                } else {
+                                    TextMessageRole::User
+                                };
+                                if has_images {
+                                    // Collect restored images
+                                    let mut imgs_b64 = Vec::new();
+                                    if let Some(arr) = obj.get("images").and_then(|v| v.as_array())
+                                    {
+                                        for img_val in arr {
+                                            if let Some(src) = img_val.as_str() {
+                                                if let Some(idx) = src.find(',') {
+                                                    let b64_data = &src[idx + 1..];
+                                                    imgs_b64.push(format!(
+                                                        "data:image/png;base64,{}",
+                                                        b64_data
+                                                    ));
+                                                    if let Ok(img_bytes) =
+                                                        BASE64.decode(b64_data.as_bytes())
+                                                    {
+                                                        if let Ok(img) =
+                                                            image::load_from_memory(&img_bytes)
+                                                        {
+                                                            image_buffer.push(img);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    // Restore as an image message
+                                    if let Ok(updated) = vision_msgs.clone().add_image_message(
+                                        role_enum,
+                                        content,
+                                        image_buffer.clone(),
+                                        model,
+                                    ) {
+                                        *vision_msgs = updated;
+                                    }
+                                    // Clear buffer after use
+                                    image_buffer.clear();
+                                } else {
+                                    *vision_msgs =
+                                        vision_msgs.clone().add_message(role_enum, content);
+                                }
+                            }
+                            // Speech models do not support context restore over WebSocket
+                            LoadedModel::Speech(_) => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+async fn handle_text_model(
+    model: &Arc<Model>,
+    user_msg: &str,
+    text_msgs: &mut TextMessages,
+    socket: &mut WebSocket,
+    app: &Arc<AppState>,
+    streaming: &mut bool,
+    active_chat_id: &Option<String>,
+) {
+    *text_msgs = text_msgs
+        .clone()
+        .add_message(TextMessageRole::User, user_msg);
+    if let Some(chat_id) = active_chat_id {
+        if let Err(e) = append_chat_message(app, chat_id, "user", user_msg, None).await {
+            error!("chat save error: {}", e);
+        }
+    }
+    let mut assistant_content = String::new();
+    let msgs_snapshot = text_msgs.clone();
+
+    *streaming = true;
+    let stream_res = stream_and_forward(
+        model,
+        msgs_snapshot,
+        socket,
+        |tok| {
+            assistant_content = tok.to_string();
+            let cur = mem::take(text_msgs);
+            *text_msgs = cur.add_message(TextMessageRole::Assistant, tok);
+        },
+        || *streaming = false,
+    )
+    .await;
+    if !assistant_content.is_empty() {
+        if let Some(chat_id) = active_chat_id {
+            let _ = append_chat_message(app, chat_id, "assistant", &assistant_content, None).await;
+        }
+    }
+    if let Err(e) = stream_res {
+        error!("stream error: {}", e);
+    }
+}
+
+async fn handle_vision_model(
+    model: &Arc<Model>,
+    user_msg: &str,
+    vision_ctx: &mut VisionContext<'_>,
+    socket: &mut WebSocket,
+    app: &Arc<AppState>,
+    streaming: &mut bool,
+    active_chat_id: &Option<String>,
+) {
+    // Track the exact set of messages that will be sent *this* turn.
+    let mut msgs_for_stream: Option<VisionMessages> = None;
+    // --- Vision input routing ---
+    if let Ok(val) = serde_json::from_str::<Value>(user_msg) {
+        // Case 1: pure image payload => buffer it and wait for a prompt
+        if let Some(url) = val.get("image").and_then(|v| v.as_str()) {
+            match validate_image_path(url) {
+                Ok(safe_path) => {
+                    // load & decode
+                    match tokio::fs::read(&safe_path).await {
+                        Ok(bytes) => match image::load_from_memory(&bytes) {
+                            Ok(img) => {
+                                vision_ctx.image_buffer.push(img);
+                            }
+                            Err(e) => {
+                                error!("image decode error: {}", e);
+                                let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
+                            }
+                        },
+                        Err(e) => {
+                            error!("image read error: {}", e);
+                            let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Invalid image path: {}", e);
+                    let _ = socket
+                        .send(Message::Text(format!("Error: Invalid image path - {}", e)))
+                        .await;
+                }
+            }
+            // Skip sending to model until we get a prompt
+            return;
+        } else {
+            // Fallback: treat whole JSON as text
+            *vision_ctx.msgs = vision_ctx
+                .msgs
+                .clone()
+                .add_message(TextMessageRole::User, user_msg);
+            msgs_for_stream = Some(vision_ctx.msgs.clone());
+            if let Some(chat_id) = active_chat_id {
+                if let Err(e) = append_chat_message(app, chat_id, "user", user_msg, None).await {
+                    error!("chat save error: {}", e);
+                }
+            }
+        }
+    } else {
+        // Plain-text prompt arrives here
+        if vision_ctx.image_buffer.is_empty() {
+            *vision_ctx.msgs = vision_ctx
+                .msgs
+                .clone()
+                .add_message(TextMessageRole::User, user_msg);
+            // Send the text‑only context to the model
+            msgs_for_stream = Some(vision_ctx.msgs.clone());
+            if let Some(chat_id) = active_chat_id {
+                if let Err(e) = append_chat_message(app, chat_id, "user", user_msg, None).await {
+                    error!("chat save error: {}", e);
+                }
+            }
+        } else {
+            match vision_ctx.msgs.clone().add_image_message(
+                TextMessageRole::User,
+                user_msg,
+                vision_ctx.image_buffer.clone(),
+                model,
+            ) {
+                Ok(updated) => {
+                    // Keep the *text‑only* conversation in our long‑term state,
+                    // but build a one‑off request that includes images.
+                    let temp_msgs = updated;
+                    *vision_ctx.msgs = vision_ctx
+                        .msgs
+                        .clone()
+                        .add_message(TextMessageRole::User, user_msg);
+                    msgs_for_stream = Some(temp_msgs.clone());
+                    // ---- persist user message with images ----
+                    let mut imgs_b64 = Vec::new();
+                    for img in vision_ctx.image_buffer.iter() {
+                        let mut buf = Vec::new();
+                        if img
+                            .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
+                            .is_ok()
+                        {
+                            imgs_b64.push(format!("data:image/png;base64,{}", BASE64.encode(&buf)));
+                        }
+                    }
+                    if let Some(chat_id) = active_chat_id {
+                        if let Err(e) =
+                            append_chat_message(app, chat_id, "user", user_msg, Some(imgs_b64))
+                                .await
+                        {
+                            error!("chat save error: {}", e);
+                        }
+                    }
+                    vision_ctx.image_buffer.clear();
+                }
+                Err(e) => {
+                    error!("image prompt error: {}", e);
+                    let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
+                }
+            }
+        }
+    }
+
+    *streaming = true;
+    let mut assistant_content = String::new();
+    let stream_res = stream_and_forward(
+        model,
+        msgs_for_stream.expect("msgs_for_stream must be set"),
+        socket,
+        |tok| {
+            assistant_content = tok.to_string();
+            let cur = mem::take(vision_ctx.msgs);
+            *vision_ctx.msgs = cur.add_message(TextMessageRole::Assistant, tok);
+        },
+        || *streaming = false,
+    )
+    .await;
+    if !assistant_content.is_empty() {
+        if let Some(chat_id) = active_chat_id {
+            let _ = append_chat_message(app, chat_id, "assistant", &assistant_content, None).await;
+        }
+    }
+    if let Err(e) = stream_res {
+        error!("stream error: {}", e);
+    }
+}

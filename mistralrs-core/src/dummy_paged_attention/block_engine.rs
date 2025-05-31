@@ -8,6 +8,7 @@ use std::{
 
 use super::block_engine_sequence::BlockEngineSequence;
 
+#[derive(Debug, Clone)]
 pub struct LogicalTokenBlock {
     tokens: Vec<usize>,
     block_size: usize,
@@ -21,6 +22,14 @@ impl LogicalTokenBlock {
             block_size,
             num_tokens: 0,
         }
+    }
+
+    pub fn block_size(&self) -> usize {
+        self.block_size
+    }
+
+    pub fn num_tokens(&self) -> usize {
+        self.num_tokens
     }
 
     pub fn is_full(&self) -> bool {
@@ -44,6 +53,12 @@ impl LogicalTokenBlock {
     }
 }
 
+impl Hash for LogicalTokenBlock {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.tokens.hash(state);
+    }
+}
+
 #[derive(Hash, PartialEq, Eq)]
 pub struct _PhysicalTokenBlock {
     pub block_id: usize,
@@ -52,7 +67,35 @@ pub struct _PhysicalTokenBlock {
     is_gpu: bool,
 }
 
+impl _PhysicalTokenBlock {
+    pub fn refcount(&self) -> usize {
+        self.refcount
+    }
+    pub fn increment_refcount(&mut self) {
+        self.refcount += 1;
+    }
+    pub fn decrement_refcount(&mut self) {
+        assert!(self.refcount >= 1);
+        self.refcount -= 1;
+    }
+}
+
 pub struct PhysicalTokenBlock(pub Mutex<_PhysicalTokenBlock>);
+
+impl std::fmt::Debug for PhysicalTokenBlock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0.lock() {
+            Ok(inner) => f
+                .debug_struct("PhysicalTokenBlock")
+                .field("block_id", &inner.block_id)
+                .field("block_size", &inner.block_size)
+                .field("refcount", &inner.refcount)
+                .field("is_gpu", &inner.is_gpu)
+                .finish(),
+            Err(_) => write!(f, "PhysicalTokenBlock(<locked>)"),
+        }
+    }
+}
 
 impl PhysicalTokenBlock {
     pub fn deref_mut(&self) -> MutexGuard<'_, _PhysicalTokenBlock> {
@@ -160,7 +203,7 @@ impl Allocator<CPUAllocator> {
                     block_id: id,
                     block_size,
                     refcount: 0,
-                    is_gpu: true,
+                    is_gpu: false,
                 },
             ))))
         }
@@ -171,9 +214,10 @@ impl Allocator<CPUAllocator> {
     }
 }
 
+#[derive(Debug)]
 pub enum AllocStatus {
     Ok,
-    Later,
+    Later { waitlisted_count: usize },
     Impossible,
 }
 
@@ -185,6 +229,7 @@ type SeqID = usize;
 /// These new tokens will be added to the logical token block for each sequence.
 pub struct BlockEngine {
     num_gpu_blocks: usize,
+    block_size: usize,
     gpu_allocator: Allocator<GPUAllocator>,
     cpu_allocator: Allocator<CPUAllocator>,
     pub block_tables: HashMap<SeqID, BlockTable>,
@@ -197,31 +242,51 @@ impl BlockEngine {
     pub fn new(block_size: usize, num_gpu_blocks: usize, num_cpu_blocks: usize) -> Self {
         Self {
             num_gpu_blocks,
+            block_size,
             gpu_allocator: Allocator::<GPUAllocator>::new(block_size, num_gpu_blocks),
             cpu_allocator: Allocator::<CPUAllocator>::new(block_size, num_cpu_blocks),
             block_tables: HashMap::new(),
         }
     }
 
-    pub fn can_allocate(&self, seq: &impl BlockEngineSequence) -> AllocStatus {
-        let num_required_blocks = seq.get_logical_token_blocks();
+    pub fn block_size(&self) -> usize {
+        self.block_size
+    }
+
+    pub fn can_allocate(&self, seq: &mut impl BlockEngineSequence) -> AllocStatus {
+        let num_required_blocks = seq.logical_token_blocks().len();
         let num_free_gpu_blocks = self.gpu_allocator.get_num_free_blocks();
 
-        if self.num_gpu_blocks > *num_free_gpu_blocks + num_required_blocks {
-            AllocStatus::Later
-        } else if self.num_gpu_blocks < num_required_blocks {
+        if self.num_gpu_blocks < num_required_blocks {
             AllocStatus::Impossible
+        } else if *num_free_gpu_blocks < num_required_blocks {
+            AllocStatus::Later {
+                waitlisted_count: seq.increment_waitlist_count(),
+            }
         } else {
             AllocStatus::Ok
         }
     }
 
-    pub fn allocate(&mut self, seq: &impl BlockEngineSequence) {
-        let mut block_table = Vec::new();
-        for _logcical_idx in 0..seq.get_logical_token_blocks() {
-            block_table.push(self.gpu_allocator.allocate());
+    pub fn allocate(&mut self, seq: &mut impl BlockEngineSequence) {
+        // If there are prefill physical blocks, use those here.
+        if let Some(physical_blocks_prefill) = seq.take_physical_blocks_prefill() {
+            let mut block_table = physical_blocks_prefill.clone();
+            for block in &mut block_table {
+                block.deref_mut().refcount = 1;
+            }
+            let n_extra_blocks = seq.logical_token_blocks().len() - block_table.len();
+            for _ in 0..n_extra_blocks {
+                block_table.push(self.gpu_allocator.allocate());
+            }
+            self.block_tables.insert(seq.get_id(), block_table.clone());
+        } else {
+            let mut block_table = Vec::new();
+            for _logcical_idx in 0..seq.logical_token_blocks().len() {
+                block_table.push(self.gpu_allocator.allocate());
+            }
+            self.block_tables.insert(seq.get_id(), block_table.clone());
         }
-        self.block_tables.insert(seq.get_id(), block_table.clone());
     }
 
     pub fn can_append_token_to_seq(&self, seq: &impl BlockEngineSequence) -> bool {

@@ -1,6 +1,5 @@
 use std::{
     any::Any,
-    iter::zip,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -15,22 +14,22 @@ use tracing::warn;
 use crate::{
     device_map::DeviceMapper,
     get_mut_arcmutex,
-    pipeline::{
-        sampling::{
-            finish_or_add_toks_to_seq, sample_sequence, sample_target_sequence_speculative,
-        },
-        AdapterInstruction,
+    kv_cache::NormalCacheManager,
+    pipeline::sampling::{
+        finish_or_add_toks_to_seq, sample_sequence, sample_target_sequence_speculative,
     },
     prefix_cacher::PrefixCacheManagerV2,
-    sequence::{Sequence, SequenceRecognizer},
+    sequence::Sequence,
     DeviceMapSetting, Loader, ModelKind, PagedAttentionConfig, Pipeline, TokenSource, TryIntoDType,
 };
 
+use crate::kv_cache::CacheManager;
+
 use super::{
-    cache_manager::NormalCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheBackendMetadata, CacheInstruction,
-    CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata,
-    IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
+    chat_template::ChatTemplate, sampling::SpeculativeSample, AnyMoePipelineMixin,
+    CacheBackendMetadata, CacheInstruction, CacheManagerMixin, EitherCache, ForwardInputsResult,
+    GeneralMetadata, IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths,
+    PreProcessingMixin,
 };
 
 /// A loader for a speculative pipeline using 2 [`Loader`]s.
@@ -284,16 +283,6 @@ impl CacheManagerMixin for SpeculativePipeline {
     }
 }
 
-impl AdapterActivationMixin for SpeculativePipeline {
-    /// Returns the number of activated adapters.
-    fn activate_adapters(&mut self, adapters: Vec<String>) -> anyhow::Result<usize> {
-        let mut res = 0;
-        res += get_mut_arcmutex!(self.draft).activate_adapters(adapters.clone())?;
-        res += get_mut_arcmutex!(self.target).activate_adapters(adapters)?;
-        Ok(res)
-    }
-}
-
 impl MetadataMixin for SpeculativePipeline {
     fn device(&self) -> Device {
         get_mut_arcmutex!(self.target).device()
@@ -348,64 +337,22 @@ impl Pipeline for SpeculativePipeline {
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
-        backend_metadata: CacheBackendMetadata<'_>,
+        backend_metadata: CacheBackendMetadata,
     ) -> Result<Duration> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
                 match pre_op {
-                    CacheInstruction::In(adapter_inst) => {
-                        match adapter_inst {
-                            AdapterInstruction::Activate(adapters) => {
-                                self.activate_adapters(adapters).map_err(|e| {
-                                    candle_core::Error::msg(<anyhow::Error as AsRef<
-                                        dyn std::error::Error,
-                                    >>::as_ref(
-                                        &e
-                                    ))
-                                })?
-                            }
-                            AdapterInstruction::None => 0,
-                        };
-                        self.clone_in_cache(input_seqs)
-                    }
-                    CacheInstruction::Nothing(adapter_inst) => {
-                        match adapter_inst {
-                            AdapterInstruction::Activate(adapters) => {
-                                self.activate_adapters(adapters).map_err(|e| {
-                                    candle_core::Error::msg(<anyhow::Error as AsRef<
-                                        dyn std::error::Error,
-                                    >>::as_ref(
-                                        &e
-                                    ))
-                                })?
-                            }
-                            AdapterInstruction::None => 0,
-                        };
-                    }
+                    CacheInstruction::In => self.clone_in_cache(input_seqs),
+                    CacheInstruction::Nothing => (),
                     CacheInstruction::Reset {
                         reset_non_granular,
-                        adapter_inst,
                         load_preallocated_cache,
-                    } => {
-                        match adapter_inst {
-                            AdapterInstruction::Activate(adapters) => {
-                                self.activate_adapters(adapters).map_err(|e| {
-                                    candle_core::Error::msg(<anyhow::Error as AsRef<
-                                        dyn std::error::Error,
-                                    >>::as_ref(
-                                        &e
-                                    ))
-                                })?
-                            }
-                            AdapterInstruction::None => 0,
-                        };
-                        self.set_none_cache(
-                            input_seqs,
-                            reset_non_granular,
-                            true,
-                            load_preallocated_cache,
-                        )
-                    }
+                    } => self.set_none_cache(
+                        input_seqs,
+                        reset_non_granular,
+                        true,
+                        load_preallocated_cache,
+                    ),
                     _ => unreachable!("Unreachable PRE cache op."),
                 }
 
@@ -457,8 +404,8 @@ impl Pipeline for SpeculativePipeline {
                         seq.return_logprobs(),
                         rng.clone(),
                         false, // todo tune
-                        false, // do not add to tok trie yet
                         true,
+                        false,
                     )
                     .await?;
                     seq.add_tmp_tok(sample.token);
@@ -530,26 +477,21 @@ impl Pipeline for SpeculativePipeline {
 
                 // ======================= Rejection sampling. ============================
                 // Map from each target sample to corresponding in draft sample
+                // this will first rollback LLG state if any, and then advance for the accepted tokens only
                 let samples = sample_target_sequence_speculative(
                     logits.clone(),
                     seq,
                     seq.return_logprobs(),
                     rng.clone(),
-                    self.gamma,
+                    &draft_samples,
                 )
                 .await?;
 
-                let mut accepted_tokens = Vec::new();
-                for (target_sample, draft_sample) in zip(samples, draft_samples) {
-                    let tok = target_sample.sample.token;
-                    accepted_tokens.push(target_sample.sample);
-                    if draft_sample.sample.token != tok {
-                        break;
-                    }
-                }
+                let accepted_tokens = samples.into_iter().map(|s| s.sample).collect::<Vec<_>>();
 
                 // ======================= Narrow caches to account for rejections ============================
                 let n_not_accepted = self.gamma - accepted_tokens.len();
+
                 match get_mut_arcmutex!(self.draft).cache() {
                     EitherCache::Full(full) => {
                         for (k, v) in full.lock().iter_mut().flatten() {
@@ -628,13 +570,6 @@ impl Pipeline for SpeculativePipeline {
                         false,
                     )
                     .await?;
-                    match seq.recognizer {
-                        SequenceRecognizer::Llguidance(ref mut llg) => {
-                            llg.commit_token(Some(accepted.token))
-                                .map_err(candle_core::Error::msg)?;
-                        }
-                        SequenceRecognizer::None => {}
-                    }
                 }
 
                 // Trick to improve lower bounds. Sample last token in multinomial
@@ -658,10 +593,9 @@ impl Pipeline for SpeculativePipeline {
                     CacheInstruction::Out => {
                         self.clone_out_cache(input_seqs);
                     }
-                    CacheInstruction::Nothing(_) => (),
+                    CacheInstruction::Nothing => (),
                     CacheInstruction::Reset {
                         reset_non_granular,
-                        adapter_inst: _,
                         load_preallocated_cache,
                     } => self.set_none_cache(
                         input_seqs,

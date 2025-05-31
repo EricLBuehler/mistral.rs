@@ -17,6 +17,7 @@ use std::{
 use tracing::warn;
 
 use crate::{
+    engine::IntervalLogger,
     get_mut_arcmutex,
     paged_attention::BlockEngine,
     scheduler::{Scheduler, SchedulerOutput},
@@ -25,6 +26,9 @@ use crate::{
 };
 
 use super::{block_engine::AllocStatus, BlockEngineSequence, BlockTables, CacheConfig};
+
+/// Allow sequences to wait for 64 scheduling passes before warning of deprivation.
+const WAITING_TIMEOUT: usize = 64;
 
 pub struct PagedAttentionSchedulerOutput {
     /// Either ALL prompt or ALL completion.
@@ -43,7 +47,7 @@ pub struct PagedAttentionScheduler {
     running: VecDeque<Arc<Mutex<Sequence>>>,
     swapped_out: VecDeque<Arc<Mutex<Sequence>>>,
     config: PagedAttentionSchedulerConfig,
-    pub block_engine: BlockEngine,
+    pub block_engine: Arc<tokio::sync::Mutex<BlockEngine>>,
     block_size: usize,
 }
 
@@ -54,20 +58,21 @@ impl PagedAttentionScheduler {
             running: VecDeque::new(),
             swapped_out: VecDeque::new(),
             config,
-            block_engine: BlockEngine::new(
+            block_engine: Arc::new(tokio::sync::Mutex::new(BlockEngine::new(
                 cache_config.block_size,
                 cache_config.num_gpu_blocks,
                 cache_config.num_cpu_blocks,
-            ),
+            ))),
             block_size: cache_config.block_size,
         }
     }
 
-    pub fn schedule(&mut self) -> PagedAttentionSchedulerOutput {
+    pub fn schedule(&mut self, logger: &IntervalLogger) -> PagedAttentionSchedulerOutput {
         // If there are no swapped seqs (they have higher priority), add seqs that are in the
         // waiting queue to the running queue.
         if self.swapped_out.is_empty() {
-            let mut scheduled = VecDeque::new();
+            let mut scheduled: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
+            let mut for_waiting_again: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
             let mut did_ignore = false;
             while !self.waiting.is_empty() {
                 let seq = self.waiting.front().unwrap().clone();
@@ -78,14 +83,62 @@ impl PagedAttentionScheduler {
                 }
 
                 // If we cannot allocate either now or in the future, either do not continue or remove the sequence.
-                let can_allocate = self.block_engine.can_allocate(&*get_mut_arcmutex!(seq));
+                let can_allocate =
+                    get_mut_arcmutex!(self.block_engine).can_allocate(&mut *get_mut_arcmutex!(seq));
                 match can_allocate {
-                    AllocStatus::Later => break, // If we can only allocate later, do not bother iterating over the rest.
+                    AllocStatus::Later { waitlisted_count } => {
+                        {
+                            // If the sequence has waited too long, try to free space by evicting a
+                            // low‑priority running sequence instead of permanently ignoring it.
+                            if waitlisted_count > WAITING_TIMEOUT {
+                                // Attempt to preempt the least‑recently created running sequence
+                                // (the back of the `running` queue after FCFS sort).
+                                if let Some(seq_to_preempt) = self.running.pop_back() {
+                                    // Move the running sequence back to the waiting queue, freeing its KV‑cache.
+                                    self._preempt_by_recompute(seq_to_preempt);
+
+                                    // Retry allocation for the current sequence now that space is freed.
+                                    if !matches!(
+                                        get_mut_arcmutex!(self.block_engine)
+                                            .can_allocate(&mut *get_mut_arcmutex!(seq)),
+                                        AllocStatus::Ok
+                                    ) {
+                                        // Even after eviction we still cannot fit the sequence – fall back to
+                                        // finishing it as ignored and restore the previous behaviour.
+                                        let id = *get_mut_arcmutex!(seq).id();
+                                        let len = get_mut_arcmutex!(seq).get_toks().len();
+                                        warn!(
+                                            "Sequence {id} with length of {len} tokens still exceeds KV cache size \
+                                             even after evicting another sequence.",
+                                        );
+                                        get_mut_arcmutex!(seq)
+                                            .set_state(SequenceState::FinishedIgnored);
+                                        did_ignore = true;
+                                    }
+                                } else {
+                                    // No running sequence is available to evict; keep the original ignore logic.
+                                    let id = *get_mut_arcmutex!(seq).id();
+                                    let len = get_mut_arcmutex!(seq).get_toks().len();
+                                    warn!(
+                                        "Sequence {id} with length of {len} tokens is too long and exceeds KV cache size. \
+                                         To fix, increase the maximum sequence length for the KV cache, for example with \
+                                         `--max-seq-len`/ `max_seq_len` in automatic device mapping parameters.",
+                                    );
+                                    get_mut_arcmutex!(seq)
+                                        .set_state(SequenceState::FinishedIgnored);
+                                    did_ignore = true;
+                                }
+                            } else {
+                                // Keep waiting until the timeout threshold is reached.
+                                break;
+                            }
+                        }
+                    }
                     AllocStatus::Impossible => {
                         let id = *get_mut_arcmutex!(seq).id();
                         let len = get_mut_arcmutex!(seq).get_toks().len();
                         warn!(
-                            "Sequence {id} with length of {len} tokens is too long and exceeds capacity of block engine. Sequence will be ignored.",
+                            "Sequence {id} with length of {len} tokens is too long and exceeds KV cache size. To fix, increase the maximum sequence length for the KV cache, for example with `--max-seq-len`/ `max_seq_len` in automatic device mapping parameters.",
                         );
                         get_mut_arcmutex!(seq).set_state(SequenceState::FinishedIgnored);
                         did_ignore = true;
@@ -93,10 +146,19 @@ impl PagedAttentionScheduler {
                     _ => {}
                 }
 
+                let new_seq_has_images = get_mut_arcmutex!(seq).has_images();
+                // Only add it if has_images matches either current or there are none.
+                if !scheduled.is_empty()
+                    && get_mut_arcmutex!(scheduled[0]).has_images() != new_seq_has_images
+                {
+                    let seq = self.waiting.pop_front().unwrap();
+                    for_waiting_again.push_back(seq.clone());
+                    continue;
+                }
                 if !did_ignore {
                     get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
-                    let seq_handle = get_mut_arcmutex!(seq);
-                    self._allocate(&seq_handle);
+                    let mut seq_handle = get_mut_arcmutex!(seq);
+                    self._allocate(&mut seq_handle);
                 }
 
                 let seq = self.waiting.pop_front().unwrap();
@@ -105,9 +167,13 @@ impl PagedAttentionScheduler {
                     scheduled.push_back(seq);
                 }
             }
+            self.waiting.extend(for_waiting_again);
 
             // If we did schedule, or we ignored sequences.
             if !scheduled.is_empty() || did_ignore {
+                logger.set_num_running(self.running.len());
+                logger.set_num_waiting(self.waiting.len() + self.swapped_out.len());
+
                 return PagedAttentionSchedulerOutput {
                     scheduled: scheduled.into(),
                     blocks_to_swap_in: HashMap::new(),
@@ -130,13 +196,12 @@ impl PagedAttentionScheduler {
         // Sorts by creation time, in descending order so that earliest are latest (first come first serve).
         self.sort_running_by_priority_fcfs();
 
-        let mut running = VecDeque::new();
+        let mut running: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
         let mut did_preempt = false;
         while !self.running.is_empty() {
             let seq = self.running.pop_front().unwrap();
             let mut finished_with_break = false;
-            while !self
-                .block_engine
+            while !get_mut_arcmutex!(self.block_engine)
                 .can_append_token_to_seq(&*get_mut_arcmutex!(seq))
             {
                 // If we cannot, now we need to preempt some seqs
@@ -160,7 +225,15 @@ impl PagedAttentionScheduler {
                     let seq_handle = get_mut_arcmutex!(seq);
                     self._append_token_slot_to_seq(&seq_handle, &mut blocks_to_copy);
                 }
-                running.push_back(seq);
+                let new_seq_has_images = get_mut_arcmutex!(seq).has_images();
+                // Only add it if has_images matches either current or there are none.
+                if running.is_empty()
+                    || get_mut_arcmutex!(running[0]).has_images() == new_seq_has_images
+                {
+                    running.push_back(seq);
+                } else {
+                    self.running.push_back(seq);
+                }
             }
         }
         self.running = running;
@@ -176,13 +249,14 @@ impl PagedAttentionScheduler {
                 let seq = self.swapped_out.front().unwrap();
 
                 // If the GPU cannot handle the group being swapped in, stop
-                if !self.block_engine.can_swap_in_seq(&*get_mut_arcmutex!(seq)) {
+                if !get_mut_arcmutex!(self.block_engine).can_swap_in_seq(&*get_mut_arcmutex!(seq)) {
                     break;
                 }
 
                 let seq = self.swapped_out.pop_front().unwrap();
                 // Swap in the blocks
-                let to_swap_in = self.block_engine.swap_in(&*get_mut_arcmutex!(seq));
+                let to_swap_in =
+                    get_mut_arcmutex!(self.block_engine).swap_in(&*get_mut_arcmutex!(seq));
                 blocks_to_swap_in.extend(to_swap_in);
                 {
                     // Reserve a new slot
@@ -204,6 +278,9 @@ impl PagedAttentionScheduler {
             TERMINATE_ALL_NEXT_STEP.store(false, Ordering::SeqCst);
         }
 
+        logger.set_num_running(self.running.len());
+        logger.set_num_waiting(self.waiting.len() + self.swapped_out.len());
+
         PagedAttentionSchedulerOutput {
             scheduled: self.running.clone().into(), // Clone should be cheap.
             blocks_to_swap_in,
@@ -222,6 +299,7 @@ impl PagedAttentionScheduler {
                 true
             }
         });
+
         for id in to_free_ids {
             self._free(id);
         }
@@ -263,7 +341,7 @@ impl PagedAttentionScheduler {
         seq: &Sequence,
         blocks_to_copy: &mut HashMap<usize, Vec<usize>>,
     ) {
-        let op = self.block_engine.append_token_slot_to_seq(seq);
+        let op = get_mut_arcmutex!(self.block_engine).append_token_slot_to_seq(seq);
         if let Some((src_block, dst_block)) = op {
             if let std::collections::hash_map::Entry::Vacant(e) = blocks_to_copy.entry(src_block) {
                 e.insert(vec![dst_block]);
@@ -299,25 +377,25 @@ impl PagedAttentionScheduler {
         seq: Arc<Mutex<Sequence>>,
         blocks_to_swap_out: &mut HashMap<usize, usize>,
     ) {
-        if !self.block_engine.can_swap_out_seq(&*get_mut_arcmutex!(seq)) {
+        if !get_mut_arcmutex!(self.block_engine).can_swap_out_seq(&*get_mut_arcmutex!(seq)) {
             // If we cannot swap it out, abort the sequence group.
             let id = get_mut_arcmutex!(seq).get_id();
             self._abort_seq(id);
             return;
         }
-        let new_to_swap = self.block_engine.swap_out(&*get_mut_arcmutex!(seq));
+        let new_to_swap = get_mut_arcmutex!(self.block_engine).swap_out(&*get_mut_arcmutex!(seq));
         blocks_to_swap_out.extend(new_to_swap);
         get_mut_arcmutex!(seq).set_state(SequenceState::Swapped);
 
         self.swapped_out.push_back(seq);
     }
 
-    fn _allocate(&mut self, seq: &Sequence) {
-        self.block_engine.allocate(seq)
+    fn _allocate(&mut self, seq: &mut Sequence) {
+        get_mut_arcmutex!(self.block_engine).allocate(seq)
     }
 
     fn _free(&mut self, seq_id: usize) {
-        self.block_engine.free_sequence(seq_id);
+        get_mut_arcmutex!(self.block_engine).free_sequence(seq_id);
     }
 
     fn sort_running_by_priority_fcfs(&mut self) {
@@ -339,9 +417,9 @@ impl Scheduler for PagedAttentionScheduler {
     fn add_seq(&mut self, seq: Sequence) {
         self.waiting.push_back(Arc::new(Mutex::new(seq)));
     }
-    fn schedule(&mut self) -> SchedulerOutput<'_> {
+    fn schedule(&mut self, logger: &IntervalLogger) -> SchedulerOutput<'_> {
         SchedulerOutput::PagedAttention {
-            output: self.schedule(),
+            output: self.schedule(logger),
         }
     }
     fn waiting_len(&self) -> usize {
@@ -350,8 +428,8 @@ impl Scheduler for PagedAttentionScheduler {
     fn running_len(&self) -> usize {
         self.running.len()
     }
-    fn block_tables(&self) -> Option<&BlockTables> {
-        Some(&self.block_engine.block_tables)
+    fn block_tables(&self) -> Option<BlockTables> {
+        Some(get_mut_arcmutex!(self.block_engine).block_tables.clone())
     }
     fn block_size(&self) -> Option<usize> {
         Some(self.block_size)
@@ -359,7 +437,7 @@ impl Scheduler for PagedAttentionScheduler {
     fn free_finished_sequence_groups(&mut self) {
         self.free_finished_sequence_groups()
     }
-    fn block_engine(&mut self) -> Option<&mut BlockEngine> {
-        Some(&mut self.block_engine)
+    fn block_engine(&self) -> Option<Arc<tokio::sync::Mutex<BlockEngine>>> {
+        Some(self.block_engine.clone())
     }
 }

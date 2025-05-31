@@ -1,12 +1,12 @@
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 // const MODEL_ID: &str = "meta-llama/Llama-3.2-11B-Vision-Instruct";
 const MODEL_ID: &str = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new(MODEL_ID, VisionLoaderType::VLlama)
+    let model = VisionModelBuilder::new(MODEL_ID)
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()
@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
-        image,
+        vec![image],
         &model,
     )?;
 

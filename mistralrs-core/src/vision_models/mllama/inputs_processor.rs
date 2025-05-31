@@ -180,7 +180,7 @@ impl InputsProcessor for MLlamaImageProcessor {
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
-        mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
+        mut paged_attn_metadata: Option<PagedAttentionMeta>,
         prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = anyhow::Result<InputProcessorOutput>>> {
@@ -208,18 +208,18 @@ impl InputsProcessor for MLlamaImageProcessor {
             inputs:
                 text_models_inputs_processor::InputMetadata {
                     input,
-                    positions,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                    flash_meta,
+                    positions: _,
+                    context_lens: _,
+                    position_ids: _,
+                    paged_attn_meta: _,
+                    flash_meta: _,
                 },
-            seq_indices,
+            seq_indices: _,
         } = if is_prompt {
             get_prompt_input(
                 input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().to_vec())
+                    .map(|seq| seq.get_toks())
                     .collect::<Vec<_>>(),
                 input_seqs,
                 device,
@@ -236,7 +236,7 @@ impl InputsProcessor for MLlamaImageProcessor {
             get_completion_input(
                 input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().to_vec())
+                    .map(|seq| seq.get_toks())
                     .collect::<Vec<_>>(),
                 input_seqs,
                 device,
@@ -323,6 +323,8 @@ impl InputsProcessor for MLlamaImageProcessor {
                 aspect_ratio_ids_accum.push(aspect_ratio_ids.unwrap().unsqueeze(0).unwrap());
                 aspect_ratio_mask_accum.push(aspect_ratio_mask.unwrap().unsqueeze(0).unwrap());
                 num_tiles_accum.push(num_tiles.unwrap());
+
+                seq.multimodal.has_changed_prompt = true;
             }
 
             // Create cross attn mask
@@ -375,6 +377,54 @@ impl InputsProcessor for MLlamaImageProcessor {
             )
         } else {
             (None, None, None, None)
+        };
+
+        let text_models_inputs_processor::InnerInputProcessorOutput {
+            inputs:
+                text_models_inputs_processor::InputMetadata {
+                    input,
+                    positions,
+                    context_lens,
+                    position_ids,
+                    paged_attn_meta,
+                    flash_meta,
+                },
+            seq_indices,
+        } = if is_prompt {
+            get_prompt_input(
+                input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks())
+                    .collect::<Vec<_>>(),
+                input_seqs,
+                device,
+                last_n_context_len,
+                return_raw_logits,
+                paged_attn_metadata.as_mut(),
+                None, // TODO: evaluate if it is possible to batch this
+                mapper,
+            )
+            .nth(0)
+            .unwrap()
+            .unwrap()
+        } else {
+            get_completion_input(
+                input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks())
+                    .collect::<Vec<_>>(),
+                input_seqs,
+                device,
+                no_kv_cache,
+                last_n_context_len,
+                return_raw_logits,
+                paged_attn_metadata.as_mut(),
+                None, // TODO: evaluate if it is possible to batch this
+                mapper,
+            )
+            .nth(0)
+            .unwrap()
+            .unwrap()
         };
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {

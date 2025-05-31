@@ -7,7 +7,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{self, Activation, RmsNorm},
     models,
-    ops::{NonZeroOp, SplitOp},
+    ops::SplitOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -20,7 +20,7 @@ use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
 pub use config::Mistral3Config;
 pub use inputs_processor::Mistral3Processor;
-use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use models::mistral::Model as Mistral;
 use vision::Mistral3VisionModel;
 
@@ -231,23 +231,24 @@ impl Mistral3Model {
         let mut input_embeds = self.text_model.get_input_embeddings(input_ids)?;
 
         if let Some(pixel_values) = pixel_values {
+            let special_image_mask = input_ids
+                .eq(self.cfg.image_token_index as f64)?
+                .unsqueeze(D::Minus1)?
+                .broadcast_as(input_embeds.shape().clone())?
+                .to_dtype(DType::U32)?;
+            let mask_flat = special_image_mask.flatten_all()?;
+            // Nonzero before vision model to allow async processing all the way through logits.
+            let indices = mask_flat.nonzero()?.squeeze(1)?;
+
             let image_sizes = image_sizes.unwrap();
             let image_features = self.get_image_features(
                 &pixel_values.to_dtype(self.vision_model.dtype())?,
                 image_sizes,
             )?;
 
-            let special_image_mask = input_ids
-                .eq(self.cfg.image_token_index as f64)?
-                .unsqueeze(D::Minus1)?
-                .broadcast_as(input_embeds.shape().clone())?
-                .to_dtype(DType::U32)?;
-
-            let mask_flat = special_image_mask.flatten_all()?;
             let mut x_flat = input_embeds.flatten_all()?;
             let src_flat = image_features.flatten_all()?;
 
-            let indices = mask_flat.nonzero()?.squeeze(1)?;
             let current_vals = x_flat.gather(&indices, 0)?;
             let diff = (src_flat - current_vals)?;
             x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
@@ -282,6 +283,8 @@ impl IsqModel for Mistral3Model {
         let uvb = UnVarBuilder::new();
         uvb.pp("multi_modal_projector")
             .extend(self.mmproj.residual_tensors());
+        uvb.pp("vision_tower")
+            .extend(self.vision_model.residual_tensors());
         uvb.pp("language_model")
             .extend(self.text_model.residual_tensors());
 
@@ -340,9 +343,6 @@ impl VisionModel for Mistral3Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         self.text_model.config()
-    }
-    fn has_conv2d(&self) -> bool {
-        true
     }
 }
 

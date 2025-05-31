@@ -8,6 +8,9 @@ runner = Runner(
     num_device_layers=["500"],
 )
 
+# In fact, JSON object can be also defined in the grammar itself, see
+# lark_llg.py and https://github.com/guidance-ai/llguidance/blob/main/docs/syntax.md#inline-json-schemas
+
 # @myobj will reference the JSON schema defined below (see grammars = [ ... ])
 top_lark = r"""
 start: "Reasoning: " /.+/ "\nJSON: " @myobj

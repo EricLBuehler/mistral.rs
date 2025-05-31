@@ -1,13 +1,11 @@
 use anyhow::Result;
-use mistralrs::{
-    RequestBuilder, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder,
-};
+use mistralrs::{RequestBuilder, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 const MODEL_ID: &str = "meta-llama/Llama-3.2-11B-Vision-Instruct";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new(MODEL_ID, VisionLoaderType::VLlama)
+    let model = VisionModelBuilder::new(MODEL_ID)
         .with_logging()
         .with_isq(mistralrs::IsqType::Q8_0)
         .build()
@@ -38,7 +36,7 @@ async fn main() -> Result<()> {
     messages = messages.add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
-        image,
+        vec![image],
         &model,
     )?;
     let resp = model
@@ -60,7 +58,8 @@ async fn main() -> Result<()> {
         };
     let image = image::load_from_memory(&bytes)?;
 
-    messages = messages.add_image_message(TextMessageRole::User, "What is this?", image, &model)?;
+    messages =
+        messages.add_image_message(TextMessageRole::User, "What is this?", vec![image], &model)?;
     let resp = model
         .send_chat_request(RequestBuilder::from(messages.clone()).set_sampler_max_len(100))
         .await?
@@ -80,7 +79,8 @@ async fn main() -> Result<()> {
         };
     let image = image::load_from_memory(&bytes)?;
 
-    messages = messages.add_image_message(TextMessageRole::User, "What is this?", image, &model)?;
+    messages =
+        messages.add_image_message(TextMessageRole::User, "What is this?", vec![image], &model)?;
     let resp = model
         .send_chat_request(RequestBuilder::from(messages.clone()).set_sampler_max_len(100))
         .await?

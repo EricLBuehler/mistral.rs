@@ -15,7 +15,6 @@ serde_default_fn!(usize, vocab_size, 262208);
 serde_default_fn!(bool, tie_word_embeddings, true);
 serde_default_fn!(usize, query_pre_attn_scalar, 256);
 serde_default_fn!(usize, max_position_embeddings, 131072);
-serde_default_fn!(bool, use_flash_attn, false);
 serde_default_fn!(f64, rope_local_base_freq, 10000.);
 serde_default_fn!(usize, sliding_window_pattern, 6);
 serde_default_fn!(usize, num_attention_heads, 8);
@@ -50,8 +49,6 @@ pub struct Gemma3TextConfig {
     #[serde(default = "max_position_embeddings")]
     pub max_position_embeddings: usize,
     pub quantization_config: Option<QuantizedConfig>,
-    #[serde(default = "use_flash_attn")]
-    pub use_flash_attn: bool,
     #[serde(default = "tie_word_embeddings")]
     pub tie_word_embeddings: bool,
     #[serde(default = "rope_local_base_freq")]

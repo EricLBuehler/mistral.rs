@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Result, Tensor};
 use rand_isaac::Isaac64Rng;
 
 use crate::{
@@ -36,8 +36,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     seq.add_token(
         logprobs.clone(),
         this.get_metadata()
-            .tok_env
-            .as_ref()
+            .tok_env()
             .ok_or(candle_core::Error::Msg(
                 "`finish_or_add_toks_to_seq` requires the pipeline to have a token trie"
                     .to_string(),
@@ -77,41 +76,23 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             }
         };
 
+        let send = seq.get_toks().len() % 2 == 0 || is_done.is_some();
         if !tool_use_still_possible || tool_use_is_done {
-            if let Some(delta) = crate::handle_seq_error_ok!(seq.get_delta(), seq.responder()) {
-                if seq.get_mut_group().is_chat {
-                    let (text_new, tool_calls) =
-                        parse_text_tools(this, delta.as_str(), seq.tools.clone())
-                            .map_err(candle_core::Error::msg)?;
+            if send {
+                if let Some(delta) = crate::handle_seq_error_ok!(seq.get_delta(), seq.responder()) {
+                    if seq.get_mut_group().is_chat {
+                        let (text_new, tool_calls) =
+                            parse_text_tools(this, delta.as_str(), seq.tools.clone())
+                                .map_err(candle_core::Error::msg)?;
 
-                    if !tool_calls.is_empty() && is_done.is_none() {
-                        is_done = Some(StopReason::Eos);
-                    };
-                    seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
-                        delta: crate::Delta {
-                            content: fixup_sentencepiece!(
-                                Option text_new.map(ToString::to_string)
-                            ),
-                            role: "assistant".to_string(),
-                            tool_calls: Some(tool_calls).filter(|v| !v.is_empty()),
-                        },
-                        index: seq.get_response_index(),
-                        finish_reason: is_done.map(|x| x.to_string()),
-                        logprobs: if seq.return_logprobs() {
-                            Some(crate::ResponseLogprob {
-                                token: delta,
-                                bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
-                                logprob: logprobs.logprob,
-                                top_logprobs: logprobs.top_logprobs.unwrap().clone(),
-                            })
-                        } else {
-                            None
-                        },
-                    });
-                } else {
-                    seq.add_streaming_completion_chunk_choice_to_group(
-                        crate::CompletionChunkChoice {
-                            text: fixup_sentencepiece!(delta),
+                        seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
+                            delta: crate::Delta {
+                                content: fixup_sentencepiece!(
+                                    Option text_new.map(ToString::to_string)
+                                ),
+                                role: "assistant".to_string(),
+                                tool_calls: Some(tool_calls).filter(|v| !v.is_empty()),
+                            },
                             index: seq.get_response_index(),
                             finish_reason: is_done.map(|x| x.to_string()),
                             logprobs: if seq.return_logprobs() {
@@ -124,41 +105,59 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             } else {
                                 None
                             },
-                        },
-                    );
-                }
-
-                if let Some(reason) = is_done {
-                    if use_prefix_cacher {
-                        prefix_cacher.add_sequence(seq);
-                        prefix_cacher.evict_to_cpu()?;
+                        });
+                    } else {
+                        seq.add_streaming_completion_chunk_choice_to_group(
+                            crate::CompletionChunkChoice {
+                                text: fixup_sentencepiece!(delta),
+                                index: seq.get_response_index(),
+                                finish_reason: is_done.map(|x| x.to_string()),
+                                logprobs: if seq.return_logprobs() {
+                                    Some(crate::ResponseLogprob {
+                                        token: delta,
+                                        bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
+                                        logprob: logprobs.logprob,
+                                        top_logprobs: logprobs.top_logprobs.unwrap().clone(),
+                                    })
+                                } else {
+                                    None
+                                },
+                            },
+                        );
                     }
-                    seq.set_state(crate::sequence::SequenceState::Done(reason));
-                    this.reset_non_granular_state();
                 }
+            }
 
-                // Send usage on final chunk.
-                let usage_opt = if is_done.is_some() {
-                    let usage = seq.get_mut_group().get_usage();
-                    seq.get_mut_group().total_prompt_toks = 0;
-                    seq.get_mut_group().total_toks = 0;
-                    Some(usage)
-                } else {
-                    None
-                };
-
-                if seq
-                    .get_mut_group()
-                    .maybe_send_streaming_response(seq, this.name().clone(), usage_opt)
-                    .await
-                    .is_err()
-                {
-                    // If we can't send the response, cancel the sequence
-                    seq.set_state(crate::sequence::SequenceState::Done(
-                        crate::sequence::StopReason::Canceled,
-                    ));
-                    this.reset_non_granular_state();
+            if let Some(reason) = is_done {
+                if use_prefix_cacher {
+                    prefix_cacher.add_sequence(seq);
+                    prefix_cacher.evict_caches()?;
                 }
+                seq.set_state(crate::sequence::SequenceState::Done(reason));
+                this.reset_non_granular_state();
+            }
+
+            // Send usage on final chunk.
+            let usage_opt = if is_done.is_some() {
+                let usage = seq.get_mut_group().get_usage();
+                seq.get_mut_group().total_prompt_toks = 0;
+                seq.get_mut_group().total_toks = 0;
+                Some(usage)
+            } else {
+                None
+            };
+
+            if seq
+                .get_mut_group()
+                .maybe_send_streaming_response(seq, this.name().clone(), usage_opt)
+                .await
+                .is_err()
+            {
+                // If we can't send the response, cancel the sequence
+                seq.set_state(crate::sequence::SequenceState::Done(
+                    crate::sequence::StopReason::Canceled,
+                ));
+                this.reset_non_granular_state();
             }
         }
     } else if let Some(reason) = is_done {
@@ -216,7 +215,8 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     let txt = String::from_utf8_lossy(seq.completion_bytes());
                     txt[..completion_bytes_pos].trim_start().to_string()
                 }
-                crate::sequence::StopReason::GeneratedImage => {
+                crate::sequence::StopReason::GeneratedImage
+                | crate::sequence::StopReason::GeneratedSpeech => {
                     candle_core::bail!("Stop reason was `GeneratedImage`.")
                 }
             };
@@ -248,7 +248,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 
             if use_prefix_cacher {
                 prefix_cacher.add_sequence(seq);
-                prefix_cacher.evict_to_cpu()?;
+                prefix_cacher.evict_caches()?;
             }
 
             let group = seq.get_mut_group();
@@ -314,8 +314,8 @@ pub async fn sample_and_add_toks(
                 return_logprobs,
                 rng.clone(),
                 use_async_pool,
-                true, // Append result to trie
                 false,
+                use_async_pool,
             )
         })
         .collect();
@@ -345,8 +345,8 @@ pub async fn sample_sequence(
     return_logprobs: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     use_async_pool: bool,
-    add_to_trie: bool,
     sample_speculative: bool,
+    multiple_sequences: bool,
 ) -> Result<Logprobs> {
     let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
 
@@ -362,6 +362,7 @@ pub async fn sample_sequence(
                 return_logprobs,
                 rng_clone,
                 sample_speculative,
+                multiple_sequences,
             )
         })
         .await?
@@ -372,14 +373,23 @@ pub async fn sample_sequence(
             return_logprobs,
             rng_clone,
             sample_speculative,
+            multiple_sequences,
         )?
     };
 
     let bias_if_not_allowed = match &mut seq.recognizer {
         SequenceRecognizer::Llguidance(ref mut llg) => {
-            let step_res = llg.compute_mask().map_err(candle_core::Error::msg)?;
-            if let Some(mask) = &step_res.sample_mask {
+            if !llg.is_stopped()
+                && llg
+                    .validate_tokens(&[first_lobprobs_response.token])
+                    .unwrap_or(0)
+                    == 1
+            {
+                None
+            } else {
+                let mask = llg.compute_mask_or_eos().map_err(candle_core::Error::msg)?;
                 if mask.is_allowed(first_lobprobs_response.token) {
+                    // shouldn't really happen, except for EOS
                     None
                 } else {
                     let mut acc = vec![-f32::INFINITY; logits.shape().dims1().unwrap()];
@@ -391,21 +401,13 @@ pub async fn sample_sequence(
 
                     Some(acc)
                 }
-            } else if step_res.is_stop() {
-                let mut acc = vec![-f32::INFINITY; logits.shape().dims1().unwrap()];
-                for eos_tok in seq.eos_tokens() {
-                    acc[*eos_tok as usize] = 0.0;
-                }
-                Some(acc)
-            } else {
-                None
             }
         }
         SequenceRecognizer::None => None,
     };
     let second_logprobs_response = match bias_if_not_allowed {
         Some(acc) => {
-            let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &Device::Cpu)?)?;
+            let new_logits = (&logits + Tensor::from_slice(&acc, acc.len(), logits.device())?)?;
 
             let ctx_clone = seq.get_toks().to_vec();
             let rng_clone = rng.clone();
@@ -418,6 +420,7 @@ pub async fn sample_sequence(
                         return_logprobs,
                         rng_clone,
                         sample_speculative,
+                        multiple_sequences,
                     )
                 })
                 .await?
@@ -428,21 +431,23 @@ pub async fn sample_sequence(
                     return_logprobs,
                     rng_clone,
                     sample_speculative,
+                    multiple_sequences,
                 )?
             }
         }
         None => first_lobprobs_response,
     };
 
-    if add_to_trie {
-        match seq.recognizer {
-            SequenceRecognizer::Llguidance(ref mut llg) => {
-                llg.commit_token(Some(second_logprobs_response.token))
+    match seq.recognizer {
+        SequenceRecognizer::Llguidance(ref mut llg) => {
+            if !llg.is_stopped() {
+                llg.consume_token(second_logprobs_response.token)
                     .map_err(candle_core::Error::msg)?;
             }
-            SequenceRecognizer::None => {}
         }
+        SequenceRecognizer::None => {}
     }
+
     Ok(second_logprobs_response)
 }
 
@@ -451,28 +456,45 @@ pub struct SpeculativeSample {
     pub sample: Logprobs,
 }
 
-/// Async sample without modifying sequence.
+/// Async sample without modifying sequence (except for the constraint).
 pub async fn sample_target_sequence_speculative(
     logits: Tensor,
     seq: &mut Sequence,
     return_logprobs: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    n_toks: usize,
+    draft_samples: &[SpeculativeSample],
 ) -> Result<Vec<SpeculativeSample>> {
+    let n_toks = draft_samples.len();
+
+    // first, rollback the llg
+    match &mut seq.recognizer {
+        SequenceRecognizer::Llguidance(ref mut llg) => {
+            llg.rollback(n_toks).map_err(candle_core::Error::msg)?;
+        }
+        SequenceRecognizer::None => {}
+    }
+
     let mut sampled = Vec::new();
-    for chunk in logits.chunk(n_toks, 1)? {
-        sampled.push(SpeculativeSample {
-            sample: sample_sequence(
-                chunk,
-                seq,
-                return_logprobs,
-                rng.clone(),
-                true,  // TODO(EricLBuehler): does this hurt perf?
-                false, // Do not append to trie (yet)
-                true,
-            )
-            .await?,
-        });
+    for (chunk, draft) in logits
+        .chunk(n_toks, 1)?
+        .into_iter()
+        .zip(draft_samples.iter())
+    {
+        let sample = sample_sequence(
+            chunk,
+            seq,
+            return_logprobs,
+            rng.clone(),
+            true, // TODO(EricLBuehler): does this hurt perf?
+            true,
+            false,
+        )
+        .await?;
+        let sampled_token = sample.token;
+        sampled.push(SpeculativeSample { sample });
+        if sampled_token != draft.sample.token {
+            break;
+        }
     }
     Ok(sampled)
 }

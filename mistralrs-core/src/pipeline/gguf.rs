@@ -1,19 +1,19 @@
-use super::cache_manager::{FullCacheManager, NormalCacheManager};
-use super::llg::build_tok_env;
+use super::llg::build_llg_factory;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind,
-    TokenSource, XLoraPaths,
+    TokenSource,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
-    ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+    AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqPipelineMixin,
+    MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::device_map::{self, DeviceMapper};
 use crate::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
 use crate::gguf::{Content, GGUFArchitecture};
+use crate::kv_cache::{FullCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
 use crate::paged_attention::{
     calculate_cache_config, AttentionImplementation, CacheEngine, ModelConfigLike,
@@ -93,6 +93,7 @@ pub struct GGUFLoader {
     tgt_non_granular_index: Option<usize>,
     config: GGUFSpecificConfig,
     jinja_explicit: Option<String>,
+    lora_adapter_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -207,6 +208,7 @@ impl GGUFLoaderBuilder {
             quantized_model_id: self.quantized_model_id,
             config: self.config,
             jinja_explicit: self.jinja_explicit,
+            lora_adapter_ids: None,
         })
     }
 }
@@ -249,6 +251,7 @@ impl GGUFLoader {
             tgt_non_granular_index,
             config,
             jinja_explicit,
+            lora_adapter_ids: None,
         }
     }
 }
@@ -487,15 +490,15 @@ impl Loader for GGUFLoader {
             serde_json::from_str(&fs::read_to_string(f).unwrap())
                 .expect("bos_token_id/eos_token_id missing in generation_config.json")
         });
+        let chat_template_explicit = paths
+            .get_chat_template_explicit()
+            .as_ref()
+            .map(|x| x.to_string_lossy().to_string());
         let mut chat_template = get_chat_template(
             paths,
-            &self.jinja_explicit,
-            &paths
-                .get_chat_template_explicit()
-                .as_ref()
-                .map(|x| x.to_string_lossy().to_string())
-                .clone(),
-            &self.chat_template,
+            self.jinja_explicit.as_ref(),
+            chat_template_explicit.as_ref(),
+            self.chat_template.as_ref(),
             gguf_chat_template,
         );
 
@@ -508,7 +511,7 @@ impl Loader for GGUFLoader {
             Model::Starcoder2(ref p) => p.max_seq_len,
             Model::Qwen2(ref p) => p.max_seq_len,
         };
-        let tok_env = build_tok_env(tokenizer.clone());
+        let llg_factory = build_llg_factory(tokenizer.clone())?;
         let num_hidden_layers = match model {
             Model::Llama(ref model) => model.cache.normal().0.len(),
             Model::Phi2(ref model) => model.cache.normal().0.len(),
@@ -547,7 +550,7 @@ impl Loader for GGUFLoader {
             }),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_env: Some(tok_env),
+                llg_factory: Some(llg_factory),
                 no_kv_cache: self.no_kv_cache,
                 no_prefix_cache: false,
                 num_hidden_layers,
@@ -639,25 +642,6 @@ impl CacheManagerMixin for GGUFPipeline {
             Model::XLoraPhi3(ref model) => &model.cache,
             Model::Starcoder2(ref model) => &model.cache,
             Model::Qwen2(ref model) => &model.cache,
-        }
-    }
-}
-
-impl AdapterActivationMixin for GGUFPipeline {
-    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
-        let is_lora = self.metadata.kind.is_adapted_and(|a| a.is_lora());
-        if !is_lora {
-            anyhow::bail!("Activating adapters is only supported for models fine-tuned with LoRA.")
-        }
-
-        match self.model {
-            Model::XLoraLlama(ref mut model) => model
-                .activate_adapters(adapter_names)
-                .map_err(anyhow::Error::msg),
-            Model::XLoraPhi3(ref mut model) => model
-                .activate_adapters(adapter_names)
-                .map_err(anyhow::Error::msg),
-            _ => unreachable!(),
         }
     }
 }

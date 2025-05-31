@@ -1,1 +1,0 @@
-{"base_model_id": "HuggingFaceH4/zephyr-7b-beta", "order": ["adapter_1"], "preload_adapters": [{"name":"adapter_2","adapter_model_id":"lamm-mit/x-lora"}]}

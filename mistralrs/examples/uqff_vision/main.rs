@@ -1,14 +1,11 @@
 use anyhow::Result;
-use mistralrs::{
-    IsqType, TextMessageRole, UqffVisionModelBuilder, VisionLoaderType, VisionMessages,
-};
+use mistralrs::{IsqType, TextMessageRole, UqffVisionModelBuilder, VisionMessages};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = UqffVisionModelBuilder::new(
         "EricB/Phi-3.5-vision-instruct-UQFF",
-        VisionLoaderType::Phi3V,
-        "phi3.5-vision-instruct-q8_0.uqff".into(),
+        vec!["phi3.5-vision-instruct-q8_0.uqff".into()],
     )
     .into_inner()
     .with_isq(IsqType::Q4K)
@@ -27,7 +24,7 @@ async fn main() -> Result<()> {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
-        image,
+        vec![image],
         &model,
     )?;
 

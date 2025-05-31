@@ -200,7 +200,6 @@ impl Attention {
             sliding_window: cfg.sliding_window,
             sdpa_params: SdpaParams {
                 n_kv_groups: num_heads / num_kv_heads,
-                use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: cfg.sliding_window,
@@ -435,7 +434,7 @@ impl Model {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
                 "Using {} quantization: {}.",
-                quant_cfg.quant_method.to_string(),
+                quant_cfg.name(),
                 quant_cfg.get_bits_name(&vb)
             );
         }
@@ -446,6 +445,7 @@ impl Model {
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
@@ -810,34 +810,6 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
-    }
-    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
-        if self.xlora_classifier.is_some() {
-            candle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
-        }
-        let mut sum = 0;
-        for layer in self.layers.iter_mut() {
-            sum += Arc::get_mut(&mut layer.self_attn.k_proj)
-                .unwrap()
-                .activate(&adapter_names)?;
-            sum += Arc::get_mut(&mut layer.self_attn.o_proj)
-                .unwrap()
-                .activate(&adapter_names)?;
-            sum += Arc::get_mut(&mut layer.self_attn.q_proj)
-                .unwrap()
-                .activate(&adapter_names)?;
-            sum += Arc::get_mut(&mut layer.self_attn.v_proj)
-                .unwrap()
-                .activate(&adapter_names)?;
-
-            sum += Arc::get_mut(&mut layer.mlp.c_fc)
-                .unwrap()
-                .activate(&adapter_names)?;
-            sum += Arc::get_mut(&mut layer.mlp.c_proj)
-                .unwrap()
-                .activate(&adapter_names)?;
-        }
-        Ok(sum)
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg

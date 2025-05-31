@@ -1,5 +1,6 @@
-use std::{fs::File, num::NonZeroUsize, path::PathBuf};
+use std::{fs::File, num::NonZeroUsize, path::PathBuf, str::FromStr};
 
+use mistralrs_quant::MULTI_LORA_DELIMITER;
 use serde::Deserialize;
 
 use crate::{
@@ -7,7 +8,7 @@ use crate::{
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
     ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
     SpeculativeLoader, Topology, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
-    GGUF_MULTI_FILE_DELIMITER,
+    GGUF_MULTI_FILE_DELIMITER, UQFF_MULTI_FILE_DELIMITER,
 };
 
 fn default_one() -> usize {
@@ -63,7 +64,7 @@ pub enum TomlModelSelected {
         write_uqff: Option<PathBuf>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
-        from_uqff: Option<PathBuf>,
+        from_uqff: Option<String>,
 
         /// .imatrix file to enhance GGUF quantizations with.
         /// Incompatible with `--imatrix/-i`
@@ -114,7 +115,7 @@ pub enum TomlModelSelected {
         write_uqff: Option<PathBuf>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
-        from_uqff: Option<PathBuf>,
+        from_uqff: Option<String>,
 
         /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[serde(default = "default_max_seq_len")]
@@ -133,11 +134,8 @@ pub enum TomlModelSelected {
         /// Force a base model ID to load from instead of using the ordering file. This may be a HF hub repo or a local path.
         model_id: Option<String>,
 
-        /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
-        adapters_model_id: String,
-
-        /// Ordering JSON file
-        order: String,
+        /// Model IDs to load LoRA from. This may be a HF hub repo or a local path. Specify multiple with a semicolon.
+        adapter_model_ids: String,
 
         /// The architecture of the model.
         arch: Option<NormalLoaderType>,
@@ -153,7 +151,7 @@ pub enum TomlModelSelected {
         write_uqff: Option<PathBuf>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
-        from_uqff: Option<PathBuf>,
+        from_uqff: Option<String>,
 
         /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[serde(default = "default_max_seq_len")]
@@ -396,7 +394,7 @@ pub enum TomlModelSelected {
         model_id: String,
 
         /// The architecture of the model.
-        arch: VisionLoaderType,
+        arch: Option<VisionLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[serde(default = "default_dtype")]
@@ -409,7 +407,7 @@ pub enum TomlModelSelected {
         write_uqff: Option<PathBuf>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
-        from_uqff: Option<PathBuf>,
+        from_uqff: Option<String>,
 
         /// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
         /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
@@ -491,7 +489,6 @@ pub struct TomlSelector {
 
 #[derive(Clone)]
 struct TomlLoaderInnerParams {
-    use_flash_attn: bool,
     chat_template: Option<String>,
     no_kv_cache: bool,
     tokenizer_json: Option<String>,
@@ -500,7 +497,6 @@ struct TomlLoaderInnerParams {
 }
 
 pub struct TomlLoaderArgs {
-    pub use_flash_attn: bool,
     pub chat_template: Option<String>,
     pub no_kv_cache: bool,
     pub prompt_chunksize: Option<NonZeroUsize>,
@@ -593,7 +589,6 @@ fn loader_from_selected(
     args: TomlLoaderInnerParams,
     model: TomlModelSelected,
 ) -> anyhow::Result<Box<dyn Loader>> {
-    let use_flash_attn = args.use_flash_attn;
     let loader: Box<dyn Loader> = match model {
         TomlModelSelected::Plain {
             model_id,
@@ -610,12 +605,16 @@ fn loader_from_selected(
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                use_flash_attn,
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.split(UQFF_MULTI_FILE_DELIMITER)
+                        .map(PathBuf::from_str)
+                        .map(|x| x.unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 imatrix,
                 calibration_file,
                 hf_cache_path,
@@ -642,12 +641,16 @@ fn loader_from_selected(
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                use_flash_attn,
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.split(UQFF_MULTI_FILE_DELIMITER)
+                        .map(PathBuf::from_str)
+                        .map(|x| x.unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
@@ -670,8 +673,7 @@ fn loader_from_selected(
         .build(arch)?,
         TomlModelSelected::Lora {
             model_id,
-            adapters_model_id,
-            order,
+            adapter_model_ids,
             arch,
             dtype: _,
             topology,
@@ -682,12 +684,16 @@ fn loader_from_selected(
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                use_flash_attn,
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.split(UQFF_MULTI_FILE_DELIMITER)
+                        .map(PathBuf::from_str)
+                        .map(|x| x.unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
@@ -699,11 +705,10 @@ fn loader_from_selected(
             args.jinja_explicit,
         )
         .with_lora(
-            adapters_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
+            adapter_model_ids
+                .split(MULTI_LORA_DELIMITER)
+                .map(ToString::to_string)
+                .collect(),
         )
         .build(arch)?,
         TomlModelSelected::GGUF {
@@ -907,11 +912,15 @@ fn loader_from_selected(
             hf_cache_path,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
-                use_flash_attn,
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.split(UQFF_MULTI_FILE_DELIMITER)
+                        .map(PathBuf::from_str)
+                        .map(|x| x.unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 max_edge,
                 calibration_file,
                 imatrix,
@@ -932,7 +941,6 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
     fn try_into(self) -> Result<Box<dyn Loader>, Self::Error> {
         let (selector, args) = self;
         let args = TomlLoaderInnerParams {
-            use_flash_attn: args.use_flash_attn,
             chat_template: args.chat_template,
             no_kv_cache: args.no_kv_cache,
             tokenizer_json: selector.tokenizer_json,

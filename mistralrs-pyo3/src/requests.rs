@@ -36,7 +36,6 @@ pub struct CompletionRequest {
     pub(crate) top_k: Option<usize>,
     pub(crate) grammar: Option<String>,
     pub(crate) grammar_type: Option<String>,
-    pub(crate) adapters: Option<Vec<String>>,
     pub(crate) min_p: Option<f64>,
     pub(crate) tool_schemas: Option<Vec<String>>,
     pub(crate) tool_choice: Option<ToolChoice>,
@@ -66,7 +65,6 @@ impl CompletionRequest {
         top_k=None,
         grammar = None,
         grammar_type = None,
-        adapters = None,
         min_p=None,
         tool_schemas=None,
         tool_choice=None,
@@ -92,7 +90,6 @@ impl CompletionRequest {
         top_k: Option<usize>,
         grammar: Option<String>,
         grammar_type: Option<String>,
-        adapters: Option<Vec<String>>,
         min_p: Option<f64>,
         tool_schemas: Option<Vec<String>>,
         tool_choice: Option<ToolChoice>,
@@ -118,7 +115,6 @@ impl CompletionRequest {
             top_k,
             grammar,
             grammar_type,
-            adapters,
             min_p,
             tool_schemas,
             tool_choice,
@@ -159,7 +155,6 @@ pub struct ChatCompletionRequest {
     pub(crate) top_k: Option<usize>,
     pub(crate) grammar: Option<String>,
     pub(crate) grammar_type: Option<String>,
-    pub(crate) adapters: Option<Vec<String>>,
     pub(crate) min_p: Option<f64>,
     pub(crate) tool_schemas: Option<Vec<String>>,
     pub(crate) tool_choice: Option<ToolChoice>,
@@ -168,6 +163,7 @@ pub struct ChatCompletionRequest {
     pub(crate) dry_allowed_length: Option<usize>,
     pub(crate) dry_sequence_breakers: Option<Vec<String>>,
     pub(crate) web_search_options: Option<WebSearchOptions>,
+    pub(crate) enable_thinking: Option<bool>,
 }
 
 #[pymethods]
@@ -190,7 +186,6 @@ impl ChatCompletionRequest {
         stream=false,
         grammar = None,
         grammar_type = None,
-        adapters = None,
         min_p=None,
         tool_schemas=None,
         tool_choice=None,
@@ -199,6 +194,7 @@ impl ChatCompletionRequest {
         dry_allowed_length=None,
         dry_sequence_breakers=None,
         web_search_options=None,
+        enable_thinking=false,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -217,7 +213,6 @@ impl ChatCompletionRequest {
         stream: Option<bool>,
         grammar: Option<String>,
         grammar_type: Option<String>,
-        adapters: Option<Vec<String>>,
         min_p: Option<f64>,
         tool_schemas: Option<Vec<String>>,
         tool_choice: Option<ToolChoice>,
@@ -226,6 +221,7 @@ impl ChatCompletionRequest {
         dry_allowed_length: Option<usize>,
         dry_sequence_breakers: Option<Vec<String>>,
         web_search_options: Option<WebSearchOptions>,
+        enable_thinking: Option<bool>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -292,7 +288,6 @@ impl ChatCompletionRequest {
             stream: stream.unwrap_or(false),
             grammar,
             grammar_type,
-            adapters,
             min_p,
             tool_choice,
             tool_schemas,
@@ -301,6 +296,7 @@ impl ChatCompletionRequest {
             dry_base,
             dry_sequence_breakers,
             web_search_options,
+            enable_thinking,
         })
     }
 }

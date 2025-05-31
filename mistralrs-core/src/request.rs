@@ -27,6 +27,7 @@ pub enum Constraint {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 /// Image generation response format
 pub enum ImageGenerationResponseFormat {
     Url,
@@ -38,7 +39,10 @@ pub type MessageContent = Either<String, Vec<IndexMap<String, Value>>>;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Message or messages for a [`Request`].
 pub enum RequestMessage {
-    Chat(Vec<IndexMap<String, MessageContent>>),
+    Chat {
+        messages: Vec<IndexMap<String, MessageContent>>,
+        enable_thinking: Option<bool>,
+    },
     Completion {
         text: String,
         echo_prompt: bool,
@@ -49,11 +53,15 @@ pub enum RequestMessage {
         #[serde(skip)] // TODO!!!!
         images: Vec<image::DynamicImage>,
         messages: Vec<IndexMap<String, MessageContent>>,
+        enable_thinking: Option<bool>,
     },
     ImageGeneration {
         prompt: String,
         format: ImageGenerationResponseFormat,
         generation_params: DiffusionGenerationParams,
+    },
+    SpeechGeneration {
+        prompt: String,
     },
 }
 
@@ -63,6 +71,7 @@ fn default_responder<T>() -> Sender<T> {
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub enum SearchContextSize {
     #[serde(rename = "low")]
@@ -75,6 +84,7 @@ pub enum SearchContextSize {
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ApproximateUserLocation {
     pub city: String,
@@ -84,6 +94,7 @@ pub struct ApproximateUserLocation {
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum WebSearchUserLocation {
@@ -94,6 +105,7 @@ pub enum WebSearchUserLocation {
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct WebSearchOptions {
     pub search_context_size: Option<SearchContextSize>,
@@ -110,7 +122,6 @@ pub struct WebSearchOptions {
 /// - `id`: Request ID
 /// - `constraint`: Constraint to use during generation
 /// - `suffix`: Suffix to add
-/// - `adapters`: Adapters to use in this request
 /// - `tools`: Tools available in this request
 /// - `tool_choice`: Choice of tools
 /// - `logits_processors`: Custom logits processors. Order of application:
@@ -130,7 +141,6 @@ pub struct NormalRequest {
     pub id: usize,
     pub constraint: Constraint,
     pub suffix: Option<String>,
-    pub adapters: Option<Vec<String>>,
     pub tools: Option<Vec<Tool>>,
     pub tool_choice: Option<ToolChoice>,
     #[serde(skip)]
@@ -159,7 +169,6 @@ impl NormalRequest {
             is_streaming: false,
             constraint: Constraint::None,
             suffix: None,
-            adapters: None,
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
@@ -175,6 +184,7 @@ pub struct TokenizationRequest {
     pub tools: Option<Vec<Tool>>,
     pub add_generation_prompt: bool,
     pub add_special_tokens: bool,
+    pub enable_thinking: Option<bool>,
     #[serde(default = "default_responder")]
     #[serde(skip)]
     pub response: Sender<anyhow::Result<Vec<u32>>>,
@@ -194,9 +204,8 @@ pub struct DetokenizationRequest {
 /// A request to the Engine, encapsulating the various parameters as well as
 /// the `mpsc` response `Sender` used to return the [`Response`].
 pub enum Request {
-    Normal(NormalRequest),
+    Normal(Box<NormalRequest>),
     ReIsq(IsqType),
-    ActivateAdapters(Vec<String>),
     Tokenize(TokenizationRequest),
     Detokenize(DetokenizationRequest),
     // Sending a terminate request causes the `run` function to return to the thread created in `MistralRs::new`,
@@ -208,21 +217,18 @@ pub enum Request {
 impl Debug for Request {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Request::Normal(NormalRequest {
-                messages,
-                sampling_params,
-                is_streaming,
-                adapters,
-                id,
-                ..
-            }) => {
+            Request::Normal(boxed_req) => {
+                let NormalRequest {
+                    messages,
+                    sampling_params,
+                    is_streaming,
+                    id,
+                    ..
+                } = &**boxed_req;
                 write!(
                     f,
-                    "Request {id} {{ messages: `{messages:?}`, sampling_params: {sampling_params:?}, is_streaming: {is_streaming}, adapters: {adapters:?}}}",
+                    "Request {id} {{ messages: `{messages:?}`, sampling_params: {sampling_params:?}, is_streaming: {is_streaming}}}",
                 )
-            }
-            Request::ActivateAdapters(adapters) => {
-                write!(f, "Activate Adapters Request {adapters:?}",)
             }
             Request::ReIsq(tp) => {
                 write!(f, "Re ISQ Request {tp:?}",)

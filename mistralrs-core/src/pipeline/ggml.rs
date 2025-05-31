@@ -1,15 +1,14 @@
-use super::cache_manager::FullCacheManager;
-use super::llg::build_tok_env;
+use super::llg::build_llg_factory;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, QuantizationKind, TokenSource,
-    XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
-    ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+    AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqPipelineMixin,
+    MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::device_map::DeviceMapper;
+use crate::kv_cache::FullCacheManager;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::get_chat_template;
@@ -48,7 +47,7 @@ use tracing::{info, warn};
 
 enum Model {
     Llama(QLlama),
-    XLoraLlama(XLoraQLlama),
+    XLoraLlama(Box<XLoraQLlama>),
 }
 
 pub struct GGMLPipeline {
@@ -75,6 +74,7 @@ pub struct GGMLLoader {
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
     jinja_explicit: Option<String>,
+    lora_adapter_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -192,6 +192,7 @@ impl GGMLLoaderBuilder {
             quantized_filename: Some(self.quantized_filename),
             quantized_model_id: Some(self.quantized_model_id),
             jinja_explicit: self.jinja_explicit,
+            lora_adapter_ids: None,
         })
     }
 }
@@ -234,6 +235,7 @@ impl GGMLLoader {
             kind,
             tgt_non_granular_index,
             jinja_explicit,
+            lora_adapter_ids: None,
         }
     }
 }
@@ -335,7 +337,7 @@ impl Loader for GGMLLoader {
         let model = match self.kind {
             ModelKind::GgufQuantized { .. } => Model::Llama(QLlama::try_from(model_config)?),
             ModelKind::GgufAdapter { .. } => {
-                Model::XLoraLlama(XLoraQLlama::try_from(model_config)?)
+                Model::XLoraLlama(Box::new(XLoraQLlama::try_from(model_config)?))
             }
             _ => unreachable!(),
         };
@@ -345,15 +347,15 @@ impl Loader for GGMLLoader {
             serde_json::from_str(&fs::read_to_string(f).unwrap())
                 .expect("bos_token_id/eos_token_id missing in generation_config.json")
         });
+        let chat_template_explicit = paths
+            .get_chat_template_explicit()
+            .as_ref()
+            .map(|x| x.to_string_lossy().to_string());
         let chat_template = get_chat_template(
             paths,
-            &self.jinja_explicit,
-            &paths
-                .get_chat_template_explicit()
-                .as_ref()
-                .map(|x| x.to_string_lossy().to_string())
-                .clone(),
-            &self.chat_template,
+            self.jinja_explicit.as_ref(),
+            chat_template_explicit.as_ref(),
+            self.chat_template.as_ref(),
             None,
         );
 
@@ -361,7 +363,7 @@ impl Loader for GGMLLoader {
             Model::Llama(ref l) => l.max_seq_len,
             Model::XLoraLlama(ref xl) => xl.max_seq_len,
         };
-        let tok_env = build_tok_env(tokenizer.clone());
+        let llg_factory = build_llg_factory(tokenizer.clone())?;
         let num_hidden_layers = match model {
             Model::Llama(ref model) => model.cache.normal().0.len(),
             Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
@@ -381,7 +383,7 @@ impl Loader for GGMLLoader {
             }),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_env: Some(tok_env),
+                llg_factory: Some(llg_factory),
                 no_kv_cache: self.no_kv_cache,
                 no_prefix_cache: false,
                 num_hidden_layers,
@@ -484,22 +486,6 @@ impl CacheManagerMixin for GGMLPipeline {
         match self.model {
             Model::Llama(ref model) => &model.cache,
             Model::XLoraLlama(ref model) => &model.cache,
-        }
-    }
-}
-
-impl AdapterActivationMixin for GGMLPipeline {
-    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
-        let is_lora = self.metadata.kind.is_adapted_and(|a| a.is_lora());
-        if !is_lora {
-            anyhow::bail!("Activating adapters is only supported for models fine-tuned with LoRA.")
-        }
-
-        match self.model {
-            Model::XLoraLlama(ref mut model) => model
-                .activate_adapters(adapter_names)
-                .map_err(anyhow::Error::msg),
-            _ => unreachable!(),
         }
     }
 }

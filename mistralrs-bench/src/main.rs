@@ -4,14 +4,14 @@ use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, initialize_logging, paged_attn_supported,
     parse_isq_value, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, DrySamplingParams, IsqType, Loader, LoaderBuilder, MemoryGpuConfig,
-    MistralRs, MistralRsBuilder, ModelSelected, NormalRequest, PagedAttentionConfig, Request,
-    RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
+    DeviceMapSetting, DrySamplingParams, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs,
+    MistralRsBuilder, ModelSelected, NormalRequest, PagedAttentionConfig, Request, RequestMessage,
+    Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
 use std::sync::Arc;
 use std::{fmt::Display, num::NonZeroUsize};
 use tokio::sync::mpsc::channel;
-use tracing::{info, warn};
+use tracing::info;
 
 enum TestName {
     Prompt(usize),
@@ -70,7 +70,7 @@ fn run_bench(
     let sender = mistralrs.get_sender().unwrap();
     let (tx, mut rx) = channel(10_000);
 
-    let req = Request::Normal(NormalRequest {
+    let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: prompt,
         sampling_params: sampling_params.clone(),
@@ -79,13 +79,12 @@ fn run_bench(
         is_streaming: false,
         constraint: Constraint::None,
         suffix: None,
-        adapters: None,
         tools: None,
         tool_choice: None,
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
-    });
+    }));
 
     let mut usages = Vec::new();
 
@@ -117,6 +116,7 @@ fn run_bench(
                     }
                     Response::CompletionChunk(_) => unreachable!(),
                     Response::ImageGeneration(_) => unreachable!(),
+                    Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
                 },
                 None => unreachable!("Expected a Done response, got None",),
@@ -238,7 +238,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
     let sender = mistralrs.get_sender().unwrap();
     let (tx, mut rx) = channel(10_000);
 
-    let req = Request::Normal(NormalRequest {
+    let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: RequestMessage::Completion {
             text: "Hello!".to_string(),
@@ -251,13 +251,12 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         is_streaming: false,
         constraint: Constraint::None,
         suffix: None,
-        adapters: None,
         tools: None,
         tool_choice: None,
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
-    });
+    }));
 
     sender
         .blocking_send(req.clone())
@@ -301,8 +300,8 @@ struct Args {
     num_device_layers: Option<Vec<String>>,
 
     /// In-situ quantization to apply.
-    #[arg(long = "isq", value_parser = parse_isq_value)]
-    in_situ_quant: Option<IsqType>,
+    #[arg(long = "isq")]
+    in_situ_quant: Option<String>,
 
     /// GPU memory to allocate for KV cache with PagedAttention in MBs.
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
@@ -348,8 +347,6 @@ fn main() -> anyhow::Result<()> {
 
     args.concurrency = Some(args.concurrency.unwrap_or(vec![1]));
 
-    let use_flash_attn = mistralrs_core::using_flash_attn();
-
     let prompt_chunksize = match args.prompt_chunksize {
         Some(0) => {
             anyhow::bail!("`prompt_chunksize` must be a strictly positive integer, got 0.",)
@@ -364,7 +361,6 @@ fn main() -> anyhow::Result<()> {
     let max_seq_len = auto_device_map_params.max_seq_len();
 
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
-        .with_use_flash_attn(use_flash_attn)
         .with_prompt_chunksize(prompt_chunksize)
         .build()?;
     let model_name = loader.get_id();
@@ -391,12 +387,6 @@ fn main() -> anyhow::Result<()> {
         candle_core::utils::with_f16c()
     );
     info!("Sampling method: penalties -> temperature -> topk -> topp -> minp -> multinomial");
-    if use_flash_attn {
-        info!("Using flash attention.");
-    }
-    if use_flash_attn && loader.get_kind().is_quantized() {
-        warn!("Using flash attention with a quantized model has no effect!")
-    }
     info!("Model kind is: {}", loader.get_kind().to_string());
 
     // Parse device mapper
@@ -500,6 +490,11 @@ fn main() -> anyhow::Result<()> {
         (_, _, _, _, _, _) => None,
     };
 
+    let isq = args
+        .in_situ_quant
+        .as_ref()
+        .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
+
     let pipeline = loader.load_model_from_hf(
         None,
         token_source,
@@ -507,7 +502,7 @@ fn main() -> anyhow::Result<()> {
         &device,
         false,
         mapper,
-        args.in_situ_quant,
+        isq,
         cache_config,
     )?;
     info!("Model loaded.");

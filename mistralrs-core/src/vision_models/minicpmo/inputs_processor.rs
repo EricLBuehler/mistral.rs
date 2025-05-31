@@ -100,7 +100,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
-        mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
+        mut paged_attn_metadata: Option<PagedAttentionMeta>,
         prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = anyhow::Result<InputProcessorOutput>>> {
@@ -216,7 +216,19 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                 }
 
                 let final_text = text_chunks.join("");
-                seq.set_initial_prompt(final_text.clone());
+
+                let input_ids = tokenizer
+                    .encode_fast(final_text.clone(), false)
+                    .unwrap()
+                    .get_ids()
+                    .to_vec();
+
+                if !seq.multimodal.has_changed_prompt {
+                    seq.set_initial_prompt(final_text.clone());
+
+                    seq.set_toks_and_reallocate(input_ids.clone(), paged_attn_metadata.as_mut());
+                    seq.multimodal.has_changed_prompt = true;
+                }
 
                 let image_bounds = {
                     let im_start_id = tokenizer
@@ -259,14 +271,6 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                         )
                         .unwrap()
                         .get_ids()[0];
-
-                    let input_ids = tokenizer
-                        .encode_fast(final_text, false)
-                        .unwrap()
-                        .get_ids()
-                        .to_vec();
-
-                    seq.set_toks_and_reallocate(input_ids.clone(), paged_attn_metadata.as_mut());
 
                     let image_start_idx = input_ids
                         .iter()
@@ -339,7 +343,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
             get_prompt_input(
                 input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().to_vec())
+                    .map(|seq| seq.get_toks())
                     .collect::<Vec<_>>(),
                 input_seqs,
                 device,
@@ -356,7 +360,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
             get_completion_input(
                 input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().to_vec())
+                    .map(|seq| seq.get_toks())
                     .collect::<Vec<_>>(),
                 input_seqs,
                 device,

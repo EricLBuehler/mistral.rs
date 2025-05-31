@@ -187,9 +187,6 @@ impl VisionModel for MLlamaModel {
     fn device(&self) -> &Device {
         &self.language_model.device
     }
-    fn has_conv2d(&self) -> bool {
-        true
-    }
     fn max_seq_len(&self) -> usize {
         self.language_model.max_position_embeddings
     }

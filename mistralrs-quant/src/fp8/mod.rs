@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
     io::Cursor,
-    num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
 
@@ -13,7 +12,7 @@ use quantize::QuantizationResult;
 mod quantize;
 
 use crate::{
-    cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_HANDLE},
+    cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_CONTROLLER},
     utils::{
         deserialize_tensor, read_dtype, serialize_tensor, version_is_compatible, write_dtype,
         UQFF_VERSION,
@@ -38,12 +37,13 @@ impl QuantMethod for FP8Linear {
     {
         match method {
             QuantMethodConfig::Gguf { .. }
-            | QuantMethodConfig::Gptq { .. }
+            | QuantMethodConfig::GptqAwq { .. }
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Bnb { .. }
-            | QuantMethodConfig::BlockwiseFP8 { .. } => unreachable!(),
+            | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::Afq { .. } => unreachable!(),
             QuantMethodConfig::FP8 { lin, dtype } => {
                 let QuantizationResult {
                     qw,
@@ -68,7 +68,7 @@ impl QuantMethod for FP8Linear {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(x.device().clone());
 
-        match *CUBLASLT_HANDLE.lock().unwrap() {
+        match CUBLASLT_CONTROLLER.get() {
             Some(handle) => {
                 let n_dims = x.dims().len();
                 if n_dims < 3 {
@@ -157,26 +157,6 @@ impl QuantMethod for FP8Linear {
     ) -> Result<Arc<dyn QuantMethod>> {
         todo!()
     }
-
-    fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize> {
-        match dtype {
-            IsqType::F8E4M3 => None,
-            IsqType::Q2K
-            | IsqType::Q3K
-            | IsqType::Q4K
-            | IsqType::Q4_0
-            | IsqType::Q4_1
-            | IsqType::Q5K
-            | IsqType::Q5_0
-            | IsqType::Q5_1
-            | IsqType::Q6K
-            | IsqType::Q8K
-            | IsqType::Q8_0
-            | IsqType::Q8_1
-            | IsqType::HQQ4
-            | IsqType::HQQ8 => None,
-        }
-    }
 }
 
 // Serialization structure:
@@ -248,6 +228,7 @@ impl QuantizedSerde for FP8Linear {
         data: Cow<[u8]>,
         device: &Device,
         _comm: &Arc<crate::Comm>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
@@ -271,6 +252,7 @@ impl QuantizedSerde for FP8Linear {
 
         let w = deserialize_tensor(&mut buffer, device)?;
 
+        let _acquired_load_guard = guard.acquire(device);
         let dequant_w_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
         let dequant_x_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
         let quant_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
@@ -295,6 +277,7 @@ impl QuantizedSerde for FP8Linear {
     fn deserialize_ext_bias(
         data: Cow<[u8]>,
         device: &Device,
+        guard: QuantizeOntoGuard,
     ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
     where
         Self: Sized,
@@ -316,6 +299,7 @@ impl QuantizedSerde for FP8Linear {
 
         let has_bias = buffer.read_u8()? != 0;
 
+        let _acquired_load_guard = guard.acquire(device);
         let w = deserialize_tensor(&mut buffer, device)?;
 
         let dequant_w_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;

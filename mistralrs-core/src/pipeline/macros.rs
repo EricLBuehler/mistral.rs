@@ -96,25 +96,19 @@ macro_rules! get_paths {
         let filenames = get_model_paths(
             revision.clone(),
             &$token_source,
-            &$quantized_model_id,
-            &$quantized_filename,
+            $quantized_model_id.as_ref(),
+            $quantized_filename.as_ref(),
             &api,
             &model_id,
             $loading_uqff,
         )?;
-        let XLoraPaths {
-            adapter_configs,
-            adapter_safetensors,
-            classifier_path,
-            xlora_order,
-            xlora_config,
-            lora_preload_adapter_info,
-        } = get_xlora_paths(
+        let adapter_paths = get_xlora_paths(
             $this.model_id.clone(),
-            &$this.xlora_model_id,
+            $this.xlora_model_id.as_ref(),
+            $this.lora_adapter_ids.as_ref(),
             &$token_source,
             revision.clone(),
-            &$this.xlora_order,
+            $this.xlora_order.as_ref(),
         )?;
         let gen_conf = if $crate::api_dir_list!(api, model_id)
             .collect::<Vec<_>>()
@@ -179,14 +173,9 @@ macro_rules! get_paths {
             tokenizer_filename,
             config_filename,
             filenames,
-            xlora_adapter_configs: adapter_configs,
-            xlora_adapter_filenames: adapter_safetensors,
-            classifier_path,
-            classifier_config: xlora_config,
-            xlora_ordering: xlora_order,
+            adapter_paths,
             template_filename,
             gen_conf,
-            lora_preload_adapter_info,
             preprocessor_config,
             processor_config,
             chat_template_json_filename,
@@ -228,9 +217,13 @@ macro_rules! get_uqff_paths {
             revision.clone(),
         ));
 
-        let file = $from_uqff.display().to_string();
+        let mut files = Vec::new();
+        for file in $from_uqff {
+            let file = file.display().to_string();
 
-        api_get_file!(api, &file, Path::new(&$this.model_id))
+            files.push(api_get_file!(api, &file, Path::new(&$this.model_id)));
+        }
+        files
     }};
 }
 
@@ -290,26 +283,20 @@ macro_rules! get_paths_gguf {
         let filenames = get_model_paths(
             revision.clone(),
             &$token_source,
-            &Some($quantized_model_id),
-            &Some($quantized_filenames),
+            Some(&$quantized_model_id),
+            Some(&$quantized_filenames),
             &api,
             &model_id,
             false, // Never loading UQFF
         )?;
 
-        let XLoraPaths {
-            adapter_configs,
-            adapter_safetensors,
-            classifier_path,
-            xlora_order,
-            xlora_config,
-            lora_preload_adapter_info,
-        } = get_xlora_paths(
+        let adapter_paths = get_xlora_paths(
             this_model_id.clone(),
-            &$this.xlora_model_id,
+            $this.xlora_model_id.as_ref(),
+            $this.lora_adapter_ids.as_ref(),
             &$token_source,
             revision.clone(),
-            &$this.xlora_order,
+            $this.xlora_order.as_ref(),
         )?;
 
         let gen_conf = if $crate::api_dir_list!(api, model_id)
@@ -379,14 +366,9 @@ macro_rules! get_paths_gguf {
             tokenizer_filename,
             config_filename: PathBuf::from_str("")?,
             filenames,
-            xlora_adapter_configs: adapter_configs,
-            xlora_adapter_filenames: adapter_safetensors,
-            classifier_path,
-            classifier_config: xlora_config,
-            xlora_ordering: xlora_order,
+            adapter_paths,
             template_filename: chat_template,
             gen_conf,
-            lora_preload_adapter_info,
             preprocessor_config,
             processor_config,
             chat_template_json_filename,
@@ -404,7 +386,6 @@ macro_rules! normal_model_loader {
         $layer_devices:expr,
         $config:expr,
         $loader:expr,
-        $use_flash_attn:expr,
         $silent:expr,
         $mapper:expr,
         $loading_isq:expr,
@@ -441,7 +422,6 @@ macro_rules! normal_model_loader {
 
         $loader.load(
             &$config,
-            $use_flash_attn,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
                 mapper: $mapper,
@@ -461,7 +441,6 @@ macro_rules! normal_model_loader_sharded {
         $vb:expr,
         $config:expr,
         $loader:expr,
-        $use_flash_attn:expr,
         $mapper:expr,
         $loading_isq:expr,
         $real_device:expr,
@@ -470,7 +449,6 @@ macro_rules! normal_model_loader_sharded {
     ) => {{
         $loader.load(
             &$config,
-            $use_flash_attn,
             $vb,
             $crate::pipeline::NormalLoadingMetadata {
                 mapper: $mapper,
@@ -493,7 +471,6 @@ macro_rules! vision_normal_model_loader {
         $layer_devices:expr,
         $config:expr,
         $loader:expr,
-        $use_flash_attn:expr,
         $silent:expr,
         $mapper:expr,
         $loading_isq:expr,
@@ -525,7 +502,6 @@ macro_rules! vision_normal_model_loader {
 
         $loader.load(
             &$config,
-            $use_flash_attn,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
                 mapper: $mapper,
@@ -545,7 +521,6 @@ macro_rules! vision_normal_model_loader_sharded {
         $vb:expr,
         $config:expr,
         $loader:expr,
-        $use_flash_attn:expr,
         $mapper:expr,
         $loading_isq:expr,
         $real_device:expr,
@@ -554,7 +529,6 @@ macro_rules! vision_normal_model_loader_sharded {
     ) => {{
         $loader.load(
             &$config,
-            $use_flash_attn,
             $vb,
             $crate::pipeline::NormalLoadingMetadata {
                 mapper: $mapper,
@@ -577,15 +551,27 @@ macro_rules! xlora_model_loader {
         $layer_devices:expr,
         $config:expr,
         $loader:expr,
-        $use_flash_attn:expr,
         $silent:expr,
         $mapper:expr,
         $loading_isq:expr,
         $real_device:expr,
         $multi_progress:expr,
     ) => {{
+        // TODO: remove lora_preload_adapter_info
+        let $crate::pipeline::AdapterPaths::XLora {
+            adapter_configs,
+            adapter_safetensors,
+            classifier_path,
+            xlora_order,
+            xlora_config,
+            lora_preload_adapter_info: _,
+        } = $paths.get_adapter_paths()
+        else {
+            unreachable!()
+        };
+
         let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
-        safetensors_paths.push($paths.get_classifier_path().as_ref().unwrap());
+        safetensors_paths.push(classifier_path.as_ref().unwrap());
         let get_device_for_tensor =
             $loader.get_device_for_tensor(&$config, &*$mapper, $loading_isq)?;
 
@@ -594,8 +580,7 @@ macro_rules! xlora_model_loader {
                 .iter()
                 .map(|x| (*x).to_owned())
                 .collect::<Vec<_>>(),
-            $paths
-                .get_adapter_filenames()
+            adapter_safetensors
                 .as_ref()
                 .unwrap()
                 .iter()
@@ -612,11 +597,10 @@ macro_rules! xlora_model_loader {
 
         $loader.load_xlora(
             &$config,
-            $use_flash_attn,
             vb,
-            $paths.get_adapter_configs().as_ref().unwrap(),
-            Some($paths.get_classifier_config().as_ref().unwrap().clone()),
-            $paths.get_ordering().as_ref().unwrap().clone(),
+            adapter_configs.as_ref().unwrap(),
+            Some(xlora_config.as_ref().unwrap().clone()),
+            xlora_order.as_ref().unwrap().clone(),
             $crate::pipeline::NormalLoadingMetadata {
                 mapper: $mapper,
                 loading_isq: $loading_isq,
@@ -638,57 +622,81 @@ macro_rules! lora_model_loader {
         $layer_devices:expr,
         $config:expr,
         $loader:expr,
-        $use_flash_attn:expr,
         $silent:expr,
         $mapper:expr,
         $loading_isq:expr,
+        $loading_uqff:expr,
         $real_device:expr,
+        $attention_mechanism:expr,
+        $is_moqe:expr,
         $multi_progress:expr,
     ) => {{
-        let safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
+        let $crate::pipeline::AdapterPaths::Lora(lora_adapter_paths) = $paths.get_adapter_paths()
+        else {
+            unreachable!()
+        };
+
+        let regexes = if $loading_isq && $loading_uqff {
+            // Dummy weights for the layers which will be overwritten...
+            Some(std::sync::Arc::new(if $is_moqe {
+                $loader.isq_layer_regexes_moqe(&$config)?
+            } else {
+                $loader.isq_layer_regexes(&$config)?
+            }))
+        } else {
+            None
+        };
         let get_device_for_tensor =
             $loader.get_device_for_tensor(&$config, &*$mapper, $loading_isq)?;
 
         let vb = from_mmaped_safetensors(
-            safetensors_paths
-                .iter()
-                .map(|x| (*x).to_owned())
-                .collect::<Vec<_>>(),
-            $paths
-                .get_adapter_filenames()
-                .as_ref()
-                .unwrap()
-                .iter()
-                .map(|(_, x)| (*x).to_owned())
-                .collect::<Vec<_>>(),
-            Some($dtype),
+            $paths.get_weight_filenames().to_vec(),
+            Vec::new(),
+            $dtype,
             $device,
             $layer_devices,
             $silent,
-            None,
-            |_| true,
-            get_device_for_tensor,
+            regexes,
+            |_| true, // Will be overwritten...
+            get_device_for_tensor.clone(),
         )?;
 
-        $loader.load_xlora(
+        for $crate::pipeline::LoraAdapterPaths {
+            adapter_path,
+            lora_config,
+        } in lora_adapter_paths
+        {
+            let lora_vb = from_mmaped_safetensors(
+                vec![adapter_path.clone()],
+                Vec::new(),
+                $dtype,
+                $device,
+                $layer_devices,
+                $silent,
+                None,
+                |_| true,
+                get_device_for_tensor.clone(),
+            )?;
+
+            mistralrs_quant::APPLIED_LORAS
+                .lock()
+                .unwrap()
+                .push(mistralrs_quant::LoraAdapter {
+                    config: lora_config.clone(),
+                    weights: lora_vb,
+                });
+        }
+
+        $loader.load(
             &$config,
-            $use_flash_attn,
             vb,
-            $paths.get_adapter_configs().as_ref().unwrap(),
-            None,
-            $paths.get_ordering().as_ref().unwrap().clone(),
             $crate::pipeline::NormalLoadingMetadata {
                 mapper: $mapper,
                 loading_isq: $loading_isq,
                 real_device: $real_device,
                 multi_progress: $multi_progress,
             },
-            &$crate::utils::varbuilder_utils::load_preload_adapters(
-                $paths.get_lora_preload_adapter_info(),
-                $dtype,
-                $device,
-                $silent,
-            )?,
+            $attention_mechanism,
         )?
     }};
 }

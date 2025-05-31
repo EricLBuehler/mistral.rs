@@ -139,7 +139,6 @@ impl Attention {
                     cfg.num_attention_heads,
                     comm,
                 ),
-                use_flash_attn: cfg.use_flash_attn,
                 softcap: cfg.attn_logit_softcapping.map(|x| x as f32),
                 softmax_scale: 1.0 / (cfg.query_pre_attn_scalar as f32).sqrt(),
                 sliding_window,
@@ -394,7 +393,7 @@ impl TextModel {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
                 "Using {} quantization: {}.",
-                quant_cfg.quant_method.to_string(),
+                quant_cfg.name(),
                 quant_cfg.get_bits_name(&vb)
             );
         }
@@ -407,6 +406,7 @@ impl TextModel {
                 cfg.vocab_size,
                 cfg.hidden_size,
                 mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+                &cfg.quantization_config,
             )?,
         );
 
@@ -444,13 +444,13 @@ impl TextModel {
             );
         }
 
-        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        for layer_idx in NiceProgressBar::<_, 'b'>(
+        let layers = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
-        ) {
+        )
+        .par_iter_if_isq(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -469,9 +469,9 @@ impl TextModel {
                 }
             };
             let comm = mapper.get_comm_for(layer_idx)?;
-            let layer = DecoderLayer::new(
-                rotary_emb_global.clone(),
-                rotary_emb_local.clone(),
+            DecoderLayer::new(
+                rotary_emb_global,
+                rotary_emb_local,
                 cfg,
                 vb_l.pp(layer_idx),
                 &*mapper,
@@ -479,9 +479,8 @@ impl TextModel {
                 normal_loading_metadata.loading_isq,
                 paged_attn,
                 &comm,
-            )?;
-            layers.push(layer)
-        }
+            )
+        })?;
         let norm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -492,7 +491,7 @@ impl TextModel {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
-                &None,
+                &cfg.quantization_config,
                 false,
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
@@ -656,6 +655,14 @@ impl IsqModel for TextModel {
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let uvb_l = uvb_m.pp("layers").pp(layer_idx);
             uvb_l
+                .pp("self_attn")
+                .pp("q_norm")
+                .add(&layer.self_attn.q_norm.undo_gemma().unwrap());
+            uvb_l
+                .pp("self_attn")
+                .pp("k_norm")
+                .add(&layer.self_attn.k_norm.undo_gemma().unwrap());
+            uvb_l
                 .pp("input_layernorm")
                 .add(&layer.input_layernorm.undo_gemma().unwrap());
             uvb_l
@@ -721,9 +728,6 @@ impl VisionModel for TextModel {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
-    }
-    fn has_conv2d(&self) -> bool {
-        unreachable!()
     }
 }
 

@@ -40,6 +40,11 @@ pub fn compute_most_similar(
                 .map(|chunk| chunk.collect::<String>())
                 .collect::<Vec<_>>();
             let sentences = [vec![query.to_string()], chunks].concat();
+            #[cfg(feature = "metal")]
+            let similarities = objc::rc::autoreleasepool(|| -> Result<Vec<f32>> {
+                compute_similarities(model, tokenizer, device, sentences, normalize_embeddings)
+            })?;
+            #[cfg(not(feature = "metal"))]
             let similarities =
                 compute_similarities(model, tokenizer, device, sentences, normalize_embeddings)?;
             similarities.iter().sum::<f32>() / similarities.len() as f32
@@ -48,6 +53,11 @@ pub fn compute_most_similar(
         let title_similarity = {
             let title = &result.title;
             let sentences = vec![query.to_string(), title.to_string()];
+            #[cfg(feature = "metal")]
+            let similarities = objc::rc::autoreleasepool(|| -> Result<Vec<f32>> {
+                compute_similarities(model, tokenizer, device, sentences, normalize_embeddings)
+            })?;
+            #[cfg(not(feature = "metal"))]
             let similarities =
                 compute_similarities(model, tokenizer, device, sentences, normalize_embeddings)?;
             similarities.iter().sum::<f32>() / similarities.len() as f32
@@ -74,31 +84,38 @@ fn compute_similarities(
         .iter()
         .map(|s| InputSequence::Raw(Cow::from(s)))
         .collect::<Vec<_>>();
+
     let tokens = tokenizer
-        .encode_batch(sentences_batched, true)
+        .encode_batch(sentences_batched.to_vec(), true)
         .map_err(E::msg)?;
-    let token_ids = tokens
-        .iter()
-        .map(|tokens| {
-            let tokens = tokens.get_ids().to_vec();
-            Ok(Tensor::new(tokens.as_slice(), device)?)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let attention_mask = tokens
-        .iter()
-        .map(|tokens| {
-            let tokens = tokens.get_attention_mask().to_vec();
-            Ok(Tensor::new(tokens.as_slice(), device)?)
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut embeddings_all = Vec::new();
+    for tokens in tokens.chunks(2) {
+        let token_ids = tokens
+            .iter()
+            .map(|tokens| {
+                let tokens = tokens.get_ids().to_vec();
+                Ok(Tensor::new(tokens.as_slice(), device)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let attention_mask = tokens
+            .iter()
+            .map(|tokens| {
+                let tokens = tokens.get_attention_mask().to_vec();
+                Ok(Tensor::new(tokens.as_slice(), device)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-    let token_ids = Tensor::stack(&token_ids, 0)?;
-    let attention_mask = Tensor::stack(&attention_mask, 0)?;
-    let token_type_ids = token_ids.zeros_like()?;
+        let token_ids = Tensor::stack(&token_ids, 0)?;
+        let attention_mask = Tensor::stack(&attention_mask, 0)?;
+        let token_type_ids = token_ids.zeros_like()?;
 
-    let embeddings = model
-        .forward(&token_ids, &token_type_ids, Some(&attention_mask))?
-        .to_dtype(DType::F32)?;
+        let embeddings = model
+            .forward(&token_ids, &token_type_ids, Some(&attention_mask))?
+            .to_dtype(DType::F32)?;
+        embeddings_all.push(embeddings)
+    }
+    let embeddings = Tensor::cat(&embeddings_all, 0)?;
+    drop(embeddings_all);
 
     // Apply some avg-pooling by taking the mean embedding value for all tokens (including padding)
     let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;

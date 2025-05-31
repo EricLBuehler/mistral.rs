@@ -1,5 +1,4 @@
 mod amoe;
-mod cache_manager;
 pub mod chat_template;
 mod diffusion;
 mod ggml;
@@ -15,6 +14,7 @@ mod processing;
 mod response;
 mod sampling;
 mod speculative;
+mod speech;
 mod vision;
 
 pub use super::diffusion_models::DiffusionGenerationParams;
@@ -24,31 +24,35 @@ use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 use chat_template::ChatTemplate;
-pub use diffusion::{DiffusionLoader, DiffusionLoaderBuilder, DiffusionSpecificConfig};
+pub use diffusion::{DiffusionLoader, DiffusionLoaderBuilder};
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 use image::DynamicImage;
 pub use inputs_processor::InputProcessorOutput;
 pub(crate) use isq::IsqModelLoader;
-pub use isq::{parse_isq_value, IsqModel, IsqOrganization};
+pub use isq::{parse_isq_value, IsqModel, IsqOrganization, UQFF_MULTI_FILE_DELIMITER};
+use llguidance::toktrie::TokEnv;
 pub use loaders::{
-    AdapterKind, AutoDeviceMapParams, AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader,
-    DeviceMappedModelLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
-    Gemma2Loader, Gemma3Loader, GemmaLoader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader, Mistral3Loader,
-    MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType, NormalLoadingMetadata,
-    NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader,
-    Phi4MMLoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader,
-    Starcoder2Loader, TokenSource, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
+    AdapterKind, AutoDeviceMapParams, AutoNormalLoader, AutoVisionLoader, DeepSeekV2Loader,
+    DeepSeekV3Loader, DeviceMappedModelLoader, DiffusionLoaderType, DiffusionModel,
+    DiffusionModelLoader, FluxLoader, Gemma2Loader, Gemma3Loader, GemmaLoader, Idefics2Loader,
+    Idefics3Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths,
+    MiniCpmOLoader, Mistral3Loader, MistralLoader, MixtralLoader, ModelKind, ModelPaths,
+    NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
+    Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind,
+    Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3Loader, Qwen3MoELoader, Starcoder2Loader,
+    TokenSource, VLlama4Loader, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
 };
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
-pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
+pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths};
+pub use paths::{AdapterPaths, LoraAdapterPaths};
 pub(crate) use processing::{
     apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
 };
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
+pub use speech::{SpeechLoader, SpeechPipeline};
 use std::any::Any;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -62,19 +66,18 @@ use candle_core::{DType, Device, IndexOp, Tensor, Var};
 
 use crate::sequence::Sequence;
 
-pub use self::cache_manager::{
-    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache, NormalCacheType,
-    RotatingCache, SingleCache,
-};
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
 };
 use self::text_models_inputs_processor::PagedAttentionMeta;
+pub use crate::kv_cache::{
+    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache, NormalCacheType,
+};
 
 pub struct GeneralMetadata {
     pub max_seq_len: usize,
-    /// Only None if it doesnt make sense for the model
-    pub tok_env: Option<llguidance::toktrie::TokEnv>,
+    /// Only None if it doesn't make sense for the model
+    pub llg_factory: Option<Arc<llguidance::ParserFactory>>,
     pub no_kv_cache: bool,
     pub no_prefix_cache: bool,
     pub num_hidden_layers: usize,
@@ -91,21 +94,21 @@ pub struct GeneralMetadata {
     pub model_metadata: Option<Arc<dyn ModelConfigLike + Send + Sync>>,
 }
 
-pub enum AdapterInstruction {
-    Activate(Vec<String>),
-    None,
+impl GeneralMetadata {
+    pub fn tok_env(&self) -> Option<TokEnv> {
+        self.llg_factory.as_ref().map(|f| f.tok_env().clone())
+    }
 }
 
 pub enum CacheInstruction {
-    In(AdapterInstruction),
+    In,
     Out,
     /// load_preallocated_cache means to load the preallocated cache, if applicable.
     Reset {
         load_preallocated_cache: bool,
         reset_non_granular: bool,
-        adapter_inst: AdapterInstruction,
     },
-    Nothing(AdapterInstruction),
+    Nothing,
 }
 
 pub trait PreProcessingMixin: MetadataMixin {
@@ -142,11 +145,6 @@ pub trait CacheManagerMixin {
     fn do_preallocated_cache(&self) -> bool {
         matches!(self.cache(), EitherCache::Normal(_))
     }
-}
-
-pub trait AdapterActivationMixin {
-    /// Returns the number of activated adapters.
-    fn activate_adapters(&mut self, adapters: Vec<String>) -> Result<usize>;
 }
 
 pub trait MetadataMixin {
@@ -219,10 +217,23 @@ pub trait AnyMoePipelineMixin {
 pub enum ModelCategory {
     Text,
     Vision {
-        has_conv2d: bool,
         prefixer: Arc<dyn VisionPromptPrefixer>,
     },
     Diffusion,
+    Audio,
+    Speech,
+}
+
+impl std::fmt::Debug for ModelCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ModelCategory::Text => write!(f, "ModelCategory::Text"),
+            ModelCategory::Vision { .. } => write!(f, "ModelCategory::Vision {{ prefixer: .. }}"),
+            ModelCategory::Diffusion => write!(f, "ModelCategory::Diffusion"),
+            ModelCategory::Audio => write!(f, "ModelCategory::Audio"),
+            ModelCategory::Speech => write!(f, "ModelCategory::Speech"),
+        }
+    }
 }
 
 impl PartialEq for ModelCategory {
@@ -230,27 +241,30 @@ impl PartialEq for ModelCategory {
         match (self, other) {
             (Self::Text, Self::Text) => true,
             (Self::Vision { .. }, Self::Vision { .. }) => true,
+            (Self::Audio, Self::Audio) => true,
+            (Self::Speech, Self::Speech) => true,
             (Self::Diffusion, Self::Diffusion) => true,
-            (Self::Text, _) => false,
-            (Self::Vision { .. }, _) => false,
-            (Self::Diffusion, _) => false,
+            (
+                Self::Text | Self::Vision { .. } | Self::Diffusion | Self::Audio | Self::Speech,
+                _,
+            ) => false,
         }
     }
 }
 
-/// Prepend a vision tag appropriate for the model to the prompt. Image indexing is assumed that start at
+/// Prepend a vision tag appropriate for the model to the prompt. Image indexing is assumed that start at 0.
 pub trait VisionPromptPrefixer: Send + Sync {
     /// Prefix for inclusion in messages (may do nothing if the chat template handles it).
-    fn prefix_image(&self, image_index: usize, prompt: &str) -> String;
+    fn prefix_image(&self, image_indices: Vec<usize>, prompt: &str) -> String;
 }
 
-pub enum CacheBackendMetadata<'a> {
+pub enum CacheBackendMetadata {
     DefaultInstructions {
         pre_op: CacheInstruction,
         post_op: CacheInstruction,
     },
     PagedAttention {
-        metadata: PagedAttentionMeta<'a>,
+        metadata: PagedAttentionMeta,
         blocks_to_swap_in: HashMap<usize, usize>,
         blocks_to_swap_out: HashMap<usize, usize>,
         blocks_to_copy: HashMap<usize, Vec<usize>>,
@@ -259,9 +273,20 @@ pub enum CacheBackendMetadata<'a> {
 
 #[derive(Clone, Debug)]
 pub enum ForwardInputsResult {
-    RawLogits { logits: Tensor },
-    CausalGeneration { logits: Tensor },
-    Image { images: Vec<DynamicImage> },
+    RawLogits {
+        logits: Tensor,
+    },
+    CausalGeneration {
+        logits: Tensor,
+    },
+    Image {
+        images: Vec<DynamicImage>,
+    },
+    Speech {
+        pcms: Vec<Arc<Vec<f32>>>,
+        rates: Vec<usize>,
+        channels: Vec<usize>,
+    },
 }
 
 impl ForwardInputsResult {
@@ -276,6 +301,15 @@ impl ForwardInputsResult {
             Self::Image { images } => Ok(Self::Image {
                 images: vec![images[bs_idx].clone()],
             }),
+            Self::Speech {
+                pcms,
+                rates,
+                channels,
+            } => Ok(Self::Speech {
+                pcms: vec![pcms[bs_idx].clone()],
+                rates: vec![rates[bs_idx]],
+                channels: vec![channels[bs_idx]],
+            }),
         }
     }
 
@@ -288,6 +322,7 @@ impl ForwardInputsResult {
                 logits: logits.to_device(device)?,
             }),
             Self::Image { .. } => Ok(self.clone()),
+            Self::Speech { .. } => Ok(self.clone()),
         }
     }
 }
@@ -299,7 +334,6 @@ pub trait Pipeline:
     + PreProcessingMixin
     + IsqPipelineMixin
     + CacheManagerMixin
-    + AdapterActivationMixin
     + MetadataMixin
     + AnyMoePipelineMixin
 {
@@ -319,7 +353,7 @@ pub trait Pipeline:
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-        backend_metadata: CacheBackendMetadata<'_>,
+        backend_metadata: CacheBackendMetadata,
     ) -> Result<Duration, candle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
@@ -359,59 +393,17 @@ pub trait Pipeline:
                     } = inputs.map_err(candle_core::Error::msg)?;
                     if i == 0 {
                         match pre_op {
-                            CacheInstruction::In(ref adapter_inst) => {
-                                match adapter_inst {
-                                    AdapterInstruction::Activate(adapters) => {
-                                        self.activate_adapters(adapters.clone()).map_err(|e| {
-                                            candle_core::Error::msg(<anyhow::Error as AsRef<
-                                                dyn std::error::Error,
-                                            >>::as_ref(
-                                                &e
-                                            ))
-                                        })?
-                                    }
-                                    AdapterInstruction::None => 0,
-                                };
-                                self.clone_in_cache(input_seqs)
-                            }
-                            CacheInstruction::Nothing(ref adapter_inst) => {
-                                match adapter_inst {
-                                    AdapterInstruction::Activate(adapters) => {
-                                        self.activate_adapters(adapters.clone()).map_err(|e| {
-                                            candle_core::Error::msg(<anyhow::Error as AsRef<
-                                                dyn std::error::Error,
-                                            >>::as_ref(
-                                                &e
-                                            ))
-                                        })?
-                                    }
-                                    AdapterInstruction::None => 0,
-                                };
-                            }
+                            CacheInstruction::In => self.clone_in_cache(input_seqs),
+                            CacheInstruction::Nothing => (),
                             CacheInstruction::Reset {
                                 load_preallocated_cache,
                                 reset_non_granular,
-                                ref adapter_inst,
-                            } => {
-                                match adapter_inst {
-                                    AdapterInstruction::Activate(adapters) => {
-                                        self.activate_adapters(adapters.clone()).map_err(|e| {
-                                            candle_core::Error::msg(<anyhow::Error as AsRef<
-                                                dyn std::error::Error,
-                                            >>::as_ref(
-                                                &e
-                                            ))
-                                        })?
-                                    }
-                                    AdapterInstruction::None => 0,
-                                };
-                                self.set_none_cache(
-                                    input_seqs,
-                                    reset_non_granular,
-                                    false,
-                                    load_preallocated_cache,
-                                )
-                            }
+                            } => self.set_none_cache(
+                                input_seqs,
+                                reset_non_granular,
+                                false,
+                                load_preallocated_cache,
+                            ),
                             _ => unreachable!("Unreachable PRE cache op."),
                         }
                     }
@@ -433,11 +425,10 @@ pub trait Pipeline:
 
                 match post_op {
                     CacheInstruction::Out => self.clone_out_cache(input_seqs),
-                    CacheInstruction::Nothing(_) => (),
+                    CacheInstruction::Nothing => (),
                     CacheInstruction::Reset {
                         load_preallocated_cache,
                         reset_non_granular,
-                        adapter_inst: _,
                     } => self.set_none_cache(
                         input_seqs,
                         reset_non_granular,
@@ -463,15 +454,20 @@ pub trait Pipeline:
                     return Ok(exec_duration);
                 }
 
+                let start = Instant::now();
+                let logits_on_cpu = logits.len() > 1;
                 let logits = logits
                     .into_iter()
                     .map(|l| {
-                        l.expect("Did not get any inputs. This is shocking.")
-                            .to_device(&Device::Cpu)
+                        let l = l.expect("Did not get any inputs. This is shocking.");
+                        if logits_on_cpu {
+                            l.to_device(&Device::Cpu)
+                        } else {
+                            Ok(l)
+                        }
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
-                let start = Instant::now();
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
@@ -505,9 +501,7 @@ pub trait Pipeline:
                                     #[allow(irrefutable_let_patterns)]
                                     let ForwardInputsResult::Image { images } = r
                                     else {
-                                        unreachable!(
-                                            "All results must have same type, `CausalGeneration`"
-                                        )
+                                        unreachable!("All results must have same type, `Image`")
                                     };
                                     images
                                         .into_iter()
@@ -517,6 +511,50 @@ pub trait Pipeline:
                                 .collect::<Vec<_>>(),
                         )
                         .await?;
+                    }
+                    ForwardInputsResult::Speech { .. } => {
+                        let rates = logits
+                            .iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::Speech { rates, .. } = r
+                                else {
+                                    unreachable!("All results must have same type, `Speech`")
+                                };
+                                assert_eq!(rates.len(), 1, "Each sequence must have 1 PCM output.");
+                                *rates.first().unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        let channels = logits
+                            .iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::Speech { channels, .. } = r
+                                else {
+                                    unreachable!("All results must have same type, `Speech`")
+                                };
+                                assert_eq!(
+                                    channels.len(),
+                                    1,
+                                    "Each sequence must have 1 PCM output."
+                                );
+                                *channels.first().unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        let pcms = logits
+                            .into_iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::Speech { pcms, .. } = r
+                                else {
+                                    unreachable!("All results must have same type, `Speech`")
+                                };
+                                assert_eq!(pcms.len(), 1, "Each sequence must have 1 PCM output.");
+                                pcms.into_iter().nth(0).unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        response::send_speech_responses(input_seqs, &pcms, &rates, &channels)
+                            .await?;
                     }
                 }
                 let end = Instant::now();
@@ -536,9 +574,9 @@ pub trait Pipeline:
                     .as_ref()
                     .expect("PagedAttention must have cache engines.")
                     .execute_scheduler_ops(
-                        blocks_to_swap_in.clone(),
-                        blocks_to_swap_out.clone(),
-                        blocks_to_copy.clone(),
+                        &blocks_to_swap_in,
+                        &blocks_to_swap_out,
+                        &blocks_to_copy,
                     )?;
 
                 let inputs_iter = self.get_processor().inputs_processor().process_inputs(
@@ -607,15 +645,20 @@ pub trait Pipeline:
                     return Ok(exec_duration);
                 }
 
+                let start = Instant::now();
+                let logits_on_cpu = logits.len() > 1;
                 let logits = logits
                     .into_iter()
                     .map(|l| {
-                        l.expect("Did not get any inputs. This is shocking.")
-                            .to_device(&Device::Cpu)
+                        let l = l.expect("Did not get any inputs. This is shocking.");
+                        if logits_on_cpu {
+                            l.to_device(&Device::Cpu)
+                        } else {
+                            Ok(l)
+                        }
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
-                let start = Instant::now();
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
@@ -647,9 +690,7 @@ pub trait Pipeline:
                                     #[allow(irrefutable_let_patterns)]
                                     let ForwardInputsResult::Image { images } = r
                                     else {
-                                        unreachable!(
-                                            "All results must have same type, `CausalGeneration`"
-                                        )
+                                        unreachable!("All results must have same type, `Image`")
                                     };
                                     images
                                         .into_iter()
@@ -659,6 +700,50 @@ pub trait Pipeline:
                                 .collect::<Vec<_>>(),
                         )
                         .await?;
+                    }
+                    ForwardInputsResult::Speech { .. } => {
+                        let rates = logits
+                            .iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::Speech { rates, .. } = r
+                                else {
+                                    unreachable!("All results must have same type, `Speech`")
+                                };
+                                assert_eq!(rates.len(), 1, "Each sequence must have 1 PCM output.");
+                                *rates.first().unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        let channels = logits
+                            .iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::Speech { channels, .. } = r
+                                else {
+                                    unreachable!("All results must have same type, `Speech`")
+                                };
+                                assert_eq!(
+                                    channels.len(),
+                                    1,
+                                    "Each sequence must have 1 PCM output."
+                                );
+                                *channels.first().unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        let pcms = logits
+                            .into_iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::Speech { pcms, .. } = r
+                                else {
+                                    unreachable!("All results must have same type, `Speech`")
+                                };
+                                assert_eq!(pcms.len(), 1, "Each sequence must have 1 PCM output.");
+                                pcms.into_iter().nth(0).unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        response::send_speech_responses(input_seqs, &pcms, &rates, &channels)
+                            .await?;
                     }
                 }
                 let end = Instant::now();
@@ -738,6 +823,7 @@ mod tests {
                     inputs.clone()
                 },
                 true,
+                None,
                 &ChatTemplateValue(Either::Left(template.to_string())),
                 Some(bos.to_string()),
                 Some(eos.to_string()),

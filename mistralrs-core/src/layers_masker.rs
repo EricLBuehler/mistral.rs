@@ -61,6 +61,42 @@ impl CausalMasker {
         Tensor::from_slice(&mask, (tgt_len, offset), device)
     }
 
+    fn make_mask_chunked(
+        &self,
+        tgt_len: usize,
+        past_kv_len: usize,
+        chunk_size: usize,
+        device: &Device,
+    ) -> Result<Tensor> {
+        let offset = tgt_len + past_kv_len;
+        let mask: Vec<_> = (0..tgt_len)
+            .flat_map(|i| {
+                (0..offset).map(move |j| {
+                    // For past key-value positions
+                    if j < past_kv_len {
+                        return 0;
+                    }
+
+                    // Adjust j to account for past_kv_len
+                    let j_adj = j - past_kv_len;
+
+                    // Calculate block position (equivalent to block_pos)
+                    let i_block = i / chunk_size;
+                    let j_block = j_adj / chunk_size;
+                    let block_pos = (i_block as isize - j_block as isize).abs();
+
+                    // Calculate token position (equivalent to token_pos)
+                    let token_pos = j_adj as isize - i as isize;
+
+                    // Apply mask conditions: same block and causal
+                    1 - u8::from((block_pos == 0) && (token_pos <= 0))
+                })
+            })
+            .collect();
+
+        Tensor::from_slice(&mask, (tgt_len, offset), device)
+    }
+
     fn make_swa_mask(
         &self,
         tgt_len: usize,
@@ -140,6 +176,40 @@ impl CausalMasker {
 
         let mut causal_mask = self
             .make_mask(tgt_len, past_kv_len, input_ids.device())?
+            .to_dtype(DType::U8)?;
+
+        let zero = Tensor::new(0.0f32, input_ids.device())?;
+        causal_mask = {
+            let mut mask =
+                causal_mask.broadcast_as((causal_mask.dims()[0], causal_mask.dims()[1]))?;
+            // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
+            mask = masked_fill(
+                &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
+                &mask,
+                f32::NEG_INFINITY,
+            )?;
+            mask
+        };
+
+        Ok(Some(causal_mask))
+    }
+
+    pub fn make_chunked_mask_matrix(
+        &self,
+        input_ids: &Tensor,
+        chunk_size: usize,
+        cache: &dyn PastKvLenCache,
+        dtype: DType,
+        _n_attn_heads: usize,
+    ) -> Result<Option<Tensor>> {
+        let past_kv_len = cache.get_past_kv_len()?;
+        let (_b_sz, tgt_len) = input_ids.dims2()?;
+        if tgt_len == 1 {
+            return Ok(None);
+        }
+
+        let mut causal_mask = self
+            .make_mask_chunked(tgt_len, past_kv_len, chunk_size, input_ids.device())?
             .to_dtype(DType::U8)?;
 
         let zero = Tensor::new(0.0f32, input_ids.device())?;

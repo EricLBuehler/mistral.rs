@@ -1,16 +1,21 @@
 use std::sync::Arc;
 
-use candle_core::{Context, Result, Tensor};
+use candle_core::{Context, Device, Result, Tensor};
 use candle_nn::Linear;
 
 use crate::{
-    blockwise_fp8::blockwise_fp8_linear_b, distributed, gptq::gptq_linear, BnbLinear,
-    DistributedKind, DummyLayer, FP8Linear, GgufMatMul, HqqLayer, QuantMethod, QuantMethodConfig,
-    QuantMethodType, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, QuantizedSerdeType, Shard,
-    ShardedVarBuilder, UnquantLinear,
+    blockwise_fp8::blockwise_fp8_linear_b,
+    distributed,
+    gptq::gptq_linear,
+    lora::merge_lora_weights,
+    should_apply_immediate_isq,
+    utils::isq::{apply_immediate_isq, apply_immediate_isq_always},
+    AfqLayer, BnbLinear, DistributedKind, DummyLayer, FP8Linear, GgufMatMul, HqqLayer, QuantMethod,
+    QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, QuantizedSerdeType,
+    Shard, ShardedVarBuilder, UnquantLinear,
 };
 
-use super::{Comm, DistributedOperation, SumAllReduce};
+use super::{Comm, SumAllReduce};
 
 fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
     Shard::Simple {
@@ -43,34 +48,42 @@ impl RowParallelLayer {
         let world_size = comm.world_size();
         let shard = shard(1, rank, world_size);
 
+        let base_vb = vb.clone();
+        let vb = if should_apply_immediate_isq(&vb) {
+            vb.set_device(Device::Cpu)
+        } else {
+            vb
+        };
+
         let weight = if let Some(quant_conf) = &config {
             // GPTQ and BNB do not support tensor parallelism
             if matches!(
-                quant_conf.quant_method,
-                QuantMethodType::Bitsandbytes | QuantMethodType::Gptq
+                quant_conf,
+                QuantizedConfig::GptqAwq { .. }
+                    | QuantizedConfig::Bitsandbytes { .. }
+                    | QuantizedConfig::Afq { .. }
             ) && comm.world_size() != 1
             {
                 candle_core::bail!(
-                    "GPTQ and BNB quantization types to not support tensor parallelism, but got a world size of {}",
+                    "GPTQ and BNB and AFQ quantization types to not support tensor parallelism, but got a world size of {}",
                     comm.world_size()
                 );
             }
 
-            match quant_conf.quant_method {
-                QuantMethodType::Gptq => {
-                    let gpt_layer = gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?;
-                    return Ok(gpt_layer);
+            match quant_conf {
+                QuantizedConfig::GptqAwq { .. } => {
+                    gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
-                QuantMethodType::Bitsandbytes => {
-                    let bnb_layer =
-                        Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>;
-                    return Ok(bnb_layer);
-                }
-                QuantMethodType::Fp8 => {
+                QuantizedConfig::Fp8 { .. } => {
                     // NOTE: no bias for fp8 as it might be parallelized
                     blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, shard, vb.clone())?
                 }
-                QuantMethodType::Unreachable => unreachable!(),
+                QuantizedConfig::Bitsandbytes { .. } => {
+                    Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>
+                }
+                QuantizedConfig::Afq { .. } => {
+                    AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
             }
         } else {
             // Handle the case where the layer is dummy (no tensors)
@@ -79,6 +92,7 @@ impl RowParallelLayer {
                 Arc::new(layer) as Arc<dyn QuantMethod>
             } else {
                 let weight = vb.get_with_hints((out_dim, in_dim), "weight", shard)?;
+                let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
 
                 let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                     Linear::new(weight, None),
@@ -87,17 +101,20 @@ impl RowParallelLayer {
             }
         };
 
-        let bias = if bias {
+        // Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
+        let bias = if bias && vb.contains_tensor("bias") {
             Some(vb.get((out_dim,), "bias")?)
         } else {
             None
         };
 
-        Ok(Arc::new(Self {
+        let this_unquant = Arc::new(Self {
             weight,
             bias,
             all_reduce: distributed::SumAllReduce::new(comm),
-        }))
+        });
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        Ok(this)
     }
 }
 
@@ -111,7 +128,7 @@ impl QuantMethod for RowParallelLayer {
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         let mut xs = self.weight.forward(a)?;
-        xs = self.all_reduce.sum_all_reduce(&xs)?;
+        xs = self.all_reduce.sum_all_reduce(&xs.contiguous()?)?;
         if let Some(bias) = &self.bias {
             xs = xs.broadcast_add(bias)?;
         }
@@ -153,10 +170,6 @@ impl QuantMethod for RowParallelLayer {
         self.weight.unquant_weight_bias()
     }
 
-    fn get_max_isq_cpu_threads(&self, dtype: crate::IsqType) -> Option<std::num::NonZeroUsize> {
-        self.weight.get_max_isq_cpu_threads(dtype)
-    }
-
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<crate::IsqType>,
@@ -169,9 +182,16 @@ impl QuantMethod for RowParallelLayer {
             self.weight
                 .clone()
                 .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)?;
+        let bias = match &self.bias {
+            Some(b) => {
+                let (dtype, device) = weight.dtype_and_device();
+                Some(b.to_device(&device)?.to_dtype(dtype)?)
+            }
+            None => None,
+        };
         Ok(Arc::new(Self {
             weight,
-            bias: self.bias.clone(),
+            bias,
             all_reduce: self.all_reduce.clone(),
         }))
     }
@@ -195,6 +215,7 @@ impl QuantizedSerde for RowParallelLayer {
         data: std::borrow::Cow<[u8]>,
         device: &candle_core::Device,
         comm: &Arc<crate::Comm>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
@@ -202,10 +223,13 @@ impl QuantizedSerde for RowParallelLayer {
         // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
         let isq_type = data[crate::UQFF_QUANT_TYPE_OFFSET];
         let (weight, bias) = match QuantizedSerdeType::try_from(isq_type as usize)? {
-            QuantizedSerdeType::Gguf => GgufMatMul::deserialize_ext_bias(data, device)?,
-            QuantizedSerdeType::Unquant => UnquantLinear::deserialize_ext_bias(data, device)?,
-            QuantizedSerdeType::Hqq => HqqLayer::deserialize_ext_bias(data, device)?,
-            QuantizedSerdeType::Fp8 => FP8Linear::deserialize_ext_bias(data, device)?,
+            QuantizedSerdeType::Gguf => GgufMatMul::deserialize_ext_bias(data, device, guard)?,
+            QuantizedSerdeType::Unquant => {
+                UnquantLinear::deserialize_ext_bias(data, device, guard)?
+            }
+            QuantizedSerdeType::Hqq => HqqLayer::deserialize_ext_bias(data, device, guard)?,
+            QuantizedSerdeType::Fp8 => FP8Linear::deserialize_ext_bias(data, device, guard)?,
+            QuantizedSerdeType::Afq => AfqLayer::deserialize_ext_bias(data, device, guard)?,
         };
         Ok(Arc::new(Self {
             weight,
@@ -234,34 +258,42 @@ impl ColumnParallelLayer {
         shard: Shard,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
+        let base_vb = vb.clone();
+        let vb = if should_apply_immediate_isq(&vb) {
+            vb.set_device(Device::Cpu)
+        } else {
+            vb
+        };
+
         let weight = if let Some(quant_conf) = &config {
             // GPTQ and BNB do not support tensor parallelism
             if matches!(
-                quant_conf.quant_method,
-                QuantMethodType::Bitsandbytes | QuantMethodType::Gptq
+                quant_conf,
+                QuantizedConfig::GptqAwq { .. }
+                    | QuantizedConfig::Bitsandbytes { .. }
+                    | QuantizedConfig::Afq { .. }
             ) && comm.world_size() != 1
             {
                 candle_core::bail!(
-                    "GPTQ and BNB quantization types to not support tensor parallelism, but got a world size of {}",
+                    "GPTQ/AWQ and BNB and AFQ quantization types to not support tensor parallelism, but got a world size of {}",
                     comm.world_size()
                 );
             }
 
-            match quant_conf.quant_method {
-                QuantMethodType::Gptq => {
-                    let gpt_layer = gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?;
-                    return Ok(gpt_layer);
+            match quant_conf {
+                QuantizedConfig::GptqAwq { .. } => {
+                    gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
-                QuantMethodType::Bitsandbytes => {
-                    let bnb_layer =
-                        Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>;
-                    return Ok(bnb_layer);
-                }
-                QuantMethodType::Fp8 => {
+                QuantizedConfig::Fp8 { .. } => {
                     // NOTE: no bias for fp8 as it might be parallelized
                     blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, shard, vb.clone())?
                 }
-                QuantMethodType::Unreachable => unreachable!(),
+                QuantizedConfig::Bitsandbytes { .. } => {
+                    Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>
+                }
+                QuantizedConfig::Afq { .. } => {
+                    AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
             }
         } else {
             // Handle the case where the layer is dummy (no tensors)
@@ -270,6 +302,7 @@ impl ColumnParallelLayer {
                 Arc::new(layer) as Arc<dyn QuantMethod>
             } else {
                 let weight = vb.get_with_hints((out_dim, in_dim), "weight", shard)?;
+                let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
 
                 let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                     Linear::new(weight, None),
@@ -278,13 +311,16 @@ impl ColumnParallelLayer {
             }
         };
 
-        let bias = if bias {
+        // Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
+        let bias = if bias && vb.contains_tensor("bias") {
             Some(vb.get_with_hints((out_dim,), "bias", shard)?)
         } else {
             None
         };
 
-        Ok(Arc::new(Self { weight, bias }))
+        let this_unquant = Arc::new(Self { weight, bias });
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        Ok(this)
     }
 
     #[allow(clippy::new_ret_no_self)]
@@ -354,10 +390,6 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.unquant_weight_bias()
     }
 
-    fn get_max_isq_cpu_threads(&self, dtype: crate::IsqType) -> Option<std::num::NonZeroUsize> {
-        self.weight.get_max_isq_cpu_threads(dtype)
-    }
-
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<crate::IsqType>,
@@ -399,6 +431,7 @@ impl QuantizedSerde for ColumnParallelLayer {
         data: std::borrow::Cow<[u8]>,
         device: &candle_core::Device,
         _comm: &Arc<crate::Comm>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
@@ -406,10 +439,13 @@ impl QuantizedSerde for ColumnParallelLayer {
         // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
         let isq_type = data[crate::UQFF_QUANT_TYPE_OFFSET];
         let (weight, bias) = match QuantizedSerdeType::try_from(isq_type as usize)? {
-            QuantizedSerdeType::Gguf => GgufMatMul::deserialize_ext_bias(data, device)?,
-            QuantizedSerdeType::Unquant => UnquantLinear::deserialize_ext_bias(data, device)?,
-            QuantizedSerdeType::Hqq => HqqLayer::deserialize_ext_bias(data, device)?,
-            QuantizedSerdeType::Fp8 => FP8Linear::deserialize_ext_bias(data, device)?,
+            QuantizedSerdeType::Gguf => GgufMatMul::deserialize_ext_bias(data, device, guard)?,
+            QuantizedSerdeType::Unquant => {
+                UnquantLinear::deserialize_ext_bias(data, device, guard)?
+            }
+            QuantizedSerdeType::Hqq => HqqLayer::deserialize_ext_bias(data, device, guard)?,
+            QuantizedSerdeType::Fp8 => FP8Linear::deserialize_ext_bias(data, device, guard)?,
+            QuantizedSerdeType::Afq => AfqLayer::deserialize_ext_bias(data, device, guard)?,
         };
         Ok(Arc::new(Self { weight, bias }))
     }
@@ -421,9 +457,10 @@ pub struct ReplicatedLayer(Arc<dyn QuantMethod>);
 
 impl ReplicatedLayer {
     pub fn from_linear(lin: Linear) -> Result<Arc<dyn QuantMethod>> {
-        Ok(Arc::new(UnquantLinear::new(
-            QuantMethodConfig::Unquantized(lin),
-        )?))
+        let dev = lin.weight().device().clone();
+        let this_unquant = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq_always(this_unquant, &dev)?;
+        Ok(this)
     }
 
     #[allow(clippy::new_ret_no_self)]
@@ -434,13 +471,19 @@ impl ReplicatedLayer {
         bias: bool,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
+        let base_vb = vb.clone();
+        let vb = if should_apply_immediate_isq(&vb) {
+            vb.set_device(Device::Cpu)
+        } else {
+            vb
+        };
+
         let layer = if let Some(quant_conf) = &config {
-            match quant_conf.quant_method {
-                QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?,
-                QuantMethodType::Bitsandbytes => {
-                    Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>
+            match quant_conf {
+                QuantizedConfig::GptqAwq { .. } => {
+                    gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
-                QuantMethodType::Fp8 => blockwise_fp8_linear_b(
+                QuantizedConfig::Fp8 { .. } => blockwise_fp8_linear_b(
                     in_dim,
                     out_dim,
                     quant_conf,
@@ -448,7 +491,12 @@ impl ReplicatedLayer {
                     Default::default(),
                     vb.clone(),
                 )?,
-                QuantMethodType::Unreachable => unreachable!(),
+                QuantizedConfig::Bitsandbytes { .. } => {
+                    Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>
+                }
+                QuantizedConfig::Afq { .. } => {
+                    AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
             }
         } else {
             // Handle the case where the layer is dummy (no tensors)
@@ -457,6 +505,7 @@ impl ReplicatedLayer {
                 Arc::new(layer) as Arc<dyn QuantMethod>
             } else {
                 let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
+                let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
 
                 let bias = if bias {
                     Some(vb.get_with_hints((out_dim,), "bias", Default::default())?)
@@ -470,7 +519,9 @@ impl ReplicatedLayer {
             }
         };
 
-        Ok(Arc::new(Self(layer)))
+        let this_unquant = Arc::new(Self(layer));
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        Ok(this)
     }
 }
 
@@ -516,10 +567,6 @@ impl QuantMethod for ReplicatedLayer {
         self.0.unquant_weight_bias()
     }
 
-    fn get_max_isq_cpu_threads(&self, dtype: crate::IsqType) -> Option<std::num::NonZeroUsize> {
-        self.0.get_max_isq_cpu_threads(dtype)
-    }
-
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<crate::IsqType>,
@@ -552,6 +599,7 @@ impl QuantizedSerde for ReplicatedLayer {
         data: std::borrow::Cow<[u8]>,
         device: &candle_core::Device,
         comm: &Arc<crate::Comm>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
@@ -559,12 +607,403 @@ impl QuantizedSerde for ReplicatedLayer {
         // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
         let isq_type = data[crate::UQFF_QUANT_TYPE_OFFSET];
         let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
-            QuantizedSerdeType::Gguf => GgufMatMul::deserialize(data, device, comm)?,
-            QuantizedSerdeType::Unquant => UnquantLinear::deserialize(data, device, comm)?,
-            QuantizedSerdeType::Hqq => HqqLayer::deserialize(data, device, comm)?,
-            QuantizedSerdeType::Fp8 => FP8Linear::deserialize(data, device, comm)?,
+            QuantizedSerdeType::Gguf => GgufMatMul::deserialize(data, device, comm, guard)?,
+            QuantizedSerdeType::Unquant => UnquantLinear::deserialize(data, device, comm, guard)?,
+            QuantizedSerdeType::Hqq => HqqLayer::deserialize(data, device, comm, guard)?,
+            QuantizedSerdeType::Fp8 => FP8Linear::deserialize(data, device, comm, guard)?,
+            QuantizedSerdeType::Afq => AfqLayer::deserialize(data, device, comm, guard)?,
         };
         Ok(Arc::new(Self(deserialized)))
+    }
+}
+
+#[derive(Debug)]
+pub struct PackedExperts {
+    pub gate_proj: Vec<Arc<dyn QuantMethod>>,
+    pub up_proj: Vec<Arc<dyn QuantMethod>>,
+    pub down_proj: Vec<Arc<dyn QuantMethod>>,
+}
+
+impl PackedExperts {
+    /// Note: we only support AFQ and unquantized here because they are the only ones that support indexed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        num_local_experts: usize,
+        hidden_size: usize,
+        intermediate_size: usize,
+        config: &Option<QuantizedConfig>,
+        bias: bool,
+        comm: &Arc<crate::Comm>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
+        if bias {
+            candle_core::bail!("PackedExperts does not support bias.");
+        }
+
+        let (gate_proj, up_proj, down_proj) = if let Some(quant_conf) = &config {
+            // GPTQ and BNB do not support tensor parallelism
+            if comm.world_size() != 1 {
+                candle_core::bail!(
+                    "PackedExperts with quantization config does not support distributed (world size {}). Use ISQ.",
+                    comm.world_size()
+                );
+            }
+
+            match quant_conf {
+                QuantizedConfig::Afq { .. } => {
+                    if !vb.contains_tensor("gate_up_proj")
+                        || !vb.contains_tensor("gate_up_proj.weight")
+                    {
+                        candle_core::bail!("PackedExperts with AFQ quantization config does not support `gate_up_proj` format.");
+                    }
+
+                    let base_vb = vb.clone();
+
+                    let vb_gate_proj = if should_apply_immediate_isq(&vb) {
+                        vb.pp("gate_proj").set_device(Device::Cpu)
+                    } else {
+                        vb.pp("gate_proj")
+                    };
+                    let vb_up_proj = if should_apply_immediate_isq(&vb) {
+                        vb.pp("up_proj").set_device(Device::Cpu)
+                    } else {
+                        vb.pp("up_proj")
+                    };
+                    let vb_down_proj = if should_apply_immediate_isq(&vb) {
+                        vb.pp("down_proj").set_device(Device::Cpu)
+                    } else {
+                        vb.pp("down_proj")
+                    };
+                    let mut gate_proj = AfqLayer::afq_packed_linear_b(
+                        num_local_experts,
+                        hidden_size,
+                        intermediate_size,
+                        quant_conf,
+                        bias,
+                        vb_gate_proj,
+                    )?;
+                    let mut up_proj = AfqLayer::afq_packed_linear_b(
+                        num_local_experts,
+                        hidden_size,
+                        intermediate_size,
+                        quant_conf,
+                        bias,
+                        vb_up_proj,
+                    )?;
+                    let mut down_proj = AfqLayer::afq_packed_linear_b(
+                        num_local_experts,
+                        intermediate_size,
+                        hidden_size,
+                        quant_conf,
+                        bias,
+                        vb_down_proj,
+                    )?;
+
+                    gate_proj = apply_immediate_isq(gate_proj, base_vb.pp("gate_proj"))?;
+                    up_proj = apply_immediate_isq(up_proj, base_vb.pp("up_proj"))?;
+                    down_proj = apply_immediate_isq(down_proj, base_vb.pp("down_proj"))?;
+
+                    (vec![gate_proj], vec![up_proj], vec![down_proj])
+                }
+                _ => candle_core::bail!(
+                    "PackedExperts with quantization config only allows AFQ quantization"
+                ),
+            }
+        } else if !vb.contains_tensor("gate_up_proj") {
+            // Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
+            let mut gs = Vec::new();
+            let mut us = Vec::new();
+            let mut ds = Vec::new();
+            for i in 0..num_local_experts {
+                let gate_proj = vb
+                    .pp(i)
+                    .get((intermediate_size, hidden_size), "gate_proj.weight")?;
+                let up_proj = vb
+                    .pp(i)
+                    .get((intermediate_size, hidden_size), "up_proj.weight")?;
+                let down_proj = vb
+                    .pp(i)
+                    .get((hidden_size, intermediate_size), "down_proj.weight")?;
+
+                gs.push(gate_proj);
+                us.push(up_proj);
+                ds.push(down_proj);
+            }
+            let gate_proj = Tensor::stack(&gs, 0)?;
+            let up_proj = Tensor::stack(&us, 0)?;
+            let down_proj = Tensor::stack(&ds, 0)?;
+            let mut gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
+            )?);
+            let mut up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
+            )?);
+            let mut down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
+            )?);
+            gate_proj = apply_immediate_isq_always(gate_proj, vb.device())?;
+            up_proj = apply_immediate_isq_always(up_proj, vb.device())?;
+            down_proj = apply_immediate_isq_always(down_proj, vb.device())?;
+            (vec![gate_proj], vec![up_proj], vec![down_proj])
+        } else {
+            // Parallelized like:
+            // Each gpu holds all experts.
+            // Gate/Up proj is parallelized on dim 2 (column)
+            // Down proj is parallelized on dim 1 (row)
+            // All reduce at the end.
+
+            // Handle the case where the layer is dummy (no tensors)
+            let gate_up_block_size = intermediate_size / comm.world_size();
+            let gate_up_start = gate_up_block_size * comm.rank();
+
+            // Gate is right before Up in the gate_up
+            let shard_gate = Shard::Offset {
+                dim: 2,
+                offset: gate_up_start,
+                len: gate_up_block_size,
+            };
+            let shard_up = Shard::Offset {
+                dim: 2,
+                offset: intermediate_size + gate_up_start,
+                len: gate_up_block_size,
+            };
+            let shard_down = Shard::Simple {
+                dim: 1,
+                rank: comm.rank(),
+                world_size: comm.world_size(),
+            };
+
+            let vb_gate_up_proj = if should_apply_immediate_isq(&vb) {
+                vb.pp("gate_up_proj").set_device(Device::Cpu)
+            } else {
+                vb.pp("gate_up_proj")
+            };
+            let vb_down_proj = if should_apply_immediate_isq(&vb) {
+                vb.pp("down_proj").set_device(Device::Cpu)
+            } else {
+                vb.pp("down_proj")
+            };
+
+            let gate_proj = vb
+                .get_with_hints(
+                    (num_local_experts, hidden_size, intermediate_size * 2),
+                    "gate_up_proj",
+                    shard_gate,
+                )?
+                .t()?
+                .contiguous()?;
+            let up_proj = vb
+                .get_with_hints(
+                    (num_local_experts, hidden_size, intermediate_size * 2),
+                    "gate_up_proj",
+                    shard_up,
+                )?
+                .t()?
+                .contiguous()?;
+            let down_proj = vb
+                .get_with_hints(
+                    (num_local_experts, intermediate_size, hidden_size),
+                    "down_proj",
+                    shard_down,
+                )?
+                .t()?
+                .contiguous()?;
+
+            let gc = gate_proj.chunk(num_local_experts, 0)?;
+            let uc = up_proj.chunk(num_local_experts, 0)?;
+            let dc = down_proj.chunk(num_local_experts, 0)?;
+            drop((gate_proj, up_proj, down_proj));
+
+            let mut gs = Vec::new();
+            let mut us = Vec::new();
+            let mut ds = Vec::new();
+            for ((mut gate_proj, mut up_proj), mut down_proj) in
+                gc.into_iter().zip(uc.into_iter()).zip(dc.into_iter())
+            {
+                gate_proj = gate_proj.squeeze(0)?;
+                up_proj = up_proj.squeeze(0)?;
+                down_proj = down_proj.squeeze(0)?;
+                let gate_proj = merge_lora_weights(
+                    &vb,
+                    gate_proj,
+                    hidden_size,
+                    intermediate_size * 2,
+                    shard_gate,
+                )?;
+                let up_proj =
+                    merge_lora_weights(&vb, up_proj, hidden_size, intermediate_size * 2, shard_up)?;
+                let down_proj =
+                    merge_lora_weights(&vb, down_proj, intermediate_size, hidden_size, shard_down)?;
+
+                let mut gate_proj: Arc<dyn QuantMethod> =
+                    Arc::new(<UnquantLinear as QuantMethod>::new(
+                        QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
+                    )?);
+                gate_proj = apply_immediate_isq(gate_proj, vb_gate_up_proj.clone())?;
+                let mut up_proj: Arc<dyn QuantMethod> =
+                    Arc::new(<UnquantLinear as QuantMethod>::new(
+                        QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
+                    )?);
+                up_proj = apply_immediate_isq(up_proj, vb_gate_up_proj.clone())?;
+                let mut down_proj: Arc<dyn QuantMethod> =
+                    Arc::new(<UnquantLinear as QuantMethod>::new(
+                        QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
+                    )?);
+                down_proj = apply_immediate_isq(down_proj, vb_down_proj.clone())?;
+                gs.push(gate_proj);
+                us.push(up_proj);
+                ds.push(down_proj);
+            }
+            (gs, us, ds)
+        };
+
+        Ok(Self {
+            gate_proj,
+            up_proj,
+            down_proj,
+        })
+    }
+}
+
+pub struct FusedExperts {
+    pub fused_gate_proj: Arc<dyn QuantMethod>,
+    pub fused_up_proj: Arc<dyn QuantMethod>,
+    pub fused_down_proj: Arc<dyn QuantMethod>,
+}
+
+impl FusedExperts {
+    pub fn new(
+        hidden_size: usize,
+        moe_intermediate_size: usize,
+        num_experts: usize,
+        quantization_config: &Option<QuantizedConfig>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
+        if !vb.device().is_metal() {
+            candle_core::bail!("FastMoeMlp requires Metal.");
+        }
+
+        let (fused_gate_proj, fused_up_proj, fused_down_proj) =
+            if matches!(&quantization_config, Some(QuantizedConfig::Afq { .. })) {
+                let quantization_config = quantization_config.as_ref().unwrap();
+
+                let fused_gate_proj = AfqLayer::afq_packed_linear_b(
+                    num_experts,
+                    hidden_size,
+                    moe_intermediate_size,
+                    quantization_config,
+                    false,
+                    vb.pp("switch_mlp.gate_proj"),
+                )?;
+                let fused_up_proj = AfqLayer::afq_packed_linear_b(
+                    num_experts,
+                    hidden_size,
+                    moe_intermediate_size,
+                    quantization_config,
+                    false,
+                    vb.pp("switch_mlp.up_proj"),
+                )?;
+                let fused_down_proj = AfqLayer::afq_packed_linear_b(
+                    num_experts,
+                    moe_intermediate_size,
+                    hidden_size,
+                    quantization_config,
+                    false,
+                    vb.pp("switch_mlp.down_proj"),
+                )?;
+
+                (fused_gate_proj, fused_up_proj, fused_down_proj)
+            } else if matches!(&quantization_config, Some(QuantizedConfig::Fp8 { .. })) {
+                let experts_vb = vb.pp("experts");
+                let mut gate_proj_vec = Vec::new();
+                let mut up_proj_vec = Vec::new();
+                let mut down_proj_vec = Vec::new();
+                for i in 0..num_experts {
+                    let vb = experts_vb.pp(i);
+
+                    let gate_proj = crate::linear_no_bias(
+                        hidden_size,
+                        moe_intermediate_size,
+                        quantization_config,
+                        vb.pp("gate_proj.weight"),
+                    )?;
+                    let up_proj = crate::linear_no_bias(
+                        hidden_size,
+                        moe_intermediate_size,
+                        quantization_config,
+                        vb.pp("up_proj.weight"),
+                    )?;
+                    let down_proj = crate::linear_no_bias(
+                        moe_intermediate_size,
+                        hidden_size,
+                        quantization_config,
+                        vb.pp("down_proj.weight"),
+                    )?;
+
+                    gate_proj_vec.push(gate_proj.dequantize_w()?);
+                    up_proj_vec.push(up_proj.dequantize_w()?);
+                    down_proj_vec.push(down_proj.dequantize_w()?);
+                }
+
+                let mut gate_proj: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                        Linear::new(Tensor::stack(&gate_proj_vec, 0)?, None),
+                    ))?);
+                let mut up_proj: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                        Linear::new(Tensor::stack(&up_proj_vec, 0)?, None),
+                    ))?);
+                let mut down_proj: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                        Linear::new(Tensor::stack(&down_proj_vec, 0)?, None),
+                    ))?);
+                gate_proj = apply_immediate_isq(gate_proj, vb.pp("gate_proj"))?;
+                up_proj = apply_immediate_isq(up_proj, vb.pp("up_proj"))?;
+                down_proj = apply_immediate_isq(down_proj, vb.pp("down_proj"))?;
+
+                (gate_proj, up_proj, down_proj)
+            } else {
+                let experts_vb = vb.pp("experts");
+                let mut gate_proj_vec = Vec::new();
+                let mut up_proj_vec = Vec::new();
+                let mut down_proj_vec = Vec::new();
+                for i in 0..num_experts {
+                    let vb = experts_vb.pp(i);
+                    let gate_proj =
+                        vb.get((moe_intermediate_size, hidden_size), "gate_proj.weight")?;
+                    let up_proj = vb.get((moe_intermediate_size, hidden_size), "up_proj.weight")?;
+                    let down_proj =
+                        vb.get((hidden_size, moe_intermediate_size), "down_proj.weight")?;
+
+                    gate_proj_vec.push(gate_proj);
+                    up_proj_vec.push(up_proj);
+                    down_proj_vec.push(down_proj);
+                }
+
+                let mut gate_proj: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                        Linear::new(Tensor::stack(&gate_proj_vec, 0)?, None),
+                    ))?);
+                let mut up_proj: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                        Linear::new(Tensor::stack(&up_proj_vec, 0)?, None),
+                    ))?);
+                let mut down_proj: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                        Linear::new(Tensor::stack(&down_proj_vec, 0)?, None),
+                    ))?);
+                gate_proj = apply_immediate_isq(gate_proj, vb.pp("gate_proj"))?;
+                up_proj = apply_immediate_isq(up_proj, vb.pp("up_proj"))?;
+                down_proj = apply_immediate_isq(down_proj, vb.pp("down_proj"))?;
+
+                (gate_proj, up_proj, down_proj)
+            };
+
+        Ok(Self {
+            fused_gate_proj,
+            fused_up_proj,
+            fused_down_proj,
+        })
     }
 }
 

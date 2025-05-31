@@ -93,39 +93,9 @@ All installations will install the `mistralrs` package. The suffix on the packag
 7) Install `mistralrs`
     Install `mistralrs` by executing the following in this directory where [features](../README.md#supported-accelerators) such as `cuda` or `flash-attn` may be specified with the `--features` argument just like they would be for `cargo run`.
 
-    The base build command is:
-    ```bash
-    maturin develop -r
-    ```
-
-    - To build for CUDA:
     
     ```bash
-    maturin develop -r --features cuda
-    ```
-    
-    - To build for CUDA with flash attention:
-    
-    ```bash
-    maturin develop -r --features "cuda flash-attn"
-    ```
-
-    - To build for Metal:  
-
-    ```bash
-    maturin develop -r --features metal
-    ```
-
-    - To build for Accelerate:  
-      
-    ```bash
-    maturin develop -r --features accelerate
-    ```
-
-    - To build for MKL:  
-      
-    ```bash
-    maturin develop -r --features mkl
+    maturin develop -r --features <specify feature(s) here>
     ```
     
 Please find [API docs here](API.md) and the type stubs [here](mistralrs.pyi), which are another great form of documentation.

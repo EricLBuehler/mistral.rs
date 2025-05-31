@@ -5,7 +5,7 @@ use interprocess::local_socket::traits::{Listener, Stream};
 use interprocess::local_socket::{GenericNamespaced, Name, ToNsName};
 use interprocess::local_socket::{ListenerOptions, Stream as LocalStream};
 pub use mistralrs_quant::distributed::use_nccl;
-use mistralrs_quant::{ShardedSafeTensors, ShardedVarBuilder};
+use mistralrs_quant::ShardedVarBuilder;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use std::env;
@@ -17,6 +17,7 @@ use tracing::info;
 
 use crate::device_map::DeviceMapper;
 use crate::pipeline::{DeviceMappedModelLoader, IsqModelLoader};
+use crate::utils::varbuilder_utils::{self, DeviceForLoadTensor};
 use crate::{DeviceMapSetting, IsqOrganization, ModelPaths};
 
 pub(crate) const IS_DAEMON_FLAG: &str = "__MISTRALRS_DAEMON_INTERNAL";
@@ -43,21 +44,18 @@ pub(crate) fn ipc_name() -> anyhow::Result<Name<'static>> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn prepare_distributed_mapper<
-    'a,
-    T: DeviceMappedModelLoader + IsqModelLoader + ?Sized,
->(
+pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLoader + ?Sized>(
     dtype: DType,
     device: &Device,
-    load_device: &Device,
     available_devices: &[Device],
+    silent: bool,
     config: &str,
     loading_isq: bool,
     from_uqff: bool,
     organization: IsqOrganization,
     model: &T,
     paths: &dyn ModelPaths,
-) -> anyhow::Result<(Box<dyn DeviceMapper + Send + Sync>, ShardedVarBuilder<'a>)> {
+) -> anyhow::Result<(Box<dyn DeviceMapper + Send + Sync>, ShardedVarBuilder)> {
     #[cfg(not(feature = "nccl"))]
     tracing::warn!(
         "NCCL support was included in the build, be sure to build with `--features nccl`."
@@ -201,14 +199,17 @@ pub(crate) fn prepare_distributed_mapper<
         None
     };
 
-    let sharded_vb = unsafe {
-        ShardedSafeTensors::sharded(
-            paths.get_weight_filenames(),
-            dtype,
-            load_device,
-            make_dummy_regexes,
-        )?
-    };
+    let sharded_vb = varbuilder_utils::from_mmaped_safetensors(
+        paths.get_weight_filenames().to_vec(),
+        vec![],
+        Some(dtype),
+        &Device::Cpu,
+        vec![],
+        silent,
+        make_dummy_regexes,
+        |_| true,
+        Arc::new(|_| DeviceForLoadTensor::Base),
+    )?;
 
     info!("Loading all ranks.");
     // The mapper is specific to this pipeline

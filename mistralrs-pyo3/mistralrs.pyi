@@ -2,8 +2,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterator, Literal, Optional
 
-from torch import OptionalType
-
 class SearchContextSize(Enum):
     Low = "low"
     Medium = "medium"
@@ -58,12 +56,12 @@ class ChatCompletionRequest:
     top_k: int | None = None
     grammar: str | None = None
     grammar_type: str | None = None
-    adapters: list[str] | None = None
     min_p: float | None = None
     min_p: float | None = None
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
     web_search_options: WebSearchOptions | None = None
+    enable_thinking: bool | None = None
 
 @dataclass
 class CompletionRequest:
@@ -88,7 +86,6 @@ class CompletionRequest:
     suffix: str | None = None
     grammar: str | None = None
     grammar_type: str | None = None
-    adapters: list[str] | None = None
     min_p: float | None = None
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
@@ -106,6 +103,8 @@ class Architecture(Enum):
     Phi3_5MoE = "phi3.5moe"
     DeepseekV2 = "deepseekv2"
     DeepseekV3 = "deepseekv3"
+    Qwen3 = "qwen3"
+    Qwen3Moe = "qwen3moe"
 
 @dataclass
 class VisionArchitecture(Enum):
@@ -121,6 +120,7 @@ class VisionArchitecture(Enum):
     Qwen2_5VL = "qwen2_5vl"
     Gemma3 = "gemma3"
     Mistral3 = "mistral3"
+    Llama4 = "llama4"
 
 @dataclass
 class DiffusionArchitecture(Enum):
@@ -143,6 +143,16 @@ class ModelDType(Enum):
 class ImageGenerationResponseFormat(Enum):
     Url = "url"
     B64Json = "b64json"
+
+@dataclass
+class SpeechGenerationResponse:
+    """
+    This wraps PCM values, sampling rate and the number of channels.
+    """
+
+    pcm: list[float]
+    rate: int
+    channels: int
 
 @dataclass
 class TextAutoMapParams:
@@ -181,6 +191,7 @@ class Which(Enum):
         tokenizer_json: str | None = None
         topology: str | None = None
         organization: str | None = None
+        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = (None,)
@@ -197,6 +208,7 @@ class Which(Enum):
         tokenizer_json: str | None = None
         tgt_non_granular_index: int | None = None
         topology: str | None = None
+        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = (None,)
@@ -204,12 +216,12 @@ class Which(Enum):
 
     @dataclass
     class Lora:
-        adapters_model_id: str
-        order: str
+        adapter_model_id: str
         arch: Architecture | None = None
         model_id: str | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
+        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = (None,)
@@ -290,6 +302,7 @@ class Which(Enum):
         arch: VisionArchitecture
         tokenizer_json: str | None = None
         topology: str | None = None
+        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         max_edge: int | None = None
@@ -302,6 +315,13 @@ class Which(Enum):
     class DiffusionPlain:
         model_id: str
         arch: DiffusionArchitecture
+        dtype: ModelDType = ModelDType.Auto
+
+    @dataclass
+    class Speech:
+        model_id: str
+        arch: DiffusionArchitecture
+        dac_model_id: str | None = None
         dtype: ModelDType = ModelDType.Auto
 
 class Runner:
@@ -396,19 +416,23 @@ class Runner:
         Generate an image.
         """
 
+    def generate_audio(self, prompt: str) -> SpeechGenerationResponse:
+        """
+        Generate audio given a (model specific) prompt. PCM and sampling rate as well as the number of channels is returned.
+        """
+
     def send_re_isq(self, dtype: str) -> CompletionResponse:
         """
         Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then nothing will happen.
         """
 
-    def activate_adapters(self, adapter_names: list[str]) -> None:
-        """
-        Send a request to make the specified adapters the active adapters for the model.
-        """
-
-    def tokenize_text(self, text: str, add_special_tokens: bool) -> list[int]:
+    def tokenize_text(
+        self, text: str, add_special_tokens: bool, enable_thinking: bool | None = None
+    ) -> list[int]:
         """
         Tokenize some text, returning raw tokens.
+
+        `enable_thinking` enables thinking for models that support this configuration.
         """
 
     def detokenize_text(self, tokens: list[int], skip_special_tokens: bool) -> str:

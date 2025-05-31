@@ -1,16 +1,13 @@
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new(
-        "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
-        VisionLoaderType::Mistral3,
-    )
-    .with_isq(IsqType::Q4K)
-    .with_logging()
-    .build()
-    .await?;
+    let model = VisionModelBuilder::new("mistralai/Mistral-Small-3.1-24B-Instruct-2503")
+        .with_isq(IsqType::Q4K)
+        .with_logging()
+        .build()
+        .await?;
 
     let bytes = match reqwest::blocking::get(
         "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg",
@@ -23,7 +20,7 @@ async fn main() -> Result<()> {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is this?",
-        image,
+        vec![image],
         &model,
     )?;
 

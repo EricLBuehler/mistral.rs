@@ -1,6 +1,6 @@
 use std::{collections::HashMap, iter::zip, ops::Mul, sync::Arc};
 
-use candle_core::{bail, quantized::QMatMul, DType, Module, Result, Tensor};
+use candle_core::{quantized::QMatMul, DType, Module, Result, Tensor};
 use candle_nn::Linear;
 use either::Either;
 use mistralrs_quant::{
@@ -10,8 +10,8 @@ use mistralrs_quant::{
 use crate::layers::MatMul;
 
 use super::{
-    apply_scalings_to_x, get_maybe_topk_scalings, make_adapter, Adapter, AdapterSwapper,
-    LinearLayerLike, LoraConfig, LoraLinearConfig, Merge, Ordering,
+    apply_scalings_to_x, get_maybe_topk_scalings, make_adapter, Adapter, LinearLayerLike,
+    LoraConfig, LoraLinearConfig, Merge, Ordering,
 };
 
 #[derive(Debug)]
@@ -23,7 +23,6 @@ pub struct QLoraLinear {
     layer_n: usize,
     merged: bool,
     adapters: HashMap<String, Adapter>,
-    linear_config: Option<LoraLinearConfig>,
 }
 
 /// Specialized QLoRA for no bias
@@ -59,7 +58,7 @@ impl QLoraLinear {
             )?),
         };
 
-        let module = prefix.split('.').last().unwrap();
+        let module = prefix.split('.').next_back().unwrap();
         if target_modules.is_some_and(|target_modules| !target_modules.contains(module)) {
             return Ok(Self {
                 old,
@@ -69,7 +68,6 @@ impl QLoraLinear {
                 layer_n: usize::MAX,
                 merged: false,
                 adapters: HashMap::default(),
-                linear_config: None,
             });
         }
 
@@ -160,7 +158,6 @@ impl QLoraLinear {
                 layer_n: layer,
                 merged: false,
                 adapters,
-                linear_config: Some(linear_config.clone()),
             })
         } else {
             Ok(QLoraLinear {
@@ -171,43 +168,8 @@ impl QLoraLinear {
                 layer_n: layer,
                 merged: false,
                 adapters,
-                linear_config: Some(linear_config.clone()),
             })
         }
-    }
-}
-
-impl AdapterSwapper for QLoraLinear {
-    fn _activate_adapters(&mut self, adapter_names: &[String]) -> Result<()> {
-        match (
-            &mut self.a_adapters,
-            &mut self.b_adapters,
-            &mut self.scale_adapters,
-        ) {
-            (Either::Left(a), Either::Left(b), s) => {
-                a.clear();
-                b.clear();
-                s.clear();
-                for adapter_name in adapter_names {
-                    let Adapter {
-                        a: a_w,
-                        b: b_w,
-                        scale,
-                    } = match self.adapters.get(adapter_name) {
-                        Some(a) => a,
-                        None => bail!("Cannot load adapter `{adapter_name}`."),
-                    };
-                    a.push(a_w.clone());
-                    b.push(b_w.clone());
-                    s.push(*scale);
-                }
-            }
-            _ => unreachable!("Adapters should not be stacked if new ones are being activated."),
-        }
-        Ok(())
-    }
-    fn can_load(&self) -> bool {
-        self.linear_config.is_some()
     }
 }
 

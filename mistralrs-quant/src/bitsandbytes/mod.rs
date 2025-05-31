@@ -1,6 +1,5 @@
 use std::{
     borrow::Cow,
-    num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
 
@@ -207,12 +206,13 @@ impl QuantMethod for BnbLinear {
     {
         match method {
             QuantMethodConfig::Gguf { .. }
-            | QuantMethodConfig::Gptq { .. }
+            | QuantMethodConfig::GptqAwq { .. }
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::FP8 { .. }
-            | QuantMethodConfig::BlockwiseFP8 { .. } => unreachable!(),
+            | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::Afq { .. } => unreachable!(),
             QuantMethodConfig::Bnb {
                 weight,
                 bias,
@@ -265,10 +265,6 @@ impl QuantMethod for BnbLinear {
     ) -> Result<Arc<dyn QuantMethod>> {
         todo!()
     }
-
-    fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
-        None
-    }
 }
 
 impl QuantizedSerde for BnbLinear {
@@ -286,6 +282,7 @@ impl QuantizedSerde for BnbLinear {
         _data: Cow<[u8]>,
         _device: &Device,
         _comm: &Arc<crate::Comm>,
+        _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,

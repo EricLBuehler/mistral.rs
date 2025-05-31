@@ -81,8 +81,12 @@ impl ClipVisionEmbeddings {
             stride: c.patch_size,
             ..Default::default()
         };
-        let position_embedding =
-            layers::embedding(num_positions, c.hidden_size, vs.pp("position_embedding"))?;
+        let position_embedding = layers::embedding(
+            num_positions,
+            c.hidden_size,
+            vs.pp("position_embedding"),
+            &None,
+        )?;
         let patch_embedding = layers::conv2d_no_bias(
             c.num_channels,
             c.hidden_size,

@@ -5,9 +5,7 @@ use std::sync::Arc;
 
 use crate::attention::SdpaParams;
 use crate::gguf::Content;
-use crate::lora::{
-    get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
-};
+use crate::lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::utils::progress::NiceProgressBar;
 use candle_core::quantized::ggml_file;
@@ -79,7 +77,7 @@ impl Mlp {
 
 #[derive(Debug)]
 enum MlpOrMoe {
-    Mlp(Mlp),
+    Mlp(Box<Mlp>),
     MoE {
         n_expert_used: usize,
         feed_forward_gate_inp: QMatMul,
@@ -307,7 +305,7 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
                 let cfg_w1 = get_lora_cfg(&feed_forward_w1);
                 let cfg_w2 = get_lora_cfg(&feed_forward_w2);
                 let cfg_w3 = get_lora_cfg(&feed_forward_w3);
-                MlpOrMoe::Mlp(Mlp {
+                MlpOrMoe::Mlp(Box::new(Mlp {
                     feed_forward_w1: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w1)?,
                         &cfg_w1,
@@ -338,7 +336,7 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
                         &mut count,
                         preload_adapters,
                     )?,
-                })
+                }))
             };
             let attention_norm = ct.remove(&format!("{prefix}.attention_norm.weight"))?;
             let ffn_norm = ct.remove(&format!("{prefix}.ffn_norm.weight"))?;
@@ -397,7 +395,6 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
                 rotary: rotary.clone().into(),
                 sdpa_params: SdpaParams {
                     n_kv_groups: ct.hparams.n_head as usize / n_kv_head,
-                    use_flash_attn: false,
                     softcap: None,
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,
@@ -558,7 +555,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                 let cfg_w1 = get_lora_cfg(&feed_forward_w1);
                 let cfg_w2 = get_lora_cfg(&feed_forward_w2);
                 let cfg_w3 = get_lora_cfg(&feed_forward_w3);
-                MlpOrMoe::Mlp(Mlp {
+                MlpOrMoe::Mlp(Box::new(Mlp {
                     feed_forward_w1: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w1)?,
                         &cfg_w1,
@@ -589,7 +586,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                         &mut count,
                         preload_adapters,
                     )?,
-                })
+                }))
             } else {
                 let feed_forward_gate_inp =
                     ct.tensor(&format!("{prefix}.ffn_gate_inp.weight"), device)?;
@@ -699,7 +696,6 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                 rotary: rotary.clone(),
                 sdpa_params: SdpaParams {
                     n_kv_groups: head_count / head_count_kv,
-                    use_flash_attn: false,
                     softcap: None,
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,
@@ -769,38 +765,6 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
 }
 
 impl ModelWeights {
-    pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
-        if self.xlora_classifier.is_some() {
-            candle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
-        }
-        let mut sum = 0;
-        for layer in self.layers.iter_mut() {
-            sum += layer.attention_wk.activate(&adapter_names)?;
-            sum += layer.attention_wo.activate(&adapter_names)?;
-            sum += layer.attention_wq.activate(&adapter_names)?;
-            sum += layer.attention_wv.activate(&adapter_names)?;
-            match &mut layer.mlp_or_moe {
-                MlpOrMoe::Mlp(ref mut m) => {
-                    sum += m.feed_forward_w1.activate(&adapter_names)?;
-                    sum += m.feed_forward_w2.activate(&adapter_names)?;
-                    sum += m.feed_forward_w3.activate(&adapter_names)?;
-                }
-                MlpOrMoe::MoE {
-                    n_expert_used: _,
-                    feed_forward_gate_inp: _,
-                    experts,
-                } => {
-                    for expert in experts {
-                        sum += expert.feed_forward_w1.activate(&adapter_names)?;
-                        sum += expert.feed_forward_w2.activate(&adapter_names)?;
-                        sum += expert.feed_forward_w3.activate(&adapter_names)?;
-                    }
-                }
-            }
-        }
-        Ok(sum)
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn inner_forward(
         &self,

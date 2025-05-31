@@ -9,10 +9,12 @@ use serde_json::{json, Value};
 /// A type which can be used as a chat request.
 pub trait RequestLike {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>];
+    fn images_ref(&self) -> &[DynamicImage];
     fn take_messages(&mut self) -> RequestMessage;
     fn take_logits_processors(&mut self) -> Option<Vec<Arc<dyn CustomLogitsProcessor>>>;
     fn take_adapters(&mut self) -> Option<Vec<String>>;
     fn return_logprobs(&self) -> bool;
+    fn enable_search(&self) -> Option<bool>;
     fn take_constraint(&mut self) -> Constraint;
     fn take_tools(&mut self) -> Option<(Vec<Tool>, ToolChoice)>;
     fn take_sampling_params(&mut self) -> SamplingParams;
@@ -33,6 +35,7 @@ impl From<TextMessages> for Vec<IndexMap<String, MessageContent>> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 /// A chat message role.
 pub enum TextMessageRole {
     User,
@@ -83,10 +86,19 @@ impl RequestLike for TextMessages {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>] {
         &self.0
     }
+    fn images_ref(&self) -> &[DynamicImage] {
+        &[]
+    }
     fn take_messages(&mut self) -> RequestMessage {
         let mut other = Vec::new();
         std::mem::swap(&mut other, &mut self.0);
-        RequestMessage::Chat(other)
+        RequestMessage::Chat {
+            messages: other,
+            enable_thinking: self.enable_search(),
+        }
+    }
+    fn enable_search(&self) -> Option<bool> {
+        None
     }
     fn take_logits_processors(&mut self) -> Option<Vec<Arc<dyn CustomLogitsProcessor>>> {
         None
@@ -148,19 +160,27 @@ impl VisionMessages {
         mut self,
         role: TextMessageRole,
         text: impl ToString,
-        image: DynamicImage,
+        images: Vec<DynamicImage>,
         model: &Model,
     ) -> anyhow::Result<Self> {
         let prefixer = match &model.config().category {
-            ModelCategory::Text | ModelCategory::Diffusion => {
+            ModelCategory::Vision { prefixer } => prefixer,
+            ModelCategory::Text
+            | ModelCategory::Diffusion
+            | ModelCategory::Speech
+            | ModelCategory::Audio => {
                 anyhow::bail!("`add_image_message` expects a vision model.")
             }
-            ModelCategory::Vision {
-                has_conv2d: _,
-                prefixer,
-            } => prefixer,
         };
-        self.images.push(image);
+
+        let n_added_images = images.len();
+        let prefixed = prefixer.prefix_image(
+            (self.images.len()..self.images.len() + n_added_images).collect(),
+            &text.to_string(),
+        );
+
+        self.images.extend(images);
+
         self.messages.push(IndexMap::from([
             ("role".to_string(), Either::Left(role.to_string())),
             (
@@ -169,12 +189,7 @@ impl VisionMessages {
                     IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
                     IndexMap::from([
                         ("type".to_string(), Value::String("text".to_string())),
-                        (
-                            "text".to_string(),
-                            Value::String(
-                                prefixer.prefix_image(self.images.len() - 1, &text.to_string()),
-                            ),
-                        ),
+                        ("text".to_string(), Value::String(prefixed)),
                     ]),
                 ]),
             ),
@@ -194,6 +209,9 @@ impl RequestLike for VisionMessages {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>] {
         &self.messages
     }
+    fn images_ref(&self) -> &[DynamicImage] {
+        &self.images
+    }
     fn take_messages(&mut self) -> RequestMessage {
         let mut other_messages = Vec::new();
         std::mem::swap(&mut other_messages, &mut self.messages);
@@ -202,7 +220,11 @@ impl RequestLike for VisionMessages {
         RequestMessage::VisionChat {
             images: other_images,
             messages: other_messages,
+            enable_thinking: self.enable_search(),
         }
+    }
+    fn enable_search(&self) -> Option<bool> {
+        None
     }
     fn take_logits_processors(&mut self) -> Option<Vec<Arc<dyn CustomLogitsProcessor>>> {
         None
@@ -236,6 +258,7 @@ impl RequestLike for VisionMessages {
 /// - Logprobs
 /// - Tools
 /// - Sampling
+/// - Enable thinking for models that support the configuration
 pub struct RequestBuilder {
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,
@@ -247,6 +270,7 @@ pub struct RequestBuilder {
     tool_choice: ToolChoice,
     sampling_params: SamplingParams,
     web_search_options: Option<WebSearchOptions>,
+    enable_thinking: Option<bool>,
 }
 
 impl Default for RequestBuilder {
@@ -268,6 +292,7 @@ impl From<TextMessages> for RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
+            enable_thinking: None,
         }
     }
 }
@@ -285,6 +310,7 @@ impl From<VisionMessages> for RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
+            enable_thinking: None,
         }
     }
 }
@@ -302,6 +328,7 @@ impl RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
+            enable_thinking: None,
         }
     }
 
@@ -491,6 +518,11 @@ impl RequestBuilder {
         self.sampling_params.dry_params = Some(dry_params);
         self
     }
+
+    pub fn enable_thinking(mut self, enable_thinking: bool) -> Self {
+        self.enable_thinking = Some(enable_thinking);
+        self
+    }
 }
 
 impl RequestLike for RequestBuilder {
@@ -498,11 +530,18 @@ impl RequestLike for RequestBuilder {
         &self.messages
     }
 
+    fn images_ref(&self) -> &[DynamicImage] {
+        &self.images
+    }
+
     fn take_messages(&mut self) -> RequestMessage {
         if self.images.is_empty() {
             let mut other = Vec::new();
             std::mem::swap(&mut other, &mut self.messages);
-            RequestMessage::Chat(other)
+            RequestMessage::Chat {
+                messages: other,
+                enable_thinking: self.enable_thinking,
+            }
         } else {
             let mut other_messages = Vec::new();
             std::mem::swap(&mut other_messages, &mut self.messages);
@@ -511,8 +550,13 @@ impl RequestLike for RequestBuilder {
             RequestMessage::VisionChat {
                 images: other_images,
                 messages: other_messages,
+                enable_thinking: self.enable_thinking,
             }
         }
+    }
+
+    fn enable_search(&self) -> Option<bool> {
+        self.enable_thinking
     }
 
     fn take_logits_processors(&mut self) -> Option<Vec<Arc<dyn CustomLogitsProcessor>>> {

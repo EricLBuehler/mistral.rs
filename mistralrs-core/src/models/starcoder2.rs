@@ -42,7 +42,6 @@ pub struct Config {
     pub(crate) rope_theta: f64,
     pub(crate) use_bias: bool,
     pub(crate) sliding_window: Option<usize>,
-    pub(crate) use_flash_attn: bool,
     pub(crate) quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     #[allow(dead_code)]
@@ -223,7 +222,6 @@ impl Attention {
                     cfg.num_attention_heads,
                     comm,
                 ),
-                use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: cfg.sliding_window,
@@ -441,7 +439,7 @@ impl Model {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
                 "Using {} quantization: {}.",
-                quant_cfg.quant_method.to_string(),
+                quant_cfg.name(),
                 quant_cfg.get_bits_name(&vb)
             );
         }
@@ -452,8 +450,8 @@ impl Model {
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
-        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
 
@@ -475,11 +473,12 @@ impl Model {
             );
         }
 
-        for layer_idx in NiceProgressBar::<_, 'b'>(
+        let layers: Vec<DecoderLayer> = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
-        ) {
+        )
+        .par_iter_if_isq(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -489,12 +488,15 @@ impl Model {
                 .clone();
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => {
-                    Some(PagedAttention::new(head_dim, device, None)?)
-                }
+                AttentionImplementation::PagedAttention => Some(
+                    PagedAttention::new(head_dim, device, None)
+                        .expect("PagedAttention creation failed"),
+                ),
             };
-            let comm = mapper.get_comm_for(layer_idx)?;
-            layers.push(DecoderLayer::new(
+            let comm = mapper
+                .get_comm_for(layer_idx)
+                .expect("Failed to get comm for layer");
+            DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
                 vb_l.pp(layer_idx),
@@ -503,8 +505,8 @@ impl Model {
                 normal_loading_metadata.loading_isq,
                 paged_attn,
                 &comm,
-            )?)
-        }
+            )
+        })?;
         let norm = layer_norm(
             cfg.hidden_size,
             cfg.norm_epsilon,

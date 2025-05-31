@@ -1,9 +1,9 @@
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("openbmb/MiniCPM-o-2_6", VisionLoaderType::MiniCpmO)
+    let model = VisionModelBuilder::new("openbmb/MiniCPM-o-2_6")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()
@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
-        image,
+        vec![image],
         &model,
     )?;
 

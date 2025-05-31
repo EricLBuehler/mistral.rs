@@ -1,6 +1,5 @@
 pub(crate) mod debug;
 pub(crate) mod gguf_metadata;
-pub(crate) mod log;
 pub(crate) mod memory_usage;
 pub(crate) mod model_config;
 pub(crate) mod normal;
@@ -181,7 +180,7 @@ macro_rules! handle_pipeline_forward_error {
                 // - The sequence is gone
                 // - We should reset the state then, including draft.
                 p.set_none_cache($seq_slice, true, true, false);
-                get_mut_arcmutex!($prefix_cacher).evict_all_to_cpu().unwrap();
+                get_mut_arcmutex!($prefix_cacher).evict_all_caches().unwrap();
 
                 continue $label;
             }

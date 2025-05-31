@@ -1,11 +1,11 @@
 #[cfg(feature = "cuda")]
 mod ffi;
 pub(crate) mod isq;
+pub mod log;
 mod ops;
-
 mod uqff;
 
-pub use ops::{BitWiseOp, LeftshiftOp};
+pub use ops::{BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
 pub use uqff::UQFF_QUANT_TYPE_OFFSET;
 pub(crate) use uqff::{
     deserialize_tensor, fake_deserialize_tensor, read_dtype, serialize_tensor,

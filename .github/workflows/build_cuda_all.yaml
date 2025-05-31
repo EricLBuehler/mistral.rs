@@ -1,6 +1,6 @@
-name: deploy_cuda_docker
+name: build_cuda_all
 
-# gh workflow run deploy_cuda_docker
+# gh workflow run build_cuda_all
 # This also runs on release deploy
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ jobs:
           matrix:
             compute_capability: [75, 80, 86, 89, 90]
           fail-fast: false
-        runs-on: [ubuntu-latest]
+        runs-on: ubuntu-latest
         
         permissions:
             contents: write
@@ -59,14 +59,14 @@ jobs:
               uses: docker/metadata-action@v5
               with:
                   images: |
-                    ghcr.io/${{ github.repository_owner }}/$(basename ${{ github.repository }})
+                    ghcr.io/${{ github.repository }}
                   flavor: |
                     latest=false
                   tags: |
-                    type=semver,pattern=cuda-${{matrix.compute_capability}}-{{version}}
-                    type=semver,pattern=cuda-${{matrix.compute_capability}}-{{major}}.{{minor}}
-                    type=raw,value=cuda-${{matrix.compute_capability}}-sha-${{ steps.slug.outputs.short_sha }}
-                    type=raw,value=cuda-${{matrix.compute_capability}}-sha-${{ github.sha }}
+                    type=semver,pattern=cuda-${{ matrix.compute_capability }}-{{ version }}
+                    type=semver,pattern=cuda-${{ matrix.compute_capability }}-{{ major }}.{{ minor }}
+                    type=raw,value=cuda-${{ matrix.compute_capability }}-sha-${{ steps.slug.outputs.short_sha }}
+                    type=raw,value=cuda-${{ matrix.compute_capability }}-sha-${{ github.sha }}
             - name: Build and push Docker image
               id: build-and-push-cuda
               uses: docker/build-push-action@v6
@@ -80,5 +80,3 @@ jobs:
                 build-args: |
                   CUDA_COMPUTE_CAP=${{matrix.compute_capability}}
                 cache-from: type=local,src=/tmp/.buildx-cache
-            
-            

@@ -1,17 +1,15 @@
 use anyhow::Result;
 use mistralrs::{
-    IsqType, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, TextMessages,
-    UqffTextModelBuilder,
+    PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, TextMessages, UqffTextModelBuilder,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = UqffTextModelBuilder::new(
         "EricB/Phi-3.5-mini-instruct-UQFF",
-        "phi3.5-mini-instruct-q8_0.uqff".into(),
+        vec!["phi3.5-mini-instruct-q8_0.uqff".into()],
     )
     .into_inner()
-    .with_isq(IsqType::Q8_0)
     .with_logging()
     .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
     .build()

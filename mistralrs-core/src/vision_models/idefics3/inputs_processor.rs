@@ -111,7 +111,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
-        mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
+        mut paged_attn_metadata: Option<PagedAttentionMeta>,
         prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = anyhow::Result<InputProcessorOutput>>> {
@@ -174,33 +174,42 @@ impl InputsProcessor for Idefics3ImageProcessor {
                 pixel_attention_mask_accum
                     .push(pixel_attention_mask.unwrap().unsqueeze(0).unwrap());
 
-                let detok = tokenizer
-                    .decode(seq.get_toks(), false)
-                    .expect("Detokenization failed!");
+                if !seq.multimodal.has_changed_prompt {
+                    let detok = tokenizer
+                        .decode(seq.get_toks(), false)
+                        .expect("Detokenization failed!");
 
-                let mut image_prompt_strings = Vec::new();
-                for (n_rows, n_cols) in rows.unwrap().into_iter().zip(cols.unwrap().into_iter()) {
-                    let image_prompt_string =
-                        get_image_prompt_string(n_rows, n_cols, self.image_seq_len);
-                    image_prompt_strings.push(image_prompt_string);
+                    let mut image_prompt_strings = Vec::new();
+                    for (n_rows, n_cols) in rows.unwrap().into_iter().zip(cols.unwrap().into_iter())
+                    {
+                        let image_prompt_string =
+                            get_image_prompt_string(n_rows, n_cols, self.image_seq_len);
+                        image_prompt_strings.push(image_prompt_string);
+                    }
+
+                    let split_sample = detok.split(IMAGE_TOKEN).collect::<Vec<_>>();
+                    let mut sample = split_sample
+                        .first()
+                        .expect("The image token <image> should be present in the text.")
+                        .to_string();
+                    for (i, image_prompt_string) in image_prompt_strings.into_iter().enumerate() {
+                        sample.push_str(&format!(
+                            "{image_prompt_string}{}",
+                            split_sample
+                                .get(i + 1)
+                                .expect("Incorrect chat template. Use the one provided in `chat_templates` with the `--chat-template`/`chat_template` settings.")
+                        ));
+                    }
+
+                    seq.set_initial_prompt(sample.clone());
+                    let toks = tokenizer
+                        .encode_fast(sample, false)
+                        .expect("Detokenization failed!");
+
+                    let ids = toks.get_ids().to_vec();
+                    seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+                    seq.multimodal.has_changed_prompt = true;
                 }
-
-                let split_sample = detok.split(IMAGE_TOKEN).collect::<Vec<_>>();
-                let mut sample = split_sample
-                    .first()
-                    .expect("The image token <image> should be present in the text.")
-                    .to_string();
-                for (i, image_prompt_string) in image_prompt_strings.into_iter().enumerate() {
-                    sample.push_str(&format!("{image_prompt_string}{}", split_sample[i]));
-                }
-
-                seq.set_initial_prompt(sample.clone());
-                let toks = tokenizer
-                    .encode_fast(sample, false)
-                    .expect("Detokenization failed!");
-
-                let ids = toks.get_ids().to_vec();
-                seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
             }
 
             (
@@ -226,7 +235,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
             get_prompt_input(
                 input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().to_vec())
+                    .map(|seq| seq.get_toks())
                     .collect::<Vec<_>>(),
                 input_seqs,
                 device,
@@ -243,7 +252,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
             get_completion_input(
                 input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().to_vec())
+                    .map(|seq| seq.get_toks())
                     .collect::<Vec<_>>(),
                 input_seqs,
                 device,

@@ -2,11 +2,11 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    iter::zip,
     sync::{Arc, Mutex},
 };
 
-use candle_core::{Device, Error, Result, Tensor, D};
+use candle_core::{DType, Device, Error, Result, Tensor, D};
+use mistralrs_quant::{CumSumOp, SortOp};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -256,53 +256,46 @@ impl Sampler {
         })
     }
 
-    fn get_top_logprobs(&self, probs: &[f32], argsort_indices: &[u32]) -> Result<Vec<TopLogprob>> {
-        let mut argsort_indices_sorted = argsort_indices.to_vec();
-        // Sort by descending prob
-        argsort_indices_sorted.sort_by(|a, b| {
-            probs[*b as usize]
-                .partial_cmp(&probs[*a as usize])
-                .expect("No ordering.")
+    fn get_top_logprobs(&self, probs: &[f32], _argsort_indices: &[u32]) -> Result<Vec<TopLogprob>> {
+        // Fast top-k selection without sorting the entire vocabulary
+        let k = self.top_n_logprobs.min(probs.len());
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+        // Build (token, probability) pairs
+        let mut idx_probs: Vec<(u32, f32)> = (0..probs.len() as u32)
+            .map(|i| (i, probs[i as usize]))
+            .collect();
+        // Partition so that the top k probabilities are in the first k positions
+        let (top_k_slice, _, _) = idx_probs.select_nth_unstable_by(k, |a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
         });
-        // These are where the top n are
-        let top_n_toks_range = 0..self.top_n_logprobs;
-        // The top n's values
-        let top_n_logprobs = argsort_indices_sorted[top_n_toks_range.clone()]
-            .iter()
-            .map(|x| probs[*x as usize].log(10.0))
-            .collect::<Vec<_>>();
-        // Find where they actually are in the logits
-        let mut top_n_toks = Vec::new();
-        for val in top_n_toks_range {
-            top_n_toks.push(argsort_indices[val]);
-        }
-
+        // Copy and sort only the top k elements by descending probability
+        let mut top_k: Vec<(u32, f32)> = top_k_slice.to_vec();
+        top_k.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Build the result vector with log10 of probabilities and optional decoding
+        let mut result = Vec::with_capacity(k);
         if let Some(tokenizer) = &self.tokenizer {
-            let mut bytes = Vec::new();
-            for tok in &top_n_toks {
-                bytes.push(
-                    tokenizer
-                        .decode(&[{ *tok }], false)
-                        .map_err(|x| Error::Msg(x.to_string()))?,
-                );
+            for (token, prob) in top_k {
+                let decoded = tokenizer
+                    .decode(&[token], false)
+                    .map_err(|e| Error::Msg(e.to_string()))?;
+                result.push(TopLogprob {
+                    token,
+                    logprob: prob.log(10.0),
+                    bytes: Some(decoded),
+                });
             }
-
-            Ok(zip(bytes, zip(top_n_toks, top_n_logprobs))
-                .map(|(bytes, (token, logprob))| TopLogprob {
-                    token,
-                    logprob,
-                    bytes: Some(bytes),
-                })
-                .collect::<Vec<_>>())
         } else {
-            Ok(zip(top_n_toks, top_n_logprobs)
-                .map(|(token, logprob)| TopLogprob {
+            for (token, prob) in top_k {
+                result.push(TopLogprob {
                     token,
-                    logprob,
+                    logprob: prob.log(10.0),
                     bytes: None,
-                })
-                .collect::<Vec<_>>())
+                });
+            }
         }
+        Ok(result)
     }
 
     fn sample_argmax(&self, logits: Tensor, return_logprobs: bool) -> Result<Logprobs> {
@@ -337,6 +330,160 @@ impl Sampler {
         })
     }
 
+    #[allow(unused)]
+    fn sample_fast(
+        &self,
+        logits: Tensor,
+        context: &[u32],
+        return_logprobs: bool,
+        top_k: i64,
+        top_p: f64,
+        min_p: f64,
+    ) -> Result<Logprobs> {
+        let mut probs = logits.to_dtype(DType::F32)?;
+
+        for processor in &self.logits_processors {
+            probs = processor.apply(&probs, context)?;
+        }
+
+        let context = Tensor::new(context, logits.device())?;
+        let mut counts = logits.zeros_like()?;
+        counts = counts.scatter_add(
+            &context,
+            &context.ones_like()?.to_dtype(counts.dtype())?,
+            D::Minus1,
+        )?;
+
+        let presence = counts
+            .gt(0.)?
+            .where_cond(&counts.ones_like()?, &counts.zeros_like()?)?;
+
+        match self.frequency_penalty {
+            Some(freq_penalty) if freq_penalty != 0. => {
+                probs = (probs - (freq_penalty as f64 * counts)?)?;
+            }
+            _ => (),
+        }
+
+        match self.presence_penalty {
+            Some(pres_penalty) if pres_penalty != 0. => {
+                probs = (probs - (pres_penalty as f64 * presence)?)?;
+            }
+            _ => (),
+        }
+
+        probs = candle_nn::ops::softmax_last_dim(&(probs / self.temperature.unwrap_or(1.))?)?;
+
+        // Top-K
+        if top_k > 0 {
+            let sorted_values = probs.fast_sort_asc(D::Minus1)?;
+            let topk_values = sorted_values.narrow(
+                D::Minus1,
+                sorted_values.dim(D::Minus1)? - top_k as usize,
+                top_k as usize,
+            )?;
+
+            // select the kth largest value as threshold
+            let threshold = topk_values.get_on_dim(D::Minus1, 0)?.unsqueeze(0)?;
+            let mask_topk = probs.broadcast_ge(&threshold)?;
+            probs = mask_topk.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
+        }
+
+        // Top-P (nucleus)
+        if top_p > 0.0 && top_p < 1.0 {
+            let sorted_probs = probs.fast_sort_asc(D::Minus1)?;
+
+            let cumsum = sorted_probs.fast_cumsum(D::Minus1)?;
+
+            let mask_topp = cumsum.le(top_p)?;
+
+            let masked_sorted =
+                mask_topp.where_cond(&sorted_probs, &Tensor::zeros_like(&sorted_probs)?)?;
+
+            let threshold = masked_sorted.max(D::Minus1)?;
+            let threshold = threshold.unsqueeze(D::Minus1)?;
+            let mask_full = probs.broadcast_ge(&threshold)?;
+            probs = mask_full.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
+        }
+
+        // Min-P
+        if min_p > 0.0 && min_p < 1.0 {
+            let max_vals = probs.max(D::Minus1)?;
+            let threshold_min = (max_vals.unsqueeze(D::Minus1)? * min_p)?;
+            let mask_minp = probs.broadcast_gt(&threshold_min)?;
+            probs = mask_minp.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
+        }
+
+        let next_token = probs.argmax(D::Minus1)?.to_scalar::<u32>()?;
+
+        // Extract the top‑n log‑probs if the caller asked for them.
+        let (top_logprobs, logprob) = if return_logprobs {
+            let k = self.top_n_logprobs;
+
+            let sorted_values = probs.fast_sort_asc(D::Minus1)?;
+            let topk_values = sorted_values
+                .narrow(
+                    D::Minus1,
+                    sorted_values.dim(D::Minus1)? - top_k as usize,
+                    top_k as usize,
+                )?
+                .to_vec1::<f32>()?;
+
+            let sorted_idxs = probs.fast_argsort_asc(D::Minus1)?;
+            let topk_idxs = sorted_idxs
+                .narrow(
+                    D::Minus1,
+                    sorted_values.dim(D::Minus1)? - top_k as usize,
+                    top_k as usize,
+                )?
+                .to_vec1::<u32>()?;
+
+            let mut result = Vec::with_capacity(k);
+            if let Some(tokenizer) = &self.tokenizer {
+                for (prob, token) in topk_values.iter().zip(topk_idxs) {
+                    let decoded = tokenizer
+                        .decode(&[token], false)
+                        .map_err(|e| Error::Msg(e.to_string()))?;
+                    result.push(TopLogprob {
+                        token,
+                        logprob: prob.log(10.0),
+                        bytes: Some(decoded),
+                    });
+                }
+            } else {
+                for (prob, token) in topk_values.iter().zip(topk_idxs) {
+                    result.push(TopLogprob {
+                        token,
+                        logprob: prob.log(10.0),
+                        bytes: None,
+                    });
+                }
+            }
+
+            let logprob = result.last().map(|res| res.logprob).unwrap_or(1.);
+
+            (Some(result), logprob)
+        } else {
+            (None, 1.)
+        };
+
+        let bytes = if let Some(tokenizer) = &self.tokenizer {
+            Some(
+                tokenizer
+                    .decode(&[next_token], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            )
+        } else {
+            None
+        };
+
+        Ok(Logprobs {
+            token: next_token,
+            logprob,
+            top_logprobs,
+            bytes,
+        })
+    }
     fn sample_speculative_top_kp_min_p(
         &self,
         logits: Tensor,
@@ -631,6 +778,7 @@ impl Sampler {
         Ok(())
     }
 
+    #[allow(unused)]
     /// Sample the provided tokens.
     ///
     /// If the temperature is `None`, argmax sampling is used. Otherwise, the selected sampling is used.
@@ -642,7 +790,19 @@ impl Sampler {
         return_logprobs: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
         sample_speculative: bool,
+        multiple_sequences: bool,
     ) -> Result<Logprobs> {
+        if cfg!(feature = "metal") && !multiple_sequences {
+            return self.sample_fast(
+                logits,
+                context,
+                return_logprobs,
+                self.top_k,
+                self.top_p,
+                self.min_p,
+            );
+        }
+
         let logits = logits.to_vec1()?;
         let mut logits = self.apply_penalties(logits, context)?;
         for processor in &self.logits_processors {
@@ -709,7 +869,14 @@ mod tests {
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler
-            .sample(logits, &(0..1024).collect::<Vec<_>>(), false, rng, false)
+            .sample(
+                logits,
+                &(0..1024).collect::<Vec<_>>(),
+                false,
+                rng,
+                false,
+                false,
+            )
             .unwrap();
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);
@@ -730,7 +897,14 @@ mod tests {
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler
-            .sample(logits, &(0..1024).collect::<Vec<_>>(), false, rng, true)
+            .sample(
+                logits,
+                &(0..1024).collect::<Vec<_>>(),
+                false,
+                rng,
+                true,
+                false,
+            )
             .unwrap();
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);

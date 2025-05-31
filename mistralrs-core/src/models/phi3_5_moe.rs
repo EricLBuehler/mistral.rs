@@ -1,12 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-// This implementation is based on:
-// https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::LayerNorm;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder,
+    ColumnParallelLayer, NonZeroOp, QuantMethod, QuantizedConfig, ReplicatedLayer,
+    RowParallelLayer, ShardedVarBuilder,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -19,7 +17,6 @@ use crate::{
         PhiRotaryEmbedding, Sdpa,
     },
     layers_masker::{masked_fill, PastKvLenCache},
-    ops::NonZeroOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -46,9 +43,9 @@ pub struct Config {
     pub(crate) rope_theta: f64,
     pub(crate) rope_scaling: Option<PhiRopeScalingConfig>,
     pub(crate) max_position_embeddings: usize,
-    pub(crate) use_flash_attn: bool,
     pub(crate) sliding_window: Option<usize>,
     pub(crate) original_max_position_embeddings: usize,
+
     pub(crate) quantization_config: Option<QuantizedConfig>,
     pub(crate) lm_head_bias: bool,
     pub(crate) attention_bias: bool,
@@ -158,7 +155,6 @@ impl Attention {
                     cfg.num_attention_heads,
                     comm,
                 ),
-                use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: cfg.sliding_window,
@@ -464,7 +460,7 @@ impl MoeMlp {
             // Index the correct hidden staters and compute the expert hidden state
             // for the current expert, we need to make sure to multiply the output hidden
             // states by `routing_weights` on the corresponding tokens (top-1, top-2)
-            let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden))?;
+            let current_state = xs.index_select(&top_x, 0)?.reshape((1, (), hidden))?;
             let current_routing_weights = routing_weights
                 .index_select(&top_x, 0)?
                 .gather(&idx.unsqueeze(1)?.contiguous()?, 1)?;
@@ -476,7 +472,7 @@ impl MoeMlp {
 
             final_hidden_states = final_hidden_states.index_add(
                 &top_x.contiguous()?,
-                &current_hidden_states.to_dtype(xs.dtype())?,
+                &current_hidden_states.squeeze(0)?.to_dtype(xs.dtype())?,
                 0,
             )?;
         }
@@ -596,7 +592,7 @@ impl Model {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
                 "Using {} quantization: {}.",
-                quant_cfg.quant_method.to_string(),
+                quant_cfg.name(),
                 quant_cfg.get_bits_name(&vb)
             );
         }
@@ -607,6 +603,7 @@ impl Model {
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
         let mut ropes = HashMap::new();
         for layer_idx in 0..cfg.num_hidden_layers {
@@ -618,13 +615,13 @@ impl Model {
                 Arc::new(PhiRotaryEmbedding::new(vb.dtype(), cfg.clone(), device)?),
             );
         }
-        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        for layer_idx in NiceProgressBar::<_, 'b'>(
+        let layers: Vec<DecoderLayer> = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
-        ) {
+        )
+        .par_iter_if_isq(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -639,7 +636,7 @@ impl Model {
                 }
             };
             let comm = mapper.get_comm_for(layer_idx)?;
-            let layer = DecoderLayer::new(
+            DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
                 vb_l.pp(layer_idx),
@@ -649,9 +646,8 @@ impl Model {
                 paged_attn,
                 normal_loading_metadata.real_device.clone(),
                 &comm,
-            )?;
-            layers.push(layer)
-        }
+            )
+        })?;
         let norm = layer_norm(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -661,7 +657,7 @@ impl Model {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
-                &None,
+                &cfg.quantization_config,
                 cfg.lm_head_bias,
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?

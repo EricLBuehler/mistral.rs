@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    fmt::{Debug, Display},
+    fmt::Debug,
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard},
 };
@@ -14,9 +14,10 @@ use candle_core::{
 #[cfg(feature = "metal")]
 mod metal_kernels;
 
+mod afq;
 mod bitsandbytes;
 mod blockwise_fp8;
-mod cublaslt;
+pub mod cublaslt;
 pub mod distributed;
 mod dummy;
 mod fp8;
@@ -24,20 +25,23 @@ mod gguf;
 mod gptq;
 mod hqq;
 mod imatrix;
+mod lora;
 pub mod rotary;
 pub mod safetensors;
-mod static_lora;
 mod unquantized;
 mod utils;
 
 use gptq::gptq_linear;
+use lora::merge_lora_weights;
+use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
+pub use afq::{AfqBits, AfqGroupSize, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
 pub use distributed::{
     layers::{
-        compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, ReplicatedLayer,
-        RowParallelLayer,
+        compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, FusedExperts, PackedExperts,
+        ReplicatedLayer, RowParallelLayer,
     },
     socket::{Client, Server},
     BarrierLike, Comm, Id, SumAllReduce,
@@ -48,79 +52,203 @@ pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::{CollectedImatrixData, ImatrixLayerStats};
-pub use static_lora::{linear_no_bias_static_lora, StaticLoraConfig};
+pub use lora::{
+    linear_no_bias_static_lora, LoraAdapter, LoraConfig, StaticLoraConfig, APPLIED_LORAS,
+    MULTI_LORA_DELIMITER,
+};
 pub use unquantized::UnquantLinear;
-pub use utils::UQFF_QUANT_TYPE_OFFSET;
+pub use utils::isq::apply_immediate_isq;
+pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
 
 use candle_nn::{Linear, Module};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub enum QuantMethodType {
-    #[serde(rename = "fp8")]
-    Fp8,
-    #[serde(rename = "gptq")]
-    Gptq,
-    #[serde(rename = "unreachable")]
-    Unreachable,
-    #[default]
-    #[serde(rename = "bitsandbytes")]
-    Bitsandbytes,
+#[derive(Clone, Debug)]
+pub struct ImmediateIsqParams {
+    pub guard: QuantizeOntoGuard,
+    pub ty: Option<IsqType>,
+    pub predicates: Vec<Regex>,
 }
 
-impl Display for QuantMethodType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Gptq => write!(f, "gptq"),
-            Self::Fp8 => write!(f, "fp8"),
-            Self::Bitsandbytes => write!(f, "bnb"),
-            Self::Unreachable => write!(f, "unreachable",),
+static IMMEDIATE_ISQ: Mutex<Option<ImmediateIsqParams>> = Mutex::new(None);
+
+pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>) {
+    let mut guard = IMMEDIATE_ISQ.lock().expect("IMMEDIATE_ISQ mutex poisoned");
+    *guard = Some(ImmediateIsqParams {
+        guard: QuantizeOntoGuard::new(),
+        ty: isq,
+        predicates,
+    });
+}
+
+pub fn get_immediate_isq() -> Option<ImmediateIsqParams> {
+    IMMEDIATE_ISQ.lock().ok().and_then(|guard| guard.clone())
+}
+
+pub fn should_apply_immediate_isq(vb: &ShardedVarBuilder) -> bool {
+    let Some(immediate_isq) = get_immediate_isq() else {
+        return false;
+    };
+    // Add a .weight to match the ISQ regexes!
+    let prefix = format!("{}.weight", vb.prefix());
+    immediate_isq.ty.is_some()
+        && immediate_isq
+            .predicates
+            .iter()
+            .any(|predicate| predicate.is_match(&prefix))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "quant_method", rename_all = "lowercase")]
+pub enum QuantizedConfig {
+    GptqAwq {
+        bits: usize,
+        group_size: usize,
+        checkpoint_format: Option<String>,
+        is_awq: bool,
+    },
+    Fp8 {
+        weight_block_size: Vec<usize>,
+    },
+    Bitsandbytes {
+        bnb_4bit_quant_type: Option<String>,
+    },
+    Afq {
+        bits: usize,
+        group_size: usize,
+    },
+}
+
+// Common fields for all variants
+#[derive(Deserialize)]
+struct RawConfig {
+    quant_method: Option<String>,
+    bits: Option<usize>,
+    group_size: Option<usize>,
+    checkpoint_format: Option<String>,
+    weight_block_size: Option<Vec<usize>>,
+    bnb_4bit_quant_type: Option<String>,
+}
+
+// Custom deserializer implementation
+impl<'de> Deserialize<'de> for QuantizedConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawConfig::deserialize(deserializer)?;
+
+        match &raw.quant_method {
+            Some(m) if m == "gptq" || m == "awq" => {
+                let bits = raw
+                    .bits
+                    .ok_or_else(|| serde::de::Error::missing_field("bits"))?;
+                let group_size = raw
+                    .group_size
+                    .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
+                Ok(QuantizedConfig::GptqAwq {
+                    bits,
+                    group_size,
+                    checkpoint_format: raw.checkpoint_format,
+                    is_awq: m == "awq",
+                })
+            }
+            Some(m) if m == "fp8" => {
+                let weight_block_size = raw
+                    .weight_block_size
+                    .ok_or_else(|| serde::de::Error::missing_field("weight_block_size"))?;
+                Ok(QuantizedConfig::Fp8 { weight_block_size })
+            }
+            Some(m) if m == "bitsandbytes" => Ok(QuantizedConfig::Bitsandbytes {
+                bnb_4bit_quant_type: raw.bnb_4bit_quant_type,
+            }),
+            Some(m) if m == "afq" => {
+                let bits = raw
+                    .bits
+                    .ok_or_else(|| serde::de::Error::missing_field("bits"))?;
+                let group_size = raw
+                    .group_size
+                    .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
+                Ok(QuantizedConfig::Afq { bits, group_size })
+            }
+            None => {
+                let bits = raw
+                    .bits
+                    .ok_or_else(|| serde::de::Error::missing_field("bits"))?;
+                let group_size = raw
+                    .group_size
+                    .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
+                Ok(QuantizedConfig::Afq { bits, group_size })
+            }
+            Some(unknown_method) => {
+                Err(serde::de::Error::custom(format!(
+                    "Unknown quantization method: {}. Expected one of: gptq, fp8, bitsandbytes, afq, or not specified", 
+                    unknown_method
+                )))
+            },
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub struct QuantizedConfig {
-    // GPTQ
-    pub bits: Option<usize>,
-    pub group_size: Option<usize>,
-    pub checkpoint_format: Option<String>,
-
-    // BNB
-    pub bnb_4bit_quant_type: Option<String>,
-
-    // FP8
-    pub weight_block_size: Option<Vec<usize>>,
-
-    pub quant_method: QuantMethodType,
-}
-
 impl QuantizedConfig {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::GptqAwq { .. } => "gptq",
+            Self::Fp8 { .. } => "fp8",
+            Self::Bitsandbytes { .. } => "bitsandbytes",
+            Self::Afq { .. } => "afq",
+        }
+    }
+
     pub fn get_bits_name(&self, _vb: &ShardedVarBuilder) -> String {
-        match self.bits {
-            Some(bits) => format!("{bits} bits"),
-            None => {
-                // Assume bnb
-                self.bnb_4bit_quant_type
-                    .clone()
-                    .unwrap_or("int8".to_string())
+        match self {
+            Self::GptqAwq { bits, .. } => format!("{bits} bits"),
+            Self::Fp8 { .. } => "8 bits".to_string(),
+            Self::Bitsandbytes {
+                bnb_4bit_quant_type: Some(_),
+            } => "4 bits".to_string(),
+            Self::Bitsandbytes {
+                bnb_4bit_quant_type: None,
+            } => "8 bits".to_string(),
+            Self::Afq { bits, .. } => format!("{bits} bits"),
+        }
+    }
+
+    pub fn pack_factor(&self, dtype: DType) -> usize {
+        match self {
+            Self::GptqAwq { bits, .. } | Self::Afq { bits, .. } => match bits {
+                2 => IsqType::Q2K.pack_factor(dtype),
+                3 => IsqType::Q3K.pack_factor(dtype),
+                4 => IsqType::Q4K.pack_factor(dtype),
+                5 => IsqType::Q5K.pack_factor(dtype),
+                6 => IsqType::Q6K.pack_factor(dtype),
+                8 => IsqType::Q8_0.pack_factor(dtype),
+                other => panic!("Unexpected bits in `pack_factor` {other}"),
+            },
+            Self::Fp8 { .. } => IsqType::Q8_0.pack_factor(dtype),
+            Self::Bitsandbytes {
+                bnb_4bit_quant_type: Some(_),
             }
+            | Self::Bitsandbytes {
+                bnb_4bit_quant_type: None,
+            } => IsqType::Q4K.pack_factor(dtype),
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum QuantMethodConfig {
-    Gptq {
+    GptqAwq {
         bits: i32,
         use_exllama: bool,
         q_weight: Tensor,
-        gptq_qzeros: Option<Tensor>,
-        gptq_scales: Tensor,
+        qzeros: Option<Tensor>,
+        scales: Tensor,
         g_idx: Option<Tensor>,
         bias: Option<Tensor>,
         workspace: Option<Tensor>,
         is_marlin: bool,
+        is_awq: bool,
     },
     Gguf {
         q_weight: Arc<QTensor>,
@@ -154,6 +282,12 @@ pub enum QuantMethodConfig {
         bias: Option<Tensor>,
         dequant_dtype: DType,
         weight_block_size: Vec<usize>,
+    },
+    Afq {
+        weight: Tensor,
+        bias: Option<Tensor>,
+        bits: AfqBits,
+        group_size: AfqGroupSize,
     },
 }
 
@@ -229,6 +363,11 @@ pub enum IsqType {
     // HQQ2,
     // HQQ1,
     F8E4M3,
+    AFQ8,
+    AFQ6,
+    AFQ4,
+    AFQ3,
+    AFQ2,
 }
 
 impl IsqType {
@@ -236,46 +375,63 @@ impl IsqType {
     /// original size / pack factor = quantized size
     pub fn pack_factor(&self, dtype: DType) -> usize {
         match self {
-            Self::Q4_0 => {
-                (dtype.size_in_bytes() * GgmlDType::Q4_0.block_size()) / GgmlDType::Q4_0.type_size()
-            }
-            Self::Q4_1 => {
-                (dtype.size_in_bytes() * GgmlDType::Q4_1.block_size()) / GgmlDType::Q4_1.type_size()
-            }
-            Self::Q5_0 => {
-                (dtype.size_in_bytes() * GgmlDType::Q5_0.block_size()) / GgmlDType::Q5_0.type_size()
-            }
-            Self::Q5_1 => {
-                (dtype.size_in_bytes() * GgmlDType::Q5_1.block_size()) / GgmlDType::Q5_1.type_size()
-            }
-            Self::Q8_0 => {
-                (dtype.size_in_bytes() * GgmlDType::Q8_0.block_size()) / GgmlDType::Q8_0.type_size()
-            }
-            Self::Q8_1 => {
-                (dtype.size_in_bytes() * GgmlDType::Q8_1.block_size()) / GgmlDType::Q8_1.type_size()
-            }
-            Self::Q2K => {
-                (dtype.size_in_bytes() * GgmlDType::Q2K.block_size()) / GgmlDType::Q2K.type_size()
-            }
-            Self::Q3K => {
-                (dtype.size_in_bytes() * GgmlDType::Q3K.block_size()) / GgmlDType::Q3K.type_size()
-            }
-            Self::Q4K => {
-                (dtype.size_in_bytes() * GgmlDType::Q4K.block_size()) / GgmlDType::Q4K.type_size()
-            }
-            Self::Q5K => {
-                (dtype.size_in_bytes() * GgmlDType::Q5K.block_size()) / GgmlDType::Q5K.type_size()
-            }
-            Self::Q6K => {
-                (dtype.size_in_bytes() * GgmlDType::Q6K.block_size()) / GgmlDType::Q6K.type_size()
-            }
-            Self::Q8K => {
-                (dtype.size_in_bytes() * GgmlDType::Q8K.block_size()) / GgmlDType::Q8K.type_size()
-            }
+            Self::Q4_0 | Self::AFQ4 => (dtype.size_in_bytes() * GgmlDType::Q4_0.block_size())
+                .div_ceil(GgmlDType::Q4_0.type_size()),
+            Self::Q4_1 => (dtype.size_in_bytes() * GgmlDType::Q4_1.block_size())
+                .div_ceil(GgmlDType::Q4_1.type_size()),
+            Self::Q5_0 => (dtype.size_in_bytes() * GgmlDType::Q5_0.block_size())
+                .div_ceil(GgmlDType::Q5_0.type_size()),
+            Self::Q5_1 => (dtype.size_in_bytes() * GgmlDType::Q5_1.block_size())
+                .div_ceil(GgmlDType::Q5_1.type_size()),
+            Self::Q8_0 | Self::AFQ8 => (dtype.size_in_bytes() * GgmlDType::Q8_0.block_size())
+                .div_ceil(GgmlDType::Q8_0.type_size()),
+            Self::Q8_1 => (dtype.size_in_bytes() * GgmlDType::Q8_1.block_size())
+                .div_ceil(GgmlDType::Q8_1.type_size()),
+            Self::Q2K | Self::AFQ2 => (dtype.size_in_bytes() * GgmlDType::Q2K.block_size())
+                .div_ceil(GgmlDType::Q2K.type_size()),
+            Self::Q3K | Self::AFQ3 => (dtype.size_in_bytes() * GgmlDType::Q3K.block_size())
+                .div_ceil(GgmlDType::Q3K.type_size()),
+            Self::Q4K => (dtype.size_in_bytes() * GgmlDType::Q4K.block_size())
+                .div_ceil(GgmlDType::Q4K.type_size()),
+            Self::Q5K => (dtype.size_in_bytes() * GgmlDType::Q5K.block_size())
+                .div_ceil(GgmlDType::Q5K.type_size()),
+            Self::Q6K | Self::AFQ6 => (dtype.size_in_bytes() * GgmlDType::Q6K.block_size())
+                .div_ceil(GgmlDType::Q6K.type_size()),
+            Self::Q8K => (dtype.size_in_bytes() * GgmlDType::Q8K.block_size())
+                .div_ceil(GgmlDType::Q8K.type_size()),
             // Estimates
             Self::HQQ4 => 4,
             Self::HQQ8 => 2,
             Self::F8E4M3 => 2,
+        }
+    }
+
+    pub fn get_max_isq_cpu_threads(&self) -> Option<NonZeroUsize> {
+        match self {
+            /*IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
+            IsqType::HQQ4
+            | IsqType::HQQ8
+            | IsqType::AFQ2
+            | IsqType::AFQ3
+            | IsqType::AFQ4
+            | IsqType::AFQ6
+            | IsqType::AFQ8 => {
+                // Use 1 because our HQQ quantizes on the GPU
+                Some(1.try_into().unwrap())
+            }
+            IsqType::F8E4M3 => None,
+            IsqType::Q2K
+            | IsqType::Q3K
+            | IsqType::Q4K
+            | IsqType::Q4_0
+            | IsqType::Q4_1
+            | IsqType::Q5K
+            | IsqType::Q5_0
+            | IsqType::Q5_1
+            | IsqType::Q6K
+            | IsqType::Q8K
+            | IsqType::Q8_0
+            | IsqType::Q8_1 => None,
         }
     }
 }
@@ -345,11 +501,13 @@ impl TryFrom<GgmlDType> for IsqType {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum QuantizedSerdeType {
     Gguf = 0,
     Unquant = 1,
     Hqq = 2,
     Fp8 = 3,
+    Afq = 4,
 }
 
 impl TryFrom<usize> for QuantizedSerdeType {
@@ -360,6 +518,7 @@ impl TryFrom<usize> for QuantizedSerdeType {
             1 => Ok(Self::Unquant),
             2 => Ok(Self::Hqq),
             3 => Ok(Self::Fp8),
+            4 => Ok(Self::Afq),
             other => candle_core::bail!("QuantizedSerdeType {other} is invalid."),
         }
     }
@@ -377,6 +536,7 @@ pub trait QuantizedSerde {
         _data: Cow<[u8]>,
         _device: &Device,
         _comm: &Arc<crate::Comm>,
+        _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
@@ -386,6 +546,7 @@ pub trait QuantizedSerde {
     fn deserialize_ext_bias(
         _data: Cow<[u8]>,
         _device: &Device,
+        _guard: QuantizeOntoGuard,
     ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
     where
         Self: Sized,
@@ -399,9 +560,11 @@ pub trait QuantizedSerde {
 }
 
 /// Used to gate access to quantizing onto the host device
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[allow(unused)]
-pub struct QuantizeOntoGuard(Arc<Mutex<()>>);
+pub struct QuantizeOntoGuard {
+    pub inner: Arc<Mutex<()>>,
+}
 
 /// Real (for Metal) and Fake (for CUDA)
 pub enum QuantizeOntoDropGuard<'a> {
@@ -417,18 +580,33 @@ impl Default for QuantizeOntoGuard {
 
 impl QuantizeOntoGuard {
     pub fn new() -> Self {
-        Self(Arc::new(Mutex::new(())))
+        QuantizeOntoGuard {
+            inner: Arc::new(Mutex::new(())),
+        }
     }
 
-    pub fn acquire(&self) -> QuantizeOntoDropGuard<'_> {
+    /// Acquire the quantize drop guard to protect the critical section.
+    ///
+    /// On metal, this flushes the command buffer to avoid "A command encoder is already encoding to this command buffer"
+    pub fn acquire(&self, device: &Device) -> QuantizeOntoDropGuard<'_> {
         #[cfg(feature = "cuda")]
         {
+            let _ = device;
             QuantizeOntoDropGuard::Fake
         }
 
         #[cfg(not(feature = "cuda"))]
         {
-            QuantizeOntoDropGuard::Real(self.0.lock().expect("QuantizeOntoGuard was poisoned!"))
+            #[cfg(feature = "metal")]
+            if let Device::Metal(dev) = device {
+                // This is necessary to avoid the errors of "A command encoder is already encoding to this command buffer"
+                dev.flush_command_buffer()
+                    .expect("Failed to flush command buffer.");
+            }
+            #[cfg(not(feature = "metal"))]
+            let _ = device;
+
+            QuantizeOntoDropGuard::Real(self.inner.lock().expect("QuantizeOntoGuard was poisoned!"))
         }
     }
 }
@@ -462,6 +640,32 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
     fn forward(&self, a: &Tensor) -> Result<Tensor>;
 
+    /// Compute matmul of `self` and `a`. `self` should contain the weights.
+    /// Automatically cast to required quantization activation type and back.
+    ///
+    /// If `a` is (n_tokens, n_experts, cols), `self` weights are (n_experts, rows, cols),
+    /// then the indices are (n_tokens, n_experts).
+    fn gather_forward_autocast(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        let original_ty = a.dtype();
+        let a = if let Some(t) = self.quantized_act_type() {
+            a.to_dtype(t)?
+        } else {
+            a.clone()
+        };
+        self.gather_forward(&a, indices)?.to_dtype(original_ty)
+    }
+
+    /// Compute matmul of `self` and `a`. `self` should contain the weights.
+    ///
+    /// If `a` is (n_tokens, n_experts, cols), `self` weights are (n_experts, rows, cols),
+    /// then the indices are (n_tokens, n_experts).
+    fn gather_forward(&self, _a: &Tensor, _indices: &Tensor) -> Result<Tensor> {
+        candle_core::bail!(
+            "{} does not support `gather_forward`. Please raise an issue.",
+            self.name()
+        )
+    }
+
     /// If a quantized method, return the activation dtype.
     fn quantized_act_type(&self) -> Option<DType>;
 
@@ -480,8 +684,6 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         imatrix_weight: Option<Vec<f32>>,
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>;
-
-    fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize>;
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         None
@@ -514,16 +716,25 @@ pub fn linear_no_bias(
     config: &Option<QuantizedConfig>,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
+    let base_vb = vb.clone();
+    let vb = if should_apply_immediate_isq(&vb) {
+        vb.set_device(Device::Cpu)
+    } else {
+        vb
+    };
+
     let layer = if let Some(quant_conf) = &config {
-        match quant_conf.quant_method {
-            QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantMethodType::Fp8 => {
+        match quant_conf {
+            QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantizedConfig::Fp8 { .. } => {
                 blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, Default::default(), vb)?
             }
-            QuantMethodType::Bitsandbytes => {
+            QuantizedConfig::Bitsandbytes { .. } => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
             }
-            QuantMethodType::Unreachable => unreachable!(),
+            QuantizedConfig::Afq { .. } => {
+                AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, false, vb)?
+            }
         }
     } else {
         // Handle the case where the layer is dummy (no tensors)
@@ -532,6 +743,7 @@ pub fn linear_no_bias(
             Arc::new(layer) as Arc<dyn QuantMethod>
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
+            let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, None),
@@ -539,7 +751,7 @@ pub fn linear_no_bias(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    Ok(layer)
+    apply_immediate_isq(layer, base_vb)
 }
 
 pub fn linear(
@@ -548,16 +760,25 @@ pub fn linear(
     config: &Option<QuantizedConfig>,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
+    let base_vb = vb.clone();
+    let vb = if should_apply_immediate_isq(&vb) {
+        vb.set_device(Device::Cpu)
+    } else {
+        vb
+    };
+
     let layer = if let Some(quant_conf) = &config {
-        match quant_conf.quant_method {
-            QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantMethodType::Fp8 => {
+        match quant_conf {
+            QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantizedConfig::Fp8 { .. } => {
                 blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, true, Default::default(), vb)?
             }
-            QuantMethodType::Bitsandbytes => {
+            QuantizedConfig::Bitsandbytes { .. } => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, true, vb)?) as Arc<_>
             }
-            QuantMethodType::Unreachable => unreachable!(),
+            QuantizedConfig::Afq { .. } => {
+                AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, true, vb)?
+            }
         }
     } else {
         // Handle the case where the layer is dummy (no tensors)
@@ -566,6 +787,7 @@ pub fn linear(
             Arc::new(layer) as Arc<dyn QuantMethod>
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
+            let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
             let bias = vb.get_with_hints((out_dim,), "bias", Default::default())?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
@@ -574,7 +796,7 @@ pub fn linear(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    Ok(layer)
+    apply_immediate_isq(layer, base_vb)
 }
 
 pub fn linear_b(

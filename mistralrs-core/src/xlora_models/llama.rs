@@ -202,7 +202,6 @@ impl CausalSelfAttention {
             max_seq_len: cfg.max_position_embeddings,
             sdpa_params: SdpaParams {
                 n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
-                use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
                 sliding_window: None,
@@ -573,7 +572,7 @@ impl XLoraLlama {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
                 "Using {} quantization: {}.",
-                quant_cfg.quant_method.to_string(),
+                quant_cfg.name(),
                 quant_cfg.get_bits_name(&vb)
             );
         }
@@ -585,6 +584,7 @@ impl XLoraLlama {
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
         let lm_head = linear(
             cfg.hidden_size,
@@ -802,37 +802,6 @@ impl NormalModel for XLoraLlama {
     }
     fn max_seq_len(&self) -> usize {
         self.blocks[0].attn.max_seq_len
-    }
-    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
-        if self.xlora_classifier.is_some() {
-            candle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
-        }
-        let mut sum = 0;
-        for layer in self.blocks.iter_mut() {
-            sum += Arc::get_mut(&mut layer.attn.k_proj)
-                .unwrap()
-                .activate(&adapter_names)?;
-            sum += Arc::get_mut(&mut layer.attn.o_proj)
-                .unwrap()
-                .activate(&adapter_names)?;
-            sum += Arc::get_mut(&mut layer.attn.q_proj)
-                .unwrap()
-                .activate(&adapter_names)?;
-            sum += Arc::get_mut(&mut layer.attn.v_proj)
-                .unwrap()
-                .activate(&adapter_names)?;
-
-            sum += Arc::get_mut(&mut layer.mlp.c_fc1)
-                .unwrap()
-                .activate(&adapter_names)?;
-            sum += Arc::get_mut(&mut layer.mlp.c_fc2)
-                .unwrap()
-                .activate(&adapter_names)?;
-            sum += Arc::get_mut(&mut layer.mlp.c_proj)
-                .unwrap()
-                .activate(&adapter_names)?;
-        }
-        Ok(sum)
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg

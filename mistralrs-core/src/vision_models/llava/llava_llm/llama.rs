@@ -217,7 +217,6 @@ impl CausalSelfAttention {
                     cfg.num_attention_heads,
                     comm,
                 ),
-                use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
                 sliding_window: None,
@@ -449,11 +448,19 @@ impl Llama {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization: {}.",
+                quant_cfg.name(),
+                quant_cfg.get_bits_name(&vb)
+            );
+        }
         let mapper = normal_loading_metadata.mapper;
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
         let lm_head = linear(
             cfg.hidden_size,
@@ -467,13 +474,12 @@ impl Llama {
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
 
-        let blocks: Vec<_> = NiceProgressBar::<_, 'b'>(
+        let blocks = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .into_iter()
-        .map(|i| {
+        .par_iter_if_isq(|i| {
             let vb_m = vb.pp(format!("model.layers.{i}"));
             let device = mapper
                 .device_for(i, false)
@@ -488,12 +494,11 @@ impl Llama {
             .unwrap();
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => Some(
-                    PagedAttention::new(head_dim, device, None)
-                        .expect("Failed to create PagedAttention"),
-                ),
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(head_dim, device, None)?)
+                }
             };
-            let comm = mapper.get_comm_for(i).unwrap();
+            let comm = mapper.get_comm_for(i)?;
             Block::load(
                 vb_m,
                 cfg,
@@ -504,9 +509,7 @@ impl Llama {
                 rope_parameters,
                 &comm,
             )
-            .expect("Failed to load block.")
-        })
-        .collect();
+        })?;
 
         Ok(Self {
             wte,

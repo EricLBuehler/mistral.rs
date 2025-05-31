@@ -3,12 +3,7 @@ use std::collections::HashMap;
 use mistralrs_quant::{QuantizedConfig, StaticLoraConfig};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    layers::{Activation, Phi4MMRopeScalingConfig},
-    serde_default_fn,
-};
-
-serde_default_fn!(bool, d_flash_attn, false);
+use crate::layers::{Activation, Phi4MMRopeScalingConfig};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Phi4MMLoraConfig {
@@ -73,8 +68,6 @@ pub struct Phi4MMConfig {
     pub vision_lora: StaticLoraConfig,
     pub speech_lora: StaticLoraConfig,
     pub quantization_config: Option<QuantizedConfig>,
-    #[serde(default = "d_flash_attn")]
-    pub use_flash_attn: bool,
 }
 
 impl Phi4MMConfig {

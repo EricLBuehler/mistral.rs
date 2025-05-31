@@ -5,6 +5,7 @@ use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
 };
+
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
@@ -25,7 +26,6 @@ use crate::{
 };
 
 serde_default_fn!(bool, word_emb_default, false);
-serde_default_fn!(bool, use_flash_attn, false);
 
 #[derive(Debug, Clone, serde::Deserialize, Default, serde::Serialize)]
 pub struct Config {
@@ -36,12 +36,10 @@ pub struct Config {
     pub num_attention_heads: usize,
     pub num_key_value_heads: usize,
     pub max_position_embeddings: usize,
-    pub sliding_window: usize,
+    pub sliding_window: Option<usize>,
     pub rope_theta: f64,
     pub rms_norm_eps: f64,
     pub hidden_act: Activation,
-    #[serde(default = "use_flash_attn")]
-    pub use_flash_attn: bool,
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub tie_word_embeddings: bool,
@@ -127,10 +125,9 @@ impl Attention {
                     cfg.num_attention_heads,
                     comm,
                 ),
-                use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
-                sliding_window: None,
+                sliding_window: cfg.sliding_window,
             },
         })
     }
@@ -329,7 +326,7 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
-    sliding_window: usize,
+    sliding_window: Option<usize>,
     device: Device,
     cache: EitherCache,
     max_seq_len: usize,
@@ -348,7 +345,7 @@ impl Model {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
                 "Using {} quantization: {}.",
-                quant_cfg.quant_method.to_string(),
+                quant_cfg.name(),
                 quant_cfg.get_bits_name(&vb)
             );
         }
@@ -359,8 +356,8 @@ impl Model {
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
-        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
 
         let mut ropes = HashMap::new();
@@ -382,11 +379,12 @@ impl Model {
         }
 
         let vb_l = vb_m.pp("layers");
-        for layer_idx in NiceProgressBar::<_, 'b'>(
+        let layers: Vec<DecoderLayer> = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
-        ) {
+        )
+        .par_iter_if_isq(|layer_idx| -> Result<DecoderLayer> {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -401,7 +399,7 @@ impl Model {
                 }
             };
             let comm = mapper.get_comm_for(layer_idx)?;
-            let layer = DecoderLayer::new(
+            DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
                 vb_l.pp(layer_idx),
@@ -410,9 +408,8 @@ impl Model {
                 normal_loading_metadata.loading_isq,
                 paged_attn,
                 &comm,
-            )?;
-            layers.push(layer)
-        }
+            )
+        })?;
         let norm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -422,7 +419,7 @@ impl Model {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
-                &None,
+                &cfg.quantization_config,
                 false,
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
@@ -454,7 +451,7 @@ impl Model {
                 num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
                 num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
                     .max(1),
-                sliding_window: Some(cfg.sliding_window),
+                sliding_window: cfg.sliding_window,
                 k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
                 v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             },
@@ -502,7 +499,7 @@ impl Model {
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
-            Some(self.sliding_window),
+            self.sliding_window,
             xs.dtype(),
             self.cfg.num_attn_heads,
         )?;

@@ -7,6 +7,7 @@ use candle_core::{
     from_storage_no_op, CudaStorage, Storage,
 };
 
+use candle_nn::Linear;
 #[cfg(feature = "cuda")]
 use half::{bf16, f16};
 use std::{
@@ -21,8 +22,8 @@ use crate::{
         deserialize_tensor, fake_deserialize_tensor, serialize_tensor, version_is_compatible,
         BitWiseOp, LeftshiftOp, UQFF_VERSION,
     },
-    IsqType, MatMul, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde,
-    QuantizedSerdeType,
+    IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
+    UnquantLinear,
 };
 
 #[cfg(feature = "cuda")]
@@ -172,8 +173,10 @@ impl HqqBits {
                 let i = wq.narrow(0, step * 8, step)?;
                 let j = wq.narrow(0, step * 9, step)?;
 
-                a.leftshift(27)?
-                    .bitwise_or(&b.leftshift(24)?)?
+                a.leftshift(27)
+                    .unwrap()
+                    .bitwise_or(&b.leftshift(24).unwrap())
+                    .unwrap()
                     .bitwise_or(&c.leftshift(21)?)?
                     .bitwise_or(&d.leftshift(18)?)?
                     .bitwise_or(&e.leftshift(15)?)?
@@ -500,17 +503,12 @@ impl HqqLayer {
 
     fn dequantize_matmul(&self, xs: &Tensor) -> Result<Tensor> {
         let w = self.dequantize()?;
-        let w = match *xs.dims() {
-            [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,
-            [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
-            _ => w.t()?,
-        };
-        let res = MatMul.matmul(xs, &w)?;
-        if let Some(ref bias) = self.bias {
-            res + bias
-        } else {
-            Ok(res)
-        }
+        // Dispatch to unquant. This uses some cublaslt for bias & on cuda always, so it is better
+        let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
+            w,
+            self.bias.clone(),
+        )))?;
+        unquant.forward(xs)
     }
 
     pub fn with_bias(mut self, bias: Tensor) -> Self {
@@ -527,11 +525,12 @@ impl QuantMethod for HqqLayer {
         match method {
             QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Unquantized(_)
-            | QuantMethodConfig::Gptq { .. }
+            | QuantMethodConfig::GptqAwq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
-            | QuantMethodConfig::BlockwiseFP8 { .. } => {
+            | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::Afq { .. } => {
                 unreachable!()
             }
             QuantMethodConfig::Hqq {
@@ -597,7 +596,7 @@ impl QuantMethod for HqqLayer {
         imatrix_weight: Option<Vec<f32>>,
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        let _acquired_quantize_guard = guard.acquire();
+        let _acquired_quantize_guard = guard.acquire(&device);
         if imatrix_weight.is_some() {
             // TODO just warn?
             candle_core::bail!("HQQ does not support imatrix.");
@@ -630,11 +629,6 @@ impl QuantMethod for HqqLayer {
         } else {
             Ok(Arc::new(res))
         }
-    }
-
-    fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
-        // Use 1 because we quantize on the GPU
-        Some(1.try_into().unwrap())
     }
 }
 
@@ -729,6 +723,7 @@ impl QuantizedSerde for HqqLayer {
         data: Cow<[u8]>,
         device: &Device,
         _comm: &Arc<crate::Comm>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
@@ -750,6 +745,7 @@ impl QuantizedSerde for HqqLayer {
 
         let has_bias = buffer.read_u8()? != 0;
 
+        let _acquired_load_guard = guard.acquire(device);
         let w_q = deserialize_tensor(&mut buffer, device)?;
         let scales = deserialize_tensor(&mut buffer, device)?;
         let zeros = deserialize_tensor(&mut buffer, device)?;
@@ -800,6 +796,7 @@ impl QuantizedSerde for HqqLayer {
     fn deserialize_ext_bias(
         data: Cow<[u8]>,
         device: &Device,
+        guard: QuantizeOntoGuard,
     ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
     where
         Self: Sized,
@@ -821,6 +818,7 @@ impl QuantizedSerde for HqqLayer {
 
         let has_bias = buffer.read_u8()? != 0;
 
+        let _acquired_load_guard = guard.acquire(device);
         let w_q = deserialize_tensor(&mut buffer, device)?;
         let scales = deserialize_tensor(&mut buffer, device)?;
         let zeros = deserialize_tensor(&mut buffer, device)?;

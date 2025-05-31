@@ -15,17 +15,21 @@ Our PagedAttention implementation has 2 inputs: GPU KV cache memory size, and bl
 > Note: In the CLI and Python API, Paged Attention is disabled by default for Metal. It can be enabled with the `--paged-attn`/`paged_attn` flags.
 
 **There are more features being added to this:**
-- GGML model support 
+- GGML model support
 - Adapter model support
 - Speculative decoding
-- Prefix caching
+
+**Prefix caching is now supported with PagedAttention.** PagedAttention can leverage the prefix cacher to cache KV prefix states across iterations for faster multi-turn inference.
 
 **Supported models:**
 - Normal models
 - GGUF models
 - Vision models
 
-> Note: the prefix cacher will be disabled when using PagedAttention regardless of settings. This functionality will be added soon!
+> Note: Prefix caching is supported when using PagedAttention. Configure the number of sequences to cache on the device with:
+> - CLI: `--prefix-cache-n <N>` (default 16)
+> - Python API: `prefix_cache_n=<N>` (default 16)
+> - Rust API: `.with_prefix_cache_n(Some(N))` (default 16)
 
 ## FlashAttention V2/V3 + PagedAttention in mistral.rs
 
@@ -37,7 +41,7 @@ the prefill phase.
 Add the `--pa-gpu-mem`/`--pa-gpu-mem-usage` and `--pa-blk-size` parameters before the model kind selector. The GPU memory is in MBs and the block size means the number of tokens per block. These parameters may be passed on any supported model type.
 
 ```
-cargo run --release --features cuda -- -i --pa-gpu-mem 8192 --pa-blk-size 32 --isq Q4K plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
+cargo run --release --features cuda -- -i --pa-gpu-mem 8192 --pa-blk-size 32 --isq Q4K plain -m microsoft/Phi-3-mini-128k-instruct
 ```
 
 ```

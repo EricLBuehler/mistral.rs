@@ -1,5 +1,6 @@
 use crate::{
-    get_mut_group,
+    get_mut_arcmutex, get_mut_group,
+    paged_attention::PhysicalTokenBlock,
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
@@ -16,6 +17,7 @@ use crate::{
 use candle_core::Tensor;
 use std::{
     fmt::Display,
+    hash::{DefaultHasher, Hash, Hasher},
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -36,6 +38,7 @@ pub enum StopReason {
     },
     Canceled,
     GeneratedImage,
+    GeneratedSpeech,
 }
 
 impl Display for StopReason {
@@ -46,6 +49,7 @@ impl Display for StopReason {
             StopReason::StopTok(_) | StopReason::StopString { .. } => write!(f, "stop"),
             StopReason::Canceled => write!(f, "canceled"),
             StopReason::GeneratedImage => write!(f, "generated-image"),
+            StopReason::GeneratedSpeech => write!(f, "generated-speech"),
         }
     }
 }
@@ -65,13 +69,14 @@ pub enum SequenceState {
 }
 
 pub enum SequenceRecognizer {
-    Llguidance(Box<llguidance::Constraint>),
+    Llguidance(Box<llguidance::Matcher>),
     None,
 }
 
 enum SequenceCustomMetadata {
     PagedAttention {
         logical_token_blocks: Vec<LogicalTokenBlock>,
+        physical_blocks_prefill: Option<Vec<Arc<PhysicalTokenBlock>>>,
         block_size: usize,
     },
     None,
@@ -89,29 +94,38 @@ macro_rules! blocks_to_add_new_tok {
     }};
 }
 
+pub(crate) fn util_append_token_to_blocks(
+    tok: usize,
+    logical_token_blocks: &mut Vec<LogicalTokenBlock>,
+    block_size: usize,
+) {
+    let last = logical_token_blocks.last_mut();
+    match last {
+        Some(last) => {
+            last.append_token_id(tok);
+        }
+        None => {
+            logical_token_blocks.push(LogicalTokenBlock::new(block_size));
+            logical_token_blocks
+                .last_mut()
+                .unwrap()
+                .append_token_id(tok);
+        }
+    }
+    if logical_token_blocks.last().as_ref().unwrap().is_full() {
+        logical_token_blocks.push(LogicalTokenBlock::new(block_size));
+    }
+}
+
 impl SequenceCustomMetadata {
     fn append_token_to_blocks(&mut self, tok: usize) {
         match self {
             Self::PagedAttention {
                 logical_token_blocks,
+                physical_blocks_prefill: _,
                 block_size,
             } => {
-                let last = logical_token_blocks.last_mut();
-                match last {
-                    Some(last) => {
-                        last.append_token_id(tok);
-                    }
-                    None => {
-                        logical_token_blocks.push(LogicalTokenBlock::new(*block_size));
-                        logical_token_blocks
-                            .last_mut()
-                            .unwrap()
-                            .append_token_id(tok);
-                    }
-                }
-                if logical_token_blocks.last().as_ref().unwrap().is_full() {
-                    logical_token_blocks.push(LogicalTokenBlock::new(*block_size));
-                }
+                util_append_token_to_blocks(tok, logical_token_blocks, *block_size);
             }
             Self::None => (),
         }
@@ -121,6 +135,7 @@ impl SequenceCustomMetadata {
         match self {
             Self::PagedAttention {
                 logical_token_blocks,
+                physical_blocks_prefill: _,
                 block_size: _,
             } => {
                 let last = logical_token_blocks.last_mut().unwrap();
@@ -149,6 +164,123 @@ pub enum SeqStepType {
     OneShot,
 }
 
+pub struct SequenceImages {
+    images: Vec<image::DynamicImage>,
+    hashes: Vec<u64>,
+}
+
+impl SequenceImages {
+    fn new(input_images: Vec<image::DynamicImage>) -> Self {
+        let hashes = input_images.iter().map(|x| {
+            let mut hasher = DefaultHasher::new();
+            x.as_bytes().hash(&mut hasher);
+            hasher.finish()
+        });
+        Self {
+            hashes: hashes.collect(),
+            images: input_images,
+        }
+    }
+
+    fn clone_images(&self) -> Vec<image::DynamicImage> {
+        self.images.clone()
+    }
+
+    fn images(&self) -> &[image::DynamicImage] {
+        &self.images
+    }
+
+    fn images_mut(&mut self) -> &mut Vec<image::DynamicImage> {
+        &mut self.images
+    }
+
+    fn hashes(&self) -> &[u64] {
+        &self.hashes
+    }
+
+    fn keep_num_images(&mut self, images_to_keep: usize) {
+        if self.images.len() > images_to_keep {
+            let start = self.images.len() - images_to_keep;
+            self.images = self.images[start..].to_vec();
+        }
+    }
+}
+
+// Holds all multimodal (vision/diffusion) data for a Sequence.
+pub struct MultimodalData {
+    pub input_images: Option<SequenceImages>,
+    pub cached_pixel_values: Option<Tensor>,
+    pub cached_img_thw: Option<Tensor>,
+    pub cached_vid_thw: Option<Tensor>,
+    pub has_changed_prompt: bool,
+    pub image_gen_response_format: Option<ImageGenerationResponseFormat>,
+    pub diffusion_params: Option<DiffusionGenerationParams>,
+}
+
+impl MultimodalData {
+    pub fn new(
+        input_images: Option<Vec<image::DynamicImage>>,
+        image_gen_response_format: Option<ImageGenerationResponseFormat>,
+        diffusion_params: Option<DiffusionGenerationParams>,
+    ) -> Self {
+        MultimodalData {
+            input_images: input_images.map(SequenceImages::new),
+            cached_pixel_values: None,
+            cached_img_thw: None,
+            cached_vid_thw: None,
+            has_changed_prompt: false,
+            image_gen_response_format,
+            diffusion_params,
+        }
+    }
+
+    pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {
+        if self.has_changed_prompt {
+            if let Some(input_images) = self.input_images.as_mut() {
+                let mut images = Vec::new();
+                std::mem::swap(&mut images, input_images.images_mut());
+                Some(images)
+            } else {
+                None
+            }
+        } else {
+            self.input_images.as_ref().map(|imgs| imgs.clone_images())
+        }
+    }
+
+    pub fn clone_images(&self) -> Option<Vec<image::DynamicImage>> {
+        self.input_images.as_ref().map(|imgs| imgs.clone_images())
+    }
+
+    pub fn images(&self) -> Option<&[image::DynamicImage]> {
+        self.input_images.as_ref().map(|imgs| imgs.images())
+    }
+
+    pub fn image_hashes(&self) -> Option<&[u64]> {
+        self.input_images.as_ref().map(|imgs| imgs.hashes())
+    }
+
+    pub fn has_images(&self) -> bool {
+        self.input_images
+            .as_ref()
+            .is_some_and(|imgs| !imgs.images().is_empty())
+    }
+
+    pub fn keep_num_images(&mut self, images_to_keep: usize) {
+        if let Some(imgs) = self.input_images.as_mut() {
+            imgs.keep_num_images(images_to_keep)
+        }
+    }
+
+    pub fn image_gen_response_format(&self) -> Option<ImageGenerationResponseFormat> {
+        self.image_gen_response_format
+    }
+
+    pub fn diffusion_params(&self) -> Option<DiffusionGenerationParams> {
+        self.diffusion_params.clone()
+    }
+}
+
 pub struct Sequence {
     // Metadata, const
     id: usize,
@@ -168,9 +300,8 @@ pub struct Sequence {
     token_offset: usize,
     eos_tokens: Vec<u32>,
 
-    // Image generation
-    image_gen_response_format: Option<ImageGenerationResponseFormat>,
-    diffusion_params: Option<DiffusionGenerationParams>,
+    // Multimodal data (images, diffusion settings, pixel caches)
+    pub multimodal: MultimodalData,
 
     // Completion requests
     suffix: Option<String>,
@@ -181,9 +312,6 @@ pub struct Sequence {
 
     // Prefix caching
     prefill_prompt_toks: Option<Vec<u32>>,
-
-    // Adapter dynamic config
-    adapters: Option<Vec<String>>,
 
     // Cache
     normal_cache: Vec<Option<KvCache>>,
@@ -207,14 +335,12 @@ pub struct Sequence {
     stream_idx: usize,
     pub recognizer: SequenceRecognizer,
     scheduling_urgency: usize, // The number of passes since scheduling
-    input_images: Option<Vec<image::DynamicImage>>,
-    pub cached_pixel_values: Option<Tensor>,
-    pub cached_img_thw: Option<Tensor>,
-    pub cached_vid_thw: Option<Tensor>,
+    waitlisted_count: usize, // Used in PagedAttention to alert the user when a sequence repeatedly cannot be scheduled
 
     // GPU things
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
+    pub total_prompt_time: Option<u128>,
     group: Arc<Mutex<SequenceGroup>>,
     state: RwLock<SequenceState>,
 
@@ -230,6 +356,7 @@ impl BlockEngineSequence for Sequence {
         match &self.custom_metadata {
             SequenceCustomMetadata::PagedAttention {
                 logical_token_blocks,
+                physical_blocks_prefill: _,
                 block_size: _,
             } => {
                 blocks_to_add_new_tok!(logical_token_blocks)
@@ -242,14 +369,32 @@ impl BlockEngineSequence for Sequence {
         self.id
     }
 
-    fn get_logical_token_blocks(&self) -> usize {
+    fn logical_token_blocks(&self) -> &[LogicalTokenBlock] {
         match &self.custom_metadata {
             SequenceCustomMetadata::PagedAttention {
                 logical_token_blocks,
+                physical_blocks_prefill: _,
                 block_size: _,
-            } => logical_token_blocks.len(),
+            } => logical_token_blocks,
             SequenceCustomMetadata::None => unreachable!(),
         }
+    }
+
+    fn take_physical_blocks_prefill(&mut self) -> Option<Vec<Arc<PhysicalTokenBlock>>> {
+        match &mut self.custom_metadata {
+            SequenceCustomMetadata::PagedAttention {
+                logical_token_blocks: _,
+                physical_blocks_prefill,
+                block_size: _,
+            } => physical_blocks_prefill.take(),
+            SequenceCustomMetadata::None => None,
+        }
+    }
+
+    fn increment_waitlist_count(&mut self) -> usize {
+        let prev = self.waitlisted_count;
+        self.waitlisted_count += 1;
+        prev
     }
 }
 
@@ -274,7 +419,6 @@ impl Sequence {
         recognizer: SequenceRecognizer,
         suffix: Option<String>,
         prefix: Option<String>,
-        adapters: Option<Vec<String>>,
         input_images: Option<Vec<image::DynamicImage>>,
         // Paged attention
         block_size: Option<usize>,
@@ -293,6 +437,7 @@ impl Sequence {
         let mut custom_metadata = if let Some(block_size) = block_size {
             SequenceCustomMetadata::PagedAttention {
                 logical_token_blocks: Vec::new(),
+                physical_blocks_prefill: None,
                 block_size,
             }
         } else {
@@ -342,19 +487,20 @@ impl Sequence {
             last_is_done: None,
             is_tmp: false,
             scheduling_urgency: 0,
-            adapters,
-            input_images,
+            // Multimodal data
+            multimodal: MultimodalData::new(
+                input_images,
+                image_gen_response_format,
+                diffusion_params,
+            ),
             custom_metadata,
             tools,
-            image_gen_response_format,
             sequence_stepping_type,
-            diffusion_params,
-            cached_pixel_values: None,
-            cached_img_thw: None,
-            cached_vid_thw: None,
             return_raw_logits,
             token_offset: 0,
             eos_tokens,
+            total_prompt_time: None,
+            waitlisted_count: 0,
         }
     }
 
@@ -376,20 +522,7 @@ impl Sequence {
         (self.scheduling_urgency as f64) + (self.len() as f64).log2()
     }
 
-    pub fn prefill(
-        mut self,
-        cache: LayerCaches,
-        xlora_cache: Option<LayerCaches>,
-        toks: Vec<u32>,
-    ) -> Self {
-        self.cache = cache;
-        self.xlora_cache = xlora_cache;
-        self.prefill_prompt_toks = Some(toks);
-        self.set_state(SequenceState::RunningPrefillPrompt);
-        self
-    }
-
-    pub fn prefill_v2(
+    pub fn prefill_v2_normal(
         mut self,
         cache: Vec<Option<KvCache>>,
         toks: Vec<u32>,
@@ -399,6 +532,30 @@ impl Sequence {
         self.prefill_prompt_toks = Some(toks);
         self.set_state(SequenceState::RunningPrefillPrompt);
         self.token_offset = offset;
+        self
+    }
+
+    pub fn prefill_v2_paged(
+        mut self,
+        logical_blocks: Vec<LogicalTokenBlock>,
+        physical_blocks: Vec<Arc<PhysicalTokenBlock>>,
+        toks: Vec<u32>,
+        offset: usize,
+    ) -> Self {
+        self.prefill_prompt_toks = Some(toks);
+        self.set_state(SequenceState::RunningPrefillPrompt);
+        self.token_offset = offset;
+
+        if let SequenceCustomMetadata::PagedAttention {
+            logical_token_blocks,
+            physical_blocks_prefill,
+            block_size: _,
+        } = &mut self.custom_metadata
+        {
+            *logical_token_blocks = logical_blocks;
+            *physical_blocks_prefill = Some(physical_blocks);
+        }
+
         self
     }
 
@@ -486,7 +643,7 @@ impl Sequence {
     pub(crate) fn set_toks_and_reallocate(
         &mut self,
         toks: Vec<u32>,
-        paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+        paged_attn_metadata: Option<&mut PagedAttentionMeta>,
     ) {
         self.tokens.clone_from(&toks);
         self.prompt_len = self.tokens.len();
@@ -494,6 +651,7 @@ impl Sequence {
         match &mut self.custom_metadata {
             SequenceCustomMetadata::PagedAttention {
                 logical_token_blocks,
+                physical_blocks_prefill: _,
                 block_size: _,
             } => {
                 logical_token_blocks.clear();
@@ -505,8 +663,8 @@ impl Sequence {
 
         if let Some(metadata) = paged_attn_metadata {
             // Free and then reallocate as appropriate
-            metadata.block_engine.free_sequence(*self.id());
-            metadata.block_engine.allocate(self);
+            get_mut_arcmutex!(metadata.block_engine).free_sequence(*self.id());
+            get_mut_arcmutex!(metadata.block_engine).allocate(self);
         }
     }
 
@@ -631,7 +789,7 @@ impl Sequence {
         max_model_len: usize,
     ) -> Option<StopReason> {
         let is_eos = match eos_tok {
-            Some(eos_tok) => eos_tok.iter().any(|t| *t == tok),
+            Some(eos_tok) => eos_tok.contains(&tok),
             None => false,
         };
         if is_eos {
@@ -726,11 +884,11 @@ impl Sequence {
             .as_millis();
 
         if let Some(ts) = self.prompt_timestamp {
-            get_mut_group!(self).total_completion_time += now - ts;
-            get_mut_group!(self).total_prompt_time += ts - self.timestamp;
+            get_mut_group!(self).total_completion_time = now - ts;
+            get_mut_group!(self).total_prompt_time = self.total_prompt_time.unwrap();
         }
 
-        get_mut_group!(self).total_time += now - self.timestamp;
+        get_mut_group!(self).total_time = now - self.timestamp;
 
         get_mut_group!(self).total_prompt_toks = self.prompt_len;
         get_mut_group!(self).total_toks = self.len();
@@ -738,7 +896,10 @@ impl Sequence {
 
     pub fn add_image_choice_to_group(&self, choice: ImageChoice) {
         get_mut_group!(self).image_choices.push(choice);
-        self.update_time_info();
+    }
+
+    pub fn add_speech_pcm_to_group(&self, pcm: Arc<Vec<f32>>, rate: usize, channels: usize) {
+        get_mut_group!(self).speech_pcms.push((pcm, rate, channels));
     }
 
     pub fn add_choice_to_group(&self, choice: Choice) {
@@ -781,32 +942,36 @@ impl Sequence {
 
     pub fn add_streaming_completion_chunk_choice_to_group(&self, chunk: CompletionChunkChoice) {
         get_mut_group!(self).completion_streaming_chunks.push(chunk);
-    }
-
-    pub fn get_adapters(&self) -> Option<Vec<String>> {
-        self.adapters.clone()
+        self.update_time_info();
     }
 
     pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {
-        self.input_images.take()
+        self.multimodal.take_images()
     }
 
-    pub fn clone_images(&mut self) -> Option<Vec<image::DynamicImage>> {
-        self.input_images.clone()
+    pub fn clone_images(&self) -> Option<Vec<image::DynamicImage>> {
+        self.multimodal.clone_images()
     }
 
     pub fn images(&self) -> Option<&[image::DynamicImage]> {
-        self.input_images.as_deref()
+        self.multimodal.images()
+    }
+
+    pub fn image_hashes(&self) -> Option<&[u64]> {
+        self.multimodal.image_hashes()
     }
 
     pub fn has_images(&self) -> bool {
-        self.input_images
-            .as_ref()
-            .is_some_and(|images| !images.is_empty())
+        self.multimodal.has_images()
+    }
+
+    /// Keep these last n images
+    pub fn keep_num_images(&mut self, images_to_keep: usize) {
+        self.multimodal.keep_num_images(images_to_keep)
     }
 
     pub fn image_gen_response_format(&self) -> Option<ImageGenerationResponseFormat> {
-        self.image_gen_response_format
+        self.multimodal.image_gen_response_format()
     }
 
     pub fn sequence_stepping_type(&self) -> &SeqStepType {
@@ -814,7 +979,7 @@ impl Sequence {
     }
 
     pub fn get_diffusion_diffusion_params(&self) -> Option<DiffusionGenerationParams> {
-        self.diffusion_params.clone()
+        self.multimodal.diffusion_params()
     }
 
     pub fn eos_tokens(&self) -> &[u32] {
@@ -832,6 +997,7 @@ pub struct SequenceGroup {
     pub total_completion_time: u128,
     choices: Vec<Choice>,
     image_choices: Vec<ImageChoice>,
+    speech_pcms: Vec<(Arc<Vec<f32>>, usize, usize)>, // (pcm, rate, channels)
     raw_choices: Vec<(Vec<Tensor>, Vec<u32>)>,
     completion_choices: Vec<(f32, CompletionChoice)>,
     pub chat_streaming_chunks: Vec<ChunkChoice>,
@@ -850,6 +1016,7 @@ impl SequenceGroup {
         Self {
             choices: Vec::new(),
             image_choices: Vec::new(),
+            speech_pcms: Vec::new(),
             raw_choices: Vec::new(),
             completion_choices: Vec::new(),
             n_choices,
@@ -950,6 +1117,24 @@ impl SequenceGroup {
         if self.image_choices.len() == self.n_choices {
             sender.send(Response::ImageGeneration(response)).await?;
         }
+
+        Ok(())
+    }
+
+    pub async fn maybe_send_speech_response(
+        &self,
+        sender: Sender<Response>,
+    ) -> Result<(), SendError<Response>> {
+        assert_eq!(self.speech_pcms.len(), 1);
+
+        let (pcm, rate, channels) = self.speech_pcms[0].clone();
+        sender
+            .send(Response::Speech {
+                pcm,
+                rate,
+                channels,
+            })
+            .await?;
 
         Ok(())
     }

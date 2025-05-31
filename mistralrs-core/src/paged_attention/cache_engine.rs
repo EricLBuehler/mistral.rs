@@ -174,9 +174,9 @@ impl CacheEngine {
 impl CacheEngine {
     pub fn execute_scheduler_ops(
         &self,
-        blocks_to_swap_in: HashMap<usize, usize>,
-        blocks_to_swap_out: HashMap<usize, usize>,
-        blocks_to_copy: HashMap<usize, Vec<usize>>,
+        blocks_to_swap_in: &HashMap<usize, usize>,
+        blocks_to_swap_out: &HashMap<usize, usize>,
+        blocks_to_copy: &HashMap<usize, Vec<usize>>,
     ) -> Result<()> {
         if !blocks_to_swap_in.is_empty() {
             self.swap_in(blocks_to_swap_in)?;
@@ -190,7 +190,7 @@ impl CacheEngine {
         Ok(())
     }
 
-    pub fn swap_in(&self, src_to_dst: HashMap<usize, usize>) -> Result<()> {
+    pub fn swap_in(&self, src_to_dst: &HashMap<usize, usize>) -> Result<()> {
         for i in 0..self.num_layers {
             let (src_key_cache, src_value_cache) = self.cpu_cache.get(i).unwrap();
             let gpu_cache = self.get_kv_cache();
@@ -203,7 +203,7 @@ impl CacheEngine {
         Ok(())
     }
 
-    pub fn swap_out(&self, src_to_dst: HashMap<usize, usize>) -> Result<()> {
+    pub fn swap_out(&self, src_to_dst: &HashMap<usize, usize>) -> Result<()> {
         for i in 0..self.num_layers {
             let gpu_cache = self.get_kv_cache();
             let (src_key_cache, src_value_cache) = gpu_cache.get(i).unwrap().clone();
@@ -218,7 +218,7 @@ impl CacheEngine {
         Ok(())
     }
 
-    pub fn copy(&self, src_to_dst: HashMap<usize, Vec<usize>>) -> Result<()> {
+    pub fn copy(&self, src_to_dst: &HashMap<usize, Vec<usize>>) -> Result<()> {
         let mut gpu_cache = self.get_kv_cache();
         #[allow(clippy::map_identity)]
         let caches: (Vec<&mut Tensor>, Vec<&mut Tensor>) =

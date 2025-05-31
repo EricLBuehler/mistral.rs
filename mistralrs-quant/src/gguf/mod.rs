@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
     io::{Cursor, Read},
-    num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
 
@@ -10,12 +9,13 @@ use candle_core::{
     quantized::{ggml_file::qtensor_from_ggml, GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
 };
-use candle_nn::Module;
+use candle_nn::{Linear, Module};
 
 use crate::{
     generate_isq, generate_isq_imatrix,
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
+    UnquantLinear,
 };
 
 #[derive(Debug)]
@@ -34,13 +34,14 @@ impl QuantMethod for GgufMatMul {
                 w: QMatMul::from_arc(q_weight)?,
                 b,
             }),
-            QuantMethodConfig::Gptq { .. }
+            QuantMethodConfig::GptqAwq { .. }
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
-            | QuantMethodConfig::BlockwiseFP8 { .. } => unreachable!(),
+            | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::Afq { .. } => unreachable!(),
         }
     }
 
@@ -55,6 +56,22 @@ impl QuantMethod for GgufMatMul {
         } else {
             Ok(x)
         }
+    }
+
+    /// Compute matmul of `self` and `a`. `self` should contain the weights.
+    ///
+    /// If `a` is (n_tokens, n_experts, cols), `self` weights are (n_experts, rows, cols),
+    /// then the indices are (n_tokens, n_experts).
+    fn gather_forward(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        // Dequantize matmul always.
+        // TODO: add a specific kernel?
+        let weight = self.dequantize_w()?;
+        // Dispatch to unquant. This uses some cublaslt for bias & on cuda always, so it is better
+        let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
+            weight,
+            self.b.clone(),
+        )))?;
+        unquant.gather_forward(x, indices)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -136,10 +153,6 @@ impl QuantMethod for GgufMatMul {
             };
             Ok(Arc::new(GgufMatMul { w, b }))
         }
-    }
-
-    fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
-        None
     }
 }
 
@@ -247,6 +260,7 @@ impl QuantizedSerde for GgufMatMul {
         data: Cow<[u8]>,
         device: &Device,
         _comm: &Arc<crate::Comm>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         let mut buffer = Cursor::new(data);
 
@@ -299,6 +313,7 @@ impl QuantizedSerde for GgufMatMul {
         let mut tensor_data = vec![0; data_len];
         buffer.read_exact(&mut tensor_data)?;
 
+        let _acquired_load_guard = guard.acquire(device);
         // If we have bias
         let b = if has_bias {
             Some(deserialize_tensor(&mut buffer, device)?)
@@ -315,6 +330,7 @@ impl QuantizedSerde for GgufMatMul {
     fn deserialize_ext_bias(
         data: Cow<[u8]>,
         device: &Device,
+        guard: QuantizeOntoGuard,
     ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)> {
         let mut buffer = Cursor::new(data);
 
@@ -367,6 +383,7 @@ impl QuantizedSerde for GgufMatMul {
         let mut tensor_data = vec![0; data_len];
         buffer.read_exact(&mut tensor_data)?;
 
+        let _acquired_load_guard = guard.acquire(device);
         // If we have bias
         let b = if has_bias {
             Some(deserialize_tensor(&mut buffer, device)?)

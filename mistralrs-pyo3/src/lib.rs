@@ -10,6 +10,7 @@ use serde_json::Value;
 use std::{
     cell::RefCell,
     num::NonZeroUsize,
+    path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex, OnceLock},
 };
@@ -22,22 +23,27 @@ use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader, AutoDeviceMapParams,
     BertEmbeddingModel, ChatCompletionResponse, CompletionResponse, Constraint,
     DefaultSchedulerMethod, DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DiffusionSpecificConfig,
-    DrySamplingParams, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
-    GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar,
-    Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
+    DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams,
+    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
+    ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar, Loader,
+    MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
     NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
-    ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
-    TokenSource, TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
+    ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader,
+    SpeechLoader, StopTokens, TokenSource, TokenizationRequest, Tool, Topology,
+    VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::prelude::*;
+use pyo3::types::PyType;
+use pyo3::Bound;
 use std::fs::File;
 mod anymoe;
 mod requests;
 mod stream;
 mod util;
 mod which;
-use which::{Architecture, DiffusionArchitecture, VisionArchitecture, Which};
+use which::{Architecture, DiffusionArchitecture, SpeechLoaderType, VisionArchitecture, Which};
+// (keep imports minimal – if needed later, re-introduce)
+use mistralrs_core::ModelDType;
 
 static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
 
@@ -68,6 +74,15 @@ fn get_device(seed: Option<u64>) -> &'static Result<Device> {
 }
 
 #[pyclass]
+#[pyo3(get_all)]
+#[derive(Debug, Clone)]
+pub struct SpeechGenerationResponse {
+    pub pcm: Vec<f32>,
+    pub rate: usize,
+    pub channels: usize,
+}
+
+#[pyclass]
 /// An object wrapping the underlying Rust system to handle requests and process conversations.
 struct Runner {
     runner: Arc<MistralRs>,
@@ -82,8 +97,6 @@ fn parse_which(
     prompt_chunksize: Option<NonZeroUsize>,
     jinja_explicit: Option<String>,
 ) -> PyApiResult<Box<dyn Loader>> {
-    let use_flash_attn = mistralrs_core::using_flash_attn();
-
     Ok(match which {
         Which::Plain {
             model_id,
@@ -100,12 +113,16 @@ fn parse_which(
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                use_flash_attn,
                 prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.map(Into::into).unwrap_or(Default::default()),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.right_or_else(|l| vec![l])
+                        .iter()
+                        .map(|x| PathBuf::from_str(x).unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 imatrix,
                 calibration_file,
                 hf_cache_path,
@@ -132,12 +149,16 @@ fn parse_which(
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                use_flash_attn,
                 prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.right_or_else(|l| vec![l])
+                        .iter()
+                        .map(|x| PathBuf::from_str(x).unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
@@ -161,8 +182,7 @@ fn parse_which(
         Which::Lora {
             model_id,
             tokenizer_json,
-            adapters_model_id,
-            order,
+            adapter_model_ids,
             arch,
             topology,
             write_uqff,
@@ -172,12 +192,16 @@ fn parse_which(
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                use_flash_attn,
                 prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.right_or_else(|l| vec![l])
+                        .iter()
+                        .map(|x| PathBuf::from_str(x).unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
@@ -188,13 +212,7 @@ fn parse_which(
             no_kv_cache,
             jinja_explicit,
         )
-        .with_lora(
-            adapters_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
-        )
+        .with_lora(adapter_model_ids)
         .build(arch.map(Into::into))?,
         Which::GGUF {
             tok_model_id,
@@ -385,11 +403,15 @@ fn parse_which(
             hf_cache_path,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
-                use_flash_attn,
                 prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.right_or_else(|l| vec![l])
+                        .iter()
+                        .map(|x| PathBuf::from_str(x).unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 max_edge,
                 calibration_file,
                 imatrix,
@@ -400,15 +422,23 @@ fn parse_which(
             Some(model_id),
             jinja_explicit,
         )
-        .build(arch.into()),
+        .build(arch.map(Into::into)),
         Which::DiffusionPlain {
             model_id,
             arch,
             dtype: _,
-        } => {
-            DiffusionLoaderBuilder::new(DiffusionSpecificConfig { use_flash_attn }, Some(model_id))
-                .build(arch.into())
-        }
+        } => DiffusionLoaderBuilder::new(Some(model_id)).build(arch.into()),
+        Which::Speech {
+            model_id,
+            dac_model_id,
+            arch,
+            ..
+        } => Box::new(SpeechLoader {
+            model_id,
+            dac_model_id,
+            arch: arch.into(),
+            cfg: None,
+        }),
     })
 }
 
@@ -505,7 +535,8 @@ impl Runner {
             | Which::GGML { .. }
             | Which::LoraGGML { .. }
             | Which::VisionPlain { .. }
-            | Which::DiffusionPlain { .. } => None,
+            | Which::DiffusionPlain { .. }
+            | Which::Speech { .. } => None,
             Which::XLora {
                 tgt_non_granular_index,
                 ..
@@ -528,6 +559,7 @@ impl Runner {
             | Which::LoraGGML { dtype, .. }
             | Which::VisionPlain { dtype, .. }
             | Which::DiffusionPlain { dtype, .. }
+            | Which::Speech { dtype, .. }
             | Which::XLora { dtype, .. }
             | Which::XLoraGGUF { dtype, .. }
             | Which::XLoraGGML { dtype, .. } => dtype,
@@ -577,7 +609,9 @@ impl Runner {
                     max_num_images: p.max_num_images,
                 })
                 .unwrap_or(AutoDeviceMapParams::default_vision()),
-            Which::DiffusionPlain { .. } => AutoDeviceMapParams::default_text(),
+            Which::DiffusionPlain { .. } | Which::Speech { .. } => {
+                AutoDeviceMapParams::default_text()
+            }
         };
 
         let max_seq_len = auto_map_params.max_seq_len();
@@ -648,7 +682,7 @@ impl Runner {
 
         let device = get_device(seed).as_ref().map_err(PyApiErr::from)?;
         let isq = if let Some(isq) = in_situ_quant {
-            Some(parse_isq_value(&isq).map_err(PyApiErr::from)?)
+            Some(parse_isq_value(&isq, Some(device)).map_err(PyApiErr::from)?)
         } else {
             None
         };
@@ -791,6 +825,129 @@ impl Runner {
             .build();
 
         Ok(Self { runner: mistralrs })
+    }
+
+    // ---------------------------------------------------------------------
+    // Convenience constructor
+    // ---------------------------------------------------------------------
+    #[classmethod]
+    #[pyo3(name = "from_pretrained", signature = (
+        model_id,
+        arch = None,
+        max_seqs = 16,
+        seed = None,
+    ))]
+    fn from_pretrained(
+        _cls: &Bound<'_, PyType>,
+        model_id: String,
+        arch: Option<Architecture>,
+        max_seqs: usize,
+        seed: Option<u64>,
+    ) -> PyApiResult<Self> {
+        let which = Which::Plain {
+            model_id,
+            arch,
+            tokenizer_json: None,
+            topology: None,
+            organization: None,
+            write_uqff: None,
+            from_uqff: None,
+            dtype: ModelDType::Auto,
+            imatrix: None,
+            calibration_file: None,
+            auto_map_params: None,
+            hf_cache_path: None,
+        };
+
+        Self::new(
+            which, max_seqs, false,   // no_kv_cache
+            16,      // prefix_cache_n
+            "cache", // token_source
+            32,      // speculative_gamma
+            None,    // which_draft
+            None,    // chat_template
+            None,    // jinja_explicit
+            None,    // num_device_layers
+            None,    // in_situ_quant
+            None,    // anymoe_config
+            None,    // pa_gpu_mem
+            None,    // pa_gpu_mem_usage
+            None,    // pa_ctxt_len
+            None,    // pa_blk_size
+            false,   // no_paged_attn
+            false,   // paged_attn
+            None,    // prompt_chunksize
+            seed, false, // enable_search
+            None,  // search_bert_model
+        )
+    }
+
+    /// A convenience helper making the Python API more ergonomic.
+    ///
+    /// Instead of having to manually construct a `ChatCompletionRequest`, you can now
+    /// simply call `runner.chat("<your prompt>")` and directly obtain the assistant
+    /// response **as a string**.  Common generation parameters can be passed as
+    /// optional keyword arguments.
+    ///
+    /// Example (Python):
+    /// ```python
+    /// from mistralrs import Runner, Which
+    /// runner = Runner(which = Which.Plain(model_id="mistralai/Mistral-7B-Instruct-v0.1"))
+    /// answer = runner.chat("Explain what an LLM is in one sentence")
+    /// print(answer)
+    /// ```
+    #[pyo3(signature = (
+        prompt,
+        max_tokens = None,
+        temperature = 1.0,
+        top_p = 1.0,
+        stop = None,
+    ))]
+    fn chat(
+        &mut self,
+        prompt: String,
+        max_tokens: Option<usize>,
+        temperature: f64,
+        top_p: f64,
+        stop: Option<Vec<String>>,
+    ) -> PyApiResult<String> {
+        use requests::ChatCompletionRequest;
+
+        // Build the request directly in Rust and then convert it into a Python object.
+        let raw_request = ChatCompletionRequest {
+            messages: Either::Right(prompt.clone()),
+            _model: "mistralrs".to_string(),
+            logit_bias: None,
+            logprobs: false,
+            top_logprobs: None,
+            max_tokens,
+            n_choices: 1,
+            presence_penalty: None,
+            frequency_penalty: None,
+            stop_seqs: stop.clone(),
+            temperature: Some(temperature),
+            top_p: Some(top_p),
+            stream: false,
+            top_k: None,
+            grammar: None,
+            grammar_type: None,
+            min_p: None,
+            tool_schemas: None,
+            tool_choice: None,
+            dry_multiplier: None,
+            dry_base: None,
+            dry_allowed_length: None,
+            dry_sequence_breakers: None,
+            web_search_options: None,
+            enable_thinking: Some(false),
+        };
+
+        let py_request = Python::with_gil(|py| Py::new(py, raw_request).map_err(PyApiErr))?;
+
+        match self.send_chat_completion_request(py_request)? {
+            Either::Left(resp) => Ok(resp.choices[0].message.content.clone().unwrap_or_default()),
+            Either::Right(_) => Err(PyApiErr::from("stream was not expected")),
+        }
     }
 
     /// Send an OpenAI API compatible request, returning the result.
@@ -957,9 +1114,13 @@ impl Runner {
                         RequestMessage::VisionChat {
                             messages: messages_vec,
                             images,
+                            enable_thinking: request.enable_thinking,
                         }
                     } else {
-                        RequestMessage::Chat(messages_vec)
+                        RequestMessage::Chat {
+                            messages: messages_vec,
+                            enable_thinking: request.enable_thinking,
+                        }
                     }
                 }
                 Either::Right(ref prompt) => {
@@ -971,7 +1132,10 @@ impl Runner {
                     message_map.insert("role".to_string(), Either::Left("user".to_string()));
                     message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
                     messages.push(message_map);
-                    RequestMessage::Chat(messages)
+                    RequestMessage::Chat {
+                        messages,
+                        enable_thinking: request.enable_thinking,
+                    }
                 }
             };
 
@@ -990,7 +1154,7 @@ impl Runner {
                 None
             };
 
-            let model_request = _Request::Normal(NormalRequest {
+            let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: {
                     let l = NEXT_REQUEST_ID.lock().unwrap();
                     let last = &mut *l.borrow_mut();
@@ -1018,13 +1182,12 @@ impl Runner {
                 is_streaming: request.stream,
                 constraint,
                 suffix: None,
-                adapters: request.adapters.clone(),
                 tool_choice,
                 tools,
                 logits_processors: None,
                 return_raw_logits: false,
                 web_search_options: request.web_search_options.clone(),
-            });
+            }));
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
             let sender = self.runner.get_sender()?;
@@ -1046,6 +1209,7 @@ impl Runner {
                     Response::CompletionModelError(_, _) => unreachable!(),
                     Response::CompletionChunk(_) => unreachable!(),
                     Response::ImageGeneration(_) => unreachable!(),
+                    Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
                 }
             }
@@ -1093,7 +1257,7 @@ impl Runner {
                 None
             };
 
-            let model_request = _Request::Normal(NormalRequest {
+            let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: {
                     let l = NEXT_REQUEST_ID.lock().unwrap();
                     let last = &mut *l.borrow_mut();
@@ -1125,13 +1289,12 @@ impl Runner {
                 is_streaming: false,
                 constraint,
                 suffix: request.suffix.clone(),
-                adapters: request.adapters.clone(),
                 tool_choice,
                 tools,
                 logits_processors: None,
                 return_raw_logits: false,
                 web_search_options: None,
-            });
+            }));
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
             let sender = self.runner.get_sender()?;
@@ -1149,6 +1312,7 @@ impl Runner {
                 Response::ModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
             }
         })
@@ -1170,7 +1334,7 @@ impl Runner {
     ) -> PyApiResult<ImageGenerationResponse> {
         let (tx, mut rx) = channel(1);
 
-        let request = _Request::Normal(NormalRequest {
+        let request = _Request::Normal(Box::new(NormalRequest {
             id: 0,
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
@@ -1183,13 +1347,12 @@ impl Runner {
             is_streaming: false,
             suffix: None,
             constraint: Constraint::None,
-            adapters: None,
             tool_choice: None,
             tools: None,
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
-        });
+        }));
 
         let sender = self.runner.get_sender()?;
         sender.blocking_send(request).unwrap();
@@ -1205,26 +1368,66 @@ impl Runner {
         Ok(response)
     }
 
+    /// Generate audio.
+    #[pyo3(signature = (
+        prompt,
+    ))]
+    fn generate_audio(&self, prompt: String) -> PyApiResult<SpeechGenerationResponse> {
+        let (tx, mut rx) = channel(1);
+
+        let request = _Request::Normal(Box::new(NormalRequest {
+            id: 0,
+            messages: RequestMessage::SpeechGeneration { prompt },
+            sampling_params: SamplingParams::deterministic(),
+            response: tx,
+            return_logprobs: false,
+            is_streaming: false,
+            suffix: None,
+            constraint: Constraint::None,
+            tool_choice: None,
+            tools: None,
+            logits_processors: None,
+            return_raw_logits: false,
+            web_search_options: None,
+        }));
+
+        let sender = self.runner.get_sender()?;
+        sender.blocking_send(request).unwrap();
+
+        let ResponseOk::Speech {
+            pcm,
+            rate,
+            channels,
+        } = rx
+            .blocking_recv()
+            .context("Channel was erroneously closed!")?
+            .as_result()?
+        else {
+            return Err(PyApiErr::from("Got unexpected response type."));
+        };
+
+        Ok(SpeechGenerationResponse {
+            pcm: (*pcm).clone(),
+            rate,
+            channels,
+        })
+    }
+
     /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
     /// then nothing will happen.
     fn send_re_isq(&self, dtype: String) -> PyApiResult<()> {
-        let request = _Request::ReIsq(parse_isq_value(&dtype)?);
+        let request = _Request::ReIsq(parse_isq_value(&dtype, None)?);
         self.runner.get_sender()?.blocking_send(request).unwrap();
         Ok(())
     }
 
-    /// Send a request to make the specified adapters the active adapters for the model.
-    fn activate_adapters(&self, adapter_names: Vec<String>) {
-        let request = _Request::ActivateAdapters(adapter_names);
-        self.runner
-            .get_sender()
-            .unwrap()
-            .blocking_send(request)
-            .unwrap();
-    }
-
     /// Tokenize some text, returning raw tokens.
-    fn tokenize_text(&self, text: String, add_special_tokens: bool) -> PyApiResult<Vec<u32>> {
+    fn tokenize_text(
+        &self,
+        text: String,
+        add_special_tokens: bool,
+        enable_thinking: Option<bool>,
+    ) -> PyApiResult<Vec<u32>> {
         let (tx, mut rx) = channel(1);
         let request = _Request::Tokenize(TokenizationRequest {
             text: Either::Right(text),
@@ -1232,6 +1435,7 @@ impl Runner {
             add_generation_prompt: true,
             add_special_tokens,
             response: tx,
+            enable_thinking,
         });
 
         self.runner.get_sender()?.blocking_send(request).unwrap();
@@ -1272,6 +1476,8 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<AnyMoeConfig>()?;
     m.add_class::<AnyMoeExpertType>()?;
     m.add_class::<ToolChoice>()?;
+    m.add_class::<SpeechGenerationResponse>()?;
+    m.add_class::<SpeechLoaderType>()?;
 
     m.add_class::<mistralrs_core::ResponseMessage>()?;
     m.add_class::<mistralrs_core::Delta>()?;

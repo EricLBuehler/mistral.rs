@@ -80,7 +80,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
-        mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
+        mut paged_attn_metadata: Option<PagedAttentionMeta>,
         prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = anyhow::Result<InputProcessorOutput>>> {
@@ -240,16 +240,19 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 .replace_all(&detokenized, IMAGE_SPECIAL_TOKEN)
                 .to_string();
 
-            seq.set_toks_and_reallocate(
-                tokenizer
-                    .encode_fast(detokenized.clone(), false)
-                    .expect("Encode failed")
-                    .get_ids()
-                    .to_vec(),
-                paged_attn_metadata.as_mut(),
-            );
+            let has_changed_prompt = seq.multimodal.has_changed_prompt;
+            if !has_changed_prompt {
+                seq.set_toks_and_reallocate(
+                    tokenizer
+                        .encode_fast(detokenized.clone(), false)
+                        .expect("Encode failed")
+                        .get_ids()
+                        .to_vec(),
+                    paged_attn_metadata.as_mut(),
+                );
 
-            seq.set_initial_prompt(detokenized);
+                seq.set_initial_prompt(detokenized);
+            }
 
             let mut i = 0;
             let mut image_token_count_iter = num_img_tokens.iter();
@@ -265,15 +268,20 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 let mut new_ids = seq.get_toks()[..i].to_vec();
                 new_ids.extend(vec![token_id; *token_count]);
                 new_ids.extend(seq.get_toks()[i + 1..].to_vec());
-                seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
+                if !has_changed_prompt {
+                    seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
+                }
                 i += token_count;
+            }
+            if !has_changed_prompt {
+                seq.multimodal.has_changed_prompt = true;
             }
             toks.push(seq.get_toks().to_vec());
         }
 
         let iter = if is_prompt {
             get_prompt_input(
-                toks,
+                toks.iter().map(Vec::as_slice).collect(),
                 input_seqs,
                 device,
                 last_n_context_len,
@@ -284,7 +292,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             )
         } else {
             get_completion_input(
-                toks,
+                toks.iter().map(Vec::as_slice).collect(),
                 input_seqs,
                 device,
                 no_kv_cache,
@@ -356,7 +364,7 @@ impl Phi4MMInputsProcessor {
 
         // Paste the original image into the center of the new image
         new_image
-            .copy_from(image, left, top)
+            .copy_from(image, 0, 0)
             .expect("Failed to copy image");
 
         new_image
@@ -395,7 +403,8 @@ impl Phi4MMInputsProcessor {
                 best_ratio_diff = ratio_diff;
                 best_ratio = ratio;
             } else if ratio_diff == best_ratio_diff
-                && area as f64 > 0.5 * image_size as f64 * ratio.0 as f64 * ratio.1 as f64
+                && area as f64
+                    > 0.5 * image_size as f64 * image_size as f64 * ratio.0 as f64 * ratio.1 as f64
             {
                 best_ratio = ratio;
             }
@@ -461,6 +470,13 @@ impl Phi4MMInputsProcessor {
             )
         };
 
+        // Guard against extreme aspect ratios resulting in too-small dimensions
+        if new_size.1.min(target_height) < 10 || new_size.0.min(target_width) < 10 {
+            candle_core::bail!(
+                "Image aspect ratio too extreme; resulting size below minimum threshold",
+            );
+        }
+
         let mut attention_mask = Tensor::ones(
             (
                 (mask_size as f64 * target_aspect_ratio.1) as usize,
@@ -490,13 +506,19 @@ impl Phi4MMInputsProcessor {
             )?;
         }
 
+        // Ensure the attention mask is non-empty
+        let mask_sum: u32 = attention_mask.sum_all()?.to_scalar::<u32>()?;
+        if mask_sum == 0 {
+            candle_core::bail!("dynamic_preprocess produced an attention mask with zero sum",);
+        }
+
         image = image.resize_exact(new_size.0 as u32, new_size.1 as u32, FilterType::Nearest);
         image = Self::pad_image(
             &image,
             0,
             padding_height as u32,
-            padding_width as u32,
             0,
+            padding_width as u32,
             Rgba([255u8, 255, 255, 255]),
         );
 
@@ -533,7 +555,7 @@ impl ImagePreProcessor for Phi4MMInputsProcessor {
                 max_size = Some((max_size.unwrap().0, image.dimensions().1 as usize));
             }
         }
-        let (max_h, max_w) = max_size.unwrap();
+        let (max_w, max_h) = max_size.unwrap();
         for image in images.iter_mut() {
             *image = image.resize_exact(max_w as u32, max_h as u32, FilterType::Nearest);
         }

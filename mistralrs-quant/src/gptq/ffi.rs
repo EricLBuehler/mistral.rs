@@ -4,8 +4,8 @@ use half::f16;
 extern "C" {
     pub(crate) fn reconstruct_exllama(
         b_q_weight: *const u32,
-        b_gptq_qzeros: *const u32,
-        b_gptq_scales: *const f16,
+        b_qzeros: *const u32,
+        b_scales: *const f16,
         b_q_perm: *const i32,
         out: *mut f16,
         size_k: i32,
@@ -16,8 +16,8 @@ extern "C" {
 
     pub(crate) fn reconstruct_gptq(
         b_q_weight: *const u32,
-        b_gptq_qzeros: *const u32,
-        b_gptq_scales: *const f16,
+        b_qzeros: *const u32,
+        b_scales: *const f16,
         b_q_perm: *const i32,
         out: *mut f16,
         size_k: i32,
@@ -29,8 +29,8 @@ extern "C" {
     pub(crate) fn gemm_half_q_half_cuda_part(
         a: *const f16,
         b_q_weight: *const u32,
-        b_gptq_qzeros: *const u32,
-        b_gptq_scales: *const f16,
+        b_qzeros: *const u32,
+        b_scales: *const f16,
         b_q_perm: *const i32,
         out: *mut f16,
         m: i32,
@@ -44,8 +44,8 @@ extern "C" {
     pub(crate) fn gemm_half_q_half_alt(
         a: *const f16,
         b_q_weight: *const u32,
-        b_gptq_qzeros: *const u32,
-        b_gptq_scales: *const f16,
+        b_qzeros: *const u32,
+        b_scales: *const f16,
         b_g_idx: *const i32,
         out: *mut f16,
         m: i32,

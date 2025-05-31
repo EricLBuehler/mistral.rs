@@ -26,6 +26,7 @@ impl Processor for DiffusionProcessor {
         _messages: Vec<IndexMap<String, MessageContent>>,
         _add_generation_prompt: bool,
         _add_special_tokens: bool,
+        _enable_thinking: Option<bool>,
         _tools: Vec<crate::Tool>,
     ) -> Result<(Vec<u32>, String)> {
         anyhow::bail!(
@@ -68,7 +69,7 @@ impl InputsProcessor for DiffusionInputsProcessor {
         _last_n_context_len: Option<(usize, usize)>,
         _return_raw_logits: bool,
         _other_config: Option<Arc<dyn Any>>,
-        _paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
+        _paged_attn_metadata: Option<PagedAttentionMeta>,
         prompt_chunksize: Option<NonZeroUsize>,
         _mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>> {
