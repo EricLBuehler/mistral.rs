@@ -39,6 +39,7 @@ pub enum StopReason {
     Canceled,
     GeneratedImage,
     GeneratedSpeech,
+    ToolCalls,
 }
 
 impl Display for StopReason {
@@ -48,8 +49,9 @@ impl Display for StopReason {
             StopReason::Length(_) | StopReason::ModelLength(_) => write!(f, "length"),
             StopReason::StopTok(_) | StopReason::StopString { .. } => write!(f, "stop"),
             StopReason::Canceled => write!(f, "canceled"),
-            StopReason::GeneratedImage => write!(f, "generated-image"),
-            StopReason::GeneratedSpeech => write!(f, "generated-speech"),
+            StopReason::GeneratedImage => write!(f, "generated_image"),
+            StopReason::GeneratedSpeech => write!(f, "generated_speech"),
+            StopReason::ToolCalls => write!(f, "tool_calls"),
         }
     }
 }

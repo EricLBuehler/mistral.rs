@@ -84,6 +84,9 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         let (text_new, tool_calls) =
                             parse_text_tools(this, delta.as_str(), seq.tools.clone())
                                 .map_err(candle_core::Error::msg)?;
+                        if tool_calls.len() != 0 {
+                            is_done = Some(StopReason::ToolCalls);
+                        }
 
                         seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
                             delta: crate::Delta {
@@ -160,7 +163,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 this.reset_non_granular_state();
             }
         }
-    } else if let Some(reason) = is_done {
+    } else if let Some(mut reason) = is_done {
         /*
         ***********************
         Finish the sequence now
@@ -203,7 +206,8 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 | crate::sequence::StopReason::ModelLength(_)
                 | crate::sequence::StopReason::Eos
                 | crate::sequence::StopReason::StopTok(_)
-                | crate::sequence::StopReason::Canceled => {
+                | crate::sequence::StopReason::Canceled
+                | crate::sequence::StopReason::ToolCalls => {
                     String::from_utf8_lossy(seq.completion_bytes())
                         .trim_start()
                         .to_string()
@@ -225,6 +229,10 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 let (text_new, tool_calls) =
                     parse_text_tools(this, text.as_str(), seq.tools.clone())
                         .map_err(candle_core::Error::msg)?;
+                if tool_calls.len() != 0 {
+                    reason = StopReason::ToolCalls;
+                }
+
                 let choice = crate::Choice {
                     finish_reason: fixup_sentencepiece!(reason),
                     index: seq.get_response_index(),
