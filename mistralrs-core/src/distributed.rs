@@ -56,10 +56,11 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
     model: &T,
     paths: &dyn ModelPaths,
 ) -> anyhow::Result<(Box<dyn DeviceMapper + Send + Sync>, ShardedVarBuilder)> {
-    #[cfg(not(feature = "nccl"))]
-    tracing::warn!(
-        "NCCL support was included in the build, be sure to build with `--features nccl`."
-    );
+    if !(cfg!(feature = "cuda") || cfg!(feature = "ring")) {
+        tracing::warn!(
+            "Distributed support was not included in the build, be sure to build with `--features nccl`."
+        );
+    }
 
     // NCCL case!
 

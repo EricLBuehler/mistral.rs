@@ -271,38 +271,53 @@ mod ops {
 mod ops {
     use std::{
         collections::HashMap,
-        env,
-        io::{Read, Write},
-        net::{TcpListener, TcpStream},
+        fmt::Debug,
+        fs::File,
         sync::{Arc, Mutex, OnceLock},
         time::{Duration, Instant},
     };
+
+    use serde::{Deserialize, Serialize};
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
 
     use candle_core::{
         backend::BackendStorage, CpuStorage, Device, Result, Storage, Tensor, WithDType,
     };
 
-    /// Lazily–initialized pair of TCP streams shared by every ring‑based collective op
+    // Define the configuration structure
+    #[derive(Debug, Deserialize, Serialize)]
+    struct RingConfig {
+        port: u16,
+        right_port: u16,
+        rank: usize,
+        world_size: usize,
+    }
+
+    impl RingConfig {
+        fn read() -> Self {
+            let config_json = std::env::var("RING_CONFIG").expect("RING_CONFIG must be set");
+            let config: RingConfig = serde_json::from_reader(
+                &File::open(config_json).expect("Could not access Ring config JSON"),
+            )
+            .expect("Invalid JSON config");
+            config
+        }
+    }
+
+    // Lazily–initialized pair of TCP streams shared by every ring‑based collective op
     static LEFT_RIGHT_STREAMS: OnceLock<(Arc<Mutex<TcpStream>>, Arc<Mutex<TcpStream>>)> =
         OnceLock::new();
 
-    /// Establish (or fetch) the left‑/right‑neighbor connections for the current
-    /// process.  Subsequent calls re‑use the same sockets so that multiple
-    /// collectives (e.g. `SumAllReduce`, `AllGather`) don’t try to bind/connect
-    /// twice to the same ports.
     fn get_ring_streams() -> (Arc<Mutex<TcpStream>>, Arc<Mutex<TcpStream>>) {
         LEFT_RIGHT_STREAMS
             .get_or_init(|| {
-                let cur_port: u16 = env::var("RING_PORT")
-                    .expect("RING_PORT")
-                    .parse()
-                    .expect("u16");
-                let right_port: u16 = env::var("RING_RIGHT")
-                    .expect("RING_RIGHT")
-                    .parse()
-                    .expect("u16");
+                let config = RingConfig::read();
 
-                // Connect to the right neighbour **before** accepting the left one.
+                let cur_port = config.port;
+                let right_port = config.right_port;
+
+                // Connect to the right neighbour
                 let left_listener =
                     TcpListener::bind(format!("127.0.0.1:{cur_port}")).expect("bind left");
                 let start = Instant::now();
@@ -310,13 +325,13 @@ mod ops {
                     match TcpStream::connect(format!("127.0.0.1:{right_port}")) {
                         Ok(s) => break s,
                         Err(_) if start.elapsed() > Duration::from_secs(10) => {
-                            panic!("Failed to connect to right node due to 10‑second timeout");
+                            panic!("Failed to connect to right node due to 10-second timeout");
                         }
                         Err(_) => continue,
                     }
                 };
 
-                // Accept connection from the left neighbour.
+                // Accept connection from the left neighbour
                 let (left, _) = left_listener.accept().expect("accept left neighbour");
 
                 left.set_nodelay(true).unwrap();
@@ -354,7 +369,10 @@ mod ops {
     }
 
     #[derive(Debug)]
-    pub struct Comm;
+    pub struct Comm {
+        rank: usize,
+        world_size: usize,
+    }
 
     impl Comm {
         pub fn from_device(
@@ -363,15 +381,20 @@ mod ops {
             _rank: usize,
             _world_size: usize,
         ) -> Result<Self> {
-            Ok(Self)
+            let config = RingConfig::read();
+
+            Ok(Self {
+                rank: config.rank,
+                world_size: config.world_size,
+            })
         }
 
         pub fn rank(&self) -> usize {
-            env::var("RING_RANK").unwrap().parse().unwrap()
+            self.rank
         }
 
         pub fn world_size(&self) -> usize {
-            env::var("RING_WORLD_SIZE").unwrap().parse().unwrap()
+            self.world_size
         }
     }
 
