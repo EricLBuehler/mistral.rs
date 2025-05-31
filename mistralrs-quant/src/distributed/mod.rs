@@ -430,8 +430,8 @@ mod ops {
         }
     }
 
-    impl super::DistributedOperation for SumAllReduce {
-        fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor> {
+    impl SumAllReduce {
+        pub fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor> {
             let storage = xs.storage_and_layout().0;
             let cpu_storage = match &*storage {
                 Storage::Cpu(storage) => storage,
@@ -447,6 +447,21 @@ mod ops {
             };
 
             xs + delta
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct AllGather;
+
+    impl AllGather {
+        pub fn new(_comm: &Arc<Comm>, _dim: usize) -> Self {
+            Self
+        }
+    }
+
+    impl AllGather {
+        pub fn all_gather(&self, _xs: &Tensor) -> Result<Tensor> {
+            todo!()
         }
     }
 }
