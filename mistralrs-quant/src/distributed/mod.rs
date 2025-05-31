@@ -9,9 +9,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RingConfig {
+    master_ip: Option<String>,
+    pub master_port: u16,
     pub port: u16,
     pub right_port: u16,
-    pub right_ip: Option<String>,
+    right_ip: Option<String>,
     pub rank: usize,
     pub world_size: usize,
 }
@@ -24,7 +26,23 @@ impl RingConfig {
             &File::open(config_json).expect("Could not access Ring config JSON"),
         )
         .expect("Invalid JSON config");
+
+        if config.master_ip.is_none() && !config.is_master_rank() {
+            panic!("Invalid Ring config. Non-master ranks (rank != 0) must specify master_ip.");
+        }
         config
+    }
+
+    pub fn is_master_rank(&self) -> bool {
+        self.rank == 0
+    }
+
+    pub fn master_ip(&self) -> String {
+        self.master_ip.clone().unwrap_or("0.0.0.0".to_string())
+    }
+
+    pub fn right_ip(&self) -> String {
+        self.right_ip.clone().unwrap_or("0.0.0.0".to_string())
     }
 }
 
@@ -323,7 +341,7 @@ mod ops {
             .get_or_init(|| {
                 let cur_port = config.port;
 
-                let right_ip = config.right_ip.clone().unwrap_or("0.0.0.0".to_string());
+                let right_ip = config.right_ip();
                 let right_port = config.right_port;
 
                 let left_listener =
