@@ -1,9 +1,32 @@
-use std::{fmt::Debug, sync::Barrier};
+use std::{fmt::Debug, fs::File, sync::Barrier};
 
 use candle_core::Result;
 pub use ops::{AllGather, Comm, Id, SumAllReduce};
 pub mod layers;
 pub mod socket;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RingConfig {
+    pub port: u16,
+    pub right_port: u16,
+    pub right_ip: Option<String>,
+    pub rank: usize,
+    pub world_size: usize,
+}
+
+impl RingConfig {
+    /// Loads the ring backend config from a path at `RING_CONFIG`
+    pub fn load() -> Self {
+        let config_json = std::env::var("RING_CONFIG").expect("RING_CONFIG must be set");
+        let config: RingConfig = serde_json::from_reader(
+            &File::open(config_json).expect("Could not access Ring config JSON"),
+        )
+        .expect("Invalid JSON config");
+        config
+    }
+}
 
 pub trait BarrierLike: Debug + Send + Sync {
     fn wait(&self) -> Result<()>;
@@ -24,7 +47,13 @@ pub fn get_global_tp_size_from_devices() -> Result<usize> {
             .w()
             .map(|x| x as usize)
     }
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(feature = "ring")]
+    {
+        let config = RingConfig::load();
+        Ok(config.world_size)
+    }
+
+    #[cfg(not(any(feature = "cuda", feature = "ring")))]
     Ok(1)
 }
 
@@ -272,12 +301,10 @@ mod ops {
     use std::{
         collections::HashMap,
         fmt::Debug,
-        fs::File,
         sync::{Arc, Mutex, OnceLock},
         time::{Duration, Instant},
     };
 
-    use serde::{Deserialize, Serialize};
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
 
@@ -285,14 +312,7 @@ mod ops {
         backend::BackendStorage, CpuStorage, Device, Result, Storage, Tensor, WithDType,
     };
 
-    #[derive(Debug, Deserialize, Serialize)]
-    struct RingConfig {
-        port: u16,
-        right_port: u16,
-        right_ip: Option<String>,
-        rank: usize,
-        world_size: usize,
-    }
+    use super::RingConfig;
 
     // Lazily–initialized pair of TCP streams shared by every ring‑based collective op
     static LEFT_RIGHT_STREAMS: OnceLock<(Arc<Mutex<TcpStream>>, Arc<Mutex<TcpStream>>)> =
@@ -370,11 +390,7 @@ mod ops {
             _rank: usize,
             _world_size: usize,
         ) -> Result<Self> {
-            let config_json = std::env::var("RING_CONFIG").expect("RING_CONFIG must be set");
-            let config: RingConfig = serde_json::from_reader(
-                &File::open(config_json).expect("Could not access Ring config JSON"),
-            )
-            .expect("Invalid JSON config");
+            let config = RingConfig::load();
 
             Ok(Self { config })
         }

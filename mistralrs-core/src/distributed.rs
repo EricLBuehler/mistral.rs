@@ -5,7 +5,7 @@ use interprocess::local_socket::traits::{Listener, Stream};
 use interprocess::local_socket::{GenericNamespaced, Name, ToNsName};
 use interprocess::local_socket::{ListenerOptions, Stream as LocalStream};
 pub use mistralrs_quant::distributed::use_nccl;
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{RingConfig, ShardedVarBuilder};
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use std::env;
@@ -98,9 +98,11 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
         stream.write_all(b"ready\n")?;
         worker_rank + 1
     } else if cfg!(feature = "ring") {
-        // Currently handled via env var.
         id = mistralrs_quant::Id::new();
-        0
+
+        let config = RingConfig::load();
+
+        config.rank
     } else {
         id = mistralrs_quant::Id::new();
         let num_workers = mistralrs_quant::distributed::get_global_tp_size_from_devices()? - 1;

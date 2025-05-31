@@ -44,7 +44,7 @@ pub use distributed::{
         ReplicatedLayer, RowParallelLayer,
     },
     socket::{Client, Server},
-    BarrierLike, Comm, Id, SumAllReduce,
+    BarrierLike, Comm, Id, RingConfig, SumAllReduce,
 };
 pub use dummy::DummyLayer;
 pub use fp8::FP8Linear;
