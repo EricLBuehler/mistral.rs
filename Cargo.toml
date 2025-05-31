@@ -8,6 +8,7 @@ members = [
     "mistralrs-vision",
     "mistralrs-quant",
     "mistralrs-paged-attn",
+    "mistralrs-codex",
     "mistralrs-web-chat",
 ]
 resolver = "2"
