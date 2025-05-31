@@ -7,7 +7,8 @@ use crate::{
         ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
         ResponseFormat, StopTokens,
     },
-    util, ExtractedMistralState, SharedMistralState,
+    types::{ExtractedMistralState, SharedMistralState},
+    util,
 };
 use anyhow::Context;
 use anyhow::Result;

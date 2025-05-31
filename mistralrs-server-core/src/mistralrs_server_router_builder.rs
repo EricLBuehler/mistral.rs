@@ -18,7 +18,7 @@ use crate::{
     image_generation::image_generation,
     openapi_doc::get_openapi_doc,
     speech_generation::speech_generation,
-    SharedMistralState,
+    types::SharedMistralState,
 };
 
 pub struct MistralRsServerRouterBuilder {
@@ -57,14 +57,14 @@ impl MistralRsServerRouterBuilder {
         self
     }
 
-    pub async fn build(mut self) -> Result<Router> {
+    pub async fn build(self) -> Result<Router> {
         initialize_logging();
 
         let mistralrs = self.mistralrs.ok_or_else(|| {
             anyhow::anyhow!("`mistralrs` instance must be set. Use `with_mistralrs`.")
         })?;
 
-        let mistralrs_server_router = init_get_router(
+        let mistralrs_server_router = init_router(
             mistralrs,
             self.include_swagger_routes,
             self.base_path.as_deref(),
@@ -74,7 +74,7 @@ impl MistralRsServerRouterBuilder {
     }
 }
 
-fn init_get_router(
+fn init_router(
     state: SharedMistralState,
     include_swagger_routes: bool,
     base_path: Option<&str>,

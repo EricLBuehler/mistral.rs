@@ -12,29 +12,13 @@ use mistralrs_core::{
 };
 use tracing::info;
 
-use crate::{defaults, LoadedPipeline, SharedMistralState};
+use crate::{
+    defaults,
+    types::{LoadedPipeline, SharedMistralState},
+};
 
 pub struct MistralRsForServerBuilder {
-    //   These are for router
-    // mistralrs: Option<SharedMistralState>,
-    // router: Option<Router>,
-    // include_swagger_routes: bool,
-    // base_path: Option<&'a str>,
-
-    //   Local vars for build
-    // tgt_non_granular_index: Option<usize>,
-    // dtype: ModelDType,
-    // auto_device_map_params: Option<AutoDeviceMapParams>,
-    // max_seq_len: usize,
     device: Option<Device>,
-    // mapper: Option<DeviceMapMetadata>,
-    // no_paged_attn2: bool,
-    // cache_config: Option<PagedAttentionConfig>,
-    // loader: Option<Box<dyn Loader>>,
-    // isq: Option<IsqType>,
-    // pipeline: Option<LoadedPipeline>,
-    // scheduler_config: Option<SchedulerConfig>,
-    // bert_model: Option<BertEmbeddingModel>,
 
     // Args
     /// IP to serve on.
@@ -135,49 +119,32 @@ pub struct MistralRsForServerBuilder {
 impl Default for MistralRsForServerBuilder {
     fn default() -> Self {
         Self {
-            // mistralrs: None,
-            // router: None,
-            // include_swagger_routes: false,
-            // base_path: None,
-            // tgt_non_granular_index: None,
-            // dtype: ModelDType::Auto,
-            // auto_device_map_params: None,
-            // max_seq_len: 0,
-            //
-            device: None,
-            // mapper: None,
-            // no_paged_attn2: false,
-            // cache_config: None,
-            // loader: None,
-            // isq: None,
-            // pipeline: None,
-            // scheduler_config: None,
-            // bert_model: None,
+            device: defaults::DEVICE,
             // serve_ip: None,
-            seed: None,
+            seed: defaults::SEED,
             // port: None,
-            log: None,
-            truncate_sequence: false,
-            model: None,
+            log: defaults::LOG,
+            truncate_sequence: defaults::TRUNCATE_SEQUENCE,
+            model: defaults::MODEL,
             max_seqs: defaults::MAX_SEQS,
             no_kv_cache: defaults::NO_KV_CACHE,
-            chat_template: None,
-            jinja_explicit: None,
+            chat_template: defaults::CHAT_TEMPLATE,
+            jinja_explicit: defaults::JINJA_EXPLICIT,
             token_source: defaults::DEFAULT_TOKEN_SOURCE,
             interactive_mode: defaults::INTERACTIVE_MODE,
             prefix_cache_n: defaults::PREFIX_CACHE_N,
-            num_device_layers: None,
-            in_situ_quant: None,
-            paged_attn_gpu_mem: None,
-            paged_attn_gpu_mem_usage: None,
-            paged_ctxt_len: None,
-            paged_attn_block_size: None,
+            num_device_layers: defaults::NUM_DEVICE_LAYERS,
+            in_situ_quant: defaults::IN_SITU_QUANT,
+            paged_attn_gpu_mem: defaults::PAGED_ATTN_GPU_MEM,
+            paged_attn_gpu_mem_usage: defaults::PAGED_ATTN_GPU_MEM_USAGE,
+            paged_ctxt_len: defaults::PAGED_CTXT_LEN,
+            paged_attn_block_size: defaults::PAGED_ATTN_BLOCK_SIZE,
             no_paged_attn: defaults::NO_PAGED_ATTN,
             paged_attn: defaults::PAGED_ATTN,
-            prompt_chunksize: None,
+            prompt_chunksize: defaults::PROMPT_CHUNKSIZE,
             cpu: defaults::CPU,
             enable_search: defaults::ENABLE_SEARCH,
-            search_bert_model: None,
+            search_bert_model: defaults::SEARCH_BERT_MODEL,
             // enable_thinking: server_defaults::ENABLE_THINKING,
         }
     }
@@ -187,11 +154,6 @@ impl MistralRsForServerBuilder {
     pub fn new() -> Self {
         Default::default()
     }
-
-    // pub fn with_mistralrs_instance(mut self, mistralrs: SharedMistralState) -> Self {
-    //     self.mistralrs = Some(mistralrs);
-    //     self
-    // }
 
     pub fn with_device(mut self, device: Device) -> Self {
         self.device = Some(device);

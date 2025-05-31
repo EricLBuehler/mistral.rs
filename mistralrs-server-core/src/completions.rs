@@ -11,7 +11,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::{
     openai::{CompletionRequest, Grammar, StopTokens},
-    ExtractedMistralState,
+    types::ExtractedMistralState,
 };
 use axum::{
     extract::{Json, State},

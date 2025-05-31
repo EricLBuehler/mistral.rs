@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::{error::Error, sync::Arc};
 use tokio::sync::mpsc::{channel, Sender};
 
-use crate::{openai::ImageGenerationRequest, ExtractedMistralState};
+use crate::{openai::ImageGenerationRequest, types::ExtractedMistralState};
 use axum::{
     extract::{Json, State},
     http::{self, StatusCode},

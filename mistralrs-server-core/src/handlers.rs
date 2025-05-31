@@ -6,7 +6,7 @@ use utoipa::ToSchema;
 
 use crate::{
     openai::{ModelObject, ModelObjects},
-    ExtractedMistralState,
+    types::ExtractedMistralState,
 };
 
 #[utoipa::path(
