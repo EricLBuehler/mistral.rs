@@ -386,16 +386,18 @@ impl Pipeline for SpeechPipeline {
         assert!(!return_raw_logits);
 
         let ModelInputs { prompt } = *inputs.downcast().expect("Downcast failed.");
+        let batch_size = prompt.len();
+
         let SpeechGenerationOutput {
-            pcm,
+            pcms,
             rate,
             channels,
         } = self.model.generate(prompt, &self.cfg)?;
 
         Ok(ForwardInputsResult::Speech {
-            pcms: vec![pcm],
-            rates: vec![rate],
-            channels: vec![channels],
+            pcms,
+            rates: vec![rate; batch_size],
+            channels: vec![channels; batch_size],
         })
     }
 

@@ -18,7 +18,7 @@ async def generate_speech(text, index):
         model="dia", voice="N/A", input=text, response_format="wav"
     )
     output_path = Path(f"output_{index}.wav")
-    output_path.write_bytes(await response.read())
+    output_path.write_bytes(response.read())
     print(f"WAV audio written to {output_path.resolve()}")
 
 # Main asynchronous function to run all tasks

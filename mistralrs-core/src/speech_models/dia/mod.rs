@@ -449,7 +449,7 @@ impl DiaPipeline {
         let mut bos_countdown: Vec<usize> = vec![max_delay_pattern; batch_size];
         let mut eos_detected: Vec<bool> = vec![false; batch_size];
         let mut eos_countdown: Vec<Option<usize>> = vec![None; batch_size];
-        let mut actual_lens = vec![0; batch_size];
+        let mut actual_lens: Vec<usize> = vec![0; batch_size];
 
         let mut rng = Isaac64Rng::seed_from_u64(0);
 
@@ -579,10 +579,14 @@ impl DiaPipeline {
             }
         }
 
-        let generated_codes = generated_tokens.i((0, 0..dec_step + 1, ..))?;
-        let pcm = self.generate_output(&generated_codes)?;
+        let mut pcms = Vec::new();
+        for (batch, len) in actual_lens.iter().enumerate() {
+            let generated_codes = generated_tokens.i((batch, 0..*len, ..))?;
+            let pcm = self.generate_output(&generated_codes)?;
+            pcms.push(Arc::new(pcm));
+        }
         Ok(SpeechGenerationOutput {
-            pcm: Arc::new(pcm),
+            pcms,
             rate: RATE,
             channels: CHANNELS,
         })
