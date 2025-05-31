@@ -13,13 +13,17 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::{
     chat_completion::chatcompletions,
     completions::completions,
-    defaults::MAX_BODY_LIMIT,
     handlers::{health, models, re_isq},
     image_generation::image_generation,
     openapi_doc::get_openapi_doc,
     speech_generation::speech_generation,
     types::SharedMistralState,
 };
+
+// NOTE(EricLBuehler): Accept up to 50mb input
+const N_INPUT_SIZE: usize = 50;
+const MB_TO_B: usize = 1024 * 1024; // 1024 kb in a mb
+pub const MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
 
 pub struct MistralRsServerRouterBuilder {
     mistralrs: Option<SharedMistralState>,

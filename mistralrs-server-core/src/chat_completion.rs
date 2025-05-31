@@ -30,12 +30,16 @@ use mistralrs_core::{
 };
 use serde::Serialize;
 
-/// A hook that runs when a chunk is ready, receiving the chunk and allowing modification.
+/// A hook that runs when a stream chunk is ready, receiving the chunk and allowing the chunk to be modified
+/// and returned prior to being sent.
 pub type OnChunkCallback =
     Box<dyn Fn(ChatCompletionChunkResponse) -> ChatCompletionChunkResponse + Send + Sync>;
 
 /// A hook that runs when the stream finishes, receiving all of the chunks.
 pub type OnDoneCallback = Box<dyn Fn(&[ChatCompletionChunkResponse]) + Send + Sync>;
+
+pub const CHANNEL_BUFFER_SIZE: usize = 10_000;
+pub const DEFAULT_KEEP_ALIVE_INTERVAL: u64 = 10_000;
 
 #[derive(Debug)]
 struct ModelErrorMessage(String);
@@ -443,9 +447,6 @@ pub async fn parse_request(
     ))
 }
 
-pub const CHANNEL_BUFFER_SIZE: usize = 10_000;
-pub const DEFAULT_KEEP_ALIVE_INTERVAL: u64 = 10_000;
-
 #[utoipa::path(
     post,
     tag = "Mistral.rs",
@@ -461,11 +462,11 @@ pub async fn chatcompletions(
 
     let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx).await {
         Ok(x) => x,
-        Err(e) => return handle_error(state, e.into()),
+        Err(e) => return handle_chat_completion_error(state, e.into()),
     };
 
     if let Err(e) = send_request(&state, request).await {
-        return handle_error(state, e.into());
+        return handle_chat_completion_error(state, e.into());
     }
 
     if is_streaming {
@@ -475,7 +476,7 @@ pub async fn chatcompletions(
     }
 }
 
-pub fn handle_error(
+pub fn handle_chat_completion_error(
     state: SharedMistralState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> ChatCompletionResponder {
@@ -531,7 +532,7 @@ pub async fn process_non_streaming_chat_response(
         Some(response) => response,
         None => {
             let e = anyhow::Error::msg("No response received from the model.");
-            return handle_error(state, e.into());
+            return handle_chat_completion_error(state, e.into());
         }
     };
 
