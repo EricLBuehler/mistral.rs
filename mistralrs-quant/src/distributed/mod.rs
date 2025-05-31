@@ -278,6 +278,55 @@ mod ops {
         time::{Duration, Instant},
     };
 
+    use std::sync::OnceLock;
+
+    /// Lazily–initialized pair of TCP streams shared by every ring‑based collective op
+    static LEFT_RIGHT_STREAMS: OnceLock<(Arc<Mutex<TcpStream>>, Arc<Mutex<TcpStream>>)> =
+        OnceLock::new();
+
+    /// Establish (or fetch) the left‑/right‑neighbor connections for the current
+    /// process.  Subsequent calls re‑use the same sockets so that multiple
+    /// collectives (e.g. `SumAllReduce`, `AllGather`) don’t try to bind/connect
+    /// twice to the same ports.
+    fn get_ring_streams() -> (Arc<Mutex<TcpStream>>, Arc<Mutex<TcpStream>>) {
+        LEFT_RIGHT_STREAMS
+            .get_or_init(|| {
+                let cur_port: u16 = env::var("RING_PORT")
+                    .expect("RING_PORT")
+                    .parse()
+                    .expect("u16");
+                let right_port: u16 = env::var("RING_RIGHT")
+                    .expect("RING_RIGHT")
+                    .parse()
+                    .expect("u16");
+
+                // Accept connection from the left neighbour.
+                let left_listener =
+                    TcpListener::bind(format!("127.0.0.1:{cur_port}")).expect("bind left");
+                let (left, _) = left_listener.accept().expect("accept left neighbour");
+
+                // Connect to the right neighbour.
+                let start = Instant::now();
+                let right = loop {
+                    match TcpStream::connect(format!("127.0.0.1:{right_port}")) {
+                        Ok(s) => break s,
+                        Err(_) if start.elapsed() > Duration::from_secs(10) => {
+                            panic!("Failed to connect to right node due to 10‑second timeout");
+                        }
+                        Err(_) => continue,
+                    }
+                };
+
+                left.set_nodelay(true).unwrap();
+                left.set_nonblocking(false).unwrap();
+                right.set_nodelay(true).unwrap();
+                right.set_nonblocking(false).unwrap();
+
+                (Arc::new(Mutex::new(left)), Arc::new(Mutex::new(right)))
+            })
+            .clone()
+    }
+
     use candle_core::{
         backend::BackendStorage, CpuStorage, Device, Result, Storage, Tensor, WithDType,
     };
@@ -337,40 +386,10 @@ mod ops {
 
     impl SumAllReduce {
         pub fn new(_comm: &Arc<Comm>) -> Self {
-            let cur_port: u16 = env::var("RING_PORT").unwrap().parse().unwrap();
-            let right_port: u16 = env::var("RING_RIGHT").unwrap().parse().unwrap();
-
-            let left_h = std::thread::spawn(move || {
-                let left_listener = TcpListener::bind(format!("127.0.0.1:{cur_port}")).unwrap();
-
-                let (left, _left_addr) = left_listener.accept().unwrap();
-                left
-            });
-            let right_h = std::thread::spawn(move || {
-                let start = Instant::now();
-                loop {
-                    let stream = TcpStream::connect(format!("127.0.0.1:{right_port}"));
-                    if let Ok(stream) = stream {
-                        return stream;
-                    }
-                    if start.elapsed() > Duration::from_secs(10) {
-                        panic!("Failed to connect to right node due to timeout: over 10s");
-                    }
-                }
-            });
-
-            while !left_h.is_finished() || !right_h.is_finished() {}
-            let left = left_h.join().unwrap();
-            let right = right_h.join().unwrap();
-
-            left.set_nodelay(true).unwrap();
-            left.set_nonblocking(false).unwrap();
-            right.set_nodelay(true).unwrap();
-            right.set_nonblocking(false).unwrap();
-
+            let (left, right) = get_ring_streams();
             Self {
-                left: Arc::new(Mutex::new(left)),
-                right: Arc::new(Mutex::new(right)),
+                left,
+                right,
                 buffers: Arc::new(Mutex::new(HashMap::new())),
             }
         }
@@ -451,17 +470,102 @@ mod ops {
     }
 
     #[derive(Clone, Debug)]
-    pub struct AllGather;
-
-    impl AllGather {
-        pub fn new(_comm: &Arc<Comm>, _dim: usize) -> Self {
-            Self
-        }
+    pub struct AllGather {
+        left: Arc<Mutex<TcpStream>>,
+        right: Arc<Mutex<TcpStream>>,
+        buffers: Arc<Mutex<HashMap<usize, Vec<u8>>>>,
+        dim: usize,
+        world_size: usize,
+        rank: usize,
     }
 
     impl AllGather {
-        pub fn all_gather(&self, _xs: &Tensor) -> Result<Tensor> {
-            todo!()
+        pub fn new(comm: &Arc<Comm>, dim: usize) -> Self {
+            let (left, right) = get_ring_streams();
+            Self {
+                left,
+                right,
+                buffers: Arc::new(Mutex::new(HashMap::new())),
+                dim,
+                world_size: comm.world_size(),
+                rank: comm.rank(),
+            }
+        }
+
+        fn run<T: WithDType + Copy>(
+            &self,
+            x: &Vec<T>,
+            dims: &[usize],
+            device: &Device,
+        ) -> Result<Tensor> {
+            let elem_cnt = x.len();
+            let nbytes = elem_cnt * std::mem::size_of::<T>();
+
+            // Prepare output buffer that will hold slices from every rank.
+            let mut out: Vec<T> = Vec::with_capacity(elem_cnt * self.world_size);
+            unsafe { out.set_len(elem_cnt * self.world_size) };
+
+            // Copy this rank’s slice into its final slot.
+            let start = self.rank * elem_cnt;
+            out[start..start + elem_cnt].copy_from_slice(x);
+
+            let right = self.right.clone();
+            let left = self.left.clone();
+            let mut send_piece: &[T] = x;
+
+            for step in 0..(self.world_size - 1) {
+                // ---------- send to the right ----------
+                let bytes =
+                    unsafe { std::slice::from_raw_parts(send_piece.as_ptr() as *const u8, nbytes) };
+                {
+                    let mut rg = right.lock().unwrap();
+                    rg.write_all(bytes)
+                        .map_err(|e| candle_core::Error::msg(format!("write error: {:?}", e)))?;
+                }
+
+                // ---------- receive from the left ----------
+                let mut bg = self.buffers.lock().unwrap();
+                let buf = bg.entry(nbytes).or_insert_with(|| {
+                    let mut v = Vec::with_capacity(nbytes);
+                    unsafe { v.set_len(nbytes) };
+                    v
+                });
+                {
+                    let mut lg = left.lock().unwrap();
+                    lg.read_exact(buf)
+                        .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))?;
+                }
+                let recv_piece: &[T] =
+                    unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const T, elem_cnt) };
+
+                // Determine which global rank the received slice came from.
+                let src_rank = (self.rank + self.world_size - step - 1) % self.world_size;
+                let dst = src_rank * elem_cnt;
+                out[dst..dst + elem_cnt].copy_from_slice(recv_piece);
+
+                // Forward that slice in the next iteration.
+                send_piece = recv_piece;
+            }
+
+            let mut out_dims = dims.to_vec();
+            out_dims[self.dim] *= self.world_size;
+            Tensor::from_slice(&out, out_dims, device)
+        }
+
+        pub fn all_gather(&self, xs: &Tensor) -> Result<Tensor> {
+            let storage = xs.storage_and_layout().0;
+            let cpu_storage = match &*storage {
+                Storage::Cpu(s) => s,
+                Storage::Cuda(s) => &s.to_cpu_storage()?,
+                Storage::Metal(s) => &s.to_cpu_storage()?,
+            };
+
+            match cpu_storage {
+                CpuStorage::BF16(x) => self.run(x, xs.dims(), xs.device()),
+                CpuStorage::F32(x) => self.run(x, xs.dims(), xs.device()),
+                CpuStorage::F16(x) => self.run(x, xs.dims(), xs.device()),
+                _ => candle_core::bail!("Unsupported dtype for ring backend"),
+            }
         }
     }
 }
