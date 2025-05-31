@@ -285,11 +285,11 @@ mod ops {
         backend::BackendStorage, CpuStorage, Device, Result, Storage, Tensor, WithDType,
     };
 
-    // Define the configuration structure
     #[derive(Debug, Deserialize, Serialize)]
     struct RingConfig {
         port: u16,
         right_port: u16,
+        right_ip: Option<String>,
         rank: usize,
         world_size: usize,
     }
@@ -315,14 +315,17 @@ mod ops {
                 let config = RingConfig::read();
 
                 let cur_port = config.port;
+
+                let right_ip = config.right_ip.unwrap_or("0.0.0.0".to_string());
                 let right_port = config.right_port;
 
-                // Connect to the right neighbour
                 let left_listener =
-                    TcpListener::bind(format!("127.0.0.1:{cur_port}")).expect("bind left");
+                    TcpListener::bind(format!("0.0.0.0:{cur_port}")).expect("bind left");
+
                 let start = Instant::now();
+                // Connect to the right neighbor using the provided IP
                 let right = loop {
-                    match TcpStream::connect(format!("127.0.0.1:{right_port}")) {
+                    match TcpStream::connect(format!("{}:{}", right_ip, right_port)) {
                         Ok(s) => break s,
                         Err(_) if start.elapsed() > Duration::from_secs(10) => {
                             panic!("Failed to connect to right node due to 10-second timeout");
