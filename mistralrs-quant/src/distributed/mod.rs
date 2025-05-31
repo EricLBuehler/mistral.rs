@@ -274,11 +274,13 @@ mod ops {
         env,
         io::{Read, Write},
         net::{TcpListener, TcpStream},
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, OnceLock},
         time::{Duration, Instant},
     };
 
-    use std::sync::OnceLock;
+    use candle_core::{
+        backend::BackendStorage, CpuStorage, Device, Result, Storage, Tensor, WithDType,
+    };
 
     /// Lazily–initialized pair of TCP streams shared by every ring‑based collective op
     static LEFT_RIGHT_STREAMS: OnceLock<(Arc<Mutex<TcpStream>>, Arc<Mutex<TcpStream>>)> =
@@ -326,10 +328,6 @@ mod ops {
             })
             .clone()
     }
-
-    use candle_core::{
-        backend::BackendStorage, CpuStorage, Device, Result, Storage, Tensor, WithDType,
-    };
 
     #[derive(Debug, Clone, Copy)]
     pub struct Id;
