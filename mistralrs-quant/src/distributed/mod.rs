@@ -394,8 +394,6 @@ mod ops {
             }
         }
 
-        /// Send data to the right and receive data from the left.
-        /// This received data is returned as a tensor and should be added to the original data.
         fn run<T: WithDType + Copy + std::ops::AddAssign>(
             &self,
             x: &Vec<T>,
@@ -403,48 +401,71 @@ mod ops {
             device: &Device,
         ) -> Result<Tensor> {
             let nbytes = x.len() * std::mem::size_of::<T>();
-            dbg!(nbytes);
+            // dbg!(nbytes);
 
-            // Clone the Arc references for use in spawned tasks
+            // --- ping‑pong to overlap latency ---------------------------------------
+            // Clone the Arc references
             let right = self.right.clone();
             let left = self.left.clone();
 
-            // Send the data to the right
-            {
-                // Copy the data from x into a Vec<u8> for sending
-                let data = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const u8, nbytes) };
+            // View the local slice as bytes that can be written on the wire.
+            let data_bytes = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const u8, nbytes) };
 
-                let mut right_guard = right.lock().unwrap();
-                right_guard
-                    .write_all(&data)
-                    .map_err(|e| candle_core::Error::msg(format!("write error: {:?}", e)))?;
-            };
-
-            // We save reallocation of buffers here.
+            // Re‑use (or allocate) a receive buffer of identical size.
             let mut buffers_guard = self.buffers.lock().unwrap();
-            let buf = {
-                buffers_guard.entry(nbytes).or_insert({
-                    let mut buf = Vec::with_capacity(nbytes);
-                    unsafe {
-                        buf.set_len(nbytes);
-                    }
-                    buf
-                })
-            };
+            let recv_buf = buffers_guard.entry(nbytes).or_insert_with(|| {
+                let mut v = Vec::<u8>::with_capacity(nbytes);
+                unsafe { v.set_len(nbytes) };
+                v
+            });
 
-            // Receive the data from the left
-            let buf = {
-                let mut left_guard = left.lock().unwrap();
+            // Lock both sockets once to avoid per‑call mutex overhead.
+            let mut right_guard = right.lock().unwrap();
+            let mut left_guard = left.lock().unwrap();
+
+            // For the typical tensor size we see (~ 6 KiB) a single
+            // write/read pair is faster than chunking because the extra
+            // system‑call and loop overhead dominates.  Only fall back to the
+            // chunked “ping‑pong” pipeline for larger transfers.
+            if nbytes <= 8 * 1024 {
+                // --- fast path: one shot ------------------------------------
+                right_guard
+                    .write_all(data_bytes)
+                    .map_err(|e| candle_core::Error::msg(format!("write error: {:?}", e)))?;
+
                 left_guard
-                    .read_exact(buf)
+                    .read_exact(recv_buf)
                     .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))?;
-                buf
-            };
-            assert_ne!(buf.len(), 0);
+            } else {
+                // --- slow path: chunked ping‑pong ---------------------------
+                const CHUNK_SIZE: usize = 64 * 1024; // 64 KiB
+                let mut offset = 0;
 
-            // Interpret the received bytes as a slice of T and add element-wise into x
+                while offset < nbytes {
+                    let len = std::cmp::min(CHUNK_SIZE, nbytes - offset);
+
+                    // send this chunk to the right neighbour
+                    right_guard
+                        .write_all(&data_bytes[offset..offset + len])
+                        .map_err(|e| candle_core::Error::msg(format!("write error: {:?}", e)))?;
+
+                    // receive the matching chunk from the left neighbour
+                    left_guard
+                        .read_exact(&mut recv_buf[offset..offset + len])
+                        .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))?;
+
+                    offset += len;
+                }
+            }
+
+            drop(left_guard);
+            drop(right_guard);
+            // drop(buffers_guard);
+
+            // -------------------------------------------------------------------------
+            // Interpret the received bytes as a slice of T and add element‑wise into x
             let received: &[T] =
-                unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const T, x.len()) };
+                unsafe { std::slice::from_raw_parts(recv_buf.as_ptr() as *const T, x.len()) };
 
             Tensor::from_slice(&received, dims, device)
         }
