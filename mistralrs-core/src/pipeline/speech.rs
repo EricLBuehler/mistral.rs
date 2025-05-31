@@ -100,7 +100,7 @@ pub struct SpeechInputsProcessor;
 
 #[derive(Clone)]
 pub struct ModelInputs {
-    pub(crate) prompt: String,
+    pub(crate) prompts: Vec<String>,
 }
 
 impl InputsProcessor for SpeechInputsProcessor {
@@ -125,12 +125,15 @@ impl InputsProcessor for SpeechInputsProcessor {
     ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>> {
         let make_value = if prompt_chunksize.is_some() {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
-                "Prompt batching is unsupported for diffusion models",
+                "Prompt batching is unsupported for speech models",
             ))));
         } else {
             || {
                 let inputs = ModelInputs {
-                    prompt: input_seqs[0].get_initial_prompt().to_string(),
+                    prompts: input_seqs
+                        .iter()
+                        .map(|seq| seq.get_initial_prompt().to_string())
+                        .collect(),
                 };
                 Ok(InputProcessorOutput {
                     inputs: Box::new(inputs),
@@ -382,17 +385,25 @@ impl Pipeline for SpeechPipeline {
     ) -> candle_core::Result<ForwardInputsResult> {
         assert!(!return_raw_logits);
 
-        let ModelInputs { prompt } = *inputs.downcast().expect("Downcast failed.");
-        let SpeechGenerationOutput {
-            pcm,
-            rate,
-            channels,
-        } = self.model.generate(&prompt, &self.cfg)?;
+        let ModelInputs { prompts } = *inputs.downcast().expect("Downcast failed.");
+        let mut pcms = Vec::new();
+        let mut rates = Vec::new();
+        let mut channels_all = Vec::new();
+        for prompt in prompts {
+            let SpeechGenerationOutput {
+                pcm,
+                rate,
+                channels,
+            } = self.model.generate(&prompt, &self.cfg)?;
+            pcms.push(pcm);
+            rates.push(rate);
+            channels_all.push(channels);
+        }
 
         Ok(ForwardInputsResult::Speech {
-            pcms: vec![pcm],
-            rates: vec![rate],
-            channels: vec![channels],
+            pcms,
+            rates,
+            channels: channels_all,
         })
     }
 
