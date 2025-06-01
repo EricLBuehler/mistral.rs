@@ -27,11 +27,17 @@ impl candle_core::CustomOp1 for PagedAttention {
     }
 
     fn metal_fwd(&self, q: &MetalStorage, q_l: &Layout) -> Result<(MetalStorage, Shape)> {
-        let dtype = q.dtype();
-        let internal_type = match dtype {
+        let ty = match q.dtype() {
             DType::F16 => PagedAttentionDType::F16,
             DType::BF16 => PagedAttentionDType::BF16,
             DType::F32 => PagedAttentionDType::F32,
+            dtype => candle_core::bail!("dtype {dtype:?} is not supported"),
+        };
+        let cache_ty = match self.key_cache.dtype() {
+            DType::F16 => PagedAttentionDType::F16,
+            DType::BF16 => PagedAttentionDType::BF16,
+            DType::F32 => PagedAttentionDType::F32,
+            DType::F8E4M3 => PagedAttentionDType::F8E4M3,
             dtype => candle_core::bail!("dtype {dtype:?} is not supported"),
         };
 
@@ -169,7 +175,8 @@ impl candle_core::CustomOp1 for PagedAttention {
                 dev.device(),
                 &command_buffer,
                 &kernels::Kernels::new(),
-                internal_type,
+                ty,
+                cache_ty,
                 q.buffer(),
                 q_l.start_offset() * q.dtype().size_in_bytes(),
                 kc.buffer(),
@@ -216,7 +223,8 @@ impl candle_core::CustomOp1 for PagedAttention {
                 dev.device(),
                 &command_buffer,
                 &kernels::Kernels::new(),
-                internal_type,
+                ty,
+                cache_ty,
                 &exp_sums,
                 &max_logits,
                 q.buffer(),
@@ -316,12 +324,17 @@ pub fn reshape_and_cache(
     value_cache: &Tensor,
     slot_mapping: &Tensor,
 ) -> Result<()> {
-    let dtype = key.dtype();
-
-    let internal_type = match dtype {
+    let kv_ty = match key.dtype() {
         DType::F16 => PagedAttentionDType::F16,
         DType::BF16 => PagedAttentionDType::BF16,
         DType::F32 => PagedAttentionDType::F32,
+        dtype => candle_core::bail!("dtype {dtype:?} is not supported"),
+    };
+    let cache_ty = match key_cache.dtype() {
+        DType::F16 => PagedAttentionDType::F16,
+        DType::BF16 => PagedAttentionDType::BF16,
+        DType::F32 => PagedAttentionDType::F32,
+        DType::F8E4M3 => PagedAttentionDType::F8E4M3,
         dtype => candle_core::bail!("dtype {dtype:?} is not supported"),
     };
 
@@ -422,7 +435,8 @@ pub fn reshape_and_cache(
         dev.device(),
         &command_buffer,
         &kernels::Kernels::new(),
-        internal_type,
+        kv_ty,
+        cache_ty,
         k.buffer(),
         k_l.start_offset() * key.dtype().size_in_bytes(),
         v.buffer(),

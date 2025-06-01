@@ -95,6 +95,7 @@ fn main() -> Result<(), String> {
         println!("cargo::rerun-if-changed=src/metal/kernels/{src}.metal");
     }
     println!("cargo::rerun-if-changed=src/metal/kernels/utils.metal");
+    println!("cargo::rerun-if-changed=src/metal/kernels/float8.metal");
     println!("cargo::rerun-if-changed=build.rs");
 
     enum Platform {
@@ -133,6 +134,7 @@ fn main() -> Result<(), String> {
             compile_air_cmd.arg(sources.join(format!("{metal_file}.metal")));
         }
         compile_air_cmd.arg(sources.join("utils.metal"));
+        compile_air_cmd.arg(sources.join("float8.metal"));
         compile_air_cmd
             .spawn()
             .expect("Failed to compile air")
@@ -177,6 +179,7 @@ fn main() -> Result<(), String> {
             compile_metallib_cmd.arg(out_dir.join(format!("{metal_file}.air")));
         }
         compile_metallib_cmd.arg(out_dir.join("utils.air"));
+        compile_metallib_cmd.arg(out_dir.join("float8.air"));
 
         let mut child = compile_metallib_cmd
             .spawn()

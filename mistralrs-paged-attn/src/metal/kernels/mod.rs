@@ -193,6 +193,18 @@ pub enum PagedAttentionDType {
     F16 = 0,
     BF16 = 1,
     F32 = 2,
+    F8E4M3 = 3,
+}
+
+impl PagedAttentionDType {
+    fn to_repr(&self) -> &'static str {
+        match self {
+            PagedAttentionDType::F32 => "float",
+            PagedAttentionDType::BF16 => "bfloat16_t",
+            PagedAttentionDType::F16 => "half",
+            PagedAttentionDType::F8E4M3 => "uchar",
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -200,7 +212,8 @@ pub fn call_reshape_and_cache(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
-    ty: PagedAttentionDType,
+    kv_ty: PagedAttentionDType,
+    cache_ty: PagedAttentionDType,
     key: &Buffer,
     key_offset: usize,
     value: &Buffer,
@@ -219,12 +232,13 @@ pub fn call_reshape_and_cache(
     key_stride: i32,
     value_stride: i32,
 ) -> Result<(), MetalKernelError> {
-    let name = match ty {
-        PagedAttentionDType::F32 => "reshape_and_cache_float",
-        PagedAttentionDType::BF16 => "reshape_and_cache_bfloat16_t",
-        PagedAttentionDType::F16 => "reshape_and_cache_half",
-    };
-    let pipeline = kernels.load_pipeline(device, name.to_string())?;
+    let name = format!(
+        "reshape_and_cache_kv_{}_cache_{}",
+        kv_ty.to_repr(),
+        cache_ty.to_repr()
+    );
+
+    let pipeline = kernels.load_pipeline(device, name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -316,6 +330,7 @@ pub fn call_paged_attention_v1(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     ty: PagedAttentionDType,
+    cache_ty: PagedAttentionDType,
     q: &Buffer,
     q_offset: usize,
     k_cache: &Buffer,
@@ -344,20 +359,12 @@ pub fn call_paged_attention_v1(
     const NUM_THREADS: u64 = 256;
     const NUM_SIMD_LANES: u64 = 32;
 
-    let name = match ty {
-        PagedAttentionDType::F32 => "paged_attention_float",
-        PagedAttentionDType::BF16 => "paged_attention_bfloat16_t",
-        PagedAttentionDType::F16 => "paged_attention_half",
-    };
-    let mut name = name.to_string();
-    name.push_str(&format!("_hs{head_size}"));
-    name.push_str(&format!("_bs{block_size}"));
-    name.push_str(&format!("_nt{NUM_THREADS}"));
-    name.push_str(&format!("_nsl{}", NUM_SIMD_LANES));
     // v1 has no partition
-    name.push_str(&format!("_ps{}", 0));
+    let name = format!(
+        "paged_attention_{}_cache{}_hs{head_size}_bs{block_size}_nt{NUM_THREADS}_nsl{NUM_SIMD_LANES}_ps{0}",
+        ty.to_repr(), cache_ty.to_repr()
+    );
 
-    // v1 has no partition.
     // Handle alibi
     let constants = Some(ConstantValues::new(vec![
         (10, Value::Bool(/* use_partitioning */ false)),
@@ -446,6 +453,7 @@ pub fn call_paged_attention_v2(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     ty: PagedAttentionDType,
+    cache_ty: PagedAttentionDType,
     exp_sums: &Buffer,
     max_logits: &Buffer,
     q: &Buffer,
@@ -480,18 +488,11 @@ pub fn call_paged_attention_v2(
 
     // Initial paged attention kernel
     {
-        let name = match ty {
-            PagedAttentionDType::F32 => "paged_attention_float",
-            PagedAttentionDType::BF16 => "paged_attention_bfloat16_t",
-            PagedAttentionDType::F16 => "paged_attention_half",
-        };
-        let mut name = name.to_string();
-        name.push_str(&format!("_hs{head_size}"));
-        name.push_str(&format!("_bs{block_size}"));
-        name.push_str(&format!("_nt{NUM_THREADS}"));
-        name.push_str(&format!("_nsl{}", NUM_SIMD_LANES));
         // v2 has partition.
-        name.push_str(&format!("_ps{}", PARTITION_SIZE));
+        let name = format!(
+            "paged_attention_{}_cache{}_hs{head_size}_bs{block_size}_nt{NUM_THREADS}_nsl{NUM_SIMD_LANES}_ps{PARTITION_SIZE}",
+            ty.to_repr(), cache_ty.to_repr()
+        );
 
         // v2 has partition.
         // Handle alibi
@@ -585,6 +586,12 @@ pub fn call_paged_attention_v2(
             PagedAttentionDType::F32 => "paged_attention_v2_reduce_float",
             PagedAttentionDType::BF16 => "paged_attention_v2_reduce_bfloat16_t",
             PagedAttentionDType::F16 => "paged_attention_v2_reduce_half",
+            PagedAttentionDType::F8E4M3 => {
+                return Err(MetalKernelError::DTypeMismatch {
+                    expected: vec![DType::F32, DType::F16, DType::BF16],
+                    got: DType::F8E4M3,
+                })
+            }
         };
         let mut name = name.to_string();
         name.push_str(&format!("_hs{head_size}"));

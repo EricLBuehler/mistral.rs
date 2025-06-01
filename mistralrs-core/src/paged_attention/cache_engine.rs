@@ -31,6 +31,7 @@ impl CacheEngine {
         device: &Device,
         layer_devices: Vec<Option<Device>>,
     ) -> Result<Self> {
+        let dtype = DType::F8E4M3;
         Ok(Self {
             gpu_cache: Arc::new(Mutex::new(Self::allocate_gpu_cache(
                 model_config,

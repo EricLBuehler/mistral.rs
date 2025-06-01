@@ -603,8 +603,8 @@ inline float block_sum(threadgroup float *red_smem, float sum, uint simd_tid,
 constant bool use_partitioning [[function_constant(10)]];
 constant bool use_alibi [[function_constant(20)]];
 
-template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS,
-          int NUM_SIMD_LANES, int PARTITION_SIZE = 0>
+template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
+          int NUM_THREADS, int NUM_SIMD_LANES, int PARTITION_SIZE = 0>
 [[kernel]] void paged_attention(
     device float *exp_sums
     [[buffer(0), function_constant(use_partitioning)]], // [num_seqs, num_heads,
@@ -615,9 +615,9 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS,
     device T *out
     [[buffer(2)]], // [num_seqs, num_heads, max_num_partitions, head_size]
     device const T *q [[buffer(3)]], // [num_seqs, num_heads, head_size]
-    device const T *k_cache
+    device const CACHE_T *k_cache
     [[buffer(4)]], // [num_blocks, num_kv_heads, head_size/x, block_size, x]
-    device const T *v_cache
+    device const CACHE_T *v_cache
     [[buffer(5)]], // [num_blocks, num_kv_heads, head_size, block_size]
     const constant int &num_kv_heads [[buffer(6)]], // [num_heads]
     const constant float &scale [[buffer(7)]],
@@ -1069,39 +1069,39 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES,
   }
 }
 
-#define instantiate_paged_attention_inner(                                     \
-    type, head_size, block_size, num_threads, num_simd_lanes, partition_size)  \
-  template                                                                     \
-      [[host_name("paged_attention_" #type "_hs" #head_size "_bs" #block_size  \
-                  "_nt" #num_threads "_nsl" #num_simd_lanes                    \
-                  "_ps" #partition_size)]] [[kernel]] void                     \
-      paged_attention<type, head_size, block_size, num_threads,                \
-                      num_simd_lanes, partition_size>(                         \
-          device float *exp_sums                                               \
-          [[buffer(0), function_constant(use_partitioning)]],                  \
-          device float *max_logits                                             \
-          [[buffer(1), function_constant(use_partitioning)]],                  \
-          device type *out [[buffer(2)]], device const type *q [[buffer(3)]],  \
-          device const type *k_cache [[buffer(4)]],                            \
-          device const type *v_cache [[buffer(5)]],                            \
-          const constant int &num_kv_heads [[buffer(6)]],                      \
-          const constant float &scale [[buffer(7)]],                           \
-          const constant float &softcapping [[buffer(8)]],                     \
-          device const uint32_t *block_tables [[buffer(9)]],                   \
-          device const uint32_t *context_lens [[buffer(10)]],                  \
-          const constant int &max_num_blocks_per_seq [[buffer(11)]],           \
-          device const float *alibi_slopes                                     \
-          [[buffer(12), function_constant(use_alibi)]],                        \
-          const constant int &q_stride [[buffer(13)]],                         \
-          const constant int &kv_block_stride [[buffer(14)]],                  \
-          const constant int &kv_head_stride [[buffer(15)]],                   \
-          threadgroup char *shared_mem [[threadgroup(0)]],                     \
-          uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]], \
-          uint3 threadgroups_per_grid [[threadgroups_per_grid]],               \
-          uint3 thread_position_in_threadgroup                                 \
-          [[thread_position_in_threadgroup]],                                  \
-          uint simd_tid [[simdgroup_index_in_threadgroup]],                    \
-          uint simd_lid [[thread_index_in_simdgroup]]);
+#define instantiate_paged_attention_inner(type, cache_type, head_size,         \
+                                          block_size, num_threads,             \
+                                          num_simd_lanes, partition_size)      \
+  template [[host_name("paged_attention_" #type "_cache" #cache_type           \
+                       "_hs" #head_size "_bs" #block_size "_nt" #num_threads   \
+                       "_nsl" #num_simd_lanes                                  \
+                       "_ps" #partition_size)]] [[kernel]] void                \
+  paged_attention<type, cache_type, head_size, block_size, num_threads,        \
+                  num_simd_lanes, partition_size>(                             \
+      device float *exp_sums                                                   \
+      [[buffer(0), function_constant(use_partitioning)]],                      \
+      device float *max_logits                                                 \
+      [[buffer(1), function_constant(use_partitioning)]],                      \
+      device type *out [[buffer(2)]], device const type *q [[buffer(3)]],      \
+      device const cache_type *k_cache [[buffer(4)]],                          \
+      device const cache_type *v_cache [[buffer(5)]],                          \
+      const constant int &num_kv_heads [[buffer(6)]],                          \
+      const constant float &scale [[buffer(7)]],                               \
+      const constant float &softcapping [[buffer(8)]],                         \
+      device const uint32_t *block_tables [[buffer(9)]],                       \
+      device const uint32_t *context_lens [[buffer(10)]],                      \
+      const constant int &max_num_blocks_per_seq [[buffer(11)]],               \
+      device const float *alibi_slopes                                         \
+      [[buffer(12), function_constant(use_alibi)]],                            \
+      const constant int &q_stride [[buffer(13)]],                             \
+      const constant int &kv_block_stride [[buffer(14)]],                      \
+      const constant int &kv_head_stride [[buffer(15)]],                       \
+      threadgroup char *shared_mem [[threadgroup(0)]],                         \
+      uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]],     \
+      uint3 threadgroups_per_grid [[threadgroups_per_grid]],                   \
+      uint3 thread_position_in_threadgroup [[thread_position_in_threadgroup]], \
+      uint simd_tid [[simdgroup_index_in_threadgroup]],                        \
+      uint simd_lid [[thread_index_in_simdgroup]]);
 
 #define instantiate_paged_attention_v2_reduce_inner(                           \
     type, head_size, num_threads, num_simd_lanes, partition_size)              \
@@ -1124,22 +1124,29 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES,
       uint simd_tid [[simdgroup_index_in_threadgroup]],                        \
       uint simd_lid [[thread_index_in_simdgroup]]);
 
-#define instantiate_paged_attention_heads(type, block_size, num_threads,       \
-                                          num_simd_lanes, partition_size)      \
-  instantiate_paged_attention_inner(type, 64, block_size, num_threads,         \
-                                    num_simd_lanes, partition_size);           \
-  instantiate_paged_attention_inner(type, 80, block_size, num_threads,         \
-                                    num_simd_lanes, partition_size);           \
-  instantiate_paged_attention_inner(type, 96, block_size, num_threads,         \
-                                    num_simd_lanes, partition_size);           \
-  instantiate_paged_attention_inner(type, 112, block_size, num_threads,        \
-                                    num_simd_lanes, partition_size);           \
-  instantiate_paged_attention_inner(type, 128, block_size, num_threads,        \
-                                    num_simd_lanes, partition_size);           \
-  instantiate_paged_attention_inner(type, 192, block_size, num_threads,        \
-                                    num_simd_lanes, partition_size);           \
-  instantiate_paged_attention_inner(type, 256, block_size, num_threads,        \
-                                    num_simd_lanes, partition_size);
+#define instantiate_paged_attention_heads(                                     \
+    type, cache_type, block_size, num_threads, num_simd_lanes, partition_size) \
+  instantiate_paged_attention_inner(type, cache_type, 64, block_size,          \
+                                    num_threads, num_simd_lanes,               \
+                                    partition_size);                           \
+  instantiate_paged_attention_inner(type, cache_type, 80, block_size,          \
+                                    num_threads, num_simd_lanes,               \
+                                    partition_size);                           \
+  instantiate_paged_attention_inner(type, cache_type, 96, block_size,          \
+                                    num_threads, num_simd_lanes,               \
+                                    partition_size);                           \
+  instantiate_paged_attention_inner(type, cache_type, 112, block_size,         \
+                                    num_threads, num_simd_lanes,               \
+                                    partition_size);                           \
+  instantiate_paged_attention_inner(type, cache_type, 128, block_size,         \
+                                    num_threads, num_simd_lanes,               \
+                                    partition_size);                           \
+  instantiate_paged_attention_inner(type, cache_type, 192, block_size,         \
+                                    num_threads, num_simd_lanes,               \
+                                    partition_size);                           \
+  instantiate_paged_attention_inner(type, cache_type, 256, block_size,         \
+                                    num_threads, num_simd_lanes,               \
+                                    partition_size);
 
 #define instantiate_paged_attention_v2_reduce_heads(                           \
     type, num_threads, num_simd_lanes, partition_size)                         \
@@ -1158,30 +1165,40 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES,
   instantiate_paged_attention_v2_reduce_inner(type, 256, num_threads,          \
                                               num_simd_lanes, partition_size);
 
-#define instantiate_paged_attention_block_size(type, num_threads,              \
+#define instantiate_paged_attention_block_size(type, cache_type, num_threads,  \
                                                num_simd_lanes, partition_size) \
-  instantiate_paged_attention_heads(type, 8, num_threads, num_simd_lanes,      \
-                                    partition_size);                           \
-  instantiate_paged_attention_heads(type, 16, num_threads, num_simd_lanes,     \
-                                    partition_size);                           \
-  instantiate_paged_attention_heads(type, 32, num_threads, num_simd_lanes,     \
-                                    partition_size);
+  instantiate_paged_attention_heads(type, cache_type, 8, num_threads,          \
+                                    num_simd_lanes, partition_size);           \
+  instantiate_paged_attention_heads(type, cache_type, 16, num_threads,         \
+                                    num_simd_lanes, partition_size);           \
+  instantiate_paged_attention_heads(type, cache_type, 32, num_threads,         \
+                                    num_simd_lanes, partition_size);
 
 // TODO: tune num_threads = 256
 // NOTE: partition_size = 0
-#define instantiate_paged_attention_v1(type, num_simd_lanes)                   \
-  instantiate_paged_attention_block_size(type, 256, num_simd_lanes, 0);
+#define instantiate_paged_attention_v1(type, cache_type, num_simd_lanes)       \
+  instantiate_paged_attention_block_size(type, cache_type, 256,                \
+                                         num_simd_lanes, 0);
 
 // TODO: tune num_threads = 256
 // NOTE: partition_size = 512
-#define instantiate_paged_attention_v2(type, num_simd_lanes)                   \
-  instantiate_paged_attention_block_size(type, 256, num_simd_lanes, 512);      \
+#define instantiate_paged_attention_v2(type, cache_type, num_simd_lanes)       \
+  instantiate_paged_attention_block_size(type, cache_type, 256,                \
+                                         num_simd_lanes, 512);                 \
   instantiate_paged_attention_v2_reduce_heads(type, 256, num_simd_lanes, 512);
 
-instantiate_paged_attention_v1(float, 32);
-instantiate_paged_attention_v1(bfloat16_t, 32);
-instantiate_paged_attention_v1(half, 32);
+instantiate_paged_attention_v1(float, float, 32);
+instantiate_paged_attention_v1(bfloat16_t, bfloat16_t, 32);
+instantiate_paged_attention_v1(half, half, 32);
 
-instantiate_paged_attention_v2(float, 32);
-instantiate_paged_attention_v2(bfloat16_t, 32);
-instantiate_paged_attention_v2(half, 32);
+instantiate_paged_attention_v1(float, uchar, 32);
+instantiate_paged_attention_v1(bfloat16_t, uchar, 32);
+instantiate_paged_attention_v1(half, uchar, 32);
+
+instantiate_paged_attention_v2(float, float, 32);
+instantiate_paged_attention_v2(bfloat16_t, bfloat16_t, 32);
+instantiate_paged_attention_v2(half, half, 32);
+
+instantiate_paged_attention_v2(float, uchar, 32);
+instantiate_paged_attention_v2(bfloat16_t, uchar, 32);
+instantiate_paged_attention_v2(half, uchar, 32);
