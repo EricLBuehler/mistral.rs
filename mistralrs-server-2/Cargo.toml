@@ -48,14 +48,11 @@ regex.workspace = true
 directories = "6.0.0"
 
 [features]
-cuda = ["mistralrs-core/cuda", "mistralrs-server-core/cuda"]
-cudnn = ["mistralrs-core/cudnn", "mistralrs-server-core/cudnn"]
-metal = ["mistralrs-core/metal", "mistralrs-server-core/metal"]
-flash-attn = [
-  "cuda",
-  "mistralrs-core/flash-attn",
-  "mistralrs-server-core/flash-attn",
-]
-accelerate = ["mistralrs-core/accelerate", "mistralrs-server-core/accelerate"]
-mkl = ["mistralrs-core/mkl", "mistralrs-server-core/mkl"]
-nccl = ["mistralrs-core/nccl", "mistralrs-server-core/nccl"]
+cuda = ["mistralrs-server-core/cuda"]
+cudnn = ["mistralrs-server-core/cudnn"]
+metal = ["mistralrs-server-core/metal"]
+flash-attn = ["cuda", "mistralrs-server-core/flash-attn"]
+accelerate = ["mistralrs-server-core/accelerate"]
+mkl = ["mistralrs-server-core/mkl"]
+nccl = ["mistralrs-server-core/nccl"]
+ring = ["mistralrs-server-core/ring"]
