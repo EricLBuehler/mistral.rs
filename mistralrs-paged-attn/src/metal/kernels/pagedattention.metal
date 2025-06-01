@@ -414,6 +414,28 @@ inline void from_float(thread Bfloat8_ &dst, Float8_ src) {
 
 // #endif
 
+// ========================================== FP8 (uchar) vector data types.
+
+// 8‑lane uchar vector – Metal only provides up to uchar4, so build our own.
+struct Uchar8_ {
+  uchar4 x;
+  uchar4 y;
+};
+
+// Vec specialisations so Vec<uchar, N>::Type resolves correctly.
+template <> struct Vec<uchar, 1> {
+  using Type = uchar;
+};
+template <> struct Vec<uchar, 2> {
+  using Type = uchar2;
+};
+template <> struct Vec<uchar, 4> {
+  using Type = uchar4;
+};
+template <> struct Vec<uchar, 8> {
+  using Type = Uchar8_;
+};
+
 // FP16 vector data types.
 struct Half8_ {
   half4 x;
@@ -527,6 +549,110 @@ inline void from_float(thread Half8_ &dst, Float8_ src) {
   from_float(y, src.y);
   dst.x = x;
   dst.y = y;
+}
+
+// General case: not uchar
+template <typename T> inline constexpr bool is_uchar() { return false; }
+
+// Specialization: T is uchar
+template <> inline constexpr bool is_uchar<uchar>() { return true; }
+
+// Generic fallback – will fail to compile if a required specialisation is
+// missing.
+template <typename Vec, typename Quant_vec>
+inline Vec fp8_convert(const thread Quant_vec &) {
+  static_assert(sizeof(Vec) == 0, "Missing fp8_convert specialisation");
+}
+
+// ========================================== FP8 → float/half/bfloat
+inline float __dequant_single(uchar v) { return fp8_e4m3_to_float(v); }
+
+// ---- 1‑lane ----
+template <> inline float fp8_convert<float, uchar>(const thread uchar &in) {
+  return __dequant_single(in);
+}
+template <> inline half fp8_convert<half, uchar>(const thread uchar &in) {
+  return half(__dequant_single(in));
+}
+template <>
+inline bfloat16_t fp8_convert<bfloat16_t, uchar>(const thread uchar &in) {
+  return bfloat16_t(__dequant_single(in));
+}
+
+// ---- 2‑lane ----
+template <> inline float2 fp8_convert<float2, uchar2>(const thread uchar2 &in) {
+  return float2(__dequant_single(in.x), __dequant_single(in.y));
+}
+template <> inline half2 fp8_convert<half2, uchar2>(const thread uchar2 &in) {
+  half2 out;
+  out.x = half(__dequant_single(in.x));
+  out.y = half(__dequant_single(in.y));
+  return out;
+}
+template <>
+inline Bfloat2_ fp8_convert<Bfloat2_, uchar2>(const thread uchar2 &in) {
+  Bfloat2_ out;
+  out.x = bfloat16_t(__dequant_single(in.x));
+  out.y = bfloat16_t(__dequant_single(in.y));
+  return out;
+}
+
+// ---- 4‑lane ----
+template <> inline float4 fp8_convert<float4, uchar4>(const thread uchar4 &in) {
+  return float4(__dequant_single(in.x), __dequant_single(in.y),
+                __dequant_single(in.z), __dequant_single(in.w));
+}
+template <> inline half4 fp8_convert<half4, uchar4>(const thread uchar4 &in) {
+  half4 out;
+  out.x = half(__dequant_single(in.x));
+  out.y = half(__dequant_single(in.y));
+  out.z = half(__dequant_single(in.z));
+  out.w = half(__dequant_single(in.w));
+  return out;
+}
+template <>
+inline Bfloat4_ fp8_convert<Bfloat4_, uchar4>(const thread uchar4 &in) {
+  Bfloat4_ out;
+  out.x.x = bfloat16_t(__dequant_single(in.x));
+  out.x.y = bfloat16_t(__dequant_single(in.y));
+  out.y.x = bfloat16_t(__dequant_single(in.z));
+  out.y.y = bfloat16_t(__dequant_single(in.w));
+  return out;
+}
+
+// ---- 8‑lane ----
+template <>
+inline Float8_ fp8_convert<Float8_, Uchar8_>(const thread Uchar8_ &in) {
+  Float8_ out;
+  out.x = float4(__dequant_single(in.x.x), __dequant_single(in.x.y),
+                 __dequant_single(in.x.z), __dequant_single(in.x.w));
+  out.y = float4(__dequant_single(in.y.x), __dequant_single(in.y.y),
+                 __dequant_single(in.y.z), __dequant_single(in.y.w));
+  return out;
+}
+template <>
+inline Half8_ fp8_convert<Half8_, Uchar8_>(const thread Uchar8_ &in) {
+  Half8_ out;
+  out.x = half4(half(__dequant_single(in.x.x)), half(__dequant_single(in.x.y)),
+                half(__dequant_single(in.x.z)), half(__dequant_single(in.x.w)));
+  out.y = half4(half(__dequant_single(in.y.x)), half(__dequant_single(in.y.y)),
+                half(__dequant_single(in.y.z)), half(__dequant_single(in.y.w)));
+  return out;
+}
+template <>
+inline Bfloat8_ fp8_convert<Bfloat8_, Uchar8_>(const thread Uchar8_ &in) {
+  Bfloat8_ out;
+  // first 4
+  out.x.x.x = bfloat16_t(__dequant_single(in.x.x));
+  out.x.x.y = bfloat16_t(__dequant_single(in.x.y));
+  out.x.y.x = bfloat16_t(__dequant_single(in.x.z));
+  out.x.y.y = bfloat16_t(__dequant_single(in.x.w));
+  // second 4
+  out.y.x.x = bfloat16_t(__dequant_single(in.y.x));
+  out.y.x.y = bfloat16_t(__dequant_single(in.y.y));
+  out.y.y.x = bfloat16_t(__dequant_single(in.y.z));
+  out.y.y.y = bfloat16_t(__dequant_single(in.y.w));
+  return out;
 }
 
 // ========================================== Dot product utilities
@@ -690,6 +816,7 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
   constexpr int VEC_SIZE = MAX(16 / (THREAD_GROUP_SIZE * sizeof(T)), 1);
   using K_vec = typename Vec<T, VEC_SIZE>::Type;
   using Q_vec = typename Vec<T, VEC_SIZE>::Type;
+  using Quant_vec = typename Vec<CACHE_T, VEC_SIZE>::Type;
 
   constexpr int NUM_ELEMS_PER_THREAD = HEAD_SIZE / THREAD_GROUP_SIZE;
   constexpr int NUM_VECS_PER_THREAD = NUM_ELEMS_PER_THREAD / VEC_SIZE;
@@ -756,8 +883,17 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
         const int vec_idx = thread_group_offset + j * THREAD_GROUP_SIZE;
         const int offset1 = (vec_idx * VEC_SIZE) / x;
         const int offset2 = (vec_idx * VEC_SIZE) % x;
-        k_vecs[j] = *reinterpret_cast<const device K_vec *>(
-            k_ptr + offset1 * BLOCK_SIZE * x + offset2);
+
+        if constexpr (is_uchar<CACHE_T>()) {
+          // FP8 support
+          Quant_vec k_vec_quant = *reinterpret_cast<const device Quant_vec *>(
+              k_ptr + offset1 * BLOCK_SIZE * x + offset2);
+          k_vecs[j] = fp8_convert<K_vec, Quant_vec>(k_vec_quant);
+        } else {
+          // Non-FP8 default
+          k_vecs[j] = *reinterpret_cast<const device K_vec *>(
+              k_ptr + offset1 * BLOCK_SIZE * x + offset2);
+        }
       }
 
       // Compute dot product.
@@ -840,6 +976,7 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
   using V_vec = typename Vec<T, V_VEC_SIZE>::Type;
   using L_vec = typename Vec<T, V_VEC_SIZE>::Type;
   using Float_L_vec = typename FloatVec<L_vec>::Type;
+  using V_quant_vec = typename Vec<CACHE_T, V_VEC_SIZE>::Type;
 
   constexpr int NUM_V_VECS_PER_ROW = BLOCK_SIZE / V_VEC_SIZE;
   constexpr int NUM_ROWS_PER_ITER = NUM_SIMD_LANES / NUM_V_VECS_PER_ROW;
@@ -880,7 +1017,18 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
         // we should explicitly zero out the values since they may contain NaNs.
         // See
         // https://github.com/vllm-project/vllm/issues/641#issuecomment-1682544472
-        V_vec v_vec = *reinterpret_cast<const device V_vec *>(v_ptr + offset);
+        V_vec v_vec;
+
+        if constexpr (is_uchar<CACHE_T>()) {
+          // FP8 support
+          V_quant_vec v_quant_vec =
+              *reinterpret_cast<const device V_quant_vec *>(v_ptr + offset);
+          v_vec = fp8_convert<V_vec, V_quant_vec>(v_quant_vec);
+        } else {
+          // Non-FP8 default
+          v_vec = *reinterpret_cast<const device V_vec *>(v_ptr + offset);
+        }
+
         if (block_idx == num_context_blocks - 1) {
           thread T *v_vec_ptr = reinterpret_cast<thread T *>(&v_vec);
 #pragma unroll
@@ -1073,7 +1221,7 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES,
 #define instantiate_paged_attention_inner(type, cache_type, head_size,         \
                                           block_size, num_threads,             \
                                           num_simd_lanes, partition_size)      \
-  template [[host_name("paged_attention_" #type "_cache" #cache_type           \
+  template [[host_name("paged_attention_" #type "_cache_" #cache_type          \
                        "_hs" #head_size "_bs" #block_size "_nt" #num_threads   \
                        "_nsl" #num_simd_lanes                                  \
                        "_ps" #partition_size)]] [[kernel]] void                \

@@ -3,6 +3,22 @@
 
 using namespace metal;
 
+template <typename KV_T, typename CACHE_T> inline CACHE_T to_cache(KV_T v) {
+  return static_cast<CACHE_T>(v);
+}
+
+template <> inline uchar to_cache<float, uchar>(float v) {
+  return float_to_fp8_e4m3(v);
+}
+
+template <> inline float to_cache<float, float>(float v) { return v; }
+
+template <> inline bfloat16_t to_cache<bfloat16_t, bfloat16_t>(bfloat16_t v) {
+  return v;
+}
+
+template <> inline half to_cache<half, half>(half v) { return v; }
+
 template <typename KV_T, typename CACHE_T>
 [[kernel]] void reshape_and_cache(
     const device KV_T *__restrict__ key
@@ -55,8 +71,8 @@ template <typename KV_T, typename CACHE_T>
 }
 
 #define instantiate_reshape_and_cache(kv_type, cache_type)                     \
-  template [[host_name("reshape_and_cache_kv_" #kv_type                         \
-                       "_cache_" #cache_type)]] [[kernel]] void                 \
+  template [[host_name("reshape_and_cache_kv_" #kv_type                        \
+                       "_cache_" #cache_type)]] [[kernel]] void                \
   reshape_and_cache<kv_type, cache_type>(                                      \
       const device kv_type *__restrict__ key [[buffer(0)]],                    \
       const device kv_type *__restrict__ value [[buffer(1)]],                  \

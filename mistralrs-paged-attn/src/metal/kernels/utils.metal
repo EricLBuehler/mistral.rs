@@ -246,19 +246,3 @@ bfloat_inplace_op_addr_space_helper(/, operator/=);
 typedef struct _MLX_BFloat16 bfloat16_t;
 
 #endif
-
-template <typename KV_T, typename CACHE_T> inline CACHE_T to_cache(KV_T v) {
-  return static_cast<CACHE_T>(v);
-}
-
-template <> inline uchar to_cache<float, uchar>(float v) {
-  return float_to_fp8_e4m3(v);
-}
-
-template <> inline float to_cache<float, float>(float v) { return v; }
-
-template <> inline bfloat16_t to_cache<bfloat16_t, bfloat16_t>(bfloat16_t v) {
-  return v;
-}
-
-template <> inline half to_cache<half, half>(half v) { return v; }
