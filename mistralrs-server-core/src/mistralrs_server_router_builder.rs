@@ -1,4 +1,5 @@
-/// Builder for mistral.rs for server
+//! ## mistral.rs server router builder.
+
 use anyhow::Result;
 use axum::{
     extract::DefaultBodyLimit,
@@ -23,15 +24,42 @@ use crate::{
 // NOTE(EricLBuehler): Accept up to 50mb input
 const N_INPUT_SIZE: usize = 50;
 const MB_TO_B: usize = 1024 * 1024; // 1024 kb in a mb
+
+/// This is the axum default request body limit for the router. Accept up to 50mb input.
 pub const MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
 
+/// A builder for creating a mistral.rs server router with configurable options.
+///
+/// ### Examples
+///
+/// Basic usage:
+/// ```ignore
+/// let router = MistralRsServerRouterBuilder::new()
+///     .with_mistralrs(mistralrs_instance)
+///     .build()
+///     .await?;
+/// ```
+///
+/// With custom configuration:
+/// ```ignore
+/// let router = MistralRsServerRouterBuilder::new()
+///     .with_mistralrs(mistralrs_instance)
+///     .with_include_swagger_routes(false)
+///     .with_base_path("/api/mistral")
+///     .build()
+///     .await?;
+/// ```
 pub struct MistralRsServerRouterBuilder {
+    /// The shared mistral.rs instance
     mistralrs: Option<SharedMistralState>,
+    /// Whether to include Swagger/OpenAPI documentation routes
     include_swagger_routes: bool,
+    /// Optional base path prefix for all routes
     base_path: Option<String>,
 }
 
 impl Default for MistralRsServerRouterBuilder {
+    /// Creates a new builder with default configuration.
     fn default() -> Self {
         Self {
             mistralrs: None,
@@ -42,25 +70,54 @@ impl Default for MistralRsServerRouterBuilder {
 }
 
 impl MistralRsServerRouterBuilder {
+    /// Creates a new `MistralRsServerRouterBuilder` with default settings.
+    ///
+    /// This is equivalent to calling `Default::default()`.
+    ///
+    /// ### Examples
+    ///
+    /// ```ignore
+    /// let builder = MistralRsServerRouterBuilder::new();
+    /// ```
     pub fn new() -> Self {
         Default::default()
     }
 
+    /// Sets the shared mistral.rs instance
     pub fn with_mistralrs(mut self, mistralrs: SharedMistralState) -> Self {
         self.mistralrs = Some(mistralrs);
         self
     }
 
+    /// Configures whether to include OpenAPI doc routes.
+    ///
+    /// When enabled (default), the router will include routes for Swagger UI
+    /// at `/docs` and the OpenAPI specification at `/api-doc/openapi.json`.
+    /// These routes respect the configured base path if one is set.
     pub fn with_include_swagger_routes(mut self, include_swagger_routes: bool) -> Self {
         self.include_swagger_routes = include_swagger_routes;
         self
     }
 
+    /// Sets a base path prefix for all routes.
+    ///
+    /// When set, all routes will be prefixed with the given path. This is
+    /// useful when including the mistral.rs server instance in another axum project.
     pub fn with_base_path(mut self, base_path: &str) -> Self {
         self.base_path = Some(base_path.to_owned());
         self
     }
 
+    /// Builds the configured axum router.
+    ///
+    /// ### Examples
+    ///
+    /// ```ignore
+    /// let router = MistralRsServerRouterBuilder::new()
+    ///     .with_mistralrs(mistralrs_instance)
+    ///     .build()
+    ///     .await?;
+    /// ```
     pub async fn build(self) -> Result<Router> {
         initialize_logging();
 
@@ -78,6 +135,10 @@ impl MistralRsServerRouterBuilder {
     }
 }
 
+/// Initializes and configures the underlying axum router with MistralRs API endpoints.
+///
+/// This function creates a router with all the necessary API endpoints,
+/// CORS configuration, body size limits, and optional Swagger documentation.
 fn init_router(
     state: SharedMistralState,
     include_swagger_routes: bool,

@@ -1,4 +1,5 @@
-/// Builder for mistral.rs for server
+//! ## mistral.rs instance for server builder.
+
 use std::num::NonZeroUsize;
 
 use anyhow::{Context, Result};
@@ -15,8 +16,8 @@ use tracing::info;
 use crate::types::{LoadedPipeline, SharedMistralState};
 
 pub mod defaults {
-    /// Provides the default values used for the server core
-    /// For example, they can be used as CLI args, etc.
+    //! Provides the default values used for the mistral.rs instance for server.
+    //! These defaults can be used for CLI argument fallbacks, config loading, or general initialization.
     pub const DEVICE: Option<candle_core::Device> = None;
     pub const SEED: Option<u64> = None;
     pub const LOG: Option<String> = None;
@@ -44,7 +45,42 @@ pub mod defaults {
     pub const TOKEN_SOURCE: mistralrs_core::TokenSource = mistralrs_core::TokenSource::CacheToken;
 }
 
+/// A builder for creating a the mistral.rs instance with configured options used for the mistral.rs server.
+///
+/// ### Examples
+///
+/// Basic usage:
+/// ```ignore
+/// let args = Args::parse();
+///
+/// let mistralrs = MistralRsForServerBuilder::new()
+///        .with_truncate_sequence(args.truncate_sequence)
+///        .with_model(args.model)
+///        .with_max_seqs(args.max_seqs)
+///        .with_no_kv_cache(args.no_kv_cache)
+///        .with_token_source(args.token_source)
+///        .with_interactive_mode(args.interactive_mode)
+///        .with_prefix_cache_n(args.prefix_cache_n)
+///        .with_no_paged_attn(args.no_paged_attn)
+///        .with_paged_attn(args.paged_attn)
+///        .with_cpu(args.cpu)
+///        .with_enable_search(args.enable_search)
+///        .with_seed_optional(args.seed)
+///        .with_log_optional(args.log)
+///        .with_chat_template_optional(args.chat_template)
+///        .with_jinja_explicit_optional(args.jinja_explicit)
+///        .with_num_device_layers_optional(args.num_device_layers)
+///        .with_in_situ_quant_optional(args.in_situ_quant)
+///        .with_paged_attn_gpu_mem_optional(args.paged_attn_gpu_mem)
+///        .with_paged_attn_gpu_mem_usage_optional(args.paged_attn_gpu_mem_usage)
+///        .with_paged_ctxt_len_optional(args.paged_ctxt_len)
+///        .with_paged_attn_block_size_optional(args.paged_attn_block_size)
+///        .with_prompt_chunksize_optional(args.prompt_chunksize)
+///        .build()
+///        .await?;
+/// ```
 pub struct MistralRsForServerBuilder {
+    /// The Candle device to use for model execution (CPU, CUDA, Metal, etc.).
     device: Option<Device>,
 
     /// Integer seed to ensure reproducible random number generation.
@@ -137,6 +173,7 @@ pub struct MistralRsForServerBuilder {
 }
 
 impl Default for MistralRsForServerBuilder {
+    /// Creates a new builder with default configuration.
     fn default() -> Self {
         Self {
             device: defaults::DEVICE,
@@ -169,20 +206,32 @@ impl Default for MistralRsForServerBuilder {
 }
 
 impl MistralRsForServerBuilder {
+    /// Creates a new `MistralRsForServerBuilder` with default settings.
+    ///
+    /// This is equivalent to calling `Default::default()`.
+    ///
+    /// ### Examples
+    ///
+    /// ```ignore
+    /// let builder = MistralRsForServerBuilder::new();
+    /// ```
     pub fn new() -> Self {
         Default::default()
     }
 
+    /// Sets the Candle device to use for model execution.
     pub fn with_device(mut self, device: Device) -> Self {
         self.device = Some(device);
         self
     }
 
+    /// Sets the random seed for deterministic model behavior.
     pub fn with_seed(mut self, seed: u64) -> Self {
         self.seed = Some(seed);
         self
     }
 
+    /// Sets the random seed if provided if provided.
     pub fn with_seed_optional(mut self, seed: Option<u64>) -> Self {
         if let Some(seed) = seed {
             self = self.with_seed(seed);
@@ -190,11 +239,13 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Sets the logging configuration.
     pub fn with_log(mut self, log: String) -> Self {
         self.log = Some(log);
         self
     }
 
+    /// Sets the logging configuration if provided.
     pub fn with_log_optional(mut self, log: Option<String>) -> Self {
         if let Some(log) = log {
             self = self.with_log(log);
@@ -202,31 +253,37 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Sets whether to truncate sequences that exceed the maximum model length.
     pub fn with_truncate_sequence(mut self, truncate_sequence: bool) -> Self {
         self.truncate_sequence = truncate_sequence;
         self
     }
 
+    /// Sets the model to be used.
     pub fn with_model(mut self, model: ModelSelected) -> Self {
         self.model = Some(model);
         self
     }
 
+    /// Sets the maximum number of concurrent sequences.
     pub fn with_max_seqs(mut self, max_seqs: usize) -> Self {
         self.max_seqs = max_seqs;
         self
     }
 
+    /// Sets whether to disable the key-value cache.
     pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
         self.no_kv_cache = no_kv_cache;
         self
     }
 
+    /// Sets the chat template configuration.
     pub fn with_chat_template(mut self, chat_template: String) -> Self {
         self.chat_template = Some(chat_template);
         self
     }
 
+    /// Sets the chat template configuration if provided.
     pub fn with_chat_template_optional(mut self, chat_template: Option<String>) -> Self {
         if let Some(chat_template) = chat_template {
             self = self.with_chat_template(chat_template);
@@ -234,11 +291,13 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Sets an explicit JINJA chat template file.
     pub fn with_jinja_explicit(mut self, jinja_explicit: String) -> Self {
         self.jinja_explicit = Some(jinja_explicit);
         self
     }
 
+    /// Sets an explicit JINJA chat template file if provided.
     pub fn with_jinja_explicit_optional(mut self, jinja_explicit: Option<String>) -> Self {
         if let Some(jinja_explicit) = jinja_explicit {
             self = self.with_jinja_explicit(jinja_explicit);
@@ -246,26 +305,31 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Sets the token source for authentication.
     pub fn with_token_source(mut self, token_source: TokenSource) -> Self {
         self.token_source = token_source;
         self
     }
 
+    /// Sets whether to run in interactive mode.
     pub fn with_interactive_mode(mut self, interactive_mode: bool) -> Self {
         self.interactive_mode = interactive_mode;
         self
     }
 
+    /// Sets the number of prefix caches to hold on the device.
     pub fn with_prefix_cache_n(mut self, prefix_cache_n: usize) -> Self {
         self.prefix_cache_n = prefix_cache_n;
         self
     }
 
+    /// Sets the device layer mapping
     pub fn with_num_device_layers(mut self, num_device_layers: Vec<String>) -> Self {
         self.num_device_layers = Some(num_device_layers);
         self
     }
 
+    /// Sets the device layer mapping if provided.
     pub fn with_num_device_layers_optional(
         mut self,
         num_device_layers: Option<Vec<String>>,
@@ -276,11 +340,13 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Sets the in-situ quantization method.
     pub fn with_in_situ_quant(mut self, in_situ_quant: String) -> Self {
         self.in_situ_quant = Some(in_situ_quant);
         self
     }
 
+    /// Sets the in-situ quantization method if provided.
     pub fn with_in_situ_quant_optional(mut self, in_situ_quant: Option<String>) -> Self {
         if let Some(in_situ_quant) = in_situ_quant {
             self = self.with_in_situ_quant(in_situ_quant);
@@ -288,11 +354,13 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Sets the GPU memory allocation for PagedAttention KV cache.
     pub fn with_paged_attn_gpu_mem(mut self, paged_attn_gpu_mem: usize) -> Self {
         self.paged_attn_gpu_mem = Some(paged_attn_gpu_mem);
         self
     }
 
+    /// Sets the GPU memory allocation for PagedAttention KV cache if provided.
     pub fn with_paged_attn_gpu_mem_optional(mut self, paged_attn_gpu_mem: Option<usize>) -> Self {
         if let Some(paged_attn_gpu_mem) = paged_attn_gpu_mem {
             self = self.with_paged_attn_gpu_mem(paged_attn_gpu_mem);
@@ -300,11 +368,13 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Sets the percentage of GPU memory to utilize for PagedAttention.
     pub fn with_paged_attn_gpu_mem_usage(mut self, paged_attn_gpu_mem_usage: f32) -> Self {
         self.paged_attn_gpu_mem_usage = Some(paged_attn_gpu_mem_usage);
         self
     }
 
+    /// Sets the percentage of GPU memory to utilize for PagedAttention if provided.
     pub fn with_paged_attn_gpu_mem_usage_optional(
         mut self,
         paged_attn_gpu_mem_usage: Option<f32>,
@@ -315,11 +385,13 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Sets the total context length for KV cache allocation.
     pub fn with_paged_ctxt_len(mut self, paged_ctxt_len: usize) -> Self {
         self.paged_ctxt_len = Some(paged_ctxt_len);
         self
     }
 
+    /// Sets the total context length for KV cache allocation if provided.
     pub fn with_paged_ctxt_len_optional(mut self, paged_ctxt_len: Option<usize>) -> Self {
         if let Some(paged_ctxt_len) = paged_ctxt_len {
             self = self.with_paged_ctxt_len(paged_ctxt_len);
@@ -327,11 +399,13 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Sets the block size for PagedAttention.
     pub fn with_paged_attn_block_size(mut self, paged_attn_block_size: usize) -> Self {
         self.paged_attn_block_size = Some(paged_attn_block_size);
         self
     }
 
+    /// Sets the block size for PagedAttention if provided.
     pub fn with_paged_attn_block_size_optional(
         mut self,
         paged_attn_block_size: Option<usize>,
@@ -342,21 +416,25 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Sets whether to disable PagedAttention on CUDA devices.
     pub fn with_no_paged_attn(mut self, no_paged_attn: bool) -> Self {
         self.no_paged_attn = no_paged_attn;
         self
     }
 
+    /// Sets whether to enable PagedAttention.
     pub fn with_paged_attn(mut self, paged_attn: bool) -> Self {
         self.paged_attn = paged_attn;
         self
     }
 
+    /// Sets the prompt chunking size.
     pub fn with_prompt_chunksize(mut self, prompt_chunksize: usize) -> Self {
         self.prompt_chunksize = Some(prompt_chunksize);
         self
     }
 
+    /// Sets the prompt chunking size if provided.
     pub fn with_prompt_chunksize_optional(mut self, prompt_chunksize: Option<usize>) -> Self {
         if let Some(prompt_chunksize) = prompt_chunksize {
             self = self.with_prompt_chunksize(prompt_chunksize);
@@ -364,21 +442,36 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Sets whether to force CPU-only execution.
     pub fn with_cpu(mut self, cpu: bool) -> Self {
         self.cpu = cpu;
         self
     }
 
+    /// Sets whether to enable web search functionality.
     pub fn with_enable_search(mut self, enable_search: bool) -> Self {
         self.enable_search = enable_search;
         self
     }
 
+    /// Sets the BERT model for web search assistance.
     pub fn with_search_bert_model(mut self, search_bert_model: String) -> Self {
         self.search_bert_model = Some(search_bert_model);
         self
     }
 
+    /// Builds the configured mistral.rs instance.
+    ///
+    /// ### Examples
+    ///
+    /// ```ignore
+    /// let shared_mistralrs = MistralRsForServerBuilder::new()
+    ///     .with_model(model)
+    ///     .with_in_situ_quant("8".to_string())
+    ///     .with_paged_attn(true)
+    ///     .build()
+    ///     .await?;
+    /// ```
     pub async fn build(mut self) -> Result<SharedMistralState> {
         // This was originally with the device config
         if self.cpu {
@@ -472,7 +565,8 @@ impl MistralRsForServerBuilder {
     }
 }
 
-// TODO replace with best device?
+// TODO: replace with best device?
+/// Initializes the device to be used for computation, optionally forcing CPU usage and setting a seed.
 fn init_device(force_cpu: bool, seed: Option<u64>) -> Result<candle_core::Device> {
     #[cfg(feature = "metal")]
     let device = if force_cpu {
@@ -497,6 +591,7 @@ fn init_device(force_cpu: bool, seed: Option<u64>) -> Result<candle_core::Device
     Ok(device)
 }
 
+/// Initializes the device mapping configuration for distributing model layers.
 fn init_mapper(
     num_device_layers: &Option<Vec<String>>,
     auto_device_map_params: &AutoDeviceMapParams,
@@ -538,6 +633,7 @@ fn init_mapper(
     }
 }
 
+/// Logs hardware feature information and the model's sampling strategy and kind.
 #[allow(clippy::borrowed_box)]
 fn mistralrs_instance_info(loader: &Box<dyn Loader>) {
     info!(
@@ -552,6 +648,7 @@ fn mistralrs_instance_info(loader: &Box<dyn Loader>) {
     info!("Model kind is: {}", loader.get_kind().to_string());
 }
 
+/// Determines whether paged attention should be disabled based on device type and preferences.
 fn configure_no_paged_attn(device: &Device, no_paged_attn: bool, paged_attn: bool) -> bool {
     if device.is_cuda() || mistralrs_core::distributed::use_nccl() {
         no_paged_attn
@@ -562,6 +659,7 @@ fn configure_no_paged_attn(device: &Device, no_paged_attn: bool, paged_attn: boo
     }
 }
 
+/// Initializes the cache configuration for paged attention based on provided parameters.
 fn init_cache_config(
     paged_attn_block_size: Option<usize>,
     paged_attn_gpu_mem: Option<usize>,
@@ -626,6 +724,7 @@ fn init_cache_config(
     }
 }
 
+/// Initializes the scheduler configuration based on cache settings and pipeline metadata.
 async fn init_scheduler_config(
     cache_config: &Option<PagedAttentionConfig>,
     pipeline: &LoadedPipeline,
@@ -650,6 +749,7 @@ async fn init_scheduler_config(
     }
 }
 
+/// Creates a BERT embedding model configuration for search functionality.
 pub fn get_bert_model(
     enable_search: bool,
     search_bert_model: Option<String>,

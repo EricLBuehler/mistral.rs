@@ -1,1 +1,5 @@
-# mistralrs-server-core
+# `mistralrs-server-core`
+
+Core crate that powers `mistral.rs server`.
+
+Documentation: TBD

@@ -1,9 +1,14 @@
-/// Custom types
+//! ## Custom types used in mistral.rs server core.
+
 use std::sync::Arc;
 
 use axum::extract::State;
 use mistralrs_core::{MistralRs, Pipeline};
 
+/// This is the underlying instance of mistral.rs.
 pub type SharedMistralState = Arc<MistralRs>;
+
+/// This is the `SharedMistralState` that has been extracted for and axum handler.
 pub type ExtractedMistralState = State<SharedMistralState>;
+
 pub(crate) type LoadedPipeline = Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>;

@@ -1,3 +1,5 @@
+//! ## OpenAPI doc functionality.
+
 use utoipa::OpenApi;
 
 use crate::{
@@ -18,6 +20,42 @@ use mistralrs_core::{
     ToolChoice, ToolType, WebSearchOptions, WebSearchUserLocation,
 };
 
+/// This is used to generate the OpenAPI docs.
+/// The mistral.rs server router will include these by default, but if you're
+/// including the mistral.rs server core into another project, you can generate the
+/// OpenAPI docs separately to merge with the other project OpenAPI docs.
+///
+/// ### Arguments
+/// * `base_path` - the base path of the mistral.rs server instance (in case the mistral.rs server is being included in another axum project)
+///
+/// ### Example
+/// ```ignore
+/// // MyApp
+/// use mistralrs_server_core::openapi_doc::get_openapi_doc;
+///
+/// #[derive(OpenApi)]
+/// #[openapi(
+///     paths(root, controllers::custom_chat),
+///     tags(
+///         (name = "hello", description = "Hello world endpoints")
+///     ),
+///     info(
+///         title = "Hello World API",
+///         version = "1.0.0",
+///         description = "A simple API that responds with a greeting"
+///     )
+/// )]
+/// struct ApiDoc;
+///
+/// let mistral_base_path = "/api/mistral";
+/// let mistral_doc = get_openapi_doc(Some(mistral_base_path));
+/// let mut api_docs = ApiDoc::openapi();
+/// api_docs.merge(mistral_doc);
+///
+/// let app = Router::new()
+///   .route("/", get(root))
+///   .merge(SwaggerUi::new("/api-docs").url("/api-docs/openapi.json", api_docs));
+/// ```
 pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
     #[openapi(

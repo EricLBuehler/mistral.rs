@@ -1,3 +1,5 @@
+//! ## General mistral.rs server route handlers.
+
 use anyhow::Result;
 use axum::extract::{Json, State};
 use mistralrs_core::{parse_isq_value, MistralRs, Request};
