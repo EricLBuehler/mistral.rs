@@ -361,7 +361,7 @@ pub fn call_paged_attention_v1(
 
     // v1 has no partition
     let name = format!(
-        "paged_attention_{}_cache{}_hs{head_size}_bs{block_size}_nt{NUM_THREADS}_nsl{NUM_SIMD_LANES}_ps{0}",
+        "paged_attention_{}_cache{}_hs{head_size}_bs{block_size}_nt{NUM_THREADS}_nsl{NUM_SIMD_LANES}_ps0",
         ty.to_repr(), cache_ty.to_repr()
     );
 

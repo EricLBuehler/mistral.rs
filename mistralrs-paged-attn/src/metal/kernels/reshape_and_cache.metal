@@ -55,8 +55,8 @@ template <typename KV_T, typename CACHE_T>
 }
 
 #define instantiate_reshape_and_cache(kv_type, cache_type)                     \
-  template [[host_name("reshape_and_cache_kv" #kv_type                         \
-                       "_cache" #cache_type)]] [[kernel]] void                 \
+  template [[host_name("reshape_and_cache_kv_" #kv_type                         \
+                       "_cache_" #cache_type)]] [[kernel]] void                 \
   reshape_and_cache<kv_type, cache_type>(                                      \
       const device kv_type *__restrict__ key [[buffer(0)]],                    \
       const device kv_type *__restrict__ value [[buffer(1)]],                  \
@@ -73,4 +73,7 @@ template <typename KV_T, typename CACHE_T>
 instantiate_reshape_and_cache(float, float);
 instantiate_reshape_and_cache(bfloat16_t, bfloat16_t);
 instantiate_reshape_and_cache(half, half);
+
 instantiate_reshape_and_cache(float, uchar);
+instantiate_reshape_and_cache(bfloat16_t, uchar);
+instantiate_reshape_and_cache(half, uchar);

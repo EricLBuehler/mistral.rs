@@ -750,7 +750,7 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
 
 #pragma unroll
       for (int j = 0; j < NUM_VECS_PER_THREAD; j++) {
-        const device T *k_ptr =
+        const device CACHE_T *k_ptr =
             k_cache + physical_block_number * kv_block_stride +
             kv_head_idx * kv_head_stride + physical_block_offset * x;
         const int vec_idx = thread_group_offset + j * THREAD_GROUP_SIZE;
@@ -868,8 +868,9 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
         logits + token_idx - start_token_idx);
     from_float(logits_vec, logits_float_vec);
 
-    const device T *v_ptr = v_cache + physical_block_number * kv_block_stride +
-                            kv_head_idx * kv_head_stride;
+    const device CACHE_T *v_ptr = v_cache +
+                                  physical_block_number * kv_block_stride +
+                                  kv_head_idx * kv_head_stride;
 #pragma unroll
     for (int i = 0; i < NUM_ROWS_PER_THREAD; i++) {
       const int row_idx = lane / NUM_V_VECS_PER_ROW + i * NUM_ROWS_PER_ITER;
@@ -1184,7 +1185,11 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES,
 // NOTE: partition_size = 512
 #define instantiate_paged_attention_v2(type, cache_type, num_simd_lanes)       \
   instantiate_paged_attention_block_size(type, cache_type, 256,                \
-                                         num_simd_lanes, 512);                 \
+                                         num_simd_lanes, 512);
+
+// TODO: tune num_threads = 256
+// NOTE: partition_size = 512
+#define instantiate_paged_attention_v2_reduce(type, num_simd_lanes)            \
   instantiate_paged_attention_v2_reduce_heads(type, 256, num_simd_lanes, 512);
 
 instantiate_paged_attention_v1(float, float, 32);
@@ -1194,6 +1199,10 @@ instantiate_paged_attention_v1(half, half, 32);
 instantiate_paged_attention_v1(float, uchar, 32);
 instantiate_paged_attention_v1(bfloat16_t, uchar, 32);
 instantiate_paged_attention_v1(half, uchar, 32);
+
+instantiate_paged_attention_v2_reduce(float, 32);
+instantiate_paged_attention_v2_reduce(bfloat16_t, 32);
+instantiate_paged_attention_v2_reduce(half, 32);
 
 instantiate_paged_attention_v2(float, float, 32);
 instantiate_paged_attention_v2(bfloat16_t, bfloat16_t, 32);

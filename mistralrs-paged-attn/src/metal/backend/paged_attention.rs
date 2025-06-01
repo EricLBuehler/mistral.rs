@@ -168,7 +168,7 @@ impl candle_core::CustomOp1 for PagedAttention {
         let command_buffer = dev.command_buffer()?;
         command_buffer.set_label("paged-attention");
 
-        let out = dev.new_buffer(elem_count, dtype, "paged-attention-out")?;
+        let out = dev.new_buffer(elem_count, q.dtype(), "paged-attention-out")?;
 
         if use_v1 {
             kernels::call_paged_attention_v1(
@@ -206,8 +206,11 @@ impl candle_core::CustomOp1 for PagedAttention {
         } else {
             let tmp_out_shape = Shape::from((num_seqs, num_heads, max_num_partitions, head_size));
             let exp_sums_shape = Shape::from((num_seqs, num_heads, max_num_partitions));
-            let tmp_out =
-                dev.new_buffer(tmp_out_shape.elem_count(), dtype, "paged-attention-tmpout")?;
+            let tmp_out = dev.new_buffer(
+                tmp_out_shape.elem_count(),
+                q.dtype(),
+                "paged-attention-tmpout",
+            )?;
             let exp_sums = dev.new_buffer(
                 exp_sums_shape.elem_count(),
                 DType::F32,
