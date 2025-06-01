@@ -47,15 +47,8 @@ pub mod defaults {
 pub struct MistralRsForServerBuilder {
     device: Option<Device>,
 
-    // Args
-    /// IP to serve on.
-    // serve_ip: Option<String>,
-
     /// Integer seed to ensure reproducible random number generation.
     seed: Option<u64>,
-
-    /// Port to serve on.
-    // port: Option<String>,
 
     /// Log all responses and requests to this file
     log: Option<String>,
@@ -147,9 +140,7 @@ impl Default for MistralRsForServerBuilder {
     fn default() -> Self {
         Self {
             device: defaults::DEVICE,
-            // serve_ip: None,
             seed: defaults::SEED,
-            // port: None,
             log: defaults::LOG,
             truncate_sequence: defaults::TRUNCATE_SEQUENCE,
             model: defaults::MODEL,
@@ -192,8 +183,22 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    pub fn with_seed_optional(mut self, seed: Option<u64>) -> Self {
+        if let Some(seed) = seed {
+            self = self.with_seed(seed);
+        }
+        self
+    }
+
     pub fn with_log(mut self, log: String) -> Self {
         self.log = Some(log);
+        self
+    }
+
+    pub fn with_log_optional(mut self, log: Option<String>) -> Self {
+        if let Some(log) = log {
+            self = self.with_log(log);
+        }
         self
     }
 
@@ -222,8 +227,22 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    pub fn with_chat_template_optional(mut self, chat_template: Option<String>) -> Self {
+        if let Some(chat_template) = chat_template {
+            self = self.with_chat_template(chat_template);
+        }
+        self
+    }
+
     pub fn with_jinja_explicit(mut self, jinja_explicit: String) -> Self {
         self.jinja_explicit = Some(jinja_explicit);
+        self
+    }
+
+    pub fn with_jinja_explicit_optional(mut self, jinja_explicit: Option<String>) -> Self {
+        if let Some(jinja_explicit) = jinja_explicit {
+            self = self.with_jinja_explicit(jinja_explicit);
+        }
         self
     }
 
@@ -247,8 +266,25 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    pub fn with_num_device_layers_optional(
+        mut self,
+        num_device_layers: Option<Vec<String>>,
+    ) -> Self {
+        if let Some(num_device_layers) = num_device_layers {
+            self = self.with_num_device_layers(num_device_layers);
+        }
+        self
+    }
+
     pub fn with_in_situ_quant(mut self, in_situ_quant: String) -> Self {
         self.in_situ_quant = Some(in_situ_quant);
+        self
+    }
+
+    pub fn with_in_situ_quant_optional(mut self, in_situ_quant: Option<String>) -> Self {
+        if let Some(in_situ_quant) = in_situ_quant {
+            self = self.with_in_situ_quant(in_situ_quant);
+        }
         self
     }
 
@@ -257,8 +293,25 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    pub fn with_paged_attn_gpu_mem_optional(mut self, paged_attn_gpu_mem: Option<usize>) -> Self {
+        if let Some(paged_attn_gpu_mem) = paged_attn_gpu_mem {
+            self = self.with_paged_attn_gpu_mem(paged_attn_gpu_mem);
+        }
+        self
+    }
+
     pub fn with_paged_attn_gpu_mem_usage(mut self, paged_attn_gpu_mem_usage: f32) -> Self {
         self.paged_attn_gpu_mem_usage = Some(paged_attn_gpu_mem_usage);
+        self
+    }
+
+    pub fn with_paged_attn_gpu_mem_usage_optional(
+        mut self,
+        paged_attn_gpu_mem_usage: Option<f32>,
+    ) -> Self {
+        if let Some(paged_attn_gpu_mem_usage) = paged_attn_gpu_mem_usage {
+            self = self.with_paged_attn_gpu_mem_usage(paged_attn_gpu_mem_usage);
+        }
         self
     }
 
@@ -267,8 +320,25 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    pub fn with_paged_ctxt_len_optional(mut self, paged_ctxt_len: Option<usize>) -> Self {
+        if let Some(paged_ctxt_len) = paged_ctxt_len {
+            self = self.with_paged_ctxt_len(paged_ctxt_len);
+        }
+        self
+    }
+
     pub fn with_paged_attn_block_size(mut self, paged_attn_block_size: usize) -> Self {
         self.paged_attn_block_size = Some(paged_attn_block_size);
+        self
+    }
+
+    pub fn with_paged_attn_block_size_optional(
+        mut self,
+        paged_attn_block_size: Option<usize>,
+    ) -> Self {
+        if let Some(paged_attn_block_size) = paged_attn_block_size {
+            self = self.with_paged_attn_block_size(paged_attn_block_size);
+        }
         self
     }
 
@@ -284,6 +354,13 @@ impl MistralRsForServerBuilder {
 
     pub fn with_prompt_chunksize(mut self, prompt_chunksize: usize) -> Self {
         self.prompt_chunksize = Some(prompt_chunksize);
+        self
+    }
+
+    pub fn with_prompt_chunksize_optional(mut self, prompt_chunksize: Option<usize>) -> Self {
+        if let Some(prompt_chunksize) = prompt_chunksize {
+            self = self.with_prompt_chunksize(prompt_chunksize);
+        }
         self
     }
 

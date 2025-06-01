@@ -144,7 +144,7 @@ fn parse_token_source(s: &str) -> Result<TokenSource, String> {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let mut mistralrs_builder = MistralRsForServerBuilder::new()
+    let mistralrs = MistralRsForServerBuilder::new()
         .with_truncate_sequence(args.truncate_sequence)
         .with_model(args.model)
         .with_max_seqs(args.max_seqs)
@@ -155,54 +155,20 @@ async fn main() -> Result<()> {
         .with_no_paged_attn(args.no_paged_attn)
         .with_paged_attn(args.paged_attn)
         .with_cpu(args.cpu)
-        .with_enable_search(args.enable_search);
-
-    if let Some(seed) = args.seed {
-        mistralrs_builder = mistralrs_builder.with_seed(seed);
-    }
-
-    if let Some(log) = args.log {
-        mistralrs_builder = mistralrs_builder.with_log(log);
-    }
-
-    if let Some(chat_template) = args.chat_template {
-        mistralrs_builder = mistralrs_builder.with_chat_template(chat_template);
-    }
-
-    if let Some(jinja_explicit) = args.jinja_explicit {
-        mistralrs_builder = mistralrs_builder.with_jinja_explicit(jinja_explicit);
-    }
-
-    if let Some(num_device_layers) = args.num_device_layers {
-        mistralrs_builder = mistralrs_builder.with_num_device_layers(num_device_layers);
-    }
-
-    if let Some(in_situ_quant) = args.in_situ_quant {
-        mistralrs_builder = mistralrs_builder.with_in_situ_quant(in_situ_quant);
-    }
-
-    if let Some(paged_attn_gpu_mem) = args.paged_attn_gpu_mem {
-        mistralrs_builder = mistralrs_builder.with_paged_attn_gpu_mem(paged_attn_gpu_mem);
-    }
-
-    if let Some(paged_attn_gpu_mem_usage) = args.paged_attn_gpu_mem_usage {
-        mistralrs_builder =
-            mistralrs_builder.with_paged_attn_gpu_mem_usage(paged_attn_gpu_mem_usage);
-    }
-
-    if let Some(paged_ctxt_len) = args.paged_ctxt_len {
-        mistralrs_builder = mistralrs_builder.with_paged_ctxt_len(paged_ctxt_len);
-    }
-
-    if let Some(paged_attn_block_size) = args.paged_attn_block_size {
-        mistralrs_builder = mistralrs_builder.with_paged_attn_block_size(paged_attn_block_size);
-    }
-
-    if let Some(prompt_chunksize) = args.prompt_chunksize {
-        mistralrs_builder = mistralrs_builder.with_prompt_chunksize(prompt_chunksize);
-    }
-
-    let mistralrs = mistralrs_builder.build().await?;
+        .with_enable_search(args.enable_search)
+        .with_seed_optional(args.seed)
+        .with_log_optional(args.log)
+        .with_chat_template_optional(args.chat_template)
+        .with_jinja_explicit_optional(args.jinja_explicit)
+        .with_num_device_layers_optional(args.num_device_layers)
+        .with_in_situ_quant_optional(args.in_situ_quant)
+        .with_paged_attn_gpu_mem_optional(args.paged_attn_gpu_mem)
+        .with_paged_attn_gpu_mem_usage_optional(args.paged_attn_gpu_mem_usage)
+        .with_paged_ctxt_len_optional(args.paged_ctxt_len)
+        .with_paged_attn_block_size_optional(args.paged_attn_block_size)
+        .with_prompt_chunksize_optional(args.prompt_chunksize)
+        .build()
+        .await?;
 
     // TODO: refactor this
     let bert_model = get_bert_model(args.enable_search, args.search_bert_model);
