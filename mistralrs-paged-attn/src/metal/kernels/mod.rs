@@ -237,6 +237,7 @@ pub fn call_reshape_and_cache(
         kv_ty.to_repr(),
         cache_ty.to_repr()
     );
+    // dbg!(&name);
 
     let pipeline = kernels.load_pipeline(device, name)?;
     let encoder = ep.encoder();
@@ -364,6 +365,7 @@ pub fn call_paged_attention_v1(
         "paged_attention_{}_cache_{}_hs{head_size}_bs{block_size}_nt{NUM_THREADS}_nsl{NUM_SIMD_LANES}_ps0",
         ty.to_repr(), cache_ty.to_repr()
     );
+    // dbg!(&name);
 
     // Handle alibi
     let constants = Some(ConstantValues::new(vec![

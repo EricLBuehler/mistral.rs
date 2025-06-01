@@ -847,7 +847,7 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
 
   // x == THREAD_GROUP_SIZE * VEC_SIZE
   // Each thread group fetches x elements from the key at a time.
-  constexpr int x = 16 / sizeof(T);
+  constexpr int x = 16 / sizeof(CACHE_T);
   float qk_max = -FLT_MAX;
 
   // Iterate over the key blocks.
