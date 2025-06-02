@@ -126,7 +126,7 @@ impl MistralRsServerRouterBuilder {
         self
     }
 
-    /// Sets the CORS allowed origins.
+    /// Sets the axum default request body limit.
     pub fn with_max_body_limit(mut self, max_body_limit: usize) -> Self {
         self.max_body_limit = Some(max_body_limit);
         self
