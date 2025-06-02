@@ -278,7 +278,10 @@ impl Loader for VisionLoader {
             mapper = DeviceMapSetting::DummyNccl {
                 nm_device: available_devices[0].clone(),
             };
-        } else if let DeviceMapSetting::Auto(params) = mapper.clone() {
+        } else if let DeviceMapSetting::Auto(mut params) = mapper.clone() {
+            // We can promote to vision params if we get text params
+            params = params.maybe_promote_to_vision();
+
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
 

@@ -36,6 +36,73 @@ pub enum ModelSelected {
         file: String,
     },
 
+    /// Select a model for running via auto loader
+    Run {
+        /// Model ID to load from. May be a HF hub repo or a local path.
+        #[arg(short, long)]
+        model_id: String,
+
+        /// Path to local tokenizer.json file. If specified, it is used over any remote file.
+        #[arg(short, long)]
+        tokenizer_json: Option<String>,
+
+        /// Model data type. Defaults to `auto`.
+        #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
+
+        /// ISQ organization: `default` or `moqe`.
+        #[arg(short, long)]
+        organization: Option<IsqOrganization>,
+
+        /// UQFF path to write to.
+        #[arg(short, long)]
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;).
+        #[arg(short, long)]
+        from_uqff: Option<String>,
+
+        /// .imatrix file to enhance GGUF quantizations with.
+        #[arg(short, long)]
+        imatrix: Option<PathBuf>,
+
+        /// Generate and utilize an imatrix to enhance GGUF quantizations.
+        #[arg(short, long)]
+        calibration_file: Option<PathBuf>,
+
+        /// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
+        /// Only supported on specific vision models.
+        #[arg(short = 'e', long)]
+        max_edge: Option<u32>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
+        max_batch_size: usize,
+
+        /// Maximum prompt number of images to expect for this model. This affects automatic device mapping but is not a hard limit.
+        /// Only supported on specific vision models.
+        #[arg(long)]
+        max_num_images: Option<usize>,
+
+        /// Maximum expected image size will have this edge length on both edges.
+        /// This affects automatic device mapping but is not a hard limit.
+        /// Only supported on specific vision models.
+        #[arg(long)]
+        max_image_length: Option<usize>,
+
+        /// Cache path for Hugging Face models downloaded locally.
+        #[arg(long)]
+        hf_cache_path: Option<PathBuf>,
+    },
+
     /// Select a plain model, without quantization or adapters
     Plain {
         /// Model ID to load from. This may be a HF hub repo or a local path.

@@ -30,7 +30,7 @@ pub struct AutoLoaderBuilder {
     vision_cfg: VisionSpecificConfig,
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
-    model_id: Option<String>,
+    model_id: String,
     jinja_explicit: Option<String>,
     no_kv_cache: bool,
     xlora_model_id: Option<String>,
@@ -47,7 +47,7 @@ impl AutoLoaderBuilder {
         vision_cfg: VisionSpecificConfig,
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
-        model_id: Option<String>,
+        model_id: String,
         no_kv_cache: bool,
         jinja_explicit: Option<String>,
     ) -> Self {
@@ -92,7 +92,7 @@ impl AutoLoaderBuilder {
     }
 
     pub fn build(self) -> Box<dyn Loader> {
-        let model_id = self.model_id.expect("model id required");
+        let model_id = self.model_id.clone();
         let mut normal_builder = NormalLoaderBuilder::new(
             self.normal_cfg,
             self.chat_template.clone(),
