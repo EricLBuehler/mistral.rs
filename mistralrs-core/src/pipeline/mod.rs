@@ -16,6 +16,7 @@ mod sampling;
 mod speculative;
 mod speech;
 mod vision;
+mod auto;
 
 pub use super::diffusion_models::DiffusionGenerationParams;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
@@ -60,6 +61,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
+pub use auto::{AutoLoader, AutoLoaderBuilder};
 
 use anyhow::Result;
 use candle_core::{DType, Device, IndexOp, Tensor, Var};
