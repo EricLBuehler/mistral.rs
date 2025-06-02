@@ -9,12 +9,14 @@ use mistralrs_quant::MULTI_LORA_DELIMITER;
 
 use crate::{
     get_toml_selected_model_dtype,
-    pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
+    pipeline::{
+        AutoLoaderBuilder, DiffusionLoaderBuilder, GGMLLoaderBuilder, GGMLSpecificConfig,
+        GGUFLoaderBuilder, GGUFSpecificConfig, NormalLoaderBuilder, NormalSpecificConfig,
+        VisionLoaderBuilder, VisionSpecificConfig,
+    },
     toml_selector::get_toml_selected_model_device_map_params,
-    AutoDeviceMapParams, DiffusionLoaderBuilder, GGUFSpecificConfig, Loader, ModelDType,
-    ModelSelected, NormalLoaderBuilder, SpeechLoader, TomlLoaderArgs, TomlSelector, Topology,
-    VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
-    UQFF_MULTI_FILE_DELIMITER,
+    AutoDeviceMapParams, Loader, ModelDType, ModelSelected, SpeechLoader, TomlLoaderArgs,
+    TomlSelector, Topology, GGUF_MULTI_FILE_DELIMITER, UQFF_MULTI_FILE_DELIMITER,
 };
 
 /// A builder for a loader using the selected model.
@@ -62,6 +64,7 @@ impl LoaderBuilder {
 pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
     match model {
         ModelSelected::Plain { .. }
+        | ModelSelected::Run { .. }
         | ModelSelected::Lora { .. }
         | ModelSelected::GGUF { .. }
         | ModelSelected::LoraGGUF { .. }
@@ -99,6 +102,7 @@ pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
         | ModelSelected::XLoraGGML { dtype, .. }
         | ModelSelected::LoraGGUF { dtype, .. }
         | ModelSelected::LoraGGML { dtype, .. }
+        | ModelSelected::Run { dtype, .. }
         | ModelSelected::Speech { dtype, .. } => Ok(*dtype),
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
@@ -160,6 +164,30 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
             max_seq_len: *max_seq_len,
             max_batch_size: *max_batch_size,
         }),
+        ModelSelected::Run {
+            max_seq_len,
+            max_batch_size,
+            max_image_length,
+            max_num_images,
+            ..
+        } => {
+            if max_num_images.is_some() || max_image_length.is_some() {
+                let max_image_length =
+                    max_image_length.unwrap_or(AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH);
+                Ok(AutoDeviceMapParams::Vision {
+                    max_seq_len: *max_seq_len,
+                    max_batch_size: *max_batch_size,
+                    max_image_shape: (max_image_length, max_image_length),
+                    max_num_images: max_num_images
+                        .unwrap_or(AutoDeviceMapParams::DEFAULT_MAX_NUM_IMAGES),
+                })
+            } else {
+                Ok(AutoDeviceMapParams::Text {
+                    max_seq_len: *max_seq_len,
+                    max_batch_size: *max_batch_size,
+                })
+            }
+        }
         ModelSelected::VisionPlain {
             max_seq_len,
             max_batch_size,
@@ -237,6 +265,121 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.jinja_explicit,
         )
         .build(arch)?,
+        ModelSelected::Run {
+            model_id,
+            tokenizer_json,
+            dtype: _,
+            topology,
+            organization,
+            write_uqff,
+            from_uqff,
+            imatrix,
+            calibration_file,
+            max_edge,
+            max_seq_len: _,
+            max_batch_size: _,
+            max_num_images: _,
+            max_image_length: _,
+            hf_cache_path,
+        } => {
+            let builder = AutoLoaderBuilder::new(
+                NormalSpecificConfig {
+                    prompt_chunksize: args.prompt_chunksize,
+                    topology: Topology::from_option_path(topology.clone())?,
+                    organization: organization.unwrap_or_default(),
+                    write_uqff: write_uqff.clone(),
+                    from_uqff: from_uqff.clone().map(|x| {
+                        x.split(UQFF_MULTI_FILE_DELIMITER)
+                            .map(PathBuf::from_str)
+                            .map(|x| x.unwrap())
+                            .collect::<Vec<_>>()
+                    }),
+                    imatrix: imatrix.clone(),
+                    calibration_file: calibration_file.clone(),
+                    hf_cache_path: hf_cache_path.clone(),
+                },
+                VisionSpecificConfig {
+                    prompt_chunksize: args.prompt_chunksize,
+                    topology: Topology::from_option_path(topology)?,
+                    write_uqff,
+                    from_uqff: from_uqff.map(|x| {
+                        x.split(UQFF_MULTI_FILE_DELIMITER)
+                            .map(PathBuf::from_str)
+                            .map(|x| x.unwrap())
+                            .collect::<Vec<_>>()
+                    }),
+                    max_edge,
+                    calibration_file,
+                    imatrix,
+                    hf_cache_path: hf_cache_path.clone(),
+                },
+                args.chat_template,
+                tokenizer_json,
+                model_id,
+                args.no_kv_cache,
+                args.jinja_explicit,
+            );
+            let builder = if let Some(ref path) = hf_cache_path {
+                builder.hf_cache_path(path.clone())
+            } else {
+                builder
+            };
+            builder.build()
+        }
+        ModelSelected::VisionPlain {
+            model_id,
+            tokenizer_json,
+            arch,
+            dtype: _,
+            topology,
+            write_uqff,
+            from_uqff,
+            max_edge,
+            calibration_file,
+            max_seq_len: _,
+            max_batch_size: _,
+            max_num_images: _,
+            max_image_length: _,
+            hf_cache_path,
+            imatrix,
+        } => VisionLoaderBuilder::new(
+            VisionSpecificConfig {
+                prompt_chunksize: args.prompt_chunksize,
+                topology: Topology::from_option_path(topology)?,
+                write_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.split(UQFF_MULTI_FILE_DELIMITER)
+                        .map(PathBuf::from_str)
+                        .map(|x| x.unwrap())
+                        .collect::<Vec<_>>()
+                }),
+                max_edge,
+                calibration_file,
+                imatrix,
+                hf_cache_path,
+            },
+            args.chat_template,
+            tokenizer_json,
+            Some(model_id),
+            args.jinja_explicit,
+        )
+        .build(arch),
+        ModelSelected::DiffusionPlain {
+            model_id,
+            arch,
+            dtype: _,
+        } => DiffusionLoaderBuilder::new(Some(model_id)).build(arch),
+        ModelSelected::Speech {
+            model_id,
+            dac_model_id,
+            arch,
+            ..
+        } => Box::new(SpeechLoader {
+            model_id,
+            dac_model_id,
+            arch,
+            cfg: None,
+        }),
         ModelSelected::XLora {
             model_id,
             xlora_model_id,
@@ -501,60 +644,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             )?,
         )
         .build(),
-        ModelSelected::VisionPlain {
-            model_id,
-            tokenizer_json,
-            arch,
-            dtype: _,
-            topology,
-            write_uqff,
-            from_uqff,
-            max_edge,
-            calibration_file,
-            max_seq_len: _,
-            max_batch_size: _,
-            max_num_images: _,
-            max_image_length: _,
-            hf_cache_path,
-            imatrix,
-        } => VisionLoaderBuilder::new(
-            VisionSpecificConfig {
-                prompt_chunksize: args.prompt_chunksize,
-                topology: Topology::from_option_path(topology)?,
-                write_uqff,
-                from_uqff: from_uqff.map(|x| {
-                    x.split(UQFF_MULTI_FILE_DELIMITER)
-                        .map(PathBuf::from_str)
-                        .map(|x| x.unwrap())
-                        .collect::<Vec<_>>()
-                }),
-                max_edge,
-                calibration_file,
-                imatrix,
-                hf_cache_path,
-            },
-            args.chat_template,
-            tokenizer_json,
-            Some(model_id),
-            args.jinja_explicit,
-        )
-        .build(arch),
-        ModelSelected::DiffusionPlain {
-            model_id,
-            arch,
-            dtype: _,
-        } => DiffusionLoaderBuilder::new(Some(model_id)).build(arch),
-        ModelSelected::Speech {
-            model_id,
-            dac_model_id,
-            arch,
-            ..
-        } => Box::new(SpeechLoader {
-            model_id,
-            dac_model_id,
-            arch,
-            cfg: None,
-        }),
     };
     Ok(loader)
 }

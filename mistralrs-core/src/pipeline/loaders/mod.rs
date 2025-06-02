@@ -341,6 +341,33 @@ pub enum AutoDeviceMapParams {
 }
 
 impl AutoDeviceMapParams {
+    pub fn maybe_promote_to_vision(&self) -> Self {
+        match *self {
+            Self::Text {
+                max_seq_len,
+                max_batch_size,
+            } => Self::Vision {
+                max_seq_len,
+                max_batch_size,
+                max_image_shape: (
+                    Self::DEFAULT_MAX_IMAGE_LENGTH,
+                    Self::DEFAULT_MAX_IMAGE_LENGTH,
+                ),
+                max_num_images: Self::DEFAULT_MAX_NUM_IMAGES,
+            },
+            Self::Vision {
+                max_seq_len,
+                max_batch_size,
+                max_image_shape,
+                max_num_images,
+            } => Self::Vision {
+                max_seq_len,
+                max_batch_size,
+                max_image_shape,
+                max_num_images,
+            },
+        }
+    }
     pub fn max_seq_len(&self) -> usize {
         match self {
             Self::Text { max_seq_len, .. } | Self::Vision { max_seq_len, .. } => *max_seq_len,
