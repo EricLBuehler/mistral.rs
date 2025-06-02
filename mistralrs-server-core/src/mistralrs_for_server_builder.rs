@@ -50,7 +50,7 @@ pub mod defaults {
 /// ### Examples
 ///
 /// Basic usage:
-/// ```ignore
+/// ```no_run
 /// let args = Args::parse();
 ///
 /// let mistralrs = MistralRsForServerBuilder::new()
@@ -212,7 +212,7 @@ impl MistralRsForServerBuilder {
     ///
     /// ### Examples
     ///
-    /// ```ignore
+    /// ```no_run
     /// let builder = MistralRsForServerBuilder::new();
     /// ```
     pub fn new() -> Self {
@@ -464,7 +464,7 @@ impl MistralRsForServerBuilder {
     ///
     /// ### Examples
     ///
-    /// ```ignore
+    /// ```no_run
     /// let shared_mistralrs = MistralRsForServerBuilder::new()
     ///     .with_model(model)
     ///     .with_in_situ_quant("8".to_string())

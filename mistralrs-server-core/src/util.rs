@@ -23,7 +23,7 @@ use tokio::{
 ///
 /// ### Examples
 ///
-/// ```ignore
+/// ```no_run
 /// // Load from HTTP URL
 /// let image = parse_image_url("https://example.com/photo.jpg").await?;
 ///

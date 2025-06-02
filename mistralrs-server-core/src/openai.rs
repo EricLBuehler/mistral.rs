@@ -131,7 +131,7 @@ pub struct ToolCall {
 ///
 /// ### Examples
 ///
-/// ```ignore
+/// ```no_run
 /// // User message
 /// let user_msg = Message {
 ///     content: Some(MessageContent(Either::Left("What's 2+2?".to_string()))),
@@ -209,7 +209,7 @@ fn default_response_format() -> ImageGenerationResponseFormat {
 ///
 /// ### Examples
 ///
-/// ```ignore
+/// ```no_run
 /// // Regex grammar for phone numbers
 /// let phone_regex = Grammar::Regex(r"\d{3}-\d{3}-\d{4}".to_string());
 ///

@@ -33,7 +33,7 @@ pub const MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
 /// ### Examples
 ///
 /// Basic usage:
-/// ```ignore
+/// ```no_run
 /// let router = MistralRsServerRouterBuilder::new()
 ///     .with_mistralrs(mistralrs_instance)
 ///     .build()
@@ -41,7 +41,7 @@ pub const MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
 /// ```
 ///
 /// With custom configuration:
-/// ```ignore
+/// ```no_run
 /// let router = MistralRsServerRouterBuilder::new()
 ///     .with_mistralrs(mistralrs_instance)
 ///     .with_include_swagger_routes(false)
@@ -79,7 +79,7 @@ impl MistralRsServerRouterBuilder {
     ///
     /// ### Examples
     ///
-    /// ```ignore
+    /// ```no_run
     /// let builder = MistralRsServerRouterBuilder::new();
     /// ```
     pub fn new() -> Self {
@@ -121,7 +121,7 @@ impl MistralRsServerRouterBuilder {
     ///
     /// ### Examples
     ///
-    /// ```ignore
+    /// ```no_run
     /// let router = MistralRsServerRouterBuilder::new()
     ///     .with_mistralrs(mistralrs_instance)
     ///     .build()

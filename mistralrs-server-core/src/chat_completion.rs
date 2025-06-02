@@ -40,7 +40,7 @@ use crate::{
 ///
 /// ### Examples
 ///
-/// ```ignore
+/// ```no_run
 /// let on_chunk: OnChunkCallback = Box::new(|mut chunk| {
 ///     // Log the chunk or modify its content
 ///     println!("Processing chunk: {:?}", chunk);
@@ -57,7 +57,7 @@ pub type OnChunkCallback =
 ///
 /// ### Examples
 ///
-/// ```ignore
+/// ```no_run
 /// let on_done: OnDoneCallback = Box::new(|chunks| {
 ///     println!("Stream completed with {} chunks", chunks.len());
 ///     // Process all chunks for analytics

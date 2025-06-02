@@ -29,7 +29,7 @@ use mistralrs_core::{
 /// * `base_path` - the base path of the mistral.rs server instance (in case the mistral.rs server is being included in another axum project)
 ///
 /// ### Example
-/// ```ignore
+/// ```no_run
 /// // MyApp
 /// use mistralrs_server_core::openapi_doc::get_openapi_doc;
 ///
