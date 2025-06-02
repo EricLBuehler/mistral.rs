@@ -72,19 +72,19 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     **Llama 4:**
 
     ```bash
-    ./mistralrs-server -i --isq 4 vision-plain -m meta-llama/Llama-4-Scout-17B-16E-Instruct
+    ./mistralrs-server -i --isq 4 run -m meta-llama/Llama-4-Scout-17B-16E-Instruct
     ```
 
     **Llama 3.1/3.2/3.3:**
 
     ```
-    ./mistralrs-server -i --isq 8 plain -m meta-llama/Llama-3.2-3B-Instruct
+    ./mistralrs-server -i --isq 8 run -m meta-llama/Llama-3.2-3B-Instruct
     ```
 
     **Llama 3.2 vision:**
 
     ```
-    ./mistralrs-server -i --isq 8 vision-plain -m meta-llama/Llama-3.2-11B-Vision-Instruct
+    ./mistralrs-server -i --isq 8 run -m meta-llama/Llama-3.2-11B-Vision-Instruct
     ```
 
   </details>
@@ -94,7 +94,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     <summary>Show command</summary>
 
     ```bash
-    ./mistralrs-server -i --isq 8 vision-plain -m google/gemma-3-4b-it
+    ./mistralrs-server -i --isq 8 run -m google/gemma-3-4b-it
     ```
   </details>
 
@@ -103,7 +103,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     <summary>Show command</summary>
 
     ```bash
-    ./mistralrs-server -i diffusion-plain -m black-forest-labs/FLUX.1-schnell -a flux
+    ./mistralrs-server -i diffusion -m black-forest-labs/FLUX.1-schnell -a flux
     ```
   </details>
 
@@ -112,7 +112,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     <summary>Show command</summary>
 
     ```bash
-    ./mistralrs-server -i --isq 8 plain -m Qwen/Qwen3-8B
+    ./mistralrs-server -i --isq 8 run -m Qwen/Qwen3-8B
     ```
   </details>
 
@@ -276,7 +276,7 @@ cargo build --release --features "cuda flash-attn cudnn"
 - Pass a path to a downloaded model from Hugging Face hub:
     - Example:  
       ```
-      ./mistralrs-server -i plain -m path/to/model
+      ./mistralrs-server -i run -m path/to/model
       ```
 
 ### Running GGUF models
@@ -305,6 +305,17 @@ cargo build --release --features "cuda flash-attn cudnn"
 
 Mistral.rs uses subcommands to control the model type. Please run `./mistralrs-server --help` to see the subcommands which categorize the models by kind.
 
+> **🚨 Important:** The `run` subcommand (alias for `plain`/`vision-plain`) only auto-detects and runs **text** and **vision** models. It does **not** support **diffusion** or **speech** models. 
+> To run a diffusion model (e.g. FLUX series), use the `diffusion` subcommand:
+> ```bash
+> mistralrs-server -i diffusion -m <model-id> [options]
+> ```
+> To run a speech model (e.g. Dia), use the `speech` subcommand:
+> ```bash
+> mistralrs-server -i speech -m <model-id> [options]
+> ```
+> If you attempt to use `run` with diffusion or speech models, model loading will fail.
+
 ### Interactive mode
 
 **Llama 3.2 3B running on an M3 Max with 8-bit ISQ:**
@@ -323,10 +334,10 @@ Vision models work seamlessly:
 ./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
 ```
 
-Diffusion models can be run too:
+Diffusion models can be run too (quantization and adapters are not yet supported):
 
 ```bash
-./mistralrs-server -i diffusion-plain -m black-forest-labs/FLUX.1-schnell -a flux
+./mistralrs-server -i diffusion -m black-forest-labs/FLUX.1-schnell -a flux
 ```
 
 And you can run speech generation in your terminal!
@@ -340,7 +351,7 @@ And you can run speech generation in your terminal!
 You can launch an HTTP server by replacing `-i` with `--port <port>`. For instance:
 
 ```bash
-./mistralrs-server --port 1234 plain -m microsoft/Phi-3.5-MoE-instruct
+./mistralrs-server --port 1234 run -m microsoft/Phi-3.5-MoE-instruct
 ```
 
 You can find documentation about the server itself [here](docs/HTTP.md).

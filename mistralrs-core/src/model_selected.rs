@@ -596,7 +596,8 @@ pub enum ModelSelected {
         hf_cache_path: Option<PathBuf>,
     },
 
-    /// Select a diffusion plain model, without quantization or adapters
+    /// Select a diffusion model, without quantization or adapters
+    #[command(name = "diffusion")]
     DiffusionPlain {
         /// Model ID to load from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
