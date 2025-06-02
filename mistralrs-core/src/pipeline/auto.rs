@@ -1,8 +1,6 @@
 use super::{
-    Loader, ModelKind, ModelPaths,
-    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
-    VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
-    TokenSource,
+    Loader, ModelKind, ModelPaths, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
+    TokenSource, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
 };
 use crate::api_get_file;
 use crate::utils::tokens::get_token;
