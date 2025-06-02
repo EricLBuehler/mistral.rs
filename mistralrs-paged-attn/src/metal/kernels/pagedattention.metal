@@ -750,6 +750,7 @@ inline float block_sum(threadgroup float *red_smem, float sum, uint simd_tid,
 
 constant bool use_partitioning [[function_constant(10)]];
 constant bool use_alibi [[function_constant(20)]];
+constant bool use_fp8_scales [[function_constant(30)]];
 
 template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
           int NUM_THREADS, int NUM_SIMD_LANES, int PARTITION_SIZE = 0>
@@ -767,9 +768,11 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
     [[buffer(4)]], // [num_blocks, num_kv_heads, head_size/x, block_size, x]
     device const CACHE_T *v_cache
     [[buffer(5)]], // [num_blocks, num_kv_heads, head_size, block_size]
-    const device float *__restrict__ k_scale [[buffer(6)]], // [1]
-    const device float *__restrict__ v_scale [[buffer(7)]], // [1]
-    const constant int &num_kv_heads [[buffer(8)]],         // [num_heads]
+    const device float *__restrict__ k_scale
+    [[buffer(6), function_constant(use_fp8_scales)]], // [1]
+    const device float *__restrict__ v_scale
+    [[buffer(7), function_constant(use_fp8_scales)]], // [1]
+    const constant int &num_kv_heads [[buffer(8)]],   // [num_heads]
     const constant float &scale [[buffer(9)]],
     const constant float &softcapping [[buffer(10)]],
     device const uint32_t *block_tables
@@ -1258,8 +1261,10 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES,
       device type *out [[buffer(2)]], device const type *q [[buffer(3)]],      \
       device const cache_type *k_cache [[buffer(4)]],                          \
       device const cache_type *v_cache [[buffer(5)]],                          \
-      device const float *k_scale [[buffer(6)]],                               \
-      device const float *v_scale [[buffer(7)]],                               \
+      device const float *k_scale                                              \
+      [[buffer(6), function_constant(use_fp8_scales)]],                        \
+      device const float *v_scale                                              \
+      [[buffer(7), function_constant(use_fp8_scales)]],                        \
       const constant int &num_kv_heads [[buffer(8)]],                          \
       const constant float &scale [[buffer(9)]],                               \
       const constant float &softcapping [[buffer(10)]],                        \

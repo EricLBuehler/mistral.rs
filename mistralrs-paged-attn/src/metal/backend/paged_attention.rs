@@ -16,8 +16,7 @@ struct PagedAttention {
     alibi_slopes: Option<Tensor>,
     max_context_len: usize,
 
-    k_scale: Tensor,
-    v_scale: Tensor,
+    k_v_scale: Option<(Tensor, Tensor)>,
 }
 
 impl candle_core::CustomOp1 for PagedAttention {
@@ -157,21 +156,29 @@ impl candle_core::CustomOp1 for PagedAttention {
             )
         }
 
-        assert_eq!(self.k_scale.elem_count(), 1);
-        assert_eq!(self.v_scale.elem_count(), 1);
-        assert_eq!(self.k_scale.dtype(), DType::F32);
-        assert_eq!(self.v_scale.dtype(), DType::F32);
+        let k_v_scale = if let Some((k_scale, v_scale)) = &self.k_v_scale {
+            if k_scale.elem_count() != 1 || v_scale.elem_count() != 1 {
+                candle_core::bail!("k_scale and v_scale must be scalars");
+            }
+            if k_scale.dtype() != DType::F32 || v_scale.dtype() != DType::F32 {
+                candle_core::bail!("k_scale and v_scale must be f32");
+            }
 
-        let (k_scale, _) = self.k_scale.storage_and_layout();
-        let k_scale = match &*k_scale {
-            Storage::Metal(k_scale) => k_scale,
-            _ => candle_core::bail!("k_scale must be a metal tensor"),
-        };
+            let (k_scale, _) = k_scale.storage_and_layout();
+            let k_scale = match &*k_scale {
+                Storage::Metal(k_scale) => k_scale,
+                _ => candle_core::bail!("k_scale must be a metal tensor"),
+            };
 
-        let (v_scale, _) = self.v_scale.storage_and_layout();
-        let v_scale = match &*v_scale {
-            Storage::Metal(v_scale) => v_scale,
-            _ => candle_core::bail!("v_scale must be a metal tensor"),
+            let (v_scale, _) = v_scale.storage_and_layout();
+            let v_scale = match &*v_scale {
+                Storage::Metal(v_scale) => v_scale,
+                _ => candle_core::bail!("v_scale must be a metal tensor"),
+            };
+
+            Some((k_scale.buffer().clone(), v_scale.buffer().clone()))
+        } else {
+            None
         };
 
         let q_stride = q_l.stride()[0];
@@ -207,8 +214,7 @@ impl candle_core::CustomOp1 for PagedAttention {
                 bt_l.start_offset() * bt.dtype().size_in_bytes(),
                 cl.buffer(),
                 cl_l.start_offset() * cl.dtype().size_in_bytes(),
-                k_scale.buffer(),
-                v_scale.buffer(),
+                k_v_scale,
                 alibi_storage_and_offset,
                 &out,
                 num_kv_heads as i32,
@@ -262,8 +268,7 @@ impl candle_core::CustomOp1 for PagedAttention {
                 bt_l.start_offset() * bt.dtype().size_in_bytes(),
                 cl.buffer(),
                 cl_l.start_offset() * cl.dtype().size_in_bytes(),
-                k_scale.buffer(),
-                v_scale.buffer(),
+                k_v_scale,
                 alibi_storage_and_offset,
                 &tmp_out,
                 &out,
@@ -312,8 +317,7 @@ impl candle_core::CustomOp1 for PagedAttention {
 #[allow(clippy::too_many_arguments)]
 pub fn paged_attention(
     q: &Tensor,
-    k_scale: &Tensor,
-    v_scale: &Tensor,
+    k_v_scale: Option<&(Tensor, Tensor)>,
     key_cache: &Tensor,
     value_cache: &Tensor,
     block_tables: &Tensor,
@@ -332,8 +336,7 @@ pub fn paged_attention(
         max_context_len,
         softcapping,
         alibi_slopes: alibi_slopes.cloned(),
-        k_scale: k_scale.clone(),
-        v_scale: v_scale.clone(),
+        k_v_scale: k_v_scale.cloned(),
     };
     q.apply_op1(op)
 }
@@ -351,8 +354,7 @@ pub fn paged_attention(
 pub fn reshape_and_cache(
     key: &Tensor,
     value: &Tensor,
-    k_scale: &Tensor,
-    v_scale: &Tensor,
+    k_v_scale: Option<&(Tensor, Tensor)>,
     key_cache: &Tensor,
     value_cache: &Tensor,
     slot_mapping: &Tensor,
@@ -401,21 +403,29 @@ pub fn reshape_and_cache(
         _ => candle_core::bail!("slot_mapping must be a metal tensor"),
     };
 
-    assert_eq!(k_scale.elem_count(), 1);
-    assert_eq!(v_scale.elem_count(), 1);
-    assert_eq!(k_scale.dtype(), DType::F32);
-    assert_eq!(v_scale.dtype(), DType::F32);
+    let k_v_scale = if let Some((k_scale, v_scale)) = k_v_scale {
+        if k_scale.elem_count() != 1 || v_scale.elem_count() != 1 {
+            candle_core::bail!("k_scale and v_scale must be scalars");
+        }
+        if k_scale.dtype() != DType::F32 || v_scale.dtype() != DType::F32 {
+            candle_core::bail!("k_scale and v_scale must be f32");
+        }
 
-    let (k_scale, _) = k_scale.storage_and_layout();
-    let k_scale = match &*k_scale {
-        Storage::Metal(k_scale) => k_scale,
-        _ => candle_core::bail!("k_scale must be a metal tensor"),
-    };
+        let (k_scale, _) = k_scale.storage_and_layout();
+        let k_scale = match &*k_scale {
+            Storage::Metal(k_scale) => k_scale,
+            _ => candle_core::bail!("k_scale must be a metal tensor"),
+        };
 
-    let (v_scale, _) = v_scale.storage_and_layout();
-    let v_scale = match &*v_scale {
-        Storage::Metal(v_scale) => v_scale,
-        _ => candle_core::bail!("v_scale must be a metal tensor"),
+        let (v_scale, _) = v_scale.storage_and_layout();
+        let v_scale = match &*v_scale {
+            Storage::Metal(v_scale) => v_scale,
+            _ => candle_core::bail!("v_scale must be a metal tensor"),
+        };
+
+        Some((k_scale.buffer().clone(), v_scale.buffer().clone()))
+    } else {
+        None
     };
 
     let k_rank = k_l.stride().len();
@@ -497,8 +507,7 @@ pub fn reshape_and_cache(
         vc_l.start_offset() * value_cache.dtype().size_in_bytes(),
         s.buffer(),
         s_l.start_offset() * slot_mapping.dtype().size_in_bytes(),
-        k_scale.buffer(),
-        v_scale.buffer(),
+        k_v_scale,
         num_tokens as i32,
         num_heads as i32,
         head_size as i32,

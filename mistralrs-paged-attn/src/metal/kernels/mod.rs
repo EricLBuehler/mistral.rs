@@ -224,8 +224,7 @@ pub fn call_reshape_and_cache(
     value_cache_offset: usize,
     slot_mapping: &Buffer,
     slot_mapping_offset: usize,
-    k_scale: &Buffer,
-    v_scale: &Buffer,
+    k_v_scale: Option<(Buffer, Buffer)>,
     num_tokens: i32,
     num_heads: i32,
     head_size: i32,
@@ -239,30 +238,55 @@ pub fn call_reshape_and_cache(
         kv_ty.to_repr(),
         cache_ty.to_repr()
     );
-    // dbg!(&name);
 
-    let pipeline = kernels.load_pipeline(device, name)?;
+    let constants = Some(ConstantValues::new(vec![(
+        10,
+        Value::Bool(/* use_fp8_scales */ k_v_scale.is_some()),
+    )]));
+
+    let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(
-        encoder,
-        (
-            (key, key_offset),
-            (value, value_offset),
-            (key_cache, key_cache_offset),
-            (value_cache, value_cache_offset),
-            (slot_mapping, slot_mapping_offset),
-            k_scale,
-            v_scale,
-            key_stride,
-            value_stride,
-            num_heads,
-            head_size,
-            block_size,
-            x
-        )
+    encoder.set_buffer(0, Some(key), key_offset as NSUInteger);
+    encoder.set_buffer(1, Some(value), value_offset as NSUInteger);
+    encoder.set_buffer(2, Some(key_cache), key_cache_offset as NSUInteger);
+    encoder.set_buffer(3, Some(value_cache), value_cache_offset as NSUInteger);
+    encoder.set_buffer(4, Some(slot_mapping), slot_mapping_offset as NSUInteger);
+    if let Some((k_scale, v_scale)) = k_v_scale {
+        encoder.set_buffer(5, Some(&k_scale), 0 as NSUInteger);
+        encoder.set_buffer(6, Some(&v_scale), 0 as NSUInteger);
+    }
+    encoder.set_bytes(
+        7,
+        core::mem::size_of_val(&key_stride) as u64,
+        &key_stride as *const _ as *const c_void,
+    );
+    encoder.set_bytes(
+        8,
+        core::mem::size_of_val(&value_stride) as u64,
+        &value_stride as *const _ as *const c_void,
+    );
+    encoder.set_bytes(
+        9,
+        core::mem::size_of_val(&num_heads) as u64,
+        &num_heads as *const _ as *const c_void,
+    );
+    encoder.set_bytes(
+        10,
+        core::mem::size_of_val(&head_size) as u64,
+        &head_size as *const _ as *const c_void,
+    );
+    encoder.set_bytes(
+        11,
+        core::mem::size_of_val(&block_size) as u64,
+        &block_size as *const _ as *const c_void,
+    );
+    encoder.set_bytes(
+        12,
+        core::mem::size_of_val(&x) as u64,
+        &x as *const _ as *const c_void,
     );
 
     let thread_groups_count = MTLSize {
@@ -346,8 +370,7 @@ pub fn call_paged_attention_v1(
     block_tables_offset: usize,
     context_lens: &Buffer,
     context_lens_offset: usize,
-    k_scale: &Buffer,
-    v_scale: &Buffer,
+    k_v_scale: Option<(Buffer, Buffer)>,
     alibi_storage_and_offset: Option<(MetalStorage, usize)>,
     output: &Buffer,
     num_kv_heads: i32,
@@ -371,15 +394,14 @@ pub fn call_paged_attention_v1(
         "paged_attention_{}_cache_{}_hs{head_size}_bs{block_size}_nt{NUM_THREADS}_nsl{NUM_SIMD_LANES}_ps0",
         ty.to_repr(), cache_ty.to_repr()
     );
-    // dbg!(&name);
 
-    // Handle alibi
     let constants = Some(ConstantValues::new(vec![
         (10, Value::Bool(/* use_partitioning */ false)),
         (
             20,
             Value::Bool(/* use_alibi */ alibi_storage_and_offset.is_some()),
         ),
+        (30, Value::Bool(/* use_fp8_scales */ k_v_scale.is_some())),
     ]));
 
     let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
@@ -400,8 +422,10 @@ pub fn call_paged_attention_v1(
     encoder.set_buffer(3, Some(q), q_offset as NSUInteger);
     encoder.set_buffer(4, Some(k_cache), k_cache_offset as NSUInteger);
     encoder.set_buffer(5, Some(v_cache), v_cache_offset as NSUInteger);
-    encoder.set_buffer(6, Some(k_scale), 0 as NSUInteger);
-    encoder.set_buffer(7, Some(v_scale), 0 as NSUInteger);
+    if let Some((k_scale, v_scale)) = &k_v_scale {
+        encoder.set_buffer(6, Some(k_scale), 0 as NSUInteger);
+        encoder.set_buffer(7, Some(v_scale), 0 as NSUInteger);
+    }
     encoder.set_bytes(
         8,
         core::mem::size_of_val(&num_kv_heads) as u64,
@@ -476,8 +500,7 @@ pub fn call_paged_attention_v2(
     block_tables_offset: usize,
     context_lens: &Buffer,
     context_lens_offset: usize,
-    k_scale: &Buffer,
-    v_scale: &Buffer,
+    k_v_scale: Option<(Buffer, Buffer)>,
     alibi_storage_and_offset: Option<(MetalStorage, usize)>,
     tmp_out: &Buffer,
     output: &Buffer,
@@ -514,6 +537,7 @@ pub fn call_paged_attention_v2(
                 20,
                 Value::Bool(/* use_alibi */ alibi_storage_and_offset.is_some()),
             ),
+            (30, Value::Bool(/* use_fp8_scales */ k_v_scale.is_some())),
         ]));
 
         let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
@@ -538,8 +562,10 @@ pub fn call_paged_attention_v2(
         encoder.set_buffer(3, Some(q), q_offset as NSUInteger);
         encoder.set_buffer(4, Some(k_cache), k_cache_offset as NSUInteger);
         encoder.set_buffer(5, Some(v_cache), v_cache_offset as NSUInteger);
-        encoder.set_buffer(6, Some(k_scale), 0 as NSUInteger);
-        encoder.set_buffer(7, Some(v_scale), 0 as NSUInteger);
+        if let Some((k_scale, v_scale)) = &k_v_scale {
+            encoder.set_buffer(6, Some(k_scale), 0 as NSUInteger);
+            encoder.set_buffer(7, Some(v_scale), 0 as NSUInteger);
+        }
         encoder.set_bytes(
             8,
             core::mem::size_of_val(&num_kv_heads) as u64,

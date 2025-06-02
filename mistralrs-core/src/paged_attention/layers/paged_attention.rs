@@ -111,19 +111,27 @@ impl PagedAttention {
             (q, k, v)
         };
 
-        let k_scale = {
-            let mut absmax = key.abs()?;
-            while !absmax.dims().is_empty() {
-                absmax = absmax.max(0)?;
-            }
-            (absmax / 240.)?.to_dtype(DType::F32)?
-        };
-        let v_scale = {
-            let mut absmax = value.abs()?;
-            while !absmax.dims().is_empty() {
-                absmax = absmax.max(0)?;
-            }
-            (absmax / 240.)?.to_dtype(DType::F32)?
+        let k_v_scale = if key_cache
+            .as_ref()
+            .is_some_and(|kc| kc.dtype() == DType::F8E4M3)
+        {
+            let k_scale = {
+                let mut absmax = key.abs()?;
+                while !absmax.dims().is_empty() {
+                    absmax = absmax.max(0)?;
+                }
+                (absmax / 240.)?.to_dtype(DType::F32)?
+            };
+            let v_scale = {
+                let mut absmax = value.abs()?;
+                while !absmax.dims().is_empty() {
+                    absmax = absmax.max(0)?;
+                }
+                (absmax / 240.)?.to_dtype(DType::F32)?
+            };
+            Some((k_scale.clone(), v_scale.clone()))
+        } else {
+            None
         };
         // let k_scale = Tensor::new(0.045f32, key.device())?;
         // let v_scale = Tensor::new(0.005f32, key.device())?;
@@ -139,8 +147,7 @@ impl PagedAttention {
             reshape_and_cache(
                 &key,
                 &value,
-                &k_scale,
-                &v_scale,
+                k_v_scale.as_ref(),
                 key_cache.as_mut().unwrap(),
                 value_cache.as_mut().unwrap(),
                 slot_mapping,
@@ -169,8 +176,7 @@ impl PagedAttention {
         #[allow(clippy::cast_possible_truncation)]
         paged_attention(
             &query,
-            &k_scale,
-            &v_scale,
+            k_v_scale.as_ref(),
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
             block_tables,
