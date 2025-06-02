@@ -8,7 +8,7 @@ use mistralrs_core::{MistralRs, Pipeline};
 /// This is the underlying instance of mistral.rs.
 pub type SharedMistralState = Arc<MistralRs>;
 
-/// This is the `SharedMistralState` that has been extracted for and axum handler.
+/// This is the `SharedMistralState` that has been extracted for an axum handler.
 pub type ExtractedMistralState = State<SharedMistralState>;
 
 pub(crate) type LoadedPipeline = Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>;

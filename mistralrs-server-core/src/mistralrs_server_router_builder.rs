@@ -56,6 +56,8 @@ pub struct MistralRsServerRouterBuilder {
     include_swagger_routes: bool,
     /// Optional base path prefix for all routes
     base_path: Option<String>,
+    /// Optional CORS allowed origins
+    allowed_origins: Option<Vec<String>>,
 }
 
 impl Default for MistralRsServerRouterBuilder {
@@ -65,6 +67,7 @@ impl Default for MistralRsServerRouterBuilder {
             mistralrs: None,
             include_swagger_routes: true,
             base_path: None,
+            allowed_origins: None,
         }
     }
 }
@@ -108,6 +111,12 @@ impl MistralRsServerRouterBuilder {
         self
     }
 
+    /// Sets the CORS allowed origins.
+    pub fn with_allowed_origins(mut self, origins: Vec<String>) -> Self {
+        self.allowed_origins = Some(origins);
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
@@ -129,6 +138,7 @@ impl MistralRsServerRouterBuilder {
             mistralrs,
             self.include_swagger_routes,
             self.base_path.as_deref(),
+            self.allowed_origins,
         );
 
         Ok(mistralrs_server_router)
@@ -143,8 +153,14 @@ fn init_router(
     state: SharedMistralState,
     include_swagger_routes: bool,
     base_path: Option<&str>,
+    allowed_origins: Option<Vec<String>>,
 ) -> Router {
-    let allow_origin = AllowOrigin::any();
+    let allow_origin = if let Some(origins) = allowed_origins {
+        AllowOrigin::list(origins.into_iter().map(|o| o.parse().unwrap()))
+    } else {
+        AllowOrigin::any()
+    };
+
     let cors_layer = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST])
         .allow_headers([http::header::CONTENT_TYPE, http::header::AUTHORIZATION])

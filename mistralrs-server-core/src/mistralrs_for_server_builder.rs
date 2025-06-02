@@ -526,7 +526,7 @@ impl MistralRsForServerBuilder {
             .with_jinja_explicit(self.jinja_explicit)
             .build()?;
 
-        mistralrs_instance_info(&loader);
+        mistralrs_instance_info(&*loader);
 
         let isq = self
             .in_situ_quant
@@ -634,8 +634,7 @@ fn init_mapper(
 }
 
 /// Logs hardware feature information and the model's sampling strategy and kind.
-#[allow(clippy::borrowed_box)]
-fn mistralrs_instance_info(loader: &Box<dyn Loader>) {
+fn mistralrs_instance_info(loader: &dyn Loader) {
     info!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
         candle_core::utils::with_avx(),

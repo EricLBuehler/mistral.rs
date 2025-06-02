@@ -573,7 +573,15 @@ pub fn create_response_channel() -> (Sender<Response>, Receiver<Response>) {
 /// Gets the keep-alive interval for SSE streams from environment or default.
 pub fn get_keep_alive_interval() -> u64 {
     env::var("KEEP_ALIVE_INTERVAL")
-        .map(|val| val.parse::<u64>().unwrap_or(DEFAULT_KEEP_ALIVE_INTERVAL))
+        .map(|val| {
+            val.parse::<u64>().unwrap_or_else(|e| {
+                eprintln!(
+                    "Warning: Failed to parse KEEP_ALIVE_INTERVAL: {}. Using default.",
+                    e
+                );
+                DEFAULT_KEEP_ALIVE_INTERVAL
+            })
+        })
         .unwrap_or(DEFAULT_KEEP_ALIVE_INTERVAL)
 }
 

@@ -85,8 +85,7 @@
 //!     api_docs.merge(mistral_doc);
 //!
 //!     let app_state = Arc::new(AppState {
-//!         mistral_state: shared_mistralrs,
-//!         db_create: mock_db_call,
+//!         mistral_state: shared_mistralrs
 //!     });
 //!
 //!     let app = Router::new()
