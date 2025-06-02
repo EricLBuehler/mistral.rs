@@ -1,15 +1,86 @@
+use std::sync::{Arc, Mutex};
+
 use candle_core::{DType, Device, Result, Tensor};
 
 use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
 use crate::{
     attention::SdpaParams,
+    get_mut_arcmutex,
     layers::Sdpa,
     pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
 };
 
+#[derive(Clone)]
+enum KvScaleCalculator {
+    InProgress {
+        k_scale: Tensor,
+        v_scale: Tensor,
+        n: usize,
+    },
+    Done {
+        k_scale: Tensor,
+        v_scale: Tensor,
+    },
+}
+
+impl KvScaleCalculator {
+    fn new(device: &Device) -> Result<Self> {
+        Ok(Self::InProgress {
+            k_scale: Tensor::new(1f32, device)?,
+            v_scale: Tensor::new(1f32, device)?,
+            n: 0,
+        })
+    }
+
+    fn collect(&mut self, k_scale_new: &Tensor, v_scale_new: &Tensor) -> Result<()> {
+        match self {
+            Self::InProgress {
+                k_scale,
+                v_scale,
+                n,
+            } => {
+                *k_scale = k_scale.clone().maximum(k_scale_new)?;
+                *v_scale = v_scale.clone().maximum(v_scale_new)?;
+                *n += 1;
+            }
+            Self::Done { .. } => {
+                candle_core::bail!("KvScaleCalculator::collect requires InProgress scales");
+            }
+        }
+
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<()> {
+        match self {
+            Self::InProgress {
+                k_scale,
+                v_scale,
+                n: _,
+            } => {
+                println!(
+                    "k {} v {}",
+                    k_scale.to_scalar::<f32>()?,
+                    v_scale.to_scalar::<f32>()?
+                );
+                *self = Self::Done {
+                    k_scale: k_scale.clone(),
+                    v_scale: v_scale.clone(),
+                }
+            }
+            Self::Done { .. } => {
+                candle_core::bail!("KvScaleCalculator::finalize requires InProgress scales");
+            }
+        }
+
+        Ok(())
+    }
+}
+
 pub struct PagedAttention {
     alibi_slopes: Option<Tensor>,
+    k_v_scale: Option<Arc<Mutex<KvScaleCalculator>>>,
 }
 
 impl PagedAttention {
@@ -20,7 +91,10 @@ impl PagedAttention {
         } else {
             None
         };
-        Ok(Self { alibi_slopes })
+        Ok(Self {
+            alibi_slopes,
+            k_v_scale: Some(Arc::new(Mutex::new(KvScaleCalculator::new(device)?))),
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -111,32 +185,53 @@ impl PagedAttention {
             (q, k, v)
         };
 
-        let k_v_scale = if key_cache
-            .as_ref()
-            .is_some_and(|kc| kc.dtype() == DType::F8E4M3)
-        {
-            let k_scale = {
-                let mut absmax = key.abs()?;
-                while !absmax.dims().is_empty() {
-                    absmax = absmax.max(0)?;
+        if let Some(collector) = &self.k_v_scale {
+            let collector = &mut *get_mut_arcmutex!(collector);
+            if let KvScaleCalculator::InProgress {
+                k_scale,
+                v_scale,
+                n,
+            } = collector.clone()
+            {
+                let k_scale = {
+                    let mut absmax = key.abs()?.to_dtype(DType::F32)?;
+                    while !absmax.dims().is_empty() {
+                        absmax = absmax.max(0)?;
+                    }
+                    (absmax / 240.)?.to_dtype(DType::F32)?
+                };
+                let v_scale = {
+                    let mut absmax = value.abs()?.to_dtype(DType::F32)?;
+                    while !absmax.dims().is_empty() {
+                        absmax = absmax.max(0)?;
+                    }
+                    (absmax / 240.)?
+                };
+                collector.collect(&k_scale, &v_scale)?;
+
+                if n == 100 {
+                    collector.finish()?;
+                    assert!(matches!(collector, KvScaleCalculator::Done { .. }));
                 }
-                (absmax / 240.)?.to_dtype(DType::F32)?
-            };
-            let v_scale = {
-                let mut absmax = value.abs()?;
-                while !absmax.dims().is_empty() {
-                    absmax = absmax.max(0)?;
+            }
+        }
+
+        let k_v_scale = if let Some(collector) = &self.k_v_scale {
+            match &*get_mut_arcmutex!(collector) {
+                // Use in progress during collection
+                KvScaleCalculator::Done { k_scale, v_scale } => {
+                    Some((k_scale.clone(), v_scale.clone()))
                 }
-                (absmax / 240.)?.to_dtype(DType::F32)?
-            };
-            Some((k_scale.clone(), v_scale.clone()))
+                KvScaleCalculator::InProgress {
+                    k_scale,
+                    v_scale,
+                    n,
+                } => Some((k_scale.clone(), v_scale.clone())),
+            }
         } else {
             None
         };
-        // let k_scale = Tensor::new(0.045f32, key.device())?;
-        // let v_scale = Tensor::new(0.005f32, key.device())?;
-        // println!("{k_scale}");
-        // println!("{v_scale}");
+        assert!(k_v_scale.is_some());
 
         // key: Tensor,              // [num_tokens, num_heads, head_size]
         // value: Tensor,            // [num_tokens, num_heads, head_size]
@@ -174,7 +269,7 @@ impl PagedAttention {
         //
         //  alibi_slopes: shape = [num_heads]
         #[allow(clippy::cast_possible_truncation)]
-        paged_attention(
+        let res = paged_attention(
             &query,
             k_v_scale.as_ref(),
             key_cache.as_ref().unwrap(),
@@ -185,6 +280,8 @@ impl PagedAttention {
             input_metadata.max_context_len.unwrap(),
             sdpa_params.softmax_scale,
             sdpa_params.softcap.unwrap_or(1.0f32),
-        )
+        )?;
+
+        Ok(res)
     }
 }
