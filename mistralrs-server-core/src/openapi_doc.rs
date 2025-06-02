@@ -31,6 +31,9 @@ use mistralrs_core::{
 /// ### Example
 /// ```no_run
 /// // MyApp
+/// use axum::{Router, routing::{get, post}};
+/// use utoipa::OpenApi;
+/// use utoipa_swagger_ui::SwaggerUi;
 /// use mistralrs_server_core::openapi_doc::get_openapi_doc;
 ///
 /// #[derive(OpenApi)]

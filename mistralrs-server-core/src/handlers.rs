@@ -8,7 +8,7 @@ use utoipa::ToSchema;
 
 use crate::{
     openai::{ModelObject, ModelObjects},
-    types::ExtractedMistralState,
+    types::ExtractedMistralRsState,
 };
 
 #[utoipa::path(
@@ -17,7 +17,7 @@ use crate::{
   path = "/v1/models",
   responses((status = 200, description = "Served model info", body = ModelObjects))
 )]
-pub async fn models(State(state): ExtractedMistralState) -> Json<ModelObjects> {
+pub async fn models(State(state): ExtractedMistralRsState) -> Json<ModelObjects> {
     Json(ModelObjects {
         object: "list",
         data: vec![ModelObject {
@@ -53,7 +53,7 @@ pub struct ReIsqRequest {
   responses((status = 200, description = "Reapply ISQ to a non GGUF or GGML model."))
 )]
 pub async fn re_isq(
-    State(state): ExtractedMistralState,
+    State(state): ExtractedMistralRsState,
     Json(request): Json<ReIsqRequest>,
 ) -> Result<String, String> {
     let repr = format!("Re ISQ: {:?}", request.ggml_type);

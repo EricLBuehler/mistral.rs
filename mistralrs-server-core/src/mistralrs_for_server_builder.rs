@@ -13,7 +13,7 @@ use mistralrs_core::{
 };
 use tracing::info;
 
-use crate::types::{LoadedPipeline, SharedMistralState};
+use crate::types::{LoadedPipeline, SharedMistralRsState};
 
 pub mod defaults {
     //! Provides the default values used for the mistral.rs instance for server.
@@ -51,6 +51,8 @@ pub mod defaults {
 ///
 /// Basic usage:
 /// ```no_run
+/// use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
+///
 /// let args = Args::parse();
 ///
 /// let mistralrs = MistralRsForServerBuilder::new()
@@ -213,7 +215,9 @@ impl MistralRsForServerBuilder {
     /// ### Examples
     ///
     /// ```no_run
-    /// let builder = MistralRsForServerBuilder::new();
+    /// use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
+    ///
+    /// let builder = mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder::new();
     /// ```
     pub fn new() -> Self {
         Default::default()
@@ -465,6 +469,8 @@ impl MistralRsForServerBuilder {
     /// ### Examples
     ///
     /// ```no_run
+    /// use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
+    ///
     /// let shared_mistralrs = MistralRsForServerBuilder::new()
     ///     .with_model(model)
     ///     .with_in_situ_quant("8".to_string())
@@ -472,7 +478,7 @@ impl MistralRsForServerBuilder {
     ///     .build()
     ///     .await?;
     /// ```
-    pub async fn build(mut self) -> Result<SharedMistralState> {
+    pub async fn build(mut self) -> Result<SharedMistralRsState> {
         // This was originally with the device config
         if self.cpu {
             self.no_paged_attn = true;

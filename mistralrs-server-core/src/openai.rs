@@ -132,6 +132,9 @@ pub struct ToolCall {
 /// ### Examples
 ///
 /// ```no_run
+/// use either::Either;
+/// use mistralrs_server_core::openai::{Message, MessageContent};
+///
 /// // User message
 /// let user_msg = Message {
 ///     content: Some(MessageContent(Either::Left("What's 2+2?".to_string()))),
@@ -210,6 +213,8 @@ fn default_response_format() -> ImageGenerationResponseFormat {
 /// ### Examples
 ///
 /// ```no_run
+/// use mistralrs_server_core::openai::Grammar;
+///
 /// // Regex grammar for phone numbers
 /// let phone_regex = Grammar::Regex(r"\d{3}-\d{3}-\d{4}".to_string());
 ///

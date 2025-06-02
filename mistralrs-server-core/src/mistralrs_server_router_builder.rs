@@ -18,7 +18,7 @@ use crate::{
     image_generation::image_generation,
     openapi_doc::get_openapi_doc,
     speech_generation::speech_generation,
-    types::SharedMistralState,
+    types::SharedMistralRsState,
 };
 
 // NOTE(EricLBuehler): Accept up to 50mb input
@@ -26,7 +26,7 @@ const N_INPUT_SIZE: usize = 50;
 const MB_TO_B: usize = 1024 * 1024; // 1024 kb in a mb
 
 /// This is the axum default request body limit for the router. Accept up to 50mb input.
-pub const MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
+pub const DEFAULT_MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
 
 /// A builder for creating a mistral.rs server router with configurable options.
 ///
@@ -34,6 +34,8 @@ pub const MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
 ///
 /// Basic usage:
 /// ```no_run
+/// use mistralrs_server_core::mistralrs_server_router_builder::MistralRsServerRouterBuilder;
+///
 /// let router = MistralRsServerRouterBuilder::new()
 ///     .with_mistralrs(mistralrs_instance)
 ///     .build()
@@ -42,6 +44,8 @@ pub const MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
 ///
 /// With custom configuration:
 /// ```no_run
+/// use mistralrs_server_core::mistralrs_server_router_builder::MistralRsServerRouterBuilder;
+///
 /// let router = MistralRsServerRouterBuilder::new()
 ///     .with_mistralrs(mistralrs_instance)
 ///     .with_include_swagger_routes(false)
@@ -51,13 +55,15 @@ pub const MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
 /// ```
 pub struct MistralRsServerRouterBuilder {
     /// The shared mistral.rs instance
-    mistralrs: Option<SharedMistralState>,
+    mistralrs: Option<SharedMistralRsState>,
     /// Whether to include Swagger/OpenAPI documentation routes
     include_swagger_routes: bool,
     /// Optional base path prefix for all routes
     base_path: Option<String>,
     /// Optional CORS allowed origins
     allowed_origins: Option<Vec<String>>,
+    /// Optional axum default request body limit
+    max_body_limit: Option<usize>,
 }
 
 impl Default for MistralRsServerRouterBuilder {
@@ -68,6 +74,7 @@ impl Default for MistralRsServerRouterBuilder {
             include_swagger_routes: true,
             base_path: None,
             allowed_origins: None,
+            max_body_limit: None,
         }
     }
 }
@@ -80,6 +87,8 @@ impl MistralRsServerRouterBuilder {
     /// ### Examples
     ///
     /// ```no_run
+    /// use mistralrs_server_core::mistralrs_server_router_builder::MistralRsServerRouterBuilder;
+    ///
     /// let builder = MistralRsServerRouterBuilder::new();
     /// ```
     pub fn new() -> Self {
@@ -87,7 +96,7 @@ impl MistralRsServerRouterBuilder {
     }
 
     /// Sets the shared mistral.rs instance
-    pub fn with_mistralrs(mut self, mistralrs: SharedMistralState) -> Self {
+    pub fn with_mistralrs(mut self, mistralrs: SharedMistralRsState) -> Self {
         self.mistralrs = Some(mistralrs);
         self
     }
@@ -117,11 +126,19 @@ impl MistralRsServerRouterBuilder {
         self
     }
 
+    /// Sets the CORS allowed origins.
+    pub fn with_max_body_limit(mut self, max_body_limit: usize) -> Self {
+        self.max_body_limit = Some(max_body_limit);
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
     ///
     /// ```no_run
+    /// use mistralrs_server_core::mistralrs_server_router_builder::MistralRsServerRouterBuilder;
+    ///
     /// let router = MistralRsServerRouterBuilder::new()
     ///     .with_mistralrs(mistralrs_instance)
     ///     .build()
@@ -139,6 +156,7 @@ impl MistralRsServerRouterBuilder {
             self.include_swagger_routes,
             self.base_path.as_deref(),
             self.allowed_origins,
+            self.max_body_limit,
         );
 
         Ok(mistralrs_server_router)
@@ -150,16 +168,19 @@ impl MistralRsServerRouterBuilder {
 /// This function creates a router with all the necessary API endpoints,
 /// CORS configuration, body size limits, and optional Swagger documentation.
 fn init_router(
-    state: SharedMistralState,
+    state: SharedMistralRsState,
     include_swagger_routes: bool,
     base_path: Option<&str>,
     allowed_origins: Option<Vec<String>>,
+    max_body_limit: Option<usize>,
 ) -> Router {
     let allow_origin = if let Some(origins) = allowed_origins {
         AllowOrigin::list(origins.into_iter().map(|o| o.parse().unwrap()))
     } else {
         AllowOrigin::any()
     };
+
+    let router_max_body_limit = max_body_limit.unwrap_or(DEFAULT_MAX_BODY_LIMIT);
 
     let cors_layer = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST])
@@ -179,7 +200,7 @@ fn init_router(
         .route("/v1/images/generations", post(image_generation))
         .route("/v1/audio/speech", post(speech_generation))
         .layer(cors_layer)
-        .layer(DefaultBodyLimit::max(MAX_BODY_LIMIT))
+        .layer(DefaultBodyLimit::max(router_max_body_limit))
         .with_state(state);
 
     if include_swagger_routes {

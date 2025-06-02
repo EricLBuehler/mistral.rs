@@ -11,7 +11,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::{
     openai::{CompletionRequest, Grammar, StopTokens},
-    types::ExtractedMistralState,
+    types::ExtractedMistralRsState,
 };
 use axum::{
     extract::{Json, State},
@@ -249,7 +249,7 @@ fn parse_request(
 )]
 
 pub async fn completions(
-    State(state): ExtractedMistralState,
+    State(state): ExtractedMistralRsState,
     Json(oairequest): Json<CompletionRequest>,
 ) -> CompletionResponder {
     let (tx, mut rx) = channel(10_000);

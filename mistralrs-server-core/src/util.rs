@@ -24,6 +24,8 @@ use tokio::{
 /// ### Examples
 ///
 /// ```no_run
+/// use mistralrs_server_core::util::parse_image_url;
+///
 /// // Load from HTTP URL
 /// let image = parse_image_url("https://example.com/photo.jpg").await?;
 ///

@@ -28,7 +28,7 @@ use crate::{
         ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
         ResponseFormat, StopTokens,
     },
-    types::{ExtractedMistralState, SharedMistralState},
+    types::{ExtractedMistralRsState, SharedMistralRsState},
     util,
 };
 
@@ -41,6 +41,8 @@ use crate::{
 /// ### Examples
 ///
 /// ```no_run
+/// use mistralrs_server_core::chat_completion::OnChunkCallback;
+///
 /// let on_chunk: OnChunkCallback = Box::new(|mut chunk| {
 ///     // Log the chunk or modify its content
 ///     println!("Processing chunk: {:?}", chunk);
@@ -58,6 +60,8 @@ pub type OnChunkCallback =
 /// ### Examples
 ///
 /// ```no_run
+/// use mistralrs_server_core::chat_completion::OnDoneCallback;
+///
 /// let on_done: OnDoneCallback = Box::new(|chunks| {
 ///     println!("Stream completed with {} chunks", chunks.len());
 ///     // Process all chunks for analytics
@@ -65,15 +69,15 @@ pub type OnChunkCallback =
 /// ```
 pub type OnDoneCallback = Box<dyn Fn(&[ChatCompletionChunkResponse]) + Send + Sync>;
 
-/// Buffer size for the response channel used in streaming operations.
+/// Default buffer size for the response channel used in streaming operations.
 ///
 /// This constant defines the maximum number of response messages that can be buffered
 /// in the channel before backpressure is applied. A larger buffer reduces the likelihood
 /// of blocking but uses more memory.
-pub const CHANNEL_BUFFER_SIZE: usize = 10_000;
+pub const DEFAULT_CHANNEL_BUFFER_SIZE: usize = 10_000;
 
 /// Default keep-alive interval for Server-Sent Events (SSE) streams in milliseconds.
-pub const DEFAULT_KEEP_ALIVE_INTERVAL: u64 = 10_000;
+pub const DEFAULT_KEEP_ALIVE_INTERVAL_MS: u64 = 10_000;
 
 /// Internal error type for model-related errors with a descriptive message.
 ///
@@ -108,7 +112,7 @@ pub struct Streamer {
     /// Current state of the streaming operation
     done_state: DoneState,
     /// Underlying mistral.rs instance
-    state: SharedMistralState,
+    state: SharedMistralRsState,
     /// Whether to store chunks for the completion callback
     store_chunks: bool,
     /// All chunks received during streaming (if `store_chunks` is true)
@@ -281,7 +285,7 @@ impl IntoResponse for ChatCompletionResponder {
 /// request format used by mistral.rs.
 pub async fn parse_request(
     oairequest: ChatCompletionRequest,
-    state: SharedMistralState,
+    state: SharedMistralRsState,
     tx: Sender<Response>,
 ) -> Result<(Request, bool)> {
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
@@ -534,10 +538,10 @@ pub async fn parse_request(
     responses((status = 200, description = "Chat completions"))
 )]
 pub async fn chatcompletions(
-    State(state): ExtractedMistralState,
+    State(state): ExtractedMistralRsState,
     Json(oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
-    let (tx, mut rx) = create_response_channel();
+    let (tx, mut rx) = create_response_channel(None);
 
     let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx).await {
         Ok(x) => x,
@@ -557,7 +561,7 @@ pub async fn chatcompletions(
 
 /// Helper function to handle chat completion errors and logging them.
 pub fn handle_chat_completion_error(
-    state: SharedMistralState,
+    state: SharedMistralRsState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> ChatCompletionResponder {
     let e = anyhow::Error::msg(e.to_string());
@@ -566,8 +570,12 @@ pub fn handle_chat_completion_error(
 }
 
 /// Creates a channel for response communication.
-pub fn create_response_channel() -> (Sender<Response>, Receiver<Response>) {
-    channel(CHANNEL_BUFFER_SIZE)
+pub fn create_response_channel(
+    buffer_size: Option<usize>,
+) -> (Sender<Response>, Receiver<Response>) {
+    let channel_buffer_size = buffer_size.unwrap_or(DEFAULT_CHANNEL_BUFFER_SIZE);
+
+    channel(channel_buffer_size)
 }
 
 /// Gets the keep-alive interval for SSE streams from environment or default.
@@ -575,18 +583,15 @@ pub fn get_keep_alive_interval() -> u64 {
     env::var("KEEP_ALIVE_INTERVAL")
         .map(|val| {
             val.parse::<u64>().unwrap_or_else(|e| {
-                eprintln!(
-                    "Warning: Failed to parse KEEP_ALIVE_INTERVAL: {}. Using default.",
-                    e
-                );
-                DEFAULT_KEEP_ALIVE_INTERVAL
+                tracing::warn!("Failed to parse KEEP_ALIVE_INTERVAL: {}. Using default.", e);
+                DEFAULT_KEEP_ALIVE_INTERVAL_MS
             })
         })
-        .unwrap_or(DEFAULT_KEEP_ALIVE_INTERVAL)
+        .unwrap_or(DEFAULT_KEEP_ALIVE_INTERVAL_MS)
 }
 
 /// Sends a request to the model processing pipeline.
-pub async fn send_request(state: &SharedMistralState, request: Request) -> Result<()> {
+pub async fn send_request(state: &SharedMistralRsState, request: Request) -> Result<()> {
     let sender = state.get_sender().unwrap();
     sender.send(request).await.map_err(|e| e.into())
 }
@@ -594,7 +599,7 @@ pub async fn send_request(state: &SharedMistralState, request: Request) -> Resul
 /// Creates a SSE streamer for chat completions with optional callbacks.
 pub fn create_chat_streamer(
     rx: Receiver<Response>,
-    state: SharedMistralState,
+    state: SharedMistralRsState,
     on_chunk: Option<OnChunkCallback>,
     on_done: Option<OnDoneCallback>,
 ) -> Sse<Streamer> {
@@ -619,7 +624,7 @@ pub fn create_chat_streamer(
 /// Processes non-streaming chat completion responses.
 pub async fn process_non_streaming_chat_response(
     rx: &mut Receiver<Response>,
-    state: SharedMistralState,
+    state: SharedMistralRsState,
 ) -> ChatCompletionResponder {
     let response = match rx.recv().await {
         Some(response) => response,
@@ -633,7 +638,7 @@ pub async fn process_non_streaming_chat_response(
 }
 
 /// Matches and processes different types of model responses into appropriate chat completion responses.
-pub fn match_responses(state: SharedMistralState, response: Response) -> ChatCompletionResponder {
+pub fn match_responses(state: SharedMistralRsState, response: Response) -> ChatCompletionResponder {
     match response {
         Response::InternalError(e) => {
             MistralRs::maybe_log_error(state, &*e);
