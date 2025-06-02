@@ -30,7 +30,9 @@ template <typename KV_T, typename CACHE_T>
     device CACHE_T *__restrict__ value_cache
     [[buffer(3)]], // [num_blocks, num_heads, head_size, block_size]
     const device int64_t *__restrict__ slot_mapping
-    [[buffer(4)]], // [num_tokens]
+    [[buffer(4)]],                                          // [num_tokens]
+    const device float *__restrict__ k_scale [[buffer(5)]], // [1]
+    const device float *__restrict__ v_scale [[buffer(6)]], // [1]
     device const int &key_stride, device const int &value_stride,
     device const int &num_heads, device const int &head_size,
     device const int &block_size, device const int &x,
@@ -65,8 +67,10 @@ template <typename KV_T, typename CACHE_T>
         block_idx * num_heads * head_size * block_size +
         head_idx * head_size * block_size + head_offset * block_size +
         block_offset;
-    key_cache[tgt_key_idx] = to_cache<KV_T, CACHE_T>(key[src_key_idx]);
-    value_cache[tgt_value_idx] = to_cache<KV_T, CACHE_T>(value[src_value_idx]);
+    key_cache[tgt_key_idx] =
+        to_cache<KV_T, CACHE_T>(KV_T((float)key[src_key_idx] / *k_scale));
+    value_cache[tgt_value_idx] =
+        to_cache<KV_T, CACHE_T>(KV_T((float)value[src_key_idx] / *v_scale));
   }
 }
 
@@ -79,6 +83,8 @@ template <typename KV_T, typename CACHE_T>
       device cache_type *__restrict__ key_cache [[buffer(2)]],                 \
       device cache_type *__restrict__ value_cache [[buffer(3)]],               \
       const device int64_t *__restrict__ slot_mapping [[buffer(4)]],           \
+      const device float *__restrict__ k_scale [[buffer(4)]],                  \
+      const device float *__restrict__ v_scale [[buffer(4)]],                  \
       device const int &key_stride, device const int &value_stride,            \
       device const int &num_heads, device const int &head_size,                \
       device const int &block_size, device const int &x,                       \

@@ -560,98 +560,120 @@ template <> inline constexpr bool is_uchar<uchar>() { return true; }
 // Generic fallback – will fail to compile if a required specialisation is
 // missing.
 template <typename Vec, typename Quant_vec>
-inline Vec fp8_convert(const thread Quant_vec &) {
+inline Vec fp8_convert(const thread Quant_vec &, float scale) {
   static_assert(sizeof(Vec) == 0, "Missing fp8_convert specialisation");
 }
 
 // ========================================== FP8 → float/half/bfloat
-inline float __dequant_single(uchar v) { return fp8_e4m3_to_float(v); }
+inline float __dequant_single(uchar v, float scale) {
+  return fp8_e4m3_to_float(v) * scale;
+}
 
 // ---- 1‑lane ----
-template <> inline float fp8_convert<float, uchar>(const thread uchar &in) {
-  return __dequant_single(in);
-}
-template <> inline half fp8_convert<half, uchar>(const thread uchar &in) {
-  return half(__dequant_single(in));
+template <>
+inline float fp8_convert<float, uchar>(const thread uchar &in, float scale) {
+  return __dequant_single(in, scale);
 }
 template <>
-inline bfloat16_t fp8_convert<bfloat16_t, uchar>(const thread uchar &in) {
-  return bfloat16_t(__dequant_single(in));
+inline half fp8_convert<half, uchar>(const thread uchar &in, float scale) {
+  return half(__dequant_single(in, scale));
+}
+template <>
+inline bfloat16_t fp8_convert<bfloat16_t, uchar>(const thread uchar &in,
+                                                 float scale) {
+  return bfloat16_t(__dequant_single(in, scale));
 }
 
 // ---- 2‑lane ----
-template <> inline float2 fp8_convert<float2, uchar2>(const thread uchar2 &in) {
-  return float2(__dequant_single(in.x), __dequant_single(in.y));
+template <>
+inline float2 fp8_convert<float2, uchar2>(const thread uchar2 &in,
+                                          float scale) {
+  return float2(__dequant_single(in.x, scale), __dequant_single(in.y, scale));
 }
-template <> inline half2 fp8_convert<half2, uchar2>(const thread uchar2 &in) {
+template <>
+inline half2 fp8_convert<half2, uchar2>(const thread uchar2 &in, float scale) {
   half2 out;
-  out.x = half(__dequant_single(in.x));
-  out.y = half(__dequant_single(in.y));
+  out.x = half(__dequant_single(in.x, scale));
+  out.y = half(__dequant_single(in.y, scale));
   return out;
 }
 template <>
-inline Bfloat2_ fp8_convert<Bfloat2_, uchar2>(const thread uchar2 &in) {
+inline Bfloat2_ fp8_convert<Bfloat2_, uchar2>(const thread uchar2 &in,
+                                              float scale) {
   Bfloat2_ out;
-  out.x = bfloat16_t(__dequant_single(in.x));
-  out.y = bfloat16_t(__dequant_single(in.y));
+  out.x = bfloat16_t(__dequant_single(in.x, scale));
+  out.y = bfloat16_t(__dequant_single(in.y, scale));
   return out;
 }
 
 // ---- 4‑lane ----
-template <> inline float4 fp8_convert<float4, uchar4>(const thread uchar4 &in) {
-  return float4(__dequant_single(in.x), __dequant_single(in.y),
-                __dequant_single(in.z), __dequant_single(in.w));
+template <>
+inline float4 fp8_convert<float4, uchar4>(const thread uchar4 &in,
+                                          float scale) {
+  return float4(__dequant_single(in.x, scale), __dequant_single(in.y, scale),
+                __dequant_single(in.z, scale), __dequant_single(in.w, scale));
 }
-template <> inline half4 fp8_convert<half4, uchar4>(const thread uchar4 &in) {
+template <>
+inline half4 fp8_convert<half4, uchar4>(const thread uchar4 &in, float scale) {
   half4 out;
-  out.x = half(__dequant_single(in.x));
-  out.y = half(__dequant_single(in.y));
-  out.z = half(__dequant_single(in.z));
-  out.w = half(__dequant_single(in.w));
+  out.x = half(__dequant_single(in.x, scale));
+  out.y = half(__dequant_single(in.y, scale));
+  out.z = half(__dequant_single(in.z, scale));
+  out.w = half(__dequant_single(in.w, scale));
   return out;
 }
 template <>
-inline Bfloat4_ fp8_convert<Bfloat4_, uchar4>(const thread uchar4 &in) {
+inline Bfloat4_ fp8_convert<Bfloat4_, uchar4>(const thread uchar4 &in,
+                                              float scale) {
   Bfloat4_ out;
-  out.x.x = bfloat16_t(__dequant_single(in.x));
-  out.x.y = bfloat16_t(__dequant_single(in.y));
-  out.y.x = bfloat16_t(__dequant_single(in.z));
-  out.y.y = bfloat16_t(__dequant_single(in.w));
+  out.x.x = bfloat16_t(__dequant_single(in.x, scale));
+  out.x.y = bfloat16_t(__dequant_single(in.y, scale));
+  out.y.x = bfloat16_t(__dequant_single(in.z, scale));
+  out.y.y = bfloat16_t(__dequant_single(in.w, scale));
   return out;
 }
 
 // ---- 8‑lane ----
 template <>
-inline Float8_ fp8_convert<Float8_, Uchar8_>(const thread Uchar8_ &in) {
+inline Float8_ fp8_convert<Float8_, Uchar8_>(const thread Uchar8_ &in,
+                                             float scale) {
   Float8_ out;
-  out.x = float4(__dequant_single(in.x.x), __dequant_single(in.x.y),
-                 __dequant_single(in.x.z), __dequant_single(in.x.w));
-  out.y = float4(__dequant_single(in.y.x), __dequant_single(in.y.y),
-                 __dequant_single(in.y.z), __dequant_single(in.y.w));
+  out.x =
+      float4(__dequant_single(in.x.x, scale), __dequant_single(in.x.y, scale),
+             __dequant_single(in.x.z, scale), __dequant_single(in.x.w, scale));
+  out.y =
+      float4(__dequant_single(in.y.x, scale), __dequant_single(in.y.y, scale),
+             __dequant_single(in.y.z, scale), __dequant_single(in.y.w, scale));
   return out;
 }
 template <>
-inline Half8_ fp8_convert<Half8_, Uchar8_>(const thread Uchar8_ &in) {
+inline Half8_ fp8_convert<Half8_, Uchar8_>(const thread Uchar8_ &in,
+                                           float scale) {
   Half8_ out;
-  out.x = half4(half(__dequant_single(in.x.x)), half(__dequant_single(in.x.y)),
-                half(__dequant_single(in.x.z)), half(__dequant_single(in.x.w)));
-  out.y = half4(half(__dequant_single(in.y.x)), half(__dequant_single(in.y.y)),
-                half(__dequant_single(in.y.z)), half(__dequant_single(in.y.w)));
+  out.x = half4(half(__dequant_single(in.x.x, scale)),
+                half(__dequant_single(in.x.y, scale)),
+                half(__dequant_single(in.x.z, scale)),
+                half(__dequant_single(in.x.w, scale)));
+  out.y = half4(half(__dequant_single(in.y.x, scale)),
+                half(__dequant_single(in.y.y, scale)),
+                half(__dequant_single(in.y.z, scale)),
+                half(__dequant_single(in.y.w, scale)));
   return out;
 }
 template <>
-inline Bfloat8_ fp8_convert<Bfloat8_, Uchar8_>(const thread Uchar8_ &in) {
+inline Bfloat8_ fp8_convert<Bfloat8_, Uchar8_>(const thread Uchar8_ &in,
+                                               float scale) {
   Bfloat8_ out;
   // first 4
-  out.x.x.x = bfloat16_t(__dequant_single(in.x.x));
-  out.x.x.y = bfloat16_t(__dequant_single(in.x.y));
-  out.x.y.x = bfloat16_t(__dequant_single(in.x.z));
-  out.x.y.y = bfloat16_t(__dequant_single(in.x.w));
+  out.x.x.x = bfloat16_t(__dequant_single(in.x.x, scale));
+  out.x.x.y = bfloat16_t(__dequant_single(in.x.y, scale));
+  out.x.y.x = bfloat16_t(__dequant_single(in.x.z, scale));
+  out.x.y.y = bfloat16_t(__dequant_single(in.x.w, scale));
   // second 4
-  out.y.x.x = bfloat16_t(__dequant_single(in.y.x));
-  out.y.x.y = bfloat16_t(__dequant_single(in.y.y));
-  out.y.y.x = bfloat16_t(__dequant_single(in.y.z));
-  out.y.y.y = bfloat16_t(__dequant_single(in.y.w));
+  out.y.x.x = bfloat16_t(__dequant_single(in.y.x, scale));
+  out.y.x.y = bfloat16_t(__dequant_single(in.y.y, scale));
+  out.y.y.x = bfloat16_t(__dequant_single(in.y.z, scale));
+  out.y.y.y = bfloat16_t(__dequant_single(in.y.w, scale));
   return out;
 }
 
@@ -745,18 +767,20 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
     [[buffer(4)]], // [num_blocks, num_kv_heads, head_size/x, block_size, x]
     device const CACHE_T *v_cache
     [[buffer(5)]], // [num_blocks, num_kv_heads, head_size, block_size]
-    const constant int &num_kv_heads [[buffer(6)]], // [num_heads]
-    const constant float &scale [[buffer(7)]],
-    const constant float &softcapping [[buffer(8)]],
+    const device float *__restrict__ k_scale [[buffer(6)]], // [1]
+    const device float *__restrict__ v_scale [[buffer(7)]], // [1]
+    const constant int &num_kv_heads [[buffer(8)]],         // [num_heads]
+    const constant float &scale [[buffer(9)]],
+    const constant float &softcapping [[buffer(10)]],
     device const uint32_t *block_tables
-    [[buffer(9)]], // [num_seqs, max_num_blocks_per_seq]
-    device const uint32_t *context_lens [[buffer(10)]], // [num_seqs]
-    const constant int &max_num_blocks_per_seq [[buffer(11)]],
+    [[buffer(11)]], // [num_seqs, max_num_blocks_per_seq]
+    device const uint32_t *context_lens [[buffer(12)]], // [num_seqs]
+    const constant int &max_num_blocks_per_seq [[buffer(13)]],
     device const float *alibi_slopes
-    [[buffer(12), function_constant(use_alibi)]], // [num_heads]
-    const constant int &q_stride [[buffer(13)]],
-    const constant int &kv_block_stride [[buffer(14)]],
-    const constant int &kv_head_stride [[buffer(15)]],
+    [[buffer(14), function_constant(use_alibi)]], // [num_heads]
+    const constant int &q_stride [[buffer(15)]],
+    const constant int &kv_block_stride [[buffer(16)]],
+    const constant int &kv_head_stride [[buffer(17)]],
     threadgroup char *shared_mem [[threadgroup(0)]],
     uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]],
     uint3 threadgroups_per_grid [[threadgroups_per_grid]],
@@ -888,7 +912,7 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
           // FP8 support
           Quant_vec k_vec_quant = *reinterpret_cast<const device Quant_vec *>(
               k_ptr + offset1 * BLOCK_SIZE * x + offset2);
-          k_vecs[j] = fp8_convert<K_vec, Quant_vec>(k_vec_quant);
+          k_vecs[j] = fp8_convert<K_vec, Quant_vec>(k_vec_quant, *k_scale);
         } else {
           // Non-FP8 default
           k_vecs[j] = *reinterpret_cast<const device K_vec *>(
@@ -1023,7 +1047,7 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
           // FP8 support
           V_quant_vec v_quant_vec =
               *reinterpret_cast<const device V_quant_vec *>(v_ptr + offset);
-          v_vec = fp8_convert<V_vec, V_quant_vec>(v_quant_vec);
+          v_vec = fp8_convert<V_vec, V_quant_vec>(v_quant_vec, *v_scale);
         } else {
           // Non-FP8 default
           v_vec = *reinterpret_cast<const device V_vec *>(v_ptr + offset);
@@ -1234,17 +1258,19 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES,
       device type *out [[buffer(2)]], device const type *q [[buffer(3)]],      \
       device const cache_type *k_cache [[buffer(4)]],                          \
       device const cache_type *v_cache [[buffer(5)]],                          \
-      const constant int &num_kv_heads [[buffer(6)]],                          \
-      const constant float &scale [[buffer(7)]],                               \
-      const constant float &softcapping [[buffer(8)]],                         \
-      device const uint32_t *block_tables [[buffer(9)]],                       \
-      device const uint32_t *context_lens [[buffer(10)]],                      \
-      const constant int &max_num_blocks_per_seq [[buffer(11)]],               \
+      device const float *k_scale [[buffer(6)]],                               \
+      device const float *v_scale [[buffer(7)]],                               \
+      const constant int &num_kv_heads [[buffer(8)]],                          \
+      const constant float &scale [[buffer(9)]],                               \
+      const constant float &softcapping [[buffer(10)]],                        \
+      device const uint32_t *block_tables [[buffer(11)]],                      \
+      device const uint32_t *context_lens [[buffer(12)]],                      \
+      const constant int &max_num_blocks_per_seq [[buffer(13)]],               \
       device const float *alibi_slopes                                         \
-      [[buffer(12), function_constant(use_alibi)]],                            \
-      const constant int &q_stride [[buffer(13)]],                             \
-      const constant int &kv_block_stride [[buffer(14)]],                      \
-      const constant int &kv_head_stride [[buffer(15)]],                       \
+      [[buffer(14), function_constant(use_alibi)]],                            \
+      const constant int &q_stride [[buffer(15)]],                             \
+      const constant int &kv_block_stride [[buffer(16)]],                      \
+      const constant int &kv_head_stride [[buffer(17)]],                       \
       threadgroup char *shared_mem [[threadgroup(0)]],                         \
       uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]],     \
       uint3 threadgroups_per_grid [[threadgroups_per_grid]],                   \

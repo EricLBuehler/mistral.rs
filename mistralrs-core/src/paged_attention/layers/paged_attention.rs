@@ -1,4 +1,4 @@
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor, D};
 
 use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
@@ -111,6 +111,25 @@ impl PagedAttention {
             (q, k, v)
         };
 
+        let k_scale = {
+            let mut absmax = key.abs()?;
+            while !absmax.dims().is_empty() {
+                absmax = absmax.max(0)?;
+            }
+            (absmax / 240.)?.to_dtype(DType::F32)?
+        };
+        let v_scale = {
+            let mut absmax = value.abs()?;
+            while !absmax.dims().is_empty() {
+                absmax = absmax.max(0)?;
+            }
+            (absmax / 240.)?.to_dtype(DType::F32)?
+        };
+        // let k_scale = Tensor::new(0.045f32, key.device())?;
+        // let v_scale = Tensor::new(0.005f32, key.device())?;
+        // println!("{k_scale}");
+        // println!("{v_scale}");
+
         // key: Tensor,              // [num_tokens, num_heads, head_size]
         // value: Tensor,            // [num_tokens, num_heads, head_size]
         // key_cache: &mut Tensor,   // [num_blocks, num_heads, head_size/x, block_size, x] 48,32,16,16,8
@@ -120,6 +139,8 @@ impl PagedAttention {
             reshape_and_cache(
                 &key,
                 &value,
+                &k_scale,
+                &v_scale,
                 key_cache.as_mut().unwrap(),
                 value_cache.as_mut().unwrap(),
                 slot_mapping,
@@ -148,6 +169,8 @@ impl PagedAttention {
         #[allow(clippy::cast_possible_truncation)]
         paged_attention(
             &query,
+            &k_scale,
+            &v_scale,
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
             block_tables,

@@ -224,6 +224,8 @@ pub fn call_reshape_and_cache(
     value_cache_offset: usize,
     slot_mapping: &Buffer,
     slot_mapping_offset: usize,
+    k_scale: &Buffer,
+    v_scale: &Buffer,
     num_tokens: i32,
     num_heads: i32,
     head_size: i32,
@@ -252,6 +254,8 @@ pub fn call_reshape_and_cache(
             (key_cache, key_cache_offset),
             (value_cache, value_cache_offset),
             (slot_mapping, slot_mapping_offset),
+            k_scale,
+            v_scale,
             key_stride,
             value_stride,
             num_heads,
@@ -342,6 +346,8 @@ pub fn call_paged_attention_v1(
     block_tables_offset: usize,
     context_lens: &Buffer,
     context_lens_offset: usize,
+    k_scale: &Buffer,
+    v_scale: &Buffer,
     alibi_storage_and_offset: Option<(MetalStorage, usize)>,
     output: &Buffer,
     num_kv_heads: i32,
@@ -394,43 +400,45 @@ pub fn call_paged_attention_v1(
     encoder.set_buffer(3, Some(q), q_offset as NSUInteger);
     encoder.set_buffer(4, Some(k_cache), k_cache_offset as NSUInteger);
     encoder.set_buffer(5, Some(v_cache), v_cache_offset as NSUInteger);
+    encoder.set_buffer(6, Some(k_scale), 0 as NSUInteger);
+    encoder.set_buffer(7, Some(v_scale), 0 as NSUInteger);
     encoder.set_bytes(
-        6,
+        8,
         core::mem::size_of_val(&num_kv_heads) as u64,
         &num_kv_heads as *const _ as *const c_void,
     );
     encoder.set_bytes(
-        7,
+        9,
         core::mem::size_of_val(&scale) as u64,
         &scale as *const _ as *const c_void,
     );
     encoder.set_bytes(
-        8,
+        10,
         core::mem::size_of_val(&softcapping) as u64,
         &softcapping as *const _ as *const c_void,
     );
-    encoder.set_buffer(9, Some(block_tables), block_tables_offset as NSUInteger);
-    encoder.set_buffer(10, Some(context_lens), context_lens_offset as NSUInteger);
+    encoder.set_buffer(11, Some(block_tables), block_tables_offset as NSUInteger);
+    encoder.set_buffer(12, Some(context_lens), context_lens_offset as NSUInteger);
     encoder.set_bytes(
-        11,
+        13,
         core::mem::size_of_val(&max_num_blocks_per_seq) as u64,
         &max_num_blocks_per_seq as *const _ as *const c_void,
     );
     if let Some((alibi, alibi_offset)) = alibi_storage_and_offset {
-        encoder.set_buffer(12, Some(alibi.buffer()), alibi_offset as NSUInteger);
+        encoder.set_buffer(14, Some(alibi.buffer()), alibi_offset as NSUInteger);
     }
     encoder.set_bytes(
-        13,
+        15,
         core::mem::size_of_val(&q_stride) as u64,
         &q_stride as *const _ as *const c_void,
     );
     encoder.set_bytes(
-        14,
+        16,
         core::mem::size_of_val(&kv_block_stride) as u64,
         &kv_block_stride as *const _ as *const c_void,
     );
     encoder.set_bytes(
-        15,
+        17,
         core::mem::size_of_val(&kv_head_stride) as u64,
         &kv_head_stride as *const _ as *const c_void,
     );
@@ -468,6 +476,8 @@ pub fn call_paged_attention_v2(
     block_tables_offset: usize,
     context_lens: &Buffer,
     context_lens_offset: usize,
+    k_scale: &Buffer,
+    v_scale: &Buffer,
     alibi_storage_and_offset: Option<(MetalStorage, usize)>,
     tmp_out: &Buffer,
     output: &Buffer,
@@ -528,43 +538,45 @@ pub fn call_paged_attention_v2(
         encoder.set_buffer(3, Some(q), q_offset as NSUInteger);
         encoder.set_buffer(4, Some(k_cache), k_cache_offset as NSUInteger);
         encoder.set_buffer(5, Some(v_cache), v_cache_offset as NSUInteger);
+        encoder.set_buffer(6, Some(k_scale), 0 as NSUInteger);
+        encoder.set_buffer(7, Some(v_scale), 0 as NSUInteger);
         encoder.set_bytes(
-            6,
+            8,
             core::mem::size_of_val(&num_kv_heads) as u64,
             &num_kv_heads as *const _ as *const c_void,
         );
         encoder.set_bytes(
-            7,
+            9,
             core::mem::size_of_val(&scale) as u64,
             &scale as *const _ as *const c_void,
         );
         encoder.set_bytes(
-            8,
+            10,
             core::mem::size_of_val(&softcapping) as u64,
             &softcapping as *const _ as *const c_void,
         );
-        encoder.set_buffer(9, Some(block_tables), block_tables_offset as NSUInteger);
-        encoder.set_buffer(10, Some(context_lens), context_lens_offset as NSUInteger);
+        encoder.set_buffer(11, Some(block_tables), block_tables_offset as NSUInteger);
+        encoder.set_buffer(12, Some(context_lens), context_lens_offset as NSUInteger);
         encoder.set_bytes(
-            11,
+            13,
             core::mem::size_of_val(&max_num_blocks_per_seq) as u64,
             &max_num_blocks_per_seq as *const _ as *const c_void,
         );
         if let Some((alibi, alibi_offset)) = alibi_storage_and_offset {
-            encoder.set_buffer(12, Some(alibi.buffer()), alibi_offset as NSUInteger);
+            encoder.set_buffer(14, Some(alibi.buffer()), alibi_offset as NSUInteger);
         }
         encoder.set_bytes(
-            13,
+            15,
             core::mem::size_of_val(&q_stride) as u64,
             &q_stride as *const _ as *const c_void,
         );
         encoder.set_bytes(
-            14,
+            16,
             core::mem::size_of_val(&kv_block_stride) as u64,
             &kv_block_stride as *const _ as *const c_void,
         );
         encoder.set_bytes(
-            15,
+            17,
             core::mem::size_of_val(&kv_head_stride) as u64,
             &kv_head_stride as *const _ as *const c_void,
         );
