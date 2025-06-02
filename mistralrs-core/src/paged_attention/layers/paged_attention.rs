@@ -1,4 +1,4 @@
-use candle_core::{DType, Device, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor};
 
 use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 

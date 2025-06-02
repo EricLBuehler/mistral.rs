@@ -1,112 +1,122 @@
 #include <metal_stdlib>
-
 using namespace metal;
 
-// ————————————————————————————————————————————————————————————————
-// F8E4M3 (Sign=1, Exponent=4, Mantissa=3; bias=2^(4−1)−1 = 7)
-// ————————————————————————————————————————————————————————————————
+// Helpers ------------------------------------------------------------
+static inline uint as_bits(float x) { return as_type<uint>(x); }
+static inline float from_bits(uint b) { return as_type<float>(b); }
 
+// -------------------------------------------------------------------
+// FP8 E4M3 (bias = 7)
+// -------------------------------------------------------------------
 inline float fp8_e4m3_to_float(uchar v) {
-  const uint sign = (v >> 7) & 0x1;
-  const uint exp_bits = (v >> 3) & 0xF;
-  const uint man_bits = v & 0x7;
+  const uint s = v >> 7;
+  const uint exp = (v >> 3) & 0xF;
+  const uint man = v & 0x7;
 
-  // handle zero / subnormals
-  if (exp_bits == 0) {
-    if (man_bits == 0) {
-      return sign ? -0.0f : 0.0f;
-    }
-    // subnormal: mantissa / 2^(bias + mantissa_bits)
-    float m = float(man_bits) / float(1 << 3);
-    float val = ldexp(m, 1 - 7 - 3);
-    return sign ? -val : val;
+  if (exp == 0) { // zero / sub-normal
+    if (man == 0)
+      return s ? -0.f : 0.f;
+    const float m = float(man) / 8.f; // already scaled by 2^-3
+    float val = ldexp(m, 1 - 7);      // 2^(1-bias) = 2^-6
+    return s ? -val : val;
   }
-  // handle Inf/NaN
-  if (exp_bits == 0xF) {
-    return sign ? -INFINITY : INFINITY;
+
+  if (exp == 0xF) { // Inf / NaN  (E4M3FN keeps only NaN)
+    if (man != 0)
+      return NAN;
+    return s ? -INFINITY : INFINITY;
   }
-  // normalised
-  float mant = 1.0f + float(man_bits) / float(1 << 3);
-  int expn = int(exp_bits) - 7;
-  float val = ldexp(mant, expn);
-  return sign ? -val : val;
+
+  const float m = 1.f + float(man) / 8.f;
+  float val = ldexp(m, int(exp) - 7);
+  return s ? -val : val;
 }
+
+// -------------------------------------------------------------------
+// FP8 E5M2 (bias = 15)
+// -------------------------------------------------------------------
+inline float fp8_e5m2_to_float(uchar v) {
+  const uint s = v >> 7;
+  const uint exp = (v >> 2) & 0x1F;
+  const uint man = v & 0x3;
+
+  if (exp == 0) {
+    if (man == 0)
+      return s ? -0.f : 0.f;
+    const float m = float(man) / 4.f;
+    float val = ldexp(m, 1 - 15); // 2^(1-bias) = 2^-14
+    return s ? -val : val;
+  }
+
+  if (exp == 0x1F) {
+    if (man != 0)
+      return NAN;
+    return s ? -INFINITY : INFINITY;
+  }
+
+  const float m = 1.f + float(man) / 4.f;
+  float val = ldexp(m, int(exp) - 15);
+  return s ? -val : val;
+}
+
+// -------------------------------------------------------------------
+// Encoding helpers (round-to-nearest-even, gradual under-flow, sat-to-∞)
+// -------------------------------------------------------------------
+namespace detail {
+template <int EXP_BITS, int MAN_BITS, int BIAS>
+inline uchar fp32_to_fp8(float f) {
+  const uint bits = as_bits(f);
+  const uint s = bits >> 31;
+  const uint abs = bits & 0x7FFFFFFF;
+
+  // NaN propagates, Inf saturates
+  if (abs >= 0x7F800000u) {
+    return uchar((s << 7) | (((1u << EXP_BITS) - 1u) << MAN_BITS) |
+                 (abs != 0x7F800000u));
+  }
+
+  int e = int((abs >> 23) & 0xFF) - 127;   // unbiased exponent
+  uint m = abs & 0x7FFFFFu;                // 23-bit mantissa
+  const int EXP_MAX = (1 << EXP_BITS) - 2; // last finite exponent
+
+  // ---------- Normal path -------------------------------------------------
+  int e_fp8 = e + BIAS;
+  if (e_fp8 >= 1 && e_fp8 <= EXP_MAX) {
+    // round-to-nearest-even
+    const int shift = 23 - MAN_BITS;
+    uint mant = m >> shift;
+    const uint lsb = mant & 1u;
+    const uint round = (m >> (shift - 1)) & 1u;
+    const uint sticky = (m & ((1u << (shift - 1)) - 1u)) != 0u;
+    mant += (round & (sticky | lsb));
+    if (mant >> MAN_BITS) { // mantissa overflow
+      mant = 0;
+      ++e_fp8;
+      if (e_fp8 > EXP_MAX)
+        return uchar((s << 7) | (((1u << EXP_BITS) - 1u) << MAN_BITS)); // ∞
+    }
+    return uchar((s << 7) | (uint(e_fp8) << MAN_BITS) |
+                 (mant & ((1u << MAN_BITS) - 1u)));
+  }
+
+  // ---------- Sub-normal / under-flow ------------------------------------
+  if (e_fp8 < 1 - MAN_BITS) // too small -> ±0
+    return uchar(s << 7);
+
+  // shift so that exponent becomes 1
+  int rshift = (1 - e_fp8) + (23 - MAN_BITS);
+  uint mant = (0x800000u | m); // implicit 1
+  uint rounded = (mant + (1u << (rshift - 1))) >> rshift;
+  if (rounded == 0)
+    return uchar(s << 7); // rounds to zero
+
+  return uchar((s << 7) | (rounded & ((1u << MAN_BITS) - 1u)));
+}
+} // namespace detail
 
 inline uchar float_to_fp8_e4m3(float f) {
-  uint bits = as_type<uint>(f);
-  uint sign = bits >> 31;
-  int exp = int((bits >> 23) & 0xFF) - 127 + 7; // adjust bias
-  uint man = bits & 0x7FFFFF;
-
-  // handle NaN/Inf
-  if (exp > 0xE) {
-    // map all overflow to Inf
-    return uchar((sign << 7) | (0xF << 3));
-  }
-  // handle zero and subnormals
-  if (exp <= 0) {
-    // subnormal or underflow → zero
-    return uchar(sign << 7);
-  }
-  // round-to-nearest-even: add half-ULP
-  uint mant_rounded = (man + (1 << (23 - 3 - 1))) >> (23 - 3);
-  if (mant_rounded == (1 << 3)) {
-    // overflow in mantissa → bump exponent
-    mant_rounded = 0;
-    exp += 1;
-    if (exp >= 0xF) {
-      // now overflow → Inf
-      return uchar((sign << 7) | (0xF << 3));
-    }
-  }
-  return uchar((sign << 7) | (uint(exp) << 3) | (mant_rounded & 0x7));
+  return detail::fp32_to_fp8<4, 3, 7>(f);
 }
-
-// ————————————————————————————————————————————————————————————————
-// F8E5M2 (Sign=1, Exponent=5, Mantissa=2; bias=2^(5−1)−1 = 15)
-// ————————————————————————————————————————————————————————————————
-
-inline float fp8_e5m2_to_float(uchar v) {
-  const uint sign = (v >> 7) & 0x1;
-  const uint exp_bits = (v >> 2) & 0x1F;
-  const uint man_bits = v & 0x3;
-
-  if (exp_bits == 0) {
-    if (man_bits == 0) {
-      return sign ? -0.0f : 0.0f;
-    }
-    float m = float(man_bits) / float(1 << 2);
-    float val = ldexp(m, 1 - 15 - 2);
-    return sign ? -val : val;
-  }
-  if (exp_bits == 0x1F) {
-    return sign ? -INFINITY : INFINITY;
-  }
-  float mant = 1.0f + float(man_bits) / float(1 << 2);
-  int expn = int(exp_bits) - 15;
-  float val = ldexp(mant, expn);
-  return sign ? -val : val;
-}
-
 inline uchar float_to_fp8_e5m2(float f) {
-  uint bits = as_type<uint>(f);
-  uint sign = bits >> 31;
-  int exp = int((bits >> 23) & 0xFF) - 127 + 15;
-  uint man = bits & 0x7FFFFF;
-
-  if (exp > 0x1D) {
-    return uchar((sign << 7) | (0x1F << 2));
-  }
-  if (exp <= 0) {
-    return uchar(sign << 7);
-  }
-  uint mant_rounded = (man + (1 << (23 - 2 - 1))) >> (23 - 2);
-  if (mant_rounded == (1 << 2)) {
-    mant_rounded = 0;
-    exp += 1;
-    if (exp >= 0x1F) {
-      return uchar((sign << 7) | (0x1F << 2));
-    }
-  }
-  return uchar((sign << 7) | (uint(exp) << 2) | (mant_rounded & 0x3));
+  return detail::fp32_to_fp8<5, 2, 15>(f);
 }

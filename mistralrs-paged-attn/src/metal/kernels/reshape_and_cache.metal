@@ -3,12 +3,19 @@
 
 using namespace metal;
 
-template <typename KV_T, typename CACHE_T> inline CACHE_T to_cache(KV_T v) {
-  return static_cast<CACHE_T>(v);
-}
+template <typename KV_T, typename CACHE_T>
+inline CACHE_T to_cache(KV_T v) = delete;
 
 template <> inline uchar to_cache<float, uchar>(float v) {
   return float_to_fp8_e4m3(v);
+}
+
+template <> inline uchar to_cache<bfloat16_t, uchar>(bfloat16_t v) {
+  return float_to_fp8_e4m3((float)v);
+}
+
+template <> inline uchar to_cache<half, uchar>(half v) {
+  return float_to_fp8_e4m3((float)v);
 }
 
 template <> inline float to_cache<float, float>(float v) { return v; }
