@@ -21,7 +21,7 @@ use std::{
 use tokio::sync::mpsc::channel;
 use tracing::{error, info};
 
-use crate::util;
+use mistralrs_server_core::util;
 
 fn exit_handler() {
     std::process::exit(0);

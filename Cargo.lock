@@ -2685,40 +2685,6 @@ dependencies = [
 name = "mistralrs-server"
 version = "0.6.0"
 dependencies = [
- "accelerate-src",
- "anyhow",
- "axum",
- "candle-core",
- "clap",
- "ctrlc",
- "data-url",
- "directories 6.0.0",
- "either",
- "futures",
- "image",
- "indexmap",
- "intel-mkl-src",
- "itertools 0.13.0",
- "mistralrs-core",
- "once_cell",
- "regex",
- "reqwest",
- "rustyline",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "tower-http 0.5.2",
- "tracing",
- "url",
- "utoipa",
- "utoipa-swagger-ui",
-]
-
-[[package]]
-name = "mistralrs-server-2"
-version = "0.6.0"
-dependencies = [
  "anyhow",
  "axum",
  "clap",
