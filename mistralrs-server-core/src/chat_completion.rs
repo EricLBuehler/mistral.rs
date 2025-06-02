@@ -592,7 +592,10 @@ pub fn get_keep_alive_interval() -> u64 {
 
 /// Sends a request to the model processing pipeline.
 pub async fn send_request(state: &SharedMistralRsState, request: Request) -> Result<()> {
-    let sender = state.get_sender().unwrap();
+    let sender = state
+        .get_sender()
+        .context("mistral.rs sender not available.")?;
+
     sender.send(request).await.map_err(|e| e.into())
 }
 

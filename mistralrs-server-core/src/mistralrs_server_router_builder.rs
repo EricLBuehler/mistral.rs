@@ -159,7 +159,7 @@ impl MistralRsServerRouterBuilder {
             self.max_body_limit,
         );
 
-        Ok(mistralrs_server_router)
+        mistralrs_server_router
     }
 }
 
@@ -173,9 +173,14 @@ fn init_router(
     base_path: Option<&str>,
     allowed_origins: Option<Vec<String>>,
     max_body_limit: Option<usize>,
-) -> Router {
+) -> Result<Router> {
     let allow_origin = if let Some(origins) = allowed_origins {
-        AllowOrigin::list(origins.into_iter().map(|o| o.parse().unwrap()))
+        let parsed_origins: Result<Vec<_>, _> = origins.into_iter().map(|o| o.parse()).collect();
+
+        match parsed_origins {
+            Ok(origins) => AllowOrigin::list(origins),
+            Err(_) => anyhow::bail!("Invalid origin format"),
+        }
     } else {
         AllowOrigin::any()
     };
@@ -212,5 +217,5 @@ fn init_router(
         );
     }
 
-    router
+    Ok(router)
 }

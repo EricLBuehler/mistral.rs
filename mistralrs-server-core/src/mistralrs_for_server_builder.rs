@@ -41,7 +41,6 @@ pub mod defaults {
     pub const CPU: bool = false;
     pub const ENABLE_SEARCH: bool = false;
     pub const SEARCH_BERT_MODEL: Option<String> = None;
-    pub const ENABLE_THINKING: bool = false;
     pub const TOKEN_SOURCE: mistralrs_core::TokenSource = mistralrs_core::TokenSource::CacheToken;
 }
 
@@ -170,8 +169,6 @@ pub struct MistralRsForServerBuilder {
 
     /// Specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
     search_bert_model: Option<String>,
-    // Enable thinking for interactive mode and models that support it.
-    // enable_thinking: bool,
 }
 
 impl Default for MistralRsForServerBuilder {
@@ -202,7 +199,6 @@ impl Default for MistralRsForServerBuilder {
             cpu: defaults::CPU,
             enable_search: defaults::ENABLE_SEARCH,
             search_bert_model: defaults::SEARCH_BERT_MODEL,
-            // enable_thinking: server_defaults::ENABLE_THINKING,
         }
     }
 }
