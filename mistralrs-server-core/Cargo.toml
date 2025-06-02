@@ -13,33 +13,29 @@ homepage.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-ctrlc = "3.4.4"
+axum = { workspace = true, features = ["tokio"] }
 candle-core.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-axum = { version = "0.7.4", features = ["tokio"] }
-tower-http = { version = "0.5.1", features = ["cors"] }
-utoipa = { workspace = true, features = ["axum_extras"] }
-utoipa-swagger-ui = { version = "7.1.0", features = ["axum"] }
+data-url.workspace = true
+either.workspace = true
+futures.workspace = true
+image.workspace = true
+indexmap.workspace = true
+itertools.workspace = true
 mistralrs-core = { version = "0.6.0", path = "../mistralrs-core", features = [
   "utoipa",
 ] }
-indexmap.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tower-http = { version = "0.5.1", features = ["cors"] }
+tracing.workspace = true
+url.workspace = true
+utoipa = { workspace = true, features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "7.1.0", features = ["axum"] }
+
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
-futures.workspace = true
-tracing.workspace = true
-tokio.workspace = true
-either.workspace = true
-clap.workspace = true
-once_cell.workspace = true
-reqwest.workspace = true
-image.workspace = true
-url.workspace = true
-data-url.workspace = true
-regex.workspace = true
-toml.workspace = true
-itertools.workspace = true
 
 [features]
 cuda = ["mistralrs-core/cuda"]
