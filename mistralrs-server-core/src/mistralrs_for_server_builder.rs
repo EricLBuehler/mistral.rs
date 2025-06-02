@@ -231,7 +231,7 @@ impl MistralRsForServerBuilder {
         self
     }
 
-    /// Sets the random seed if provided if provided.
+    /// Sets the random seed if provided.
     pub fn with_seed_optional(mut self, seed: Option<u64>) -> Self {
         if let Some(seed) = seed {
             self = self.with_seed(seed);
