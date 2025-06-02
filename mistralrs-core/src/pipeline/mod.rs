@@ -1,4 +1,5 @@
 mod amoe;
+mod auto;
 pub mod chat_template;
 mod diffusion;
 mod ggml;
@@ -16,7 +17,6 @@ mod sampling;
 mod speculative;
 mod speech;
 mod vision;
-mod auto;
 
 pub use super::diffusion_models::DiffusionGenerationParams;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
@@ -24,6 +24,7 @@ use crate::device_map::DeviceMapper;
 use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
+pub use auto::{AutoLoader, AutoLoaderBuilder};
 use chat_template::ChatTemplate;
 pub use diffusion::{DiffusionLoader, DiffusionLoaderBuilder};
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
@@ -61,7 +62,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
-pub use auto::{AutoLoader, AutoLoaderBuilder};
 
 use anyhow::Result;
 use candle_core::{DType, Device, IndexOp, Tensor, Var};

@@ -1,18 +1,20 @@
 use super::{
-    NormalLoaderBuilder, VisionLoaderBuilder, NormalSpecificConfig, VisionSpecificConfig,
-    Loader, ModelPaths, TokenSource, ModelKind, NormalLoaderType, VisionLoaderType,
-    Ordering,
+    Loader, ModelKind, ModelPaths, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
+    TokenSource, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
 };
+use crate::api_get_file;
 use crate::utils::tokens::get_token;
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType, Cache};
+use crate::Ordering;
+use crate::{DeviceMapSetting, IsqType, PagedAttentionConfig, Pipeline, TryIntoDType};
 use anyhow::Result;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use candle_core::Device;
-use crate::{PagedAttentionConfig, Pipeline, TryIntoDType, DeviceMapSetting, IsqType};
-use std::path::PathBuf;
-use std::path::Path;
+use hf_hub::{api::sync::ApiBuilder, Cache, Repo, RepoType};
 use serde::Deserialize;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
+use tracing::info;
 
 /// Automatically selects between a normal or vision loader based on the `architectures` field.
 pub struct AutoLoader {
@@ -65,7 +67,13 @@ impl AutoLoaderBuilder {
         }
     }
 
-    pub fn with_xlora(mut self, model_id: String, order: Ordering, no_kv_cache: bool, tgt_non_granular_index: Option<usize>) -> Self {
+    pub fn with_xlora(
+        mut self,
+        model_id: String,
+        order: Ordering,
+        no_kv_cache: bool,
+        tgt_non_granular_index: Option<usize>,
+    ) -> Self {
         self.xlora_model_id = Some(model_id);
         self.xlora_order = Some(order);
         self.no_kv_cache = no_kv_cache;
@@ -94,7 +102,8 @@ impl AutoLoaderBuilder {
             self.jinja_explicit.clone(),
         );
         if let (Some(id), Some(ord)) = (self.xlora_model_id.clone(), self.xlora_order.clone()) {
-            normal_builder = normal_builder.with_xlora(id, ord, self.no_kv_cache, self.tgt_non_granular_index);
+            normal_builder =
+                normal_builder.with_xlora(id, ord, self.no_kv_cache, self.tgt_non_granular_index);
         }
         if let Some(ref adapters) = self.lora_adapter_ids {
             normal_builder = normal_builder.with_lora(adapters.clone());
@@ -138,7 +147,7 @@ enum Detected {
 }
 
 impl AutoLoader {
-    fn read_config_from_path(&self, paths: &Box<dyn ModelPaths>) -> Result<String> {
+    fn read_config_from_path(&self, paths: &dyn ModelPaths) -> Result<String> {
         Ok(std::fs::read_to_string(paths.get_config_filename())?)
     }
 
@@ -148,7 +157,11 @@ impl AutoLoader {
         token_source: &TokenSource,
         silent: bool,
     ) -> Result<String> {
-        let cache = self.hf_cache_path.clone().map(Cache::new).unwrap_or_default();
+        let cache = self
+            .hf_cache_path
+            .clone()
+            .map(Cache::new)
+            .unwrap_or_default();
         let mut api = ApiBuilder::from_cache(cache)
             .with_progress(!silent)
             .with_token(get_token(token_source)?);
@@ -223,7 +236,7 @@ impl Loader for AutoLoader {
         mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+    ) -> Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let config = self.read_config_from_hf(revision.clone(), &token_source, silent)?;
         self.ensure_loader(&config)?;
         self.loader
@@ -253,8 +266,8 @@ impl Loader for AutoLoader {
         mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let config = self.read_config_from_path(paths)?;
+    ) -> Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        let config = self.read_config_from_path(paths.as_ref())?;
         self.ensure_loader(&config)?;
         self.loader
             .lock()
@@ -285,4 +298,3 @@ impl Loader for AutoLoader {
             .unwrap_or(ModelKind::Normal)
     }
 }
-
