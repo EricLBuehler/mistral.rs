@@ -832,7 +832,6 @@ pub trait IsqModel {
         }
 
         let artifacts = unsafe { candle_core::safetensors::MmapedSafetensors::multi(artifacts)? };
-        println!("{:?}", artifacts.tensors().into_iter().map(|x| x.0).collect::<Vec<_>>());
 
         let artifact_isqs = artifacts
             .tensors()
