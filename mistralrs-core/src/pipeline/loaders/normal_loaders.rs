@@ -3081,8 +3081,8 @@ impl DeviceMappedModelLoader for Qwen3Loader {
             let post_attention_layernorm = cfg.hidden_size;
 
             let size_in = cfg.hidden_size;
-            let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
-            let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+            let size_q = cfg.head_dim() * cfg.num_attention_heads;
+            let size_kv = cfg.head_dim() * cfg.num_key_value_heads;
             let q_proj = size_in * size_q / weight_pack_factor + size_q;
             let k_proj = size_in * size_kv / weight_pack_factor + size_kv;
             let v_proj = size_in * size_kv / weight_pack_factor + size_kv;
@@ -3272,8 +3272,8 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
             let post_attention_layernorm = cfg.hidden_size;
 
             let size_in = cfg.hidden_size;
-            let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
-            let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+            let size_q = cfg.head_dim() * cfg.num_attention_heads;
+            let size_kv = cfg.head_dim() * cfg.num_key_value_heads;
             let q_proj = size_in * size_q / weight_pack_factor;
             let k_proj = size_in * size_kv / weight_pack_factor;
             let v_proj = size_in * size_kv / weight_pack_factor;
