@@ -1,14 +1,154 @@
-use super::{
-    calculate_key_block_shape, calculate_value_block_shape, AutoDeviceMapParams,
-    DeviceMappedModelLoader,
+use std::fmt::{self, Display};
+
+use crate::paged_attention::{
+    calculate_cache_config, ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
 };
-use crate::paged_attention::{calculate_cache_config, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE};
 use crate::utils::debug::DeviceRepr;
 use crate::{DeviceLayerMapMetadata, DeviceMapMetadata, MemoryUsage, PagedAttentionConfig};
 use anyhow::{Context, Result};
 use candle_core::{DType, Device};
 use itertools::Itertools;
 use tracing::{info, warn};
+
+use super::DeviceMappedModelLoader;
+
+#[derive(Clone, Debug)]
+pub(crate) enum NonMappedSubModel {
+    Vision,
+}
+
+impl Display for NonMappedSubModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NonMappedSubModel::Vision => write!(f, "vision"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum AutoDeviceMapParams {
+    Text {
+        max_seq_len: usize,
+        max_batch_size: usize,
+    },
+    Vision {
+        max_seq_len: usize,
+        max_batch_size: usize,
+        max_image_shape: (usize, usize),
+        max_num_images: usize,
+    },
+}
+
+impl AutoDeviceMapParams {
+    pub fn maybe_promote_to_vision(&self) -> Self {
+        match *self {
+            Self::Text {
+                max_seq_len,
+                max_batch_size,
+            } => Self::Vision {
+                max_seq_len,
+                max_batch_size,
+                max_image_shape: (
+                    Self::DEFAULT_MAX_IMAGE_LENGTH,
+                    Self::DEFAULT_MAX_IMAGE_LENGTH,
+                ),
+                max_num_images: Self::DEFAULT_MAX_NUM_IMAGES,
+            },
+            Self::Vision {
+                max_seq_len,
+                max_batch_size,
+                max_image_shape,
+                max_num_images,
+            } => Self::Vision {
+                max_seq_len,
+                max_batch_size,
+                max_image_shape,
+                max_num_images,
+            },
+        }
+    }
+
+    pub fn max_seq_len(&self) -> usize {
+        match self {
+            Self::Text { max_seq_len, .. } | Self::Vision { max_seq_len, .. } => *max_seq_len,
+        }
+    }
+}
+
+impl Display for AutoDeviceMapParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Text {
+                max_seq_len,
+                max_batch_size,
+            } => write!(
+                f,
+                "text[max_seq_len: {max_seq_len}, max_batch_size: {max_batch_size}]"
+            ),
+            Self::Vision {
+                max_seq_len,
+                max_batch_size,
+                max_image_shape,
+                max_num_images,
+            } => write!(
+                f,
+                "vision[max_seq_len: {max_seq_len}, max_batch_size: {max_batch_size}, max_image_shape: {max_image_shape:?}, max_num_images: {max_num_images}]"
+            ),
+        }
+    }
+}
+
+impl AutoDeviceMapParams {
+    pub const DEFAULT_MAX_SEQ_LEN: usize = 4 * 1024;
+    pub const DEFAULT_MAX_BATCH_SIZE: usize = 1;
+    pub const DEFAULT_MAX_NUM_IMAGES: usize = 1;
+    pub const DEFAULT_MAX_IMAGE_LENGTH: usize = 1024;
+
+    pub fn default_text() -> Self {
+        Self::Text {
+            max_seq_len: Self::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: Self::DEFAULT_MAX_BATCH_SIZE,
+        }
+    }
+
+    pub fn default_vision() -> Self {
+        Self::Vision {
+            max_seq_len: Self::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: Self::DEFAULT_MAX_BATCH_SIZE,
+            max_num_images: Self::DEFAULT_MAX_NUM_IMAGES,
+            max_image_shape: (
+                Self::DEFAULT_MAX_IMAGE_LENGTH,
+                Self::DEFAULT_MAX_IMAGE_LENGTH,
+            ),
+        }
+    }
+}
+
+fn calculate_key_block_shape(
+    model_config: &dyn ModelConfigLike,
+    dtype: DType,
+    block_size: usize,
+) -> (usize, usize, usize, usize) {
+    let element_size = dtype.size_in_bytes();
+    let x = 16 / element_size;
+    (
+        model_config.num_kv_heads(),
+        model_config.k_head_dim() / x,
+        block_size,
+        x,
+    )
+}
+
+fn calculate_value_block_shape(
+    model_config: &dyn ModelConfigLike,
+    block_size: usize,
+) -> (usize, usize, usize) {
+    (
+        model_config.num_kv_heads(),
+        model_config.v_head_dim(),
+        block_size,
+    )
+}
 
 macro_rules! b_to_mb {
     ($x:expr) => {
