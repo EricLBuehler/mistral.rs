@@ -22,7 +22,7 @@
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>EXTRACT_TOOL_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"website_content_extractor"</span>;
 <a href=#23 id=23 data-nosnippet>23</a>
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">const </span>APP_VERSION: <span class="kw-2">&amp;</span>str = <span class="macro">env!</span>(<span class="string">"CARGO_PKG_VERSION"</span>);
-<a href=#25 id=25 data-nosnippet>25</a><span class="kw">const </span>SEARCH_DESCRIPTION: <span class="kw-2">&amp;</span>str = <span class="string">r#"This tool is used to search the web given a query.
+<a href=#25 id=25 data-nosnippet>25</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>SEARCH_DESCRIPTION: <span class="kw-2">&amp;</span>str = <span class="string">r#"This tool is used to search the web given a query.
 <a href=#26 id=26 data-nosnippet>26</a>If the user wants up-to-date information or you want to retrieve new information, call this tool.
 <a href=#27 id=27 data-nosnippet>27</a>If you call this tool, then you MUST complete your answer using the output.
 <a href=#28 id=28 data-nosnippet>28</a>The input can be a query. It should not be a URL. Either is fine.
@@ -41,7 +41,7 @@
 <a href=#41 id=41 data-nosnippet>41</a>    ]
 <a href=#42 id=42 data-nosnippet>42</a>}
 <a href=#43 id=43 data-nosnippet>43</a>"#</span>;
-<a href=#44 id=44 data-nosnippet>44</a><span class="kw">const </span>EXTRACT_DESCRIPTION: <span class="kw-2">&amp;</span>str = <span class="string">r#"This tool is used to extract the content of a website.
+<a href=#44 id=44 data-nosnippet>44</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>EXTRACT_DESCRIPTION: <span class="kw-2">&amp;</span>str = <span class="string">r#"This tool is used to extract the content of a website.
 <a href=#45 id=45 data-nosnippet>45</a>If the user wants information about a specific site or you want to extract the content of a specific site, call this tool.
 <a href=#46 id=46 data-nosnippet>46</a>The input must be a URL.
 <a href=#47 id=47 data-nosnippet>47</a>Additionally, if you have any questions that require a follow-up, you can call this tool repeatedly.
