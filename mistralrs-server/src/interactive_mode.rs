@@ -335,20 +335,6 @@ async fn text_interactive_mode(
     rl.save_history(&history_file_path()).unwrap();
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_files_and_message_trims_trailing_punctuation() {
-        let regex = Regex::new(IMAGE_REGEX).unwrap();
-        let input = "Look at this https://example.com/test.png.";
-        let (urls, text) = parse_files_and_message(input, &regex);
-        assert_eq!(urls, vec!["https://example.com/test.png"]);
-        assert_eq!(text, "Look at this .");
-    }
-}
-
 fn parse_files_and_message(input: &str, regex: &Regex) -> (Vec<String>, String) {
     // Collect all URLs
     let urls: Vec<String> = regex
@@ -797,4 +783,18 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
     }
 
     rl.save_history(&history_file_path()).unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_files_and_message_trims_trailing_punctuation() {
+        let regex = Regex::new(IMAGE_REGEX).unwrap();
+        let input = "Look at this https://example.com/test.png.";
+        let (urls, text) = parse_files_and_message(input, &regex);
+        assert_eq!(urls, vec!["https://example.com/test.png"]);
+        assert_eq!(text, "Look at this .");
+    }
 }
