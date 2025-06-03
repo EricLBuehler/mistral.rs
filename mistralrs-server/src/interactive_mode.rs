@@ -134,6 +134,9 @@ const EXIT_CMD: &str = "\\exit";
 const SYSTEM_CMD: &str = "\\system";
 const CLEAR_CMD: &str = "\\clear";
 
+/// Regex string used to extract image URLs from prompts.
+const IMAGE_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:png|jpe?g|bmp|gif|webp)(?:\?\S+?)?)"#;
+
 fn interactive_sample_parameters() -> SamplingParams {
     SamplingParams {
         temperature: Some(0.1),
@@ -336,7 +339,18 @@ fn parse_files_and_message(input: &str, regex: &Regex) -> (Vec<String>, String) 
     // Collect all URLs
     let urls: Vec<String> = regex
         .captures_iter(input)
-        .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+        .filter_map(|cap| {
+            cap.get(1).map(|m| {
+                m.as_str()
+                    .trim_end_matches(|c: char| {
+                        matches!(
+                            c,
+                            '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"' | '\''
+                        )
+                    })
+                    .to_string()
+            })
+        })
         .collect();
     // Remove the URLs from the input to get the message text
     let text = regex.replace_all(input, "").trim().to_string();
@@ -349,8 +363,7 @@ async fn vision_interactive_mode(
     enable_thinking: Option<bool>,
 ) {
     // Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
-    let image_regex =
-        Regex::new(r#"((?:https?://|file://)?\S+\.(?:png|jpe?g|bmp|gif|webp))"#).unwrap();
+    let image_regex = Regex::new(IMAGE_REGEX).unwrap();
 
     let sender = mistralrs.get_sender().unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
@@ -770,4 +783,18 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
     }
 
     rl.save_history(&history_file_path()).unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_files_and_message_trims_trailing_punctuation() {
+        let regex = Regex::new(IMAGE_REGEX).unwrap();
+        let input = "Look at this https://example.com/test.png.";
+        let (urls, text) = parse_files_and_message(input, &regex);
+        assert_eq!(urls, vec!["https://example.com/test.png"]);
+        assert_eq!(text, "Look at this .");
+    }
 }
