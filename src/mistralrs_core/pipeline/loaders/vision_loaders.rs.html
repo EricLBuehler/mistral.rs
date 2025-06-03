@@ -4159,16 +4159,16 @@
 <a href=#4159 id=4159 data-nosnippet>4159</a>            Regex::new(<span class="string">r"language_model\.model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
 <a href=#4160 id=4160 data-nosnippet>4160</a>            <span class="comment">// FF MoE
 <a href=#4161 id=4161 data-nosnippet>4161</a>            </span>Regex::new(
-<a href=#4162 id=4162 data-nosnippet>4162</a>                <span class="string">r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.gate_up_proj\.(weight|bias)$"</span>,
+<a href=#4162 id=4162 data-nosnippet>4162</a>                <span class="string">r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.(\d+)\.gate_up_proj\.(weight|bias)$"</span>,
 <a href=#4163 id=4163 data-nosnippet>4163</a>            )<span class="question-mark">?</span>,
 <a href=#4164 id=4164 data-nosnippet>4164</a>            Regex::new(
-<a href=#4165 id=4165 data-nosnippet>4165</a>                <span class="string">r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.gate_proj\.(weight|bias)$"</span>,
+<a href=#4165 id=4165 data-nosnippet>4165</a>                <span class="string">r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.(\d+)\.gate_proj\.(weight|bias)$"</span>,
 <a href=#4166 id=4166 data-nosnippet>4166</a>            )<span class="question-mark">?</span>,
 <a href=#4167 id=4167 data-nosnippet>4167</a>            Regex::new(
-<a href=#4168 id=4168 data-nosnippet>4168</a>                <span class="string">r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.up_proj\.(weight|bias)$"</span>,
+<a href=#4168 id=4168 data-nosnippet>4168</a>                <span class="string">r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.(\d+)\.up_proj\.(weight|bias)$"</span>,
 <a href=#4169 id=4169 data-nosnippet>4169</a>            )<span class="question-mark">?</span>,
 <a href=#4170 id=4170 data-nosnippet>4170</a>            Regex::new(
-<a href=#4171 id=4171 data-nosnippet>4171</a>                <span class="string">r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.down_proj\.(weight|bias)$"</span>,
+<a href=#4171 id=4171 data-nosnippet>4171</a>                <span class="string">r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.(\d+)\.down_proj\.(weight|bias)$"</span>,
 <a href=#4172 id=4172 data-nosnippet>4172</a>            )<span class="question-mark">?</span>,
 <a href=#4173 id=4173 data-nosnippet>4173</a>            Regex::new(
 <a href=#4174 id=4174 data-nosnippet>4174</a>                <span class="string">r"language_model\.model\.layers\.(\d+)\.feed_forward\.router\.(weight|bias)$"</span>,
