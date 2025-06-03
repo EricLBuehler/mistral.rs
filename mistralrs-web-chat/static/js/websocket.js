@@ -211,7 +211,32 @@ ${content}
   
   showSpinner();
   
-  ws.send(msg);
+  // Send message, optionally with web search options
+  const enableSearch = document.getElementById('enableSearch')?.checked;
+  if (enableSearch) {
+    const opts = {};
+    // Always include selected context size (default medium)
+    const sizeSelect = document.getElementById('searchContextSize');
+    if (sizeSelect) {
+      const sizeValue = sizeSelect.value;
+      if (sizeValue) opts.search_context_size = sizeValue;
+    }
+    // Include user location if any field is provided
+    const city = document.getElementById('userLocationCity').value.trim();
+    const region = document.getElementById('userLocationRegion').value.trim();
+    const country = document.getElementById('userLocationCountry').value.trim();
+    const timezone = document.getElementById('userLocationTimezone').value.trim();
+    if (city || region || country || timezone) {
+      opts.user_location = {
+        type: 'approximate',
+        approximate: { city, region, country, timezone }
+      };
+    }
+    const payload = { content: msg, web_search_options: opts };
+    ws.send(JSON.stringify(payload));
+  } else {
+    ws.send(msg);
+  }
   input.value = ''; 
   
   // Clear uploaded files after sending

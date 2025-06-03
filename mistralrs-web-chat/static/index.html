@@ -14,6 +14,28 @@
     <button id="clearBtn">🧹 Clear chat</button>
     <button id="renameBtn">✏️ Rename chat</button>
     <button id="deleteBtn">🗑️ Delete chat</button>
+    <hr />
+    <h3>Web Search Options</h3>
+    <label><input type="checkbox" id="enableSearch" /> Enable web search</label>
+    <div id="webSearchOptions" hidden>
+      <label for="searchContextSize">Context size:</label>
+      <select id="searchContextSize">
+        <option value="low">Low</option>
+        <option value="medium" selected>Medium</option>
+        <option value="high">High</option>
+      </select>
+      <fieldset>
+        <legend>Approximate User Location</legend>
+        <label for="userLocationCity">City:</label>
+        <input type="text" id="userLocationCity" placeholder="City" />
+        <label for="userLocationRegion">Region:</label>
+        <input type="text" id="userLocationRegion" placeholder="Region" />
+        <label for="userLocationCountry">Country:</label>
+        <input type="text" id="userLocationCountry" placeholder="Country" />
+        <label for="userLocationTimezone">Timezone:</label>
+        <input type="text" id="userLocationTimezone" placeholder="Timezone" />
+      </fieldset>
+    </div>
     <ul id="chatList"></ul>
   </div>
 
