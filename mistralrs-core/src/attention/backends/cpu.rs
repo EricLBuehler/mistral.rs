@@ -308,6 +308,21 @@ where
                     let mut m = f32::NEG_INFINITY;
 
                     for kv_pos in start..end {
+                        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+                        {
+                            // One‑step look‑ahead prefetch of the next K and V rows.
+                            let next_pos = kv_pos + 1;
+                            if next_pos < end {
+                                let next_k_base =
+                                    b_i * kstride[0] + next_pos * kstride[1] + k_head * kstride[2];
+                                let next_v_base =
+                                    b_i * vstride[0] + next_pos * vstride[1] + v_head * vstride[2];
+                                unsafe {
+                                    prefetch(k_data.as_ptr().add(next_k_base) as *const u8);
+                                    prefetch(v_data.as_ptr().add(next_v_base) as *const u8);
+                                }
+                            }
+                        }
                         // ---------- dot(Q,K) ----------
                         let k_base = b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
                         let k_row = &k_data[k_base..k_base + d];
