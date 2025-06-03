@@ -10,6 +10,32 @@ use rayon::ThreadPool;
 use std::sync::LazyLock;
 use std::{f32, iter::Sum};
 
+// Optional hardware prefetch for ping‑pong style scheduling.
+#[cfg(target_arch = "x86_64")]
+use core::arch::x86_64::_mm_prefetch;
+
+// --- portable wrapper around architecture‑specific prefetch -------------
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+unsafe fn prefetch(addr: *const u8) {
+    _mm_prefetch(addr as *const i8, core::arch::x86_64::_MM_HINT_T0);
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn prefetch(addr: *const u8) {
+    core::arch::asm!(
+        "prfm pldl1keep, [{0}]",
+        in(reg) addr,
+        options(readonly, nostack, preserves_flags)
+    );
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[inline(always)]
+unsafe fn prefetch(_addr: *const u8) {}
+// -----------------------------------------------------------------------
+
 use crate::attention::SdpaParams;
 
 #[cfg(target_os = "macos")]
@@ -278,6 +304,24 @@ where
                         let q_row = &q_data[q_base..q_base + d];
 
                         for kv_pos in start..end {
+                            // -------- ping‑pong prefetch of next KV row --------
+                            #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+                            {
+                                let next_pos = kv_pos + 1;
+                                if next_pos < end {
+                                    let next_k_base = b_i * kstride[0]
+                                        + next_pos * kstride[1]
+                                        + k_head * kstride[2];
+                                    let next_v_base = b_i * vstride[0]
+                                        + next_pos * vstride[1]
+                                        + v_head * vstride[2];
+                                    unsafe {
+                                        prefetch(k_data.as_ptr().add(next_k_base) as *const u8);
+                                        prefetch(v_data.as_ptr().add(next_v_base) as *const u8);
+                                    }
+                                }
+                            }
+                            // ----------------------------------------------------
                             // ---- mask -------------------------------------------------------
                             let mv = if let Some(mv_vec) = mask_vec {
                                 slope * mv_vec[(b_i * kv_len) + kv_pos].to_f32()
@@ -435,6 +479,22 @@ where
                 let q_row = &q_data[q_base..q_base + d];
 
                 for kv_pos in 0..kv_len {
+                    // -------- ping‑pong prefetch of next KV row --------
+                    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+                    {
+                        let next_pos = kv_pos + 1;
+                        if next_pos < kv_len {
+                            let next_k_base =
+                                b_i * kstride[0] + next_pos * kstride[1] + k_head * kstride[2];
+                            let next_v_base =
+                                b_i * vstride[0] + next_pos * vstride[1] + v_head * vstride[2];
+                            unsafe {
+                                prefetch(k_data.as_ptr().add(next_k_base) as *const u8);
+                                prefetch(v_data.as_ptr().add(next_v_base) as *const u8);
+                            }
+                        }
+                    }
+                    // ----------------------------------------------------
                     // Mask (optional)
                     let mv = if let Some(mv_vec) = mask_vec {
                         slope * mv_vec[((b_i * q_len + q_pos) * kv_len) + kv_pos].to_f32()
