@@ -556,3 +556,130 @@ where
     let out_shape = (b, h, q_len, dv);
     Tensor::from_vec(out, out_shape, &Device::Cpu)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attention::SdpaParams;
+    use candle_core::{Device, Tensor, D};
+    use candle_nn::ops::softmax;
+
+    // Bring `Result` into scope so we can return it from tests
+    use candle_core::Result as CandleResult;
+
+    #[test]
+    fn test_flash_attn_cpu_single_q() -> CandleResult<()> {
+        // Test for q_len == 1 (single Q)
+        let b = 1;
+        let h = 2;
+        let d = 4;
+        let kv_len = 2;
+
+        // Create q with shape (b, 1, h, d) filled with ones
+        let q_vec = vec![1.0f32; b * 1 * h * d];
+        let q = Tensor::from_vec(q_vec.clone(), (b, 1, h, d), &Device::Cpu)?;
+
+        // Create k and v with shape (b, kv_len, h, d) filled with ones
+        let k_vec = vec![1.0f32; b * kv_len * h * d];
+        let v_vec = vec![1.0f32; b * kv_len * h * d];
+        let k = Tensor::from_vec(k_vec.clone(), (b, kv_len, h, d), &Device::Cpu)?;
+        let v = Tensor::from_vec(v_vec.clone(), (b, kv_len, h, d), &Device::Cpu)?;
+
+        // SDPA parameters: scale = 1.0, no softcap
+        let sdpa = SdpaParams {
+            softmax_scale: 1.0,
+            softcap: None,
+            n_kv_groups: 1,
+            sliding_window: None,
+        };
+        let scale = sdpa.softmax_scale;
+
+        // Run the flash attention CPU function
+        let out = run_flash_attn_cpu::<f32>(&q, &k, &v, None, &sdpa)?;
+        // Expect output shape (b, h, 1, d)
+        assert_eq!(out.shape().dims(), &[b, h, 1, d]);
+
+        // Naive attention
+        let q_perm = q.clone().permute((0, 2, 1, 3))?;
+        let k_perm = k.clone().permute((0, 2, 1, 3))?;
+        let v_perm = v.clone().permute((0, 2, 1, 3))?;
+
+        let q_resh = q_perm.reshape(&[b * h, 1, d])?;
+        let k_resh = k_perm.reshape(&[b * h, kv_len, d])?;
+        let v_resh = v_perm.reshape(&[b * h, kv_len, d])?;
+
+        let logits = (q_resh.matmul(&k_resh.transpose(1, 2)?)? * scale as f64)?;
+        let weights = softmax(&logits, D::Minus1)?;
+
+        let attn_out = weights.matmul(&v_resh)?;
+
+        let naive_out = attn_out.reshape(&[b, h, 1, d])?;
+
+        let flash_data = out.flatten_all()?.to_vec1::<f32>()?;
+        let naive_data = naive_out.flatten_all()?.to_vec1::<f32>()?;
+        for (f_val, n_val) in flash_data.iter().zip(naive_data.iter()) {
+            assert!((f_val - n_val).abs() < 1e-4);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_flash_attn_cpu_full_q() -> CandleResult<()> {
+        // Test for q_len > 1 (full Q)
+        let b = 1;
+        let q_len = 2;
+        let h = 2;
+        let d = 4;
+        let kv_len = 2;
+
+        // Create q with shape (b, q_len, h, d) filled with ones
+        let q_vec = vec![1.0f32; b * q_len * h * d];
+        let q = Tensor::from_vec(q_vec.clone(), (b, q_len, h, d), &Device::Cpu)?;
+
+        // Create k and v with shape (b, kv_len, h, d) filled with ones
+        let k_vec = vec![1.0f32; b * kv_len * h * d];
+        let v_vec = vec![1.0f32; b * kv_len * h * d];
+        let k = Tensor::from_vec(k_vec.clone(), (b, kv_len, h, d), &Device::Cpu)?;
+        let v = Tensor::from_vec(v_vec.clone(), (b, kv_len, h, d), &Device::Cpu)?;
+
+        // SDPA parameters: scale = 1.0, no softcap
+        let sdpa = SdpaParams {
+            softmax_scale: 1.0,
+            softcap: None,
+            n_kv_groups: 1,
+            sliding_window: None,
+        };
+        let scale = sdpa.softmax_scale;
+
+        // Run the flash attention CPU function
+        let out = run_flash_attn_cpu::<f32>(&q, &k, &v, None, &sdpa)?;
+        // Expect output shape (b, h, q_len, d)
+        assert_eq!(out.shape().dims(), &[b, h, q_len, d]);
+
+        // Naive attention
+        let q_perm = q.clone().permute((0, 2, 1, 3))?;
+        let k_perm = k.clone().permute((0, 2, 1, 3))?;
+        let v_perm = v.clone().permute((0, 2, 1, 3))?;
+
+        let q_resh = q_perm.reshape(&[b * h, q_len, d])?;
+        let k_resh = k_perm.reshape(&[b * h, kv_len, d])?;
+        let v_resh = v_perm.reshape(&[b * h, kv_len, d])?;
+
+        let logits = (q_resh.matmul(&k_resh.transpose(1, 2)?)? * scale as f64)?;
+        let weights = softmax(&logits, D::Minus1)?;
+
+        let attn_out = weights.matmul(&v_resh)?;
+
+        let naive_out = attn_out.reshape(&[b, h, q_len, d])?;
+
+        // 7) Compare element‐by‐element
+        let flash_data = out.flatten_all()?.to_vec1::<f32>()?;
+        let naive_data = naive_out.flatten_all()?.to_vec1::<f32>()?;
+        for (f_val, n_val) in flash_data.iter().zip(naive_data.iter()) {
+            assert!((f_val - n_val).abs() < 1e-4);
+        }
+
+        Ok(())
+    }
+}
