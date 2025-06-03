@@ -156,6 +156,7 @@ macro_rules! b_to_mb {
     };
 }
 
+#[allow(clippy::too_many_arguments)]
 /// Core logic for automatic device mapping
 pub fn get_device_layers(
     loader: &dyn DeviceMappedModelLoader,
@@ -251,19 +252,27 @@ pub fn get_device_layers(
         let (cap, dev) = avail
             .pop()
             .context("No more devices to map to. The model does not fit on this system.")?;
+
+        // All usage of 90% of the memory as a maximum.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let cap = (cap as f64 * 0.90) as usize;
-        let layers_on_dev = if ordinal == 0
-            && cap
-                >= remaining
-                    + non_mapped_max.max(mapped_max)
-                    + non_mapped_size_in_bytes
-                    + kv_cache_bytes * (num_layers - layer)
-        {
-            remaining = 0;
-            num_layers - layer
-        } else if ordinal != 0
-            && cap >= remaining + mapped_max + kv_cache_bytes * (num_layers - layer)
-        {
+
+        // Algorithm is to check the following:
+        // 1) (no mapping) if *everything* fits on the first dev (non mapped and mapped)
+        // 2) if the mapped activations plus remaining fits on the nth device
+        // 3) common case, iteratively find the optimal amount of layers to put on the nth device
+        //   - if this is the first dev: must hold the non-mapped act and non-mapped model
+        //   - otherwise, must hold the mapped act
+        let required_whole_capacity = if ordinal == 0 {
+            remaining
+                + non_mapped_max.max(mapped_max)
+                + non_mapped_size_in_bytes
+                + kv_cache_bytes * (num_layers - layer)
+        } else {
+            remaining + mapped_max + kv_cache_bytes * (num_layers - layer)
+        };
+
+        let layers_on_dev = if cap >= required_whole_capacity {
             remaining = 0;
             num_layers - layer
         } else {
