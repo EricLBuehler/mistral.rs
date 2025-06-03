@@ -1,9 +1,43 @@
+//! ## General utilities.
+
 use image::DynamicImage;
 use tokio::{
     fs::{self, File},
     io::AsyncReadExt,
 };
 
+/// Parses and loads an image from a URL, file path, or data URL.
+///
+/// This function accepts various input formats and attempts to parse them in order:
+/// 1. First tries to parse as a complete URL (http/https/file/data schemes)
+/// 2. If that fails, checks if it's a local file path and converts to file URL
+/// 3. Finally falls back to treating it as a malformed URL and returns an error
+///
+/// ### Arguments
+///
+/// * `url_unparsed` - A string that can be:
+///   - An HTTP/HTTPS URL (e.g., "https://example.com/image.png")
+///   - A file path (e.g., "/path/to/image.jpg" or "image.png")
+///   - A data URL with base64 encoded image (e.g., "data:image/png;base64,...")
+///   - A file URL (e.g., "file:///path/to/image.jpg")
+///
+/// ### Examples
+///
+/// ```no_run
+/// use mistralrs_server_core::util::parse_image_url;
+///
+/// // Load from HTTP URL
+/// let image = parse_image_url("https://example.com/photo.jpg").await?;
+///
+/// // Load from local file path
+/// let image = parse_image_url("./assets/logo.png").await?;
+///
+/// // Load from data URL
+/// let image = parse_image_url("data:image/png;base64,iVBORw0KGgoAAAANS...").await?;
+///
+/// // Load from file URL
+/// let image = parse_image_url("file:///home/user/picture.jpg").await?;
+/// ```
 pub async fn parse_image_url(url_unparsed: &str) -> Result<DynamicImage, anyhow::Error> {
     let url = if let Ok(url) = url::Url::parse(url_unparsed) {
         url

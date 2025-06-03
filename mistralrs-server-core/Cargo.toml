@@ -1,0 +1,48 @@
+[package]
+name = "mistralrs-server-core"
+readme = "README.md"
+authors = ["Eric Buehler"]
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum = { workspace = true, features = ["tokio"] }
+candle-core.workspace = true
+data-url.workspace = true
+either.workspace = true
+futures.workspace = true
+image.workspace = true
+indexmap.workspace = true
+itertools.workspace = true
+mistralrs-core = { version = "0.6.0", path = "../mistralrs-core", features = [
+  "utoipa",
+] }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tower-http = { version = "0.5.1", features = ["cors"] }
+tracing.workspace = true
+url.workspace = true
+utoipa = { workspace = true, features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "7.1.0", features = ["axum"] }
+
+accelerate-src = { workspace = true, optional = true }
+intel-mkl-src = { workspace = true, optional = true }
+
+[features]
+cuda = ["mistralrs-core/cuda"]
+cudnn = ["mistralrs-core/cudnn"]
+metal = ["mistralrs-core/metal"]
+flash-attn = ["cuda", "mistralrs-core/flash-attn"]
+accelerate = ["mistralrs-core/accelerate"]
+mkl = ["mistralrs-core/mkl"]
+nccl = ["mistralrs-core/nccl"]
+ring = ["mistralrs-core/ring"]

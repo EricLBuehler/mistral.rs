@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::{error::Error, sync::Arc};
 use tokio::sync::mpsc::{channel, Sender};
 
-use crate::openai::ImageGenerationRequest;
+use crate::{openai::ImageGenerationRequest, types::ExtractedMistralRsState};
 use axum::{
     extract::{Json, State},
     http::{self, StatusCode},
@@ -95,7 +95,7 @@ fn parse_request(
 )]
 
 pub async fn image_generation(
-    State(state): State<Arc<MistralRs>>,
+    State(state): ExtractedMistralRsState,
     Json(oairequest): Json<ImageGenerationRequest>,
 ) -> ImageGenerationResponder {
     let (tx, mut rx) = channel(10_000);

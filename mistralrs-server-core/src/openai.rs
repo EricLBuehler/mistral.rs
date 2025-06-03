@@ -1,14 +1,18 @@
+//! ## OpenAI compatible functionality.
+
+use std::{collections::HashMap, ops::Deref};
+
 use either::Either;
 use mistralrs_core::{
     ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice, ToolType, WebSearchOptions,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, ops::Deref};
 use utoipa::{
     openapi::{ArrayBuilder, ObjectBuilder, OneOfBuilder, RefOr, Schema, SchemaType},
     ToSchema,
 };
 
+/// Inner content structure for messages that can be either a string or key-value pairs
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MessageInnerContent(
     #[serde(with = "either::serde_untagged")] pub Either<String, HashMap<String, String>>,
@@ -32,8 +36,7 @@ impl Deref for MessageInnerContent {
     }
 }
 
-// Implement ToSchema manually to handle `Either<String, HashMap<String, String>>`
-// Maps to oneOf: [string, object with string values]
+/// Function for MessageInnerContent Schema generation to handle `Either`
 fn message_inner_content_schema() -> Schema {
     Schema::OneOf(
         OneOfBuilder::new()
@@ -54,6 +57,7 @@ fn message_inner_content_schema() -> Schema {
     )
 }
 
+/// Message content that can be either simple text or complex structured content
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MessageContent(
     #[serde(with = "either::serde_untagged")]
@@ -75,7 +79,7 @@ impl Deref for MessageContent {
     }
 }
 
-// Implement ToSchema manually to handle `Either`
+/// Function for MessageContent Schema generation to handle `Either`
 fn message_content_schema() -> Schema {
     Schema::OneOf(
         OneOfBuilder::new()
@@ -98,68 +102,154 @@ fn message_content_schema() -> Schema {
     )
 }
 
+/// Represents a function call made by the assistant
+///
+/// When using tool calling, this structure contains the details of a function
+/// that the model has decided to call, including the function name and its parameters.
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, ToSchema)]
 pub struct FunctionCalled {
+    /// The name of the function to call
     pub name: String,
+    /// The function arguments
     #[serde(alias = "arguments")]
     pub parameters: String,
 }
 
+/// Represents a tool call made by the assistant
+///
+/// This structure wraps a function call with its type information.
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, ToSchema)]
 pub struct ToolCall {
+    /// The type of tool being called
     #[serde(rename = "type")]
     pub tp: ToolType,
+    ///  The function call details
     pub function: FunctionCalled,
 }
 
+/// Represents a single message in a conversation
+///
+/// ### Examples
+///
+/// ```no_run
+/// use either::Either;
+/// use mistralrs_server_core::openai::{Message, MessageContent};
+///
+/// // User message
+/// let user_msg = Message {
+///     content: Some(MessageContent(Either::Left("What's 2+2?".to_string()))),
+///     role: "user".to_string(),
+///     name: None,
+///     tool_calls: None,
+/// };
+///
+/// // System message
+/// let system_msg = Message {
+///     content: Some(MessageContent(Either::Left("You are a helpful assistant.".to_string()))),
+///     role: "system".to_string(),
+///     name: None,
+///     tool_calls: None,
+/// };
+/// ```
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct Message {
+    /// The message content
     pub content: Option<MessageContent>,
+    /// The role of the message sender ("user", "assistant", "system", "tool", etc.)
     pub role: String,
     pub name: Option<String>,
+    /// Optional list of tool calls
     pub tool_calls: Option<Vec<ToolCall>>,
 }
 
+/// Stop token configuration for generation
+///
+/// Defines when the model should stop generating text, either with a single
+/// stop token or multiple possible stop sequences.
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 #[serde(untagged)]
 pub enum StopTokens {
+    ///  Multiple possible stop sequences
     Multi(Vec<String>),
+    /// Single stop sequence
     Single(String),
 }
 
+/// Default value helper
 fn default_false() -> bool {
     false
 }
 
+/// Default value helper
 fn default_1usize() -> usize {
     1
 }
 
+/// Default value helper
 fn default_720usize() -> usize {
     720
 }
 
+/// Default value helper
 fn default_1280usize() -> usize {
     1280
 }
 
+/// Default value helper
 fn default_model() -> String {
     "default".to_string()
 }
 
+/// Default value helper
 fn default_response_format() -> ImageGenerationResponseFormat {
     ImageGenerationResponseFormat::Url
 }
 
+/// Grammar specification for structured generation
+///
+/// Defines different types of grammars that can be used to constrain model output,
+/// ensuring it follows specific formats or structures.
+///
+/// ### Examples
+///
+/// ```no_run
+/// use mistralrs_server_core::openai::Grammar;
+///
+/// // Regex grammar for phone numbers
+/// let phone_regex = Grammar::Regex(r"\d{3}-\d{3}-\d{4}".to_string());
+///
+/// // JSON schema for structured data
+/// let json_schema = Grammar::JsonSchema(serde_json::json!({
+///     "type": "object",
+///     "properties": {
+///         "name": {"type": "string"},
+///         "age": {"type": "integer"}
+///     },
+///     "required": ["name", "age"]
+/// }));
+///
+/// // Lark grammar for arithmetic expressions
+/// let lark_grammar = Grammar::Lark(r#"
+///     ?start: expr
+///     expr: term ("+" term | "-" term)*
+///     term: factor ("*" factor | "/" factor)*
+///     factor: NUMBER | "(" expr ")"
+///     %import common.NUMBER
+/// "#.to_string());
+/// ```
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", content = "value")]
 pub enum Grammar {
+    /// Regular expression grammar
     #[serde(rename = "regex")]
     Regex(String),
+    /// JSON schema grammar
     #[serde(rename = "json_schema")]
     JsonSchema(serde_json::Value),
+    /// LLGuidance grammar
     #[serde(rename = "llguidance")]
     Llguidance(LlguidanceGrammar),
+    /// Lark parser grammar
     #[serde(rename = "lark")]
     Lark(String),
 }
@@ -199,7 +289,7 @@ impl utoipa::ToSchema<'_> for Grammar {
     }
 }
 
-// Helper function to create a grammar variant schema
+/// Helper function to create a grammar variant schema
 fn create_grammar_variant_schema(type_value: &str, value_schema: Schema) -> Schema {
     Schema::Object(
         ObjectBuilder::new()
@@ -222,6 +312,7 @@ fn create_grammar_variant_schema(type_value: &str, value_schema: Schema) -> Sche
     )
 }
 
+/// Helper function to generate LLGuidance schema
 fn llguidance_schema() -> Schema {
     let grammar_with_lexer_schema = Schema::Object(
         ObjectBuilder::new()
@@ -290,23 +381,28 @@ fn llguidance_schema() -> Schema {
     )
 }
 
+/// JSON Schema for structured responses
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct JsonSchemaResponseFormat {
     pub name: String,
     pub schema: serde_json::Value,
 }
 
+/// Response format for model output
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 #[serde(tag = "type")]
 pub enum ResponseFormat {
+    /// Free-form text response
     #[serde(rename = "text")]
     Text,
+    /// Structured response following a JSON schema
     #[serde(rename = "json_schema")]
     JsonSchema {
         json_schema: JsonSchemaResponseFormat,
     },
 }
 
+/// Chat completion request following OpenAI's specification
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ChatCompletionRequest {
     #[schema(
@@ -373,7 +469,7 @@ pub struct ChatCompletionRequest {
     pub enable_thinking: Option<bool>,
 }
 
-// Implement ToSchema manually to handle `Either`
+/// Function for ChatCompletionRequest.messages Schema generation to handle `Either`
 fn messages_schema() -> Schema {
     Schema::OneOf(
         OneOfBuilder::new()
@@ -391,6 +487,7 @@ fn messages_schema() -> Schema {
     )
 }
 
+/// Model information metadata about an available mode
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ModelObject {
     pub id: String,
@@ -399,12 +496,14 @@ pub struct ModelObject {
     pub owned_by: &'static str,
 }
 
+/// Collection of available models
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ModelObjects {
     pub object: &'static str,
     pub data: Vec<ModelObject>,
 }
 
+/// Legacy OpenAI compatible text completion request
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct CompletionRequest {
     #[schema(example = "mistral")]
@@ -466,6 +565,7 @@ pub struct CompletionRequest {
     pub dry_sequence_breakers: Option<Vec<String>>,
 }
 
+/// Image generation request
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ImageGenerationRequest {
     #[schema(example = "mistral")]
@@ -487,19 +587,27 @@ pub struct ImageGenerationRequest {
     pub width: usize,
 }
 
+/// Audio format options for speech generation responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum AudioResponseFormat {
+    /// Widely compatible, lossy compression, good for web streaming
     #[default]
     Mp3,
+    /// Good compression efficiency, ideal for real-time communication
     Opus,
+    /// High-quality lossy compression, commonly used in mobile applications
     Aac,
+    /// Lossless compression, larger file sizes but good audio quality
     Flac,
+    /// Uncompressed, largest file sizes but maximum compatibility
     Wav,
+    ///  Raw audio data, requires additional format specification
     Pcm,
 }
 
 impl AudioResponseFormat {
+    /// Generate the appropriate MIME content type string for this audio format.
     pub fn audio_content_type(
         &self,
         pcm_rate: usize,
@@ -519,16 +627,20 @@ impl AudioResponseFormat {
     }
 }
 
+/// Speech generation request
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct SpeechGenerationRequest {
+    /// The TTS model to use for audio generation.
     #[schema(example = "nari-labs/Dia-1.6B")]
     #[serde(default = "default_model")]
     pub model: String,
+    /// The text content to convert to speech.
     #[schema(
         example = "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face."
     )]
     pub input: String,
     // `voice` and `instructions` are ignored.
+    /// The desired audio format for the generated speech.
     #[schema(example = "mp3")]
     pub response_format: AudioResponseFormat,
 }
