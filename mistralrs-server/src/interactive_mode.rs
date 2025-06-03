@@ -98,9 +98,9 @@ Commands:
     Add a system message to the chat without running the model.
     Ex: `\system Always respond as a pirate.`
 - `\clear`: Clear the chat history.
-- `\temperature <float>`: Set sampling temperature.
-- `\topk <int>`: Set top-k sampling value.
-- `\topp <float>`: Set top-p sampling value.
+- `\temperature <float>`: Set sampling temperature (0.0 to 1.0).
+- `\topk <int>`: Set top-k sampling value (>0).
+- `\topp <float>`: Set top-p sampling value in (0.0 to 1.0).
 "#;
 
 const TEXT_INTERACTIVE_HELP: &str = r#"
@@ -157,6 +157,67 @@ fn interactive_sample_parameters() -> SamplingParams {
     }
 }
 
+/// Handles sampling commands (\temperature, \topk, \topp) and updates the sampling_params accordingly.
+/// Returns true if the prompt was a handled sampling command, otherwise false.
+fn handle_sampling_command(prompt: &str, sampling_params: &mut SamplingParams) -> bool {
+    let trimmed = prompt.trim();
+    if trimmed.starts_with(TEMPERATURE_CMD) {
+        let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
+        if let [_, value] = parts.as_slice() {
+            match value.trim().parse::<f64>() {
+                Ok(v) if v > 0.0 && v <= 1.0 => {
+                    sampling_params.temperature = Some(v);
+                    info!("Set temperature to {v}");
+                }
+                Ok(_) => {
+                    println!("Error: temperature must be in (0.0, 1.0]");
+                }
+                Err(_) => println!("Error: format is `{TEMPERATURE_CMD} <float>`"),
+            }
+        } else {
+            println!("Error: format is `{TEMPERATURE_CMD} <float>`");
+        }
+        return true;
+    }
+    if trimmed.starts_with(TOPK_CMD) {
+        let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
+        if let [_, value] = parts.as_slice() {
+            match value.trim().parse::<usize>() {
+                Ok(v) if v > 0 => {
+                    sampling_params.top_k = Some(v);
+                    info!("Set top-k to {v}");
+                }
+                Ok(_) => {
+                    println!("Error: top-k must be a positive integer");
+                }
+                Err(_) => println!("Error: format is `{TOPK_CMD} <int>`"),
+            }
+        } else {
+            println!("Error: format is `{TOPK_CMD} <int>`");
+        }
+        return true;
+    }
+    if trimmed.starts_with(TOPP_CMD) {
+        let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
+        if let [_, value] = parts.as_slice() {
+            match value.trim().parse::<f64>() {
+                Ok(v) if v > 0.0 && v <= 1.0 => {
+                    sampling_params.top_p = Some(v);
+                    info!("Set top-p to {v}");
+                }
+                Ok(_) => {
+                    println!("Error: top-p must be in (0.0, 1.0]");
+                }
+                Err(_) => println!("Error: format is `{TOPP_CMD} <float>`"),
+            }
+        } else {
+            println!("Error: format is `{TOPP_CMD} <float>`");
+        }
+        return true;
+    }
+    false
+}
+
 async fn text_interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
@@ -188,8 +249,14 @@ async fn text_interactive_mode(
 
         let prompt = read_line(&mut rl);
 
-        match prompt.as_str().trim() {
-            "" => continue,
+        let prompt_trimmed = prompt.as_str().trim();
+        if prompt_trimmed.is_empty() {
+            continue;
+        }
+        if handle_sampling_command(prompt_trimmed, &mut sampling_params) {
+            continue;
+        }
+        match prompt_trimmed {
             HELP_CMD => {
                 println!(
                     "{}{TEXT_INTERACTIVE_HELP}{COMMAND_COMMANDS}{}",
@@ -206,53 +273,8 @@ async fn text_interactive_mode(
                 info!("Cleared chat history.");
                 continue;
             }
-            prompt if prompt.trim().starts_with(TEMPERATURE_CMD) => {
-                let parts: Vec<&str> = prompt.splitn(2, ' ').collect();
-                if let [_, value] = parts.as_slice() {
-                    match value.trim().parse::<f64>() {
-                        Ok(v) => {
-                            sampling_params.temperature = Some(v);
-                            info!("Set temperature to {v}");
-                        }
-                        Err(_) => println!("Error: format is `{TEMPERATURE_CMD} <float>`"),
-                    }
-                } else {
-                    println!("Error: format is `{TEMPERATURE_CMD} <float>`");
-                }
-                continue;
-            }
-            prompt if prompt.trim().starts_with(TOPK_CMD) => {
-                let parts: Vec<&str> = prompt.splitn(2, ' ').collect();
-                if let [_, value] = parts.as_slice() {
-                    match value.trim().parse::<usize>() {
-                        Ok(v) => {
-                            sampling_params.top_k = Some(v);
-                            info!("Set top-k to {v}");
-                        }
-                        Err(_) => println!("Error: format is `{TOPK_CMD} <int>`"),
-                    }
-                } else {
-                    println!("Error: format is `{TOPK_CMD} <int>`");
-                }
-                continue;
-            }
-            prompt if prompt.trim().starts_with(TOPP_CMD) => {
-                let parts: Vec<&str> = prompt.splitn(2, ' ').collect();
-                if let [_, value] = parts.as_slice() {
-                    match value.trim().parse::<f64>() {
-                        Ok(v) => {
-                            sampling_params.top_p = Some(v);
-                            info!("Set top-p to {v}");
-                        }
-                        Err(_) => println!("Error: format is `{TOPP_CMD} <float>`"),
-                    }
-                } else {
-                    println!("Error: format is `{TOPP_CMD} <float>`");
-                }
-                continue;
-            }
-            prompt if prompt.trim().starts_with(SYSTEM_CMD) => {
-                let parsed = match &prompt.split(SYSTEM_CMD).collect::<Vec<_>>()[..] {
+            _ if prompt_trimmed.starts_with(SYSTEM_CMD) => {
+                let parsed = match &prompt_trimmed.split(SYSTEM_CMD).collect::<Vec<_>>()[..] {
                     &["", a] => a.trim(),
                     _ => {
                         println!("Error: Setting the system command should be done with this format: `{SYSTEM_CMD} This is a system message.`");
@@ -440,8 +462,14 @@ async fn vision_interactive_mode(
 
         let prompt = read_line(&mut rl);
 
-        match prompt.as_str().trim() {
-            "" => continue,
+        let prompt_trimmed = prompt.as_str().trim();
+        if prompt_trimmed.is_empty() {
+            continue;
+        }
+        if handle_sampling_command(prompt_trimmed, &mut sampling_params) {
+            continue;
+        }
+        match prompt_trimmed {
             HELP_CMD => {
                 println!(
                     "{}{VISION_INTERACTIVE_HELP}{COMMAND_COMMANDS}{}",
@@ -459,53 +487,8 @@ async fn vision_interactive_mode(
                 info!("Cleared chat history.");
                 continue;
             }
-            prompt if prompt.trim().starts_with(TEMPERATURE_CMD) => {
-                let parts: Vec<&str> = prompt.splitn(2, ' ').collect();
-                if let [_, value] = parts.as_slice() {
-                    match value.trim().parse::<f64>() {
-                        Ok(v) => {
-                            sampling_params.temperature = Some(v);
-                            info!("Set temperature to {v}");
-                        }
-                        Err(_) => println!("Error: format is `{TEMPERATURE_CMD} <float>`"),
-                    }
-                } else {
-                    println!("Error: format is `{TEMPERATURE_CMD} <float>`");
-                }
-                continue;
-            }
-            prompt if prompt.trim().starts_with(TOPK_CMD) => {
-                let parts: Vec<&str> = prompt.splitn(2, ' ').collect();
-                if let [_, value] = parts.as_slice() {
-                    match value.trim().parse::<usize>() {
-                        Ok(v) => {
-                            sampling_params.top_k = Some(v);
-                            info!("Set top-k to {v}");
-                        }
-                        Err(_) => println!("Error: format is `{TOPK_CMD} <int>`"),
-                    }
-                } else {
-                    println!("Error: format is `{TOPK_CMD} <int>`");
-                }
-                continue;
-            }
-            prompt if prompt.trim().starts_with(TOPP_CMD) => {
-                let parts: Vec<&str> = prompt.splitn(2, ' ').collect();
-                if let [_, value] = parts.as_slice() {
-                    match value.trim().parse::<f64>() {
-                        Ok(v) => {
-                            sampling_params.top_p = Some(v);
-                            info!("Set top-p to {v}");
-                        }
-                        Err(_) => println!("Error: format is `{TOPP_CMD} <float>`"),
-                    }
-                } else {
-                    println!("Error: format is `{TOPP_CMD} <float>`");
-                }
-                continue;
-            }
-            prompt if prompt.trim().starts_with(SYSTEM_CMD) => {
-                let parsed = match &prompt.split(SYSTEM_CMD).collect::<Vec<_>>()[..] {
+            _ if prompt_trimmed.starts_with(SYSTEM_CMD) => {
+                let parsed = match &prompt_trimmed.split(SYSTEM_CMD).collect::<Vec<_>>()[..] {
                     &["", a] => a.trim(),
                     _ => {
                         println!("Error: Setting the system command should be done with this format: `{SYSTEM_CMD} This is a system message.`");
@@ -519,9 +502,9 @@ async fn vision_interactive_mode(
                 messages.push(user_message);
                 continue;
             }
-            // Extract any image URLs and the remaining text
             _ => {
-                let (urls, text) = parse_files_and_message(prompt.trim(), &image_regex);
+                // Extract any image URLs and the remaining text
+                let (urls, text) = parse_files_and_message(prompt_trimmed, &image_regex);
                 if !urls.is_empty() {
                     let mut image_indexes = Vec::new();
                     // Load all images first
@@ -562,12 +545,12 @@ async fn vision_interactive_mode(
                     user_message.insert("role".to_string(), Either::Left("user".to_string()));
                     user_message.insert(
                         "content".to_string(),
-                        Either::Left(prompt.trim().to_string()),
+                        Either::Left(prompt_trimmed.to_string()),
                     );
                     messages.push(user_message);
                 }
             }
-        };
+        }
 
         // Set the handler to terminate all seqs, so allowing cancelling running
         *CTRLC_HANDLER.lock().unwrap() = &terminate_handler;
