@@ -90,9 +90,9 @@
 <a href=#90 id=90 data-nosnippet>90</a>
 <a href=#91 id=91 data-nosnippet>91</a>    <span class="kw">for _ in </span><span class="number">0</span>..repetitions {
 <a href=#92 id=92 data-nosnippet>92</a>        <span class="kw">for _ in </span><span class="number">0</span>..concurrency {
-<a href=#93 id=93 data-nosnippet>93</a>            sender
-<a href=#94 id=94 data-nosnippet>94</a>                .blocking_send(req.clone())
-<a href=#95 id=95 data-nosnippet>95</a>                .expect(<span class="string">"Expected receiver."</span>);
+<a href=#93 id=93 data-nosnippet>93</a>            <span class="kw">if </span>sender.blocking_send(req.clone()).is_err() {
+<a href=#94 id=94 data-nosnippet>94</a>                <span class="macro">eprintln!</span>(<span class="string">"Receiver disconnected"</span>);
+<a href=#95 id=95 data-nosnippet>95</a>            }
 <a href=#96 id=96 data-nosnippet>96</a>        }
 <a href=#97 id=97 data-nosnippet>97</a>        <span class="kw">for _ in </span><span class="number">0</span>..concurrency {
 <a href=#98 id=98 data-nosnippet>98</a>            <span class="kw">match </span>rx.blocking_recv() {
@@ -258,9 +258,9 @@
 <a href=#258 id=258 data-nosnippet>258</a>        web_search_options: <span class="prelude-val">None</span>,
 <a href=#259 id=259 data-nosnippet>259</a>    }));
 <a href=#260 id=260 data-nosnippet>260</a>
-<a href=#261 id=261 data-nosnippet>261</a>    sender
-<a href=#262 id=262 data-nosnippet>262</a>        .blocking_send(req.clone())
-<a href=#263 id=263 data-nosnippet>263</a>        .expect(<span class="string">"Expected receiver."</span>);
+<a href=#261 id=261 data-nosnippet>261</a>    <span class="kw">if </span>sender.blocking_send(req.clone()).is_err() {
+<a href=#262 id=262 data-nosnippet>262</a>        <span class="macro">eprintln!</span>(<span class="string">"Receiver disconnected"</span>);
+<a href=#263 id=263 data-nosnippet>263</a>    }
 <a href=#264 id=264 data-nosnippet>264</a>
 <a href=#265 id=265 data-nosnippet>265</a>    <span class="kw">let _ </span>= rx.blocking_recv();
 <a href=#266 id=266 data-nosnippet>266</a>}
