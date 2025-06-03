@@ -241,6 +241,10 @@ where
     // Split the KV axis into cache‑friendly tiles.
     let kv_tiles = kv_len.div_ceil(TILE_KV);
 
+    assert_eq!(qstride[3], 1, "q must have contiguous rows");
+    assert_eq!(kstride[3], 1, "k must have contiguous rows");
+    assert_eq!(vstride[3], 1, "v must have contiguous rows");
+
     FLASH_ATTN_POOL.install(|| {
         out.par_chunks_mut(dv)
             .with_min_len(64)
@@ -271,8 +275,7 @@ where
 
                         // Q row is already contiguous in memory for q_len == 1
                         let q_base = b_i * qstride[0] + h_i * qstride[2];
-                        let q_row: Vec<f32> =
-                            (0..d).map(|di| q_data[q_base + di].to_f32()).collect();
+                        let q_row = &q_data[q_base..q_base + d];
 
                         for kv_pos in start..end {
                             // ---- mask -------------------------------------------------------
@@ -288,11 +291,10 @@ where
                             // ---- K row -------------------------------------------------------
                             let k_base =
                                 b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
-                            let k_row: Vec<f32> =
-                                (0..d).map(|di| k_data[k_base + di].to_f32()).collect();
+                            let k_row = &k_data[k_base..k_base + d];
 
                             // dot(Q, K)
-                            let mut s_val = vec_dot_f32(&q_row, &k_row);
+                            let mut s_val = vec_dot_f32(q_row, k_row);
 
                             let mut scale_applied = scale;
                             if logit_softcap != 0.0 {
@@ -322,7 +324,7 @@ where
                             let v_base =
                                 b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
                             for d_i in 0..dv {
-                                vkq[d_i] += v_data[v_base + d_i * vstride[3]].to_f32() * vs;
+                                vkq[d_i] += v_data[v_base + d_i].to_f32() * vs;
                             }
 
                             s = s * ms + vs;
@@ -399,6 +401,10 @@ where
 
     let mut out = vec![T::cast(0.0); b * q_len * h * dv];
 
+    assert_eq!(qstride[3], 1, "q must have contiguous rows");
+    assert_eq!(kstride[3], 1, "k must have contiguous rows");
+    assert_eq!(vstride[3], 1, "v must have contiguous rows");
+
     FLASH_ATTN_POOL.install(|| {
         out.par_chunks_mut(dv)
             .with_min_len(64)
@@ -424,11 +430,9 @@ where
                 let mut s = 0.0f32;
                 let mut m = f32::NEG_INFINITY;
 
-                // Gather Q row (strided) as f32
+                // Q row
                 let q_base = b_i * qstride[0] + q_pos * qstride[1] + h_i * qstride[2];
-                let q_row: Vec<f32> = (0..d)
-                    .map(|di| q_data[q_base + di * qstride[3]].to_f32())
-                    .collect();
+                let q_row = &q_data[q_base..q_base + d];
 
                 for kv_pos in 0..kv_len {
                     // Mask (optional)
@@ -441,14 +445,12 @@ where
                         continue;
                     }
 
-                    // K row (strided) as f32
+                    // K row
                     let k_base = b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
-                    let k_row: Vec<f32> = (0..d)
-                        .map(|di| k_data[k_base + di * kstride[3]].to_f32())
-                        .collect();
+                    let k_row = &k_data[k_base..k_base + d];
 
                     // dot(Q, K)
-                    let mut s_val = vec_dot_f32(&q_row, &k_row);
+                    let mut s_val = vec_dot_f32(q_row, k_row);
                     let mut scale_applied = scale;
                     if logit_softcap != 0.0 {
                         scale_applied /= logit_softcap;
@@ -476,7 +478,7 @@ where
                     // V row (strided) as f32
                     let v_base = b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
                     for d_i in 0..dv {
-                        vkq[d_i] += v_data[v_base + d_i * vstride[3]].to_f32() * vs;
+                        vkq[d_i] += v_data[v_base + d_i].to_f32() * vs;
                     }
 
                     s = s * ms + vs;
