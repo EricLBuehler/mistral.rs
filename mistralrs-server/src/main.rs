@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use mistralrs_core::{ModelSelected, TokenSource};
+use mistralrs_core::{initialize_logging, ModelSelected, TokenSource};
 use tracing::info;
 
 use mistralrs_server_core::{
@@ -143,6 +143,8 @@ fn parse_token_source(s: &str) -> Result<TokenSource, String> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+
+    initialize_logging();
 
     let mistralrs = MistralRsForServerBuilder::new()
         .with_truncate_sequence(args.truncate_sequence)

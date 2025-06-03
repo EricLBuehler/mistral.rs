@@ -7,7 +7,6 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use mistralrs_core::initialize_logging;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -145,8 +144,6 @@ impl MistralRsServerRouterBuilder {
     ///     .await?;
     /// ```
     pub async fn build(self) -> Result<Router> {
-        initialize_logging();
-
         let mistralrs = self.mistralrs.ok_or_else(|| {
             anyhow::anyhow!("`mistralrs` instance must be set. Use `with_mistralrs`.")
         })?;

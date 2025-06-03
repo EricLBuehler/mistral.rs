@@ -5,11 +5,11 @@ use std::num::NonZeroUsize;
 use anyhow::{Context, Result};
 use candle_core::Device;
 use mistralrs_core::{
-    get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, initialize_logging,
-    paged_attn_supported, parse_isq_value, AutoDeviceMapParams, BertEmbeddingModel,
-    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader,
-    LoaderBuilder, MemoryGpuConfig, MistralRsBuilder, ModelSelected, PagedAttentionConfig,
-    SchedulerConfig, TokenSource,
+    get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
+    parse_isq_value, AutoDeviceMapParams, BertEmbeddingModel, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder,
+    MemoryGpuConfig, MistralRsBuilder, ModelSelected, PagedAttentionConfig, SchedulerConfig,
+    TokenSource,
 };
 use tracing::info;
 
@@ -475,8 +475,6 @@ impl MistralRsForServerBuilder {
     ///     .await?;
     /// ```
     pub async fn build(mut self) -> Result<SharedMistralRsState> {
-        initialize_logging();
-
         // This was originally with the device config
         if self.cpu {
             self.no_paged_attn = true;
