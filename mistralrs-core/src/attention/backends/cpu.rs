@@ -577,7 +577,7 @@ mod tests {
         let kv_len = 2;
 
         // Create q with shape (b, 1, h, d) filled with ones
-        let q_vec = vec![1.0f32; b * 1 * h * d];
+        let q_vec = vec![1.0f32; b * h * d];
         let q = Tensor::from_vec(q_vec.clone(), (b, 1, h, d), &Device::Cpu)?;
 
         // Create k and v with shape (b, kv_len, h, d) filled with ones
@@ -693,7 +693,7 @@ mod tests {
         let kv_len = 2;
 
         // Create q with shape (b, 1, h, d) filled with ones
-        let q_vec = vec![1.0f32; b * 1 * h * d];
+        let q_vec = vec![1.0f32; b * h * d];
         let q = Tensor::from_vec(q_vec.clone(), (b, 1, h, d), &Device::Cpu)?;
 
         // Create k and v with shape (b, kv_len, h, d) filled with ones
