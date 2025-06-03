@@ -493,8 +493,9 @@ impl DeviceMappedModelLoader for MistralLoader {
 
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
             };
@@ -683,8 +684,9 @@ impl DeviceMappedModelLoader for GemmaLoader {
 
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
             };
@@ -877,8 +879,9 @@ impl DeviceMappedModelLoader for LlamaLoader {
 
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
             };
@@ -1066,8 +1069,9 @@ impl DeviceMappedModelLoader for MixtralLoader {
 
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
             };
@@ -1260,8 +1264,9 @@ impl DeviceMappedModelLoader for Phi2Loader {
 
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
             };
@@ -1445,8 +1450,9 @@ impl DeviceMappedModelLoader for Phi3Loader {
 
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
             };
@@ -1622,8 +1628,9 @@ impl DeviceMappedModelLoader for Qwen2Loader {
 
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
             };
@@ -1814,8 +1821,9 @@ impl DeviceMappedModelLoader for Gemma2Loader {
 
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
             };
@@ -2008,8 +2016,9 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
 
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
             };
@@ -2211,8 +2220,9 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
 
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
             };
@@ -2497,8 +2507,9 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
         let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
             };
@@ -2821,8 +2832,9 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
         let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
             };
@@ -3045,8 +3057,9 @@ impl DeviceMappedModelLoader for Qwen3Loader {
         let cfg: models::qwen3::Config = serde_json::from_str(config)?;
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
             };
@@ -3232,9 +3245,10 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
     ) -> Result<usize> {
         let cfg: models::qwen3_moe::Config = serde_json::from_str(config)?;
         let elems = {
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size;
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
             };
