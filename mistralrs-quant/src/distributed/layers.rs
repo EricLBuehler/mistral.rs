@@ -711,40 +711,15 @@ impl PackedExperts {
             }
         } else if !vb.contains_tensor("gate_up_proj") {
             // Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
-            let mut gs = Vec::new();
-            let mut us = Vec::new();
-            let mut ds = Vec::new();
-            for i in 0..num_local_experts {
-                let gate_proj = vb
-                    .pp(i)
-                    .get((intermediate_size, hidden_size), "gate_proj.weight")?;
-                let up_proj = vb
-                    .pp(i)
-                    .get((intermediate_size, hidden_size), "up_proj.weight")?;
-                let down_proj = vb
-                    .pp(i)
-                    .get((hidden_size, intermediate_size), "down_proj.weight")?;
-
-                gs.push(gate_proj);
-                us.push(up_proj);
-                ds.push(down_proj);
+            let mut gs: Vec<Arc<dyn QuantMethod>> = Vec::new();
+            let mut us: Vec<Arc<dyn QuantMethod>> = Vec::new();
+            let mut ds: Vec<Arc<dyn QuantMethod>> = Vec::new();
+            for _ in 0..num_local_experts {
+                gs.push(Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?));
+                us.push(Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?));
+                ds.push(Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?));
             }
-            let gate_proj = Tensor::stack(&gs, 0)?;
-            let up_proj = Tensor::stack(&us, 0)?;
-            let down_proj = Tensor::stack(&ds, 0)?;
-            let mut gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
-            )?);
-            let mut up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
-            )?);
-            let mut down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
-            )?);
-            gate_proj = apply_immediate_isq_always(gate_proj, vb.device())?;
-            up_proj = apply_immediate_isq_always(up_proj, vb.device())?;
-            down_proj = apply_immediate_isq_always(down_proj, vb.device())?;
-            (vec![gate_proj], vec![up_proj], vec![down_proj])
+            (gs, us, ds)
         } else {
             // Parallelized like:
             // Each gpu holds all experts.
