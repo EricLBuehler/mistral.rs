@@ -7,7 +7,7 @@
 <p>Defines different types of grammars that can be used to constrain model output,
 ensuring it follows specific formats or structures.</p>
 <h4 id="examples"><a class="doc-anchor" href="#examples">§</a>Examples</h4>
-<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>mistralrs_server_core::openai::Grammar;
+<div class="example-wrap ignore"><a href="#" class="tooltip" title="This example is not tested">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">use </span>mistralrs_server_core::openai::Grammar;
 
 <span class="comment">// Regex grammar for phone numbers
 </span><span class="kw">let </span>phone_regex = Grammar::Regex(<span class="string">r"\d{3}-\d{3}-\d{4}"</span>.to_string());
