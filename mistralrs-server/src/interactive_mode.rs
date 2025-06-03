@@ -98,7 +98,7 @@ Commands:
     Add a system message to the chat without running the model.
     Ex: `\system Always respond as a pirate.`
 - `\clear`: Clear the chat history.
-- `\temperature <float>`: Set sampling temperature (0.0 to 1.0).
+- `\temperature <float>`: Set sampling temperature (0.0 to 2.0).
 - `\topk <int>`: Set top-k sampling value (>0).
 - `\topp <float>`: Set top-p sampling value in (0.0 to 1.0).
 "#;
@@ -165,12 +165,12 @@ fn handle_sampling_command(prompt: &str, sampling_params: &mut SamplingParams) -
         let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
         if let [_, value] = parts.as_slice() {
             match value.trim().parse::<f64>() {
-                Ok(v) if v > 0.0 && v <= 1.0 => {
+                Ok(v) if v > 0.0 && v <= 2.0 => {
                     sampling_params.temperature = Some(v);
                     info!("Set temperature to {v}");
                 }
                 Ok(_) => {
-                    println!("Error: temperature must be in (0.0, 1.0]");
+                    println!("Error: temperature must be in (0.0, 2.0]");
                 }
                 Err(_) => println!("Error: format is `{TEMPERATURE_CMD} <float>`"),
             }
