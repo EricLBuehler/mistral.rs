@@ -190,6 +190,8 @@ pub struct Sampler {
     top_p: f64,
     min_p: f64,
     logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
+    /// Cached Gumbel noise tensor to avoid reallocating it.
+    gumbel_cache: Arc<Mutex<Option<Tensor>>>,
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
@@ -253,6 +255,7 @@ impl Sampler {
             top_p,
             min_p,
             logits_processors,
+            gumbel_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -414,7 +417,26 @@ impl Sampler {
             probs = mask_minp.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
         }
 
-        let next_token = probs.argmax(D::Minus1)?.to_scalar::<u32>()?;
+        // Sample using the Gumbel-max trick fully on-device.
+        let log_probs = probs.log()?;
+        // Generate cached Gumbel noise (-log(-log(u))) once.
+        let gumbel = {
+            let mut guard = self.gumbel_cache.lock().unwrap();
+            if guard.is_none() {
+                let uniform = Tensor::rand(0f32, 1f32, log_probs.shape(), log_probs.device())?;
+                let noise = uniform
+                    .clamp(1e-20, 1.0)?
+                    .log()? // ln(u)
+                    .neg()? // -ln(u)
+                    .log()? // ln(-ln(u))
+                    .neg()?; // -ln(-ln(u))
+                *guard = Some(noise);
+            }
+            guard.as_ref().unwrap().clone()
+        };
+
+        let gumbel_logits = (&log_probs + &gumbel)?;
+        let next_token = gumbel_logits.argmax(D::Minus1)?.to_scalar::<u32>()?;
 
         // Extract the top‑n log‑probs if the caller asked for them.
         let (top_logprobs, logprob) = if return_logprobs {
