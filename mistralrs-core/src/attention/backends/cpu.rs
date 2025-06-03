@@ -2,6 +2,8 @@
 
 use candle_core::{Context, Device, Result, Storage, Tensor, WithDType};
 
+use half::bf16;
+use half::f16;
 use rayon::prelude::*;
 use rayon::ThreadPool;
 
@@ -62,6 +64,28 @@ fn vec_dot<T: WithDType + Sum + Copy + std::ops::Mul<Output = T>>(a: &[T], b: &[
     sum
 }
 
+pub(super) trait DowncastF32 {
+    fn cast(x: f32) -> Self;
+}
+
+impl DowncastF32 for f32 {
+    fn cast(x: f32) -> Self {
+        x
+    }
+}
+
+impl DowncastF32 for f16 {
+    fn cast(x: f32) -> Self {
+        f16::from_f32(x)
+    }
+}
+
+impl DowncastF32 for bf16 {
+    fn cast(x: f32) -> Self {
+        bf16::from_f32(x)
+    }
+}
+
 pub fn run_flash_attn_cpu<T>(
     q: &Tensor,
     k: &Tensor,
@@ -70,7 +94,7 @@ pub fn run_flash_attn_cpu<T>(
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor>
 where
-    T: WithDType + Sum + num_traits::real::Real,
+    T: WithDType + Sum + num_traits::real::Real + DowncastF32,
 {
     // Inline CPU slice extraction for q, k, v, and optional mask
     let (q_guard, q_layout) = q.storage_and_layout();
@@ -170,7 +194,10 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
     scale: f32,
     max_bias: f32,
     logit_softcap: f32,
-) -> Result<Tensor> {
+) -> Result<Tensor>
+where
+    T: DowncastF32,
+{
     // Shapes: (B, 1, H, D)
     let (b, _q_len, h, d) = (
         qshape[0], qshape[1], // == 1
@@ -186,7 +213,7 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
     let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
 
     // Output buffer: (B, H, 1, D)
-    let mut out = vec![0f32; b * h * dv];
+    let mut out = vec![T::zero(); b * h * dv];
 
     // Expose a second dimension of work: split the KV axis into tiles that
     // fit in the last‑level cache and let Rayon schedule them.
@@ -318,7 +345,7 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
                 // ---------------- final normalisation ---------------------------------------
                 let inv_s = 1.0 / s_tot;
                 for v in out_chunk.iter_mut().zip(vkq.iter()) {
-                    *v.0 = *v.1 * inv_s;
+                    *v.0 = T::cast(*v.1) * T::cast(inv_s);
                 }
             });
     });
@@ -344,7 +371,10 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
     scale: f32,
     max_bias: f32,
     logit_softcap: f32,
-) -> Result<Tensor> {
+) -> Result<Tensor>
+where
+    T: DowncastF32,
+{
     let (b, q_len, h, d) = (qshape[0], qshape[1], qshape[2], qshape[3]);
     let kv_len = kshape[1];
     // --- Head broadcasting factors ----------------------------------------------------
@@ -359,7 +389,7 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
     // Precompute value for ALiBi slope calculation
     let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
 
-    let mut out = vec![0f32; b * q_len * h * dv];
+    let mut out = vec![T::zero(); b * q_len * h * dv];
 
     // ------------------------------------------------------------------
     // Rayon‑parallel version: each (b_i, h_i, q_pos) row is independent.
@@ -392,7 +422,7 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
                 let v_head = h_i / rv2;
 
                 // Buffers local to this row
-                let mut vkq = vec![0f32; dv];
+                let mut vkq = vec![T::zero(); dv];
                 let mut s = 0.0f32;
                 let mut m = f32::NEG_INFINITY;
 
@@ -447,7 +477,7 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
                         m = s_val.to_f64() as f32;
                         ms = (m_old - m).exp();
                         for v in vkq.iter_mut() {
-                            *v *= ms;
+                            *v *= T::cast(ms);
                         }
                     } else {
                         vs = (s_val.to_f64() as f32 - m).exp();
@@ -456,7 +486,7 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
                     // V row (strided)
                     let v_base = b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
                     for d_i in 0..dv {
-                        vkq[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * vs;
+                        vkq[d_i] += T::cast(v_data[v_base + d_i * vstride[3]].to_f64() as f32 * vs);
                     }
 
                     s = s * ms + vs;
@@ -465,7 +495,7 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
                 // ------------------- normalise & write out ------------------
                 let inv_s = 1.0 / s;
                 for v in vkq.iter_mut() {
-                    *v *= inv_s;
+                    *v *= T::cast(inv_s);
                 }
                 out_chunk.copy_from_slice(&vkq);
             });
