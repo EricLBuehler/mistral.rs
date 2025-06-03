@@ -199,7 +199,15 @@ async fn do_search(
         message.insert("role".to_string(), Either::Left("tool".to_string()));
         message.insert(
             "content".to_string(),
-            Either::Left(format!("{{\"output\": \"{tool_result}\"}}")),
+            Either::Left(
+                // Format the tool output JSON and append the search tool description for context
+                format!(
+                    "{{\"output\": \"{}\"}}\n\n{}\n\n{}",
+                    tool_result,
+                    search::SEARCH_DESCRIPTION,
+                    search::EXTRACT_DESCRIPTION,
+                ),
+            ),
         );
         messages.push(message);
     }
