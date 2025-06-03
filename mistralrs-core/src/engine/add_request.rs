@@ -85,9 +85,11 @@ impl Engine {
                     .response
                     .send(Response::ValidationError(
                         "Received messages for a model which does not have a chat template. Either use a different model or pass a single string as the prompt".into(),
-                    )).await.expect("Expected receiver.");
-            return;
-        }
+                    ))
+                    .await
+                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                return;
+            }
 
         // Verify the model's category matches the messages received.
         match (
@@ -110,7 +112,7 @@ impl Engine {
                         "Received a request incompatible for this model's category.".into(),
                     ))
                     .await
-                    .expect("Expected receiver.");
+                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
                 return;
             }
         }
@@ -178,7 +180,7 @@ impl Engine {
                             "Completion requests require the pipeline to have a tokenizer".into(),
                         ))
                         .await
-                        .expect("Expected receiver.");
+                        .unwrap_or_else(|_| warn!("Receiver disconnected"));
                     return;
                 };
                 let prompt = tokenizer
@@ -201,7 +203,7 @@ impl Engine {
                             "Completion requests w/ raw tokens require the pipeline to have a tokenizer".into(),
                         ))
                         .await
-                        .expect("Expected receiver.");
+                        .unwrap_or_else(|_| warn!("Receiver disconnected"));
                     return;
                 };
                 let prompt = tokenizer
@@ -217,7 +219,7 @@ impl Engine {
                     "Received an empty prompt.".into(),
                 ))
                 .await
-                .expect("Expected receiver.");
+                .unwrap_or_else(|_| warn!("Receiver disconnected"));
             return;
         }
 
@@ -227,7 +229,9 @@ impl Engine {
                     .response
                     .send(Response::ValidationError(
                         format!("Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?", get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len).into(),
-                    )).await.expect("Expected receiver.");
+                    ))
+                    .await
+                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
                 return;
             } else {
                 let prompt_len = prompt_tokens.len();
@@ -275,7 +279,8 @@ impl Engine {
                                 .send(Response::ValidationError(
                                     format!("Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token.", tok_trie.token_str(*id)).into(),
                                 ))
-                                .await .expect("Expected receiver.");
+                                .await
+                                .unwrap_or_else(|_| warn!("Receiver disconnected"));
                             return;
                         }
                     }
@@ -303,7 +308,7 @@ impl Engine {
                                     .into(),
                             ))
                             .await
-                            .expect("Expected receiver.");
+                            .unwrap_or_else(|_| warn!("Receiver disconnected"));
                         return;
                     };
                     let encoded = tokenizer.encode_fast(stop_txt.to_string(), true);
@@ -359,7 +364,7 @@ impl Engine {
                     "Number of choices must be greater than 0.".into(),
                 ))
                 .await
-                .expect("Expected receiver.");
+                .unwrap_or_else(|_| warn!("Receiver disconnected"));
             return;
         }
 
@@ -378,7 +383,7 @@ impl Engine {
                             format!("Invalid grammar. {}", err).into(),
                         ))
                         .await
-                        .expect("Expected receiver.");
+                        .unwrap_or_else(|_| warn!("Receiver disconnected"));
                     return;
                 }
             };
@@ -434,7 +439,7 @@ impl Engine {
                                         .into(),
                                 ))
                                 .await
-                                .expect("Expected receiver.");
+                                .unwrap_or_else(|_| warn!("Receiver disconnected"));
                             return;
                         }
                     }
@@ -455,7 +460,7 @@ impl Engine {
                                         .into(),
                                 ))
                                 .await
-                                .expect("Expected receiver.");
+                                .unwrap_or_else(|_| warn!("Receiver disconnected"));
                             return;
                         }
                     }
@@ -587,7 +592,7 @@ impl Engine {
                             .response
                             .send(Err(e))
                             .await
-                            .expect("Expected receiver.");
+                            .unwrap_or_else(|_| warn!("Receiver disconnected"));
                         return;
                     }
                 };
@@ -609,7 +614,7 @@ impl Engine {
                                 "Pipeline does not include a toksnizer.",
                             )))
                             .await
-                            .expect("Expected receiver.");
+                            .unwrap_or_else(|_| warn!("Receiver disconnected"));
                         return;
                     }
                 };
@@ -621,7 +626,7 @@ impl Engine {
                             .response
                             .send(Err(anyhow::Error::msg(e)))
                             .await
-                            .expect("Expected receiver.");
+                            .unwrap_or_else(|_| warn!("Receiver disconnected"));
                         return;
                     }
                 };
@@ -646,7 +651,7 @@ impl Engine {
                         "Pipeline does not include a toksnizer.",
                     )))
                     .await
-                    .expect("Expected receiver.");
+                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
                 return;
             }
         };
@@ -658,7 +663,7 @@ impl Engine {
                     .response
                     .send(Err(anyhow::Error::msg(e)))
                     .await
-                    .expect("Expected receiver.");
+                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
                 return;
             }
         };
