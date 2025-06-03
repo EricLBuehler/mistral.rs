@@ -76,7 +76,8 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             }
         };
 
-        let send = seq.get_toks().len() % 2 == 0 || is_done.is_some();
+        // let send = seq.get_toks().len() % 2 == 0 || is_done.is_some();
+        let send = true;
         if !tool_use_still_possible || tool_use_is_done {
             if send {
                 if let Some(delta) = crate::handle_seq_error_ok!(seq.get_delta(), seq.responder()) {
