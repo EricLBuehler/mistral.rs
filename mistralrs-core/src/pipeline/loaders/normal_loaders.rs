@@ -3260,9 +3260,9 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
             let size_in = cfg.hidden_size;
             let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
             let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
-            let q_proj = size_in * size_q / weight_pack_factor + size_q;
-            let k_proj = size_in * size_kv / weight_pack_factor + size_kv;
-            let v_proj = size_in * size_kv / weight_pack_factor + size_kv;
+            let q_proj = size_in * size_q / weight_pack_factor;
+            let k_proj = size_in * size_kv / weight_pack_factor;
+            let v_proj = size_in * size_kv / weight_pack_factor;
             let o_proj = size_q * size_in / weight_pack_factor;
 
             let mlp_size = if !cfg.mlp_only_layers.contains(&layer_idx)
