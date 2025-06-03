@@ -17,6 +17,7 @@ use crate::kv_cache::{FullCacheManager, NormalCacheManager};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::llg::build_llg_factory;
+use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
@@ -371,7 +372,8 @@ impl Loader for VisionLoader {
                     )
                 };
 
-            let new = self.inner.get_device_layers(
+            let new = auto_device_map::get_device_layers(
+                &*self.inner,
                 &config,
                 self.inner.num_layers(&config)?,
                 layer_sizes_in_bytes,
