@@ -44,22 +44,20 @@ const DOT_CHUNK: usize = 4;
 /// Size (in KV positions) processed by each inner‑tile job.
 const TILE_KV: usize = 16;
 
+/// Unrolled dot‑product that works purely in `f32`.
 #[inline]
-fn vec_dot<T: WithDType + Sum + Copy + std::ops::Mul<Output = T>>(a: &[T], b: &[T]) -> T {
-    let mut sum = T::zero();
+fn vec_dot_f32<T: UpcastF32 + Copy>(a: &[T], b: &[T]) -> f32 {
+    let mut sum = 0f32;
     let chunks = a.len() / DOT_CHUNK;
-
     for i in 0..chunks {
         let i_chunk = i * DOT_CHUNK;
-        sum = sum
-            + a[i_chunk] * b[i_chunk]
-            + a[i_chunk + 1] * b[i_chunk + 1]
-            + a[i_chunk + 2] * b[i_chunk + 2]
-            + a[i_chunk + 3] * b[i_chunk + 3];
+        sum += a[i_chunk].to_f32() * b[i_chunk].to_f32()
+            + a[i_chunk + 1].to_f32() * b[i_chunk + 1].to_f32()
+            + a[i_chunk + 2].to_f32() * b[i_chunk + 2].to_f32()
+            + a[i_chunk + 3].to_f32() * b[i_chunk + 3].to_f32();
     }
-
     for i in (chunks * DOT_CHUNK)..a.len() {
-        sum += a[i] * b[i];
+        sum += a[i].to_f32() * b[i].to_f32();
     }
     sum
 }
@@ -86,6 +84,33 @@ impl DowncastF32 for bf16 {
     }
 }
 
+/// Up‑cast helper: convert any supported element type to `f32` once so that the
+/// hot kernels can run entirely in `f32` and only down‑cast when writing out.
+pub(super) trait UpcastF32 {
+    fn to_f32(self) -> f32;
+}
+
+impl UpcastF32 for f32 {
+    #[inline(always)]
+    fn to_f32(self) -> f32 {
+        self
+    }
+}
+
+impl UpcastF32 for f16 {
+    #[inline(always)]
+    fn to_f32(self) -> f32 {
+        self.to_f32()
+    }
+}
+
+impl UpcastF32 for bf16 {
+    #[inline(always)]
+    fn to_f32(self) -> f32 {
+        self.to_f32()
+    }
+}
+
 pub fn run_flash_attn_cpu<T>(
     q: &Tensor,
     k: &Tensor,
@@ -94,7 +119,7 @@ pub fn run_flash_attn_cpu<T>(
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor>
 where
-    T: WithDType + Sum + num_traits::real::Real + DowncastF32,
+    T: WithDType + Sum + num_traits::real::Real + DowncastF32 + UpcastF32,
 {
     // Inline CPU slice extraction for q, k, v, and optional mask
     let (q_guard, q_layout) = q.storage_and_layout();
@@ -178,9 +203,10 @@ where
 }
 
 /// Optimised path for the common decode case: q_len == 1 but kv_len ≫ 1.
-/// We drop the inner q‑position loop and parallelise over `(batch, head)`.
+/// All intermediate maths is done in `f32`; we down‑cast to `T` exactly once
+/// when writing the output buffer.
 #[allow(clippy::too_many_arguments)]
-fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
+fn flash_attn_cpu_single_q<T>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -196,13 +222,10 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
     logit_softcap: f32,
 ) -> Result<Tensor>
 where
-    T: DowncastF32,
+    T: WithDType + Copy + UpcastF32 + DowncastF32,
 {
     // Shapes: (B, 1, H, D)
-    let (b, _q_len, h, d) = (
-        qshape[0], qshape[1], // == 1
-        qshape[2], qshape[3],
-    );
+    let (b, _q_len, h, d) = (qshape[0], qshape[1], qshape[2], qshape[3]);
     let kv_len = kshape[1];
     let k_h = kshape[2];
     let v_h = vshape[2];
@@ -212,15 +235,12 @@ where
 
     let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
 
-    // Output buffer: (B, H, 1, D)
-    let mut out = vec![T::zero(); b * h * dv];
+    // Final output buffer (B, H, 1, D) – already typed as `T`
+    let mut out = vec![T::cast(0.0); b * h * dv];
 
-    // Expose a second dimension of work: split the KV axis into tiles that
-    // fit in the last‑level cache and let Rayon schedule them.
+    // Split the KV axis into cache‑friendly tiles.
     let kv_tiles = kv_len.div_ceil(TILE_KV);
 
-    // SAFETY: `par_chunks_mut` hands out non‑overlapping &mut slices, so no two
-    // threads write the same output area.
     FLASH_ATTN_POOL.install(|| {
         out.par_chunks_mut(dv)
             .with_min_len(64)
@@ -229,25 +249,19 @@ where
                 let b_i = row_idx / h;
                 let h_i = row_idx % h;
 
-                // ALiBi positional bias (standard formula)
                 let slope = if max_bias > 0.0 {
                     2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
                 } else {
                     1.0
                 };
 
-                // For grouped‑KV we collapse multiple query heads into the same K/V head.
                 let k_head = h_i / rk2;
                 let v_head = h_i / rv2;
 
-                // ------------------------------------------------------------------
-                // Nested parallelism: each KV tile is mapped independently, then we
-                // reduce the partial results with the correct soft‑max algebra.
-                // ------------------------------------------------------------------
+                // ---------------- map‑reduce over KV tiles -----------------
                 let (vkq, s_tot, _m_tot) = (0..kv_tiles)
                     .into_par_iter()
                     .map(|tile_idx| {
-                        // ---- per‑tile scratch -------------------------------------------------
                         let start = tile_idx * TILE_KV;
                         let end = (start + TILE_KV).min(kv_len);
 
@@ -255,17 +269,15 @@ where
                         let mut s = 0.0f32;
                         let mut m = f32::NEG_INFINITY;
 
-                        // ---------------- single‑Q row (already contiguous) -------------------
-                        let q_base =
-                            b_i * qstride[0] /*batch*/ + h_i * qstride[2] /*head*/;
-                        let q_row = &q_data[q_base..q_base + d];
+                        // Q row is already contiguous in memory for q_len == 1
+                        let q_base = b_i * qstride[0] + h_i * qstride[2];
+                        let q_row: Vec<f32> =
+                            (0..d).map(|di| q_data[q_base + di].to_f32()).collect();
 
-                        // ---------------- iterate over this KV slice --------------------------
                         for kv_pos in start..end {
-                            // Mask
+                            // ---- mask -------------------------------------------------------
                             let mv = if let Some(mv_vec) = mask_vec {
-                                let mval = mv_vec[(b_i * kv_len) + kv_pos];
-                                slope * mval.to_f64() as f32
+                                slope * mv_vec[(b_i * kv_len) + kv_pos].to_f32()
                             } else {
                                 0.0
                             };
@@ -273,13 +285,14 @@ where
                                 continue;
                             }
 
-                            // K row
+                            // ---- K row -------------------------------------------------------
                             let k_base =
                                 b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
-                            let k_row = &k_data[k_base..k_base + d];
+                            let k_row: Vec<f32> =
+                                (0..d).map(|di| k_data[k_base + di].to_f32()).collect();
 
                             // dot(Q, K)
-                            let mut s_val = vec_dot::<T>(q_row, k_row).to_f64() as f32;
+                            let mut s_val = vec_dot_f32(&q_row, &k_row);
 
                             let mut scale_applied = scale;
                             if logit_softcap != 0.0 {
@@ -291,7 +304,7 @@ where
                             }
                             s_val += mv;
 
-                            // Tile‑local online softmax ------------------------------------------
+                            // ---- tile‑local online soft‑max -------------------------------
                             let m_old = m;
                             let mut ms = 1.0f32;
                             let mut vs = 1.0f32;
@@ -305,20 +318,19 @@ where
                                 vs = (s_val - m).exp();
                             }
 
-                            // V row
+                            // ---- V row -------------------------------------------------------
                             let v_base =
                                 b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
                             for d_i in 0..dv {
-                                vkq[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * vs;
+                                vkq[d_i] += v_data[v_base + d_i * vstride[3]].to_f32() * vs;
                             }
 
                             s = s * ms + vs;
                         }
 
-                        // Return per‑tile accumulator + softmax stats
                         (vkq, s, m)
                     })
-                    // -------- reduce two tiles -----------------------------------------------
+                    // --------------- reduce two tiles --------------------------------------
                     .reduce(
                         || (vec![0f32; dv], 0.0f32, f32::NEG_INFINITY),
                         |mut a, b| {
@@ -342,10 +354,10 @@ where
                         },
                     );
 
-                // ---------------- final normalisation ---------------------------------------
+                // ---------------- final normalisation + down‑cast -------------
                 let inv_s = 1.0 / s_tot;
-                for v in out_chunk.iter_mut().zip(vkq.iter()) {
-                    *v.0 = T::cast(*v.1) * T::cast(inv_s);
+                for (o, v) in out_chunk.iter_mut().zip(vkq.iter()) {
+                    *o = T::cast(*v * inv_s);
                 }
             });
     });
@@ -357,7 +369,7 @@ where
 /// Main forward flash-attention CPU routine.
 /// Shapes follow Candle convention: (B, S, H, D)
 #[allow(clippy::too_many_arguments)]
-fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
+fn flash_attn_cpu<T>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -373,32 +385,20 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
     logit_softcap: f32,
 ) -> Result<Tensor>
 where
-    T: DowncastF32,
+    T: WithDType + Copy + UpcastF32 + DowncastF32,
 {
     let (b, q_len, h, d) = (qshape[0], qshape[1], qshape[2], qshape[3]);
     let kv_len = kshape[1];
-    // --- Head broadcasting factors ----------------------------------------------------
-    // Allows K and V to have fewer heads than Q (grouped‑KV); the ratio is an
-    // integer factor.  rk2 = #Q‑heads / #K‑heads,  rv2 = #Q‑heads / #V‑heads.
     let k_h = kshape[2];
     let v_h = vshape[2];
-    let rk2 = h / k_h; // must divide exactly; panic otherwise
+    let rk2 = h / k_h;
     let rv2 = h / v_h;
-    let dv = d; // value dim = key dim in this kernel
+    let dv = d;
 
-    // Precompute value for ALiBi slope calculation
     let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
 
-    let mut out = vec![T::zero(); b * q_len * h * dv];
+    let mut out = vec![T::cast(0.0); b * q_len * h * dv];
 
-    // ------------------------------------------------------------------
-    // Rayon‑parallel version: each (b_i, h_i, q_pos) row is independent.
-    // ------------------------------------------------------------------
-
-    let _rows = b * h * q_len; // total independent work items
-
-    // SAFETY: `par_chunks_mut` hands out non‑overlapping &mut [f32] slices,
-    // so no two threads can write the same output area.
     FLASH_ATTN_POOL.install(|| {
         out.par_chunks_mut(dv)
             .with_min_len(64)
@@ -417,32 +417,23 @@ where
                     1.0
                 };
 
-                // For grouped‑KV we collapse multiple query heads into the same K/V head.
                 let k_head = h_i / rk2;
                 let v_head = h_i / rv2;
 
-                // Buffers local to this row
-                let mut vkq = vec![T::zero(); dv];
+                let mut vkq = vec![0f32; dv];
                 let mut s = 0.0f32;
                 let mut m = f32::NEG_INFINITY;
 
-                // Allocate q_row and k_row once per row
-                let mut q_row: Vec<T> = Vec::with_capacity(d);
-                let mut k_row: Vec<T> = Vec::with_capacity(d);
-
-                // ------------------- gather Q (strided) --------------------
+                // Gather Q row (strided) as f32
                 let q_base = b_i * qstride[0] + q_pos * qstride[1] + h_i * qstride[2];
-                q_row.clear();
-                for di in 0..d {
-                    q_row.push(q_data[q_base + di * qstride[3]]);
-                }
+                let q_row: Vec<f32> = (0..d)
+                    .map(|di| q_data[q_base + di * qstride[3]].to_f32())
+                    .collect();
 
-                // ---------------- iterate over keys/values -----------------
                 for kv_pos in 0..kv_len {
                     // Mask (optional)
                     let mv = if let Some(mv_vec) = mask_vec {
-                        let mval = mv_vec[((b_i * q_len + q_pos) * kv_len) + kv_pos];
-                        slope * mval.to_f64() as f32
+                        slope * mv_vec[((b_i * q_len + q_pos) * kv_len) + kv_pos].to_f32()
                     } else {
                         0.0
                     };
@@ -450,58 +441,55 @@ where
                         continue;
                     }
 
-                    // K row (strided)
+                    // K row (strided) as f32
                     let k_base = b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
-                    k_row.clear();
-                    for di in 0..d {
-                        k_row.push(k_data[k_base + di * kstride[3]]);
-                    }
+                    let k_row: Vec<f32> = (0..d)
+                        .map(|di| k_data[k_base + di * kstride[3]].to_f32())
+                        .collect();
 
                     // dot(Q, K)
-                    let mut s_val = vec_dot::<T>(&q_row, &k_row);
+                    let mut s_val = vec_dot_f32(&q_row, &k_row);
                     let mut scale_applied = scale;
                     if logit_softcap != 0.0 {
                         scale_applied /= logit_softcap;
                     }
-                    s_val *= T::from_f64(scale_applied as f64);
+                    s_val *= scale_applied;
                     if logit_softcap != 0.0 {
-                        s_val = T::from_f64(logit_softcap as f64 * s_val.to_f64().tanh());
+                        s_val = logit_softcap * s_val.tanh();
                     }
-                    s_val += T::from_f64(mv as f64);
+                    s_val += mv;
 
-                    // online softmax
+                    // online softmax
                     let m_old = m;
                     let mut ms = 1.0f32;
                     let mut vs = 1.0f32;
-                    if s_val.to_f64() as f32 > m {
-                        m = s_val.to_f64() as f32;
+                    if s_val > m {
+                        m = s_val;
                         ms = (m_old - m).exp();
                         for v in vkq.iter_mut() {
-                            *v *= T::cast(ms);
+                            *v *= ms;
                         }
                     } else {
-                        vs = (s_val.to_f64() as f32 - m).exp();
+                        vs = (s_val - m).exp();
                     }
 
-                    // V row (strided)
+                    // V row (strided) as f32
                     let v_base = b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
                     for d_i in 0..dv {
-                        vkq[d_i] += T::cast(v_data[v_base + d_i * vstride[3]].to_f64() as f32 * vs);
+                        vkq[d_i] += v_data[v_base + d_i * vstride[3]].to_f32() * vs;
                     }
 
                     s = s * ms + vs;
                 }
 
-                // ------------------- normalise & write out ------------------
+                // final normalisation + downcast
                 let inv_s = 1.0 / s;
-                for v in vkq.iter_mut() {
-                    *v *= T::cast(inv_s);
+                for (o, v) in out_chunk.iter_mut().zip(vkq.iter()) {
+                    *o = T::cast(*v * inv_s);
                 }
-                out_chunk.copy_from_slice(&vkq);
             });
     });
 
-    // Build output tensor with shape (B, H, S, D) to match standard (permute 0,2,1,3)
     let out_shape = (b, h, q_len, dv);
     Tensor::from_vec(out, out_shape, &Device::Cpu)
 }
