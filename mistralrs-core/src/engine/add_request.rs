@@ -33,7 +33,6 @@ impl Engine {
                     request.messages,
                     RequestMessage::Chat { .. } | RequestMessage::VisionChat { .. }
                 ) && request.web_search_options.is_some()
-                    && get_mut_arcmutex!(self.bert_pipeline).is_some()
                 {
                     search_request::search_request(self.clone(), *request).await;
                 } else {

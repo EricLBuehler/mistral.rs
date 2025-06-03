@@ -211,7 +211,21 @@ ${content}
   
   showSpinner();
   
-  ws.send(msg);
+  // Send message, optionally with web search options
+  const enableSearch = document.getElementById('enableSearch')?.checked;
+  if (enableSearch) {
+    const opts = {};
+    // Include selected context size (default medium)
+    const sizeSelect = document.getElementById('searchContextSize');
+    if (sizeSelect) {
+      const sizeValue = sizeSelect.value;
+      if (sizeValue) opts.search_context_size = sizeValue;
+    }
+    const payload = { content: msg, web_search_options: opts };
+    ws.send(JSON.stringify(payload));
+  } else {
+    ws.send(msg);
+  }
   input.value = ''; 
   
   // Clear uploaded files after sending

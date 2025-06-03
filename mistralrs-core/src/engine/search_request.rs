@@ -1,5 +1,6 @@
 use std::{borrow::Cow, sync::Arc, time::Instant};
 
+use bm25::{Embedder, EmbedderBuilder, Language, ScoredDocument, Scorer};
 use either::Either;
 use indexmap::IndexMap;
 use tokenizers::InputSequence;
@@ -72,52 +73,102 @@ async fn do_search(
                 SearchContextSize::Medium => 8192_usize,
                 SearchContextSize::Low => 4096_usize,
             };
-        let mut results = tracing::dispatcher::with_default(&dispatch, || {
-            search::run_search_tool(&tool_call_params)
-                .unwrap()
-                .into_iter()
-                .map(|mut result| {
-                    result = result
-                        .cap_content_len(&tokenizer, max_results_budget_toks)
-                        .unwrap();
-                    let len = {
-                        let inp = InputSequence::Raw(Cow::from(&result.content));
-                        tokenizer
-                            .encode_fast(inp, false)
-                            .map(|x| x.len())
-                            .unwrap_or(usize::MAX)
-                    };
-                    (result, len)
-                })
-                .collect::<Vec<_>>()
+        let mut results = tokio::task::block_in_place(|| {
+            tracing::dispatcher::with_default(&dispatch, || {
+                search::run_search_tool(&tool_call_params)
+                    .unwrap()
+                    .into_iter()
+                    .map(|mut result| {
+                        result = result
+                            .cap_content_len(&tokenizer, max_results_budget_toks)
+                            .unwrap();
+                        let len = {
+                            let inp = InputSequence::Raw(Cow::from(&result.content));
+                            tokenizer
+                                .encode_fast(inp, false)
+                                .map(|x| x.len())
+                                .unwrap_or(usize::MAX)
+                        };
+                        (result, len)
+                    })
+                    .collect::<Vec<_>>()
+            })
         });
 
         // Sort increasing by tokenized length, if it fails, put it at the end.
         results.sort_by_key(|(_, len)| *len);
 
         {
-            let device = get_mut_arcmutex!(this.pipeline).device();
+            // Determine ranking: use embedding model if available, otherwise fallback to BM25
+            let decreasing_indexes: Vec<usize> = if let Some(bert_pipeline) =
+                &mut *get_mut_arcmutex!(this.bert_pipeline)
+            {
+                // Semantic reranking with embeddings
+                let device = get_mut_arcmutex!(this.pipeline).device();
+                search::rag::compute_most_similar(
+                    &device,
+                    &tool_call_params.query,
+                    results.iter().map(|(res, _)| res).collect::<Vec<_>>(),
+                    bert_pipeline,
+                )
+                .unwrap()
+            } else {
+                tracing::warn!("No embedding model loaded; falling back to BM25 ranking for web search results.");
 
-            let Some(bert_pipeline) = &mut *get_mut_arcmutex!(this.bert_pipeline) else {
-                unreachable!()
+                // Build an Embedder over the corpus, fitting to the entire set of documents.
+                //    - Language::English is chosen here
+                //    - This computes an in‑memory sparse embedding for each document.
+
+                let docs: Vec<String> =
+                    results.iter().map(|(res, _)| res.content.clone()).collect();
+                let doc_refs: Vec<&str> = docs.iter().map(|s| s.as_str()).collect();
+
+                let embedder: Embedder =
+                    EmbedderBuilder::with_fit_to_corpus(Language::English, &doc_refs).build();
+
+                // Initialize a Scorer keyed by usize (document index type).
+                let mut scorer = Scorer::<usize>::new();
+
+                // For each document, compute its embedding and upsert into the scorer.
+                for (i, doc_text) in docs.iter().enumerate() {
+                    let doc_embedding = embedder.embed(doc_text);
+                    scorer.upsert(&i, doc_embedding);
+                }
+
+                // Embed the query string into the same sparse embedding space.
+                let query_embedding = embedder.embed(&tool_call_params.query);
+
+                // Score all documents individually
+                let mut scored_docs: Vec<ScoredDocument<usize>> = docs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, _)| {
+                        scorer
+                            .score(&i, &query_embedding)
+                            .map(|score| ScoredDocument { id: i, score })
+                    })
+                    .collect();
+
+                // Sort the scored documents by descending `score` (f32).
+                scored_docs.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+
+                // Extract only the document indices (usize) in ranked order.
+                let decreasing_indexes: Vec<usize> =
+                    scored_docs.into_iter().map(|d| d.id).collect();
+
+                decreasing_indexes
             };
-
-            let decreasing_indexes = search::rag::compute_most_similar(
-                &device,
-                &tool_call_params.query,
-                results.iter().map(|(res, _)| res).collect::<Vec<_>>(),
-                bert_pipeline,
-            )
-            .unwrap();
-
-            // Rerank the results
-            let mut results_old = Vec::new();
-            std::mem::swap(&mut results_old, &mut results);
-            for &index in &decreasing_indexes {
-                let mut current_result: (SearchResult, usize) = Default::default();
-                std::mem::swap(&mut current_result, &mut results_old[index]);
-
-                results.push(current_result);
+            // Reorder results according to ranking
+            let mut old = Vec::new();
+            std::mem::swap(&mut old, &mut results);
+            for &idx in &decreasing_indexes {
+                let mut item: (SearchResult, usize) = Default::default();
+                std::mem::swap(&mut item, &mut old[idx]);
+                results.push(item);
             }
         }
 
@@ -148,7 +199,15 @@ async fn do_search(
         message.insert("role".to_string(), Either::Left("tool".to_string()));
         message.insert(
             "content".to_string(),
-            Either::Left(format!("{{\"output\": \"{tool_result}\"}}")),
+            Either::Left(
+                // Format the tool output JSON and append the search tool description for context
+                format!(
+                    "{{\"output\": \"{}\"}}\n\n{}\n\n{}",
+                    tool_result,
+                    search::SEARCH_DESCRIPTION,
+                    search::EXTRACT_DESCRIPTION,
+                ),
+            ),
         );
         messages.push(message);
     }
@@ -214,12 +273,16 @@ async fn do_extraction(
                 SearchContextSize::Low => 4096_usize,
             };
 
-        let res = tracing::dispatcher::with_default(&dispatch, || {
-            search::run_extract_tool(&tool_call_params)
-                .unwrap()
+        let res = {
+            let extract_result = tokio::task::block_in_place(|| {
+                tracing::dispatcher::with_default(&dispatch, || {
+                    search::run_extract_tool(&tool_call_params).unwrap()
+                })
+            });
+            extract_result
                 .cap_content_len(&tokenizer, max_results_budget_toks)
                 .unwrap()
-        });
+        };
 
         let tool_result = serde_json::to_string(&res)
             .unwrap()

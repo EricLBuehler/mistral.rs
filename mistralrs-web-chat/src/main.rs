@@ -12,8 +12,8 @@ use hyper::Uri;
 use include_dir::{include_dir, Dir};
 use indexmap::IndexMap;
 use mistralrs::{
-    best_device, parse_isq_value, IsqType, SpeechLoaderType, SpeechModelBuilder, TextModelBuilder,
-    VisionModelBuilder,
+    best_device, parse_isq_value, BertEmbeddingModel, IsqType, SpeechLoaderType,
+    SpeechModelBuilder, TextModelBuilder, VisionModelBuilder,
 };
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{fs, net::TcpListener};
@@ -71,6 +71,15 @@ async fn main() -> Result<()> {
         .as_ref()
         .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
 
+    // Determine embedding model for web search if enabled
+    let search_embedding_model: Option<BertEmbeddingModel> = if cli.enable_search {
+        Some(match &cli.search_bert_model {
+            Some(model_id) => BertEmbeddingModel::Custom(model_id.clone()),
+            None => BertEmbeddingModel::default(),
+        })
+    } else {
+        None
+    };
     let mut models: IndexMap<String, LoadedModel> = IndexMap::new();
 
     // Insert text models first
@@ -81,12 +90,14 @@ async fn main() -> Result<()> {
             .unwrap_or("text-model")
             .to_string();
         println!("📝 Loading text model: {name}");
-        let m = TextModelBuilder::new(path)
+        let mut builder = TextModelBuilder::new(path)
             .with_isq(isq.unwrap_or(default_isq))
             .with_logging()
-            .with_throughput_logging()
-            .build()
-            .await?;
+            .with_throughput_logging();
+        if let Some(ref bert_model) = search_embedding_model {
+            builder = builder.with_search(bert_model.clone());
+        }
+        let m = builder.build().await?;
         models.insert(name, LoadedModel::Text(Arc::new(m)));
     }
 
@@ -98,12 +109,14 @@ async fn main() -> Result<()> {
             .unwrap_or("vision-model")
             .to_string();
         println!("🖼️  Loading vision model: {name}");
-        let m = VisionModelBuilder::new(path)
+        let mut builder = VisionModelBuilder::new(path)
             .with_isq(isq.unwrap_or(default_isq))
             .with_logging()
-            .with_throughput_logging()
-            .build()
-            .await?;
+            .with_throughput_logging();
+        if let Some(ref bert_model) = search_embedding_model {
+            builder = builder.with_search(bert_model.clone());
+        }
+        let m = builder.build().await?;
         models.insert(name, LoadedModel::Vision(Arc::new(m)));
     }
 

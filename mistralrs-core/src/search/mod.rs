@@ -22,7 +22,7 @@ pub(crate) const SEARCH_TOOL_NAME: &str = "search_the_web";
 pub(crate) const EXTRACT_TOOL_NAME: &str = "website_content_extractor";
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const SEARCH_DESCRIPTION: &str = r#"This tool is used to search the web given a query.
+pub(crate) const SEARCH_DESCRIPTION: &str = r#"This tool is used to search the web given a query.
 If the user wants up-to-date information or you want to retrieve new information, call this tool.
 If you call this tool, then you MUST complete your answer using the output.
 The input can be a query. It should not be a URL. Either is fine.
@@ -41,7 +41,7 @@ You should expect output like this:
     ]
 }
 "#;
-const EXTRACT_DESCRIPTION: &str = r#"This tool is used to extract the content of a website.
+pub(crate) const EXTRACT_DESCRIPTION: &str = r#"This tool is used to extract the content of a website.
 If the user wants information about a specific site or you want to extract the content of a specific site, call this tool.
 The input must be a URL.
 Additionally, if you have any questions that require a follow-up, you can call this tool repeatedly.

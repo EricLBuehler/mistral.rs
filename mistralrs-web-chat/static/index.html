@@ -14,6 +14,21 @@
     <button id="clearBtn">🧹 Clear chat</button>
     <button id="renameBtn">✏️ Rename chat</button>
     <button id="deleteBtn">🗑️ Delete chat</button>
+    <hr />
+    <div class="sidebar-card">
+      <h3>Web Search</h3>
+      <div class="sidebar-card-content">
+        <label class="toggle-label"><input type="checkbox" id="enableSearch" /> Enable web search</label>
+        <div id="webSearchOptions" hidden>
+          <label for="searchContextSize">Context size:</label>
+          <select id="searchContextSize">
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+          </select>
+        </div>
+      </div>
+    </div>
     <ul id="chatList"></ul>
   </div>
 

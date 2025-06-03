@@ -295,6 +295,18 @@ function initStopButton() {
 }
 
 /**
+ * Initialize web search controls: toggle visibility of search options
+ */
+function initWebSearchControls() {
+  const checkbox = document.getElementById('enableSearch');
+  const options = document.getElementById('webSearchOptions');
+  if (!checkbox || !options) return;
+  checkbox.addEventListener('change', () => {
+    options.hidden = !checkbox.checked;
+  });
+}
+
+/**
  * Initialize all UI interactions
  */
 function initUI() {
@@ -302,5 +314,6 @@ function initUI() {
   initImageUpload();
   initTextUpload();
   initDragAndDrop();
+  initWebSearchControls();
   initStopButton();
 }

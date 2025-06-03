@@ -5,7 +5,9 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::stream::StreamExt;
-use mistralrs::{Model, TextMessageRole, TextMessages, VisionMessages};
+use mistralrs::{
+    Model, RequestBuilder, TextMessageRole, TextMessages, VisionMessages, WebSearchOptions,
+};
 use serde_json::Value;
 use std::io::Cursor;
 use std::mem;
@@ -23,6 +25,15 @@ const CLEAR_CMD: &str = "__CLEAR__";
 pub struct VisionContext<'a> {
     pub msgs: &'a mut VisionMessages,
     pub image_buffer: &'a mut Vec<image::DynamicImage>,
+}
+
+/// Aggregates frequently used parameters so that helper functions stay below
+/// Clippy’s `too_many_arguments` threshold.
+pub struct HandlerParams<'a> {
+    pub socket: &'a mut WebSocket,
+    pub app: &'a Arc<AppState>,
+    pub streaming: &'a mut bool,
+    pub active_chat_id: &'a Option<String>,
 }
 
 /// Upgrades an HTTP request to a WebSocket connection.
@@ -141,7 +152,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             }
             continue;
         }
-        // Handle front‑end replay helper messages without triggering inference
+        // Handle front-end replay helper messages without triggering inference
         if user_msg.trim_start().starts_with("{\"restore\":") {
             handle_restore_message(
                 &user_msg,
@@ -152,6 +163,90 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             )
             .await;
             continue;
+        }
+        // Handle chat messages with optional web search options provided as JSON
+        if let Ok(val) = serde_json::from_str::<Value>(&user_msg) {
+            if let Some(content) = val.get("content").and_then(|v| v.as_str()) {
+                // Extract web search options if provided
+                let web_search_opts = if let Some(opts_val) = val.get("web_search_options") {
+                    match serde_json::from_value::<WebSearchOptions>(opts_val.clone()) {
+                        Ok(opts) => Some(opts),
+                        Err(e) => {
+                            let _ = socket
+                                .send(Message::Text(format!(
+                                    "Error parsing web_search_options: {}",
+                                    e
+                                )))
+                                .await;
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                // Determine selected model
+                let model_name_opt = { app.current.read().await.clone() };
+                let Some(model_name) = model_name_opt else {
+                    let _ = socket
+                        .send(Message::Text(
+                            "No model selected. Choose one in the sidebar.".into(),
+                        ))
+                        .await;
+                    continue;
+                };
+                let Some(model_loaded) = app.models.get(&model_name).cloned() else {
+                    let _ = socket
+                        .send(Message::Text("Selected model not found.".into()))
+                        .await;
+                    continue;
+                };
+                match model_loaded {
+                    LoadedModel::Text(model) => {
+                        let mut params = HandlerParams {
+                            socket: &mut socket,
+                            app: &app,
+                            streaming: &mut streaming,
+                            active_chat_id: &active_chat_id,
+                        };
+                        handle_text_model(
+                            &model,
+                            content,
+                            web_search_opts.clone(),
+                            &mut text_msgs,
+                            &mut params,
+                        )
+                        .await;
+                    }
+                    LoadedModel::Vision(model) => {
+                        let mut vision_ctx = VisionContext {
+                            msgs: &mut vision_msgs,
+                            image_buffer: &mut image_buffer,
+                        };
+                        let mut params = HandlerParams {
+                            socket: &mut socket,
+                            app: &app,
+                            streaming: &mut streaming,
+                            active_chat_id: &active_chat_id,
+                        };
+                        handle_vision_model(
+                            &model,
+                            content,
+                            web_search_opts.clone(),
+                            &mut vision_ctx,
+                            &mut params,
+                        )
+                        .await;
+                    }
+                    LoadedModel::Speech(_) => {
+                        let _ = socket
+                            .send(Message::Text(
+                                "Speech models are not supported over WebSocket".into(),
+                            ))
+                            .await;
+                    }
+                }
+                continue;
+            }
         }
 
         let model_name_opt = { app.current.read().await.clone() };
@@ -172,32 +267,26 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
 
         match model_loaded {
             LoadedModel::Text(model) => {
-                handle_text_model(
-                    &model,
-                    &user_msg,
-                    &mut text_msgs,
-                    &mut socket,
-                    &app,
-                    &mut streaming,
-                    &active_chat_id,
-                )
-                .await;
+                let mut params = HandlerParams {
+                    socket: &mut socket,
+                    app: &app,
+                    streaming: &mut streaming,
+                    active_chat_id: &active_chat_id,
+                };
+                handle_text_model(&model, &user_msg, None, &mut text_msgs, &mut params).await;
             }
             LoadedModel::Vision(model) => {
                 let mut vision_ctx = VisionContext {
                     msgs: &mut vision_msgs,
                     image_buffer: &mut image_buffer,
                 };
-                handle_vision_model(
-                    &model,
-                    &user_msg,
-                    &mut vision_ctx,
-                    &mut socket,
-                    &app,
-                    &mut streaming,
-                    &active_chat_id,
-                )
-                .await;
+                let mut params = HandlerParams {
+                    socket: &mut socket,
+                    app: &app,
+                    streaming: &mut streaming,
+                    active_chat_id: &active_chat_id,
+                };
+                handle_vision_model(&model, &user_msg, None, &mut vision_ctx, &mut params).await;
             }
             // Speech models should use HTTP endpoint; not handled here
             LoadedModel::Speech(_) => {
@@ -305,12 +394,15 @@ async fn handle_restore_message(
 async fn handle_text_model(
     model: &Arc<Model>,
     user_msg: &str,
+    web_search_opts: Option<WebSearchOptions>,
     text_msgs: &mut TextMessages,
-    socket: &mut WebSocket,
-    app: &Arc<AppState>,
-    streaming: &mut bool,
-    active_chat_id: &Option<String>,
+    params: &mut HandlerParams<'_>,
 ) {
+    // Local aliases keep the original body unchanged.
+    let socket = &mut *params.socket;
+    let app = params.app;
+    let streaming = &mut *params.streaming;
+    let active_chat_id = params.active_chat_id;
     *text_msgs = text_msgs
         .clone()
         .add_message(TextMessageRole::User, user_msg);
@@ -321,11 +413,15 @@ async fn handle_text_model(
     }
     let mut assistant_content = String::new();
     let msgs_snapshot = text_msgs.clone();
+    let mut request_builder = RequestBuilder::from(msgs_snapshot);
+    if let Some(opts) = web_search_opts {
+        request_builder = request_builder.with_web_search_options(opts);
+    }
 
     *streaming = true;
     let stream_res = stream_and_forward(
         model,
-        msgs_snapshot,
+        request_builder,
         socket,
         |tok| {
             assistant_content = tok.to_string();
@@ -348,12 +444,14 @@ async fn handle_text_model(
 async fn handle_vision_model(
     model: &Arc<Model>,
     user_msg: &str,
+    web_search_opts: Option<WebSearchOptions>,
     vision_ctx: &mut VisionContext<'_>,
-    socket: &mut WebSocket,
-    app: &Arc<AppState>,
-    streaming: &mut bool,
-    active_chat_id: &Option<String>,
+    params: &mut HandlerParams<'_>,
 ) {
+    let socket = &mut *params.socket;
+    let app = params.app;
+    let streaming = &mut *params.streaming;
+    let active_chat_id = params.active_chat_id;
     // Track the exact set of messages that will be sent *this* turn.
     let mut msgs_for_stream: Option<VisionMessages> = None;
     // --- Vision input routing ---
@@ -460,11 +558,16 @@ async fn handle_vision_model(
         }
     }
 
+    let msgs = msgs_for_stream.expect("msgs_for_stream must be set");
+    let mut request_builder = RequestBuilder::from(msgs);
+    if let Some(opts) = web_search_opts {
+        request_builder = request_builder.with_web_search_options(opts);
+    }
     *streaming = true;
     let mut assistant_content = String::new();
     let stream_res = stream_and_forward(
         model,
-        msgs_for_stream.expect("msgs_for_stream must be set"),
+        request_builder,
         socket,
         |tok| {
             assistant_content = tok.to_string();

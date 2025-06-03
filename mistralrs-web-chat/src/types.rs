@@ -23,6 +23,12 @@ pub struct Cli {
     /// Repeated flag for speech models
     #[arg(long = "speech-model")]
     pub speech_models: Vec<String>,
+    /// Enable web search tool (requires embedding model)
+    #[arg(long)]
+    pub enable_search: bool,
+    /// Hugging Face model ID for search embeddings (default: SnowflakeArcticEmbedL if --enable-search)
+    #[arg(long = "search-bert-model")]
+    pub search_bert_model: Option<String>,
 
     /// Port to listen on (default: 8080)
     #[arg(long = "port")]

@@ -426,3 +426,48 @@ pre:hover .copy-btn {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* ----- sidebar card for Web Search ----- */
+.sidebar-card {
+  background: var(--chat-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+}
+.sidebar-card h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+.sidebar-card-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+/* Web Search options within card */
+#webSearchOptions {
+  display: none;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+#webSearchOptions:not([hidden]) {
+  display: flex;
+}
+#webSearchOptions label {
+  font-size: 0.9rem;
+}
+#webSearchOptions select {
+  width: 100%;
+  padding: 0.45rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--chat-bg);
+  color: var(--text-color);
+  font-family: inherit;
+}
