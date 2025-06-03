@@ -134,10 +134,8 @@ const EXIT_CMD: &str = "\\exit";
 const SYSTEM_CMD: &str = "\\system";
 const CLEAR_CMD: &str = "\\clear";
 
-/// Regex string used to extract image URLs from prompts without capturing
-/// trailing punctuation like periods or parentheses.
-const IMAGE_REGEX: &str =
-    r#"((?:https?://|file://)?\S+?\.(?:png|jpe?g|bmp|gif|webp)(?:\?\S+?)?)(?=[\s,.;:!?)]|$)"#;
+/// Regex string used to extract image URLs from prompts.
+const IMAGE_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:png|jpe?g|bmp|gif|webp)(?:\?\S+?)?)"#;
 
 fn interactive_sample_parameters() -> SamplingParams {
     SamplingParams {
@@ -358,7 +356,12 @@ fn parse_files_and_message(input: &str, regex: &Regex) -> (Vec<String>, String) 
         .filter_map(|cap| {
             cap.get(1).map(|m| {
                 m.as_str()
-                    .trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"' | '\''))
+                    .trim_end_matches(|c: char| {
+                        matches!(
+                            c,
+                            '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"' | '\''
+                        )
+                    })
                     .to_string()
             })
         })
