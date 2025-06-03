@@ -3282,6 +3282,7 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
             let mlp_size = if !cfg.mlp_only_layers.contains(&layer_idx)
                 && (cfg.num_experts > 0 && (layer_idx + 1) % cfg.decoder_sparse_step == 0)
             {
+                let gate_size = cfg.hidden_size * cfg.num_experts;
                 let expert_size = {
                     let h_size = cfg.hidden_size;
                     let i_size = cfg.moe_intermediate_size;
@@ -3290,7 +3291,7 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
                     let down_proj = i_size * h_size / weight_pack_factor;
                     gate_proj + up_proj + down_proj
                 };
-                expert_size * cfg.num_experts
+                expert_size * cfg.num_experts + gate_size
             } else {
                 let h_size = cfg.hidden_size;
                 let i_size = cfg.intermediate_size;
