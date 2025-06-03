@@ -29,10 +29,7 @@ macro_rules! handle_seq_error {
             Ok(v) => v,
             Err(e) => {
                 use $crate::response::Response;
-                if let Err(_) = $response
-                    .send(Response::InternalError(e.into()))
-                    .await
-                {
+                if let Err(_) = $response.send(Response::InternalError(e.into())).await {
                     tracing::warn!("Receiver disconnected");
                 }
                 return;
@@ -49,10 +46,7 @@ macro_rules! handle_seq_error_ok {
             Ok(v) => v,
             Err(e) => {
                 use $crate::response::Response;
-                if let Err(_) = $response
-                    .send(Response::InternalError(e.into()))
-                    .await
-                {
+                if let Err(_) = $response.send(Response::InternalError(e.into())).await {
                     tracing::warn!("Receiver disconnected");
                 }
                 return Ok(());

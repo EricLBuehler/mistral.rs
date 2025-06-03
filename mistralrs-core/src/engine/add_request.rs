@@ -88,8 +88,8 @@ impl Engine {
                     ))
                     .await
                     .unwrap_or_else(|_| warn!("Receiver disconnected"));
-                return;
-            }
+            return;
+        }
 
         // Verify the model's category matches the messages received.
         match (
