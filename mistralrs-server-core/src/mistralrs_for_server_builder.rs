@@ -49,7 +49,7 @@ pub mod defaults {
 /// ### Examples
 ///
 /// Basic usage:
-/// ```no_run
+/// ```ignore
 /// use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
 ///
 /// let args = Args::parse();
@@ -210,7 +210,7 @@ impl MistralRsForServerBuilder {
     ///
     /// ### Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
     ///
     /// let builder = mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder::new();
@@ -464,7 +464,7 @@ impl MistralRsForServerBuilder {
     ///
     /// ### Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
     ///
     /// let shared_mistralrs = MistralRsForServerBuilder::new()

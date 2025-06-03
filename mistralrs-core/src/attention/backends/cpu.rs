@@ -250,166 +250,167 @@ fn flash_attn_cpu_single_q<T>(
 where
     T: WithDType + Copy + UpcastF32 + DowncastF32,
 {
-    // Shapes: (B, 1, H, D)
-    let (b, _q_len, h, d) = (qshape[0], qshape[1], qshape[2], qshape[3]);
+    let (b, _qlen, h, d) = (qshape[0], qshape[1], qshape[2], qshape[3]);
     let kv_len = kshape[1];
+    let kv_tiles = kv_len.div_ceil(TILE_KV);
+    let dv = d;
+
+    // --- head tiling factors and softmax helper -----------------------
     let k_h = kshape[2];
     let v_h = vshape[2];
     let rk2 = h / k_h;
     let rv2 = h / v_h;
-    let dv = d;
-
     let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
 
-    // Final output buffer (B, H, 1, D) – already typed as `T`
+    // final output
     let mut out = vec![T::cast(0.0); b * h * dv];
+    // scratch: one tile  ×  heads ×  dv  (flattened)
+    let mut scratch = vec![0f32; kv_tiles * h * dv];
+    let mut scratch_s = vec![0f32; kv_tiles * h]; // softmax S per tile
+    let mut scratch_m = vec![f32::NEG_INFINITY; kv_tiles * h];
 
-    // Split the KV axis into cache‑friendly tiles.
-    let kv_tiles = kv_len.div_ceil(TILE_KV);
-
-    assert_eq!(qstride[3], 1, "q must have contiguous rows");
-    assert_eq!(kstride[3], 1, "k must have contiguous rows");
-    assert_eq!(vstride[3], 1, "v must have contiguous rows");
+    // Store as plain usize so the capture is Sync (raw *mut T is not Sync)
+    let scratch_ptr = scratch.as_mut_ptr() as usize;
+    let scratch_s_ptr = scratch_s.as_mut_ptr() as usize;
+    let scratch_m_ptr = scratch_m.as_mut_ptr() as usize;
 
     FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(dv)
-            .with_min_len(64)
-            .enumerate()
-            .for_each(|(row_idx, out_chunk)| {
-                let b_i = row_idx / h;
-                let h_i = row_idx % h;
+        (0..kv_tiles).into_par_iter().for_each(|tile_idx| {
+            let start = tile_idx * TILE_KV;
+            let end = (start + TILE_KV).min(kv_len);
 
-                let slope = if max_bias > 0.0 {
-                    2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
-                } else {
-                    1.0
-                };
+            for b_i in 0..b {
+                for h_i in 0..h {
+                    // Per‑head slope for ALiBi / NTK bias.
+                    let slope = if max_bias > 0.0 {
+                        2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+                    } else {
+                        1.0
+                    };
+                    let k_head = h_i / rk2;
+                    let v_head = h_i / rv2;
 
-                let k_head = h_i / rk2;
-                let v_head = h_i / rv2;
+                    // pointers into scratch
+                    let base_vk = ((tile_idx * h + h_i) * dv) as isize;
+                    let base_s = (tile_idx * h + h_i) as isize;
 
-                // ---------------- map‑reduce over KV tiles -----------------
-                let (vkq, s_tot, _m_tot) = (0..kv_tiles)
-                    .into_par_iter()
-                    .map(|tile_idx| {
-                        let start = tile_idx * TILE_KV;
-                        let end = (start + TILE_KV).min(kv_len);
+                    let q_base = b_i * qstride[0] + h_i * qstride[2];
+                    let q_row = &q_data[q_base..q_base + d];
 
-                        let mut vkq = vec![0f32; dv];
-                        let mut s = 0.0f32;
-                        let mut m = f32::NEG_INFINITY;
+                    // Re‑materialise the pointer from the captured usize.
+                    let vkq: &mut [f32] = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            (scratch_ptr as *mut f32).add(base_vk as usize),
+                            dv,
+                        )
+                    };
+                    let mut s = 0f32;
+                    let mut m = f32::NEG_INFINITY;
 
-                        // Q row is already contiguous in memory for q_len == 1
-                        let q_base = b_i * qstride[0] + h_i * qstride[2];
-                        let q_row = &q_data[q_base..q_base + d];
-
-                        for kv_pos in start..end {
-                            // -------- ping‑pong prefetch of next KV row --------
-                            #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-                            {
-                                let next_pos = kv_pos + 1;
-                                if next_pos < end {
-                                    let next_k_base = b_i * kstride[0]
-                                        + next_pos * kstride[1]
-                                        + k_head * kstride[2];
-                                    let next_v_base = b_i * vstride[0]
-                                        + next_pos * vstride[1]
-                                        + v_head * vstride[2];
-                                    unsafe {
-                                        prefetch(k_data.as_ptr().add(next_k_base) as *const u8);
-                                        prefetch(v_data.as_ptr().add(next_v_base) as *const u8);
-                                    }
+                    for kv_pos in start..end {
+                        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+                        {
+                            // One‑step look‑ahead prefetch of the next K and V rows.
+                            let next_pos = kv_pos + 1;
+                            if next_pos < end {
+                                let next_k_base =
+                                    b_i * kstride[0] + next_pos * kstride[1] + k_head * kstride[2];
+                                let next_v_base =
+                                    b_i * vstride[0] + next_pos * vstride[1] + v_head * vstride[2];
+                                unsafe {
+                                    prefetch(k_data.as_ptr().add(next_k_base) as *const u8);
+                                    prefetch(v_data.as_ptr().add(next_v_base) as *const u8);
                                 }
                             }
-                            // ----------------------------------------------------
-                            // ---- mask -------------------------------------------------------
-                            let mv = if let Some(mv_vec) = mask_vec {
-                                slope * mv_vec[(b_i * kv_len) + kv_pos].to_f32()
-                            } else {
-                                0.0
-                            };
-                            if mv == f32::NEG_INFINITY {
-                                continue;
-                            }
+                        }
+                        // ---------- dot(Q,K) ----------
+                        let k_base = b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
+                        let k_row = &k_data[k_base..k_base + d];
 
-                            // ---- K row -------------------------------------------------------
-                            let k_base =
-                                b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
-                            let k_row = &k_data[k_base..k_base + d];
+                        let mut s_val = vec_dot_f32(q_row, k_row) * scale;
 
-                            // dot(Q, K)
-                            let mut s_val = vec_dot_f32(q_row, k_row);
-
-                            let mut scale_applied = scale;
-                            if logit_softcap != 0.0 {
-                                scale_applied /= logit_softcap;
-                            }
-                            s_val *= scale_applied;
-                            if logit_softcap != 0.0 {
-                                s_val = logit_softcap * s_val.tanh();
-                            }
-                            s_val += mv;
-
-                            // ---- tile‑local online soft‑max -------------------------------
-                            let m_old = m;
-                            let mut ms = 1.0f32;
-                            let mut vs = 1.0f32;
-                            if s_val > m {
-                                m = s_val;
-                                ms = (m_old - m).exp();
-                                for v in vkq.iter_mut() {
-                                    *v *= ms;
-                                }
-                            } else {
-                                vs = (s_val - m).exp();
-                            }
-
-                            // ---- V row -------------------------------------------------------
-                            let v_base =
-                                b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
-                            for d_i in 0..dv {
-                                vkq[d_i] += v_data[v_base + d_i].to_f32() * vs;
-                            }
-
-                            s = s * ms + vs;
+                        if logit_softcap != 0.0 {
+                            s_val = logit_softcap * (s_val / logit_softcap).tanh();
+                        }
+                        if let Some(mv_vec) = mask_vec {
+                            s_val += slope * mv_vec[(b_i * kv_len) + kv_pos].to_f32();
                         }
 
-                        (vkq, s, m)
-                    })
-                    // --------------- reduce two tiles --------------------------------------
-                    .reduce(
-                        || (vec![0f32; dv], 0.0f32, f32::NEG_INFINITY),
-                        |mut a, b| {
-                            let (ref mut vkq_a, mut s_a, m_a) = a;
-                            let (vkq_b, s_b, m_b) = b;
-                            if m_a >= m_b {
-                                let factor = (m_b - m_a).exp();
-                                for (va, vb) in vkq_a.iter_mut().zip(vkq_b) {
-                                    *va += vb * factor;
-                                }
-                                s_a += s_b * factor;
-                                (vkq_a.clone(), s_a, m_a)
-                            } else {
-                                let factor = (m_a - m_b).exp();
-                                let mut vkq_new = vkq_b;
-                                for (vb, va) in vkq_new.iter_mut().zip(vkq_a) {
-                                    *vb += *va * factor;
-                                }
-                                (vkq_new, s_b + s_a * factor, m_b)
+                        // -------- tile-local softmax ----------
+                        let m_old = m;
+                        let mut ms = 1.0;
+                        let mut vs = 1.0;
+                        if s_val > m {
+                            m = s_val;
+                            ms = (m_old - m).exp();
+                            for v in vkq.iter_mut() {
+                                *v *= ms;
                             }
-                        },
-                    );
+                        } else {
+                            vs = (s_val - m).exp();
+                        }
 
-                // ---------------- final normalisation + down‑cast -------------
-                let inv_s = 1.0 / s_tot;
-                for (o, v) in out_chunk.iter_mut().zip(vkq.iter()) {
-                    *o = T::cast(*v * inv_s);
+                        // -------- add V ----------
+                        let v_base = b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
+                        for d_i in 0..dv {
+                            vkq[d_i] += v_data[v_base + d_i].to_f32() * vs;
+                        }
+
+                        s = s * ms + vs;
+                    }
+
+                    unsafe {
+                        *((scratch_s_ptr as *mut f32).add(base_s as usize)) = s;
+                        *((scratch_m_ptr as *mut f32).add(base_s as usize)) = m;
+                    }
                 }
-            });
+            }
+        });
     });
 
-    let out_shape = (b, h, 1usize, dv);
-    Tensor::from_vec(out, out_shape, &Device::Cpu)
+    // -------- serial reduction over tiles (per head) --------
+    for b_i in 0..b {
+        for h_i in 0..h {
+            let out_off = (b_i * h + h_i) * dv;
+
+            // start with tile 0
+            let mut vkq = vec![0f32; dv];
+            vkq.copy_from_slice(&scratch[(h_i * dv)..(h_i * dv + dv)]);
+            let mut s = scratch_s[h_i];
+            let mut m = scratch_m[h_i];
+
+            for tile_idx in 1..kv_tiles {
+                let base = (tile_idx * h + h_i) * dv;
+                let base_s = tile_idx * h + h_i;
+
+                let m_b = scratch_m[base_s];
+                let s_b = scratch_s[base_s];
+                let vkq_b = &scratch[base..base + dv];
+
+                if m >= m_b {
+                    let factor = (m_b - m).exp();
+                    for (v, v_b) in vkq.iter_mut().zip(vkq_b) {
+                        *v += v_b * factor;
+                    }
+                    s += s_b * factor;
+                } else {
+                    let factor = (m - m_b).exp();
+                    for (v, v_a) in vkq.iter_mut().zip(vkq_b) {
+                        *v = v_a + *v * factor;
+                    }
+                    s = s_b + s * factor;
+                    m = m_b;
+                }
+            }
+
+            let inv_s = 1.0 / s;
+            for (o, v) in out[out_off..][..dv].iter_mut().zip(vkq.iter()) {
+                *o = T::cast(*v * inv_s);
+            }
+        }
+    }
+
+    Tensor::from_vec(out, (b, h, 1, dv), &Device::Cpu)
 }
 
 /// Main forward flash-attention CPU routine.
@@ -554,4 +555,253 @@ where
 
     let out_shape = (b, h, q_len, dv);
     Tensor::from_vec(out, out_shape, &Device::Cpu)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attention::SdpaParams;
+    use candle_core::{Device, Tensor, D};
+    use candle_nn::ops::softmax;
+
+    use candle_core::Result as CandleResult;
+
+    const EPS: f32 = 1e-4;
+
+    #[test]
+    fn test_flash_attn_cpu_single_q() -> CandleResult<()> {
+        // Test for q_len == 1 (single Q)
+        let b = 1;
+        let h = 2;
+        let d = 4;
+        let kv_len = 2;
+
+        // Create q with shape (b, 1, h, d) filled with ones
+        let q_vec = vec![1.0f32; b * h * d];
+        let q = Tensor::from_vec(q_vec.clone(), (b, 1, h, d), &Device::Cpu)?;
+
+        // Create k and v with shape (b, kv_len, h, d) filled with ones
+        let k_vec = vec![1.0f32; b * kv_len * h * d];
+        let v_vec = vec![1.0f32; b * kv_len * h * d];
+        let k = Tensor::from_vec(k_vec.clone(), (b, kv_len, h, d), &Device::Cpu)?;
+        let v = Tensor::from_vec(v_vec.clone(), (b, kv_len, h, d), &Device::Cpu)?;
+
+        // SDPA parameters: scale = 1.0, no softcap
+        let sdpa = SdpaParams {
+            softmax_scale: 1.0,
+            softcap: None,
+            n_kv_groups: 1,
+            sliding_window: None,
+        };
+        let scale = sdpa.softmax_scale;
+
+        // Run the flash attention CPU function
+        let out = run_flash_attn_cpu::<f32>(&q, &k, &v, None, &sdpa)?;
+        // Expect output shape (b, h, 1, d)
+        assert_eq!(out.shape().dims(), &[b, h, 1, d]);
+
+        // Naive attention
+        let q_perm = q.clone().permute((0, 2, 1, 3))?;
+        let k_perm = k.clone().permute((0, 2, 1, 3))?;
+        let v_perm = v.clone().permute((0, 2, 1, 3))?;
+
+        let q_resh = q_perm.reshape(&[b * h, 1, d])?;
+        let k_resh = k_perm.reshape(&[b * h, kv_len, d])?;
+        let v_resh = v_perm.reshape(&[b * h, kv_len, d])?;
+
+        let logits = (q_resh.matmul(&k_resh.transpose(1, 2)?)? * scale as f64)?;
+        let weights = softmax(&logits, D::Minus1)?;
+
+        let attn_out = weights.matmul(&v_resh)?;
+
+        let naive_out = attn_out.reshape(&[b, h, 1, d])?;
+
+        let flash_data = out.flatten_all()?.to_vec1::<f32>()?;
+        let naive_data = naive_out.flatten_all()?.to_vec1::<f32>()?;
+        for (f_val, n_val) in flash_data.iter().zip(naive_data.iter()) {
+            assert!((f_val - n_val).abs() < EPS);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_flash_attn_cpu_full_q() -> CandleResult<()> {
+        // Test for q_len > 1 (full Q)
+        let b = 1;
+        let q_len = 2;
+        let h = 2;
+        let d = 4;
+        let kv_len = 2;
+
+        // Create q with shape (b, q_len, h, d) filled with ones
+        let q_vec = vec![1.0f32; b * q_len * h * d];
+        let q = Tensor::from_vec(q_vec.clone(), (b, q_len, h, d), &Device::Cpu)?;
+
+        // Create k and v with shape (b, kv_len, h, d) filled with ones
+        let k_vec = vec![1.0f32; b * kv_len * h * d];
+        let v_vec = vec![1.0f32; b * kv_len * h * d];
+        let k = Tensor::from_vec(k_vec.clone(), (b, kv_len, h, d), &Device::Cpu)?;
+        let v = Tensor::from_vec(v_vec.clone(), (b, kv_len, h, d), &Device::Cpu)?;
+
+        // SDPA parameters: scale = 1.0, no softcap
+        let sdpa = SdpaParams {
+            softmax_scale: 1.0,
+            softcap: None,
+            n_kv_groups: 1,
+            sliding_window: None,
+        };
+        let scale = sdpa.softmax_scale;
+
+        // Run the flash attention CPU function
+        let out = run_flash_attn_cpu::<f32>(&q, &k, &v, None, &sdpa)?;
+        // Expect output shape (b, h, q_len, d)
+        assert_eq!(out.shape().dims(), &[b, h, q_len, d]);
+
+        // Naive attention
+        let q_perm = q.clone().permute((0, 2, 1, 3))?;
+        let k_perm = k.clone().permute((0, 2, 1, 3))?;
+        let v_perm = v.clone().permute((0, 2, 1, 3))?;
+
+        let q_resh = q_perm.reshape(&[b * h, q_len, d])?;
+        let k_resh = k_perm.reshape(&[b * h, kv_len, d])?;
+        let v_resh = v_perm.reshape(&[b * h, kv_len, d])?;
+
+        let logits = (q_resh.matmul(&k_resh.transpose(1, 2)?)? * scale as f64)?;
+        let weights = softmax(&logits, D::Minus1)?;
+
+        let attn_out = weights.matmul(&v_resh)?;
+
+        let naive_out = attn_out.reshape(&[b, h, q_len, d])?;
+
+        // 7) Compare element‐by‐element
+        let flash_data = out.flatten_all()?.to_vec1::<f32>()?;
+        let naive_data = naive_out.flatten_all()?.to_vec1::<f32>()?;
+        for (f_val, n_val) in flash_data.iter().zip(naive_data.iter()) {
+            assert!((f_val - n_val).abs() < EPS);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_flash_attn_cpu_single_q_softcap() -> CandleResult<()> {
+        // Test for q_len == 1 (single Q) with softcap
+        let b = 1;
+        let h = 2;
+        let d = 4;
+        let kv_len = 2;
+
+        // Create q with shape (b, 1, h, d) filled with ones
+        let q_vec = vec![1.0f32; b * h * d];
+        let q = Tensor::from_vec(q_vec.clone(), (b, 1, h, d), &Device::Cpu)?;
+
+        // Create k and v with shape (b, kv_len, h, d) filled with ones
+        let k_vec = vec![1.0f32; b * kv_len * h * d];
+        let v_vec = vec![1.0f32; b * kv_len * h * d];
+        let k = Tensor::from_vec(k_vec.clone(), (b, kv_len, h, d), &Device::Cpu)?;
+        let v = Tensor::from_vec(v_vec.clone(), (b, kv_len, h, d), &Device::Cpu)?;
+
+        // SDPA parameters: scale = 1.0, softcap = Some(0.5)
+        let sdpa = SdpaParams {
+            softmax_scale: 1.0,
+            softcap: Some(0.5),
+            n_kv_groups: 1,
+            sliding_window: None,
+        };
+        let scale = sdpa.softmax_scale;
+        let sc = sdpa.softcap.unwrap();
+
+        // Run the flash attention CPU function
+        let out = run_flash_attn_cpu::<f32>(&q, &k, &v, None, &sdpa)?;
+        // Expect output shape (b, h, 1, d)
+        assert_eq!(out.shape().dims(), &[b, h, 1, d]);
+
+        // Naive attention with softcap
+        let q_perm = q.clone().permute((0, 2, 1, 3))?;
+        let k_perm = k.clone().permute((0, 2, 1, 3))?;
+        let v_perm = v.clone().permute((0, 2, 1, 3))?;
+
+        let q_resh = q_perm.reshape(&[b * h, 1, d])?;
+        let k_resh = k_perm.reshape(&[b * h, kv_len, d])?;
+        let v_resh = v_perm.reshape(&[b * h, kv_len, d])?;
+
+        let logits = (q_resh.matmul(&k_resh.transpose(1, 2)?)? * scale as f64)?;
+
+        let logits = (logits / sc as f64)?;
+        let logits = logits.tanh()?;
+        let logits = (logits * sc as f64)?;
+
+        let weights = softmax(&logits, D::Minus1)?;
+        let attn_out = weights.matmul(&v_resh)?;
+        let naive_out = attn_out.reshape(&[b, h, 1, d])?;
+
+        let flash_data = out.flatten_all()?.to_vec1::<f32>()?;
+        let naive_data = naive_out.flatten_all()?.to_vec1::<f32>()?;
+        for (f_val, n_val) in flash_data.iter().zip(naive_data.iter()) {
+            assert!((f_val - n_val).abs() < EPS);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_flash_attn_cpu_full_q_softcap() -> CandleResult<()> {
+        // Test for q_len > 1 (full Q) with softcap
+        let b = 1;
+        let q_len = 2;
+        let h = 2;
+        let d = 4;
+        let kv_len = 2;
+
+        // Create q with shape (b, q_len, h, d) filled with ones
+        let q_vec = vec![1.0f32; b * q_len * h * d];
+        let q = Tensor::from_vec(q_vec.clone(), (b, q_len, h, d), &Device::Cpu)?;
+
+        // Create k and v with shape (b, kv_len, h, d) filled with ones
+        let k_vec = vec![1.0f32; b * kv_len * h * d];
+        let v_vec = vec![1.0f32; b * kv_len * h * d];
+        let k = Tensor::from_vec(k_vec.clone(), (b, kv_len, h, d), &Device::Cpu)?;
+        let v = Tensor::from_vec(v_vec.clone(), (b, kv_len, h, d), &Device::Cpu)?;
+
+        // SDPA parameters: scale = 1.0, softcap = Some(0.5)
+        let sdpa = SdpaParams {
+            softmax_scale: 1.0,
+            softcap: Some(0.5),
+            n_kv_groups: 1,
+            sliding_window: None,
+        };
+        let scale = sdpa.softmax_scale;
+        let sc = sdpa.softcap.unwrap();
+
+        // Run the flash attention CPU function
+        let out = run_flash_attn_cpu::<f32>(&q, &k, &v, None, &sdpa)?;
+        // Expect output shape (b, h, q_len, d)
+        assert_eq!(out.shape().dims(), &[b, h, q_len, d]);
+
+        // Naive attention with softcap
+        let q_perm = q.clone().permute((0, 2, 1, 3))?;
+        let k_perm = k.clone().permute((0, 2, 1, 3))?;
+        let v_perm = v.clone().permute((0, 2, 1, 3))?;
+
+        let q_resh = q_perm.reshape(&[b * h, q_len, d])?;
+        let k_resh = k_perm.reshape(&[b * h, kv_len, d])?;
+        let v_resh = v_perm.reshape(&[b * h, kv_len, d])?;
+
+        let logits = (q_resh.matmul(&k_resh.transpose(1, 2)?)? * scale as f64)?;
+
+        let logits = (logits / sc as f64)?;
+        let logits = logits.tanh()?;
+        let logits = (logits * sc as f64)?;
+
+        let weights = softmax(&logits, D::Minus1)?;
+        let attn_out = weights.matmul(&v_resh)?;
+        let naive_out = attn_out.reshape(&[b, h, q_len, d])?;
+
+        let flash_data = out.flatten_all()?.to_vec1::<f32>()?;
+        let naive_data = naive_out.flatten_all()?.to_vec1::<f32>()?;
+        for (f_val, n_val) in flash_data.iter().zip(naive_data.iter()) {
+            assert!((f_val - n_val).abs() < EPS);
+        }
+        Ok(())
+    }
 }

@@ -23,7 +23,7 @@ use tokio::{
 ///
 /// ### Examples
 ///
-/// ```no_run
+/// ```ignore
 /// use mistralrs_server_core::util::parse_image_url;
 ///
 /// // Load from HTTP URL

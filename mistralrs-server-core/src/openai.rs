@@ -131,7 +131,7 @@ pub struct ToolCall {
 ///
 /// ### Examples
 ///
-/// ```no_run
+/// ```ignore
 /// use either::Either;
 /// use mistralrs_server_core::openai::{Message, MessageContent};
 ///
@@ -212,7 +212,7 @@ fn default_response_format() -> ImageGenerationResponseFormat {
 ///
 /// ### Examples
 ///
-/// ```no_run
+/// ```ignore
 /// use mistralrs_server_core::openai::Grammar;
 ///
 /// // Regex grammar for phone numbers

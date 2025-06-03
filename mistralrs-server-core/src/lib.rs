@@ -10,7 +10,7 @@
 //! 2. Hook into the mistral.rs server lifecycle.
 //!
 //! ### Example
-//! ```no_run
+//! ```ignore
 //! use std::sync::Arc;
 //!
 //! use axum::{

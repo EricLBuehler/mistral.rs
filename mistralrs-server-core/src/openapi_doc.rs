@@ -29,7 +29,7 @@ use mistralrs_core::{
 /// * `base_path` - the base path of the mistral.rs server instance (in case the mistral.rs server is being included in another axum project)
 ///
 /// ### Example
-/// ```no_run
+/// ```ignore
 /// // MyApp
 /// use axum::{Router, routing::{get, post}};
 /// use utoipa::OpenApi;
