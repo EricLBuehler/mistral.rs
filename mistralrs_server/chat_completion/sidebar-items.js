@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ChatCompletionResponder","DoneState"],"fn":["chatcompletions","parse_request"],"struct":["JsonError","JsonModelError","ModelErrorMessage","Streamer"],"trait":["ErrorToResponse"]};

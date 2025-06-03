@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ImageGenerationResponder"],"fn":["image_generation","parse_request"],"struct":["JsonError"],"trait":["ErrorToResponse"]};

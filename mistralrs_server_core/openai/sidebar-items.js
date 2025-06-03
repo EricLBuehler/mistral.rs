@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["AudioResponseFormat","Grammar","ResponseFormat","StopTokens"],"struct":["ChatCompletionRequest","CompletionRequest","FunctionCalled","ImageGenerationRequest","JsonSchemaResponseFormat","Message","MessageContent","MessageInnerContent","ModelObject","ModelObjects","SpeechGenerationRequest","ToolCall"]};

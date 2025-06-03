@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["MB_TO_B","N_INPUT_SIZE"],"fn":["get_router","health","main","models","parse_token_source","re_isq"],"mod":["chat_completion","completions","image_generation","interactive_mode","openai","speech_generation","util"],"struct":["Args","ReIsqRequest"]};
+window.SIDEBAR_ITEMS = {"fn":["main","parse_token_source"],"mod":["interactive_mode"],"struct":["Args"]};
