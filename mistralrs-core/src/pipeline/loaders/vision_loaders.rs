@@ -4165,7 +4165,7 @@ impl IsqModelLoader for VLlama4Loader {
                 r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.(\d+)\.gate_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.(\d+).up_proj\.(weight|bias)$",
+                r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.(\d+)\.up_proj\.(weight|bias)$",
             )?,
             Regex::new(
                 r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.(\d+)\.down_proj\.(weight|bias)$",
