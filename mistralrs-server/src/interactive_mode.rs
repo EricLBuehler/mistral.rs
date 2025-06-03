@@ -99,8 +99,8 @@ Commands:
     Ex: `\system Always respond as a pirate.`
 - `\clear`: Clear the chat history.
 - `\temperature <float>`: Set sampling temperature.
-- `\topk <int>`: Set top-k sampling.
-- `\topp <float>`: Set top-p sampling.
+- `\topk <int>`: Set top-k sampling value.
+- `\topp <float>`: Set top-p sampling value.
 "#;
 
 const TEXT_INTERACTIVE_HELP: &str = r#"
