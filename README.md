@@ -328,6 +328,14 @@ You can launch interactive mode, a simple chat application running in the termin
 ./mistralrs-server -i plain -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
+During a chat session you can adjust sampling behaviour with these runtime commands:
+
+```text
+\temperature 0.7
+\topk 40
+\topp 0.9
+```
+
 Vision models work seamlessly:
 
 ```bash

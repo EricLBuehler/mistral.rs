@@ -134,6 +134,7 @@ struct Args {
     /// Enable thinking for interactive mode and models that support it.
     #[arg(long = "enable-thinking")]
     enable_thinking: bool,
+
 }
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
