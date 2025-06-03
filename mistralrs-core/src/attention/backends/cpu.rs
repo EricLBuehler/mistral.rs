@@ -252,7 +252,7 @@ where
 {
     let (b, _qlen, h, d) = (qshape[0], qshape[1], qshape[2], qshape[3]);
     let kv_len = kshape[1];
-    let kv_tiles = (kv_len + TILE_KV - 1) / TILE_KV;
+    let kv_tiles = kv_len.div_ceil(TILE_KV);
     let dv = d;
 
     // --- head tiling factors and softmax helper -----------------------
@@ -374,7 +374,8 @@ where
             let out_off = (b_i * h + h_i) * dv;
 
             // start with tile 0
-            let mut vkq = scratch[((h_i) * dv)..][..dv].to_vec();
+            let mut vkq = vec![0f32; dv];
+            vkq.copy_from_slice(&scratch[(h_i * dv)..(h_i * dv + dv)]);
             let mut s = scratch_s[h_i];
             let mut m = scratch_m[h_i];
 
@@ -394,18 +395,16 @@ where
                     s += s_b * factor;
                 } else {
                     let factor = (m - m_b).exp();
-                    vkq = vkq_b
-                        .iter()
-                        .zip(&vkq)
-                        .map(|(b, a)| b + a * factor)
-                        .collect();
+                    for (v, v_a) in vkq.iter_mut().zip(vkq_b) {
+                        *v = v_a + *v * factor;
+                    }
                     s = s_b + s * factor;
                     m = m_b;
                 }
             }
 
             let inv_s = 1.0 / s;
-            for (o, v) in out[out_off..][..dv].iter_mut().zip(&vkq) {
+            for (o, v) in out[out_off..][..dv].iter_mut().zip(vkq.iter()) {
                 *o = T::cast(*v * inv_s);
             }
         }
