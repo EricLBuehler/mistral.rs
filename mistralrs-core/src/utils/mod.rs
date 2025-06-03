@@ -29,10 +29,9 @@ macro_rules! handle_seq_error {
             Ok(v) => v,
             Err(e) => {
                 use $crate::response::Response;
-                $response
-                    .send(Response::InternalError(e.into()))
-                    .await
-                    .expect("Expected receiver.");
+                if let Err(_) = $response.send(Response::InternalError(e.into())).await {
+                    tracing::warn!("Receiver disconnected");
+                }
                 return;
             }
         }
@@ -47,10 +46,9 @@ macro_rules! handle_seq_error_ok {
             Ok(v) => v,
             Err(e) => {
                 use $crate::response::Response;
-                $response
-                    .send(Response::InternalError(e.into()))
-                    .await
-                    .expect("Expected receiver.");
+                if let Err(_) = $response.send(Response::InternalError(e.into())).await {
+                    tracing::warn!("Receiver disconnected");
+                }
                 return Ok(());
             }
         }
@@ -66,10 +64,13 @@ macro_rules! handle_seq_error_stateaware_ok {
             Err(e) => {
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
-                $seq.responder()
+                if let Err(_) = $seq
+                    .responder()
                     .send(Response::InternalError(e.into()))
                     .await
-                    .expect("Expected receiver.");
+                {
+                    tracing::warn!("Receiver disconnected");
+                }
                 $seq.set_state(SequenceState::Error);
                 return Ok(());
             }

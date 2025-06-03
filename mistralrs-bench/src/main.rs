@@ -90,9 +90,9 @@ fn run_bench(
 
     for _ in 0..repetitions {
         for _ in 0..concurrency {
-            sender
-                .blocking_send(req.clone())
-                .expect("Expected receiver.");
+            if sender.blocking_send(req.clone()).is_err() {
+                eprintln!("Receiver disconnected");
+            }
         }
         for _ in 0..concurrency {
             match rx.blocking_recv() {
@@ -258,9 +258,9 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         web_search_options: None,
     }));
 
-    sender
-        .blocking_send(req.clone())
-        .expect("Expected receiver.");
+    if sender.blocking_send(req.clone()).is_err() {
+        eprintln!("Receiver disconnected");
+    }
 
     let _ = rx.blocking_recv();
 }
