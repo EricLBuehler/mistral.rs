@@ -72,24 +72,26 @@ async fn do_search(
                 SearchContextSize::Medium => 8192_usize,
                 SearchContextSize::Low => 4096_usize,
             };
-        let mut results = tracing::dispatcher::with_default(&dispatch, || {
-            search::run_search_tool(&tool_call_params)
-                .unwrap()
-                .into_iter()
-                .map(|mut result| {
-                    result = result
-                        .cap_content_len(&tokenizer, max_results_budget_toks)
-                        .unwrap();
-                    let len = {
-                        let inp = InputSequence::Raw(Cow::from(&result.content));
-                        tokenizer
-                            .encode_fast(inp, false)
-                            .map(|x| x.len())
-                            .unwrap_or(usize::MAX)
-                    };
-                    (result, len)
-                })
-                .collect::<Vec<_>>()
+        let mut results = tokio::task::block_in_place(|| {
+            tracing::dispatcher::with_default(&dispatch, || {
+                search::run_search_tool(&tool_call_params)
+                    .unwrap()
+                    .into_iter()
+                    .map(|mut result| {
+                        result = result
+                            .cap_content_len(&tokenizer, max_results_budget_toks)
+                            .unwrap();
+                        let len = {
+                            let inp = InputSequence::Raw(Cow::from(&result.content));
+                            tokenizer
+                                .encode_fast(inp, false)
+                                .map(|x| x.len())
+                                .unwrap_or(usize::MAX)
+                        };
+                        (result, len)
+                    })
+                    .collect::<Vec<_>>()
+            })
         });
 
         // Sort increasing by tokenized length, if it fails, put it at the end.
@@ -214,12 +216,16 @@ async fn do_extraction(
                 SearchContextSize::Low => 4096_usize,
             };
 
-        let res = tracing::dispatcher::with_default(&dispatch, || {
-            search::run_extract_tool(&tool_call_params)
-                .unwrap()
+        let res = {
+            let extract_result = tokio::task::block_in_place(|| {
+                tracing::dispatcher::with_default(&dispatch, || {
+                    search::run_extract_tool(&tool_call_params).unwrap()
+                })
+            });
+            extract_result
                 .cap_content_len(&tokenizer, max_results_budget_toks)
                 .unwrap()
-        });
+        };
 
         let tool_result = serde_json::to_string(&res)
             .unwrap()
