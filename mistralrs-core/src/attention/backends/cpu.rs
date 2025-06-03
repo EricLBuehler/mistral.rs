@@ -250,166 +250,153 @@ fn flash_attn_cpu_single_q<T>(
 where
     T: WithDType + Copy + UpcastF32 + DowncastF32,
 {
-    // Shapes: (B, 1, H, D)
-    let (b, _q_len, h, d) = (qshape[0], qshape[1], qshape[2], qshape[3]);
+    let (b, _qlen, h, d) = (qshape[0], qshape[1], qshape[2], qshape[3]);
     let kv_len = kshape[1];
+    let kv_tiles = (kv_len + TILE_KV - 1) / TILE_KV;
+    let dv = d;
+
+    // --- head tiling factors and softmax helper -----------------------
     let k_h = kshape[2];
     let v_h = vshape[2];
     let rk2 = h / k_h;
     let rv2 = h / v_h;
-    let dv = d;
-
     let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
 
-    // Final output buffer (B, H, 1, D) – already typed as `T`
+    // final output
     let mut out = vec![T::cast(0.0); b * h * dv];
+    // scratch: one tile  ×  heads ×  dv  (flattened)
+    let mut scratch = vec![0f32; kv_tiles * h * dv];
+    let mut scratch_s = vec![0f32; kv_tiles * h]; // softmax S per tile
+    let mut scratch_m = vec![f32::NEG_INFINITY; kv_tiles * h];
 
-    // Split the KV axis into cache‑friendly tiles.
-    let kv_tiles = kv_len.div_ceil(TILE_KV);
-
-    assert_eq!(qstride[3], 1, "q must have contiguous rows");
-    assert_eq!(kstride[3], 1, "k must have contiguous rows");
-    assert_eq!(vstride[3], 1, "v must have contiguous rows");
+    // Store as plain usize so the capture is Sync (raw *mut T is not Sync)
+    let scratch_ptr = scratch.as_mut_ptr() as usize;
+    let scratch_s_ptr = scratch_s.as_mut_ptr() as usize;
+    let scratch_m_ptr = scratch_m.as_mut_ptr() as usize;
 
     FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(dv)
-            .with_min_len(64)
-            .enumerate()
-            .for_each(|(row_idx, out_chunk)| {
-                let b_i = row_idx / h;
-                let h_i = row_idx % h;
+        (0..kv_tiles).into_par_iter().for_each(|tile_idx| {
+            let start = tile_idx * TILE_KV;
+            let end = (start + TILE_KV).min(kv_len);
 
-                let slope = if max_bias > 0.0 {
-                    2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
-                } else {
-                    1.0
-                };
+            for b_i in 0..b {
+                for h_i in 0..h {
+                    // Per‑head slope for ALiBi / NTK bias.
+                    let slope = if max_bias > 0.0 {
+                        2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+                    } else {
+                        1.0
+                    };
+                    let k_head = h_i / rk2;
+                    let v_head = h_i / rv2;
 
-                let k_head = h_i / rk2;
-                let v_head = h_i / rv2;
+                    // pointers into scratch
+                    let base_vk = ((tile_idx * h + h_i) * dv) as isize;
+                    let base_s = (tile_idx * h + h_i) as isize;
 
-                // ---------------- map‑reduce over KV tiles -----------------
-                let (vkq, s_tot, _m_tot) = (0..kv_tiles)
-                    .into_par_iter()
-                    .map(|tile_idx| {
-                        let start = tile_idx * TILE_KV;
-                        let end = (start + TILE_KV).min(kv_len);
+                    let q_base = b_i * qstride[0] + h_i * qstride[2];
+                    let q_row = &q_data[q_base..q_base + d];
 
-                        let mut vkq = vec![0f32; dv];
-                        let mut s = 0.0f32;
-                        let mut m = f32::NEG_INFINITY;
+                    // Re‑materialise the pointer from the captured usize.
+                    let vkq: &mut [f32] = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            (scratch_ptr as *mut f32).add(base_vk as usize),
+                            dv,
+                        )
+                    };
+                    let mut s = 0f32;
+                    let mut m = f32::NEG_INFINITY;
 
-                        // Q row is already contiguous in memory for q_len == 1
-                        let q_base = b_i * qstride[0] + h_i * qstride[2];
-                        let q_row = &q_data[q_base..q_base + d];
+                    for kv_pos in start..end {
+                        // ---------- dot(Q,K) ----------
+                        let k_base = b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
+                        let k_row = &k_data[k_base..k_base + d];
 
-                        for kv_pos in start..end {
-                            // -------- ping‑pong prefetch of next KV row --------
-                            #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-                            {
-                                let next_pos = kv_pos + 1;
-                                if next_pos < end {
-                                    let next_k_base = b_i * kstride[0]
-                                        + next_pos * kstride[1]
-                                        + k_head * kstride[2];
-                                    let next_v_base = b_i * vstride[0]
-                                        + next_pos * vstride[1]
-                                        + v_head * vstride[2];
-                                    unsafe {
-                                        prefetch(k_data.as_ptr().add(next_k_base) as *const u8);
-                                        prefetch(v_data.as_ptr().add(next_v_base) as *const u8);
-                                    }
-                                }
-                            }
-                            // ----------------------------------------------------
-                            // ---- mask -------------------------------------------------------
-                            let mv = if let Some(mv_vec) = mask_vec {
-                                slope * mv_vec[(b_i * kv_len) + kv_pos].to_f32()
-                            } else {
-                                0.0
-                            };
-                            if mv == f32::NEG_INFINITY {
-                                continue;
-                            }
+                        let mut s_val = vec_dot_f32(q_row, k_row) * scale;
 
-                            // ---- K row -------------------------------------------------------
-                            let k_base =
-                                b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
-                            let k_row = &k_data[k_base..k_base + d];
-
-                            // dot(Q, K)
-                            let mut s_val = vec_dot_f32(q_row, k_row);
-
-                            let mut scale_applied = scale;
-                            if logit_softcap != 0.0 {
-                                scale_applied /= logit_softcap;
-                            }
-                            s_val *= scale_applied;
-                            if logit_softcap != 0.0 {
-                                s_val = logit_softcap * s_val.tanh();
-                            }
-                            s_val += mv;
-
-                            // ---- tile‑local online soft‑max -------------------------------
-                            let m_old = m;
-                            let mut ms = 1.0f32;
-                            let mut vs = 1.0f32;
-                            if s_val > m {
-                                m = s_val;
-                                ms = (m_old - m).exp();
-                                for v in vkq.iter_mut() {
-                                    *v *= ms;
-                                }
-                            } else {
-                                vs = (s_val - m).exp();
-                            }
-
-                            // ---- V row -------------------------------------------------------
-                            let v_base =
-                                b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
-                            for d_i in 0..dv {
-                                vkq[d_i] += v_data[v_base + d_i].to_f32() * vs;
-                            }
-
-                            s = s * ms + vs;
+                        if logit_softcap != 0.0 {
+                            s_val = logit_softcap * (s_val / logit_softcap).tanh();
+                        }
+                        if let Some(mv_vec) = mask_vec {
+                            s_val += slope * mv_vec[(b_i * kv_len) + kv_pos].to_f32();
                         }
 
-                        (vkq, s, m)
-                    })
-                    // --------------- reduce two tiles --------------------------------------
-                    .reduce(
-                        || (vec![0f32; dv], 0.0f32, f32::NEG_INFINITY),
-                        |mut a, b| {
-                            let (ref mut vkq_a, mut s_a, m_a) = a;
-                            let (vkq_b, s_b, m_b) = b;
-                            if m_a >= m_b {
-                                let factor = (m_b - m_a).exp();
-                                for (va, vb) in vkq_a.iter_mut().zip(vkq_b) {
-                                    *va += vb * factor;
-                                }
-                                s_a += s_b * factor;
-                                (vkq_a.clone(), s_a, m_a)
-                            } else {
-                                let factor = (m_a - m_b).exp();
-                                let mut vkq_new = vkq_b;
-                                for (vb, va) in vkq_new.iter_mut().zip(vkq_a) {
-                                    *vb += *va * factor;
-                                }
-                                (vkq_new, s_b + s_a * factor, m_b)
+                        // -------- tile-local softmax ----------
+                        let m_old = m;
+                        let mut ms = 1.0;
+                        let mut vs = 1.0;
+                        if s_val > m {
+                            m = s_val;
+                            ms = (m_old - m).exp();
+                            for v in vkq.iter_mut() {
+                                *v *= ms;
                             }
-                        },
-                    );
+                        } else {
+                            vs = (s_val - m).exp();
+                        }
 
-                // ---------------- final normalisation + down‑cast -------------
-                let inv_s = 1.0 / s_tot;
-                for (o, v) in out_chunk.iter_mut().zip(vkq.iter()) {
-                    *o = T::cast(*v * inv_s);
+                        // -------- add V ----------
+                        let v_base = b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
+                        for d_i in 0..dv {
+                            vkq[d_i] += v_data[v_base + d_i].to_f32() * vs;
+                        }
+
+                        s = s * ms + vs;
+                    }
+
+                    unsafe {
+                        *((scratch_s_ptr as *mut f32).add(base_s as usize)) = s;
+                        *((scratch_m_ptr as *mut f32).add(base_s as usize)) = m;
+                    }
                 }
-            });
+            }
+        });
     });
 
-    let out_shape = (b, h, 1usize, dv);
-    Tensor::from_vec(out, out_shape, &Device::Cpu)
+    // -------- serial reduction over tiles (per head) --------
+    for b_i in 0..b {
+        for h_i in 0..h {
+            let out_off = (b_i * h + h_i) * dv;
+
+            // start with tile 0
+            let mut vkq = scratch[((h_i) * dv)..][..dv].to_vec();
+            let mut s = scratch_s[h_i];
+            let mut m = scratch_m[h_i];
+
+            for tile_idx in 1..kv_tiles {
+                let base = (tile_idx * h + h_i) * dv;
+                let base_s = tile_idx * h + h_i;
+
+                let m_b = scratch_m[base_s];
+                let s_b = scratch_s[base_s];
+                let vkq_b = &scratch[base..base + dv];
+
+                if m >= m_b {
+                    let factor = (m_b - m).exp();
+                    for (v, v_b) in vkq.iter_mut().zip(vkq_b) {
+                        *v += v_b * factor;
+                    }
+                    s += s_b * factor;
+                } else {
+                    let factor = (m - m_b).exp();
+                    vkq = vkq_b
+                        .iter()
+                        .zip(&vkq)
+                        .map(|(b, a)| b + a * factor)
+                        .collect();
+                    s = s_b + s * factor;
+                    m = m_b;
+                }
+            }
+
+            let inv_s = 1.0 / s;
+            for (o, v) in out[out_off..][..dv].iter_mut().zip(&vkq) {
+                *o = T::cast(*v * inv_s);
+            }
+        }
+    }
+
+    Tensor::from_vec(out, (b, h, 1, dv), &Device::Cpu)
 }
 
 /// Main forward flash-attention CPU routine.
