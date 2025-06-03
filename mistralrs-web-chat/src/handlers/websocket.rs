@@ -27,6 +27,15 @@ pub struct VisionContext<'a> {
     pub image_buffer: &'a mut Vec<image::DynamicImage>,
 }
 
+/// Aggregates frequently used parameters so that helper functions stay below
+/// Clippy’s `too_many_arguments` threshold.
+pub struct HandlerParams<'a> {
+    pub socket: &'a mut WebSocket,
+    pub app: &'a Arc<AppState>,
+    pub streaming: &'a mut bool,
+    pub active_chat_id: &'a Option<String>,
+}
+
 /// Upgrades an HTTP request to a WebSocket connection.
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -193,15 +202,18 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 };
                 match model_loaded {
                     LoadedModel::Text(model) => {
+                        let mut params = HandlerParams {
+                            socket: &mut socket,
+                            app: &app,
+                            streaming: &mut streaming,
+                            active_chat_id: &active_chat_id,
+                        };
                         handle_text_model(
                             &model,
                             content,
                             web_search_opts.clone(),
                             &mut text_msgs,
-                            &mut socket,
-                            &app,
-                            &mut streaming,
-                            &active_chat_id,
+                            &mut params,
                         )
                         .await;
                     }
@@ -210,15 +222,18 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                             msgs: &mut vision_msgs,
                             image_buffer: &mut image_buffer,
                         };
+                        let mut params = HandlerParams {
+                            socket: &mut socket,
+                            app: &app,
+                            streaming: &mut streaming,
+                            active_chat_id: &active_chat_id,
+                        };
                         handle_vision_model(
                             &model,
                             content,
                             web_search_opts.clone(),
                             &mut vision_ctx,
-                            &mut socket,
-                            &app,
-                            &mut streaming,
-                            &active_chat_id,
+                            &mut params,
                         )
                         .await;
                     }
@@ -252,34 +267,26 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
 
         match model_loaded {
             LoadedModel::Text(model) => {
-                handle_text_model(
-                    &model,
-                    &user_msg,
-                    None,
-                    &mut text_msgs,
-                    &mut socket,
-                    &app,
-                    &mut streaming,
-                    &active_chat_id,
-                )
-                .await;
+                let mut params = HandlerParams {
+                    socket: &mut socket,
+                    app: &app,
+                    streaming: &mut streaming,
+                    active_chat_id: &active_chat_id,
+                };
+                handle_text_model(&model, &user_msg, None, &mut text_msgs, &mut params).await;
             }
             LoadedModel::Vision(model) => {
                 let mut vision_ctx = VisionContext {
                     msgs: &mut vision_msgs,
                     image_buffer: &mut image_buffer,
                 };
-                handle_vision_model(
-                    &model,
-                    &user_msg,
-                    None,
-                    &mut vision_ctx,
-                    &mut socket,
-                    &app,
-                    &mut streaming,
-                    &active_chat_id,
-                )
-                .await;
+                let mut params = HandlerParams {
+                    socket: &mut socket,
+                    app: &app,
+                    streaming: &mut streaming,
+                    active_chat_id: &active_chat_id,
+                };
+                handle_vision_model(&model, &user_msg, None, &mut vision_ctx, &mut params).await;
             }
             // Speech models should use HTTP endpoint; not handled here
             LoadedModel::Speech(_) => {
@@ -389,11 +396,13 @@ async fn handle_text_model(
     user_msg: &str,
     web_search_opts: Option<WebSearchOptions>,
     text_msgs: &mut TextMessages,
-    socket: &mut WebSocket,
-    app: &Arc<AppState>,
-    streaming: &mut bool,
-    active_chat_id: &Option<String>,
+    params: &mut HandlerParams<'_>,
 ) {
+    // Local aliases keep the original body unchanged.
+    let socket = &mut *params.socket;
+    let app = params.app;
+    let streaming = &mut *params.streaming;
+    let active_chat_id = params.active_chat_id;
     *text_msgs = text_msgs
         .clone()
         .add_message(TextMessageRole::User, user_msg);
@@ -437,11 +446,12 @@ async fn handle_vision_model(
     user_msg: &str,
     web_search_opts: Option<WebSearchOptions>,
     vision_ctx: &mut VisionContext<'_>,
-    socket: &mut WebSocket,
-    app: &Arc<AppState>,
-    streaming: &mut bool,
-    active_chat_id: &Option<String>,
+    params: &mut HandlerParams<'_>,
 ) {
+    let socket = &mut *params.socket;
+    let app = params.app;
+    let streaming = &mut *params.streaming;
+    let active_chat_id = params.active_chat_id;
     // Track the exact set of messages that will be sent *this* turn.
     let mut msgs_for_stream: Option<VisionMessages> = None;
     // --- Vision input routing ---
