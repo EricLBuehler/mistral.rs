@@ -14,7 +14,7 @@ use crate::{
         SearchResult, EXTRACT_TOOL_NAME, SEARCH_TOOL_NAME,
     },
     MessageContent, NormalRequest, RequestMessage, Response, ResponseOk, ToolCallResponse,
-    WebSearchOptions,
+    ToolChoice, WebSearchOptions,
 };
 
 use super::Engine;
@@ -306,7 +306,15 @@ async fn do_extraction(
         message.insert("role".to_string(), Either::Left("tool".to_string()));
         message.insert(
             "content".to_string(),
-            Either::Left(format!("{{\"output\": \"{tool_result}\"}}")),
+            Either::Left(
+                // Format the tool output JSON and append the search tool description for context
+                format!(
+                    "{{\"output\": \"{}\"}}\n\n{}\n\n{}",
+                    tool_result,
+                    search::SEARCH_DESCRIPTION,
+                    search::EXTRACT_DESCRIPTION,
+                ),
+            ),
         );
         messages.push(message);
     }
@@ -334,6 +342,7 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
         .tools
         .get_or_insert_with(Vec::new)
         .extend(search::get_search_tools(&web_search_options).unwrap());
+    first_request.tool_choice = Some(ToolChoice::Auto);
 
     let mut second_request = first_request.clone();
     first_request.web_search_options = None;
