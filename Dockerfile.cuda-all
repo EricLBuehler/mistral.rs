@@ -53,3 +53,6 @@ COPY --from=builder /mistralrs/target/release/mistralrs-server /usr/local/bin/mi
 RUN chmod +x /usr/local/bin/mistralrs-server
 COPY --from=builder /mistralrs/target/release/mistralrs-web-chat /usr/local/bin/mistralrs-web-chat
 RUN chmod +x /usr/local/bin/mistralrs-web-chat
+
+# Copy chat templates for users running models which may not include them
+COPY --from=builder /mistralrs/chat_templates /chat_templates

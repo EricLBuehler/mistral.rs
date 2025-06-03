@@ -37,3 +37,6 @@ COPY --from=builder /mistralrs/target/release/mistralrs-web-chat /usr/local/bin/
 
 # Make the binaries executable
 RUN chmod +x /usr/local/bin/mistralrs-bench /usr/local/bin/mistralrs-server /usr/local/bin/mistralrs-web-chat
+
+# Copy chat templates for users running models which may not include them
+COPY --from=builder /mistralrs/chat_templates /chat_templates
