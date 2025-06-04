@@ -54,7 +54,7 @@ try:
         )
         file = input("Enter UQFF filename (with extension): ").strip()
         if ";" in file:
-            file = f"\"{file}\""
+            file = f'"{file}"'
 
         quants = input(
             "Enter quantization NAMES used to make that file (single quantization name, OR if multiple, comma delimited): "

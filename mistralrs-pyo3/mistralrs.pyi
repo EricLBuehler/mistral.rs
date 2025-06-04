@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterator, Literal, Optional
+from typing import Iterator, Literal, Optional, Callable
 
 class SearchContextSize(Enum):
     Low = "low"
@@ -345,7 +345,9 @@ class Runner:
         paged_attn: bool = False,
         prompt_batchsize: int | None = None,
         seed: int | None = None,
+        enable_search: bool = False,
         search_bert_model: str | None = None,
+        search_callback: Callable[[str], list[dict[str, str]]] | None = None,
         no_bert_model: bool = False,
     ) -> None:
         """
@@ -389,6 +391,7 @@ class Runner:
         - `seed`, used to ensure reproducible random number generation.
         - `enable_search`: Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
         - `search_bert_model`: specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
+        - `search_callback`: Custom Python callable to perform web searches. Should accept a query string and return a list of dicts with keys "title", "description", "url", and "content".
         """
         ...
 
