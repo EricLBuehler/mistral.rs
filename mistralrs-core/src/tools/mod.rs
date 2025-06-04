@@ -5,11 +5,10 @@ use candle_core::Result;
 use regex::Regex;
 pub use request::*;
 pub use response::*;
-use serde_json::Value;
-use std::{
-    collections::HashMap,
-    sync::{Arc, OnceLock},
-};
+use serde::de::{self, Deserializer, MapAccess, Visitor};
+use serde_json::{Map, Value};
+use std::fmt;
+use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
 
 use crate::Pipeline;
@@ -87,8 +86,57 @@ pub struct ToolCallingMatcher {
 pub struct CalledFunctionParameters {
     #[serde(alias = "function")]
     pub name: String,
-    #[serde(alias = "arguments")]
-    pub parameters: HashMap<String, Value>,
+    #[serde(alias = "arguments", deserialize_with = "flexible_args")]
+    pub parameters: Value,
+}
+
+// Accept either `{...}` **or** a `"stringified { ... }"`
+fn flexible_args<'de, D>(d: D) -> std::result::Result<Value, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct ArgVisitor;
+
+    impl<'de> Visitor<'de> for ArgVisitor {
+        type Value = Value;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("an object or a JSON-encoded string containing an object")
+        }
+
+        // Case 1 – the good case: already a JSON object
+        fn visit_map<M>(self, mut m: M) -> std::result::Result<Self::Value, M::Error>
+        where
+            M: MapAccess<'de>,
+        {
+            let mut map = Map::new();
+            while let Some((k, v)) = m.next_entry()? {
+                map.insert(k, v);
+            }
+            Ok(Value::Object(map))
+        }
+
+        // Case 2 – got a *string*; try parsing it as JSON
+        fn visit_str<E>(self, s: &str) -> std::result::Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            serde_json::from_str(s).map_err(|e| E::custom(format!("inner JSON error: {e}")))
+        }
+    }
+
+    d.deserialize_any(ArgVisitor)
+}
+
+/// Fixup potentially broken JSON
+/// 1) allow/handle arguments as maps in quotations
+fn fix_broken_json(raw: &str) -> anyhow::Result<String> {
+    // 1) Delete the opening quote that shouldn’t be there
+    let tmp = raw.replacen(r#""arguments":"{"#, r#""arguments":{"#, 1);
+    // 2) Delete the closing quote that matches it
+    let fixed = tmp.replacen(r#"}"}"#, r#"}}"#, 1);
+
+    Ok(fixed)
 }
 
 impl ToolCallingMatcher {
@@ -111,6 +159,7 @@ impl ToolCallingMatcher {
             return Ok((false, false));
         }
         let message_prefix = process_model_specific_message(message_prefix)?;
+        let message_prefix = fix_broken_json(&message_prefix).unwrap();
 
         // Check if the prefix could be a JSON serialization of any of the following types.
         Ok([
@@ -138,6 +187,7 @@ impl ToolCallingMatcher {
             return Ok(Vec::new());
         }
         let message = process_model_specific_message(message)?;
+        let message = fix_broken_json(&message).unwrap();
 
         if let Ok(deser) = serde_json::from_str::<CalledFunctionParameters>(&message) {
             let id = format!("call-{}", Uuid::new_v4());
