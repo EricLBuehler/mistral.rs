@@ -57,6 +57,22 @@ impl std::fmt::Display for ModelErrorMessage {
 }
 impl std::error::Error for ModelErrorMessage {}
 
+/// Generic JSON error response structure
+#[derive(Serialize, Debug)]
+pub(crate) struct BaseJsonModelError<T> {
+    pub(crate) message: String,
+    pub(crate) partial_response: T,
+}
+
+impl<T> BaseJsonModelError<T> {
+    pub(crate) fn new(message: String, partial_response: T) -> Self {
+        Self {
+            message,
+            partial_response,
+        }
+    }
+}
+
 /// Creates a channel for response communication.
 pub fn create_response_channel(
     buffer_size: Option<usize>,

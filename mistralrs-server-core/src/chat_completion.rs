@@ -1,6 +1,6 @@
 //! ## Chat Completions functionality and route handler.
 
-use std::{error::Error, ops::Deref, pin::Pin, task::Poll, time::Duration};
+use std::{ops::Deref, pin::Pin, task::Poll, time::Duration};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -19,20 +19,20 @@ use mistralrs_core::{
     NormalRequest, Request, RequestMessage, Response, SamplingParams,
     StopTokens as InternalStopTokens,
 };
-use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
+    completion_base::{base_handle_completion_error, BaseCompletionResponder},
     openai::{
         ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
         ResponseFormat, StopTokens,
     },
-    streaming::{get_keep_alive_interval, DoneState},
+    streaming::{get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, SharedMistralRsState},
     util::{
-        create_response_channel, parse_image_url, send_model_request, ErrorToResponse, JsonError,
-        ModelErrorMessage,
+        create_response_channel, parse_image_url, send_model_request, BaseJsonModelError,
+        ErrorToResponse, JsonError, ModelErrorMessage,
     },
 };
 
@@ -77,22 +77,7 @@ pub type OnDoneCallback = Box<dyn Fn(&[ChatCompletionChunkResponse]) + Send + Sy
 ///
 /// It processes incoming response chunks from a model and converts them
 /// into Server-Sent Events (SSE) format for real-time streaming to clients.
-pub struct Streamer {
-    /// Channel receiver for incoming model responses
-    rx: Receiver<Response>,
-    /// Current state of the streaming operation
-    done_state: DoneState,
-    /// Underlying mistral.rs instance
-    state: SharedMistralRsState,
-    /// Whether to store chunks for the completion callback
-    store_chunks: bool,
-    /// All chunks received during streaming (if `store_chunks` is true)
-    chunks: Vec<ChatCompletionChunkResponse>,
-    /// Optional callback to process each chunk before sending
-    on_chunk: Option<OnChunkCallback>,
-    /// Optional callback to execute when streaming completes
-    on_done: Option<OnDoneCallback>,
-}
+pub type Streamer = BaseStreamer<ChatCompletionChunkResponse, OnChunkCallback, OnDoneCallback>;
 
 impl futures::Stream for Streamer {
     type Item = Result<Event, axum::Error>;
@@ -173,37 +158,9 @@ impl futures::Stream for Streamer {
 }
 
 /// Represents different types of chat completion responses.
-pub enum ChatCompletionResponder {
-    /// Server-Sent Events streaming response
-    Sse(Sse<Streamer>),
-    /// Complete JSON response for non-streaming requests
-    Json(ChatCompletionResponse),
-    /// Model error with partial response data
-    ModelError(String, ChatCompletionResponse),
-    /// Internal server error
-    InternalError(Box<dyn Error>),
-    /// Request validation error
-    ValidationError(Box<dyn Error>),
-}
+pub type ChatCompletionResponder = BaseCompletionResponder<ChatCompletionResponse, Streamer>;
 
-/// JSON error response structure for model errors.
-#[derive(Serialize)]
-struct JsonModelError {
-    message: String,
-    /// Partial response data that was generated before the error occurred
-    partial_response: ChatCompletionResponse,
-}
-
-impl JsonModelError {
-    /// Creates a new JSON model error with message and partial response.
-    fn new(message: String, partial_response: ChatCompletionResponse) -> Self {
-        Self {
-            message,
-            partial_response,
-        }
-    }
-}
-
+type JsonModelError = BaseJsonModelError<ChatCompletionResponse>;
 impl ErrorToResponse for JsonModelError {}
 
 impl IntoResponse for ChatCompletionResponder {
@@ -557,9 +514,7 @@ pub fn handle_chat_completion_error(
     state: SharedMistralRsState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> ChatCompletionResponder {
-    let e = anyhow::Error::msg(e.to_string());
-    MistralRs::maybe_log_error(state, &*e);
-    ChatCompletionResponder::InternalError(e.into())
+    base_handle_completion_error(state, e)
 }
 
 /// Creates a SSE streamer for chat completions with optional callbacks.
