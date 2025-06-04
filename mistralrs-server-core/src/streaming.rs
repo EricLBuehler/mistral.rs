@@ -2,6 +2,11 @@
 
 use std::env;
 
+use mistralrs_core::Response;
+use tokio::sync::mpsc::Receiver;
+
+use crate::types::SharedMistralRsState;
+
 /// Default keep-alive interval for Server-Sent Events (SSE) streams in milliseconds.
 pub const DEFAULT_KEEP_ALIVE_INTERVAL_MS: u64 = 10_000;
 
@@ -13,6 +18,27 @@ pub enum DoneState {
     SendingDone,
     /// The stream has completed entirely
     Done,
+}
+
+/// A streaming response handler.
+///
+/// It processes incoming response chunks from a model and converts them
+/// into Server-Sent Events (SSE) format for real-time streaming to clients.
+pub struct BaseStreamer<R, C, D> {
+    /// Channel receiver for incoming model responses
+    pub rx: Receiver<Response>,
+    /// Current state of the streaming operation
+    pub done_state: DoneState,
+    /// Underlying mistral.rs instance
+    pub state: SharedMistralRsState,
+    /// Whether to store chunks for the completion callback
+    pub store_chunks: bool,
+    /// All chunks received during streaming (if `store_chunks` is true)
+    pub chunks: Vec<R>,
+    /// Optional callback to process each chunk before sending
+    pub on_chunk: Option<C>,
+    /// Optional callback to execute when streaming completes
+    pub on_done: Option<D>,
 }
 
 /// Gets the keep-alive interval for SSE streams from environment or default.

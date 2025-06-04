@@ -215,6 +215,7 @@
 //! ```
 
 pub mod chat_completion;
+pub mod completion_base;
 mod completions;
 mod handlers;
 mod image_generation;

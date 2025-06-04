@@ -1,5 +1,4 @@
 use std::{
-    error::Error,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -19,16 +18,17 @@ use mistralrs_core::{
     CompletionResponse, Constraint, DrySamplingParams, MistralRs, NormalRequest, Request,
     RequestMessage, Response, SamplingParams, StopTokens as InternalStopTokens,
 };
-use serde::Serialize;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::warn;
 
 use crate::{
+    completion_base::BaseCompletionResponder,
     openai::{CompletionRequest, Grammar, StopTokens},
     streaming::{get_keep_alive_interval, DoneState},
     types::ExtractedMistralRsState,
     util::{
-        create_response_channel, send_model_request, ErrorToResponse, JsonError, ModelErrorMessage,
+        create_response_channel, send_model_request, BaseJsonModelError, ErrorToResponse,
+        JsonError, ModelErrorMessage,
     },
 };
 
@@ -94,29 +94,10 @@ impl futures::Stream for Streamer {
     }
 }
 
-pub enum CompletionResponder {
-    Sse(Sse<Streamer>),
-    Json(CompletionResponse),
-    ModelError(String, CompletionResponse),
-    InternalError(Box<dyn Error>),
-    ValidationError(Box<dyn Error>),
-}
+pub type CompletionResponder = BaseCompletionResponder<CompletionResponse, Streamer>;
 
-#[derive(Serialize)]
-struct JsonModelError {
-    message: String,
-    partial_response: CompletionResponse,
-}
-
-impl JsonModelError {
-    fn new(message: String, partial_response: CompletionResponse) -> Self {
-        Self {
-            message,
-            partial_response,
-        }
-    }
-}
-
+/// JSON error response structure for model errors.
+type JsonModelError = BaseJsonModelError<CompletionResponse>;
 impl ErrorToResponse for JsonModelError {}
 
 impl IntoResponse for CompletionResponder {
