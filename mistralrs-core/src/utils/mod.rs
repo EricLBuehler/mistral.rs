@@ -9,6 +9,22 @@ pub(crate) mod tokens;
 pub(crate) mod unvarbuilder;
 pub(crate) mod varbuilder_utils;
 
+/// Ensure that the correct CUDA context is active for a device.
+///
+/// Some operations require having the device's primary context set as
+/// current before interacting with CUDA. When multiple devices are used,
+/// this helper allows explicit context switching.
+#[cfg(feature = "cuda")]
+pub fn set_cuda_context(dev: &candle_core::Device) {
+    if let candle_core::Device::Cuda(d) = dev {
+        unsafe { cudarc::driver::result::ctx::set_current(d.cu_primary_ctx()) }
+            .unwrap();
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn set_cuda_context(_dev: &candle_core::Device) {}
+
 #[doc(hidden)]
 #[macro_export]
 macro_rules! get_mut_arcmutex {
