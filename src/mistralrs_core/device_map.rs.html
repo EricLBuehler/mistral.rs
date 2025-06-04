@@ -160,7 +160,7 @@
 <a href=#160 id=160 data-nosnippet>160</a>                                <span class="kw">if </span>device_ord == <span class="kw-2">*</span>ordinal {
 <a href=#161 id=161 data-nosnippet>161</a>                                    device.clone()
 <a href=#162 id=162 data-nosnippet>162</a>                                } <span class="kw">else </span>{
-<a href=#163 id=163 data-nosnippet>163</a>                                    Device::new_cuda_with_stream(<span class="kw-2">*</span>ordinal)<span class="question-mark">?
+<a href=#163 id=163 data-nosnippet>163</a>                                    Device::new_cuda(<span class="kw-2">*</span>ordinal)<span class="question-mark">?
 <a href=#164 id=164 data-nosnippet>164</a>                                </span>}
 <a href=#165 id=165 data-nosnippet>165</a>                            }
 <a href=#166 id=166 data-nosnippet>166</a>                            DeviceLocation::Metal { gpu_id: device_ord } =&gt; {
