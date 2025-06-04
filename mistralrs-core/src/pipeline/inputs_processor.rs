@@ -255,8 +255,8 @@ pub mod text_models_inputs_processor {
             .cumsum(0)?
             .to_dtype(DType::U32)?;
 
-        let mut seqlens_q_map: HashMap<DeviceLocation, Tensor> = HashMap::new();
-        let mut seqlens_k_map: HashMap<DeviceLocation, Tensor> = HashMap::new();
+        let mut seqlens_q_map = HashMap::new();
+        let mut seqlens_k_map = HashMap::new();
 
         let devices = mapper.unwrap().get_unique_devices();
         for device in devices {
@@ -426,8 +426,8 @@ pub mod text_models_inputs_processor {
             .cumsum(0)?
             .to_dtype(DType::U32)?;
 
-        let mut seqlens_q_map: HashMap<DeviceLocation, Tensor> = HashMap::new();
-        let mut seqlens_k_map: HashMap<DeviceLocation, Tensor> = HashMap::new();
+        let mut seqlens_q_map = HashMap::new();
+        let mut seqlens_k_map = HashMap::new();
 
         let devices = mapper.unwrap().get_unique_devices();
         for device in devices {
