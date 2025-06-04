@@ -26,7 +26,7 @@ use crate::{
         EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
-    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder, set_cuda_context},
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 serde_default_fn!(bool, word_emb_default, false);
@@ -521,10 +521,6 @@ impl Llama {
         });
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
-            // When using multiple CUDA devices, operations must run with the
-            // correct context active. Mapping can move tensors across devices
-            // so ensure the block's device is made current.
-            set_cuda_context(x.device());
             x = block.forward(
                 &x,
                 &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
@@ -537,9 +533,6 @@ impl Llama {
             )?;
         }
         let x = x.to_device(&self.device)?;
-        // Switch back to the model's device for the final normalization and
-        // head computations.
-        set_cuda_context(&self.device);
         let mut x = self.ln_f.forward(&x)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
             x = x.to_dtype(t)?;

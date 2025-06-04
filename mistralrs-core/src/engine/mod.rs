@@ -113,7 +113,8 @@ impl Engine {
 
         no_prefix_cache = no_prefix_cache
             || no_kv_cache
-            || get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache;
+            || get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache
+            || prefix_cache_n == 0;
 
         let bert_pipeline = match search_embedding_model {
             Some(search_embedding_model) => Some(BertPipeline::new(

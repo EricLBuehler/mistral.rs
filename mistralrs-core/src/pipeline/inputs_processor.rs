@@ -260,8 +260,8 @@ pub mod text_models_inputs_processor {
 
         let devices = mapper.unwrap().get_unique_devices();
         for device in devices {
-            // seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
-            // seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
+            seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
+            seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
         }
 
         let input = Tensor::cat(&seqs_tensors, 0).unwrap();
@@ -431,8 +431,8 @@ pub mod text_models_inputs_processor {
 
         let devices = mapper.unwrap().get_unique_devices();
         for device in devices {
-            // seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
-            // seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
+            seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
+            seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
         }
 
         let paged_attn_meta = if paged_attn_metadata.is_some() {
