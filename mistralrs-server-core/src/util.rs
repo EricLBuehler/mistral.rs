@@ -1,10 +1,62 @@
 //! ## General utilities.
 
+use anyhow::{Context, Result};
+use axum::{extract::Json, http::StatusCode, response::IntoResponse};
 use image::DynamicImage;
+use mistralrs_core::Request;
+use serde::Serialize;
 use tokio::{
     fs::{self, File},
     io::AsyncReadExt,
 };
+
+use crate::types::SharedMistralRsState;
+
+/// Trait for converting errors to HTTP responses with appropriate status codes.
+pub(crate) trait ErrorToResponse: Serialize {
+    /// Converts the error to an HTTP response with the specified status code.
+    fn to_response(&self, code: StatusCode) -> axum::response::Response {
+        let mut r = Json(self).into_response();
+        *r.status_mut() = code;
+        r
+    }
+}
+
+/// Standard JSON error response structure.
+#[derive(Serialize)]
+pub(crate) struct JsonError {
+    pub(crate) message: String,
+}
+
+impl JsonError {
+    /// Creates a new JSON error with the specified message.
+    pub(crate) fn new(message: String) -> Self {
+        Self { message }
+    }
+}
+impl ErrorToResponse for JsonError {}
+
+/// Internal error type for model-related errors with a descriptive message.
+///
+/// This struct wraps error messages from the underlying model and implements
+/// the standard error traits for proper error handling and display.
+#[derive(Debug)]
+pub(crate) struct ModelErrorMessage(pub(crate) String);
+impl std::fmt::Display for ModelErrorMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl std::error::Error for ModelErrorMessage {}
+
+/// Sends a request to the model processing pipeline.
+pub async fn send_model_request(state: &SharedMistralRsState, request: Request) -> Result<()> {
+    let sender = state
+        .get_sender()
+        .context("mistral.rs sender not available.")?;
+
+    sender.send(request).await.map_err(|e| e.into())
+}
 
 /// Parses and loads an image from a URL, file path, or data URL.
 ///
