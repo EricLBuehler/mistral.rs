@@ -14,6 +14,11 @@ use tokenizers::Tokenizer;
 
 use crate::{Function, Tool, ToolType, WebSearchOptions, WebSearchUserLocation};
 
+/// Callback used to override how search results are gathered. The returned
+/// vector must be sorted in decreasing order of relevance.
+pub type SearchCallback =
+    dyn Fn(&SearchFunctionParameters) -> Result<Vec<SearchResult>> + Send + Sync;
+
 pub(crate) fn search_tool_called(name: &str) -> bool {
     name == SEARCH_TOOL_NAME || name == EXTRACT_TOOL_NAME
 }
@@ -140,11 +145,14 @@ pub fn get_search_tools(web_search_options: &WebSearchOptions) -> Result<Vec<Too
             }
             None => "".to_string(),
         };
-
+        let description = web_search_options
+            .search_description
+            .as_deref()
+            .unwrap_or(SEARCH_DESCRIPTION);
         Tool {
             tp: ToolType::Function,
             function: Function {
-                description: Some(format!("{SEARCH_DESCRIPTION}{location_details}")),
+                description: Some(format!("{}{}", description, location_details)),
                 name: SEARCH_TOOL_NAME.to_string(),
                 parameters: Some(parameters),
             },
@@ -163,10 +171,14 @@ pub fn get_search_tools(web_search_options: &WebSearchOptions) -> Result<Vec<Too
             "required": ["url"],
         }))?;
 
+        let description = web_search_options
+            .extract_description
+            .as_deref()
+            .unwrap_or(EXTRACT_DESCRIPTION);
         Tool {
             tp: ToolType::Function,
             function: Function {
-                description: Some(EXTRACT_DESCRIPTION.to_string()),
+                description: Some(description.to_string()),
                 name: EXTRACT_TOOL_NAME.to_string(),
                 parameters: Some(parameters),
             },

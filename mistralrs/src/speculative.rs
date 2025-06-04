@@ -94,12 +94,15 @@ impl TextSpeculativeBuilder {
             self.speculative_config,
         )?));
 
-        let runner = MistralRsBuilder::new(
+        let mut runner = MistralRsBuilder::new(
             pipeline,
             scheduler_method,
             self.target.throughput_logging,
             self.target.search_bert_model,
         );
+        if let Some(cb) = self.target.search_callback.clone() {
+            runner = runner.with_search_callback(cb);
+        }
 
         Ok(Model::new(runner.build()))
     }

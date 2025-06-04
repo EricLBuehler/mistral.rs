@@ -23,6 +23,35 @@ Internally, we use a BERT model (Snowflake/snowflake-arctic-embed-l-v2.0)[https:
 - Python: `search_bert_model` in the Runner
 - Server: `search-bert-model` before the model type selector (`plain`/`vision-plain`)
 
+## Specifying a custom search callback
+
+By default, mistral.rs uses a DuckDuckGo-based search callback. To override this, you can provide your own search function:
+
+- Rust: use `.with_search_callback(...)` on the model builder with an `Arc<dyn Fn(&SearchFunctionParameters) -> anyhow::Result<Vec<SearchResult>> + Send + Sync>`.
+- Python: pass the `search_callback` keyword argument to `Runner`, which should be a function `def search_callback(query: str) -> List[Dict[str, str]]` returning a list of results with keys `"title"`, `"description"`, `"url"`, and `"content"`.
+
+Example in Python:
+```py
+def search_callback(query: str) -> list[dict[str, str]]:
+    # Implement your custom search logic here, returning a list of result dicts
+    return [
+        {
+            "title": "Example Result",
+            "description": "An example description",
+            "url": "https://example.com",
+            "content": "Full text content of the page",
+        },
+        # more results...
+    ]
+
+from mistralrs import Runner, Which, Architecture
+runner = Runner(
+    which=Which.Plain(model_id="YourModel/ID", arch=Architecture.Mistral),
+    enable_search=True,
+    search_callback=search_callback,
+)
+```
+
 ## HTTP server
 **Be sure to add `--enable-search`!**
 
@@ -80,12 +109,25 @@ from mistralrs import (
     WebSearchOptions,
 )
 
+# Define a custom search callback if desired
+def my_search_callback(query: str) -> list[dict[str, str]]:
+    # Fetch or compute search results here
+    return [
+        {
+            "title": "Mistral.rs GitHub",
+            "description": "Official mistral.rs repository",
+            "url": "https://github.com/huggingface/mistral.rs",
+            "content": "mistral.rs is a Rust binding for Mistral models...",
+        },
+    ]
+
 runner = Runner(
     which=Which.Plain(
         model_id="NousResearch/Hermes-3-Llama-3.1-8B",
         arch=Architecture.Llama,
     ),
     enable_search=True,
+    search_callback=my_search_callback,
 )
 
 res = runner.send_chat_completion_request(

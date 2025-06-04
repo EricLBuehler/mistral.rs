@@ -104,6 +104,7 @@ pub use sampler::{
     CustomLogitsProcessor, DrySamplingParams, SamplingParams, StopTokens, TopLogprob,
 };
 pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
+pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
 use serde::Serialize;
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
@@ -159,6 +160,7 @@ struct RebootState {
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
     search_embedding_model: Option<BertEmbeddingModel>,
+    search_callback: Option<Arc<search::SearchCallback>>,
 }
 
 #[derive(Debug)]
@@ -196,9 +198,13 @@ pub struct MistralRsBuilder {
     disable_eos_stop: Option<bool>,
     throughput_logging_enabled: bool,
     search_embedding_model: Option<BertEmbeddingModel>,
+    search_callback: Option<Arc<SearchCallback>>,
 }
 
 impl MistralRsBuilder {
+    /// Creates a new builder with the given pipeline, scheduler method, logging flag,
+    /// and optional embedding model for web search. To override the search callback,
+    /// use `.with_search_callback(...)` on the builder.
     pub fn new(
         pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         method: SchedulerConfig,
@@ -216,6 +222,7 @@ impl MistralRsBuilder {
             disable_eos_stop: None,
             throughput_logging_enabled: throughput_logging,
             search_embedding_model,
+            search_callback: None,
         }
     }
     pub fn with_log(mut self, log: String) -> Self {
@@ -247,6 +254,12 @@ impl MistralRsBuilder {
         self
     }
 
+    /// Use a custom callback to gather search results.
+    pub fn with_search_callback(mut self, search_callback: Arc<SearchCallback>) -> Self {
+        self.search_callback = Some(search_callback);
+        self
+    }
+
     pub fn build(self) -> Arc<MistralRs> {
         MistralRs::new(self)
     }
@@ -274,6 +287,7 @@ impl MistralRs {
             disable_eos_stop,
             throughput_logging_enabled,
             search_embedding_model,
+            search_callback,
         } = config;
 
         let category = pipeline.try_lock().unwrap().category();
@@ -297,6 +311,7 @@ impl MistralRs {
             disable_eos_stop,
             throughput_logging_enabled,
             search_embedding_model: search_embedding_model.clone(),
+            search_callback: search_callback.clone(),
         };
 
         let (tx, rx) = channel(10_000);
@@ -328,6 +343,7 @@ impl MistralRs {
                         disable_eos_stop,
                         throughput_logging_enabled,
                         search_embedding_model,
+                        search_callback.clone(),
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -349,6 +365,7 @@ impl MistralRs {
                         disable_eos_stop,
                         throughput_logging_enabled,
                         search_embedding_model,
+                        search_callback.clone(),
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -473,6 +490,7 @@ impl MistralRs {
                         reboot_state.disable_eos_stop,
                         reboot_state.throughput_logging_enabled,
                         reboot_state.search_embedding_model,
+                        reboot_state.search_callback.clone(),
                     )
                     .expect("Engine creation failed");
                     Arc::new(engine).run().await;

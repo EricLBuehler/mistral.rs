@@ -1,9 +1,11 @@
 use candle_core::Device;
+use mistralrs_core::SearchCallback;
 use mistralrs_core::*;
 use std::{
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
     path::PathBuf,
+    sync::Arc,
 };
 
 use crate::{best_device, Model};
@@ -26,6 +28,7 @@ pub struct VisionModelBuilder {
     pub(crate) max_edge: Option<u32>,
     pub(crate) hf_cache_path: Option<PathBuf>,
     pub(crate) search_bert_model: Option<BertEmbeddingModel>,
+    pub(crate) search_callback: Option<Arc<SearchCallback>>,
     pub(crate) device: Option<Device>,
 
     // Model running
@@ -75,6 +78,7 @@ impl VisionModelBuilder {
             paged_attn_cfg: None,
             hf_cache_path: None,
             search_bert_model: None,
+            search_callback: None,
             device: None,
         }
     }
@@ -82,6 +86,12 @@ impl VisionModelBuilder {
     /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified or the default.
     pub fn with_search(mut self, search_bert_model: BertEmbeddingModel) -> Self {
         self.search_bert_model = Some(search_bert_model);
+        self
+    }
+
+    /// Override the search function used when `web_search_options` is enabled.
+    pub fn with_search_callback(mut self, callback: Arc<SearchCallback>) -> Self {
+        self.search_callback = Some(callback);
         self
     }
 
@@ -300,14 +310,16 @@ impl VisionModelBuilder {
             },
         };
 
-        let runner = MistralRsBuilder::new(
+        let mut runner = MistralRsBuilder::new(
             pipeline,
             scheduler_method,
             self.throughput_logging,
             self.search_bert_model,
-        )
-        .with_no_kv_cache(false)
-        .with_no_prefix_cache(false);
+        );
+        if let Some(cb) = self.search_callback.clone() {
+            runner = runner.with_search_callback(cb);
+        }
+        let runner = runner.with_no_kv_cache(false).with_no_prefix_cache(false);
 
         Ok(Model::new(runner.build()))
     }

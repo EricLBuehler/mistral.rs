@@ -1,8 +1,10 @@
 use candle_core::Device;
+use mistralrs_core::SearchCallback;
 use mistralrs_core::*;
 use std::num::NonZeroUsize;
 
 use crate::{best_device, Model};
+use std::sync::Arc;
 
 /// Configure a text GGUF model with the various parameters for loading, running, and other inference behaviors.
 pub struct GgufModelBuilder {
@@ -17,6 +19,7 @@ pub struct GgufModelBuilder {
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) search_bert_model: Option<BertEmbeddingModel>,
+    pub(crate) search_callback: Option<Arc<SearchCallback>>,
     pub(crate) device: Option<Device>,
 
     // Model running
@@ -61,6 +64,7 @@ impl GgufModelBuilder {
             jinja_explicit: None,
             throughput_logging: false,
             search_bert_model: None,
+            search_callback: None,
             device: None,
         }
     }
@@ -68,6 +72,12 @@ impl GgufModelBuilder {
     /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified or the default.
     pub fn with_search(mut self, search_bert_model: BertEmbeddingModel) -> Self {
         self.search_bert_model = Some(search_bert_model);
+        self
+    }
+
+    /// Override the search function used when `web_search_options` is enabled.
+    pub fn with_search_callback(mut self, callback: Arc<SearchCallback>) -> Self {
+        self.search_callback = Some(callback);
         self
     }
 
@@ -245,9 +255,13 @@ impl GgufModelBuilder {
             scheduler_method,
             self.throughput_logging,
             self.search_bert_model,
-        )
-        .with_no_kv_cache(self.no_kv_cache)
-        .with_no_prefix_cache(self.prefix_cache_n.is_none());
+        );
+        if let Some(cb) = self.search_callback.clone() {
+            runner = runner.with_search_callback(cb);
+        }
+        runner = runner
+            .with_no_kv_cache(self.no_kv_cache)
+            .with_no_prefix_cache(self.prefix_cache_n.is_none());
 
         if let Some(n) = self.prefix_cache_n {
             runner = runner.with_prefix_cache_n(n)
