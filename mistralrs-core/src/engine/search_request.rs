@@ -9,12 +9,9 @@ use tracing::{level_filters::LevelFilter, Dispatch};
 use crate::{
     get_mut_arcmutex,
     request::SearchContextSize,
-    search::{
-        self, search_tool_called, ExtractFunctionParameters, SearchFunctionParameters,
-        SearchResult, EXTRACT_TOOL_NAME, SEARCH_TOOL_NAME,
-    },
+    search::{self, ExtractFunctionParameters, SearchFunctionParameters, SearchResult},
     MessageContent, NormalRequest, RequestMessage, Response, ResponseOk, ToolCallResponse,
-    WebSearchOptions,
+    ToolChoice, WebSearchOptions,
 };
 
 use super::Engine;
@@ -24,7 +21,7 @@ async fn do_search(
     mut second_request: NormalRequest,
     tool_calls: &ToolCallResponse,
     web_search_options: &WebSearchOptions,
-) {
+) -> NormalRequest {
     let messages = match &mut second_request.messages {
         RequestMessage::Chat { messages, .. } | RequestMessage::VisionChat { messages, .. } => {
             messages
@@ -212,10 +209,12 @@ async fn do_search(
         messages.push(message);
     }
 
+    // Allow the assistant to invoke tools again on the next turn
+    second_request.tool_choice = Some(ToolChoice::Auto);
     // Recursion is enabled here!
     second_request.web_search_options = Some(web_search_options.clone());
 
-    this.add_request(second_request).await;
+    second_request
 }
 
 async fn do_extraction(
@@ -223,7 +222,7 @@ async fn do_extraction(
     mut second_request: NormalRequest,
     tool_calls: &ToolCallResponse,
     web_search_options: &WebSearchOptions,
-) {
+) -> NormalRequest {
     let messages = match &mut second_request.messages {
         RequestMessage::Chat { messages, .. } | RequestMessage::VisionChat { messages, .. } => {
             messages
@@ -306,144 +305,192 @@ async fn do_extraction(
         message.insert("role".to_string(), Either::Left("tool".to_string()));
         message.insert(
             "content".to_string(),
-            Either::Left(format!("{{\"output\": \"{tool_result}\"}}")),
+            Either::Left(
+                // Format the tool output JSON and append the search tool description for context
+                format!(
+                    "{{\"output\": \"{}\"}}\n\n{}\n\n{}",
+                    tool_result,
+                    search::SEARCH_DESCRIPTION,
+                    search::EXTRACT_DESCRIPTION,
+                ),
+            ),
         );
         messages.push(message);
     }
 
+    // Allow the assistant to invoke tools again on the next turn
+    second_request.tool_choice = Some(ToolChoice::Auto);
     // Recursion is enabled here!
     second_request.web_search_options = Some(web_search_options.clone());
 
-    this.add_request(second_request).await;
+    second_request
 }
 
-/// The strategy is:
-/// - Send the first request to allow a tool call
-///     - If no, tool call, early return
-/// - Proceed to `do_search`
-///     1) Execute search
-///     2) Rank by relevance
-/// - Send final tool call, which is allowed to have web search for repeated queries.
+/// Drive one or more web-search / extraction rounds without recursion.
+///
+/// Strategy:
+/// 1. Send a “probe” request that may call the search/extract tools.  
+/// 2. If such a tool is called, run it (`do_search` / `do_extraction`) to
+///    mutate the conversational context and build the next request.  
+/// 3. Repeat until no further tool call is made.
+/// 4. Forward every user-visible reply **except** the first, which is just the
+///    probe that discovers whether a tool call is needed.
 pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
+    // We entered this function only when web_search_options is Some(_)
     let Some(web_search_options) = request.web_search_options.clone() else {
         unreachable!()
     };
-    let mut first_request = request.clone();
-    // Actually add the search tools here
-    first_request
+
+    // The sender that ultimately delivers data back to the caller.
+    let user_sender = request.response.clone();
+    let is_streaming = request.is_streaming;
+
+    // ---------------------------------------------------------------------
+    // Build the *first* request (the “probe”).
+    // ---------------------------------------------------------------------
+    let mut probe = request.clone();
+    probe
         .tools
         .get_or_insert_with(Vec::new)
         .extend(search::get_search_tools(&web_search_options).unwrap());
+    probe.tool_choice = Some(ToolChoice::Auto);
+    // Prevent accidental infinite recursion on the probe itself.
+    probe.web_search_options = None;
 
-    let mut second_request = first_request.clone();
-    first_request.web_search_options = None;
-    second_request.web_search_options = None;
+    // The conversation context that the user *will* see.
+    let mut visible_req = probe.clone();
+    visible_req.response = user_sender.clone();
 
+    // We'll drive everything inside a single spawned task.
     let this_clone = this.clone();
+    let handle = tokio::spawn(async move {
+        // `current` is what we actually dispatch each loop.
+        // The very first time that is the hidden probe.
+        let mut current = probe;
+        // Forward results to the user after the first loop.
+        let mut forward_to_user = false;
 
-    if !request.is_streaming {
-        let handle = tokio::spawn(async move {
-            let (new_sender, mut first_receiver) = tokio::sync::mpsc::channel(1);
-            second_request.response = new_sender;
-            std::mem::swap(&mut first_request.response, &mut second_request.response);
+        loop {
+            // Each dispatch gets its own one-shot channel so we can peek at
+            // the response before (optionally) forwarding it.
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+            current.response = sender;
 
-            this_clone.add_request(first_request).await;
-            let ResponseOk::Done(done) = first_receiver.recv().await.unwrap().as_result().unwrap()
-            else {
-                unreachable!()
-            };
+            // Kick the request into the engine.
+            this_clone.add_request(current).await;
 
-            let tool_calls = match &done.choices[0].message.tool_calls {
-                Some(tool_calls)
-                    if tool_calls.len() == 1
-                        && search_tool_called(&tool_calls[0].function.name) =>
-                {
-                    &tool_calls[0]
-                }
-                None => {
-                    second_request
-                        .response
-                        .send(Response::Done(done))
-                        .await
-                        .unwrap();
-                    return;
-                }
-                Some(_) => {
-                    second_request
-                        .response
-                        .send(Response::Done(done))
-                        .await
-                        .unwrap();
-                    return;
-                }
-            };
-
-            if tool_calls.function.name == SEARCH_TOOL_NAME {
-                do_search(this_clone, second_request, tool_calls, &web_search_options).await;
-            } else if tool_calls.function.name == EXTRACT_TOOL_NAME {
-                do_extraction(this_clone, second_request, tool_calls, &web_search_options).await;
-            } else {
-                unreachable!()
-            }
-        });
-        get_mut_arcmutex!(this.handles).push(handle);
-    } else {
-        let handle = tokio::spawn(async move {
-            let (new_sender, mut first_receiver) = tokio::sync::mpsc::channel(1);
-            second_request.response = new_sender;
-            std::mem::swap(&mut first_request.response, &mut second_request.response);
-
-            this_clone.add_request(first_request).await;
-            let ResponseOk::Chunk(done) = first_receiver.recv().await.unwrap().as_result().unwrap()
-            else {
-                unreachable!()
-            };
-            second_request
-                .response
-                .send(Response::Chunk(done.clone()))
-                .await
-                .unwrap();
-
-            let mut choice = done.choices[0].clone();
-
-            while choice.finish_reason.is_none() {
-                let ResponseOk::Chunk(done) =
-                    first_receiver.recv().await.unwrap().as_result().unwrap()
+            // ----------------------- NON-STREAMING ------------------------
+            if !is_streaming {
+                let ResponseOk::Done(done) = receiver.recv().await.unwrap().as_result().unwrap()
                 else {
-                    unreachable!()
+                    unreachable!();
                 };
-                second_request
-                    .response
-                    .send(Response::Chunk(done.clone()))
-                    .await
-                    .unwrap();
 
-                choice = done.choices[0].clone();
+                // Forward to the caller once the probe is out of the way.
+                if forward_to_user {
+                    user_sender
+                        .send(Response::Done(done.clone()))
+                        .await
+                        .unwrap();
+                }
+
+                // Did the assistant ask to run a tool?
+                let tc_opt = match &done.choices[0].message.tool_calls {
+                    Some(calls)
+                        if calls.len() == 1
+                            && search::search_tool_called(&calls[0].function.name) =>
+                    {
+                        Some(&calls[0])
+                    }
+                    _ => None,
+                };
+
+                // No tool call? We are finished.
+                if tc_opt.is_none() {
+                    break;
+                }
+
+                // Tool requested → build the next turn.
+                let tc = tc_opt.unwrap();
+                let next_visible = if tc.function.name == search::SEARCH_TOOL_NAME {
+                    do_search(this_clone.clone(), visible_req, tc, &web_search_options).await
+                } else {
+                    do_extraction(this_clone.clone(), visible_req, tc, &web_search_options).await
+                };
+
+                // The fresh request becomes both the user-visible context and
+                // the next `current` we will dispatch.
+                visible_req = next_visible.clone();
+                visible_req.response = user_sender.clone();
+                current = visible_req.clone();
+                forward_to_user = true;
             }
+            // ------------------------- STREAMING -------------------------
+            else {
+                // We need the *last* chunk to see whether a tool was called.
+                let mut last_choice = None;
 
-            let tool_calls = match &choice.delta.tool_calls {
-                Some(tool_calls)
-                    if tool_calls.len() == 1
-                        && search_tool_called(&tool_calls[0].function.name) =>
-                {
-                    &tool_calls[0]
-                }
-                None => {
-                    return;
-                }
-                Some(_) => {
-                    return;
-                }
-            };
+                while let Some(resp) = receiver.recv().await {
+                    match resp.as_result().unwrap() {
+                        ResponseOk::Chunk(chunk) => {
+                            // Forward every content‑bearing chunk immediately, but
+                            // *suppress* the ones that initiate a tool call. This ensures
+                            // the user sees the assistant’s streamed text from the very
+                            // first probe turn while still hiding the internal
+                            // search/extract trigger.
+                            let first_choice = &chunk.choices[0];
+                            if first_choice.delta.tool_calls.is_none() {
+                                user_sender
+                                    .send(Response::Chunk(chunk.clone()))
+                                    .await
+                                    .unwrap();
+                            }
 
-            if tool_calls.function.name == SEARCH_TOOL_NAME {
-                do_search(this_clone, second_request, tool_calls, &web_search_options).await;
-            } else if tool_calls.function.name == EXTRACT_TOOL_NAME {
-                do_extraction(this_clone, second_request, tool_calls, &web_search_options).await;
-            } else {
-                unreachable!()
+                            last_choice = Some(first_choice.clone());
+
+                            // Stop once the model marks completion.
+                            if last_choice
+                                .as_ref()
+                                .and_then(|c| c.finish_reason.as_ref())
+                                .is_some()
+                            {
+                                break;
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+
+                let Some(choice) = last_choice else { break };
+
+                let tc_opt = match &choice.delta.tool_calls {
+                    Some(calls)
+                        if calls.len() == 1
+                            && search::search_tool_called(&calls[0].function.name) =>
+                    {
+                        Some(&calls[0])
+                    }
+                    _ => None,
+                };
+
+                if tc_opt.is_none() {
+                    break; // No more tool calls → done.
+                }
+
+                let tc = tc_opt.unwrap();
+                let next_visible = if tc.function.name == search::SEARCH_TOOL_NAME {
+                    do_search(this_clone.clone(), visible_req, tc, &web_search_options).await
+                } else {
+                    do_extraction(this_clone.clone(), visible_req, tc, &web_search_options).await
+                };
+
+                visible_req = next_visible.clone();
+                visible_req.response = user_sender.clone();
+                current = visible_req.clone();
+                forward_to_user = true;
             }
-        });
-        get_mut_arcmutex!(this.handles).push(handle);
-    }
+        }
+    });
+
+    get_mut_arcmutex!(this.handles).push(handle);
 }
