@@ -1,11 +1,11 @@
 //! ## Chat Completions functionality and route handler.
 
-use std::{env, error::Error, ops::Deref, pin::Pin, task::Poll, time::Duration};
+use std::{error::Error, ops::Deref, pin::Pin, task::Poll, time::Duration};
 
 use anyhow::{Context, Result};
 use axum::{
     extract::{Json, State},
-    http::{self, StatusCode},
+    http::{self},
     response::{
         sse::{Event, KeepAlive},
         IntoResponse, Sse,
@@ -21,15 +21,16 @@ use mistralrs_core::{
 };
 use serde::Serialize;
 use serde_json::Value;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
     openai::{
         ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
         ResponseFormat, StopTokens,
     },
+    streaming::{create_response_channel, get_keep_alive_interval, DoneState},
     types::{ExtractedMistralRsState, SharedMistralRsState},
-    util,
+    util::{parse_image_url, send_model_request, ErrorToResponse, JsonError, ModelErrorMessage},
 };
 
 /// A callback function that processes streaming response chunks before they are sent to the client.
@@ -68,39 +69,6 @@ pub type OnChunkCallback =
 /// });
 /// ```
 pub type OnDoneCallback = Box<dyn Fn(&[ChatCompletionChunkResponse]) + Send + Sync>;
-
-/// Default buffer size for the response channel used in streaming operations.
-///
-/// This constant defines the maximum number of response messages that can be buffered
-/// in the channel before backpressure is applied. A larger buffer reduces the likelihood
-/// of blocking but uses more memory.
-pub const DEFAULT_CHANNEL_BUFFER_SIZE: usize = 10_000;
-
-/// Default keep-alive interval for Server-Sent Events (SSE) streams in milliseconds.
-pub const DEFAULT_KEEP_ALIVE_INTERVAL_MS: u64 = 10_000;
-
-/// Internal error type for model-related errors with a descriptive message.
-///
-/// This struct wraps error messages from the underlying model and implements
-/// the standard error traits for proper error handling and display.
-#[derive(Debug)]
-struct ModelErrorMessage(String);
-impl std::fmt::Display for ModelErrorMessage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-impl std::error::Error for ModelErrorMessage {}
-
-/// Represents the current state of a streaming response.
-enum DoneState {
-    /// The stream is actively processing and sending response chunks
-    Running,
-    /// The stream has finished processing and is about to send the `[DONE]` message
-    SendingDone,
-    /// The stream has completed entirely
-    Done,
-}
 
 /// A streaming response handler.
 ///
@@ -214,30 +182,6 @@ pub enum ChatCompletionResponder {
     /// Request validation error
     ValidationError(Box<dyn Error>),
 }
-
-/// Trait for converting errors to HTTP responses with appropriate status codes.
-trait ErrorToResponse: Serialize {
-    /// Converts the error to an HTTP response with the specified status code.
-    fn to_response(&self, code: StatusCode) -> axum::response::Response {
-        let mut r = Json(self).into_response();
-        *r.status_mut() = code;
-        r
-    }
-}
-
-/// Standard JSON error response structure.
-#[derive(Serialize)]
-struct JsonError {
-    message: String,
-}
-
-impl JsonError {
-    /// Creates a new JSON error with the specified message.
-    fn new(message: String) -> Self {
-        Self { message }
-    }
-}
-impl ErrorToResponse for JsonError {}
 
 /// JSON error response structure for model errors.
 #[derive(Serialize)]
@@ -469,7 +413,7 @@ pub async fn parse_request(
                 // Parse images
                 let mut images = Vec::new();
                 for url_unparsed in image_urls {
-                    let image = util::parse_image_url(&url_unparsed)
+                    let image = parse_image_url(&url_unparsed)
                         .await
                         .context(format!("Failed to parse image resource: {}", url_unparsed))?;
                     images.push(image);
@@ -594,7 +538,7 @@ pub async fn chatcompletions(
         Err(e) => return handle_chat_completion_error(state, e.into()),
     };
 
-    if let Err(e) = send_request(&state, request).await {
+    if let Err(e) = send_model_request(&state, request).await {
         return handle_chat_completion_error(state, e.into());
     }
 
@@ -613,36 +557,6 @@ pub fn handle_chat_completion_error(
     let e = anyhow::Error::msg(e.to_string());
     MistralRs::maybe_log_error(state, &*e);
     ChatCompletionResponder::InternalError(e.into())
-}
-
-/// Creates a channel for response communication.
-pub fn create_response_channel(
-    buffer_size: Option<usize>,
-) -> (Sender<Response>, Receiver<Response>) {
-    let channel_buffer_size = buffer_size.unwrap_or(DEFAULT_CHANNEL_BUFFER_SIZE);
-
-    channel(channel_buffer_size)
-}
-
-/// Gets the keep-alive interval for SSE streams from environment or default.
-pub fn get_keep_alive_interval() -> u64 {
-    env::var("KEEP_ALIVE_INTERVAL")
-        .map(|val| {
-            val.parse::<u64>().unwrap_or_else(|e| {
-                tracing::warn!("Failed to parse KEEP_ALIVE_INTERVAL: {}. Using default.", e);
-                DEFAULT_KEEP_ALIVE_INTERVAL_MS
-            })
-        })
-        .unwrap_or(DEFAULT_KEEP_ALIVE_INTERVAL_MS)
-}
-
-/// Sends a request to the model processing pipeline.
-pub async fn send_request(state: &SharedMistralRsState, request: Request) -> Result<()> {
-    let sender = state
-        .get_sender()
-        .context("mistral.rs sender not available.")?;
-
-    sender.send(request).await.map_err(|e| e.into())
 }
 
 /// Creates a SSE streamer for chat completions with optional callbacks.

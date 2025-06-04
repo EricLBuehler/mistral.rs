@@ -1,21 +1,15 @@
-use anyhow::Result;
 use std::{
-    env,
     error::Error,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
-use tokio::sync::mpsc::{channel, Receiver, Sender};
 
-use crate::{
-    openai::{CompletionRequest, Grammar, StopTokens},
-    types::ExtractedMistralRsState,
-};
+use anyhow::Result;
 use axum::{
     extract::{Json, State},
-    http::{self, StatusCode},
+    http::{self},
     response::{
         sse::{Event, KeepAlive},
         IntoResponse, Sse,
@@ -26,22 +20,15 @@ use mistralrs_core::{
     RequestMessage, Response, SamplingParams, StopTokens as InternalStopTokens,
 };
 use serde::Serialize;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::warn;
 
-#[derive(Debug)]
-struct ModelErrorMessage(String);
-impl std::fmt::Display for ModelErrorMessage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-impl std::error::Error for ModelErrorMessage {}
-
-enum DoneState {
-    Running,
-    SendingDone,
-    Done,
-}
+use crate::{
+    openai::{CompletionRequest, Grammar, StopTokens},
+    streaming::{create_response_channel, get_keep_alive_interval, DoneState},
+    types::ExtractedMistralRsState,
+    util::{send_model_request, ErrorToResponse, JsonError, ModelErrorMessage},
+};
 
 pub struct Streamer {
     rx: Receiver<Response>,
@@ -112,26 +99,6 @@ pub enum CompletionResponder {
     InternalError(Box<dyn Error>),
     ValidationError(Box<dyn Error>),
 }
-
-trait ErrorToResponse: Serialize {
-    fn to_response(&self, code: StatusCode) -> axum::response::Response {
-        let mut r = Json(self).into_response();
-        *r.status_mut() = code;
-        r
-    }
-}
-
-#[derive(Serialize)]
-struct JsonError {
-    message: String,
-}
-
-impl JsonError {
-    fn new(message: String) -> Self {
-        Self { message }
-    }
-}
-impl ErrorToResponse for JsonError {}
 
 #[derive(Serialize)]
 struct JsonModelError {
@@ -252,7 +219,8 @@ pub async fn completions(
     State(state): ExtractedMistralRsState,
     Json(oairequest): Json<CompletionRequest>,
 ) -> CompletionResponder {
-    let (tx, mut rx) = channel(10_000);
+    let (tx, mut rx) = create_response_channel(None);
+
     if oairequest.logprobs.is_some() {
         return CompletionResponder::ValidationError(
             "Completion requests do not support logprobs.".into(),
@@ -267,9 +235,8 @@ pub async fn completions(
             return CompletionResponder::InternalError(e.into());
         }
     };
-    let sender = state.get_sender().unwrap();
 
-    if let Err(e) = sender.send(request).await {
+    if let Err(e) = send_model_request(&state, request).await {
         let e = anyhow::Error::msg(e.to_string());
         MistralRs::maybe_log_error(state, &*e);
         return CompletionResponder::InternalError(e.into());
@@ -282,9 +249,8 @@ pub async fn completions(
             state,
         };
 
-        let keep_alive_interval = env::var("KEEP_ALIVE_INTERVAL")
-            .map(|val| val.parse::<u64>().unwrap_or(10000))
-            .unwrap_or(10000);
+        let keep_alive_interval = get_keep_alive_interval();
+
         CompletionResponder::Sse(
             Sse::new(streamer)
                 .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval))),
