@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="mistral.rs server core"><title>mistralrs_server_core - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-916cea96.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="mistralrs_server_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0 (17067e9ac 2025-05-09)" data-channel="1.87.0" data-search-js="search-e7298875.js" data-settings-js="settings-d72f25bb.js" ><script src="../static.files/storage-82c7156e.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-fb8c74a8.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../mistralrs_server_core/index.html">mistralrs_<wbr>server_<wbr>core</a><span class="version">0.6.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#about" title="About">About</a><ul><li><a href="#features" title="Features">Features</a></li><li><a href="#example" title="Example">Example</a></li></ul></li></ul><h3><a href="#modules">Crate Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1>Crate <span>mistralrs_server_core</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/mistralrs_server_core/lib.rs.html#1-222">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><blockquote>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="mistral.rs server core"><title>mistralrs_server_core - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-916cea96.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="mistralrs_server_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0 (17067e9ac 2025-05-09)" data-channel="1.87.0" data-search-js="search-e7298875.js" data-settings-js="settings-d72f25bb.js" ><script src="../static.files/storage-82c7156e.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-fb8c74a8.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../mistralrs_server_core/index.html">mistralrs_<wbr>server_<wbr>core</a><span class="version">0.6.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#about" title="About">About</a><ul><li><a href="#features" title="Features">Features</a></li><li><a href="#example" title="Example">Example</a></li></ul></li></ul><h3><a href="#modules">Crate Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1>Crate <span>mistralrs_server_core</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/mistralrs_server_core/lib.rs.html#1-227">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><blockquote>
 <p><strong>mistral.rs server core</strong></p>
 </blockquote>
 <h3 id="about"><a class="doc-anchor" href="#about">§</a>About</h3>
@@ -20,7 +20,9 @@ allowing others to implement and extend the server implementation.</p>
 <span class="kw">use </span>utoipa::OpenApi;
 <span class="kw">use </span>utoipa_swagger_ui::SwaggerUi;
 
-<span class="kw">use </span>mistralrs::{AutoDeviceMapParams, ChatCompletionChunkResponse, ModelDType, ModelSelected};
+<span class="kw">use </span>mistralrs::{
+   AutoDeviceMapParams, ChatCompletionChunkResponse, ModelDType, ModelSelected, initialize_logging,
+};
 <span class="kw">use </span>mistralrs_server_core::{
     chat_completion::{
         ChatCompletionResponder, OnChunkCallback, OnDoneCallback, create_chat_streamer,
@@ -50,12 +52,14 @@ allowing others to implement and extend the server implementation.</p>
 
 <span class="attr">#[derive(Clone)]
 </span><span class="kw">pub struct </span>AppState {
-    <span class="kw">pub </span>mistral_state: SharedMistralRsState,
+    <span class="kw">pub </span>mistralrs_state: SharedMistralRsState,
     <span class="kw">pub </span>db_create: <span class="kw">fn</span>(),
 }
 
 <span class="attr">#[tokio::main]
 </span><span class="kw">async fn </span>main() {
+    initialize_logging();
+     
     <span class="kw">let </span>plain_model_id = String::from(<span class="string">"meta-llama/Llama-3.2-1B-Instruct"</span>);
     <span class="kw">let </span>tokenizer_json = <span class="prelude-val">None</span>;
     <span class="kw">let </span>arch = <span class="prelude-val">None</span>;
@@ -95,22 +99,22 @@ allowing others to implement and extend the server implementation.</p>
         .<span class="kw">await
         </span>.unwrap();
 
-    <span class="kw">let </span>mistral_base_path = <span class="string">"/api/mistral"</span>;
+    <span class="kw">let </span>mistralrs_base_path = <span class="string">"/api/mistral"</span>;
 
-    <span class="kw">let </span>mistral_routes = MistralRsServerRouterBuilder::new()
+    <span class="kw">let </span>mistralrs_routes = MistralRsServerRouterBuilder::new()
         .with_mistralrs(shared_mistralrs.clone())
         .with_include_swagger_routes(<span class="bool-val">false</span>)
-        .with_base_path(mistral_base_path)
+        .with_base_path(mistralrs_base_path)
         .build()
         .<span class="kw">await
         </span>.unwrap();
 
-    <span class="kw">let </span>mistral_doc = get_openapi_doc(<span class="prelude-val">Some</span>(mistral_base_path));
+    <span class="kw">let </span>mistralrs_doc = get_openapi_doc(<span class="prelude-val">Some</span>(mistralrs_base_path));
     <span class="kw">let </span><span class="kw-2">mut </span>api_docs = ApiDoc::openapi();
-    api_docs.merge(mistral_doc);
+    api_docs.merge(mistralrs_doc);
 
     <span class="kw">let </span>app_state = Arc::new(AppState {
-        mistral_state: shared_mistralrs,
+        mistralrs_state: shared_mistralrs,
         db_create: mock_db_call,
     });
 
@@ -118,7 +122,7 @@ allowing others to implement and extend the server implementation.</p>
         .route(<span class="string">"/"</span>, get(root))
         .route(<span class="string">"/chat"</span>, post(custom_chat))
         .with_state(app_state.clone())
-        .nest(mistral_base_path, mistral_routes)
+        .nest(mistralrs_base_path, mistralrs_routes)
         .merge(SwaggerUi::new(<span class="string">"/api-docs"</span>).url(<span class="string">"/api-docs/openapi.json"</span>, api_docs));
 
     <span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="string">"0.0.0.0:3000"</span>).<span class="kw">await</span>.unwrap();
@@ -150,19 +154,19 @@ allowing others to implement and extend the server implementation.</p>
     State(state): State&lt;Arc&lt;AppState&gt;&gt;,
     Json(oai_request): Json&lt;ChatCompletionRequest&gt;,
 ) -&gt; ChatCompletionResponder {
-    <span class="kw">let </span>mistral_state = state.mistral_state.clone();
+    <span class="kw">let </span>mistralrs_state = state.mistralrs_state.clone();
     <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = create_response_channel(<span class="prelude-val">None</span>);
 
-    <span class="kw">let </span>(request, is_streaming) = <span class="kw">match </span>parse_request(oai_request, mistral_state.clone(), tx).<span class="kw">await
+    <span class="kw">let </span>(request, is_streaming) = <span class="kw">match </span>parse_request(oai_request, mistralrs_state.clone(), tx).<span class="kw">await
     </span>{
         <span class="prelude-val">Ok</span>(x) =&gt; x,
-        <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span>handle_chat_completion_error(mistral_state, e.into()),
+        <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span>handle_chat_completion_error(mistralrs_state, e.into()),
     };
 
     <span class="macro">dbg!</span>(request.clone());
 
-    <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = send_request(<span class="kw-2">&amp;</span>mistral_state, request).<span class="kw">await </span>{
-        <span class="kw">return </span>handle_chat_completion_error(mistral_state, e.into());
+    <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = send_request(<span class="kw-2">&amp;</span>mistralrs_state, request).<span class="kw">await </span>{
+        <span class="kw">return </span>handle_chat_completion_error(mistralrs_state, e.into());
     }
 
     <span class="kw">if </span>is_streaming {
@@ -184,15 +188,16 @@ allowing others to implement and extend the server implementation.</p>
         });
 
         <span class="kw">let </span>streamer =
-            create_chat_streamer(rx, mistral_state.clone(), <span class="prelude-val">Some</span>(on_chunk), <span class="prelude-val">Some</span>(on_done));
+            create_chat_streamer(rx, mistralrs_state.clone(), <span class="prelude-val">Some</span>(on_chunk), <span class="prelude-val">Some</span>(on_done));
 
         ChatCompletionResponder::Sse(streamer)
     } <span class="kw">else </span>{
-        <span class="kw">let </span>response = process_non_streaming_chat_response(<span class="kw-2">&amp;mut </span>rx, mistral_state.clone()).<span class="kw">await</span>;
+        <span class="kw">let </span>response = process_non_streaming_chat_response(<span class="kw-2">&amp;mut </span>rx, mistralrs_state.clone()).<span class="kw">await</span>;
 
         <span class="kw">match </span><span class="kw-2">&amp;</span>response {
             ChatCompletionResponder::Json(json_response) =&gt; {
                 <span class="macro">dbg!</span>(json_response);
+                (state.db_create)();
             }
             <span class="kw">_ </span>=&gt; {
                 <span class="comment">//
