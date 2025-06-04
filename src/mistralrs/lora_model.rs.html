@@ -89,14 +89,18 @@
 <a href=#89 id=89 data-nosnippet>89</a>            scheduler_method,
 <a href=#90 id=90 data-nosnippet>90</a>            <span class="self">self</span>.text_model.throughput_logging,
 <a href=#91 id=91 data-nosnippet>91</a>            <span class="self">self</span>.text_model.search_bert_model,
-<a href=#92 id=92 data-nosnippet>92</a>        )
-<a href=#93 id=93 data-nosnippet>93</a>        .with_no_kv_cache(<span class="self">self</span>.text_model.no_kv_cache)
-<a href=#94 id=94 data-nosnippet>94</a>        .with_no_prefix_cache(<span class="self">self</span>.text_model.prefix_cache_n.is_none());
-<a href=#95 id=95 data-nosnippet>95</a>
-<a href=#96 id=96 data-nosnippet>96</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = <span class="self">self</span>.text_model.prefix_cache_n {
-<a href=#97 id=97 data-nosnippet>97</a>            runner = runner.with_prefix_cache_n(n)
-<a href=#98 id=98 data-nosnippet>98</a>        }
+<a href=#92 id=92 data-nosnippet>92</a>        );
+<a href=#93 id=93 data-nosnippet>93</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(cb) = <span class="self">self</span>.text_model.search_callback.clone() {
+<a href=#94 id=94 data-nosnippet>94</a>            runner = runner.with_search_callback(cb);
+<a href=#95 id=95 data-nosnippet>95</a>        }
+<a href=#96 id=96 data-nosnippet>96</a>        runner = runner
+<a href=#97 id=97 data-nosnippet>97</a>            .with_no_kv_cache(<span class="self">self</span>.text_model.no_kv_cache)
+<a href=#98 id=98 data-nosnippet>98</a>            .with_no_prefix_cache(<span class="self">self</span>.text_model.prefix_cache_n.is_none());
 <a href=#99 id=99 data-nosnippet>99</a>
-<a href=#100 id=100 data-nosnippet>100</a>        <span class="prelude-val">Ok</span>(Model::new(runner.build()))
-<a href=#101 id=101 data-nosnippet>101</a>    }
-<a href=#102 id=102 data-nosnippet>102</a>}</code></pre></div></section></main></body></html>
+<a href=#100 id=100 data-nosnippet>100</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = <span class="self">self</span>.text_model.prefix_cache_n {
+<a href=#101 id=101 data-nosnippet>101</a>            runner = runner.with_prefix_cache_n(n)
+<a href=#102 id=102 data-nosnippet>102</a>        }
+<a href=#103 id=103 data-nosnippet>103</a>
+<a href=#104 id=104 data-nosnippet>104</a>        <span class="prelude-val">Ok</span>(Model::new(runner.build()))
+<a href=#105 id=105 data-nosnippet>105</a>    }
+<a href=#106 id=106 data-nosnippet>106</a>}</code></pre></div></section></main></body></html>
