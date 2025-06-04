@@ -182,6 +182,7 @@ OpenAI API compatible API server
 - [API Docs](docs/HTTP.md).
 - [Launching the server or use the CLI](README.md#run-with-the-cli)
 - [Example](examples/server/chat.py)
+- [Use or extend the server in other axum projects](https://ericlbuehler.github.io/mistral.rs/mistralrs_server_core/)
 
 
 ### Llama Index integration

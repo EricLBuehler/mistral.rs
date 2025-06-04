@@ -21,7 +21,9 @@
 //! use utoipa::OpenApi;
 //! use utoipa_swagger_ui::SwaggerUi;
 //!
-//! use mistralrs::{AutoDeviceMapParams, ChatCompletionChunkResponse, ModelDType, ModelSelected};
+//! use mistralrs::{
+//!    AutoDeviceMapParams, ChatCompletionChunkResponse, ModelDType, ModelSelected, initialize_logging,
+//! };
 //! use mistralrs_server_core::{
 //!     chat_completion::{
 //!         ChatCompletionResponder, OnChunkCallback, OnDoneCallback, create_chat_streamer,
@@ -51,12 +53,14 @@
 //!
 //! #[derive(Clone)]
 //! pub struct AppState {
-//!     pub mistral_state: SharedMistralRsState,
+//!     pub mistralrs_state: SharedMistralRsState,
 //!     pub db_create: fn(),
 //! }
 //!
 //! #[tokio::main]
 //! async fn main() {
+//!     initialize_logging();
+//!     
 //!     let plain_model_id = String::from("meta-llama/Llama-3.2-1B-Instruct");
 //!     let tokenizer_json = None;
 //!     let arch = None;
@@ -96,22 +100,22 @@
 //!         .await
 //!         .unwrap();
 //!
-//!     let mistral_base_path = "/api/mistral";
+//!     let mistralrs_base_path = "/api/mistral";
 //!
-//!     let mistral_routes = MistralRsServerRouterBuilder::new()
+//!     let mistralrs_routes = MistralRsServerRouterBuilder::new()
 //!         .with_mistralrs(shared_mistralrs.clone())
 //!         .with_include_swagger_routes(false)
-//!         .with_base_path(mistral_base_path)
+//!         .with_base_path(mistralrs_base_path)
 //!         .build()
 //!         .await
 //!         .unwrap();
 //!
-//!     let mistral_doc = get_openapi_doc(Some(mistral_base_path));
+//!     let mistralrs_doc = get_openapi_doc(Some(mistralrs_base_path));
 //!     let mut api_docs = ApiDoc::openapi();
-//!     api_docs.merge(mistral_doc);
+//!     api_docs.merge(mistralrs_doc);
 //!
 //!     let app_state = Arc::new(AppState {
-//!         mistral_state: shared_mistralrs,
+//!         mistralrs_state: shared_mistralrs,
 //!         db_create: mock_db_call,
 //!     });
 //!
@@ -119,7 +123,7 @@
 //!         .route("/", get(root))
 //!         .route("/chat", post(custom_chat))
 //!         .with_state(app_state.clone())
-//!         .nest(mistral_base_path, mistral_routes)
+//!         .nest(mistralrs_base_path, mistralrs_routes)
 //!         .merge(SwaggerUi::new("/api-docs").url("/api-docs/openapi.json", api_docs));
 //!
 //!     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -151,19 +155,19 @@
 //!     State(state): State<Arc<AppState>>,
 //!     Json(oai_request): Json<ChatCompletionRequest>,
 //! ) -> ChatCompletionResponder {
-//!     let mistral_state = state.mistral_state.clone();
+//!     let mistralrs_state = state.mistralrs_state.clone();
 //!     let (tx, mut rx) = create_response_channel(None);
 //!
-//!     let (request, is_streaming) = match parse_request(oai_request, mistral_state.clone(), tx).await
+//!     let (request, is_streaming) = match parse_request(oai_request, mistralrs_state.clone(), tx).await
 //!     {
 //!         Ok(x) => x,
-//!         Err(e) => return handle_chat_completion_error(mistral_state, e.into()),
+//!         Err(e) => return handle_chat_completion_error(mistralrs_state, e.into()),
 //!     };
 //!
 //!     dbg!(request.clone());
 //!
-//!     if let Err(e) = send_request(&mistral_state, request).await {
-//!         return handle_chat_completion_error(mistral_state, e.into());
+//!     if let Err(e) = send_request(&mistralrs_state, request).await {
+//!         return handle_chat_completion_error(mistralrs_state, e.into());
 //!     }
 //!
 //!     if is_streaming {
@@ -185,15 +189,16 @@
 //!         });
 //!
 //!         let streamer =
-//!             create_chat_streamer(rx, mistral_state.clone(), Some(on_chunk), Some(on_done));
+//!             create_chat_streamer(rx, mistralrs_state.clone(), Some(on_chunk), Some(on_done));
 //!
 //!         ChatCompletionResponder::Sse(streamer)
 //!     } else {
-//!         let response = process_non_streaming_chat_response(&mut rx, mistral_state.clone()).await;
+//!         let response = process_non_streaming_chat_response(&mut rx, mistralrs_state.clone()).await;
 //!
 //!         match &response {
 //!             ChatCompletionResponder::Json(json_response) => {
 //!                 dbg!(json_response);
+//!                 (state.db_create)();
 //!             }
 //!             _ => {
 //!                 //

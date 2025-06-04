@@ -44,7 +44,7 @@ pub mod defaults {
     pub const TOKEN_SOURCE: mistralrs_core::TokenSource = mistralrs_core::TokenSource::CacheToken;
 }
 
-/// A builder for creating a the mistral.rs instance with configured options used for the mistral.rs server.
+/// A builder for creating a mistral.rs instance with configured options for the mistral.rs server.
 ///
 /// ### Examples
 ///
