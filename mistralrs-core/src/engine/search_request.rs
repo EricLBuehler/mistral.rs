@@ -72,8 +72,12 @@ async fn do_search(
             };
         let mut results = tokio::task::block_in_place(|| {
             tracing::dispatcher::with_default(&dispatch, || {
-                search::run_search_tool(&tool_call_params)
-                    .unwrap()
+                let base_results = if let Some(cb) = &this.search_callback {
+                    cb(&tool_call_params).unwrap()
+                } else {
+                    search::run_search_tool(&tool_call_params).unwrap()
+                };
+                base_results
                     .into_iter()
                     .map(|mut result| {
                         result = result

@@ -110,6 +110,10 @@ pub enum WebSearchUserLocation {
 pub struct WebSearchOptions {
     pub search_context_size: Option<SearchContextSize>,
     pub user_location: Option<WebSearchUserLocation>,
+    /// Override the description for the search tool.
+    pub search_description: Option<String>,
+    /// Override the description for the extraction tool.
+    pub extract_description: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

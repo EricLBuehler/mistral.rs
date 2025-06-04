@@ -123,6 +123,7 @@ pub use messages::{RequestBuilder, RequestLike, TextMessageRole, TextMessages, V
 pub use model::{best_device, Model};
 pub use speculative::TextSpeculativeBuilder;
 pub use speech_model::SpeechModelBuilder;
+pub use mistralrs_core::{SearchCallback, search::SearchResult};
 pub use text_model::{PagedAttentionMetaBuilder, TextModelBuilder, UqffTextModelBuilder};
 pub use vision_model::{UqffVisionModelBuilder, VisionModelBuilder};
 pub use xlora_model::XLoraModelBuilder;

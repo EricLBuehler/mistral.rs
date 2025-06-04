@@ -84,6 +84,7 @@ impl GgufLoraModelBuilder {
             scheduler_method,
             self.gguf_model.throughput_logging,
             self.gguf_model.search_bert_model,
+            self.gguf_model.search_callback.clone(),
         )
         .with_no_kv_cache(self.gguf_model.no_kv_cache)
         .with_no_prefix_cache(self.gguf_model.prefix_cache_n.is_none());

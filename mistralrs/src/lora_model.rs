@@ -89,6 +89,7 @@ impl LoraModelBuilder {
             scheduler_method,
             self.text_model.throughput_logging,
             self.text_model.search_bert_model,
+            self.text_model.search_callback.clone(),
         )
         .with_no_kv_cache(self.text_model.no_kv_cache)
         .with_no_prefix_cache(self.text_model.prefix_cache_n.is_none());

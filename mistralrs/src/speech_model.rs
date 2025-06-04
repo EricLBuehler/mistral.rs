@@ -111,7 +111,7 @@ impl SpeechModelBuilder {
             method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
         };
 
-        let runner = MistralRsBuilder::new(pipeline, scheduler_method, false, None);
+        let runner = MistralRsBuilder::new(pipeline, scheduler_method, false, None, None);
 
         Ok(Model::new(runner.build()))
     }

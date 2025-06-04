@@ -99,6 +99,7 @@ impl TextSpeculativeBuilder {
             scheduler_method,
             self.target.throughput_logging,
             self.target.search_bert_model,
+            self.target.search_callback.clone(),
         );
 
         Ok(Model::new(runner.build()))

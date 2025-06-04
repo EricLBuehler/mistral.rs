@@ -1,6 +1,7 @@
 use crate::{
     distributed,
     embedding::bert::BertPipeline,
+    search,
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
@@ -72,6 +73,7 @@ pub struct Engine {
     rx: Arc<Mutex<Receiver<Request>>>,
     pipeline: Arc<Mutex<dyn Pipeline>>,
     bert_pipeline: Arc<Mutex<Option<BertPipeline>>>,
+    search_callback: Option<Arc<search::SearchCallback>>,
     scheduler: Arc<Mutex<dyn Scheduler>>,
     id: Arc<Mutex<usize>>,
     truncate_sequence: bool,
@@ -105,6 +107,7 @@ impl Engine {
         disable_eos_stop: bool,
         throughput_logging_enabled: bool,
         search_embedding_model: Option<BertEmbeddingModel>,
+        search_callback: Option<Arc<search::SearchCallback>>,
     ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
@@ -127,6 +130,7 @@ impl Engine {
             rx: Arc::new(Mutex::new(rx)),
             pipeline,
             bert_pipeline: Arc::new(Mutex::new(bert_pipeline)),
+            search_callback,
             scheduler: scheduler.clone(),
             id: Arc::new(Mutex::new(0)),
             truncate_sequence,
