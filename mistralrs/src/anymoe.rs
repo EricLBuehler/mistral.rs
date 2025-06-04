@@ -116,10 +116,13 @@ impl AnyMoeModelBuilder {
             scheduler_method,
             self.base.throughput_logging,
             self.base.search_bert_model,
-            self.base.search_callback.clone(),
-        )
-        .with_no_kv_cache(self.base.no_kv_cache)
-        .with_no_prefix_cache(self.base.prefix_cache_n.is_none());
+        );
+        if let Some(cb) = self.base.search_callback.clone() {
+            runner = runner.with_search_callback(cb);
+        }
+        runner = runner
+            .with_no_kv_cache(self.base.no_kv_cache)
+            .with_no_prefix_cache(self.base.prefix_cache_n.is_none());
 
         if let Some(n) = self.base.prefix_cache_n {
             runner = runner.with_prefix_cache_n(n)

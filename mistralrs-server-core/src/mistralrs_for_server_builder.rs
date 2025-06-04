@@ -1,6 +1,6 @@
 //! ## mistral.rs instance for server builder.
 
-use std::num::NonZeroUsize;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use anyhow::{Context, Result};
 use candle_core::Device;
@@ -9,7 +9,7 @@ use mistralrs_core::{
     parse_isq_value, AutoDeviceMapParams, BertEmbeddingModel, DefaultSchedulerMethod,
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder,
     MemoryGpuConfig, MistralRsBuilder, ModelSelected, PagedAttentionConfig, SchedulerConfig,
-    TokenSource,
+    SearchCallback, TokenSource,
 };
 use tracing::info;
 
@@ -18,6 +18,9 @@ use crate::types::{LoadedPipeline, SharedMistralRsState};
 pub mod defaults {
     //! Provides the default values used for the mistral.rs instance for server.
     //! These defaults can be used for CLI argument fallbacks, config loading, or general initialization.
+
+    use std::sync::Arc;
+
     pub const DEVICE: Option<candle_core::Device> = None;
     pub const SEED: Option<u64> = None;
     pub const LOG: Option<String> = None;
@@ -42,6 +45,7 @@ pub mod defaults {
     pub const ENABLE_SEARCH: bool = false;
     pub const SEARCH_BERT_MODEL: Option<String> = None;
     pub const TOKEN_SOURCE: mistralrs_core::TokenSource = mistralrs_core::TokenSource::CacheToken;
+    pub const SEARCH_CALLBACK: Option<Arc<mistralrs_core::SearchCallback>> = None;
 }
 
 /// A builder for creating a mistral.rs instance with configured options for the mistral.rs server.
@@ -169,6 +173,9 @@ pub struct MistralRsForServerBuilder {
 
     /// Specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
     search_bert_model: Option<String>,
+
+    /// Optional override search callback
+    search_callback: Option<Arc<SearchCallback>>,
 }
 
 impl Default for MistralRsForServerBuilder {
@@ -199,6 +206,7 @@ impl Default for MistralRsForServerBuilder {
             cpu: defaults::CPU,
             enable_search: defaults::ENABLE_SEARCH,
             search_bert_model: defaults::SEARCH_BERT_MODEL,
+            search_callback: defaults::SEARCH_CALLBACK,
         }
     }
 }
@@ -457,6 +465,12 @@ impl MistralRsForServerBuilder {
     /// Sets the BERT model for web search assistance.
     pub fn with_search_bert_model(mut self, search_bert_model: String) -> Self {
         self.search_bert_model = Some(search_bert_model);
+        self
+    }
+
+    /// Override the search function used when `web_search_options` is enabled.
+    pub fn with_search_callback(mut self, callback: Arc<SearchCallback>) -> Self {
+        self.search_callback = Some(callback);
         self
     }
 

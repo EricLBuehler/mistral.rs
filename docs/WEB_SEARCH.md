@@ -23,6 +23,13 @@ Internally, we use a BERT model (Snowflake/snowflake-arctic-embed-l-v2.0)[https:
 - Python: `search_bert_model` in the Runner
 - Server: `search-bert-model` before the model type selector (`plain`/`vision-plain`)
 
+## Specifying a custom search callback
+
+By default, mistral.rs uses a DuckDuckGo-based search callback. To override this, you can provide your own search function:
+
+- Rust: use `.with_search_callback(...)` on the model builder with an `Arc<dyn Fn(&SearchFunctionParameters) -> anyhow::Result<Vec<SearchResult>> + Send + Sync>`.
+- Python: pass the `search_callback` keyword argument to `Runner`, which should be a function `def search_callback(query: str) -> List[Dict[str, str]]` returning a list of results with keys `"title"`, `"description"`, `"url"`, and `"content"`.
+
 ## HTTP server
 **Be sure to add `--enable-search`!**
 

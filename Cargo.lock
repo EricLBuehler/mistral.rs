@@ -2573,6 +2573,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "walkdir",
 ]
 
 [[package]]

@@ -1,7 +1,6 @@
 use crate::{
     distributed,
     embedding::bert::BertPipeline,
-    search,
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
@@ -10,6 +9,7 @@ use crate::{
     prefix_cacher::PrefixCacheManagerV2,
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
+    search,
     sequence::{SeqStepType, StopReason},
     CompletionResponse, SchedulerConfig, DEBUG,
 };

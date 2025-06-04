@@ -104,6 +104,7 @@ pub use sampler::{
     CustomLogitsProcessor, DrySamplingParams, SamplingParams, StopTokens, TopLogprob,
 };
 pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
+pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
 use serde::Serialize;
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
@@ -112,7 +113,6 @@ pub use tools::{
     CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolChoice, ToolType,
 };
 pub use topology::{LayerTopology, Topology};
-pub use search::SearchCallback;
 pub use utils::debug::initialize_logging;
 pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};
@@ -202,12 +202,14 @@ pub struct MistralRsBuilder {
 }
 
 impl MistralRsBuilder {
+    /// Creates a new builder with the given pipeline, scheduler method, logging flag,
+    /// and optional embedding model for web search. To override the search callback,
+    /// use `.with_search_callback(...)` on the builder.
     pub fn new(
         pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         method: SchedulerConfig,
         throughput_logging: bool,
         search_embedding_model: Option<BertEmbeddingModel>,
-        search_callback: Option<Arc<SearchCallback>>,
     ) -> Self {
         Self {
             pipeline,
@@ -220,7 +222,7 @@ impl MistralRsBuilder {
             disable_eos_stop: None,
             throughput_logging_enabled: throughput_logging,
             search_embedding_model,
-            search_callback,
+            search_callback: None,
         }
     }
     pub fn with_log(mut self, log: String) -> Self {

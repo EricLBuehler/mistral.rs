@@ -1,11 +1,11 @@
 use anyhow::Result;
-use walkdir::WalkDir;
+use mistralrs::{
+    BertEmbeddingModel, IsqType, RequestBuilder, SearchResult, TextMessageRole, TextMessages,
+    TextModelBuilder, WebSearchOptions,
+};
 use std::fs;
 use std::sync::Arc;
-use mistralrs::{
-    BertEmbeddingModel, IsqType, RequestBuilder, SearchCallback, SearchResult,
-    TextMessageRole, TextMessages, TextModelBuilder, WebSearchOptions,
-};
+use walkdir::WalkDir;
 
 fn local_search(query: &str) -> Result<Vec<SearchResult>> {
     let mut results = Vec::new();
@@ -40,16 +40,12 @@ async fn main() -> Result<()> {
         .build()
         .await?;
 
-    let messages = TextMessages::new().add_message(
-        TextMessageRole::User,
-        "Where is Cargo.toml in this repo?",
-    );
-    let messages = RequestBuilder::from(messages).with_web_search_options(
-        WebSearchOptions {
-            search_description: Some("Local filesystem search".to_string()),
-            ..Default::default()
-        },
-    );
+    let messages =
+        TextMessages::new().add_message(TextMessageRole::User, "Where is Cargo.toml in this repo?");
+    let messages = RequestBuilder::from(messages).with_web_search_options(WebSearchOptions {
+        search_description: Some("Local filesystem search".to_string()),
+        ..Default::default()
+    });
 
     let response = model.send_chat_request(messages).await?;
     println!("{}", response.choices[0].message.content.as_ref().unwrap());

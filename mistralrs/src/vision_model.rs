@@ -1,6 +1,6 @@
 use candle_core::Device;
-use mistralrs_core::*;
 use mistralrs_core::SearchCallback;
+use mistralrs_core::*;
 use std::{
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
@@ -310,15 +310,16 @@ impl VisionModelBuilder {
             },
         };
 
-        let runner = MistralRsBuilder::new(
+        let mut runner = MistralRsBuilder::new(
             pipeline,
             scheduler_method,
             self.throughput_logging,
             self.search_bert_model,
-            self.search_callback.clone(),
-        )
-        .with_no_kv_cache(false)
-        .with_no_prefix_cache(false);
+        );
+        if let Some(cb) = self.search_callback.clone() {
+            runner = runner.with_search_callback(cb);
+        }
+        let runner = runner.with_no_kv_cache(false).with_no_prefix_cache(false);
 
         Ok(Model::new(runner.build()))
     }

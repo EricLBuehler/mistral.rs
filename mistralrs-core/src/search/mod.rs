@@ -16,7 +16,8 @@ use crate::{Function, Tool, ToolType, WebSearchOptions, WebSearchUserLocation};
 
 /// Callback used to override how search results are gathered. The returned
 /// vector must be sorted in decreasing order of relevance.
-pub type SearchCallback = dyn Fn(&SearchFunctionParameters) -> Result<Vec<SearchResult>> + Send + Sync;
+pub type SearchCallback =
+    dyn Fn(&SearchFunctionParameters) -> Result<Vec<SearchResult>> + Send + Sync;
 
 pub(crate) fn search_tool_called(name: &str) -> bool {
     name == SEARCH_TOOL_NAME || name == EXTRACT_TOOL_NAME

@@ -1,6 +1,6 @@
 use candle_core::Device;
-use mistralrs_core::*;
 use mistralrs_core::SearchCallback;
+use mistralrs_core::*;
 use std::num::NonZeroUsize;
 
 use crate::{best_device, Model};
@@ -255,10 +255,13 @@ impl GgufModelBuilder {
             scheduler_method,
             self.throughput_logging,
             self.search_bert_model,
-            self.search_callback.clone(),
-        )
-        .with_no_kv_cache(self.no_kv_cache)
-        .with_no_prefix_cache(self.prefix_cache_n.is_none());
+        );
+        if let Some(cb) = self.search_callback.clone() {
+            runner = runner.with_search_callback(cb);
+        }
+        runner = runner
+            .with_no_kv_cache(self.no_kv_cache)
+            .with_no_prefix_cache(self.prefix_cache_n.is_none());
 
         if let Some(n) = self.prefix_cache_n {
             runner = runner.with_prefix_cache_n(n)

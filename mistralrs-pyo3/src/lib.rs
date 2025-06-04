@@ -32,20 +32,19 @@ use mistralrs_core::{
     SpeechLoader, StopTokens, TokenSource, TokenizationRequest, Tool, Topology,
     VisionLoaderBuilder, VisionSpecificConfig,
 };
-use mistralrs_core::{search::SearchFunctionParameters, search::SearchResult, SearchCallback};
+use mistralrs_core::{SearchCallback, SearchFunctionParameters, SearchResult};
 use pyo3::prelude::*;
-use pyo3::types::{PyType, PyList};
-use pyo3::PyObject;
+use pyo3::types::{PyList, PyType};
 use pyo3::Bound;
+use pyo3::PyObject;
 use std::fs::File;
 mod anymoe;
 mod requests;
 mod stream;
 mod util;
 mod which;
-use which::{Architecture, DiffusionArchitecture, SpeechLoaderType, VisionArchitecture, Which};
-// (keep imports minimal – if needed later, re-introduce)
 use mistralrs_core::ModelDType;
+use which::{Architecture, DiffusionArchitecture, SpeechLoaderType, VisionArchitecture, Which};
 
 static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
 
@@ -95,18 +94,24 @@ static NEXT_REQUEST_ID: Mutex<RefCell<usize>> = Mutex::new(RefCell::new(0));
 fn wrap_search_callback(cb: PyObject) -> Arc<SearchCallback> {
     Arc::new(move |params: &SearchFunctionParameters| {
         Python::with_gil(|py| {
-            let list = cb.call1(py, (params.query.clone(),))?.downcast::<PyList>()?;
+            let obj = cb.call1(py, (params.query.clone(),))?;
+            let list = obj.downcast_bound::<PyList>(py)?;
             let mut results = Vec::new();
             for item in list.iter() {
                 let title: String = item.get_item("title")?.extract()?;
                 let description: String = item.get_item("description")?.extract()?;
                 let url: String = item.get_item("url")?.extract()?;
                 let content: String = item.get_item("content")?.extract()?;
-                results.push(SearchResult { title, description, url, content });
+                results.push(SearchResult {
+                    title,
+                    description,
+                    url,
+                    content,
+                });
             }
             Ok(results)
         })
-        .map_err(|e| anyhow::anyhow!(e.to_string()))
+        .map_err(|e: PyErr| anyhow::anyhow!(e.to_string()))
     })
 }
 
@@ -842,7 +847,11 @@ impl Runner {
             None
         };
         let cb = search_callback.map(wrap_search_callback);
-        let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, false, bert_model, cb)
+        let mut builder = MistralRsBuilder::new(pipeline, scheduler_config, false, bert_model);
+        if let Some(cb) = cb {
+            builder = builder.with_search_callback(cb);
+        }
+        let mistralrs = builder
             .with_no_kv_cache(no_kv_cache)
             .with_prefix_cache_n(prefix_cache_n)
             .build();
