@@ -3,14 +3,22 @@
 use anyhow::{Context, Result};
 use axum::{extract::Json, http::StatusCode, response::IntoResponse};
 use image::DynamicImage;
-use mistralrs_core::Request;
+use mistralrs_core::{Request, Response};
 use serde::Serialize;
 use tokio::{
     fs::{self, File},
     io::AsyncReadExt,
+    sync::mpsc::{channel, Receiver, Sender},
 };
 
 use crate::types::SharedMistralRsState;
+
+/// Default buffer size for the response channel used in streaming operations.
+///
+/// This constant defines the maximum number of response messages that can be buffered
+/// in the channel before backpressure is applied. A larger buffer reduces the likelihood
+/// of blocking but uses more memory.
+pub const DEFAULT_CHANNEL_BUFFER_SIZE: usize = 10_000;
 
 /// Trait for converting errors to HTTP responses with appropriate status codes.
 pub(crate) trait ErrorToResponse: Serialize {
@@ -48,6 +56,15 @@ impl std::fmt::Display for ModelErrorMessage {
     }
 }
 impl std::error::Error for ModelErrorMessage {}
+
+/// Creates a channel for response communication.
+pub fn create_response_channel(
+    buffer_size: Option<usize>,
+) -> (Sender<Response>, Receiver<Response>) {
+    let channel_buffer_size = buffer_size.unwrap_or(DEFAULT_CHANNEL_BUFFER_SIZE);
+
+    channel(channel_buffer_size)
+}
 
 /// Sends a request to the model processing pipeline.
 pub async fn send_model_request(state: &SharedMistralRsState, request: Request) -> Result<()> {
