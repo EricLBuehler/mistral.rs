@@ -17,7 +17,7 @@ pub(crate) mod varbuilder_utils;
 #[cfg(feature = "cuda")]
 pub fn set_cuda_context(dev: &candle_core::Device) {
     if let candle_core::Device::Cuda(d) = dev {
-        unsafe { cudarc::driver::result::ctx::set_current(d.cu_primary_ctx()) }
+        unsafe { candle_core::cuda::cudarc::driver::result::ctx::set_current(*d.cu_primary_ctx()) }
             .unwrap();
     }
 }
