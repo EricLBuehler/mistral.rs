@@ -28,9 +28,12 @@ use crate::{
         ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
         ResponseFormat, StopTokens,
     },
-    streaming::{create_response_channel, get_keep_alive_interval, DoneState},
+    streaming::{get_keep_alive_interval, DoneState},
     types::{ExtractedMistralRsState, SharedMistralRsState},
-    util::{parse_image_url, send_model_request, ErrorToResponse, JsonError, ModelErrorMessage},
+    util::{
+        create_response_channel, parse_image_url, send_model_request, ErrorToResponse, JsonError,
+        ModelErrorMessage,
+    },
 };
 
 /// A callback function that processes streaming response chunks before they are sent to the client.

@@ -25,9 +25,11 @@ use tracing::warn;
 
 use crate::{
     openai::{CompletionRequest, Grammar, StopTokens},
-    streaming::{create_response_channel, get_keep_alive_interval, DoneState},
+    streaming::{get_keep_alive_interval, DoneState},
     types::ExtractedMistralRsState,
-    util::{send_model_request, ErrorToResponse, JsonError, ModelErrorMessage},
+    util::{
+        create_response_channel, send_model_request, ErrorToResponse, JsonError, ModelErrorMessage,
+    },
 };
 
 pub struct Streamer {
