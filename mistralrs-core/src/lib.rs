@@ -110,7 +110,8 @@ pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoa
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
 pub use tools::{
-    CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolChoice, ToolType,
+    CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolCallback, ToolChoice,
+    ToolType,
 };
 pub use topology::{LayerTopology, Topology};
 pub use utils::debug::initialize_logging;
@@ -161,6 +162,7 @@ struct RebootState {
     throughput_logging_enabled: bool,
     search_embedding_model: Option<BertEmbeddingModel>,
     search_callback: Option<Arc<search::SearchCallback>>,
+    tool_callback: Option<Arc<tools::ToolCallback>>,
 }
 
 #[derive(Debug)]
@@ -199,6 +201,7 @@ pub struct MistralRsBuilder {
     throughput_logging_enabled: bool,
     search_embedding_model: Option<BertEmbeddingModel>,
     search_callback: Option<Arc<SearchCallback>>,
+    tool_callback: Option<Arc<tools::ToolCallback>>,
 }
 
 impl MistralRsBuilder {
@@ -223,6 +226,7 @@ impl MistralRsBuilder {
             throughput_logging_enabled: throughput_logging,
             search_embedding_model,
             search_callback: None,
+            tool_callback: None,
         }
     }
     pub fn with_log(mut self, log: String) -> Self {
@@ -260,6 +264,12 @@ impl MistralRsBuilder {
         self
     }
 
+    /// Use a custom callback for arbitrary tool calls.
+    pub fn with_tool_callback(mut self, tool_callback: Arc<tools::ToolCallback>) -> Self {
+        self.tool_callback = Some(tool_callback);
+        self
+    }
+
     pub fn build(self) -> Arc<MistralRs> {
         MistralRs::new(self)
     }
@@ -288,6 +298,7 @@ impl MistralRs {
             throughput_logging_enabled,
             search_embedding_model,
             search_callback,
+            tool_callback,
         } = config;
 
         let category = pipeline.try_lock().unwrap().category();
@@ -312,6 +323,7 @@ impl MistralRs {
             throughput_logging_enabled,
             search_embedding_model: search_embedding_model.clone(),
             search_callback: search_callback.clone(),
+            tool_callback: tool_callback.clone(),
         };
 
         let (tx, rx) = channel(10_000);
@@ -344,6 +356,7 @@ impl MistralRs {
                         throughput_logging_enabled,
                         search_embedding_model,
                         search_callback.clone(),
+                        tool_callback.clone(),
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -366,6 +379,7 @@ impl MistralRs {
                         throughput_logging_enabled,
                         search_embedding_model,
                         search_callback.clone(),
+                        tool_callback.clone(),
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -491,6 +505,7 @@ impl MistralRs {
                         reboot_state.throughput_logging_enabled,
                         reboot_state.search_embedding_model,
                         reboot_state.search_callback.clone(),
+                        reboot_state.tool_callback.clone(),
                     )
                     .expect("Engine creation failed");
                     Arc::new(engine).run().await;

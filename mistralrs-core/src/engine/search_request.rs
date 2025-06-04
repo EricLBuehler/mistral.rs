@@ -330,6 +330,48 @@ async fn do_extraction(
     second_request
 }
 
+async fn do_custom_tool(
+    this: Arc<Engine>,
+    mut second_request: NormalRequest,
+    tool_calls: &ToolCallResponse,
+) -> NormalRequest {
+    let messages = match &mut second_request.messages {
+        RequestMessage::Chat { messages, .. } | RequestMessage::VisionChat { messages, .. } => {
+            messages
+        }
+        _ => unreachable!(),
+    };
+
+    {
+        let mut message: IndexMap<String, MessageContent> = IndexMap::new();
+        message.insert("role".to_string(), Either::Left("assistant".to_string()));
+        message.insert(
+            "content".to_string(),
+            Either::Left(format!(
+                "{{\"name\":\"{}\",\"arguments\":\"{}\"}}",
+                tool_calls.function.name, tool_calls.function.arguments
+            )),
+        );
+        messages.push(message);
+    }
+
+    let result = if let Some(cb) = &this.tool_callback {
+        cb(&tool_calls.function).unwrap_or_else(|e| format!("ERROR: {e}"))
+    } else {
+        "ERROR: no tool callback".to_string()
+    };
+
+    {
+        let mut message: IndexMap<String, MessageContent> = IndexMap::new();
+        message.insert("role".to_string(), Either::Left("tool".to_string()));
+        message.insert("content".to_string(), Either::Left(result));
+        messages.push(message);
+    }
+
+    second_request.tool_choice = Some(ToolChoice::Auto);
+    second_request
+}
+
 /// Drive one or more web-search / extraction rounds without recursion.
 ///
 /// Strategy:
@@ -340,10 +382,7 @@ async fn do_extraction(
 /// 4. Forward every user-visible reply **except** the first, which is just the
 ///    probe that discovers whether a tool call is needed.
 pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
-    // We entered this function only when web_search_options is Some(_)
-    let Some(web_search_options) = request.web_search_options.clone() else {
-        unreachable!()
-    };
+    let web_search_options = request.web_search_options.clone();
 
     // The sender that ultimately delivers data back to the caller.
     let user_sender = request.response.clone();
@@ -353,10 +392,12 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
     // Build the *first* request (the “probe”).
     // ---------------------------------------------------------------------
     let mut probe = request.clone();
-    probe
-        .tools
-        .get_or_insert_with(Vec::new)
-        .extend(search::get_search_tools(&web_search_options).unwrap());
+    if let Some(ref opts) = web_search_options {
+        probe
+            .tools
+            .get_or_insert_with(Vec::new)
+            .extend(search::get_search_tools(opts).unwrap());
+    }
     probe.tool_choice = Some(ToolChoice::Auto);
     // Prevent accidental infinite recursion on the probe itself.
     probe.web_search_options = None;
@@ -400,12 +441,7 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
 
                 // Did the assistant ask to run a tool?
                 let tc_opt = match &done.choices[0].message.tool_calls {
-                    Some(calls)
-                        if calls.len() == 1
-                            && search::search_tool_called(&calls[0].function.name) =>
-                    {
-                        Some(&calls[0])
-                    }
+                    Some(calls) if calls.len() == 1 => Some(&calls[0]),
                     _ => None,
                 };
 
@@ -416,10 +452,15 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
 
                 // Tool requested → build the next turn.
                 let tc = tc_opt.unwrap();
-                let next_visible = if tc.function.name == search::SEARCH_TOOL_NAME {
-                    do_search(this_clone.clone(), visible_req, tc, &web_search_options).await
+                let next_visible = if search::search_tool_called(&tc.function.name) {
+                    if tc.function.name == search::SEARCH_TOOL_NAME {
+                        do_search(this_clone.clone(), visible_req, tc, &web_search_options).await
+                    } else {
+                        do_extraction(this_clone.clone(), visible_req, tc, &web_search_options)
+                            .await
+                    }
                 } else {
-                    do_extraction(this_clone.clone(), visible_req, tc, &web_search_options).await
+                    do_custom_tool(this_clone.clone(), visible_req, tc).await
                 };
 
                 // The fresh request becomes both the user-visible context and
@@ -468,12 +509,7 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                 let Some(choice) = last_choice else { break };
 
                 let tc_opt = match &choice.delta.tool_calls {
-                    Some(calls)
-                        if calls.len() == 1
-                            && search::search_tool_called(&calls[0].function.name) =>
-                    {
-                        Some(&calls[0])
-                    }
+                    Some(calls) if calls.len() == 1 => Some(&calls[0]),
                     _ => None,
                 };
 
@@ -482,10 +518,15 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                 }
 
                 let tc = tc_opt.unwrap();
-                let next_visible = if tc.function.name == search::SEARCH_TOOL_NAME {
-                    do_search(this_clone.clone(), visible_req, tc, &web_search_options).await
+                let next_visible = if search::search_tool_called(&tc.function.name) {
+                    if tc.function.name == search::SEARCH_TOOL_NAME {
+                        do_search(this_clone.clone(), visible_req, tc, &web_search_options).await
+                    } else {
+                        do_extraction(this_clone.clone(), visible_req, tc, &web_search_options)
+                            .await
+                    }
                 } else {
-                    do_extraction(this_clone.clone(), visible_req, tc, &web_search_options).await
+                    do_custom_tool(this_clone.clone(), visible_req, tc).await
                 };
 
                 visible_req = next_visible.clone();

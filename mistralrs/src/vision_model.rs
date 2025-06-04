@@ -1,6 +1,6 @@
 use candle_core::Device;
-use mistralrs_core::SearchCallback;
 use mistralrs_core::*;
+use mistralrs_core::{SearchCallback, ToolCallback};
 use std::{
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
@@ -29,6 +29,7 @@ pub struct VisionModelBuilder {
     pub(crate) hf_cache_path: Option<PathBuf>,
     pub(crate) search_bert_model: Option<BertEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
+    pub(crate) tool_callback: Option<Arc<ToolCallback>>,
     pub(crate) device: Option<Device>,
 
     // Model running
@@ -79,6 +80,7 @@ impl VisionModelBuilder {
             hf_cache_path: None,
             search_bert_model: None,
             search_callback: None,
+            tool_callback: None,
             device: None,
         }
     }
@@ -92,6 +94,11 @@ impl VisionModelBuilder {
     /// Override the search function used when `web_search_options` is enabled.
     pub fn with_search_callback(mut self, callback: Arc<SearchCallback>) -> Self {
         self.search_callback = Some(callback);
+        self
+    }
+
+    pub fn with_tool_callback(mut self, callback: Arc<ToolCallback>) -> Self {
+        self.tool_callback = Some(callback);
         self
     }
 
@@ -318,6 +325,9 @@ impl VisionModelBuilder {
         );
         if let Some(cb) = self.search_callback.clone() {
             runner = runner.with_search_callback(cb);
+        }
+        if let Some(cb) = self.tool_callback.clone() {
+            runner = runner.with_tool_callback(cb);
         }
         let runner = runner.with_no_kv_cache(false).with_no_prefix_cache(false);
 

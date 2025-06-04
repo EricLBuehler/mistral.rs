@@ -13,6 +13,10 @@ use uuid::Uuid;
 
 use crate::Pipeline;
 
+/// Callback used for custom tool functions. Receives the called function
+/// (name and JSON arguments) and returns the tool output as a string.
+pub type ToolCallback = dyn Fn(&CalledFunction) -> anyhow::Result<String> + Send + Sync;
+
 fn contains_tool_call_prefix(prefix: &str) -> bool {
     prefix.contains("<tool_call>")
         || prefix.contains("<｜tool▁call▁begin｜>")

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use mistralrs::{
-    BertEmbeddingModel, IsqType, RequestBuilder, SearchResult, TextMessageRole, TextMessages,
-    TextModelBuilder, WebSearchOptions,
+    CalledFunction, IsqType, RequestBuilder, SearchResult, TextMessageRole, TextMessages,
+    TextModelBuilder, Tool, ToolCallback, ToolChoice, ToolType,
 };
 use std::fs;
 use std::sync::Arc;
@@ -35,17 +35,32 @@ async fn main() -> Result<()> {
     let model = TextModelBuilder::new("NousResearch/Hermes-3-Llama-3.1-8B")
         .with_isq(IsqType::Q4K)
         .with_logging()
-        .with_search(BertEmbeddingModel::default())
-        .with_search_callback(Arc::new(|p| local_search(&p.query)))
+        .with_tool_callback(Arc::new(|f: &CalledFunction| {
+            let args: serde_json::Value = serde_json::from_str(&f.arguments)?;
+            let query = args["query"].as_str().unwrap_or("");
+            Ok(serde_json::to_string(&local_search(query)?)?)
+        }))
         .build()
         .await?;
 
+    let parameters = std::collections::HashMap::from([(
+        "query".to_string(),
+        serde_json::json!({"type": "string", "description": "Query"}),
+    )]);
+    let tool = Tool {
+        tp: ToolType::Function,
+        function: mistralrs::Function {
+            description: Some("Local filesystem search".to_string()),
+            name: "local_search".to_string(),
+            parameters: Some(parameters),
+        },
+    };
+
     let messages =
         TextMessages::new().add_message(TextMessageRole::User, "Where is Cargo.toml in this repo?");
-    let messages = RequestBuilder::from(messages).with_web_search_options(WebSearchOptions {
-        search_description: Some("Local filesystem search".to_string()),
-        ..Default::default()
-    });
+    let messages = RequestBuilder::from(messages)
+        .set_tools(vec![tool])
+        .set_tool_choice(ToolChoice::Auto);
 
     let response = model.send_chat_request(messages).await?;
     println!("{}", response.choices[0].message.content.as_ref().unwrap());

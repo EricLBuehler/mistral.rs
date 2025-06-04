@@ -120,7 +120,7 @@ pub use gguf_lora_model::GgufLoraModelBuilder;
 pub use gguf_xlora_model::GgufXLoraModelBuilder;
 pub use lora_model::LoraModelBuilder;
 pub use messages::{RequestBuilder, RequestLike, TextMessageRole, TextMessages, VisionMessages};
-pub use mistralrs_core::{SearchCallback, SearchResult};
+pub use mistralrs_core::{SearchCallback, SearchResult, ToolCallback};
 pub use model::{best_device, Model};
 pub use speculative::TextSpeculativeBuilder;
 pub use speech_model::SpeechModelBuilder;

@@ -1,6 +1,6 @@
 use candle_core::Device;
-use mistralrs_core::SearchCallback;
 use mistralrs_core::*;
+use mistralrs_core::{SearchCallback, ToolCallback};
 use std::num::NonZeroUsize;
 
 use crate::{best_device, Model};
@@ -20,6 +20,7 @@ pub struct GgufModelBuilder {
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) search_bert_model: Option<BertEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
+    pub(crate) tool_callback: Option<Arc<ToolCallback>>,
     pub(crate) device: Option<Device>,
 
     // Model running
@@ -65,6 +66,7 @@ impl GgufModelBuilder {
             throughput_logging: false,
             search_bert_model: None,
             search_callback: None,
+            tool_callback: None,
             device: None,
         }
     }
@@ -78,6 +80,11 @@ impl GgufModelBuilder {
     /// Override the search function used when `web_search_options` is enabled.
     pub fn with_search_callback(mut self, callback: Arc<SearchCallback>) -> Self {
         self.search_callback = Some(callback);
+        self
+    }
+
+    pub fn with_tool_callback(mut self, callback: Arc<ToolCallback>) -> Self {
+        self.tool_callback = Some(callback);
         self
     }
 
@@ -258,6 +265,9 @@ impl GgufModelBuilder {
         );
         if let Some(cb) = self.search_callback.clone() {
             runner = runner.with_search_callback(cb);
+        }
+        if let Some(cb) = self.tool_callback.clone() {
+            runner = runner.with_tool_callback(cb);
         }
         runner = runner
             .with_no_kv_cache(self.no_kv_cache)

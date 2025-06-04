@@ -348,6 +348,7 @@ class Runner:
         enable_search: bool = False,
         search_bert_model: str | None = None,
         search_callback: Callable[[str], list[dict[str, str]]] | None = None,
+        tool_callback: Callable[[str, dict], str] | None = None,
         no_bert_model: bool = False,
     ) -> None:
         """
@@ -392,6 +393,7 @@ class Runner:
         - `enable_search`: Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
         - `search_bert_model`: specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
         - `search_callback`: Custom Python callable to perform web searches. Should accept a query string and return a list of dicts with keys "title", "description", "url", and "content".
+        - `tool_callback`: Python callable invoked for generic tool calls. It receives the tool name and a dict of arguments and should return the tool output as a string.
         """
         ...
 
