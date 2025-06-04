@@ -161,8 +161,9 @@ pub mod text_models_inputs_processor {
         let mut slot_mappings = Vec::new();
         let mut block_tables = Vec::new();
         let mut paged_attn_context_lens = Vec::new();
-        let mut seqlens_q = vec![0];
-        let mut seqlens_k = vec![0];
+        let flash_attn = crate::using_flash_attn();
+        let mut seqlens_q = if flash_attn { vec![0] } else { Vec::new() };
+        let mut seqlens_k = if flash_attn { vec![0] } else { Vec::new() };
         for (seq_id, ctxt) in seq_ids.iter().zip(toks) {
             let prompt_len = ctxt.len();
             let offset = last_n_context_len.unwrap_or_default();
@@ -189,8 +190,10 @@ pub mod text_models_inputs_processor {
                 ));
             }
 
-            seqlens_q.push(ctxt.len() as u32);
-            seqlens_k.push((ctxt.len() + chunk_offset_toks) as u32);
+            if flash_attn {
+                seqlens_q.push(ctxt.len() as u32);
+                seqlens_k.push((ctxt.len() + chunk_offset_toks) as u32);
+            }
 
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
 
@@ -244,25 +247,30 @@ pub mod text_models_inputs_processor {
             }
         }
 
-        let max_q = *seqlens_q.iter().max().unwrap();
-        let max_k = *seqlens_k.iter().max().unwrap();
-        let seqlens_q = Tensor::new(seqlens_q, device)?
-            .to_dtype(DType::F32)?
-            .cumsum(0)?
-            .to_dtype(DType::U32)?;
-        let seqlens_k = Tensor::new(seqlens_k, device)?
-            .to_dtype(DType::F32)?
-            .cumsum(0)?
-            .to_dtype(DType::U32)?;
+        let (max_q, max_k, seqlens_q_map, seqlens_k_map) = if flash_attn {
+            let max_q = *seqlens_q.iter().max().unwrap();
+            let max_k = *seqlens_k.iter().max().unwrap();
+            let seqlens_q = Tensor::new(seqlens_q, device)?
+                .to_dtype(DType::F32)?
+                .cumsum(0)?
+                .to_dtype(DType::U32)?;
+            let seqlens_k = Tensor::new(seqlens_k, device)?
+                .to_dtype(DType::F32)?
+                .cumsum(0)?
+                .to_dtype(DType::U32)?;
 
-        let mut seqlens_q_map = HashMap::new();
-        let mut seqlens_k_map = HashMap::new();
+            let mut seqlens_q_map = HashMap::new();
+            let mut seqlens_k_map = HashMap::new();
 
-        let devices = mapper.unwrap().get_unique_devices();
-        for device in devices {
-            seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
-            seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
-        }
+            let devices = mapper.unwrap().get_unique_devices();
+            for device in devices {
+                seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
+                seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
+            }
+            (max_q, max_k, seqlens_q_map, seqlens_k_map)
+        } else {
+            (0, 0, HashMap::new(), HashMap::new())
+        };
 
         let input = Tensor::cat(&seqs_tensors, 0).unwrap();
 
@@ -349,6 +357,7 @@ pub mod text_models_inputs_processor {
         mapper: Option<&dyn DeviceMapper>,
     ) -> Result<InputMetadata> {
         // Pad each sequence by the padding token to the max len.
+        let flash_attn = crate::using_flash_attn();
         let mut seqs_tensors = Vec::new();
         let mut seqlen_offsets = Vec::new();
         let mut context_lens = Vec::new();
@@ -357,8 +366,8 @@ pub mod text_models_inputs_processor {
         let mut slot_mappings = Vec::new();
         let mut block_tables = Vec::new();
         let mut paged_attn_context_lens = Vec::new();
-        let mut seqlens_q = vec![0];
-        let mut seqlens_k = vec![0];
+        let mut seqlens_q = if flash_attn { vec![0] } else { Vec::new() };
+        let mut seqlens_k = if flash_attn { vec![0] } else { Vec::new() };
         for (seq, ctxt) in input_seqs.iter().zip(toks) {
             let start_pos = ctxt.len().saturating_sub(1);
             let ctxt = ctxt[start_pos..].to_vec();
@@ -366,8 +375,10 @@ pub mod text_models_inputs_processor {
             context_lens.push((0, 1));
             position_ids.push(seq.len());
 
-            seqlens_q.push(ctxt.len() as u32);
-            seqlens_k.push((ctxt.len() + start_pos) as u32);
+            if flash_attn {
+                seqlens_q.push(ctxt.len() as u32);
+                seqlens_k.push((ctxt.len() + start_pos) as u32);
+            }
 
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
 
@@ -415,25 +426,30 @@ pub mod text_models_inputs_processor {
             }
         }
 
-        let max_q = *seqlens_q.iter().max().unwrap();
-        let max_k = *seqlens_k.iter().max().unwrap();
-        let seqlens_q = Tensor::new(seqlens_q, device)?
-            .to_dtype(DType::F32)?
-            .cumsum(0)?
-            .to_dtype(DType::U32)?;
-        let seqlens_k = Tensor::new(seqlens_k, device)?
-            .to_dtype(DType::F32)?
-            .cumsum(0)?
-            .to_dtype(DType::U32)?;
+        let (max_q, max_k, seqlens_q_map, seqlens_k_map) = if flash_attn {
+            let max_q = *seqlens_q.iter().max().unwrap();
+            let max_k = *seqlens_k.iter().max().unwrap();
+            let seqlens_q = Tensor::new(seqlens_q, device)?
+                .to_dtype(DType::F32)?
+                .cumsum(0)?
+                .to_dtype(DType::U32)?;
+            let seqlens_k = Tensor::new(seqlens_k, device)?
+                .to_dtype(DType::F32)?
+                .cumsum(0)?
+                .to_dtype(DType::U32)?;
 
-        let mut seqlens_q_map = HashMap::new();
-        let mut seqlens_k_map = HashMap::new();
+            let mut seqlens_q_map = HashMap::new();
+            let mut seqlens_k_map = HashMap::new();
 
-        let devices = mapper.unwrap().get_unique_devices();
-        for device in devices {
-            seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
-            seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
-        }
+            let devices = mapper.unwrap().get_unique_devices();
+            for device in devices {
+                seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
+                seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
+            }
+            (max_q, max_k, seqlens_q_map, seqlens_k_map)
+        } else {
+            (0, 0, HashMap::new(), HashMap::new())
+        };
 
         let paged_attn_meta = if paged_attn_metadata.is_some() {
             let slot_mappings = _make_tensor_with_pad(slot_mappings, 1, _PAD_SLOT_ID, device)?;
