@@ -116,26 +116,29 @@ impl PrefixCacheManagerV2 {
             return;
         }
 
-        if let Some(_block_engine) = &self.block_engine {
-            // let logical_token_blocks = seq.logical_token_blocks();
-            // let block_engine = get_mut_arcmutex!(block_engine);
-            // let block_table = &block_engine.block_tables[seq.id()];
-            // let hashed_logical_blocks = hash_logical_blocks(logical_token_blocks);
+        if let Some(block_engine) = &self.block_engine {
+            let logical_token_blocks = seq.logical_token_blocks();
+            let block_engine = get_mut_arcmutex!(block_engine);
+            let block_table = block_engine
+                .block_tables
+                .get(seq.id())
+                .expect("Sequence not allocated in block engine");
+            let hashed_logical_blocks = hash_logical_blocks(logical_token_blocks);
 
-            // if !self.block_caches.contains_key(&hashed_logical_blocks) {
-            //     for block in block_table {
-            //         block.deref_mut().increment_refcount();
-            //     }
+            if !self.block_caches.contains_key(&hashed_logical_blocks) {
+                for block in block_table {
+                    block.deref_mut().increment_refcount();
+                }
 
-            //     self.block_caches.insert(
-            //         hashed_logical_blocks,
-            //         BlockCacheElement {
-            //             logical_blocks: logical_token_blocks.to_vec(),
-            //             physical_blocks: block_table.clone(),
-            //             image_hashes: seq.image_hashes().map(|x| x.to_vec()),
-            //         },
-            //     );
-            // }
+                self.block_caches.insert(
+                    hashed_logical_blocks,
+                    BlockCacheElement {
+                        logical_blocks: logical_token_blocks.to_vec(),
+                        physical_blocks: block_table.clone(),
+                        image_hashes: seq.image_hashes().map(|x| x.to_vec()),
+                    },
+                );
+            }
         } else {
             let cache = seq.normal_cache().to_vec();
 

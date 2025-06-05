@@ -48,8 +48,8 @@ impl LogicalTokenBlock {
 
     pub fn pop_token(&mut self) {
         assert_ne!(self.num_tokens, 0);
-        self.tokens.pop();
         self.num_tokens -= 1;
+        self.tokens[self.num_tokens] = 0;
     }
 }
 
