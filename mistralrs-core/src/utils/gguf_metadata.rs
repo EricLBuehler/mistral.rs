@@ -489,24 +489,21 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                 let mut attn_q =
                     tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_q.weight")?);
                 if let GGUFArchitecture::Qwen2 = self.arch {
-                    attn_q += tensor_info_size_in_bytes!(self
-                        .model
-                        .tensor_info("blk.0.attn_q.bias")?);
+                    attn_q +=
+                        tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_q.bias")?);
                 }
                 let mut attn_k =
                     tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_k.weight")?);
                 if let GGUFArchitecture::Qwen2 = self.arch {
-                    attn_k += tensor_info_size_in_bytes!(self
-                        .model
-                        .tensor_info("blk.0.attn_k.bias")?);
+                    attn_k +=
+                        tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_k.bias")?);
                 }
 
                 let mut attn_v =
                     tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_v.weight")?);
                 if let GGUFArchitecture::Qwen2 = self.arch {
-                    attn_v += tensor_info_size_in_bytes!(self
-                        .model
-                        .tensor_info("blk.0.attn_v.bias")?);
+                    attn_v +=
+                        tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_v.bias")?);
                 }
 
                 let attn_output = tensor_info_size_in_bytes!(self
