@@ -10,7 +10,7 @@ use tracing::info;
 
 use crate::{
     get_mut_arcmutex,
-    paged_attention::{BlockEngine, LogicalTokenBlock, PhysicalTokenBlock},
+    paged_attention::{BlockEngine, BlockEngineSequence, LogicalTokenBlock, PhysicalTokenBlock},
     pipeline::KvCache,
     sequence::{self, Sequence},
 };
