@@ -564,7 +564,7 @@ impl Sequence {
     /// This is the number of tokens. If the KV cache is Some, then it will use that.
     pub fn len(&self) -> usize {
         if let Some(toks) = &self.prefill_prompt_toks {
-            return toks.len();
+            return toks.len() + self.token_offset;
         }
         if self.is_tmp {
             return self.tokens.len();
