@@ -117,7 +117,6 @@ impl PrefixCacheManagerV2 {
         }
 
         if let Some(_block_engine) = &self.block_engine {
-            return;
             // let logical_token_blocks = seq.logical_token_blocks();
             // let block_engine = get_mut_arcmutex!(block_engine);
             // let block_table = &block_engine.block_tables[seq.id()];
