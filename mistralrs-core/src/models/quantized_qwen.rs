@@ -193,7 +193,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
     type Error = anyhow::Error;
 
     fn try_from(c: ContentMetadata) -> std::result::Result<Self, Self::Error> {
-        let _ = verify_qwen_arch(&c.metadata, &["qwen2", "qwen3"])?;
+        let _ = verify_qwen_arch(c.metadata, &["qwen2", "qwen3"])?;
 
         let required = [
             "attention.head_count",
