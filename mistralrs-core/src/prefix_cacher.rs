@@ -124,16 +124,6 @@ impl PrefixCacheManagerV2 {
 
             if !self.block_caches.contains_key(&hashed_logical_blocks) {
                 for block in block_table {
-                    let id = block.deref_mut().block_id;
-                    for BlockCacheElement {
-                        physical_blocks, ..
-                    } in self.block_caches.values()
-                    {
-                        if physical_blocks.iter().any(|x| x.deref_mut().block_id == id) {
-                            return;
-                        }
-                    }
-
                     block.deref_mut().increment_refcount();
                 }
 
@@ -338,8 +328,13 @@ impl PrefixCacheManagerV2 {
 
             // If the last reused block is full, reserve an extra empty block for new tokens
             let new_toks = toks[match_len..].to_vec();
-            for _ in 0..new_toks.len().div_ceil(block_size) {
-                logical_prefix.push(LogicalTokenBlock::new(block_size));
+            logical_prefix.push(LogicalTokenBlock::new(block_size));
+            for tok in &new_toks {
+                sequence::util_append_token_to_blocks(
+                    *tok as usize,
+                    &mut logical_prefix,
+                    block_size,
+                );
             }
             if logical_prefix.last().is_some_and(|last| last.is_full()) {
                 logical_prefix.push(LogicalTokenBlock::new(block_size));
