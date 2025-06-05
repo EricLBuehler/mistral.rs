@@ -298,7 +298,7 @@
 <a href=#298 id=298 data-nosnippet>298</a>    models::quantized_llama::ModelWeights <span class="kw">as </span>QLlama,
 <a href=#299 id=299 data-nosnippet>299</a>    models::quantized_phi2::ModelWeights <span class="kw">as </span>QPhi,
 <a href=#300 id=300 data-nosnippet>300</a>    models::quantized_phi3::ModelWeights <span class="kw">as </span>QPhi3,
-<a href=#301 id=301 data-nosnippet>301</a>    models::quantized_qwen2::ModelWeights <span class="kw">as </span>QQwen2,
+<a href=#301 id=301 data-nosnippet>301</a>    models::quantized_qwen::ModelWeights <span class="kw">as </span>QQwen,
 <a href=#302 id=302 data-nosnippet>302</a>    models::quantized_starcoder2::ModelWeights <span class="kw">as </span>QStarcoder2,
 <a href=#303 id=303 data-nosnippet>303</a>    xlora_models::{XLoraQLlama, XLoraQPhi3},
 <a href=#304 id=304 data-nosnippet>304</a>};
@@ -323,7 +323,7 @@
 <a href=#323 id=323 data-nosnippet>323</a>}
 <a href=#324 id=324 data-nosnippet>324</a>
 <a href=#325 id=325 data-nosnippet>325</a><span class="macro">akin!</span> {
-<a href=#326 id=326 data-nosnippet>326</a>    <span class="kw">let </span><span class="kw-2">&amp;</span>models_gguf = [QLlama, QPhi, QPhi3, QStarcoder2, QQwen2];
+<a href=#326 id=326 data-nosnippet>326</a>    <span class="kw">let </span><span class="kw-2">&amp;</span>models_gguf = [QLlama, QPhi, QPhi3, QStarcoder2, QQwen];
 <a href=#327 id=327 data-nosnippet>327</a>
 <a href=#328 id=328 data-nosnippet>328</a>    <span class="kw">impl</span>&lt;R: std::io::Seek + std::io::Read&gt; TryFrom&lt;ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>, R&gt;&gt;&gt; <span class="kw">for </span><span class="kw-2">*</span>models_gguf {
 <a href=#329 id=329 data-nosnippet>329</a>        <span class="kw">type </span>Error = candle_core::Error;

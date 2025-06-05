@@ -312,7 +312,7 @@
 <a href=#312 id=312 data-nosnippet>312</a>                };
 <a href=#313 id=313 data-nosnippet>313</a>                token_embd + output_norm + output
 <a href=#314 id=314 data-nosnippet>314</a>            }
-<a href=#315 id=315 data-nosnippet>315</a>            GGUFArchitecture::Qwen2 =&gt; {
+<a href=#315 id=315 data-nosnippet>315</a>            GGUFArchitecture::Qwen2 | GGUFArchitecture::Qwen3 =&gt; {
 <a href=#316 id=316 data-nosnippet>316</a>                <span class="kw">let </span>token_embd = <span class="macro">tensor_info_size_in_bytes!</span>(
 <a href=#317 id=317 data-nosnippet>317</a>                    <span class="self">self</span>.model.tensor_info(<span class="string">"token_embd.weight"</span>)<span class="question-mark">?</span>,
 <a href=#318 id=318 data-nosnippet>318</a>                    DType::F32
@@ -476,7 +476,7 @@
 <a href=#476 id=476 data-nosnippet>476</a>
 <a href=#477 id=477 data-nosnippet>477</a>                attn_norm + ffn_norm + attn_qkv + attn_output + ffn_up + ffn_down
 <a href=#478 id=478 data-nosnippet>478</a>            }
-<a href=#479 id=479 data-nosnippet>479</a>            GGUFArchitecture::Qwen2 =&gt; {
+<a href=#479 id=479 data-nosnippet>479</a>            GGUFArchitecture::Qwen2 | GGUFArchitecture::Qwen3 =&gt; {
 <a href=#480 id=480 data-nosnippet>480</a>                <span class="kw">let </span>attn_norm = <span class="macro">tensor_info_size_in_bytes!</span>(
 <a href=#481 id=481 data-nosnippet>481</a>                    <span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_norm.weight"</span>)<span class="question-mark">?</span>,
 <a href=#482 id=482 data-nosnippet>482</a>                    DType::F32
@@ -486,89 +486,97 @@
 <a href=#486 id=486 data-nosnippet>486</a>                    DType::F32
 <a href=#487 id=487 data-nosnippet>487</a>                );
 <a href=#488 id=488 data-nosnippet>488</a>
-<a href=#489 id=489 data-nosnippet>489</a>                <span class="kw">let </span>attn_q = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
-<a href=#490 id=490 data-nosnippet>490</a>                    </span>.model
-<a href=#491 id=491 data-nosnippet>491</a>                    .tensor_info(<span class="string">"blk.0.attn_q.weight"</span>)<span class="question-mark">?</span>)
-<a href=#492 id=492 data-nosnippet>492</a>                    + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_q.bias"</span>)<span class="question-mark">?</span>);
-<a href=#493 id=493 data-nosnippet>493</a>                <span class="kw">let </span>attn_k = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
-<a href=#494 id=494 data-nosnippet>494</a>                    </span>.model
-<a href=#495 id=495 data-nosnippet>495</a>                    .tensor_info(<span class="string">"blk.0.attn_k.weight"</span>)<span class="question-mark">?</span>)
-<a href=#496 id=496 data-nosnippet>496</a>                    + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_k.bias"</span>)<span class="question-mark">?</span>);
-<a href=#497 id=497 data-nosnippet>497</a>                <span class="kw">let </span>attn_v = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
-<a href=#498 id=498 data-nosnippet>498</a>                    </span>.model
-<a href=#499 id=499 data-nosnippet>499</a>                    .tensor_info(<span class="string">"blk.0.attn_v.weight"</span>)<span class="question-mark">?</span>)
-<a href=#500 id=500 data-nosnippet>500</a>                    + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_v.bias"</span>)<span class="question-mark">?</span>);
-<a href=#501 id=501 data-nosnippet>501</a>                <span class="kw">let </span>attn_output = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
-<a href=#502 id=502 data-nosnippet>502</a>                    </span>.model
-<a href=#503 id=503 data-nosnippet>503</a>                    .tensor_info(<span class="string">"blk.0.attn_output.weight"</span>)<span class="question-mark">?</span>);
-<a href=#504 id=504 data-nosnippet>504</a>
-<a href=#505 id=505 data-nosnippet>505</a>                <span class="kw">let </span>ffn_gate =
-<a href=#506 id=506 data-nosnippet>506</a>                    <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.ffn_gate.weight"</span>)<span class="question-mark">?</span>);
-<a href=#507 id=507 data-nosnippet>507</a>                <span class="kw">let </span>ffn_up =
-<a href=#508 id=508 data-nosnippet>508</a>                    <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.ffn_up.weight"</span>)<span class="question-mark">?</span>);
-<a href=#509 id=509 data-nosnippet>509</a>                <span class="kw">let </span>ffn_down =
-<a href=#510 id=510 data-nosnippet>510</a>                    <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.ffn_down.weight"</span>)<span class="question-mark">?</span>);
-<a href=#511 id=511 data-nosnippet>511</a>
-<a href=#512 id=512 data-nosnippet>512</a>                attn_norm
-<a href=#513 id=513 data-nosnippet>513</a>                    + ffn_norm
-<a href=#514 id=514 data-nosnippet>514</a>                    + attn_q
-<a href=#515 id=515 data-nosnippet>515</a>                    + attn_k
-<a href=#516 id=516 data-nosnippet>516</a>                    + attn_v
-<a href=#517 id=517 data-nosnippet>517</a>                    + attn_output
-<a href=#518 id=518 data-nosnippet>518</a>                    + ffn_gate
-<a href=#519 id=519 data-nosnippet>519</a>                    + ffn_up
-<a href=#520 id=520 data-nosnippet>520</a>                    + ffn_down
-<a href=#521 id=521 data-nosnippet>521</a>            }
-<a href=#522 id=522 data-nosnippet>522</a>            GGUFArchitecture::Starcoder2 =&gt; {
-<a href=#523 id=523 data-nosnippet>523</a>                <span class="kw">let </span>attn_norm = <span class="macro">tensor_info_size_in_bytes!</span>(
-<a href=#524 id=524 data-nosnippet>524</a>                    <span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_norm.weight"</span>)<span class="question-mark">?</span>,
-<a href=#525 id=525 data-nosnippet>525</a>                    DType::F32
-<a href=#526 id=526 data-nosnippet>526</a>                ) + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
-<a href=#527 id=527 data-nosnippet>527</a>                    </span>.model
-<a href=#528 id=528 data-nosnippet>528</a>                    .tensor_info(<span class="string">"blk.0.attn_norm.bias"</span>)<span class="question-mark">?</span>);
-<a href=#529 id=529 data-nosnippet>529</a>                <span class="kw">let </span>ffn_norm = <span class="macro">tensor_info_size_in_bytes!</span>(
-<a href=#530 id=530 data-nosnippet>530</a>                    <span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.ffn_norm.weight"</span>)<span class="question-mark">?</span>,
-<a href=#531 id=531 data-nosnippet>531</a>                    DType::F32
-<a href=#532 id=532 data-nosnippet>532</a>                ) + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
-<a href=#533 id=533 data-nosnippet>533</a>                    </span>.model
-<a href=#534 id=534 data-nosnippet>534</a>                    .tensor_info(<span class="string">"blk.0.ffn_norm.bias"</span>)<span class="question-mark">?</span>);
-<a href=#535 id=535 data-nosnippet>535</a>
-<a href=#536 id=536 data-nosnippet>536</a>                <span class="kw">let </span>attn_q = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
-<a href=#537 id=537 data-nosnippet>537</a>                    </span>.model
-<a href=#538 id=538 data-nosnippet>538</a>                    .tensor_info(<span class="string">"blk.0.attn_q.weight"</span>)<span class="question-mark">?</span>)
-<a href=#539 id=539 data-nosnippet>539</a>                    + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_q.bias"</span>)<span class="question-mark">?</span>);
-<a href=#540 id=540 data-nosnippet>540</a>                <span class="kw">let </span>attn_k = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
+<a href=#489 id=489 data-nosnippet>489</a>                <span class="kw">let </span><span class="kw-2">mut </span>attn_q =
+<a href=#490 id=490 data-nosnippet>490</a>                    <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_q.weight"</span>)<span class="question-mark">?</span>);
+<a href=#491 id=491 data-nosnippet>491</a>                <span class="kw">if let </span>GGUFArchitecture::Qwen2 = <span class="self">self</span>.arch {
+<a href=#492 id=492 data-nosnippet>492</a>                    attn_q +=
+<a href=#493 id=493 data-nosnippet>493</a>                        <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_q.bias"</span>)<span class="question-mark">?</span>);
+<a href=#494 id=494 data-nosnippet>494</a>                }
+<a href=#495 id=495 data-nosnippet>495</a>                <span class="kw">let </span><span class="kw-2">mut </span>attn_k =
+<a href=#496 id=496 data-nosnippet>496</a>                    <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_k.weight"</span>)<span class="question-mark">?</span>);
+<a href=#497 id=497 data-nosnippet>497</a>                <span class="kw">if let </span>GGUFArchitecture::Qwen2 = <span class="self">self</span>.arch {
+<a href=#498 id=498 data-nosnippet>498</a>                    attn_k +=
+<a href=#499 id=499 data-nosnippet>499</a>                        <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_k.bias"</span>)<span class="question-mark">?</span>);
+<a href=#500 id=500 data-nosnippet>500</a>                }
+<a href=#501 id=501 data-nosnippet>501</a>
+<a href=#502 id=502 data-nosnippet>502</a>                <span class="kw">let </span><span class="kw-2">mut </span>attn_v =
+<a href=#503 id=503 data-nosnippet>503</a>                    <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_v.weight"</span>)<span class="question-mark">?</span>);
+<a href=#504 id=504 data-nosnippet>504</a>                <span class="kw">if let </span>GGUFArchitecture::Qwen2 = <span class="self">self</span>.arch {
+<a href=#505 id=505 data-nosnippet>505</a>                    attn_v +=
+<a href=#506 id=506 data-nosnippet>506</a>                        <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_v.bias"</span>)<span class="question-mark">?</span>);
+<a href=#507 id=507 data-nosnippet>507</a>                }
+<a href=#508 id=508 data-nosnippet>508</a>
+<a href=#509 id=509 data-nosnippet>509</a>                <span class="kw">let </span>attn_output = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
+<a href=#510 id=510 data-nosnippet>510</a>                    </span>.model
+<a href=#511 id=511 data-nosnippet>511</a>                    .tensor_info(<span class="string">"blk.0.attn_output.weight"</span>)<span class="question-mark">?</span>);
+<a href=#512 id=512 data-nosnippet>512</a>
+<a href=#513 id=513 data-nosnippet>513</a>                <span class="kw">let </span>ffn_gate =
+<a href=#514 id=514 data-nosnippet>514</a>                    <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.ffn_gate.weight"</span>)<span class="question-mark">?</span>);
+<a href=#515 id=515 data-nosnippet>515</a>                <span class="kw">let </span>ffn_up =
+<a href=#516 id=516 data-nosnippet>516</a>                    <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.ffn_up.weight"</span>)<span class="question-mark">?</span>);
+<a href=#517 id=517 data-nosnippet>517</a>                <span class="kw">let </span>ffn_down =
+<a href=#518 id=518 data-nosnippet>518</a>                    <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.ffn_down.weight"</span>)<span class="question-mark">?</span>);
+<a href=#519 id=519 data-nosnippet>519</a>
+<a href=#520 id=520 data-nosnippet>520</a>                attn_norm
+<a href=#521 id=521 data-nosnippet>521</a>                    + ffn_norm
+<a href=#522 id=522 data-nosnippet>522</a>                    + attn_q
+<a href=#523 id=523 data-nosnippet>523</a>                    + attn_k
+<a href=#524 id=524 data-nosnippet>524</a>                    + attn_v
+<a href=#525 id=525 data-nosnippet>525</a>                    + attn_output
+<a href=#526 id=526 data-nosnippet>526</a>                    + ffn_gate
+<a href=#527 id=527 data-nosnippet>527</a>                    + ffn_up
+<a href=#528 id=528 data-nosnippet>528</a>                    + ffn_down
+<a href=#529 id=529 data-nosnippet>529</a>            }
+<a href=#530 id=530 data-nosnippet>530</a>            GGUFArchitecture::Starcoder2 =&gt; {
+<a href=#531 id=531 data-nosnippet>531</a>                <span class="kw">let </span>attn_norm = <span class="macro">tensor_info_size_in_bytes!</span>(
+<a href=#532 id=532 data-nosnippet>532</a>                    <span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_norm.weight"</span>)<span class="question-mark">?</span>,
+<a href=#533 id=533 data-nosnippet>533</a>                    DType::F32
+<a href=#534 id=534 data-nosnippet>534</a>                ) + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
+<a href=#535 id=535 data-nosnippet>535</a>                    </span>.model
+<a href=#536 id=536 data-nosnippet>536</a>                    .tensor_info(<span class="string">"blk.0.attn_norm.bias"</span>)<span class="question-mark">?</span>);
+<a href=#537 id=537 data-nosnippet>537</a>                <span class="kw">let </span>ffn_norm = <span class="macro">tensor_info_size_in_bytes!</span>(
+<a href=#538 id=538 data-nosnippet>538</a>                    <span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.ffn_norm.weight"</span>)<span class="question-mark">?</span>,
+<a href=#539 id=539 data-nosnippet>539</a>                    DType::F32
+<a href=#540 id=540 data-nosnippet>540</a>                ) + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
 <a href=#541 id=541 data-nosnippet>541</a>                    </span>.model
-<a href=#542 id=542 data-nosnippet>542</a>                    .tensor_info(<span class="string">"blk.0.attn_k.weight"</span>)<span class="question-mark">?</span>)
-<a href=#543 id=543 data-nosnippet>543</a>                    + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_k.bias"</span>)<span class="question-mark">?</span>);
-<a href=#544 id=544 data-nosnippet>544</a>                <span class="kw">let </span>attn_v = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
+<a href=#542 id=542 data-nosnippet>542</a>                    .tensor_info(<span class="string">"blk.0.ffn_norm.bias"</span>)<span class="question-mark">?</span>);
+<a href=#543 id=543 data-nosnippet>543</a>
+<a href=#544 id=544 data-nosnippet>544</a>                <span class="kw">let </span>attn_q = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
 <a href=#545 id=545 data-nosnippet>545</a>                    </span>.model
-<a href=#546 id=546 data-nosnippet>546</a>                    .tensor_info(<span class="string">"blk.0.attn_v.weight"</span>)<span class="question-mark">?</span>)
-<a href=#547 id=547 data-nosnippet>547</a>                    + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_v.bias"</span>)<span class="question-mark">?</span>);
-<a href=#548 id=548 data-nosnippet>548</a>                <span class="kw">let </span>attn_output = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
+<a href=#546 id=546 data-nosnippet>546</a>                    .tensor_info(<span class="string">"blk.0.attn_q.weight"</span>)<span class="question-mark">?</span>)
+<a href=#547 id=547 data-nosnippet>547</a>                    + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_q.bias"</span>)<span class="question-mark">?</span>);
+<a href=#548 id=548 data-nosnippet>548</a>                <span class="kw">let </span>attn_k = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
 <a href=#549 id=549 data-nosnippet>549</a>                    </span>.model
-<a href=#550 id=550 data-nosnippet>550</a>                    .tensor_info(<span class="string">"blk.0.attn_output.weight"</span>)<span class="question-mark">?</span>)
-<a href=#551 id=551 data-nosnippet>551</a>                    + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
-<a href=#552 id=552 data-nosnippet>552</a>                        </span>.model
-<a href=#553 id=553 data-nosnippet>553</a>                        .tensor_info(<span class="string">"blk.0.attn_output.bias"</span>)<span class="question-mark">?</span>);
-<a href=#554 id=554 data-nosnippet>554</a>
-<a href=#555 id=555 data-nosnippet>555</a>                <span class="kw">let </span>ffn_up = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
-<a href=#556 id=556 data-nosnippet>556</a>                    </span>.model
-<a href=#557 id=557 data-nosnippet>557</a>                    .tensor_info(<span class="string">"blk.0.ffn_up.weight"</span>)<span class="question-mark">?</span>)
-<a href=#558 id=558 data-nosnippet>558</a>                    + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.ffn_up.bias"</span>)<span class="question-mark">?</span>);
-<a href=#559 id=559 data-nosnippet>559</a>                <span class="kw">let </span>ffn_down = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
-<a href=#560 id=560 data-nosnippet>560</a>                    </span>.model
-<a href=#561 id=561 data-nosnippet>561</a>                    .tensor_info(<span class="string">"blk.0.ffn_down.weight"</span>)<span class="question-mark">?</span>)
-<a href=#562 id=562 data-nosnippet>562</a>                    + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.ffn_down.bias"</span>)<span class="question-mark">?</span>);
-<a href=#563 id=563 data-nosnippet>563</a>
-<a href=#564 id=564 data-nosnippet>564</a>                attn_norm + ffn_norm + attn_q + attn_k + attn_v + attn_output + ffn_up + ffn_down
-<a href=#565 id=565 data-nosnippet>565</a>            }
-<a href=#566 id=566 data-nosnippet>566</a>            <span class="kw">_ </span>=&gt; <span class="macro">unimplemented!</span>(),
-<a href=#567 id=567 data-nosnippet>567</a>        };
-<a href=#568 id=568 data-nosnippet>568</a>        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[size_in_bytes; <span class="self">self</span>.num_layers(config)<span class="question-mark">?</span>])
-<a href=#569 id=569 data-nosnippet>569</a>    }
-<a href=#570 id=570 data-nosnippet>570</a>    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
-<a href=#571 id=571 data-nosnippet>571</a>        <span class="kw">let </span>model_config_metadata: ContentConfig = <span class="self">self</span>.model.into();
-<a href=#572 id=572 data-nosnippet>572</a>        <span class="prelude-val">Ok</span>(Box::new(model_config_metadata))
-<a href=#573 id=573 data-nosnippet>573</a>    }
-<a href=#574 id=574 data-nosnippet>574</a>}</code></pre></div></section></main></body></html>
+<a href=#550 id=550 data-nosnippet>550</a>                    .tensor_info(<span class="string">"blk.0.attn_k.weight"</span>)<span class="question-mark">?</span>)
+<a href=#551 id=551 data-nosnippet>551</a>                    + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_k.bias"</span>)<span class="question-mark">?</span>);
+<a href=#552 id=552 data-nosnippet>552</a>                <span class="kw">let </span>attn_v = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
+<a href=#553 id=553 data-nosnippet>553</a>                    </span>.model
+<a href=#554 id=554 data-nosnippet>554</a>                    .tensor_info(<span class="string">"blk.0.attn_v.weight"</span>)<span class="question-mark">?</span>)
+<a href=#555 id=555 data-nosnippet>555</a>                    + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_v.bias"</span>)<span class="question-mark">?</span>);
+<a href=#556 id=556 data-nosnippet>556</a>                <span class="kw">let </span>attn_output = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
+<a href=#557 id=557 data-nosnippet>557</a>                    </span>.model
+<a href=#558 id=558 data-nosnippet>558</a>                    .tensor_info(<span class="string">"blk.0.attn_output.weight"</span>)<span class="question-mark">?</span>)
+<a href=#559 id=559 data-nosnippet>559</a>                    + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
+<a href=#560 id=560 data-nosnippet>560</a>                        </span>.model
+<a href=#561 id=561 data-nosnippet>561</a>                        .tensor_info(<span class="string">"blk.0.attn_output.bias"</span>)<span class="question-mark">?</span>);
+<a href=#562 id=562 data-nosnippet>562</a>
+<a href=#563 id=563 data-nosnippet>563</a>                <span class="kw">let </span>ffn_up = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
+<a href=#564 id=564 data-nosnippet>564</a>                    </span>.model
+<a href=#565 id=565 data-nosnippet>565</a>                    .tensor_info(<span class="string">"blk.0.ffn_up.weight"</span>)<span class="question-mark">?</span>)
+<a href=#566 id=566 data-nosnippet>566</a>                    + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.ffn_up.bias"</span>)<span class="question-mark">?</span>);
+<a href=#567 id=567 data-nosnippet>567</a>                <span class="kw">let </span>ffn_down = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
+<a href=#568 id=568 data-nosnippet>568</a>                    </span>.model
+<a href=#569 id=569 data-nosnippet>569</a>                    .tensor_info(<span class="string">"blk.0.ffn_down.weight"</span>)<span class="question-mark">?</span>)
+<a href=#570 id=570 data-nosnippet>570</a>                    + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.ffn_down.bias"</span>)<span class="question-mark">?</span>);
+<a href=#571 id=571 data-nosnippet>571</a>
+<a href=#572 id=572 data-nosnippet>572</a>                attn_norm + ffn_norm + attn_q + attn_k + attn_v + attn_output + ffn_up + ffn_down
+<a href=#573 id=573 data-nosnippet>573</a>            }
+<a href=#574 id=574 data-nosnippet>574</a>            <span class="kw">_ </span>=&gt; <span class="macro">unimplemented!</span>(),
+<a href=#575 id=575 data-nosnippet>575</a>        };
+<a href=#576 id=576 data-nosnippet>576</a>        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[size_in_bytes; <span class="self">self</span>.num_layers(config)<span class="question-mark">?</span>])
+<a href=#577 id=577 data-nosnippet>577</a>    }
+<a href=#578 id=578 data-nosnippet>578</a>    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+<a href=#579 id=579 data-nosnippet>579</a>        <span class="kw">let </span>model_config_metadata: ContentConfig = <span class="self">self</span>.model.into();
+<a href=#580 id=580 data-nosnippet>580</a>        <span class="prelude-val">Ok</span>(Box::new(model_config_metadata))
+<a href=#581 id=581 data-nosnippet>581</a>    }
+<a href=#582 id=582 data-nosnippet>582</a>}</code></pre></div></section></main></body></html>
