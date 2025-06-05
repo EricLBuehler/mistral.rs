@@ -394,13 +394,13 @@ impl Loader for GGUFLoader {
             }
         };
 
-        let archs = model.get_metadata()[&format!("general.architecture")].to_string()?;
-        let base_url = format!("general.base_model.0.repo_url");
+        let archs = model.get_metadata()[&"general.architecture".to_string()].to_string()?;
+        let base_url = "general.base_model.0.repo_url".to_string();
         //temp fix, tokenizer built from gguf file may cause problems in qwen3
         if archs == "qwen3" && model.get_metadata().contains_key(&base_url) {
             let base_repo = model.get_metadata()[&base_url].to_string()?;
             let base_repo = base_repo.replace("https://huggingface.co/", "");
-            warn!("Loading `tokenizer.json` at `{}` because built-in tokenizer metadata in gguf file may not be usuable.", base_repo);
+            warn!("Loading `tokenizer.json` at `{}` because built-in tokenizer metadata in gguf file may not be usable.", base_repo);
             let api = {
                 use crate::GLOBAL_HF_CACHE;
                 let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
