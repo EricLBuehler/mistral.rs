@@ -329,9 +329,26 @@ impl PrefixCacheManagerV2 {
                 block.deref_mut().increment_refcount();
             }
 
-            // If the last reused block is full, reserve an extra empty block for new tokens
+            // Tokens that are not already covered by the cached prefix.
             let new_toks = toks[match_len..].to_vec();
-            logical_prefix.push(LogicalTokenBlock::new(block_size));
+
+            // If no new tokens need to be processed we can simply return `None` to
+            // signal the caller that the entire sequence is already cached.
+            if new_toks.is_empty() {
+                return Ok(None);
+            }
+
+            // Ensure there is room in the last logical block before we start
+            // appending new tokens. We only create a brand-new empty logical
+            // block when the current last block is already full – this avoids
+            // introducing an off-by-one mis-alignment between logical and
+            // physical blocks.
+            if logical_prefix.last().map(|b| b.is_full()).unwrap_or(true) {
+                logical_prefix.push(LogicalTokenBlock::new(block_size));
+            }
+
+            // Append the new tokens, letting the helper function allocate
+            // additional logical blocks when the previous one becomes full.
             for tok in &new_toks {
                 sequence::util_append_token_to_blocks(
                     *tok as usize,
@@ -339,6 +356,12 @@ impl PrefixCacheManagerV2 {
                     block_size,
                 );
             }
+
+            // The helper automatically creates a new block when the previous
+            // one becomes full, however if the *last* block ends up completely
+            // filled after the appends it will not yet have added an extra
+            // empty block – we do so here to keep the invariant that the last
+            // logical block is never full.
             if logical_prefix.last().is_some_and(|last| last.is_full()) {
                 logical_prefix.push(LogicalTokenBlock::new(block_size));
             }
@@ -351,7 +374,12 @@ impl PrefixCacheManagerV2 {
                 logical_blocks: logical_prefix,
                 physical_blocks: physical_prefix,
                 toks: new_toks,
-                offset: match_len,
+                // For paged-attention we always reset the token offset to 0.  The
+                // KV-cache already contains the reused prefix blocks, therefore
+                // all subsequent indexing (e.g. when mapping completion tokens
+                // to KV slots) should be performed relative to the beginning of
+                // the sequence.
+                offset: 0,
                 images_to_keep,
             }));
         }
