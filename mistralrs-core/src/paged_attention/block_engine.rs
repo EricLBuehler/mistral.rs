@@ -51,6 +51,10 @@ impl LogicalTokenBlock {
         self.tokens.pop();
         self.num_tokens -= 1;
     }
+
+    pub fn toks(&self) -> &[usize] {
+        &self.tokens
+    }
 }
 
 impl Hash for LogicalTokenBlock {
