@@ -312,7 +312,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                 };
                 token_embd + output_norm + output
             }
-            GGUFArchitecture::Qwen2 => {
+            GGUFArchitecture::Qwen2 | GGUFArchitecture::Qwen3 => {
                 let token_embd = tensor_info_size_in_bytes!(
                     self.model.tensor_info("token_embd.weight")?,
                     DType::F32
@@ -476,7 +476,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
 
                 attn_norm + ffn_norm + attn_qkv + attn_output + ffn_up + ffn_down
             }
-            GGUFArchitecture::Qwen2 => {
+            GGUFArchitecture::Qwen2 | GGUFArchitecture::Qwen3 => {
                 let attn_norm = tensor_info_size_in_bytes!(
                     self.model.tensor_info("blk.0.attn_norm.weight")?,
                     DType::F32
@@ -486,18 +486,38 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                     DType::F32
                 );
 
-                let attn_q = tensor_info_size_in_bytes!(self
-                    .model
-                    .tensor_info("blk.0.attn_q.weight")?)
-                    + tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_q.bias")?);
-                let attn_k = tensor_info_size_in_bytes!(self
-                    .model
-                    .tensor_info("blk.0.attn_k.weight")?)
-                    + tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_k.bias")?);
-                let attn_v = tensor_info_size_in_bytes!(self
-                    .model
-                    .tensor_info("blk.0.attn_v.weight")?)
-                    + tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_v.bias")?);
+                let mut attn_q =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_q.weight")?);
+                match self.arch {
+                    GGUFArchitecture::Qwen2 => {
+                        attn_q += tensor_info_size_in_bytes!(self
+                            .model
+                            .tensor_info("blk.0.attn_q.bias")?);
+                    }
+                    _ => {}
+                }
+                let mut attn_k =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_k.weight")?);
+                match self.arch {
+                    GGUFArchitecture::Qwen2 => {
+                        attn_k += tensor_info_size_in_bytes!(self
+                            .model
+                            .tensor_info("blk.0.attn_k.bias")?);
+                    }
+                    _ => {}
+                }
+
+                let mut attn_v =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_v.weight")?);
+                match self.arch {
+                    GGUFArchitecture::Qwen2 => {
+                        attn_v += tensor_info_size_in_bytes!(self
+                            .model
+                            .tensor_info("blk.0.attn_v.bias")?);
+                    }
+                    _ => {}
+                }
+
                 let attn_output = tensor_info_size_in_bytes!(self
                     .model
                     .tensor_info("blk.0.attn_output.weight")?);

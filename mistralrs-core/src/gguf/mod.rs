@@ -27,6 +27,7 @@ pub enum GGUFArchitecture {
     Phi3,
     Starcoder2,
     Qwen2,
+    Qwen3,
 }
 
 // Wraps from_str() for some convenience:
