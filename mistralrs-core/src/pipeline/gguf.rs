@@ -379,7 +379,7 @@ impl Loader for GGUFLoader {
         }
 
         let GgufTokenizerConversion {
-            tokenizer,
+            mut tokenizer,
             bos,
             eos,
             unk,
@@ -393,6 +393,34 @@ impl Loader for GGUFLoader {
                 unk: None,
             }
         };
+
+        let archs = model.get_metadata()[&format!("general.architecture")].to_string()?;
+        let base_url = format!("general.base_model.0.repo_url");
+        //temp fix, tokenizer built from gguf file may cause problems in qwen3
+        if archs == "qwen3" && model.get_metadata().contains_key(&base_url) {
+            let base_repo = model.get_metadata()[&base_url].to_string()?;
+            let base_repo = base_repo.replace("https://huggingface.co/", "");
+            warn!("Loading `tokenizer.json` at `{}` because built-in tokenizer metadata in gguf file may not be usuable.", base_repo);
+            let api = {
+                use crate::GLOBAL_HF_CACHE;
+                let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+                let mut api = ApiBuilder::from_cache(cache)
+                    .with_progress(true)
+                    .with_token(get_token(&TokenSource::CacheToken)?);
+                if let Ok(x) = std::env::var("HF_HUB_CACHE") {
+                    api = api.with_cache_dir(x.into());
+                }
+                api.build()?
+            };
+            let api = api.repo(Repo::with_revision(
+                base_repo.clone(),
+                RepoType::Model,
+                "main".to_string(),
+            ));
+            let tokenizer_file =
+                crate::api_get_file!(api, "tokenizer.json", std::path::Path::new(&base_repo));
+            tokenizer = get_tokenizer(tokenizer_file, None)?;
+        }
 
         // Only load gguf chat template if there is nothing else
         let gguf_chat_template =
