@@ -216,14 +216,15 @@
 
 pub mod chat_completion;
 pub mod completion_base;
-mod completions;
+pub mod completions;
 mod handlers;
-mod image_generation;
+pub mod handlers_base;
+pub mod image_generation;
 pub mod mistralrs_for_server_builder;
 pub mod mistralrs_server_router_builder;
 pub mod openai;
 pub mod openapi_doc;
-mod speech_generation;
-pub mod streaming;
+pub mod speech_generation;
+pub mod sse;
 pub mod types;
 pub mod util;

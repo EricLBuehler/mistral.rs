@@ -15,25 +15,27 @@ use either::Either;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use mistralrs_core::{
-    ChatCompletionChunkResponse, ChatCompletionResponse, Constraint, DrySamplingParams, MistralRs,
-    NormalRequest, Request, RequestMessage, Response, SamplingParams,
-    StopTokens as InternalStopTokens,
+    ChatCompletionChunkResponse, ChatCompletionResponse, Constraint, MistralRs, NormalRequest,
+    Request, RequestMessage, Response, SamplingParams,
 };
 use serde_json::Value;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
     completion_base::{
-        base_handle_completion_error, base_process_non_streaming_response, create_response_channel,
-        send_model_request, BaseCompletionResponder, BaseJsonModelError, ErrorToResponse,
-        JsonError, ModelErrorMessage,
+        convert_stop_tokens, get_dry_sampling_params, handle_completion_error,
+        BaseCompletionResponder,
+    },
+    handlers_base::{
+        create_response_channel, process_non_streaming_response, send_model_request,
+        BaseJsonModelError, ErrorToResponse, JsonError, ModelErrorMessage,
     },
     openai::{
         ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
-        ResponseFormat, StopTokens,
+        ResponseFormat,
     },
-    streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
-    types::{ExtractedMistralRsState, SharedMistralRsState},
+    sse::{create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
+    types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
     util::parse_image_url,
 };
 
@@ -54,8 +56,7 @@ use crate::{
 ///     chunk
 /// });
 /// ```
-pub type ChatCompletionOnChunkCallback =
-    Box<dyn Fn(ChatCompletionChunkResponse) -> ChatCompletionChunkResponse + Send + Sync>;
+pub type ChatCompletionOnChunkCallback = OnChunkCallback<ChatCompletionChunkResponse>;
 
 /// A callback function that is executed when the streaming response completes.
 ///
@@ -72,7 +73,7 @@ pub type ChatCompletionOnChunkCallback =
 ///     // Process all chunks for analytics
 /// });
 /// ```
-pub type ChatCompletionOnDoneCallback = Box<dyn Fn(&[ChatCompletionChunkResponse]) + Send + Sync>;
+pub type ChatCompletionOnDoneCallback = OnDoneCallback<ChatCompletionChunkResponse>;
 
 /// A streaming response handler.
 ///
@@ -201,11 +202,8 @@ pub async fn parse_request(
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
 
-    let stop_toks = match oairequest.stop_seqs {
-        Some(StopTokens::Multi(m)) => Some(InternalStopTokens::Seqs(m)),
-        Some(StopTokens::Single(s)) => Some(InternalStopTokens::Seqs(vec![s])),
-        None => None,
-    };
+    let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
+
     let messages = match oairequest.messages {
         Either::Left(req_messages) => {
             let mut messages = Vec::new();
@@ -421,16 +419,12 @@ pub async fn parse_request(
         }
     };
 
-    let dry_params = if let Some(dry_multiplier) = oairequest.dry_multiplier {
-        Some(DrySamplingParams::new_with_defaults(
-            dry_multiplier,
-            oairequest.dry_sequence_breakers,
-            oairequest.dry_base,
-            oairequest.dry_allowed_length,
-        )?)
-    } else {
-        None
-    };
+    let dry_params = get_dry_sampling_params(
+        oairequest.dry_multiplier,
+        oairequest.dry_sequence_breakers,
+        oairequest.dry_base,
+        oairequest.dry_allowed_length,
+    )?;
 
     let is_streaming = oairequest.stream.unwrap_or(false);
 
@@ -501,49 +495,33 @@ pub async fn chatcompletions(
 
     let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx).await {
         Ok(x) => x,
-        Err(e) => return handle_chat_completion_error(state, e.into()),
+        Err(e) => return handle_completion_error(state, e.into()),
     };
 
     if let Err(e) = send_model_request(&state, request).await {
-        return handle_chat_completion_error(state, e.into());
+        return handle_completion_error(state, e.into());
     }
 
     if is_streaming {
-        ChatCompletionResponder::Sse(create_chat_streamer(rx, state, None, None))
+        ChatCompletionResponder::Sse(create_chat_completions_streamer(rx, state, None, None))
     } else {
-        process_non_streaming_chat_response(&mut rx, state).await
+        process_non_streaming_response(&mut rx, state, match_responses, handle_completion_error)
+            .await
     }
 }
 
-/// Helper function to handle chat completion errors and logging them.
-pub fn handle_chat_completion_error(
-    state: SharedMistralRsState,
-    e: Box<dyn std::error::Error + Send + Sync + 'static>,
-) -> ChatCompletionResponder {
-    base_handle_completion_error(state, e)
-}
-
 /// Creates a SSE streamer for chat completions with optional callbacks.
-pub fn create_chat_streamer(
+pub fn create_chat_completions_streamer(
     rx: Receiver<Response>,
     state: SharedMistralRsState,
     on_chunk: Option<ChatCompletionOnChunkCallback>,
     on_done: Option<ChatCompletionOnDoneCallback>,
 ) -> Sse<ChatCompletionStreamer> {
-    let streamer = base_create_streamer(rx, state, on_chunk, on_done);
+    let streamer = create_streamer(rx, state, on_chunk, on_done);
     let keep_alive_interval = get_keep_alive_interval();
 
     Sse::new(streamer)
         .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval)))
-}
-
-/// Processes non-streaming chat completion responses.
-pub async fn process_non_streaming_chat_response(
-    rx: &mut Receiver<Response>,
-    state: SharedMistralRsState,
-) -> ChatCompletionResponder {
-    base_process_non_streaming_response(rx, state, match_responses, handle_chat_completion_error)
-        .await
 }
 
 /// Matches and processes different types of model responses into appropriate chat completion responses.
