@@ -34,7 +34,7 @@ candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", versio
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }
 # candle-flash-attn = { path = "../candle/candle-flash-attn" }
 
-axum = "0.7.9"
+axum = "0.8.4"
 anyhow = "1.0.98"
 serde = "1.0.219"
 serde_json = "1.0.140"
@@ -46,7 +46,7 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 futures = "0.3"
 clap = { version = "4.5.39", features = ["derive", "wrap_help"] }
-pyo3 = { version = "0.24.2", features = ["full", "extension-module", "either"] }
+pyo3 = { version = "0.25.0", features = ["full", "extension-module", "either"] }
 tokio = { version = "1.45.1", features = ["full", "rt-multi-thread"] }
 once_cell = "1.21.3"
 # All features but avif, avif increases the msrv dramatically
@@ -90,11 +90,11 @@ hf-hub = { version = "0.4.2", default-features = false, features = [
     "tokio",
     "rustls-tls",
 ] }
-itertools = "0.13.0"
+itertools = "0.14.0"
 rand = "0.9.1"
-cli-table = "0.4.9"
-dirs = "5.0.1"
-thiserror = "1"
+cli-table = "0.5.0"
+dirs = "6.0.0"
+thiserror = "2.0.12"
 tokenizers = { version = "0.21.1", default-features = false }
 tqdm = "0.7.0"
 chrono = "0.4.41"
@@ -112,8 +112,8 @@ tokio-rayon = "2.1.0"
 rand_isaac = "0.4.0"
 indicatif = { version = "0.17.11", features = ["rayon"] }
 async-trait = "0.1.88"
-strum = { version = "0.26", features = ["derive"] }
-derive_more = { version = "0.99.20", default-features = false, features = ["from"] }
+strum = { version = "0.27.1", features = ["derive"] }
+derive_more = { version = "2.0.1", default-features = false, features = ["from"] }
 akin = "0.4.0"
 variantly = "0.4.0"
 derive-new = "0.7.0"
@@ -145,7 +145,7 @@ paste = "1.0.15"
 byteorder = "1.5.0"
 yoke = "0.7.5"
 memmap2 = "0.9.5"
-pyo3-build-config = "0.22"
+pyo3-build-config = "0.25.0"
 ctrlc = "3.4.7"
 directories = "6.0.0"
 rustyline = { version = "16.0.0", default-features = false, features = ["with-file-history"] }
