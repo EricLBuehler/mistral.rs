@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::serde_default_fn;
+use crate::{layers::Activation, serde_default_fn};
 
 serde_default_fn!(usize, default_attention_dim, 256);
 serde_default_fn!(usize, default_attention_heads, 4);
@@ -15,8 +15,8 @@ serde_default_fn!(usize, default_depthwise_seperable_out_channel, 256);
 serde_default_fn!(usize, default_depthwise_multiplier, 1);
 serde_default_fn!(usize, default_chunk_se, 0);
 serde_default_fn!(usize, default_kernel_size, 3);
-serde_default_fn!(String, default_activation, "relu".to_string());
-serde_default_fn!(String, default_conv_activation, "relu".to_string());
+serde_default_fn!(Activation, default_activation, Activation::Relu);
+serde_default_fn!(Activation, default_conv_activation, Activation::Relu);
 serde_default_fn!(String, default_conv_glu_type, "sigmoid".to_string());
 serde_default_fn!(bool, default_bias_in_glu, true);
 serde_default_fn!(bool, default_linear_glu_in_convm, false);
@@ -29,7 +29,7 @@ serde_default_fn!(usize, default_attention_group_size, 1);
 serde_default_fn!(String, default_subsampling, "dw_striding".to_string());
 serde_default_fn!(usize, default_conv_channels, 256);
 serde_default_fn!(usize, default_subsampling_conv_chunking_factor, 1);
-serde_default_fn!(String, default_nemo_activation, "relu".to_string());
+serde_default_fn!(Activation, default_nemo_activation, Activation::Relu);
 serde_default_fn!(bool, default_nemo_is_causal, false);
 serde_default_fn!(usize, fake_default_sentinel, usize::MAX);
 
@@ -41,7 +41,7 @@ pub struct RelativeAttentionBiasArgs {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct NemoConvSettings {
+pub struct NemoConvConfig {
     #[serde(default = "default_subsampling")]
     pub subsampling: String,
     #[serde(default = "fake_default_sentinel")]
@@ -55,7 +55,7 @@ pub struct NemoConvSettings {
     #[serde(default = "default_subsampling_conv_chunking_factor")]
     pub subsampling_conv_chunking_factor: usize,
     #[serde(default = "default_nemo_activation")]
-    pub activation: String,
+    pub activation: Activation,
     #[serde(default = "default_nemo_is_causal")]
     pub is_causal: bool,
 }
@@ -98,9 +98,9 @@ pub struct ConformerEncoderConfig {
     #[serde(default = "default_kernel_size")]
     pub kernel_size: usize,
     #[serde(default = "default_activation")]
-    pub activation: String,
+    pub activation: Activation,
     #[serde(default = "default_conv_activation")]
-    pub conv_activation: String,
+    pub conv_activation: Activation,
     #[serde(default = "default_conv_glu_type")]
     pub conv_glu_type: String,
     #[serde(default = "default_bias_in_glu")]
@@ -116,7 +116,7 @@ pub struct ConformerEncoderConfig {
     pub relative_attention_bias_args: Option<RelativeAttentionBiasArgs>,
     #[serde(default = "default_time_reduction")]
     pub time_reduction: usize,
-    pub nemo_conv_settings: Option<NemoConvSettings>,
+    pub nemo_conv_settings: NemoConvConfig,
     #[serde(default = "default_replication_pad_for_subsample_embedding")]
     pub replication_pad_for_subsample_embedding: bool,
     #[serde(default = "default_attention_group_size")]
@@ -126,20 +126,15 @@ pub struct ConformerEncoderConfig {
 
 impl ConformerEncoderConfig {
     pub fn finish_nemo_config(&mut self) {
-        match &mut self.nemo_conv_settings {
-            Some(nemo_conv_settings) => {
-                // Override any of the defaults with the incoming, user settings
-                if nemo_conv_settings.subsampling_factor == usize::MAX {
-                    nemo_conv_settings.subsampling_factor = self.time_reduction;
-                }
-                if nemo_conv_settings.feat_in == usize::MAX {
-                    nemo_conv_settings.feat_in = self.input_size;
-                }
-                if nemo_conv_settings.feat_out == usize::MAX {
-                    nemo_conv_settings.feat_out = self.attention_dim;
-                }
-            }
-            None => (),
+        // Override any of the defaults with the incoming, user settings
+        if self.nemo_conv_settings.subsampling_factor == usize::MAX {
+            self.nemo_conv_settings.subsampling_factor = self.time_reduction;
+        }
+        if self.nemo_conv_settings.feat_in == usize::MAX {
+            self.nemo_conv_settings.feat_in = self.input_size;
+        }
+        if self.nemo_conv_settings.feat_out == usize::MAX {
+            self.nemo_conv_settings.feat_out = self.attention_dim;
         }
     }
 }
