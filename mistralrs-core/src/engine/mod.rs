@@ -11,7 +11,7 @@ use crate::{
     scheduler::{Scheduler, SchedulerOutput},
     search,
     sequence::{SeqStepType, StopReason},
-    CompletionResponse, SchedulerConfig, DEBUG,
+    tools, CompletionResponse, SchedulerConfig, DEBUG,
 };
 use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::ParserFactory;
@@ -74,6 +74,7 @@ pub struct Engine {
     pipeline: Arc<Mutex<dyn Pipeline>>,
     bert_pipeline: Arc<Mutex<Option<BertPipeline>>>,
     search_callback: Option<Arc<search::SearchCallback>>,
+    tool_callbacks: tools::ToolCallbacks,
     scheduler: Arc<Mutex<dyn Scheduler>>,
     id: Arc<Mutex<usize>>,
     truncate_sequence: bool,
@@ -108,6 +109,7 @@ impl Engine {
         throughput_logging_enabled: bool,
         search_embedding_model: Option<BertEmbeddingModel>,
         search_callback: Option<Arc<search::SearchCallback>>,
+        tool_callbacks: tools::ToolCallbacks,
     ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
@@ -132,6 +134,7 @@ impl Engine {
             pipeline,
             bert_pipeline: Arc::new(Mutex::new(bert_pipeline)),
             search_callback,
+            tool_callbacks,
             scheduler: scheduler.clone(),
             id: Arc::new(Mutex::new(0)),
             truncate_sequence,

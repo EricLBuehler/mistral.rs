@@ -1,6 +1,7 @@
 use candle_core::Device;
-use mistralrs_core::SearchCallback;
 use mistralrs_core::*;
+use mistralrs_core::{SearchCallback, ToolCallback};
+use std::collections::HashMap;
 use std::{
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
@@ -28,6 +29,7 @@ pub struct TextModelBuilder {
     pub(crate) hf_cache_path: Option<PathBuf>,
     pub(crate) search_bert_model: Option<BertEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
+    pub(crate) tool_callbacks: HashMap<String, Arc<ToolCallback>>,
     pub(crate) device: Option<Device>,
 
     // Model running
@@ -118,6 +120,7 @@ impl TextModelBuilder {
             hf_cache_path: None,
             search_bert_model: None,
             search_callback: None,
+            tool_callbacks: HashMap::new(),
             device: None,
         }
     }
@@ -131,6 +134,16 @@ impl TextModelBuilder {
     /// Override the search function used when `web_search_options` is enabled.
     pub fn with_search_callback(mut self, callback: Arc<SearchCallback>) -> Self {
         self.search_callback = Some(callback);
+        self
+    }
+
+    /// Register a callback for a specific tool name.
+    pub fn with_tool_callback(
+        mut self,
+        name: impl Into<String>,
+        callback: Arc<ToolCallback>,
+    ) -> Self {
+        self.tool_callbacks.insert(name.into(), callback);
         self
     }
 
@@ -375,6 +388,9 @@ impl TextModelBuilder {
         );
         if let Some(cb) = self.search_callback.clone() {
             runner = runner.with_search_callback(cb);
+        }
+        for (name, cb) in &self.tool_callbacks {
+            runner = runner.with_tool_callback(name.clone(), cb.clone());
         }
         runner = runner
             .with_no_kv_cache(self.no_kv_cache)

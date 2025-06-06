@@ -146,7 +146,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
    - [AnyMoE](docs/ANYMOE.md): create MoE models on any base model
    - [Sampling & penalty options](docs/SAMPLING.md)
    - Prompt chunking for large inputs
-   - Integrated [tool calling](docs/TOOL_CALLING.md)
+   - Integrated [tool calling](docs/TOOL_CALLING.md) with customizable Python/Rust native tool and search callbacks
 
 5. **Advanced Features**
    - High-throughput with [PagedAttention](docs/PAGED_ATTENTION.md) & FlashAttention V2/V3

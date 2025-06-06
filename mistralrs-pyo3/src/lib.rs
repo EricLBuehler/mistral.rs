@@ -32,9 +32,12 @@ use mistralrs_core::{
     SpeechLoader, StopTokens, TokenSource, TokenizationRequest, Tool, Topology,
     VisionLoaderBuilder, VisionSpecificConfig,
 };
-use mistralrs_core::{SearchCallback, SearchFunctionParameters, SearchResult};
+use mistralrs_core::{
+    CalledFunction, SearchCallback, SearchFunctionParameters, SearchResult, ToolCallback,
+    ToolCallbacks,
+};
 use pyo3::prelude::*;
-use pyo3::types::{PyList, PyType};
+use pyo3::types::PyList;
 use pyo3::Bound;
 use pyo3::PyObject;
 use std::fs::File;
@@ -43,7 +46,6 @@ mod requests;
 mod stream;
 mod util;
 mod which;
-use mistralrs_core::ModelDType;
 use which::{Architecture, DiffusionArchitecture, SpeechLoaderType, VisionArchitecture, Which};
 
 static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
@@ -112,6 +114,39 @@ fn wrap_search_callback(cb: PyObject) -> Arc<SearchCallback> {
             Ok(results)
         })
         .map_err(|e: PyErr| anyhow::anyhow!(e.to_string()))
+    })
+}
+
+fn wrap_tool_callback(cb: PyObject) -> Arc<ToolCallback> {
+    Arc::new(move |func: &CalledFunction| {
+        Python::with_gil(|py| {
+            let json = py.import("json")?;
+            let args: Py<PyAny> = json
+                .call_method1("loads", (func.arguments.clone(),))?
+                .into();
+            let obj = cb.call1(py, (func.name.clone(), args))?;
+            obj.extract::<String>(py)
+        })
+        .map_err(|e: PyErr| anyhow::anyhow!(e.to_string()))
+    })
+}
+
+fn wrap_tool_callbacks(obj: PyObject) -> anyhow::Result<ToolCallbacks> {
+    Python::with_gil(|py| {
+        let dict = obj
+            .downcast_bound::<pyo3::types::PyDict>(py)
+            .map_err(|e| anyhow::anyhow!("Failed to downcast to PyDict: {}", e))?;
+
+        let mut map = ToolCallbacks::new();
+
+        for (name, cb) in dict.iter() {
+            let name: String = name
+                .extract()
+                .map_err(|e: PyErr| anyhow::anyhow!(e.to_string()))?;
+            let cb_obj: PyObject = cb.into();
+            map.insert(name, wrap_tool_callback(cb_obj));
+        }
+        Ok(map)
     })
 }
 
@@ -528,6 +563,7 @@ impl Runner {
         enable_search = false,
         search_bert_model = None,
         search_callback = None,
+        tool_callbacks = None,
     ))]
     fn new(
         which: Which,
@@ -553,6 +589,7 @@ impl Runner {
         enable_search: bool,
         search_bert_model: Option<String>,
         search_callback: Option<PyObject>,
+        tool_callbacks: Option<PyObject>,
     ) -> PyApiResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -847,9 +884,18 @@ impl Runner {
             None
         };
         let cb = search_callback.map(wrap_search_callback);
+        let tool_cbs = match tool_callbacks {
+            Some(obj) => Some(wrap_tool_callbacks(obj)?),
+            None => None,
+        };
         let mut builder = MistralRsBuilder::new(pipeline, scheduler_config, false, bert_model);
         if let Some(cb) = cb {
             builder = builder.with_search_callback(cb);
+        }
+        if let Some(map) = tool_cbs {
+            for (name, cb) in map {
+                builder = builder.with_tool_callback(name, cb);
+            }
         }
         let mistralrs = builder
             .with_no_kv_cache(no_kv_cache)
@@ -857,130 +903,6 @@ impl Runner {
             .build();
 
         Ok(Self { runner: mistralrs })
-    }
-
-    // ---------------------------------------------------------------------
-    // Convenience constructor
-    // ---------------------------------------------------------------------
-    #[classmethod]
-    #[pyo3(name = "from_pretrained", signature = (
-        model_id,
-        arch = None,
-        max_seqs = 16,
-        seed = None,
-    ))]
-    fn from_pretrained(
-        _cls: &Bound<'_, PyType>,
-        model_id: String,
-        arch: Option<Architecture>,
-        max_seqs: usize,
-        seed: Option<u64>,
-    ) -> PyApiResult<Self> {
-        let which = Which::Plain {
-            model_id,
-            arch,
-            tokenizer_json: None,
-            topology: None,
-            organization: None,
-            write_uqff: None,
-            from_uqff: None,
-            dtype: ModelDType::Auto,
-            imatrix: None,
-            calibration_file: None,
-            auto_map_params: None,
-            hf_cache_path: None,
-        };
-
-        Self::new(
-            which, max_seqs, false,   // no_kv_cache
-            16,      // prefix_cache_n
-            "cache", // token_source
-            32,      // speculative_gamma
-            None,    // which_draft
-            None,    // chat_template
-            None,    // jinja_explicit
-            None,    // num_device_layers
-            None,    // in_situ_quant
-            None,    // anymoe_config
-            None,    // pa_gpu_mem
-            None,    // pa_gpu_mem_usage
-            None,    // pa_ctxt_len
-            None,    // pa_blk_size
-            false,   // no_paged_attn
-            false,   // paged_attn
-            None,    // prompt_chunksize
-            seed, false, // enable_search
-            None,  // search_bert_model
-            None,  // search_callback
-        )
-    }
-
-    /// A convenience helper making the Python API more ergonomic.
-    ///
-    /// Instead of having to manually construct a `ChatCompletionRequest`, you can now
-    /// simply call `runner.chat("<your prompt>")` and directly obtain the assistant
-    /// response **as a string**.  Common generation parameters can be passed as
-    /// optional keyword arguments.
-    ///
-    /// Example (Python):
-    /// ```python
-    /// from mistralrs import Runner, Which
-    /// runner = Runner(which = Which.Plain(model_id="mistralai/Mistral-7B-Instruct-v0.1"))
-    /// answer = runner.chat("Explain what an LLM is in one sentence")
-    /// print(answer)
-    /// ```
-    #[pyo3(signature = (
-        prompt,
-        max_tokens = None,
-        temperature = 1.0,
-        top_p = 1.0,
-        stop = None,
-    ))]
-    fn chat(
-        &mut self,
-        prompt: String,
-        max_tokens: Option<usize>,
-        temperature: f64,
-        top_p: f64,
-        stop: Option<Vec<String>>,
-    ) -> PyApiResult<String> {
-        use requests::ChatCompletionRequest;
-
-        // Build the request directly in Rust and then convert it into a Python object.
-        let raw_request = ChatCompletionRequest {
-            messages: Either::Right(prompt.clone()),
-            _model: "mistralrs".to_string(),
-            logit_bias: None,
-            logprobs: false,
-            top_logprobs: None,
-            max_tokens,
-            n_choices: 1,
-            presence_penalty: None,
-            frequency_penalty: None,
-            stop_seqs: stop.clone(),
-            temperature: Some(temperature),
-            top_p: Some(top_p),
-            stream: false,
-            top_k: None,
-            grammar: None,
-            grammar_type: None,
-            min_p: None,
-            tool_schemas: None,
-            tool_choice: None,
-            dry_multiplier: None,
-            dry_base: None,
-            dry_allowed_length: None,
-            dry_sequence_breakers: None,
-            web_search_options: None,
-            enable_thinking: Some(false),
-        };
-
-        let py_request = Python::with_gil(|py| Py::new(py, raw_request).map_err(PyApiErr))?;
-
-        match self.send_chat_completion_request(py_request)? {
-            Either::Left(resp) => Ok(resp.choices[0].message.content.clone().unwrap_or_default()),
-            Either::Right(_) => Err(PyApiErr::from("stream was not expected")),
-        }
     }
 
     /// Send an OpenAI API compatible request, returning the result.
