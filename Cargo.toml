@@ -77,7 +77,7 @@ base64 = "0.22.1"
 half = "2.6.0"
 rayon = "1.10.0"
 url = "2.5.4"
-utoipa = "4.2"
+utoipa = "5.3.1"
 walkdir = "2.5.0"
 data-url = "0.3.1"
 float8 = "0.2.1"
@@ -150,7 +150,7 @@ ctrlc = "3.4.7"
 directories = "6.0.0"
 rustyline = { version = "16.0.0", default-features = false, features = ["with-file-history"] }
 tower-http = "0.6.6"
-utoipa-swagger-ui = { version = "7.1.0", features = ["axum"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
 futures-util = "0.3.31"
 axum_static = "1.7.1"
 mime_guess = "2.0.5"

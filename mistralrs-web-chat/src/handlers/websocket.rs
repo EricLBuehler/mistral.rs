@@ -64,7 +64,11 @@ where
                 if let mistralrs::Response::Chunk(resp) = chunk {
                     if let Some(choice) = resp.choices.first() {
                         if let Some(token) = &choice.delta.content {
-                            if socket.send(Message::Text(token.clone())).await.is_err() {
+                            if socket
+                                .send(Message::Text(token.clone().into()))
+                                .await
+                                .is_err()
+                            {
                                 break;
                             }
                             assistant_reply.push_str(token);
@@ -77,7 +81,9 @@ where
             Ok(())
         }
         Err(e) => {
-            let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
+            let _ = socket
+                .send(Message::Text(format!("Error: {}", e).into()))
+                .await;
             Err(e)
         }
     }
@@ -173,10 +179,9 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                         Ok(opts) => Some(opts),
                         Err(e) => {
                             let _ = socket
-                                .send(Message::Text(format!(
-                                    "Error parsing web_search_options: {}",
-                                    e
-                                )))
+                                .send(Message::Text(
+                                    format!("Error parsing web_search_options: {}", e).into(),
+                                ))
                                 .await;
                             None
                         }
@@ -468,19 +473,25 @@ async fn handle_vision_model(
                             }
                             Err(e) => {
                                 error!("image decode error: {}", e);
-                                let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
+                                let _ = socket
+                                    .send(Message::Text(format!("Error: {}", e).into()))
+                                    .await;
                             }
                         },
                         Err(e) => {
                             error!("image read error: {}", e);
-                            let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
+                            let _ = socket
+                                .send(Message::Text(format!("Error: {}", e).into()))
+                                .await;
                         }
                     }
                 }
                 Err(e) => {
                     error!("Invalid image path: {}", e);
                     let _ = socket
-                        .send(Message::Text(format!("Error: Invalid image path - {}", e)))
+                        .send(Message::Text(
+                            format!("Error: Invalid image path - {}", e).into(),
+                        ))
                         .await;
                 }
             }
@@ -552,7 +563,9 @@ async fn handle_vision_model(
                 }
                 Err(e) => {
                     error!("image prompt error: {}", e);
-                    let _ = socket.send(Message::Text(format!("Error: {}", e))).await;
+                    let _ = socket
+                        .send(Message::Text(format!("Error: {}", e).into()))
+                        .await;
                 }
             }
         }
