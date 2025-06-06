@@ -1,3 +1,4 @@
+import argparse
 from openai import OpenAI
 import httpx
 import textwrap
@@ -28,25 +29,26 @@ def log_response(response: httpx.Response):
         print(f"    {key}: {value}")
 
 
+parser = argparse.ArgumentParser(description="Send a vision chat request")
+parser.add_argument("--model", required=True, help="model name for the API")
+parser.add_argument(
+    "--image-url",
+    default="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg",
+)
+args = parser.parse_args()
+
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
-# Enable this to log requests and responses
-# client._client = httpx.Client(
-#     event_hooks={"request": [print], "response": [log_response]}
-# )
+# Uncomment to log HTTP requests
+# client._client = httpx.Client(event_hooks={"request": [print], "response": [log_response]})
 
 completion = client.chat.completions.create(
-    model="phi4mm",
+    model=args.model,
     messages=[
         {
             "role": "user",
             "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
-                    },
-                },
+                {"type": "image_url", "image_url": {"url": args.image_url}},
                 {
                     "type": "text",
                     "text": "<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.",
@@ -59,5 +61,4 @@ completion = client.chat.completions.create(
     top_p=0.1,
     temperature=0,
 )
-resp = completion.choices[0].message.content
-print(resp)
+print(completion.choices[0].message.content)

@@ -19,7 +19,7 @@ The Rust API takes an image from the [image](https://docs.rs/image/latest/image/
 > They should be added to messages manually, and are of the format `<|image_{N}|>` where N starts from 1.
 
 ## HTTP server
-You can find this example [here](../examples/server/phi3v.py).
+You can find this example [here](../examples/server/vision_chat.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -94,7 +94,7 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/phi3v/main.rs).
+You can find this example [here](../mistralrs/examples/vision_chat/main.rs).
 
 This is a minimal example of running the Phi 4 Multimodal model with a dummy image.
 
@@ -139,7 +139,7 @@ async fn main() -> Result<()> {
 ```
 
 ## Python
-You can find this example [here](../examples/python/phi3v.py).
+You can find this example [here](../examples/python/vision_chat.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
