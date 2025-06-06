@@ -10,8 +10,6 @@
 //! - [`VisionModelBuilder`]
 //! - [`AnyMoeModelBuilder`]
 //!
-//! Check out the [`v0_4_api`] module for concise documentation of this, newer API.
-//!
 //! ## Example
 //! ```no_run
 //! use anyhow::Result;

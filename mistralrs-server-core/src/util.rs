@@ -16,7 +16,7 @@ use tokio::{
 /// ### Arguments
 ///
 /// * `url_unparsed` - A string that can be:
-///   - An HTTP/HTTPS URL (e.g., "https://example.com/image.png")
+///   - An HTTP/HTTPS URL (e.g., "<https://example.com/image.png>")
 ///   - A file path (e.g., "/path/to/image.jpg" or "image.png")
 ///   - A data URL with base64 encoded image (e.g., "data:image/png;base64,...")
 ///   - A file URL (e.g., "file:///path/to/image.jpg")
