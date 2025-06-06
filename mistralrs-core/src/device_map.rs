@@ -160,7 +160,7 @@ impl DeviceMapSetting {
                                 if device_ord == *ordinal {
                                     device.clone()
                                 } else {
-                                    Device::new_cuda_with_stream(*ordinal)?
+                                    Device::new_cuda(*ordinal)?
                                 }
                             }
                             DeviceLocation::Metal { gpu_id: device_ord } => {
