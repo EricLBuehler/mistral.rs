@@ -387,7 +387,7 @@ impl PrefixCacheManagerV2 {
                 // all subsequent indexing (e.g. when mapping completion tokens
                 // to KV slots) should be performed relative to the beginning of
                 // the sequence.
-                offset: match_len,
+                offset: 0,
                 images_to_keep,
             }));
         }
