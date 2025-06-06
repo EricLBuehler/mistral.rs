@@ -33,7 +33,7 @@ impl Engine {
                     request.messages,
                     RequestMessage::Chat { .. } | RequestMessage::VisionChat { .. }
                 ) && (request.web_search_options.is_some()
-                    || (self.tool_callback.is_some() && request.tools.is_some()))
+                    || (!self.tool_callbacks.is_empty() && request.tools.is_some()))
                 {
                     search_request::search_request(self.clone(), *request).await;
                 } else {

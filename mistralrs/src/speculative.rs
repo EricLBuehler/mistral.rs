@@ -103,8 +103,8 @@ impl TextSpeculativeBuilder {
         if let Some(cb) = self.target.search_callback.clone() {
             runner = runner.with_search_callback(cb);
         }
-        if let Some(cb) = self.target.tool_callback.clone() {
-            runner = runner.with_tool_callback(cb);
+        for (name, cb) in &self.target.tool_callbacks {
+            runner = runner.with_tool_callback(name.clone(), cb.clone());
         }
 
         Ok(Model::new(runner.build()))

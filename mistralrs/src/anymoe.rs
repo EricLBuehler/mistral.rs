@@ -120,8 +120,8 @@ impl AnyMoeModelBuilder {
         if let Some(cb) = self.base.search_callback.clone() {
             runner = runner.with_search_callback(cb);
         }
-        if let Some(cb) = self.base.tool_callback.clone() {
-            runner = runner.with_tool_callback(cb);
+        for (name, cb) in &self.base.tool_callbacks {
+            runner = runner.with_tool_callback(name.clone(), cb.clone());
         }
         runner = runner
             .with_no_kv_cache(self.base.no_kv_cache)

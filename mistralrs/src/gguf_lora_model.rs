@@ -88,8 +88,8 @@ impl GgufLoraModelBuilder {
         if let Some(cb) = self.gguf_model.search_callback.clone() {
             runner = runner.with_search_callback(cb);
         }
-        if let Some(cb) = self.gguf_model.tool_callback.clone() {
-            runner = runner.with_tool_callback(cb);
+        for (name, cb) in &self.gguf_model.tool_callbacks {
+            runner = runner.with_tool_callback(name.clone(), cb.clone());
         }
         runner = runner
             .with_no_kv_cache(self.gguf_model.no_kv_cache)

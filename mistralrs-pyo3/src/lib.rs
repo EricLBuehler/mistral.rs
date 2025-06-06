@@ -34,6 +34,7 @@ use mistralrs_core::{
 };
 use mistralrs_core::{
     CalledFunction, SearchCallback, SearchFunctionParameters, SearchResult, ToolCallback,
+    ToolCallbacks,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyList;
@@ -127,6 +128,25 @@ fn wrap_tool_callback(cb: PyObject) -> Arc<ToolCallback> {
             obj.extract::<String>(py)
         })
         .map_err(|e: PyErr| anyhow::anyhow!(e.to_string()))
+    })
+}
+
+fn wrap_tool_callbacks(obj: PyObject) -> anyhow::Result<ToolCallbacks> {
+    Python::with_gil(|py| {
+        let dict = obj
+            .downcast_bound::<pyo3::types::PyDict>(py)
+            .map_err(|e| anyhow::anyhow!("Failed to downcast to PyDict: {}", e))?;
+
+        let mut map = ToolCallbacks::new();
+
+        for (name, cb) in dict.iter() {
+            let name: String = name
+                .extract()
+                .map_err(|e: PyErr| anyhow::anyhow!(e.to_string()))?;
+            let cb_obj: PyObject = cb.into();
+            map.insert(name, wrap_tool_callback(cb_obj));
+        }
+        Ok(map)
     })
 }
 
@@ -543,7 +563,7 @@ impl Runner {
         enable_search = false,
         search_bert_model = None,
         search_callback = None,
-        tool_callback = None,
+        tool_callbacks = None,
     ))]
     fn new(
         which: Which,
@@ -569,7 +589,7 @@ impl Runner {
         enable_search: bool,
         search_bert_model: Option<String>,
         search_callback: Option<PyObject>,
-        tool_callback: Option<PyObject>,
+        tool_callbacks: Option<PyObject>,
     ) -> PyApiResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -864,13 +884,18 @@ impl Runner {
             None
         };
         let cb = search_callback.map(wrap_search_callback);
-        let tool_cb = tool_callback.map(wrap_tool_callback);
+        let tool_cbs = match tool_callbacks {
+            Some(obj) => Some(wrap_tool_callbacks(obj)?),
+            None => None,
+        };
         let mut builder = MistralRsBuilder::new(pipeline, scheduler_config, false, bert_model);
         if let Some(cb) = cb {
             builder = builder.with_search_callback(cb);
         }
-        if let Some(cb) = tool_cb {
-            builder = builder.with_tool_callback(cb);
+        if let Some(map) = tool_cbs {
+            for (name, cb) in map {
+                builder = builder.with_tool_callback(name, cb);
+            }
         }
         let mistralrs = builder
             .with_no_kv_cache(no_kv_cache)

@@ -7,6 +7,7 @@ pub use request::*;
 pub use response::*;
 use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
@@ -16,6 +17,9 @@ use crate::Pipeline;
 /// Callback used for custom tool functions. Receives the called function
 /// (name and JSON arguments) and returns the tool output as a string.
 pub type ToolCallback = dyn Fn(&CalledFunction) -> anyhow::Result<String> + Send + Sync;
+
+/// Collection of callbacks keyed by tool name.
+pub type ToolCallbacks = HashMap<String, Arc<ToolCallback>>;
 
 fn contains_tool_call_prefix(prefix: &str) -> bool {
     prefix.contains("<tool_call>")

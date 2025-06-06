@@ -10,6 +10,7 @@ pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
+use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Instant;
 use std::{
@@ -110,8 +111,8 @@ pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoa
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
 pub use tools::{
-    CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolCallback, ToolChoice,
-    ToolType,
+    CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolCallback, ToolCallbacks,
+    ToolChoice, ToolType,
 };
 pub use topology::{LayerTopology, Topology};
 pub use utils::debug::initialize_logging;
@@ -162,7 +163,7 @@ struct RebootState {
     throughput_logging_enabled: bool,
     search_embedding_model: Option<BertEmbeddingModel>,
     search_callback: Option<Arc<search::SearchCallback>>,
-    tool_callback: Option<Arc<tools::ToolCallback>>,
+    tool_callbacks: tools::ToolCallbacks,
 }
 
 #[derive(Debug)]
@@ -201,7 +202,7 @@ pub struct MistralRsBuilder {
     throughput_logging_enabled: bool,
     search_embedding_model: Option<BertEmbeddingModel>,
     search_callback: Option<Arc<SearchCallback>>,
-    tool_callback: Option<Arc<tools::ToolCallback>>,
+    tool_callbacks: tools::ToolCallbacks,
 }
 
 impl MistralRsBuilder {
@@ -226,7 +227,7 @@ impl MistralRsBuilder {
             throughput_logging_enabled: throughput_logging,
             search_embedding_model,
             search_callback: None,
-            tool_callback: None,
+            tool_callbacks: HashMap::new(),
         }
     }
     pub fn with_log(mut self, log: String) -> Self {
@@ -264,9 +265,13 @@ impl MistralRsBuilder {
         self
     }
 
-    /// Use a custom callback for arbitrary tool calls.
-    pub fn with_tool_callback(mut self, tool_callback: Arc<tools::ToolCallback>) -> Self {
-        self.tool_callback = Some(tool_callback);
+    /// Register a custom callback for the specified tool name.
+    pub fn with_tool_callback(
+        mut self,
+        name: impl Into<String>,
+        tool_callback: Arc<tools::ToolCallback>,
+    ) -> Self {
+        self.tool_callbacks.insert(name.into(), tool_callback);
         self
     }
 
@@ -298,7 +303,7 @@ impl MistralRs {
             throughput_logging_enabled,
             search_embedding_model,
             search_callback,
-            tool_callback,
+            tool_callbacks,
         } = config;
 
         let category = pipeline.try_lock().unwrap().category();
@@ -323,7 +328,7 @@ impl MistralRs {
             throughput_logging_enabled,
             search_embedding_model: search_embedding_model.clone(),
             search_callback: search_callback.clone(),
-            tool_callback: tool_callback.clone(),
+            tool_callbacks: tool_callbacks.clone(),
         };
 
         let (tx, rx) = channel(10_000);
@@ -356,7 +361,7 @@ impl MistralRs {
                         throughput_logging_enabled,
                         search_embedding_model,
                         search_callback.clone(),
-                        tool_callback.clone(),
+                        tool_callbacks.clone(),
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -379,7 +384,7 @@ impl MistralRs {
                         throughput_logging_enabled,
                         search_embedding_model,
                         search_callback.clone(),
-                        tool_callback.clone(),
+                        tool_callbacks.clone(),
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -505,7 +510,7 @@ impl MistralRs {
                         reboot_state.throughput_logging_enabled,
                         reboot_state.search_embedding_model,
                         reboot_state.search_callback.clone(),
-                        reboot_state.tool_callback.clone(),
+                        reboot_state.tool_callbacks.clone(),
                     )
                     .expect("Engine creation failed");
                     Arc::new(engine).run().await;

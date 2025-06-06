@@ -52,7 +52,7 @@ schema = json.dumps(
 
 runner = Runner(
     which=Which.Plain(model_id="NousResearch/Hermes-3-Llama-3.1-8B", arch=Architecture.Llama),
-    tool_callback=tool_cb,
+    tool_callbacks={"local_search": tool_cb},
 )
 
 res = runner.send_chat_completion_request(

@@ -355,10 +355,10 @@ async fn do_custom_tool(
         messages.push(message);
     }
 
-    let result = if let Some(cb) = &this.tool_callback {
+    let result = if let Some(cb) = this.tool_callbacks.get(&tool_calls.function.name) {
         cb(&tool_calls.function).unwrap_or_else(|e| format!("ERROR: {e}"))
     } else {
-        "ERROR: no tool callback".to_string()
+        format!("ERROR: no tool callback for {}", tool_calls.function.name)
     };
 
     {

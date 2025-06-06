@@ -35,11 +35,14 @@ async fn main() -> Result<()> {
     let model = TextModelBuilder::new("NousResearch/Hermes-3-Llama-3.1-8B")
         .with_isq(IsqType::Q4K)
         .with_logging()
-        .with_tool_callback(Arc::new(|f: &CalledFunction| {
-            let args: serde_json::Value = serde_json::from_str(&f.arguments)?;
-            let query = args["query"].as_str().unwrap_or("");
-            Ok(serde_json::to_string(&local_search(query)?)?)
-        }))
+        .with_tool_callback(
+            "local_search",
+            Arc::new(|f: &CalledFunction| {
+                let args: serde_json::Value = serde_json::from_str(&f.arguments)?;
+                let query = args["query"].as_str().unwrap_or("");
+                Ok(serde_json::to_string(&local_search(query)?)?)
+            }),
+        )
         .build()
         .await?;
 

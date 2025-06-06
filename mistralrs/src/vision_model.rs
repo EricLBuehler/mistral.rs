@@ -1,6 +1,7 @@
 use candle_core::Device;
 use mistralrs_core::*;
 use mistralrs_core::{SearchCallback, ToolCallback};
+use std::collections::HashMap;
 use std::{
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
@@ -29,7 +30,7 @@ pub struct VisionModelBuilder {
     pub(crate) hf_cache_path: Option<PathBuf>,
     pub(crate) search_bert_model: Option<BertEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
-    pub(crate) tool_callback: Option<Arc<ToolCallback>>,
+    pub(crate) tool_callbacks: HashMap<String, Arc<ToolCallback>>,
     pub(crate) device: Option<Device>,
 
     // Model running
@@ -80,7 +81,7 @@ impl VisionModelBuilder {
             hf_cache_path: None,
             search_bert_model: None,
             search_callback: None,
-            tool_callback: None,
+            tool_callbacks: HashMap::new(),
             device: None,
         }
     }
@@ -97,8 +98,12 @@ impl VisionModelBuilder {
         self
     }
 
-    pub fn with_tool_callback(mut self, callback: Arc<ToolCallback>) -> Self {
-        self.tool_callback = Some(callback);
+    pub fn with_tool_callback(
+        mut self,
+        name: impl Into<String>,
+        callback: Arc<ToolCallback>,
+    ) -> Self {
+        self.tool_callbacks.insert(name.into(), callback);
         self
     }
 
@@ -326,8 +331,8 @@ impl VisionModelBuilder {
         if let Some(cb) = self.search_callback.clone() {
             runner = runner.with_search_callback(cb);
         }
-        if let Some(cb) = self.tool_callback.clone() {
-            runner = runner.with_tool_callback(cb);
+        for (name, cb) in &self.tool_callbacks {
+            runner = runner.with_tool_callback(name.clone(), cb.clone());
         }
         let runner = runner.with_no_kv_cache(false).with_no_prefix_cache(false);
 
