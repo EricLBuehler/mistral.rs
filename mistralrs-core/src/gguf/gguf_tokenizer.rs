@@ -2,25 +2,26 @@
 
 use std::{collections::HashMap, sync::atomic::Ordering};
 
+use crate::utils::gguf_metadata::ContentMetadata;
+use crate::DEBUG;
 use anyhow::Result;
+use candle_core::quantized::gguf_file::Value;
 use itertools::Itertools;
+use tokenizers::pre_tokenizers::{
+    sequence::Sequence,
+    split::{Split, SplitPattern},
+    PreTokenizerWrapper,
+};
+use tokenizers::tokenizer::normalizer::SplitDelimiterBehavior;
 use tokenizers::{
     decoders::{
         self, byte_fallback::ByteFallback, byte_level::ByteLevel, fuse::Fuse, strip::Strip,
     },
     models::{bpe::BpeBuilder, unigram::Unigram},
     normalizers::{self, Prepend, Replace},
-    pre_tokenizers,
-    processors::{
-        self,
-        template::{self, TemplateProcessing},
-    },
-    AddedToken, DecoderWrapper, ModelWrapper, NormalizerWrapper, Tokenizer,
+    processors, AddedToken, DecoderWrapper, ModelWrapper, NormalizerWrapper, Tokenizer,
 };
 use tracing::info;
-
-use crate::utils::gguf_metadata::ContentMetadata;
-use crate::DEBUG;
 
 use super::Content;
 
@@ -40,7 +41,6 @@ struct PropsGGUF {
     unk: Option<u32>,
     eos: u32,
     bos: u32,
-    add_bos_token: Option<bool>,
 }
 
 impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
@@ -59,17 +59,10 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             unk: c.get_value("unknown_token_id").ok(),
             eos: c.get_value("eos_token_id")?,
             bos: c.get_value("bos_token_id")?,
-            add_bos_token: c.get_value("add_bos_token").ok(),
         };
 
         Ok(props)
     }
-}
-
-struct AddedTokensCollection {
-    bos: String,
-    eos: String,
-    unk: Option<String>,
 }
 
 pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
@@ -79,9 +72,25 @@ pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
         path_prefix: "tokenizer.ggml",
         metadata: content.get_metadata(),
     };
+
+    let md_get = |s: &str| match metadata.metadata.get(s) {
+        None => candle_core::bail!("cannot find {s} in metadata"),
+        Some(v) => Ok(v),
+    };
+
+    let mut token_types = Vec::<i32>::new();
+    if metadata.metadata.contains_key("tokenizer.ggml.token_type") {
+        let vtypes: &Vec<Value> = md_get("tokenizer.ggml.token_type")
+            .unwrap()
+            .to_vec()
+            .unwrap();
+        let v: Vec<i32> = vtypes.iter().map(|v| v.to_i32().unwrap()).collect();
+        token_types.extend(v);
+    }
+
     let props = PropsGGUF::try_from(metadata)?;
 
-    let (tokenizer, kind, special_tokens) = match props.model.as_str() {
+    let (mut tokenizer, kind) = match props.model.as_str() {
         "llama" | "replit" => unigram_tokenizer(&props)?,
         "gpt2" => bpe_tokenizer(&props)?,
         other => {
@@ -89,9 +98,22 @@ pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
         }
     };
 
+    //token type other than 1 treated as special token
+    let mut num_special_tokens = 0;
+    if token_types.len() == props.tokens.len() {
+        for i in 0..props.tokens.len() {
+            if token_types[i] != 1i32 {
+                let tk = props.tokens[i].clone();
+                tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
+                num_special_tokens += 1;
+            }
+        }
+    }
+
     info!(
-        "GGUF tokenizer model is `{model}`, kind: `{kind:?}`, num tokens: {}, num added tokens: {}, num merges: {}, num scores: {}",
+        "GGUF tokenizer model is `{model}`, kind: `{kind:?}`, num tokens: {}, num special tokens {}, num added tokens: {}, num merges: {}, num scores: {}",
         tokenizer.get_vocab_size(true),
+        num_special_tokens,
         props.added_tokens.as_ref().map(|x| x.len()).unwrap_or(0),
         props.merges.as_ref().map(|x| x.len()).unwrap_or(0),
         props.scores.as_ref().map(|x| x.len()).unwrap_or(0),
@@ -101,12 +123,15 @@ pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
         info!("Tokenizer: {tokenizer:?}");
     }
 
-    let AddedTokensCollection { bos, eos, unk } = special_tokens;
+    let unk = match props.unk {
+        Some(u) => Some(props.tokens[u as usize].clone()),
+        _ => None,
+    };
 
     Ok(GgufTokenizerConversion {
         tokenizer,
-        bos: Some(bos),
-        eos: Some(eos),
+        bos: Some(props.tokens[props.bos as usize].clone()),
+        eos: Some(props.tokens[props.eos as usize].clone()),
         unk,
     })
 }
@@ -119,37 +144,7 @@ enum TokenizerKind {
     Bpe,
 }
 
-/// Add the special tokens and return their string representations
-fn add_special_tokens(
-    p: &PropsGGUF,
-    tokenizer: &mut Tokenizer,
-    bos: u32,
-    eos: u32,
-    unk: Option<u32>,
-) -> AddedTokensCollection {
-    // Add special tokens (bos, eos, unk):
-    let mut special_tokens: [Option<String>; 3] = Default::default();
-
-    // A little bit awkward here since eos/bos are assumed not options so we need to handle an Option
-    for (i, token_id) in [Some(bos), Some(eos), unk].into_iter().enumerate() {
-        if let Some(token_id) = token_id {
-            let token = p.tokens[token_id as usize].as_str();
-            special_tokens[i] = Some(token.to_string());
-            tokenizer.add_special_tokens(&[AddedToken::from(token.to_string(), true)]);
-        }
-    }
-
-    // Destructure array of options:
-    let [bos_str, eos_str, unk_str] = special_tokens;
-    // Would need to unwrap bos/eos here, or change the struct types
-    AddedTokensCollection {
-        bos: bos_str.unwrap(),
-        eos: eos_str.unwrap(),
-        unk: unk_str,
-    }
-}
-
-fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokensCollection)> {
+fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
     let PropsGGUF { unk, eos, bos, .. } = *p;
     // Unigram (SentencePiece) default UNK is 0
     let unk = unk.unwrap_or(0);
@@ -191,12 +186,14 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTo
     )?;
 
     // Add special tokens (bos, eos, unk):
-    let special_tokens = add_special_tokens(p, &mut tokenizer, bos, eos, Some(unk));
-
-    Ok((tokenizer, TokenizerKind::Unigram, special_tokens))
+    for i in [bos, eos, unk] {
+        let tk = p.tokens[i as usize].clone();
+        tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
+    }
+    Ok((tokenizer, TokenizerKind::Unigram))
 }
 
-fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokensCollection)> {
+fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
     // BPE merges have each string item as a space-delimited pair:
     // https://github.com/EricLBuehler/mistral.rs/pull/397#discussion_r1631988370
     let merges = p
@@ -219,13 +216,7 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
         vocab.insert(token.clone(), i as u32);
     }
 
-    let PropsGGUF {
-        eos,
-        bos,
-        unk,
-        add_bos_token,
-        ..
-    } = *p;
+    let PropsGGUF { eos, bos, unk, .. } = *p;
 
     let mut bpe = BpeBuilder::new().vocab_and_merges(vocab, merges);
     if let Some(unk) = unk {
@@ -239,39 +230,42 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
         Some(Decoder::ByteLevel(true, true, true)),
         None,
     )?;
-    tokenizer.with_pre_tokenizer(Some(pre_tokenizers::byte_level::ByteLevel::new(
-        false, true, true,
+
+    let split = Split::new(
+        SplitPattern::Regex("(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+".to_string()),
+        SplitDelimiterBehavior::Isolated,
+        false,
+    ).unwrap();
+
+    // example:
+    // "type": "ByteLevel",
+    // "add_prefix_space": false,
+    // "trim_offsets": false,
+    // "use_regex": false
+    let pre_tokenizer = Sequence::new(vec![
+        PreTokenizerWrapper::Split(split),
+        PreTokenizerWrapper::ByteLevel(ByteLevel::new(false, false, false)),
+    ]);
+
+    tokenizer.with_pre_tokenizer(Some(pre_tokenizer));
+
+    tokenizer.with_decoder(Some(decoders::byte_level::ByteLevel::new(
+        false, false, false,
     )));
-    if add_bos_token.is_some_and(|x| x) {
-        let mut special_toks = HashMap::new();
-        special_toks.insert(
-            p.tokens[bos as usize].clone(),
-            template::SpecialToken::new(
-                p.tokens[bos as usize].clone(),
-                vec![bos],
-                vec![p.tokens[bos as usize].clone()],
-            )
-            .unwrap(),
-        );
-        tokenizer.with_post_processor(Some(
-            TemplateProcessing::builder()
-                .try_single(format!("{}:0 $A:0", p.tokens[bos as usize]))
-                .unwrap()
-                .try_pair(format!("{}:0 $A:0 $B:1", p.tokens[bos as usize]))
-                .unwrap()
-                .special_tokens(special_toks)
-                .build()
-                .unwrap(),
-        ));
-    } else {
-        tokenizer.with_post_processor(Some(processors::byte_level::ByteLevel::new(
-            true, false, true,
-        )));
+    tokenizer.with_post_processor(Some(processors::byte_level::ByteLevel::new(
+        false, false, false,
+    )));
+
+    for i in [bos, eos] {
+        let tk = p.tokens[i as usize].clone();
+        tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
+    }
+    if unk.is_some() {
+        let tk = p.tokens[unk.unwrap() as usize].clone();
+        tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
     }
 
-    let special_tokens = add_special_tokens(p, &mut tokenizer, bos, eos, unk);
-
-    Ok((tokenizer, TokenizerKind::Bpe, special_tokens))
+    Ok((tokenizer, TokenizerKind::Bpe))
 }
 
 // This is a workaround to have a better builder API.
