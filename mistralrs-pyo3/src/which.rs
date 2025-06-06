@@ -22,6 +22,7 @@ pub enum Architecture {
     DeepseekV2,
     DeepseekV3,
     Qwen3,
+    GLM4,
     Qwen3Moe,
 }
 
@@ -41,6 +42,7 @@ impl From<Architecture> for NormalLoaderType {
             Architecture::DeepseekV2 => Self::DeepSeekV2,
             Architecture::DeepseekV3 => Self::DeepSeekV3,
             Architecture::Qwen3 => Self::Qwen3,
+            Architecture::GLM4 => Self::GLM4,
             Architecture::Qwen3Moe => Self::Qwen3Moe,
         }
     }
