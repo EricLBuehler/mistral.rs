@@ -20,6 +20,7 @@ type BlockBestMatch<'a> = (
     &'a [LogicalTokenBlock],       // logical blocks
     &'a [Arc<PhysicalTokenBlock>], // physical blocks
     usize,                         // images_match_until
+    usize,                         // logical_matches_until
 );
 
 fn hash_logical_blocks(logical_blocks: &[LogicalTokenBlock]) -> Vec<u64> {
@@ -297,7 +298,8 @@ impl PrefixCacheManagerV2 {
                     0
                 };
 
-                if best_match.is_some_and(|(best_match_len, _, _, _)| best_match_len < matched_len)
+                if best_match
+                    .is_some_and(|(best_match_len, _, _, _, _)| best_match_len < matched_len)
                     || best_match.is_none()
                 {
                     best_match = Some((
@@ -305,18 +307,24 @@ impl PrefixCacheManagerV2 {
                         &cache_elem.logical_blocks,
                         &cache_elem.physical_blocks,
                         images_match_until,
+                        logical_matches_until,
                     ))
                 }
             }
 
-            let Some((match_len, logical_blocks, physical_blocks, images_match_until)) = best_match
+            let Some((
+                match_len,
+                logical_blocks,
+                physical_blocks,
+                images_match_until,
+                logical_matches_until,
+            )) = best_match
             else {
                 return Ok(None);
             };
 
             // Determine how many blocks cover the matched prefix
-            let mut n_blocks = match_len.div_ceil(block_size);
-            n_blocks = n_blocks.min(logical_blocks.len());
+            let n_blocks = logical_matches_until;
 
             if n_blocks == 0 {
                 return Ok(None);
