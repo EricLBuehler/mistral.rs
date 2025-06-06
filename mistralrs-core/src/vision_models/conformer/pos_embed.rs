@@ -1,4 +1,8 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_nn::Embedding;
+use mistralrs_quant::ShardedVarBuilder;
+
+use crate::layers;
 
 use super::config::ConformerEncoderConfig;
 
@@ -47,5 +51,31 @@ impl AbsolutePositionalEncoding {
         }
 
         (xs * self.xscale)?.broadcast_mul(&self.pe.i((.., ..xs.dim(1)?))?)
+    }
+}
+
+pub struct T5RelativeAttentionLogitBias {
+    bias_values: Embedding,
+    skip_bucketing: bool,
+}
+
+impl T5RelativeAttentionLogitBias {
+    pub fn new(
+        num_heads: usize,
+        num_buckets: Option<usize>,
+        max_distance: usize,
+        symmetric: bool,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
+        let skip_bucketing = num_buckets.is_none();
+        let mut num_buckets = num_buckets.unwrap_or(max_distance);
+        if !symmetric {
+            num_buckets *= 2;
+        }
+
+        Ok(Self {
+            bias_values: layers::embedding(num_buckets, num_heads, vb.pp("bias_values"), &None)?,
+            skip_bucketing,
+        })
     }
 }

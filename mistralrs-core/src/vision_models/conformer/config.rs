@@ -35,7 +35,8 @@ serde_default_fn!(usize, fake_default_sentinel, usize::MAX);
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RelativeAttentionBiasArgs {
-    pub t5_bias_max_distance: usize,
+    pub t5_bias_max_distance: Option<usize>,
+    pub t5_bias_symmetric: Option<bool>,
     #[serde(rename = "type")]
     pub tp: String,
 }
