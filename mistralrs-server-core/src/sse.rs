@@ -1,4 +1,4 @@
-//! ## Streaming utils and functionality.
+//! ## SSE utils.
 
 use std::env;
 
@@ -42,7 +42,7 @@ pub struct BaseStreamer<R, C, D> {
 }
 
 /// Generic function to create a SSE streamer with optional callbacks.
-pub(crate) fn base_create_streamer<R, C, D>(
+pub(crate) fn create_streamer<R, C, D>(
     rx: Receiver<Response>,
     state: SharedMistralRsState,
     on_chunk: Option<C>,

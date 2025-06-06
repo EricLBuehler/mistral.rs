@@ -2,88 +2,13 @@
 
 use std::error::Error;
 
-use anyhow::{Context, Result};
-use axum::{
-    extract::Json,
-    http::StatusCode,
-    response::{IntoResponse, Sse},
-};
-use mistralrs_core::{MistralRs, Request, Response};
-use serde::Serialize;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use anyhow::Result;
+use axum::response::Sse;
+use mistralrs_core::{DrySamplingParams, MistralRs, StopTokens as InternalStopTokens};
 
-use crate::types::SharedMistralRsState;
+use crate::{openai::StopTokens, types::SharedMistralRsState};
 
-/// Default buffer size for the response channel used in streaming operations.
-///
-/// This constant defines the maximum number of response messages that can be buffered
-/// in the channel before backpressure is applied. A larger buffer reduces the likelihood
-/// of blocking but uses more memory.
-pub const DEFAULT_CHANNEL_BUFFER_SIZE: usize = 10_000;
-
-/// Trait for converting errors to HTTP responses with appropriate status codes.
-pub(crate) trait ErrorToResponse: Serialize {
-    /// Converts the error to an HTTP response with the specified status code.
-    fn to_response(&self, code: StatusCode) -> axum::response::Response {
-        let mut r = Json(self).into_response();
-        *r.status_mut() = code;
-        r
-    }
-}
-
-/// Standard JSON error response structure.
-#[derive(Serialize, Debug)]
-pub(crate) struct JsonError {
-    pub(crate) message: String,
-}
-
-impl JsonError {
-    /// Creates a new JSON error with the specified message.
-    pub(crate) fn new(message: String) -> Self {
-        Self { message }
-    }
-}
-
-impl std::fmt::Display for JsonError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl std::error::Error for JsonError {}
-
-impl ErrorToResponse for JsonError {}
-
-/// Internal error type for model-related errors with a descriptive message.
-///
-/// This struct wraps error messages from the underlying model and implements
-/// the standard error traits for proper error handling and display.
-#[derive(Debug)]
-pub(crate) struct ModelErrorMessage(pub(crate) String);
-impl std::fmt::Display for ModelErrorMessage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-impl std::error::Error for ModelErrorMessage {}
-
-/// Generic JSON error response structure
-#[derive(Serialize, Debug)]
-pub(crate) struct BaseJsonModelError<T> {
-    pub(crate) message: String,
-    pub(crate) partial_response: T,
-}
-
-impl<T> BaseJsonModelError<T> {
-    pub(crate) fn new(message: String, partial_response: T) -> Self {
-        Self {
-            message,
-            partial_response,
-        }
-    }
-}
-
-/// Generic responder enum for different completion types
+/// Generic responder enum for different completion types.
 #[derive(Debug)]
 pub enum BaseCompletionResponder<R, S> {
     /// Server-Sent Events streaming response
@@ -98,17 +23,8 @@ pub enum BaseCompletionResponder<R, S> {
     ValidationError(Box<dyn Error>),
 }
 
-/// Creates a channel for response communication.
-pub fn create_response_channel(
-    buffer_size: Option<usize>,
-) -> (Sender<Response>, Receiver<Response>) {
-    let channel_buffer_size = buffer_size.unwrap_or(DEFAULT_CHANNEL_BUFFER_SIZE);
-
-    channel(channel_buffer_size)
-}
-
 /// Generic function to handle completion errors and logging them.
-pub(crate) fn base_handle_completion_error<R, S>(
+pub(crate) fn handle_completion_error<R, S>(
     state: SharedMistralRsState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> BaseCompletionResponder<R, S> {
@@ -117,32 +33,33 @@ pub(crate) fn base_handle_completion_error<R, S>(
     BaseCompletionResponder::InternalError(e.into())
 }
 
-/// Sends a request to the model processing pipeline.
-pub async fn send_model_request(state: &SharedMistralRsState, request: Request) -> Result<()> {
-    let sender = state
-        .get_sender()
-        .context("mistral.rs sender not available.")?;
-
-    sender.send(request).await.map_err(|e| e.into())
+/// Helper function to convert from the OpenAI stop tokens to the mistral.rs
+/// internal stop tokens.
+pub(crate) fn convert_stop_tokens(stop_seqs: Option<StopTokens>) -> Option<InternalStopTokens> {
+    match stop_seqs {
+        Some(StopTokens::Multi(m)) => Some(InternalStopTokens::Seqs(m)),
+        Some(StopTokens::Single(s)) => Some(InternalStopTokens::Seqs(vec![s])),
+        None => None,
+    }
 }
 
-/// Generic function to process non-streaming responses.
-pub(crate) async fn base_process_non_streaming_response<R>(
-    rx: &mut Receiver<Response>,
-    state: SharedMistralRsState,
-    match_fn: fn(SharedMistralRsState, Response) -> R,
-    error_handler: fn(
-        SharedMistralRsState,
-        Box<dyn std::error::Error + Send + Sync + 'static>,
-    ) -> R,
-) -> R {
-    let response = match rx.recv().await {
-        Some(response) => response,
-        None => {
-            let e = anyhow::Error::msg("No response received from the model.");
-            return error_handler(state, e.into());
-        }
-    };
+/// Helper function to get the dry sampling params.
+pub(crate) fn get_dry_sampling_params(
+    dry_multiplier: Option<f32>,
+    dry_sequence_breakers: Option<Vec<String>>,
+    dry_base: Option<f32>,
+    dry_allowed_length: Option<usize>,
+) -> Result<Option<DrySamplingParams>> {
+    if let Some(dry_multiplier) = dry_multiplier {
+        let dry_sampling_params = DrySamplingParams::new_with_defaults(
+            dry_multiplier,
+            dry_sequence_breakers,
+            dry_base,
+            dry_allowed_length,
+        )?;
 
-    match_fn(state, response)
+        Ok(Some(dry_sampling_params))
+    } else {
+        Ok(None)
+    }
 }

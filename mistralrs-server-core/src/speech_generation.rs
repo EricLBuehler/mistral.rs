@@ -13,14 +13,15 @@ use mistralrs_core::{
     speech_utils::{self, Sample},
     Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response, SamplingParams,
 };
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
-    completion_base::{create_response_channel, send_model_request, ErrorToResponse, JsonError},
+    handlers_base::{create_response_channel, send_model_request, ErrorToResponse, JsonError},
     openai::{AudioResponseFormat, SpeechGenerationRequest},
     types::SharedMistralRsState,
 };
 
+/// Represents different types of speech generation responses.
 pub enum SpeechGenerationResponder {
     InternalError(Box<dyn Error>),
     ValidationError(Box<dyn Error>),
@@ -28,6 +29,7 @@ pub enum SpeechGenerationResponder {
 }
 
 impl IntoResponse for SpeechGenerationResponder {
+    /// Converts the speech generation responder into an HTTP response.
     fn into_response(self) -> axum::response::Response {
         match self {
             SpeechGenerationResponder::InternalError(e) => {
@@ -41,7 +43,11 @@ impl IntoResponse for SpeechGenerationResponder {
     }
 }
 
-fn parse_request(
+/// Parses and validates a speech generation request.
+///
+/// This function transforms a speech generation request into the
+/// request format used by mistral.rs.
+pub fn parse_request(
     oairequest: SpeechGenerationRequest,
     state: Arc<MistralRs>,
     tx: Sender<Response>,
@@ -70,6 +76,7 @@ fn parse_request(
     Ok((request, oairequest.response_format))
 }
 
+/// Speech generation endpoint handler.
 #[utoipa::path(
     post,
     tag = "Mistral.rs",
@@ -102,15 +109,42 @@ pub async fn speech_generation(
         return handle_speech_generation_error(state, e.into());
     }
 
+    process_speech_generation_response(&mut rx, state, response_format).await
+}
+
+/// Helper function to handle speech generation errors and logging them.
+pub fn handle_speech_generation_error(
+    state: SharedMistralRsState,
+    e: Box<dyn std::error::Error + Send + Sync + 'static>,
+) -> SpeechGenerationResponder {
+    let e = anyhow::Error::msg(e.to_string());
+    MistralRs::maybe_log_error(state, &*e);
+    SpeechGenerationResponder::InternalError(e.into())
+}
+
+/// Processes speech generation responses.
+pub async fn process_speech_generation_response(
+    rx: &mut Receiver<Response>,
+    state: SharedMistralRsState,
+    response_format: AudioResponseFormat,
+) -> SpeechGenerationResponder {
     let response = match rx.recv().await {
         Some(response) => response,
         None => {
             let e = anyhow::Error::msg("No response received from the model.");
-            MistralRs::maybe_log_error(state, &*e);
-            return SpeechGenerationResponder::InternalError(e.into());
+            return handle_speech_generation_error(state, e.into());
         }
     };
 
+    match_responses(state, response, response_format)
+}
+
+/// Matches and processes different types of model responses into appropriate speech generation responses.
+pub fn match_responses(
+    state: SharedMistralRsState,
+    response: Response,
+    response_format: AudioResponseFormat,
+) -> SpeechGenerationResponder {
     match response {
         Response::InternalError(e) => {
             MistralRs::maybe_log_error(state, &*e);
@@ -167,14 +201,4 @@ pub async fn speech_generation(
         }
         Response::Raw { .. } => unreachable!(),
     }
-}
-
-/// Helper function to handle image generation errors and logging them.
-pub fn handle_speech_generation_error(
-    state: SharedMistralRsState,
-    e: Box<dyn std::error::Error + Send + Sync + 'static>,
-) -> SpeechGenerationResponder {
-    let e = anyhow::Error::msg(e.to_string());
-    MistralRs::maybe_log_error(state, &*e);
-    SpeechGenerationResponder::InternalError(e.into())
 }
