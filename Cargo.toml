@@ -92,6 +92,79 @@ hf-hub = { version = "0.4.1", default-features = false, features = [
 ] }
 itertools = "0.13.0"
 
+rand = "0.9.0"
+cli-table = "0.4.7"
+dirs = "5.0.1"
+thiserror = "1"
+tokenizers = { version = "0.21.0", default-features = false }
+tqdm = "0.7.0"
+chrono = "0.4.34"
+minijinja = { version = "2.0.2", features = ["builtins", "json"] }
+minijinja-contrib = { version = "2.0.2", features = ["pycompat"] }
+regex-automata = { version = "0.4.6", features = ["meta"] }
+rustc-hash = "2.0.0"
+vob = "3.0.3"
+cfgrammar = "0.13.3"
+lrtable = "0.13.3"
+galil-seiferas = "0.1.5"
+radix_trie = "0.2.1"
+bytemuck = "1.15.0"
+tokio-rayon = "2.1.0"
+rand_isaac = "0.4.0"
+indicatif = { version = "0.17.8", features = ["rayon"] }
+async-trait = "0.1.80"
+strum = { version = "0.26", features = ["derive"] }
+derive_more = { version = "0.99.17", default-features = false, features = ["from"] }
+akin = "0.4.0"
+variantly = "0.4.0"
+derive-new = "0.7.0"
+sysinfo = "0.30.12"
+csv = "1.3.0"
+bytemuck_derive = "1.7.0"
+uuid = "1.17.0"
+schemars = "0.8.21"
+serde_yaml = "0.9.34"
+serde_plain = "1.0.2"
+as-any = "0.3.1"
+llguidance = { version = "0.7.20", default-features = false, features = ["lark"] }
+toktrie_hf_tokenizers = "0.7.20"
+objc = { version = "0.2.7" }
+serde-big-array = "0.5.1"
+interprocess = "2.2.2"
+urlencoding = "2.1.3"
+scraper = "0.23.1"
+html2text = "0.14.2"
+ordered-float = "5.0.0"
+hashbrown = "0.15.3"
+parking_lot = "0.12.3"
+ahash = "0.8.12"
+num-traits = "0.2.19"
+libc = "0.2.172"
+bm25 = "2.2.1"
+lazy_static = "1.4"
+paste = "1.0.15"
+byteorder = "1.5.0"
+yoke = "0.7.5"
+memmap2 = "0.9.5"
+pyo3-build-config = "0.22"
+ctrlc = "3.4.4"
+directories = "6.0.0"
+rustyline = { version = "15.0.0", default-features = false, features = ["with-file-history"] }
+tower-http = "0.6.4"
+utoipa-swagger-ui = { version = "7.1.0", features = ["axum"] }
+futures-util = "0.3.31"
+axum_static = "1.7.1"
+mime_guess = "2.0.5"
+include_dir = "0.7.4"
+http = "1.3.1"
+hyper = "1.6.0"
+bindgen_cuda = { git = "https://github.com/guoqingbao/bindgen_cuda.git", version = "0.1.6" }
+mistralrs-core = { path = "mistralrs-core" }
+mistralrs-paged-attn = { path = "mistralrs-paged-attn" }
+mistralrs-quant = { path = "mistralrs-quant" }
+mistralrs-vision = { path = "mistralrs-vision" }
+mistralrs-server-core = { path = "mistralrs-server-core" }
+mistralrs = { path = "mistralrs" }
 [profile.release-with-debug]
 inherits = "release"
 debug = true

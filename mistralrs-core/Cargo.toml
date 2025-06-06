@@ -18,84 +18,84 @@ candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 candle-flash-attn = { workspace = true, optional = true }
-dirs = "5.0.1"
+dirs.workspace = true
 hf-hub.workspace = true
-thiserror = "1.0.57"
-tokenizers = { version = "0.21.0", default-features = false }
-tqdm = "0.7.0"
-chrono = "0.4.34"
-minijinja = { version = "2.0.2", features = ["builtins", "json"] }
-minijinja-contrib = { version = "2.0.2", features = ["pycompat"] }
+thiserror.workspace = true
+tokenizers.workspace = true
+tqdm.workspace = true
+chrono.workspace = true
+minijinja.workspace = true
+minijinja-contrib.workspace = true
 either.workspace = true
 indexmap.workspace = true
 half.workspace = true
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 tracing.workspace = true
-rand = "0.9.0"
-regex-automata = { version = "0.4.6", features = ["meta"] }
-rustc-hash = "2.0.0"
-vob = "3.0.3"
-cfgrammar = "0.13.3"
-lrtable = "0.13.3"
-galil-seiferas = "0.1.5"
+rand.workspace = true
+regex-automata.workspace = true
+rustc-hash.workspace = true
+vob.workspace = true
+cfgrammar.workspace = true
+lrtable.workspace = true
+galil-seiferas.workspace = true
 clap.workspace = true
-radix_trie = "0.2.1"
-bytemuck = "1.15.0"
+radix_trie.workspace = true
+bytemuck.workspace = true
 rayon.workspace = true
 tokio.workspace = true
-tokio-rayon = "2.1.0"
-rand_isaac = "0.4.0"
+tokio-rayon.workspace = true
+rand_isaac.workspace = true
 futures.workspace = true
 pyo3 = { workspace = true, optional = true }
-indicatif = { version = "0.17.8", features = ["rayon"] }
-async-trait = "0.1.80"
+indicatif.workspace = true
+async-trait.workspace = true
 once_cell.workspace = true
 toml.workspace = true
-strum = { version = "0.26", features = ["derive"] }
+strum.workspace = true
 image.workspace = true
 derive_more = { version = "0.99.17", default-features = false, features = [
     "from",
 ] }
-akin = "0.4.0"
-variantly = "0.4.0"
+akin.workspace = true
+variantly.workspace = true
 tracing-subscriber.workspace = true
-derive-new = "0.7.0"
+derive-new.workspace = true
 itertools.workspace = true
-sysinfo = "0.30.12"
-mistralrs-vision = { version = "0.6.0", path = "../mistralrs-vision" }
-csv = "1.3.0"
+sysinfo.workspace = true
+mistralrs-vision.workspace = true
+csv.workspace = true
 reqwest.workspace = true
 base64.workspace = true
-bytemuck_derive = "1.7.0"
-mistralrs-paged-attn = { version = "0.6.0", path = "../mistralrs-paged-attn", optional = true }
-mistralrs-quant = { version = "0.6.0", path = "../mistralrs-quant" }
-uuid = { version = "1.10.0", features = ["v4"] }
+bytemuck_derive.workspace = true
+mistralrs-paged-attn = { workspace = true, optional = true }
+mistralrs-quant.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 utoipa = { workspace = true, optional = true }
-schemars = "0.8.21"
-serde_yaml = "0.9.34"
+schemars.workspace = true
+serde_yaml.workspace = true
 regex.workspace = true
-serde_plain = "1.0.2"
-as-any = "0.3.1"
+serde_plain.workspace = true
+as-any.workspace = true
 float8.workspace = true
-llguidance = { version = "0.7.20", default-features = false, features = ["lark"] }
-toktrie_hf_tokenizers = "0.7.20"
-objc = { version = "0.2.7", optional = true }
+llguidance.workspace = true
+toktrie_hf_tokenizers.workspace = true
+objc = { workspace = true, optional = true }
 metal = { workspace = true, optional = true }
 candle-flash-attn-v3 = { workspace = true, optional = true }
 safetensors.workspace = true
-serde-big-array = "0.5.1"
-interprocess = "2.2.2"
-urlencoding = "2.1.3"
-scraper = "0.23.1"
-html2text = "0.14.2"
-ordered-float = "5.0.0"
-hashbrown = "0.15.3"
-parking_lot = "0.12.3"
-ahash = "0.8.12"
-num-traits = "0.2.19"
-libc = "0.2.172"
-bm25 = "2.2.1"
+serde-big-array.workspace = true
+interprocess.workspace = true
+urlencoding.workspace = true
+scraper.workspace = true
+html2text.workspace = true
+ordered-float.workspace = true
+hashbrown.workspace = true
+parking_lot.workspace = true
+ahash.workspace = true
+num-traits.workspace = true
+libc.workspace = true
+bm25.workspace = true
 
 [features]
 pyo3_macros = ["pyo3"]
@@ -127,4 +127,4 @@ utoipa = ["dep:utoipa"]
 ring = ["mistralrs-quant/ring"]
 
 [build-dependencies]
-bindgen_cuda = { version = "0.1.5", optional = true }
+bindgen_cuda = { workspace = true, optional = true }

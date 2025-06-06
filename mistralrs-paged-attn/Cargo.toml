@@ -16,11 +16,11 @@ candle-core.workspace = true
 half.workspace = true
 float8.workspace = true
 metal = { workspace = true, optional = true }
-thiserror = "1"
-once_cell = "1.20.2"
+thiserror.workspace = true
+once_cell.workspace = true
 
 [build-dependencies]
-bindgen_cuda = {git = "https://github.com/guoqingbao/bindgen_cuda.git", version = "0.1.6", optional = true}
+bindgen_cuda = { workspace = true, optional = true }
 anyhow.workspace = true
 
 [features]
