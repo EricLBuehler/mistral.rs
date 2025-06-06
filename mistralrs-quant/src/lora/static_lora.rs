@@ -11,9 +11,9 @@ use super::StaticLoraConfig;
 /// Static LoRA in the style of Phi-4 multimodal. Only when the layer regex for the specific LoRA matches.
 ///
 /// Structure:
-/// - prefix.base_layer.weight
-/// - prefix.lora_A.<lora name>.weight
-/// - prefix.lora_B.<lora name>.weight
+/// - `prefix.base_layer.weight`
+/// - `prefix.lora_A.<lora name>.weight`
+/// - `prefix.lora_B.<lora name>.weight`
 pub fn linear_no_bias_static_lora(
     in_dim: usize,
     out_dim: usize,

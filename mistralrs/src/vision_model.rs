@@ -187,7 +187,7 @@ impl VisionModelBuilder {
     }
 
     /// Enable PagedAttention. Configure PagedAttention with a [`PagedAttentionConfig`] object, which
-    /// can be created with sensible values with a [`PagedAttentionMetaBuilder`].
+    /// can be created with sensible values with a [`PagedAttentionMetaBuilder`](crate::PagedAttentionMetaBuilder).
     ///
     /// If PagedAttention is not supported (query with [`paged_attn_supported`]), this will do nothing.
     pub fn with_paged_attn(
