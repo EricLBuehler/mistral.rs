@@ -138,6 +138,8 @@ After creating the UQFF file, you can upload the model to Hugging Face. To do th
 
 ### Creating with the CLI
 
+**⭐ Check out [uqff_maker](https://github.com/EricLBuehler/uqff_maker) to make UQFF models with an easy CLI!**
+
 ```
 ./mistralrs-server --isq Q4K -i plain -m microsoft/Phi-3.5-mini-instruct --write-uqff phi3.5-mini-instruct-q4k.uqff
 ```
