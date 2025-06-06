@@ -1,20 +1,28 @@
 use anyhow::Result;
+use clap::Parser;
 use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+
+#[derive(Parser)]
+struct Args {
+    #[clap(long)]
+    model_id: String,
+    #[clap(
+        long,
+        default_value = "https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg"
+    )]
+    image_url: String,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("llava-hf/llava-v1.6-mistral-7b-hf")
+    let args = Args::parse();
+    let model = VisionModelBuilder::new(&args.model_id)
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()
         .await?;
 
-    let bytes = match reqwest::blocking::get(
-        "https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg",
-    ) {
-        Ok(http_resp) => http_resp.bytes()?.to_vec(),
-        Err(e) => anyhow::bail!(e),
-    };
+    let bytes = reqwest::blocking::get(&args.image_url)?.bytes()?.to_vec();
     let image = image::load_from_memory(&bytes)?;
 
     let messages = VisionMessages::new().add_image_message(

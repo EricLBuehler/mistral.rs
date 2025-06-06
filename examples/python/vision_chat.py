@@ -1,24 +1,32 @@
+import argparse
 from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+
+parser = argparse.ArgumentParser(description="Vision model chat example")
+parser.add_argument("--model-id", required=True, help="HuggingFace model id")
+parser.add_argument("--arch", required=True, help="VisionArchitecture name")
+parser.add_argument(
+    "--image-url",
+    default="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg",
+)
+args = parser.parse_args()
 
 runner = Runner(
     which=Which.VisionPlain(
-        model_id="microsoft/Phi-4-multimodal-instruct",
-        arch=VisionArchitecture.Phi4MM,
+        model_id=args.model_id,
+        arch=VisionArchitecture[args.arch],
     ),
 )
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="phi4mm",
+        model=args.arch.lower(),
         messages=[
             {
                 "role": "user",
                 "content": [
                     {
                         "type": "image_url",
-                        "image_url": {
-                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
-                        },
+                        "image_url": {"url": args.image_url},
                     },
                     {
                         "type": "text",

@@ -24,7 +24,7 @@ The Rust API takes an image from the [image](https://docs.rs/image/latest/image/
 > It should be added to messages manually, and is of the format `<image>`.
 
 ## HTTP server
-You can find this example [here](../examples/server/llava_next.py).
+You can find this example [here](../examples/server/vision_chat.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -101,7 +101,7 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/llava_next/main.rs).
+You can find this example [here](../mistralrs/examples/vision_chat/main.rs).
 
 This is a minimal example of running the LLaVA and LLaVANext model with a dummy image.
 
@@ -146,7 +146,7 @@ async fn main() -> Result<()> {
 ```
 
 ## Python
-You can find this example [here](../examples/python/llava_next.py).
+You can find this example [here](../examples/python/vision_chat.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 

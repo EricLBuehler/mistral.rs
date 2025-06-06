@@ -137,7 +137,7 @@ async fn main() -> Result<()> {
 ```
 
 ## Python
-You can find this example [here](../examples/python/phi3v.py).
+You can find this example [here](../examples/python/vision_chat.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
