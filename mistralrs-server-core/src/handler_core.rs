@@ -1,4 +1,4 @@
-//! Base functionality for handlers.
+//! Core functionality for handlers.
 
 use anyhow::{Context, Result};
 use axum::{extract::Json, http::StatusCode, response::IntoResponse};
@@ -19,9 +19,9 @@ pub const DEFAULT_CHANNEL_BUFFER_SIZE: usize = 10_000;
 pub(crate) trait ErrorToResponse: Serialize {
     /// Converts the error to an HTTP response with the specified status code.
     fn to_response(&self, code: StatusCode) -> axum::response::Response {
-        let mut r = Json(self).into_response();
-        *r.status_mut() = code;
-        r
+        let mut response = Json(self).into_response();
+        *response.status_mut() = code;
+        response
     }
 }
 
@@ -43,6 +43,7 @@ impl std::fmt::Display for JsonError {
         write!(f, "{}", self.message)
     }
 }
+
 impl std::error::Error for JsonError {}
 impl ErrorToResponse for JsonError {}
 
@@ -58,6 +59,7 @@ impl std::fmt::Display for ModelErrorMessage {
         write!(f, "{}", self.0)
     }
 }
+
 impl std::error::Error for ModelErrorMessage {}
 
 /// Generic JSON error response structure
@@ -81,7 +83,6 @@ pub fn create_response_channel(
     buffer_size: Option<usize>,
 ) -> (Sender<Response>, Receiver<Response>) {
     let channel_buffer_size = buffer_size.unwrap_or(DEFAULT_CHANNEL_BUFFER_SIZE);
-
     channel(channel_buffer_size)
 }
 
@@ -91,7 +92,10 @@ pub async fn send_model_request(state: &SharedMistralRsState, request: Request) 
         .get_sender()
         .context("mistral.rs sender not available.")?;
 
-    sender.send(request).await.map_err(|e| e.into())
+    sender
+        .send(request)
+        .await
+        .context("Failed to send request to model pipeline")
 }
 
 /// Generic function to process non-streaming responses.
@@ -104,13 +108,11 @@ pub(crate) async fn process_non_streaming_response<R>(
         Box<dyn std::error::Error + Send + Sync + 'static>,
     ) -> R,
 ) -> R {
-    let response = match rx.recv().await {
-        Some(response) => response,
+    match rx.recv().await {
+        Some(response) => match_fn(state, response),
         None => {
-            let e = anyhow::Error::msg("No response received from the model.");
-            return error_handler(state, e.into());
+            let error = anyhow::Error::msg("No response received from the model.");
+            error_handler(state, error.into())
         }
-    };
-
-    match_fn(state, response)
+    }
 }

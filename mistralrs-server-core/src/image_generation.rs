@@ -15,7 +15,7 @@ use mistralrs_core::{
 use tokio::sync::mpsc::Sender;
 
 use crate::{
-    handlers_base::{
+    handler_core::{
         create_response_channel, process_non_streaming_response, send_model_request,
         ErrorToResponse, JsonError,
     },
