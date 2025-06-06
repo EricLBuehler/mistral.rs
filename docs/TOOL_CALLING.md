@@ -35,3 +35,35 @@ Please see [our example here](../mistralrs/examples/tools/main.rs).
 
 ## Python example
 Please see [our notebook here](../examples/python/tool_calling.ipynb).
+
+## Tool callbacks
+
+You can override tool execution using a **tool callback**. The callback receives
+the tool name and a dictionary of arguments and must return the tool output as a
+string.
+
+### Python
+
+```py
+def tool_cb(name: str, args: dict) -> str:
+    if name == "local_search":
+        return json.dumps(local_search(args.get("query", "")))
+    return ""
+
+runner = Runner(
+    which=Which.Plain(model_id="YourModel/ID", arch=Architecture.Llama),
+    tool_callback=tool_cb,
+)
+```
+
+See [local_tool_search.py](../examples/python/local_tool_search.py) for a full
+example. In Rust pass `.with_tool_callback(...)` to the builder as demonstrated
+in [local_search/main.rs](../mistralrs/examples/local_search/main.rs).
+
+## Search callbacks
+
+Web search uses a DuckDuckGo-based callback by default. Provide your own search
+function with `search_callback` in Python or `.with_search_callback(...)` in
+Rust. Each callback should return a list of results with `title`, `description`,
+`url` and `content` fields. See [WEB_SEARCH.md](WEB_SEARCH.md) for more details
+and examples.
