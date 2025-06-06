@@ -3,6 +3,7 @@ use std::any::Any;
 use candle_core::Tensor;
 
 pub(crate) mod clip;
+pub(crate) mod conformer;
 pub(crate) mod idefics2;
 pub(crate) use idefics2::idefics2_input_processor;
 pub(crate) mod image_processor;
