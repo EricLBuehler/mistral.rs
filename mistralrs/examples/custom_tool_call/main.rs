@@ -32,6 +32,7 @@ fn local_search(query: &str) -> Result<Vec<SearchResult>> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Build the model and register the *tool callback*.
     let model = TextModelBuilder::new("NousResearch/Hermes-3-Llama-3.1-8B")
         .with_isq(IsqType::Q4K)
         .with_logging()
@@ -46,6 +47,7 @@ async fn main() -> Result<()> {
         .build()
         .await?;
 
+    // Define the JSON schema for the tool the model can call.
     let parameters = std::collections::HashMap::from([(
         "query".to_string(),
         serde_json::json!({"type": "string", "description": "Query"}),
@@ -59,6 +61,7 @@ async fn main() -> Result<()> {
         },
     };
 
+    // Ask the user question and allow the model to call the tool automatically.
     let messages =
         TextMessages::new().add_message(TextMessageRole::User, "Where is Cargo.toml in this repo?");
     let messages = RequestBuilder::from(messages)
