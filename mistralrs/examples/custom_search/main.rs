@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
         .with_search_callback(Arc::new(|params: &mistralrs::SearchFunctionParameters| {
             // In a real application there could be network or database calls here – but for the
             // sake of demonstration we simply perform a local filesystem search.
-            Ok(local_search(&params.query)?)
+            local_search(&params.query)
         }))
         .build()
         .await?;
