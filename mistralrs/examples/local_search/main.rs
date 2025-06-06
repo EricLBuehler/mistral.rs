@@ -1,7 +1,7 @@
 use anyhow::Result;
 use mistralrs::{
     CalledFunction, IsqType, RequestBuilder, SearchResult, TextMessageRole, TextMessages,
-    TextModelBuilder, Tool, ToolCallback, ToolChoice, ToolType,
+    TextModelBuilder, Tool, ToolChoice, ToolType,
 };
 use std::fs;
 use std::sync::Arc;

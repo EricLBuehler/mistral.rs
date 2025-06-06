@@ -11,7 +11,7 @@ use crate::{
     scheduler::{Scheduler, SchedulerOutput},
     search,
     sequence::{SeqStepType, StopReason},
-    CompletionResponse, SchedulerConfig, DEBUG,
+    tools, CompletionResponse, SchedulerConfig, DEBUG,
 };
 use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::ParserFactory;

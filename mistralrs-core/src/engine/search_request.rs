@@ -453,11 +453,11 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                 // Tool requested → build the next turn.
                 let tc = tc_opt.unwrap();
                 let next_visible = if search::search_tool_called(&tc.function.name) {
+                    let web_search_options = web_search_options.as_ref().unwrap();
                     if tc.function.name == search::SEARCH_TOOL_NAME {
-                        do_search(this_clone.clone(), visible_req, tc, &web_search_options).await
+                        do_search(this_clone.clone(), visible_req, tc, web_search_options).await
                     } else {
-                        do_extraction(this_clone.clone(), visible_req, tc, &web_search_options)
-                            .await
+                        do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
                     }
                 } else {
                     do_custom_tool(this_clone.clone(), visible_req, tc).await
@@ -519,11 +519,11 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
 
                 let tc = tc_opt.unwrap();
                 let next_visible = if search::search_tool_called(&tc.function.name) {
+                    let web_search_options = web_search_options.as_ref().unwrap();
                     if tc.function.name == search::SEARCH_TOOL_NAME {
-                        do_search(this_clone.clone(), visible_req, tc, &web_search_options).await
+                        do_search(this_clone.clone(), visible_req, tc, web_search_options).await
                     } else {
-                        do_extraction(this_clone.clone(), visible_req, tc, &web_search_options)
-                            .await
+                        do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
                     }
                 } else {
                     do_custom_tool(this_clone.clone(), visible_req, tc).await
