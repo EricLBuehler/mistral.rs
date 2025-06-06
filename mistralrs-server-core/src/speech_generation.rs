@@ -16,7 +16,7 @@ use mistralrs_core::{
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
-    handlers_base::{create_response_channel, send_model_request, ErrorToResponse, JsonError},
+    handler_core::{create_response_channel, send_model_request, ErrorToResponse, JsonError},
     openai::{AudioResponseFormat, SpeechGenerationRequest},
     types::SharedMistralRsState,
 };

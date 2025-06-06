@@ -24,16 +24,16 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::warn;
 
 use crate::{
-    completion_base::{
+    completion_core::{
         convert_stop_tokens, get_dry_sampling_params, handle_completion_error,
         BaseCompletionResponder,
     },
-    handlers_base::{
+    handler_core::{
         create_response_channel, process_non_streaming_response, send_model_request,
         BaseJsonModelError, ErrorToResponse, JsonError, ModelErrorMessage,
     },
     openai::{CompletionRequest, Grammar},
-    sse::{create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
+    streaming::{create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
 };
 

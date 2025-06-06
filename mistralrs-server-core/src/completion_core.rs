@@ -1,4 +1,4 @@
-//! Base functionality for completions.
+//! Core functionality for completions.
 
 use std::error::Error;
 
@@ -28,17 +28,17 @@ pub(crate) fn handle_completion_error<R, S>(
     state: SharedMistralRsState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> BaseCompletionResponder<R, S> {
-    let e = anyhow::Error::msg(e.to_string());
-    MistralRs::maybe_log_error(state, &*e);
-    BaseCompletionResponder::InternalError(e.into())
+    let error = anyhow::Error::msg(e.to_string());
+    MistralRs::maybe_log_error(state, &*error);
+    BaseCompletionResponder::InternalError(error.into())
 }
 
 /// Helper function to convert from the OpenAI stop tokens to the mistral.rs
 /// internal stop tokens.
 pub(crate) fn convert_stop_tokens(stop_seqs: Option<StopTokens>) -> Option<InternalStopTokens> {
     match stop_seqs {
-        Some(StopTokens::Multi(m)) => Some(InternalStopTokens::Seqs(m)),
-        Some(StopTokens::Single(s)) => Some(InternalStopTokens::Seqs(vec![s])),
+        Some(StopTokens::Multi(sequences)) => Some(InternalStopTokens::Seqs(sequences)),
+        Some(StopTokens::Single(sequence)) => Some(InternalStopTokens::Seqs(vec![sequence])),
         None => None,
     }
 }
@@ -50,16 +50,16 @@ pub(crate) fn get_dry_sampling_params(
     dry_base: Option<f32>,
     dry_allowed_length: Option<usize>,
 ) -> Result<Option<DrySamplingParams>> {
-    if let Some(dry_multiplier) = dry_multiplier {
-        let dry_sampling_params = DrySamplingParams::new_with_defaults(
-            dry_multiplier,
-            dry_sequence_breakers,
-            dry_base,
-            dry_allowed_length,
-        )?;
-
-        Ok(Some(dry_sampling_params))
-    } else {
-        Ok(None)
+    match dry_multiplier {
+        Some(multiplier) => {
+            let params = DrySamplingParams::new_with_defaults(
+                multiplier,
+                dry_sequence_breakers,
+                dry_base,
+                dry_allowed_length,
+            )?;
+            Ok(Some(params))
+        }
+        None => Ok(None),
     }
 }

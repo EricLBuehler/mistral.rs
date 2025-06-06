@@ -1,4 +1,4 @@
-//! ## SSE utils.
+//! SSE streaming utilities.
 
 use std::env;
 

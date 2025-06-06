@@ -215,16 +215,16 @@
 //! ```
 
 pub mod chat_completion;
-pub mod completion_base;
+pub mod completion_core;
 pub mod completions;
+pub mod handler_core;
 mod handlers;
-pub mod handlers_base;
 pub mod image_generation;
 pub mod mistralrs_for_server_builder;
 pub mod mistralrs_server_router_builder;
 pub mod openai;
 pub mod openapi_doc;
 pub mod speech_generation;
-pub mod sse;
+pub mod streaming;
 pub mod types;
 pub mod util;
