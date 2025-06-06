@@ -88,14 +88,17 @@
 <a href=#88 id=88 data-nosnippet>88</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(cb) = <span class="self">self</span>.gguf_model.search_callback.clone() {
 <a href=#89 id=89 data-nosnippet>89</a>            runner = runner.with_search_callback(cb);
 <a href=#90 id=90 data-nosnippet>90</a>        }
-<a href=#91 id=91 data-nosnippet>91</a>        runner = runner
-<a href=#92 id=92 data-nosnippet>92</a>            .with_no_kv_cache(<span class="self">self</span>.gguf_model.no_kv_cache)
-<a href=#93 id=93 data-nosnippet>93</a>            .with_no_prefix_cache(<span class="self">self</span>.gguf_model.prefix_cache_n.is_none());
-<a href=#94 id=94 data-nosnippet>94</a>
-<a href=#95 id=95 data-nosnippet>95</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = <span class="self">self</span>.gguf_model.prefix_cache_n {
-<a href=#96 id=96 data-nosnippet>96</a>            runner = runner.with_prefix_cache_n(n)
-<a href=#97 id=97 data-nosnippet>97</a>        }
-<a href=#98 id=98 data-nosnippet>98</a>
-<a href=#99 id=99 data-nosnippet>99</a>        <span class="prelude-val">Ok</span>(Model::new(runner.build()))
-<a href=#100 id=100 data-nosnippet>100</a>    }
-<a href=#101 id=101 data-nosnippet>101</a>}</code></pre></div></section></main></body></html>
+<a href=#91 id=91 data-nosnippet>91</a>        <span class="kw">for </span>(name, cb) <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.gguf_model.tool_callbacks {
+<a href=#92 id=92 data-nosnippet>92</a>            runner = runner.with_tool_callback(name.clone(), cb.clone());
+<a href=#93 id=93 data-nosnippet>93</a>        }
+<a href=#94 id=94 data-nosnippet>94</a>        runner = runner
+<a href=#95 id=95 data-nosnippet>95</a>            .with_no_kv_cache(<span class="self">self</span>.gguf_model.no_kv_cache)
+<a href=#96 id=96 data-nosnippet>96</a>            .with_no_prefix_cache(<span class="self">self</span>.gguf_model.prefix_cache_n.is_none());
+<a href=#97 id=97 data-nosnippet>97</a>
+<a href=#98 id=98 data-nosnippet>98</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = <span class="self">self</span>.gguf_model.prefix_cache_n {
+<a href=#99 id=99 data-nosnippet>99</a>            runner = runner.with_prefix_cache_n(n)
+<a href=#100 id=100 data-nosnippet>100</a>        }
+<a href=#101 id=101 data-nosnippet>101</a>
+<a href=#102 id=102 data-nosnippet>102</a>        <span class="prelude-val">Ok</span>(Model::new(runner.build()))
+<a href=#103 id=103 data-nosnippet>103</a>    }
+<a href=#104 id=104 data-nosnippet>104</a>}</code></pre></div></section></main></body></html>

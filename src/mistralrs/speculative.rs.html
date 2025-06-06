@@ -103,7 +103,10 @@
 <a href=#103 id=103 data-nosnippet>103</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(cb) = <span class="self">self</span>.target.search_callback.clone() {
 <a href=#104 id=104 data-nosnippet>104</a>            runner = runner.with_search_callback(cb);
 <a href=#105 id=105 data-nosnippet>105</a>        }
-<a href=#106 id=106 data-nosnippet>106</a>
-<a href=#107 id=107 data-nosnippet>107</a>        <span class="prelude-val">Ok</span>(Model::new(runner.build()))
-<a href=#108 id=108 data-nosnippet>108</a>    }
-<a href=#109 id=109 data-nosnippet>109</a>}</code></pre></div></section></main></body></html>
+<a href=#106 id=106 data-nosnippet>106</a>        <span class="kw">for </span>(name, cb) <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.target.tool_callbacks {
+<a href=#107 id=107 data-nosnippet>107</a>            runner = runner.with_tool_callback(name.clone(), cb.clone());
+<a href=#108 id=108 data-nosnippet>108</a>        }
+<a href=#109 id=109 data-nosnippet>109</a>
+<a href=#110 id=110 data-nosnippet>110</a>        <span class="prelude-val">Ok</span>(Model::new(runner.build()))
+<a href=#111 id=111 data-nosnippet>111</a>    }
+<a href=#112 id=112 data-nosnippet>112</a>}</code></pre></div></section></main></body></html>
