@@ -12,7 +12,7 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-mistralrs-core = { version = "0.6.0", path = "../mistralrs-core" }
+mistralrs-core.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 candle-core.workspace = true
@@ -24,7 +24,7 @@ indexmap.workspace = true
 either.workspace = true
 futures.workspace = true
 reqwest.workspace = true
-rand = "0.9.0"
+rand.workspace = true
 clap.workspace = true
 walkdir.workspace = true
 

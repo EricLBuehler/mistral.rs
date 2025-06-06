@@ -17,17 +17,17 @@ candle-nn.workspace = true
 half.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-lazy_static = "1.4"
-paste = "1.0.15"
+lazy_static.workspace = true
+paste.workspace = true
 tracing.workspace = true
 rayon.workspace = true
-byteorder = "1.5.0"
+byteorder.workspace = true
 float8.workspace = true
 once_cell.workspace = true
 metal = { workspace = true, optional = true }
-thiserror = "1"
-yoke = "0.7.5"
-memmap2 = "0.9.5"
+thiserror.workspace = true
+yoke.workspace = true
+memmap2.workspace = true
 safetensors.workspace = true
 regex.workspace = true
 hf-hub.workspace = true
@@ -45,4 +45,4 @@ accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
 ring = []
 
 [build-dependencies]
-bindgen_cuda = { version = "0.1.5", optional = true }
+bindgen_cuda = { workspace = true, optional = true }

@@ -16,12 +16,12 @@ default-run = "mistralrs-server"
 anyhow.workspace = true
 axum = { workspace = true, features = ["tokio"] }
 clap.workspace = true
-ctrlc = "3.4.4"
-directories = "6.0.0"
+ctrlc.workspace = true
+directories.workspace = true
 either.workspace = true
 indexmap.workspace = true
-mistralrs-core = { version = "0.6.0", path = "../mistralrs-core" }
-mistralrs-server-core = { version = "0.6.0", path = "../mistralrs-server-core" }
+mistralrs-core.workspace = true
+mistralrs-server-core.workspace = true
 once_cell.workspace = true
 regex.workspace = true
 rustyline = { version = "15.0.0", default-features = false, features = [
