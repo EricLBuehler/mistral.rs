@@ -15,32 +15,78 @@ use axum::{
     },
 };
 use mistralrs_core::{
-    CompletionResponse, Constraint, DrySamplingParams, MistralRs, NormalRequest, Request,
-    RequestMessage, Response, SamplingParams, StopTokens as InternalStopTokens,
+    CompletionChunkResponse, CompletionResponse, Constraint, DrySamplingParams, MistralRs,
+    NormalRequest, Request, RequestMessage, Response, SamplingParams,
+    StopTokens as InternalStopTokens,
 };
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::warn;
 
 use crate::{
-    completion_base::BaseCompletionResponder,
-    openai::{CompletionRequest, Grammar, StopTokens},
-    streaming::{get_keep_alive_interval, DoneState},
-    types::ExtractedMistralRsState,
-    util::{
-        create_response_channel, send_model_request, BaseJsonModelError, ErrorToResponse,
+    completion_base::{
+        base_handle_completion_error, base_process_non_streaming_response, create_response_channel,
+        send_model_request, BaseCompletionResponder, BaseJsonModelError, ErrorToResponse,
         JsonError, ModelErrorMessage,
     },
+    openai::{CompletionRequest, Grammar, StopTokens},
+    streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
+    types::{ExtractedMistralRsState, SharedMistralRsState},
 };
 
-pub struct Streamer {
-    rx: Receiver<Response>,
-    done_state: DoneState,
-    state: Arc<MistralRs>,
-}
+/// A callback function that processes streaming response chunks before they are sent to the client.
+///
+/// This hook allows modification of each chunk in the streaming response, enabling features like
+/// content filtering, transformation, or logging. The callback receives a chunk and must return
+/// a (potentially modified) chunk.
+///
+/// ### Examples
+///
+/// ```no_run
+/// use mistralrs_server_core::completion::OnChunkCallback;
+///
+/// let on_chunk: OnChunkCallback = Box::new(|mut chunk| {
+///     // Log the chunk or modify its content
+///     println!("Processing chunk: {:?}", chunk);
+///     chunk
+/// });
+/// ```
+pub type CompletionOnChunkCallback =
+    Box<dyn Fn(CompletionChunkResponse) -> CompletionChunkResponse + Send + Sync>;
 
-impl futures::Stream for Streamer {
+/// A callback function that is executed when the streaming response completes.
+///
+/// This hook receives all chunks that were streamed during the response, allowing for
+/// post-processing, analytics, or cleanup operations after the stream finishes.
+///
+/// ### Examples
+///
+/// ```no_run
+/// use mistralrs_server_core::completion::OnDoneCallback;
+///
+/// let on_done: OnDoneCallback = Box::new(|chunks| {
+///     println!("Stream completed with {} chunks", chunks.len());
+///     // Process all chunks for analytics
+/// });
+/// ```
+pub type CompletionOnDoneCallback = Box<dyn Fn(&[CompletionChunkResponse]) + Send + Sync>;
+
+/// A streaming response handler.
+///
+/// It processes incoming response chunks from a model and converts them
+/// into Server-Sent Events (SSE) format for real-time streaming to clients.
+pub type CompletionStreamer =
+    BaseStreamer<CompletionChunkResponse, CompletionOnChunkCallback, CompletionOnDoneCallback>;
+
+impl futures::Stream for CompletionStreamer {
     type Item = Result<Event, axum::Error>;
 
+    /// Polls the stream for the next Server-Sent Event.
+    ///
+    /// This method implements the core streaming logic:
+    /// 1. Handles stream completion by sending `[DONE]` and executing callbacks
+    /// 2. Processes incoming model responses and converts them to SSE events
+    /// 3. Applies chunk modifications if a callback is provided
+    /// 4. Stores chunks if completion callback is configured
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.done_state {
             DoneState::SendingDone => {
@@ -50,6 +96,9 @@ impl futures::Stream for Streamer {
                 return Poll::Ready(Some(Ok(Event::default().data("[DONE]"))));
             }
             DoneState::Done => {
+                if let Some(on_done) = &self.on_done {
+                    on_done(&self.chunks);
+                }
                 return Poll::Ready(None);
             }
             DoneState::Running => (),
@@ -73,12 +122,21 @@ impl futures::Stream for Streamer {
                     MistralRs::maybe_log_error(self.state.clone(), &*e);
                     Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
                 }
-                Response::CompletionChunk(response) => {
+                Response::CompletionChunk(mut response) => {
                     if response.choices.iter().all(|x| x.finish_reason.is_some()) {
-                        // Done now, just need to send the [DONE]
                         self.done_state = DoneState::SendingDone;
                     }
+                    // Done now, just need to send the [DONE]
                     MistralRs::maybe_log_response(self.state.clone(), &response);
+
+                    if let Some(on_chunk) = &self.on_chunk {
+                        response = on_chunk(response);
+                    }
+
+                    if self.store_chunks {
+                        self.chunks.push(response.clone());
+                    }
+
                     Poll::Ready(Some(Event::default().json_data(response)))
                 }
                 Response::Done(_) => unreachable!(),
@@ -94,7 +152,7 @@ impl futures::Stream for Streamer {
     }
 }
 
-pub type CompletionResponder = BaseCompletionResponder<CompletionResponse, Streamer>;
+pub type CompletionResponder = BaseCompletionResponder<CompletionResponse, CompletionStreamer>;
 
 /// JSON error response structure for model errors.
 type JsonModelError = BaseJsonModelError<CompletionResponse>;
@@ -117,6 +175,10 @@ impl IntoResponse for CompletionResponder {
     }
 }
 
+/// Parses and validates a completion request.
+///
+/// This function transforms an OpenAI-compatible completion request into the
+/// request format used by mistral.rs.
 fn parse_request(
     oairequest: CompletionRequest,
     state: Arc<MistralRs>,
@@ -190,6 +252,7 @@ fn parse_request(
     ))
 }
 
+/// OpenAI-compatible chat completions endpoint handler.
 #[utoipa::path(
     post,
     tag = "Mistral.rs",
@@ -197,7 +260,6 @@ fn parse_request(
     request_body = CompletionRequest,
     responses((status = 200, description = "Completions"))
 )]
-
 pub async fn completions(
     State(state): ExtractedMistralRsState,
     Json(oairequest): Json<CompletionRequest>,
@@ -212,64 +274,73 @@ pub async fn completions(
 
     let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx) {
         Ok(x) => x,
-        Err(e) => {
-            let e = anyhow::Error::msg(e.to_string());
-            MistralRs::maybe_log_error(state, &*e);
-            return CompletionResponder::InternalError(e.into());
-        }
+        Err(e) => return handle_completion_error(state, e.into()),
     };
 
     if let Err(e) = send_model_request(&state, request).await {
-        let e = anyhow::Error::msg(e.to_string());
-        MistralRs::maybe_log_error(state, &*e);
-        return CompletionResponder::InternalError(e.into());
+        return handle_completion_error(state, e.into());
     }
 
     if is_streaming {
-        let streamer = Streamer {
-            rx,
-            done_state: DoneState::Running,
-            state,
-        };
-
-        let keep_alive_interval = get_keep_alive_interval();
-
-        CompletionResponder::Sse(
-            Sse::new(streamer)
-                .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval))),
-        )
+        CompletionResponder::Sse(create_streamer(rx, state, None, None))
     } else {
-        let response = match rx.recv().await {
-            Some(response) => response,
-            None => {
-                let e = anyhow::Error::msg("No response received from the model.");
-                MistralRs::maybe_log_error(state, &*e);
-                return CompletionResponder::InternalError(e.into());
-            }
-        };
+        process_non_streaming_response(&mut rx, state).await
+    }
+}
 
-        match response {
-            Response::InternalError(e) => {
-                MistralRs::maybe_log_error(state, &*e);
-                CompletionResponder::InternalError(e)
-            }
-            Response::CompletionModelError(msg, response) => {
-                MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
-                MistralRs::maybe_log_response(state, &response);
-                CompletionResponder::ModelError(msg, response)
-            }
-            Response::ValidationError(e) => CompletionResponder::ValidationError(e),
-            Response::CompletionDone(response) => {
-                MistralRs::maybe_log_response(state, &response);
-                CompletionResponder::Json(response)
-            }
-            Response::CompletionChunk(_) => unreachable!(),
-            Response::Chunk(_) => unreachable!(),
-            Response::Done(_) => unreachable!(),
-            Response::ModelError(_, _) => unreachable!(),
-            Response::ImageGeneration(_) => unreachable!(),
-            Response::Speech { .. } => unreachable!(),
-            Response::Raw { .. } => unreachable!(),
+/// Helper function to handle chat completion errors and logging them.
+pub fn handle_completion_error(
+    state: SharedMistralRsState,
+    e: Box<dyn std::error::Error + Send + Sync + 'static>,
+) -> CompletionResponder {
+    base_handle_completion_error(state, e)
+}
+
+/// Creates a SSE streamer for chat completions with optional callbacks.
+pub fn create_streamer(
+    rx: Receiver<Response>,
+    state: SharedMistralRsState,
+    on_chunk: Option<CompletionOnChunkCallback>,
+    on_done: Option<CompletionOnDoneCallback>,
+) -> Sse<CompletionStreamer> {
+    let streamer = base_create_streamer(rx, state, on_chunk, on_done);
+    let keep_alive_interval = get_keep_alive_interval();
+
+    Sse::new(streamer)
+        .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval)))
+}
+
+/// Processes non-streaming chat completion responses.
+pub async fn process_non_streaming_response(
+    rx: &mut Receiver<Response>,
+    state: SharedMistralRsState,
+) -> CompletionResponder {
+    base_process_non_streaming_response(rx, state, match_responses, handle_completion_error).await
+}
+
+/// Matches and processes different types of model responses into appropriate chat completion responses.
+pub fn match_responses(state: SharedMistralRsState, response: Response) -> CompletionResponder {
+    match response {
+        Response::InternalError(e) => {
+            MistralRs::maybe_log_error(state, &*e);
+            CompletionResponder::InternalError(e)
         }
+        Response::CompletionModelError(msg, response) => {
+            MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
+            MistralRs::maybe_log_response(state, &response);
+            CompletionResponder::ModelError(msg, response)
+        }
+        Response::ValidationError(e) => CompletionResponder::ValidationError(e),
+        Response::CompletionDone(response) => {
+            MistralRs::maybe_log_response(state, &response);
+            CompletionResponder::Json(response)
+        }
+        Response::CompletionChunk(_) => unreachable!(),
+        Response::Chunk(_) => unreachable!(),
+        Response::Done(_) => unreachable!(),
+        Response::ModelError(_, _) => unreachable!(),
+        Response::ImageGeneration(_) => unreachable!(),
+        Response::Speech { .. } => unreachable!(),
+        Response::Raw { .. } => unreachable!(),
     }
 }

@@ -41,6 +41,26 @@ pub struct BaseStreamer<R, C, D> {
     pub on_done: Option<D>,
 }
 
+/// Generic function to create a SSE streamer with optional callbacks.
+pub(crate) fn base_create_streamer<R, C, D>(
+    rx: Receiver<Response>,
+    state: SharedMistralRsState,
+    on_chunk: Option<C>,
+    on_done: Option<D>,
+) -> BaseStreamer<R, C, D> {
+    let store_chunks = on_done.is_some();
+
+    BaseStreamer {
+        rx,
+        done_state: DoneState::Running,
+        store_chunks,
+        state,
+        chunks: Vec::new(),
+        on_chunk,
+        on_done,
+    }
+}
+
 /// Gets the keep-alive interval for SSE streams from environment or default.
 pub fn get_keep_alive_interval() -> u64 {
     env::var("KEEP_ALIVE_INTERVAL")

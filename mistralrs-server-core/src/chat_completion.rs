@@ -23,17 +23,18 @@ use serde_json::Value;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
-    completion_base::{base_handle_completion_error, BaseCompletionResponder},
+    completion_base::{
+        base_handle_completion_error, base_process_non_streaming_response, create_response_channel,
+        send_model_request, BaseCompletionResponder, BaseJsonModelError, ErrorToResponse,
+        JsonError, ModelErrorMessage,
+    },
     openai::{
         ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
         ResponseFormat, StopTokens,
     },
-    streaming::{get_keep_alive_interval, BaseStreamer, DoneState},
+    streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, SharedMistralRsState},
-    util::{
-        create_response_channel, parse_image_url, send_model_request, BaseJsonModelError,
-        ErrorToResponse, JsonError, ModelErrorMessage,
-    },
+    util::parse_image_url,
 };
 
 /// A callback function that processes streaming response chunks before they are sent to the client.
@@ -53,7 +54,7 @@ use crate::{
 ///     chunk
 /// });
 /// ```
-pub type OnChunkCallback =
+pub type ChatCompletionOnChunkCallback =
     Box<dyn Fn(ChatCompletionChunkResponse) -> ChatCompletionChunkResponse + Send + Sync>;
 
 /// A callback function that is executed when the streaming response completes.
@@ -71,15 +72,19 @@ pub type OnChunkCallback =
 ///     // Process all chunks for analytics
 /// });
 /// ```
-pub type OnDoneCallback = Box<dyn Fn(&[ChatCompletionChunkResponse]) + Send + Sync>;
+pub type ChatCompletionOnDoneCallback = Box<dyn Fn(&[ChatCompletionChunkResponse]) + Send + Sync>;
 
 /// A streaming response handler.
 ///
 /// It processes incoming response chunks from a model and converts them
 /// into Server-Sent Events (SSE) format for real-time streaming to clients.
-pub type Streamer = BaseStreamer<ChatCompletionChunkResponse, OnChunkCallback, OnDoneCallback>;
+pub type ChatCompletionStreamer = BaseStreamer<
+    ChatCompletionChunkResponse,
+    ChatCompletionOnChunkCallback,
+    ChatCompletionOnDoneCallback,
+>;
 
-impl futures::Stream for Streamer {
+impl futures::Stream for ChatCompletionStreamer {
     type Item = Result<Event, axum::Error>;
 
     /// Polls the stream for the next Server-Sent Event.
@@ -158,7 +163,8 @@ impl futures::Stream for Streamer {
 }
 
 /// Represents different types of chat completion responses.
-pub type ChatCompletionResponder = BaseCompletionResponder<ChatCompletionResponse, Streamer>;
+pub type ChatCompletionResponder =
+    BaseCompletionResponder<ChatCompletionResponse, ChatCompletionStreamer>;
 
 type JsonModelError = BaseJsonModelError<ChatCompletionResponse>;
 impl ErrorToResponse for JsonModelError {}
@@ -521,21 +527,10 @@ pub fn handle_chat_completion_error(
 pub fn create_chat_streamer(
     rx: Receiver<Response>,
     state: SharedMistralRsState,
-    on_chunk: Option<OnChunkCallback>,
-    on_done: Option<OnDoneCallback>,
-) -> Sse<Streamer> {
-    let store_chunks = on_done.is_some();
-
-    let streamer = Streamer {
-        rx,
-        done_state: DoneState::Running,
-        store_chunks,
-        state,
-        chunks: Vec::new(),
-        on_chunk,
-        on_done,
-    };
-
+    on_chunk: Option<ChatCompletionOnChunkCallback>,
+    on_done: Option<ChatCompletionOnDoneCallback>,
+) -> Sse<ChatCompletionStreamer> {
+    let streamer = base_create_streamer(rx, state, on_chunk, on_done);
     let keep_alive_interval = get_keep_alive_interval();
 
     Sse::new(streamer)
@@ -547,15 +542,8 @@ pub async fn process_non_streaming_chat_response(
     rx: &mut Receiver<Response>,
     state: SharedMistralRsState,
 ) -> ChatCompletionResponder {
-    let response = match rx.recv().await {
-        Some(response) => response,
-        None => {
-            let e = anyhow::Error::msg("No response received from the model.");
-            return handle_chat_completion_error(state, e.into());
-        }
-    };
-
-    match_responses(state, response)
+    base_process_non_streaming_response(rx, state, match_responses, handle_chat_completion_error)
+        .await
 }
 
 /// Matches and processes different types of model responses into appropriate chat completion responses.
