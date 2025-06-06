@@ -34,23 +34,23 @@ candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", versio
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }
 # candle-flash-attn = { path = "../candle/candle-flash-attn" }
 
-axum = "0.7.4"
-anyhow = "1.0.80"
-serde = "1.0.197"
-serde_json = "1.0.114"
-indexmap = { version = "2.2.5", features = ["serde"] }
-either = { version = "1.10.0", features = ["serde"] }
+axum = "0.7.9"
+anyhow = "1.0.98"
+serde = "1.0.219"
+serde_json = "1.0.140"
+indexmap = { version = "2.9.0", features = ["serde"] }
+either = { version = "1.15.0", features = ["serde"] }
 accelerate-src = { version = "0.3.2" }
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
-tracing = "0.1.40"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 futures = "0.3"
-clap = { version = "4.5.1", features = ["derive", "wrap_help"] }
-pyo3 = { version = "0.24.1", features = ["full", "extension-module", "either"] }
-tokio = { version = "1.44.2", features = ["full", "rt-multi-thread"] }
-once_cell = "1.19.0"
+clap = { version = "4.5.39", features = ["derive", "wrap_help"] }
+pyo3 = { version = "0.24.2", features = ["full", "extension-module", "either"] }
+tokio = { version = "1.45.1", features = ["full", "rt-multi-thread"] }
+once_cell = "1.21.3"
 # All features but avif, avif increases the msrv dramatically
-image = { version = "0.25.1", default-features = false, features = [
+image = { version = "0.25.6", default-features = false, features = [
     'bmp',
     'dds',
     'exr',
@@ -66,7 +66,7 @@ image = { version = "0.25.1", default-features = false, features = [
     'tiff',
     'webp',
 ] }
-reqwest = { version = "0.12.4", default-features = false, features = [
+reqwest = { version = "0.12.19", default-features = false, features = [
     "blocking",
     "rustls-tls",
     "charset",
@@ -74,82 +74,82 @@ reqwest = { version = "0.12.4", default-features = false, features = [
     "macos-system-configuration",
 ] }
 base64 = "0.22.1"
-half = "2.4.0"
-rayon = "1.1.0"
-url = "2.5.2"
+half = "2.6.0"
+rayon = "1.10.0"
+url = "2.5.4"
 utoipa = "4.2"
 walkdir = "2.5.0"
 data-url = "0.3.1"
 float8 = "0.2.1"
-regex = "1.10.6"
+regex = "1.11.1"
 metal = { version = "0.27.0", features = ["mps"] }
 safetensors = "0.4.5"
-toml = "0.8.12"
-hf-hub = { version = "0.4.1", default-features = false, features = [
+toml = "0.8.22"
+hf-hub = { version = "0.4.2", default-features = false, features = [
     "ureq",
     "tokio",
     "rustls-tls",
 ] }
 itertools = "0.13.0"
-rand = "0.9.0"
-cli-table = "0.4.7"
+rand = "0.9.1"
+cli-table = "0.4.9"
 dirs = "5.0.1"
 thiserror = "1"
-tokenizers = { version = "0.21.0", default-features = false }
+tokenizers = { version = "0.21.1", default-features = false }
 tqdm = "0.7.0"
-chrono = "0.4.34"
-minijinja = { version = "2.0.2", features = ["builtins", "json"] }
-minijinja-contrib = { version = "2.0.2", features = ["pycompat"] }
-regex-automata = { version = "0.4.6", features = ["meta"] }
-rustc-hash = "2.0.0"
-vob = "3.0.3"
-cfgrammar = "0.13.3"
-lrtable = "0.13.3"
+chrono = "0.4.41"
+minijinja = { version = "2.10.2", features = ["builtins", "json"] }
+minijinja-contrib = { version = "2.10.2", features = ["pycompat"] }
+regex-automata = { version = "0.4.9", features = ["meta"] }
+rustc-hash = "2.1.1"
+vob = "3.0.4"
+cfgrammar = "0.13.10"
+lrtable = "0.13.10"
 galil-seiferas = "0.1.5"
 radix_trie = "0.2.1"
-bytemuck = "1.15.0"
+bytemuck = "1.23.0"
 tokio-rayon = "2.1.0"
 rand_isaac = "0.4.0"
-indicatif = { version = "0.17.8", features = ["rayon"] }
-async-trait = "0.1.80"
+indicatif = { version = "0.17.11", features = ["rayon"] }
+async-trait = "0.1.88"
 strum = { version = "0.26", features = ["derive"] }
-derive_more = { version = "0.99.17", default-features = false, features = ["from"] }
+derive_more = { version = "0.99.20", default-features = false, features = ["from"] }
 akin = "0.4.0"
 variantly = "0.4.0"
 derive-new = "0.7.0"
-sysinfo = "0.30.12"
-csv = "1.3.0"
-bytemuck_derive = "1.7.0"
+sysinfo = "0.30.13"
+csv = "1.3.1"
+bytemuck_derive = "1.9.3"
 uuid = "1.17.0"
-schemars = "0.8.21"
+schemars = "0.8.22"
 serde_yaml = "0.9.34"
 serde_plain = "1.0.2"
-as-any = "0.3.1"
-llguidance = { version = "0.7.20", default-features = false, features = ["lark"] }
-toktrie_hf_tokenizers = "0.7.20"
+as-any = "0.3.2"
+llguidance = { version = "0.7.29", default-features = false, features = ["lark"] }
+toktrie_hf_tokenizers = "0.7.29"
 objc = { version = "0.2.7" }
 serde-big-array = "0.5.1"
-interprocess = "2.2.2"
+interprocess = "2.2.3"
 urlencoding = "2.1.3"
 scraper = "0.23.1"
-html2text = "0.14.2"
+html2text = "0.14.4"
 ordered-float = "5.0.0"
 hashbrown = "0.15.3"
-parking_lot = "0.12.3"
+parking_lot = "0.12.4"
 ahash = "0.8.12"
 num-traits = "0.2.19"
 libc = "0.2.172"
 bm25 = "2.2.1"
-lazy_static = "1.4"
+lazy_static = "1.5"
 paste = "1.0.15"
 byteorder = "1.5.0"
 yoke = "0.7.5"
 memmap2 = "0.9.5"
 pyo3-build-config = "0.22"
-ctrlc = "3.4.4"
+ctrlc = "3.4.7"
 directories = "6.0.0"
 rustyline = { version = "16.0.0", default-features = false, features = ["with-file-history"] }
-tower-http = "0.6.4"
+tower-http = "0.6.6"
 utoipa-swagger-ui = { version = "7.1.0", features = ["axum"] }
 futures-util = "0.3.31"
 axum_static = "1.7.1"
