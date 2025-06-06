@@ -148,7 +148,8 @@ memmap2 = "0.9.5"
 pyo3-build-config = "0.25.0"
 ctrlc = "3.4.7"
 directories = "6.0.0"
-rustyline = { version = "16.0.0", default-features = false, features = ["with-file-history"] }
+# Need to keep rustyline at 15.0.0 as 16.0.0 has a breaking change that conficts with `ctrlc`'s handling
+rustyline = { version = "15.0.0", default-features = false, features = ["with-file-history"] }
 tower-http = "0.6.6"
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
 futures-util = "0.3.31"
