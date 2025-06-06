@@ -165,6 +165,7 @@ mistralrs-quant = { path = "mistralrs-quant" }
 mistralrs-vision = { path = "mistralrs-vision" }
 mistralrs-server-core = { path = "mistralrs-server-core" }
 mistralrs = { path = "mistralrs" }
+
 [profile.release-with-debug]
 inherits = "release"
 debug = true

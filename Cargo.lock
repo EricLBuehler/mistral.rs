@@ -2602,7 +2602,7 @@ dependencies = [
  "as-any",
  "async-trait",
  "base64 0.22.1",
- "bindgen_cuda 0.1.5",
+ "bindgen_cuda 0.1.7",
  "bm25",
  "bytemuck",
  "bytemuck_derive",
@@ -2723,7 +2723,7 @@ dependencies = [
 name = "mistralrs-quant"
 version = "0.6.0"
 dependencies = [
- "bindgen_cuda 0.1.5",
+ "bindgen_cuda 0.1.7",
  "byteorder",
  "candle-core",
  "candle-nn",
@@ -2788,7 +2788,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tower-http 0.5.2",
+ "tower-http 0.6.4",
  "tracing",
  "url",
  "utoipa",
