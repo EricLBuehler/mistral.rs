@@ -100,6 +100,7 @@ pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
 
     //token type other than 1 treated as special token
     let mut num_special_tokens = 0;
+    #[allow(clippy::needless_range_loop)]
     if token_types.len() == props.tokens.len() {
         for i in 0..props.tokens.len() {
             if token_types[i] != 1i32 {
