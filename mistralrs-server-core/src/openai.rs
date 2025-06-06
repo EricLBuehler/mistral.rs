@@ -8,8 +8,8 @@ use mistralrs_core::{
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{
-    openapi::{ArrayBuilder, ObjectBuilder, OneOfBuilder, RefOr, Schema, SchemaType},
-    ToSchema,
+    openapi::{schema::SchemaType, ArrayBuilder, ObjectBuilder, OneOfBuilder, RefOr, Schema, Type},
+    PartialSchema, ToSchema,
 };
 
 /// Inner content structure for messages that can be either a string or key-value pairs
@@ -20,12 +20,23 @@ pub struct MessageInnerContent(
 
 // The impl Deref was preventing the Derive ToSchema and #[schema] macros from
 // properly working, so manually impl ToSchema
-impl ToSchema<'_> for MessageInnerContent {
-    fn schema() -> (&'static str, RefOr<Schema>) {
-        (
-            "MessageInnerContent",
-            RefOr::T(message_inner_content_schema()),
-        )
+impl PartialSchema for MessageInnerContent {
+    fn schema() -> RefOr<Schema> {
+        RefOr::T(message_inner_content_schema())
+    }
+}
+
+impl ToSchema for MessageInnerContent {
+    fn schemas(
+        schemas: &mut Vec<(
+            String,
+            utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+        )>,
+    ) {
+        schemas.push((
+            MessageInnerContent::name().into(),
+            MessageInnerContent::schema(),
+        ));
     }
 }
 
@@ -42,14 +53,18 @@ fn message_inner_content_schema() -> Schema {
         OneOfBuilder::new()
             // Either::Left - simple string
             .item(Schema::Object(
-                ObjectBuilder::new().schema_type(SchemaType::String).build(),
+                ObjectBuilder::new()
+                    .schema_type(SchemaType::Type(Type::String))
+                    .build(),
             ))
             // Either::Right - object with string values
             .item(Schema::Object(
                 ObjectBuilder::new()
-                    .schema_type(SchemaType::Object)
+                    .schema_type(SchemaType::Type(Type::Object))
                     .additional_properties(Some(RefOr::T(Schema::Object(
-                        ObjectBuilder::new().schema_type(SchemaType::String).build(),
+                        ObjectBuilder::new()
+                            .schema_type(SchemaType::Type(Type::String))
+                            .build(),
                     ))))
                     .build(),
             ))
@@ -66,9 +81,20 @@ pub struct MessageContent(
 
 // The impl Deref was preventing the Derive ToSchema and #[schema] macros from
 // properly working, so manually impl ToSchema
-impl ToSchema<'_> for MessageContent {
-    fn schema() -> (&'static str, RefOr<Schema>) {
-        ("MessageContent", RefOr::T(message_content_schema()))
+impl PartialSchema for MessageContent {
+    fn schema() -> RefOr<Schema> {
+        RefOr::T(message_content_schema())
+    }
+}
+
+impl ToSchema for MessageContent {
+    fn schemas(
+        schemas: &mut Vec<(
+            String,
+            utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+        )>,
+    ) {
+        schemas.push((MessageContent::name().into(), MessageContent::schema()));
     }
 }
 
@@ -84,13 +110,15 @@ fn message_content_schema() -> Schema {
     Schema::OneOf(
         OneOfBuilder::new()
             .item(Schema::Object(
-                ObjectBuilder::new().schema_type(SchemaType::String).build(),
+                ObjectBuilder::new()
+                    .schema_type(SchemaType::Type(Type::String))
+                    .build(),
             ))
             .item(Schema::Array(
                 ArrayBuilder::new()
                     .items(RefOr::T(Schema::Object(
                         ObjectBuilder::new()
-                            .schema_type(SchemaType::Object)
+                            .schema_type(SchemaType::Type(Type::Object))
                             .additional_properties(Some(RefOr::Ref(
                                 utoipa::openapi::Ref::from_schema_name("MessageInnerContent"),
                             )))
@@ -255,37 +283,51 @@ pub enum Grammar {
 }
 
 // Implement ToSchema manually to handle `LlguidanceGrammar`
-impl utoipa::ToSchema<'_> for Grammar {
-    fn schema() -> (&'static str, RefOr<Schema>) {
-        (
-            "Grammar",
-            RefOr::T(Schema::OneOf(
-                OneOfBuilder::new()
-                    .item(create_grammar_variant_schema(
-                        "regex",
-                        Schema::Object(
-                            ObjectBuilder::new().schema_type(SchemaType::String).build(),
-                        ),
-                    ))
-                    .item(create_grammar_variant_schema(
-                        "json_schema",
-                        Schema::Object(
-                            ObjectBuilder::new().schema_type(SchemaType::Object).build(),
-                        ),
-                    ))
-                    .item(create_grammar_variant_schema(
-                        "llguidance",
-                        llguidance_schema(),
-                    ))
-                    .item(create_grammar_variant_schema(
-                        "lark",
-                        Schema::Object(
-                            ObjectBuilder::new().schema_type(SchemaType::String).build(),
-                        ),
-                    ))
-                    .build(),
-            )),
-        )
+impl PartialSchema for Grammar {
+    fn schema() -> RefOr<Schema> {
+        RefOr::T(Schema::OneOf(
+            OneOfBuilder::new()
+                .item(create_grammar_variant_schema(
+                    "regex",
+                    Schema::Object(
+                        ObjectBuilder::new()
+                            .schema_type(SchemaType::Type(Type::String))
+                            .build(),
+                    ),
+                ))
+                .item(create_grammar_variant_schema(
+                    "json_schema",
+                    Schema::Object(
+                        ObjectBuilder::new()
+                            .schema_type(SchemaType::Type(Type::Object))
+                            .build(),
+                    ),
+                ))
+                .item(create_grammar_variant_schema(
+                    "llguidance",
+                    llguidance_schema(),
+                ))
+                .item(create_grammar_variant_schema(
+                    "lark",
+                    Schema::Object(
+                        ObjectBuilder::new()
+                            .schema_type(SchemaType::Type(Type::String))
+                            .build(),
+                    ),
+                ))
+                .build(),
+        ))
+    }
+}
+
+impl ToSchema for Grammar {
+    fn schemas(
+        schemas: &mut Vec<(
+            String,
+            utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+        )>,
+    ) {
+        schemas.push((Grammar::name().into(), Grammar::schema()));
     }
 }
 
@@ -293,12 +335,12 @@ impl utoipa::ToSchema<'_> for Grammar {
 fn create_grammar_variant_schema(type_value: &str, value_schema: Schema) -> Schema {
     Schema::Object(
         ObjectBuilder::new()
-            .schema_type(SchemaType::Object)
+            .schema_type(SchemaType::Type(Type::Object))
             .property(
                 "type",
                 RefOr::T(Schema::Object(
                     ObjectBuilder::new()
-                        .schema_type(SchemaType::String)
+                        .schema_type(SchemaType::Type(Type::String))
                         .enum_values(Some(vec![serde_json::Value::String(
                             type_value.to_string(),
                         )]))
@@ -316,13 +358,12 @@ fn create_grammar_variant_schema(type_value: &str, value_schema: Schema) -> Sche
 fn llguidance_schema() -> Schema {
     let grammar_with_lexer_schema = Schema::Object(
         ObjectBuilder::new()
-            .schema_type(SchemaType::Object)
+            .schema_type(SchemaType::Type(Type::Object))
             .property(
                 "name",
                 RefOr::T(Schema::Object(
                     ObjectBuilder::new()
-                        .schema_type(SchemaType::String)
-                        .nullable(true)
+                        .schema_type(SchemaType::from_iter([Type::String, Type::Null]))
                         .description(Some(
                             "The name of this grammar, can be used in GenGrammar nodes",
                         ))
@@ -333,8 +374,7 @@ fn llguidance_schema() -> Schema {
                 "json_schema",
                 RefOr::T(Schema::Object(
                     ObjectBuilder::new()
-                        .schema_type(SchemaType::Object)
-                        .nullable(true)
+                        .schema_type(SchemaType::from_iter([Type::Object, Type::Null]))
                         .description(Some("The JSON schema that the grammar should generate"))
                         .build(),
                 )),
@@ -343,8 +383,7 @@ fn llguidance_schema() -> Schema {
                 "lark_grammar",
                 RefOr::T(Schema::Object(
                     ObjectBuilder::new()
-                        .schema_type(SchemaType::String)
-                        .nullable(true)
+                        .schema_type(SchemaType::from_iter([Type::String, Type::Null]))
                         .description(Some("The Lark grammar that the grammar should generate"))
                         .build(),
                 )),
@@ -355,7 +394,7 @@ fn llguidance_schema() -> Schema {
 
     Schema::Object(
         ObjectBuilder::new()
-            .schema_type(SchemaType::Object)
+            .schema_type(SchemaType::Type(Type::Object))
             .property(
                 "grammars",
                 RefOr::T(Schema::Array(
@@ -369,8 +408,7 @@ fn llguidance_schema() -> Schema {
                 "max_tokens",
                 RefOr::T(Schema::Object(
                     ObjectBuilder::new()
-                        .schema_type(SchemaType::Integer)
-                        .nullable(true)
+                        .schema_type(SchemaType::from_iter([Type::Integer, Type::Null]))
                         .description(Some("Maximum number of tokens to generate"))
                         .build(),
                 )),
@@ -481,7 +519,9 @@ fn messages_schema() -> Schema {
                     .build(),
             ))
             .item(Schema::Object(
-                ObjectBuilder::new().schema_type(SchemaType::String).build(),
+                ObjectBuilder::new()
+                    .schema_type(SchemaType::Type(Type::String))
+                    .build(),
             ))
             .build(),
     )
