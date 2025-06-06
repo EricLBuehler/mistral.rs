@@ -24,9 +24,7 @@ mistralrs-core.workspace = true
 mistralrs-server-core.workspace = true
 once_cell.workspace = true
 regex.workspace = true
-rustyline = { version = "15.0.0", default-features = false, features = [
-  "with-file-history",
-] }
+rustyline.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
