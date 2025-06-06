@@ -29,7 +29,7 @@ impl<'a> CowBytesView<'a> {
     }
 }
 
-impl<'a> safetensors::tensor::View for CowBytesView<'a> {
+impl safetensors::tensor::View for CowBytesView<'_> {
     fn dtype(&self) -> safetensors::tensor::Dtype {
         // Serialize as raw bytes
         safetensors::tensor::Dtype::U8
