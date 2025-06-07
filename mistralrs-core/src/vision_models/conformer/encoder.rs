@@ -536,7 +536,7 @@ impl EncoderEmbedding {
     }
 }
 
-pub struct Encoder {
+pub struct ConformerEncoder {
     encoder_embedding: EncoderEmbedding,
     embed: NemoConvSubsampling,
     pos_embed: AbsolutePositionalEncoding,
@@ -544,7 +544,7 @@ pub struct Encoder {
     encoders: Vec<EncoderLayer>,
 }
 
-impl Encoder {
+impl ConformerEncoder {
     pub fn new(mut cfg: ConformerEncoderConfig, vb: ShardedVarBuilder) -> Result<Self> {
         assert_eq!(cfg.input_layer, "nemo_conv");
 

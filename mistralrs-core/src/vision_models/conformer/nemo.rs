@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use candle_core::{Result, Tensor};
 use candle_nn::{Conv2dConfig, Linear, Module};
 use mistralrs_quant::ShardedVarBuilder;
@@ -7,7 +9,7 @@ use crate::layers;
 use super::config::NemoConvConfig;
 
 pub struct NemoConvSubsampling {
-    conv: Vec<Box<dyn Module>>,
+    conv: Vec<Arc<dyn Module + Send + Sync>>,
     conv2d_subsampling: bool,
     out: Linear,
     subsampling_causal_cond: bool,
@@ -25,7 +27,7 @@ impl NemoConvSubsampling {
             ["dw_striding", "striding", "striding_conv1d"].contains(&cfg.subsampling.as_str());
 
         let mut in_channels = 1;
-        let mut layers: Vec<Box<dyn Module>> = Vec::new();
+        let mut layers: Vec<Arc<dyn Module + Send + Sync>> = Vec::new();
 
         let stride = 2;
         let kernel_size = 3;
@@ -46,7 +48,7 @@ impl NemoConvSubsampling {
             let vb_layers = vb.pp("conv");
 
             let mut idx = 0;
-            layers.push(Box::new(layers::conv2d(
+            layers.push(Arc::new(layers::conv2d(
                 in_channels,
                 cfg.conv_channels,
                 kernel_size,
@@ -61,11 +63,11 @@ impl NemoConvSubsampling {
 
             in_channels = cfg.conv_channels;
             idx += 1;
-            layers.push(Box::new(cfg.activation));
+            layers.push(Arc::new(cfg.activation));
 
             for _ in 0..(sampling_num - 1) {
                 idx += 1;
-                layers.push(Box::new(layers::conv2d(
+                layers.push(Arc::new(layers::conv2d(
                     in_channels,
                     in_channels,
                     kernel_size,
@@ -79,7 +81,7 @@ impl NemoConvSubsampling {
                 )?));
 
                 idx += 1;
-                layers.push(Box::new(layers::conv2d(
+                layers.push(Arc::new(layers::conv2d(
                     in_channels,
                     cfg.conv_channels,
                     1,
@@ -93,7 +95,7 @@ impl NemoConvSubsampling {
                 )?));
 
                 idx += 1;
-                layers.push(Box::new(cfg.activation));
+                layers.push(Arc::new(cfg.activation));
             }
         }
 
