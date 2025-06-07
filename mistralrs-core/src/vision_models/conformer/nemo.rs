@@ -65,20 +65,18 @@ impl NemoConvSubsampling {
 
             for _ in 0..(sampling_num - 1) {
                 idx += 1;
-                layers.push(Box::new(
-                    layers::conv2d(
-                        in_channels,
-                        in_channels,
-                        kernel_size,
-                        Conv2dConfig {
-                            padding: left_padding,
-                            stride: stride,
-                            dilation: 1,
-                            groups: in_channels,
-                        },
-                        vb_layers.pp(idx),
-                    )?
-                ));
+                layers.push(Box::new(layers::conv2d(
+                    in_channels,
+                    in_channels,
+                    kernel_size,
+                    Conv2dConfig {
+                        padding: left_padding,
+                        stride: stride,
+                        dilation: 1,
+                        groups: in_channels,
+                    },
+                    vb_layers.pp(idx),
+                )?));
 
                 idx += 1;
                 layers.push(Box::new(layers::conv2d(

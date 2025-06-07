@@ -133,7 +133,7 @@ impl FeedForward {
         let layer_norm = layers::layer_norm(cfg.attention_dim, 1e-5, vb.pp("layer_norm"))?;
         let up = layers::linear_b(
             cfg.attention_dim,
-            cfg.linear_units,
+            cfg.linear_units * 2,
             cfg.bias_in_glu,
             vb.pp("net.0.linear"),
         )?;
