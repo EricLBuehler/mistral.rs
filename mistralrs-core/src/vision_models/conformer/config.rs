@@ -33,7 +33,7 @@ serde_default_fn!(Activation, default_nemo_activation, Activation::Relu);
 serde_default_fn!(bool, default_nemo_is_causal, false);
 serde_default_fn!(usize, fake_default_sentinel, usize::MAX);
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RelativeAttentionBiasArgs {
     pub t5_bias_max_distance: Option<usize>,
     pub t5_bias_symmetric: Option<bool>,
@@ -41,7 +41,7 @@ pub struct RelativeAttentionBiasArgs {
     pub tp: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NemoConvConfig {
     #[serde(default = "default_subsampling")]
     pub subsampling: String,
@@ -61,12 +61,12 @@ pub struct NemoConvConfig {
     pub is_causal: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct EncoderEmbeddingConfig {
     pub input_size: usize,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ConformerEncoderConfig {
     pub input_size: usize,
     pub chunk_size: i32,

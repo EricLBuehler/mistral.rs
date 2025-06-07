@@ -1,5 +1,5 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::Embedding;
+use candle_nn::{Embedding, Module};
 use mistralrs_quant::ShardedVarBuilder;
 
 use crate::layers;
@@ -57,6 +57,8 @@ impl AbsolutePositionalEncoding {
 pub struct T5RelativeAttentionLogitBias {
     bias_values: Embedding,
     skip_bucketing: bool,
+    max_distance: usize,
+    symmetric: bool,
 }
 
 impl T5RelativeAttentionLogitBias {
@@ -76,6 +78,41 @@ impl T5RelativeAttentionLogitBias {
         Ok(Self {
             bias_values: layers::embedding(num_buckets, num_heads, vb.pp("bias_values"), &None)?,
             skip_bucketing,
+            symmetric,
+            max_distance,
         })
+    }
+
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let maxpos = x.dim(1)?;
+        let device = x.device();
+
+        // Create position matrices
+        let context_position = Tensor::arange(0u32, maxpos as u32, device)?.unsqueeze(1)?;
+        let memory_position = Tensor::arange(0u32, maxpos as u32, device)?.unsqueeze(0)?;
+
+        // Calculate relative positions
+        let relative_position = memory_position.broadcast_sub(&context_position)?;
+
+        // Clip to max distance
+        let max_dist = self.max_distance as i64;
+        let relative_position = relative_position.clamp(-max_dist, max_dist - 1)?;
+
+        // Map to bias indices
+        let bias_idx = if self.skip_bucketing {
+            relative_position
+        } else {
+            unimplemented!("require skip_bucketing");
+        };
+
+        let bias_idx = if self.symmetric {
+            bias_idx.abs()?
+        } else {
+            (bias_idx + (self.bias_values.embeddings().dim(0)? as f64 / 2.))?
+        };
+
+        // Get bias values
+        let t5_rel_att_bias = self.bias_values.forward(&bias_idx)?; // [L, L, H]
+        t5_rel_att_bias.permute((2, 0, 1))?.unsqueeze(0) // [1, H, L, L]
     }
 }

@@ -1,4 +1,4 @@
-use candle_core::Result;
+use candle_core::{Result, Tensor};
 use candle_nn::{Conv2dConfig, Linear, Module};
 use mistralrs_quant::ShardedVarBuilder;
 
@@ -11,6 +11,7 @@ pub struct NemoConvSubsampling {
     conv2d_subsampling: bool,
     out: Linear,
     subsampling_causal_cond: bool,
+    subsampling_factor: usize,
 }
 
 impl NemoConvSubsampling {
@@ -35,7 +36,11 @@ impl NemoConvSubsampling {
 
         let left_padding = (kernel_size - 1) / 2;
         let right_padding = (kernel_size - 1) / 2;
-        let max_cache_len = 0;
+        // let max_cache_len = if cfg.is_causal {
+        //     cfg.subsampling_factor+1
+        // } else {
+        //     0
+        // };
 
         {
             let vb_layers = vb.pp("layers");
@@ -88,7 +93,7 @@ impl NemoConvSubsampling {
                 vb_layers.pp(idx),
             )?));
 
-            idx += 1;
+            // idx += 1;
             layers.push(Box::new(cfg.activation));
         }
 
@@ -114,6 +119,7 @@ impl NemoConvSubsampling {
             conv2d_subsampling,
             out,
             subsampling_causal_cond,
+            subsampling_factor: cfg.subsampling_factor,
         })
     }
 
@@ -136,5 +142,41 @@ impl NemoConvSubsampling {
             }
         }
         length as usize
+    }
+
+    pub fn forward(&self, x: &Tensor, mask: Option<&Tensor>) -> Result<(Tensor, Option<Tensor>)> {
+        // Unsqueeze channel axis for 2D conv
+        let mut x = x.unsqueeze(1)?;
+
+        // Apply conv layers
+        // Dont do self.subsampling_conv_chunking_factor != -1 and self.conv2d_subsampling
+        for layer in &self.conv {
+            x = layer.forward(&x)?;
+        }
+
+        // Flatten and apply output linear layer
+        let (b, c, t, f) = x.dims4()?;
+        x = x.transpose(1, 2)?.reshape((b, t, c * f))?;
+        x = x.apply(&self.out)?;
+
+        // Handle mask
+        let new_mask = if let Some(mask) = mask {
+            let max_audio_length = x.dim(1)?;
+            let feature_lens = mask.sum_keepdim(1)?;
+            let padding_length = feature_lens.apply(&|t: &Tensor| {
+                (t.to_dtype(candle_core::DType::F32)? / self.subsampling_factor as f64)?.ceil()
+            })?;
+
+            let device = x.device();
+            let arange = Tensor::arange(0u32, max_audio_length as u32, device)?
+                .unsqueeze(0)?
+                .broadcast_as((padding_length.dim(0)?, max_audio_length))?;
+            let pad_mask = arange.lt(&padding_length)?;
+            Some(pad_mask.unsqueeze(1)?)
+        } else {
+            None
+        };
+
+        Ok((x, new_mask))
     }
 }

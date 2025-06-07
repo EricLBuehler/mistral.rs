@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use candle_core::{Result, Tensor};
-use candle_nn::{BatchNorm, Conv1d, Conv1dConfig, LayerNorm, Linear};
+use candle_core::{IndexOp, Result, Tensor, D};
+use candle_nn::{BatchNorm, Conv1d, Conv1dConfig, LayerNorm, Linear, ModuleT};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
@@ -148,10 +148,16 @@ impl FeedForward {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.layer_norm)?
-            .apply(&self.up)?
-            .apply(&self.act)?
-            .apply(&self.down)
+        let normed = xs.apply(&self.layer_norm)?;
+        let projected = normed.apply(&self.up)?;
+
+        // GLU: split in half and gate
+        let chunks = projected.chunk(2, D::Minus1)?;
+        let x = &chunks[0];
+        let gate = chunks[1].apply(&self.act)?;
+        let gated = (x * gate)?;
+
+        gated.apply(&self.down)
     }
 }
 
@@ -209,6 +215,7 @@ struct GLUPointWiseConv {
     ext_pw_conv_1d: Conv1d,
     act: Activation,
     b1_b2: Option<(Tensor, Tensor)>,
+    cfg: ConformerEncoderConfig,
 }
 
 impl GLUPointWiseConv {
@@ -253,16 +260,50 @@ impl GLUPointWiseConv {
             ext_pw_conv_1d,
             act: cfg.conv_glu_type,
             b1_b2,
+            cfg: cfg.clone(),
         })
+    }
+
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        // Input is (B, T, D), need (B, D, T) for conv1d
+        let x = x.transpose(1, 2)?;
+        let mut x = x.apply(&self.ext_pw_conv_1d)?;
+
+        // Handle causal padding removal
+        if self.cfg.causal && self.cfg.kernel_size > 1 {
+            let seq_len = x.dim(2)?;
+            x = x.i((.., .., ..(seq_len - (self.cfg.kernel_size - 1))))?;
+        }
+
+        // Split for GLU
+        let chunks = x.chunk(2, 1)?; // Split along channel dim
+        let first_half = &chunks[0];
+        let second_half = &chunks[1];
+
+        let result = if let Some((b1, b2)) = &self.b1_b2 {
+            let first_with_bias = first_half.broadcast_add(b1)?;
+            let second_with_bias = second_half.broadcast_add(b2)?;
+            first_with_bias.mul(&second_with_bias.apply(&self.act)?)?
+        } else {
+            first_half.mul(&second_half.apply(&self.act)?)?
+        };
+
+        // Back to (B, T, D)
+        result.transpose(1, 2)
     }
 }
 
 struct ConvModule {
     layer_norm: LayerNorm,
     bn_layer: Option<BatchNorm>,
+    ln1: Option<Linear>,
     ln2: Option<Linear>,
     dw_sep_conv_1d: DepthWiseSeperableConv1d,
     glu: GLUPointWiseConv,
+    ext_pw_conv_1d: Conv1d,
+    cfg: ConformerEncoderConfig,
+    act: Activation,
+    fix_len1: bool,
 }
 
 impl ConvModule {
@@ -286,6 +327,8 @@ impl ConvModule {
         };
 
         let dw_sep_conv_1d = DepthWiseSeperableConv1d::new(cfg, padding, vb.pp("dw_sep_conv_1d"))?;
+
+        assert_ne!(cfg.ext_pw_out_channel, 0);
 
         let ln2 = if cfg.depthwise_seperable_out_channel != 0
             && cfg.attention_dim != cfg.depthwise_seperable_out_channel
@@ -356,10 +399,64 @@ impl ConvModule {
         Ok(Self {
             layer_norm,
             bn_layer,
+            ln1,
             ln2,
             dw_sep_conv_1d,
             glu,
+            ext_pw_conv_1d,
+            cfg: cfg.clone(),
+            act: cfg.conv_activation,
+            fix_len1,
         })
+    }
+
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let mut x = x.apply(&self.layer_norm)?;
+
+        // Use GLU
+        x = self.glu.forward(&x)?;
+        if self.cfg.causal && self.cfg.ext_pw_kernel_size > 1 {
+            let seq_len = x.dim(1)?;
+            x = x.i((.., ..(seq_len - (self.cfg.ext_pw_kernel_size - 1)), ..))?;
+        }
+        if let Some(ln1) = &self.ln1 {
+            x = x.apply(ln1)?;
+        }
+
+        // Apply depthwise separable conv
+        x = x.transpose(1, 2)?; // (B, T, D) -> (B, D, T)
+        x = self.dw_sep_conv_1d.forward(&x)?;
+
+        if self.cfg.causal && self.cfg.kernel_size > 1 {
+            let seq_len = x.dim(2)?;
+            x = x.i((.., .., ..(seq_len - (self.cfg.kernel_size - 1))))?;
+        }
+
+        if let Some(ln2) = &self.ln2 {
+            x = x.transpose(1, 2)?; // (B, D, T) -> (B, T, D)
+            x = x.apply(ln2)?;
+            x = x.transpose(1, 2)?; // (B, T, D) -> (B, D, T)
+        }
+
+        if let Some(bn) = &self.bn_layer {
+            x = bn.forward_t(&x, false)?;
+        }
+
+        x = x.apply(&self.act)?;
+
+        x = x.apply(&self.ext_pw_conv_1d)?;
+        if self.fix_len1 {
+            let seq_len = x.dim(2)?;
+            x = x.i((.., .., ..(seq_len - (self.cfg.ext_pw_kernel_size - 1))))?;
+        }
+        if let Some(ln1) = &self.ln1 {
+            x = x.transpose(1, 2)?;
+            x = x.apply(ln1)?;
+            x = x.transpose(1, 2)?;
+        }
+        x = x.transpose(1, 2)?; // Back to (B, T, D)
+
+        Ok(x)
     }
 }
 
@@ -389,6 +486,34 @@ impl EncoderLayer {
             layer_norm_att,
             conv,
         })
+    }
+    fn forward(
+        &self,
+        x: &Tensor,
+        mask: Option<&Tensor>,
+        relative_attention_bias: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        // First feed forward (0.5x)
+        let ff_in_out = self.feed_forward_in.forward(x)?;
+        let mut x = (x + (ff_in_out * 0.5)?)?;
+
+        // Self attention with pre-norm
+        let norm_x = x.apply(&self.layer_norm_att)?;
+        let attn_out = self
+            .self_attn
+            .forward(&norm_x, mask, relative_attention_bias)?;
+        x = (x + attn_out)?;
+
+        // Conv module
+        let conv_out = self.conv.forward(&x)?;
+        x = (x + conv_out)?;
+
+        // Second feed forward (0.5x)
+        let ff_out_out = self.feed_forward_out.forward(&x)?;
+        x = (x + (ff_out_out * 0.5)?)?;
+
+        // Final layer norm
+        x.apply(&self.layer_norm)
     }
 }
 
@@ -436,5 +561,125 @@ impl Encoder {
             relative_attention_bias_layer,
             encoders,
         })
+    }
+
+    pub fn forward(&self, xs: &Tensor, mask: Option<&Tensor>) -> Result<(Tensor, Option<Tensor>)> {
+        // Forward through embeddings (subsampling)
+        let (mut input_tensor, masks) = self.embed.forward(xs, mask)?;
+
+        // Handle long sequences with unfolding
+        let max_seq_len = 500;
+        let (ori_bz, seq_len, d) = input_tensor.dims3()?;
+        let unfolded = seq_len > max_seq_len;
+
+        // Outside of the `if` block as it's needed below
+        let mut chunk_pad_size = 0;
+        if unfolded {
+            // Pad to multiple of max_seq_len
+            chunk_pad_size = if seq_len % max_seq_len > 0 {
+                max_seq_len - (seq_len % max_seq_len)
+            } else {
+                0
+            };
+
+            if chunk_pad_size > 0 {
+                input_tensor = input_tensor.pad_with_zeros(D::Minus1, 0, chunk_pad_size)?;
+            }
+
+            // Unfold into chunks
+            input_tensor = unfold_tensor(&input_tensor, max_seq_len)?;
+        }
+
+        // Apply positional encoding
+        input_tensor = self.pos_embed.forward(&input_tensor)?;
+
+        // Compute relative attention bias if available
+        let relative_attention_bias = self.relative_attention_bias_layer.forward(&input_tensor)?;
+
+        // Apply encoder layers
+        for layer in &self.encoders {
+            input_tensor = layer.forward(
+                &input_tensor,
+                masks.as_ref(),
+                Some(&relative_attention_bias),
+            )?;
+        }
+
+        // Handle unfolding restoration
+        if unfolded {
+            input_tensor = input_tensor.reshape((ori_bz, seq_len + chunk_pad_size, d))?;
+            if chunk_pad_size > 0 {
+                input_tensor = input_tensor.i((.., ..seq_len, ..))?;
+            }
+        }
+
+        Ok((input_tensor, masks))
+    }
+}
+
+fn unfold_tensor(xs_pad: &Tensor, max_seq_len: usize) -> Result<Tensor> {
+    let (n, t, d) = xs_pad.dims3()?;
+
+    // If sequence length is already <= max_seq_len, no need to unfold
+    if t <= max_seq_len {
+        return Ok(xs_pad.clone());
+    }
+
+    // xs_pad.transpose(-1, -2) # convert to N, D, T
+    let xs_pad = xs_pad.transpose(1, 2)?; // (N, T, D) -> (N, D, T)
+
+    // Unfold the last dimension (T) with size=max_seq_len and step=max_seq_len
+    // This creates sliding windows of size max_seq_len with step max_seq_len
+    let xs_pad = xs_pad.unfold(2, max_seq_len, max_seq_len)?;
+    // Shape is now (N, D, T', max_seq_len) where T' = T // max_seq_len
+
+    let (n, d, t_prime, _) = xs_pad.dims4()?;
+
+    // Permute to (N, T', max_seq_len, D) - equivalent to permute(0, 2, 3, 1)
+    let xs_pad = xs_pad.permute((0, 2, 3, 1))?;
+
+    // Reshape to (N*T', max_seq_len, D)
+    let xs_pad = xs_pad.reshape((n * t_prime, max_seq_len, d))?;
+
+    Ok(xs_pad)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::Device;
+
+    #[test]
+    fn test_unfold_tensor() -> Result<()> {
+        let device = Device::Cpu;
+
+        // Test case 1: T > max_seq_len
+        let xs = Tensor::arange(0f32, 24f32, &device)?.reshape((2, 6, 2))?; // (N=2, T=6, D=2)
+        let result = unfold_tensor(&xs, 3)?; // max_seq_len=3
+        assert_eq!(result.dims(), &[4, 3, 2]); // (N*T'=2*2, max_seq_len=3, D=2)
+
+        // Test case 2: T <= max_seq_len
+        let xs = Tensor::arange(0f32, 12f32, &device)?.reshape((2, 3, 2))?; // (N=2, T=3, D=2)
+        let result = unfold_tensor(&xs, 5)?; // max_seq_len=5
+        assert_eq!(result.dims(), &[2, 3, 2]); // Should return original shape
+
+        // Test case 3: T == max_seq_len
+        let xs = Tensor::arange(0f32, 12f32, &device)?.reshape((2, 3, 2))?; // (N=2, T=3, D=2)
+        let result = unfold_tensor(&xs, 3)?; // max_seq_len=3
+        assert_eq!(result.dims(), &[2, 3, 2]); // (N*T'=2*1, max_seq_len=3, D=2)
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_unfold_tensor_larger() -> Result<()> {
+        let device = Device::Cpu;
+
+        // Test with larger tensor
+        let xs = Tensor::arange(0f32, 120f32, &device)?.reshape((2, 10, 6))?; // (N=2, T=10, D=6)
+        let result = unfold_tensor(&xs, 4)?; // max_seq_len=4, T'=10//4=2
+        assert_eq!(result.dims(), &[4, 4, 6]); // (N*T'=2*2, max_seq_len=4, D=6)
+
+        Ok(())
     }
 }
