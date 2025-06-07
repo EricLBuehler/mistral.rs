@@ -94,6 +94,13 @@ ahash.workspace = true
 num-traits.workspace = true
 libc.workspace = true
 bm25.workspace = true
+mel_spec = "0.3.3"
+dasp = "0.11.0"
+rubato = "0.16.2"
+rustfft = "6.3.0"
+symphonia = "0.5.4"
+hound = "3.5.1"
+cpal = "0.15.3"
 
 [features]
 pyo3_macros = ["pyo3"]
