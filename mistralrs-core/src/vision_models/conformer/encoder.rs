@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use candle_core::{Result, Tensor};
-use candle_nn::{LayerNorm, Linear};
+use candle_nn::{BatchNorm, Conv1d, Conv1dConfig, LayerNorm, Linear};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
@@ -144,12 +144,221 @@ impl FeedForward {
     }
 }
 
+struct DepthWiseSeperableConv1d {
+    dw_conv: Conv1d,
+    pw_conv: Option<Conv1d>,
+}
+
+impl DepthWiseSeperableConv1d {
+    fn new(cfg: &ConformerEncoderConfig, padding: usize, vb: ShardedVarBuilder) -> Result<Self> {
+        let dw_conv = layers::conv1d(
+            cfg.attention_dim,
+            cfg.attention_dim * cfg.depthwise_multiplier,
+            cfg.kernel_size,
+            Conv1dConfig {
+                padding,
+                stride: 1,
+                groups: cfg.attention_dim,
+                dilation: 1,
+            },
+            vb.pp("dw_conv"),
+        )?;
+
+        let pw_conv = if cfg.depthwise_seperable_out_channel != 0 {
+            Some(layers::conv1d(
+                cfg.attention_dim * cfg.depthwise_multiplier,
+                cfg.attention_dim,
+                1,
+                Conv1dConfig {
+                    padding: 0,
+                    stride: 1,
+                    dilation: 1,
+                    groups: 1,
+                },
+                vb.pp("pw_conv"),
+            )?)
+        } else {
+            None
+        };
+
+        Ok(Self { pw_conv, dw_conv })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let mut xs = xs.apply(&self.dw_conv)?;
+        if let Some(pw_conv) = &self.pw_conv {
+            xs = xs.apply(pw_conv)?;
+        }
+
+        Ok(xs)
+    }
+}
+
+struct GLUPointWiseConv {
+    ext_pw_conv_1d: Conv1d,
+    act: Activation,
+    b1_b2: Option<(Tensor, Tensor)>,
+}
+
+impl GLUPointWiseConv {
+    fn new(cfg: &ConformerEncoderConfig, vb: ShardedVarBuilder) -> Result<Self> {
+        let ext_pw_conv_1d = if cfg.causal {
+            layers::conv1d(
+                cfg.attention_dim,
+                cfg.ext_pw_out_channel * 2,
+                cfg.ext_pw_kernel_size,
+                Conv1dConfig {
+                    padding: cfg.ext_pw_kernel_size - 1,
+                    stride: 1,
+                    dilation: 1,
+                    groups: 1,
+                },
+                vb.pp("ext_pw_conv_1d"),
+            )?
+        } else {
+            layers::conv1d(
+                cfg.attention_dim,
+                cfg.ext_pw_out_channel * 2,
+                cfg.ext_pw_kernel_size,
+                Conv1dConfig {
+                    padding: (cfg.ext_pw_kernel_size - 1) / 2,
+                    stride: 1,
+                    dilation: 1,
+                    groups: 1,
+                },
+                vb.pp("ext_pw_conv_1d"),
+            )?
+        };
+
+        let b1_b2 = if cfg.bias_in_glu {
+            let b1 = vb.get((1, cfg.ext_pw_out_channel, 1), "b1")?;
+            let b2 = vb.get((1, cfg.ext_pw_out_channel, 1), "b2")?;
+            Some((b1, b2))
+        } else {
+            None
+        };
+
+        Ok(Self {
+            ext_pw_conv_1d,
+            act: cfg.conv_glu_type,
+            b1_b2,
+        })
+    }
+}
+
+struct ConvModule {
+    layer_norm: LayerNorm,
+    bn_layer: Option<BatchNorm>,
+    ln2: Option<Linear>,
+    dw_sep_conv_1d: DepthWiseSeperableConv1d,
+    glu: GLUPointWiseConv,
+}
+
+impl ConvModule {
+    fn new(cfg: &ConformerEncoderConfig, vb: ShardedVarBuilder) -> Result<Self> {
+        let layer_norm = layers::layer_norm(cfg.attention_dim, 1e-5, vb.pp("layer_norm"))?;
+
+        let bn_layer = if cfg.batch_norm {
+            Some(layers::batch_norm(
+                cfg.attention_dim,
+                1e-5,
+                vb.pp("bn_layer"),
+            )?)
+        } else {
+            None
+        };
+
+        let padding = if cfg.causal {
+            cfg.kernel_size - 1
+        } else {
+            (cfg.kernel_size - 1) / 2
+        };
+
+        let dw_sep_conv_1d = DepthWiseSeperableConv1d::new(cfg, padding, vb.pp("dw_sep_conv_1d"))?;
+
+        let ln2 = if cfg.depthwise_seperable_out_channel != 0
+            && cfg.attention_dim != cfg.depthwise_seperable_out_channel
+        {
+            Some(layers::linear(
+                cfg.depthwise_seperable_out_channel,
+                cfg.attention_dim,
+                vb.pp("ln2"),
+            )?)
+        } else if cfg.depthwise_multiplier != 1 {
+            Some(layers::linear(
+                cfg.attention_dim * cfg.depthwise_multiplier,
+                cfg.attention_dim,
+                vb.pp("ln2"),
+            )?)
+        } else {
+            None
+        };
+
+        let mut fix_len1 = false;
+        let ext_pw_conv_1d = if cfg.causal {
+            if cfg.ext_pw_kernel_size > 1 {
+                fix_len1 = true;
+            } else {
+                fix_len1 = false;
+            }
+            layers::conv1d(
+                cfg.attention_dim,
+                cfg.ext_pw_out_channel,
+                cfg.ext_pw_kernel_size,
+                Conv1dConfig {
+                    padding: cfg.ext_pw_kernel_size - 1,
+                    stride: 1,
+                    dilation: 1,
+                    groups: 1,
+                },
+                vb.pp("ext_pw_conv_1d"),
+            )?
+        } else {
+            fix_len1 = false;
+            layers::conv1d(
+                cfg.attention_dim,
+                cfg.ext_pw_out_channel,
+                cfg.ext_pw_kernel_size,
+                Conv1dConfig {
+                    padding: (cfg.ext_pw_kernel_size - 1) / 2,
+                    stride: 1,
+                    dilation: 1,
+                    groups: 1,
+                },
+                vb.pp("ext_pw_conv_1d"),
+            )?
+        };
+
+        let ln1 = if cfg.attention_dim != cfg.ext_pw_out_channel {
+            Some(layers::linear(
+                cfg.ext_pw_out_channel,
+                cfg.attention_dim,
+                vb.pp("ln1"),
+            )?)
+        } else {
+            None
+        };
+
+        assert_eq!(cfg.linear_glu_in_convm, false);
+        let glu = GLUPointWiseConv::new(cfg, vb.pp("glu"))?;
+
+        Ok(Self {
+            layer_norm,
+            bn_layer,
+            ln2,
+            dw_sep_conv_1d,
+            glu,
+        })
+    }
+}
+
 struct EncoderLayer {
     self_attn: Attention,
     feed_forward_in: FeedForward,
     feed_forward_out: FeedForward,
     layer_norm_att: LayerNorm,
     layer_norm: LayerNorm,
+    conv: ConvModule,
 }
 
 impl EncoderLayer {
@@ -159,7 +368,16 @@ impl EncoderLayer {
         let feed_forward_out = FeedForward::new(cfg, vb.pp("feed_forward_out"))?;
         let layer_norm_att = layers::layer_norm(cfg.attention_dim, 1e-5, vb.pp("layer_norm_att"))?;
         let layer_norm = layers::layer_norm(cfg.attention_dim, 1e-5, vb.pp("layer_norm"))?;
-        todo!()
+        let conv = ConvModule::new(cfg, vb.pp("conv"))?;
+
+        Ok(Self {
+            self_attn,
+            feed_forward_in,
+            feed_forward_out,
+            layer_norm,
+            layer_norm_att,
+            conv,
+        })
     }
 }
 
@@ -167,6 +385,7 @@ pub struct Encoder {
     embed: NemoConvSubsampling,
     pos_embed: AbsolutePositionalEncoding,
     relative_attention_bias_layer: T5RelativeAttentionLogitBias,
+    encoders: Vec<EncoderLayer>,
 }
 
 impl Encoder {
@@ -176,13 +395,13 @@ impl Encoder {
         cfg.finish_nemo_config();
         let embed = NemoConvSubsampling::new(&cfg.nemo_conv_settings, vb.pp("embed"))?;
 
-        let pos_emb = AbsolutePositionalEncoding::new(&cfg, vb.device())?;
+        let pos_embed = AbsolutePositionalEncoding::new(&cfg, vb.device())?;
 
         assert!(cfg
             .relative_attention_bias_args
             .as_ref()
             .is_some_and(|x| x.tp == "t5"));
-        let relative_attention_bias_args = cfg.relative_attention_bias_args.unwrap();
+        let relative_attention_bias_args = cfg.relative_attention_bias_args.as_ref().unwrap();
         let relative_attention_bias_layer = T5RelativeAttentionLogitBias::new(
             cfg.attention_heads / cfg.attention_group_size,
             None,
@@ -195,6 +414,16 @@ impl Encoder {
             vb.pp("relative_attention_bias_layer"),
         )?;
 
-        todo!()
+        let mut encoders = Vec::new();
+        for i in 0..cfg.num_blocks {
+            encoders.push(EncoderLayer::new(&cfg, vb.pp("encoders").pp(i))?);
+        }
+
+        Ok(Self {
+            embed,
+            pos_embed,
+            relative_attention_bias_layer,
+            encoders,
+        })
     }
 }

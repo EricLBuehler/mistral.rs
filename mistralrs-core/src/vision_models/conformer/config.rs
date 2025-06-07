@@ -17,7 +17,7 @@ serde_default_fn!(usize, default_chunk_se, 0);
 serde_default_fn!(usize, default_kernel_size, 3);
 serde_default_fn!(Activation, default_activation, Activation::Relu);
 serde_default_fn!(Activation, default_conv_activation, Activation::Relu);
-serde_default_fn!(String, default_conv_glu_type, "sigmoid".to_string());
+serde_default_fn!(Activation, default_conv_glu_type, Activation::Sigmoid);
 serde_default_fn!(bool, default_bias_in_glu, true);
 serde_default_fn!(bool, default_linear_glu_in_convm, false);
 serde_default_fn!(String, default_attention_glu_type, "swish".to_string());
@@ -103,7 +103,7 @@ pub struct ConformerEncoderConfig {
     #[serde(default = "default_conv_activation")]
     pub conv_activation: Activation,
     #[serde(default = "default_conv_glu_type")]
-    pub conv_glu_type: String,
+    pub conv_glu_type: Activation,
     #[serde(default = "default_bias_in_glu")]
     pub bias_in_glu: bool,
     #[serde(default = "default_linear_glu_in_convm")]
