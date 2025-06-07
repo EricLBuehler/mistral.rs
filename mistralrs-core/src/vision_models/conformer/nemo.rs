@@ -43,7 +43,7 @@ impl NemoConvSubsampling {
         // };
 
         {
-            let vb_layers = vb.pp("layers");
+            let vb_layers = vb.pp("conv");
 
             let mut idx = 0;
             layers.push(Box::new(layers::conv2d(
@@ -65,36 +65,38 @@ impl NemoConvSubsampling {
 
             for _ in 0..(sampling_num - 1) {
                 idx += 1;
+                layers.push(Box::new(
+                    layers::conv2d(
+                        in_channels,
+                        in_channels,
+                        kernel_size,
+                        Conv2dConfig {
+                            padding: left_padding,
+                            stride: stride,
+                            dilation: 1,
+                            groups: in_channels,
+                        },
+                        vb_layers.pp(idx),
+                    )?
+                ));
+
+                idx += 1;
                 layers.push(Box::new(layers::conv2d(
                     in_channels,
-                    in_channels,
-                    kernel_size,
+                    cfg.conv_channels,
+                    1,
                     Conv2dConfig {
-                        padding: left_padding,
-                        stride: stride,
+                        padding: 0,
+                        stride: 1,
                         dilation: 1,
                         groups: 1,
                     },
                     vb_layers.pp(idx),
                 )?));
+
+                idx += 1;
+                layers.push(Box::new(cfg.activation));
             }
-
-            idx += 1;
-            layers.push(Box::new(layers::conv2d(
-                in_channels,
-                in_channels,
-                1,
-                Conv2dConfig {
-                    padding: 0,
-                    stride: 1,
-                    dilation: 1,
-                    groups: 1,
-                },
-                vb_layers.pp(idx),
-            )?));
-
-            // idx += 1;
-            layers.push(Box::new(cfg.activation));
         }
 
         let in_length = cfg.feat_in as f32;
@@ -131,7 +133,7 @@ impl NemoConvSubsampling {
         ceil_mode: bool,
         repeat_num: usize,
     ) -> usize {
-        let add_pad = (all_paddings - kernel_size) as f32;
+        let add_pad = all_paddings as f32 - kernel_size as f32;
         let one = 1f32;
         for i in 0..repeat_num {
             length = (length + add_pad) / (stride as f32) + one;

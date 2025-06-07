@@ -4,11 +4,12 @@ use mistralrs_quant::ShardedVarBuilder;
 
 use crate::utils::unvarbuilder::UnVarBuilder;
 
-use super::{image_embedding::ImageEmbedding, Phi4MMConfig};
+use super::{audio_embedding::AudioEmbedding, image_embedding::ImageEmbedding, Phi4MMConfig};
 
 const MAX_INPUT_ID: f64 = 1e9;
 
 pub struct Phi4MMImageAudioEmbedding {
+    audio_embed: Option<AudioEmbedding>,
     image_embed: Option<ImageEmbedding>,
     image_input_id: f64,
     wte: candle_nn::Embedding,
@@ -30,9 +31,19 @@ impl Phi4MMImageAudioEmbedding {
         } else {
             None
         };
+        let audio_embed = if let Some(audio_embd_config) = &cfg.embd_layer.audio_embd_layer {
+            Some(AudioEmbedding::new(
+                cfg,
+                audio_embd_config,
+                vb.pp("audio_embed"),
+            )?)
+        } else {
+            None
+        };
 
         Ok(Self {
             image_embed,
+            audio_embed,
             image_input_id: cfg.image_input_id.unwrap_or(-1.),
             wte,
         })

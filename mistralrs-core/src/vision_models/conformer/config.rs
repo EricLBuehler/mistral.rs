@@ -70,7 +70,7 @@ pub struct EncoderEmbeddingConfig {
 pub struct ConformerEncoderConfig {
     pub input_size: usize,
     pub chunk_size: i32,
-    pub left_chunk: Vec<usize>,
+    pub left_chunk: usize,
     pub num_lang: Option<usize>,
     #[serde(default = "default_attention_dim")]
     pub attention_dim: usize,

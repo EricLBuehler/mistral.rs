@@ -22,6 +22,7 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
+mod audio_embedding;
 mod config;
 mod image_embedding;
 pub(crate) mod inputs_processor;
