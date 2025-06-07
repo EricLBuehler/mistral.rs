@@ -206,9 +206,9 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                                 input_image_embeds: None,
                                 image_attention_mask: None,
                                 image_sizes: None,
-                                input_audio_embeds: None,   // TODO!
-                                audio_embed_sizes: None,    // TODO!
-                                audio_attention_mask: None, // TODO!
+                                input_audio_embeds: None,
+                                audio_embed_sizes: None,
+                                audio_attention_mask: None,
                             }),
                             paged_attn_meta,
                             flash_meta,
