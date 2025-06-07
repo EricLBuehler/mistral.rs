@@ -10,9 +10,7 @@ use super::config::NemoConvConfig;
 
 pub struct NemoConvSubsampling {
     conv: Vec<Arc<dyn Module + Send + Sync>>,
-    conv2d_subsampling: bool,
     out: Linear,
-    subsampling_causal_cond: bool,
     subsampling_factor: usize,
 }
 
@@ -23,8 +21,6 @@ impl NemoConvSubsampling {
         }
 
         let sampling_num = (cfg.subsampling_factor as f32).log2() as usize;
-        let subsampling_causal_cond =
-            ["dw_striding", "striding", "striding_conv1d"].contains(&cfg.subsampling.as_str());
 
         let mut in_channels = 1;
         let mut layers: Vec<Arc<dyn Module + Send + Sync>> = Vec::new();
@@ -114,13 +110,10 @@ impl NemoConvSubsampling {
             true,
             vb.pp("out"),
         )?;
-        let conv2d_subsampling = false;
 
         Ok(Self {
             conv: layers,
-            conv2d_subsampling,
             out,
-            subsampling_causal_cond,
             subsampling_factor: cfg.subsampling_factor,
         })
     }
@@ -135,7 +128,7 @@ impl NemoConvSubsampling {
     ) -> usize {
         let add_pad = all_paddings as f32 - kernel_size as f32;
         let one = 1f32;
-        for i in 0..repeat_num {
+        for _ in 0..repeat_num {
             length = (length + add_pad) / (stride as f32) + one;
             if ceil_mode {
                 length = length.ceil();

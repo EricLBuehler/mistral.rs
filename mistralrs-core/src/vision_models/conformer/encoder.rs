@@ -348,7 +348,7 @@ impl ConvModule {
             None
         };
 
-        let mut fix_len1 = false;
+        let fix_len1;
         let ext_pw_conv_1d = if cfg.causal {
             if cfg.ext_pw_kernel_size > 1 {
                 fix_len1 = true;
@@ -642,7 +642,7 @@ impl ConformerEncoder {
 }
 
 fn unfold_tensor(xs_pad: &Tensor, max_seq_len: usize) -> Result<Tensor> {
-    let (n, t, d) = xs_pad.dims3()?;
+    let (_n, t, _d) = xs_pad.dims3()?;
 
     // If sequence length is already <= max_seq_len, no need to unfold
     if t <= max_seq_len {

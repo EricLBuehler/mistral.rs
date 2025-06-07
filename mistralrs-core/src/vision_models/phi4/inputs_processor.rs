@@ -203,9 +203,12 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                             position_ids,
                             pixel_values: None,
                             model_specific_args: Box::new(Phi4MMVisionSpecificArgs {
-                                image_sizes: None,
-                                image_attention_mask: None,
                                 input_image_embeds: None,
+                                image_attention_mask: None,
+                                image_sizes: None,
+                                input_audio_embeds: None,   // TODO!
+                                audio_embed_sizes: None,    // TODO!
+                                audio_attention_mask: None, // TODO!
                             }),
                             paged_attn_meta,
                             flash_meta,
@@ -326,9 +329,12 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 position_ids,
                 pixel_values: pixel_values.clone(),
                 model_specific_args: Box::new(Phi4MMVisionSpecificArgs {
-                    image_sizes: image_sizes.clone(),
-                    image_attention_mask: pixel_attention_mask,
                     input_image_embeds: pixel_values,
+                    image_attention_mask: pixel_attention_mask,
+                    image_sizes: image_sizes.clone(),
+                    input_audio_embeds: None,   // TODO!
+                    audio_embed_sizes: None,    // TODO!
+                    audio_attention_mask: None, // TODO!
                 }),
                 paged_attn_meta,
                 flash_meta,

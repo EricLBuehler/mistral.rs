@@ -20,6 +20,7 @@ use crate::{
         EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, VisionModel,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
+    vision_models::phi4::audio_embedding::AudioProjectionMode,
 };
 
 mod audio_embedding;
@@ -465,19 +466,32 @@ impl Phi4MMModel {
         input_ids: &Tensor,
         input_image_embeds: Option<Tensor>,
         image_attention_mask: Option<Tensor>,
+        image_sizes: Option<Vec<(u32, u32)>>,
+        input_audio_embeds: Option<Tensor>,
+        audio_embed_sizes: Option<Vec<usize>>,
+        audio_attention_mask: Option<Tensor>,
         seqlen_offsets: &[usize],
         position_ids: &[usize],
         context_lens: Vec<(usize, usize)>,
-        image_sizes: Option<Vec<(u32, u32)>>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let mut xs = if let Some(input_image_embeds) = &input_image_embeds {
+        let mut xs = if input_image_embeds.is_some() || input_audio_embeds.is_some() {
+            let projection_mode = match (&input_image_embeds, &input_audio_embeds) {
+                (Some(_), Some(_)) | (Some(_), None) => AudioProjectionMode::Vision,
+                (None, Some(_)) => AudioProjectionMode::Speech,
+                _ => unreachable!("already know either are some"),
+            };
+
             self.embed_tokens_extend.forward(
                 input_ids,
-                input_image_embeds,
+                input_image_embeds.as_ref(),
                 image_attention_mask.as_ref(),
                 image_sizes,
+                input_audio_embeds.as_ref(),
+                audio_embed_sizes,
+                audio_attention_mask.as_ref(),
+                projection_mode,
             )?
         } else {
             self.embed_tokens.forward(input_ids)?
@@ -531,6 +545,9 @@ pub(crate) struct Phi4MMVisionSpecificArgs {
     pub image_sizes: Option<Vec<(u32, u32)>>,
     pub input_image_embeds: Option<Tensor>,
     pub image_attention_mask: Option<Tensor>,
+    pub input_audio_embeds: Option<Tensor>,
+    pub audio_embed_sizes: Option<Vec<usize>>,
+    pub audio_attention_mask: Option<Tensor>,
 }
 
 impl VisionModel for Phi4MMModel {
@@ -546,20 +563,27 @@ impl VisionModel for Phi4MMModel {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let Phi4MMVisionSpecificArgs {
-            image_sizes,
-            image_attention_mask,
             input_image_embeds,
+            image_attention_mask,
+            image_sizes,
+            input_audio_embeds,
+            audio_attention_mask,
+            audio_embed_sizes,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Phi4MMVisionSpecificArgs`");
+
         self.forward(
             input_ids,
             input_image_embeds,
             image_attention_mask,
+            image_sizes,
+            input_audio_embeds,
+            audio_embed_sizes,
+            audio_attention_mask,
             seqlen_offsets,
             &position_ids,
             context_lens,
-            image_sizes,
             metadata,
             flash_params,
         )
