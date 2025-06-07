@@ -50,7 +50,7 @@ impl Attention {
             embed_dim / cfg.attention_group_size,
             embed_dim,
             &None,
-            vb.pp("out_proj"),
+            vb.pp("linear_out"),
         )?;
 
         Ok(Self {
