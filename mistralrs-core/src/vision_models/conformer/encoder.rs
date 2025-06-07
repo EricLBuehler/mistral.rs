@@ -71,7 +71,6 @@ impl Attention {
         attention_mask: Option<&Tensor>,
         relative_attention_bias: Option<&Tensor>,
     ) -> Result<Tensor> {
-        todo!("relative_attention_bias");
         let (b_sz, q_len, _) = xs.dims3()?;
 
         let mut q = self.q_proj.forward(xs)?;
@@ -88,11 +87,23 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
 
+        let attention_mask = match (attention_mask, relative_attention_bias) {
+            (Some(attention_mask), Some(relative_attention_bias)) => Some(
+                attention_mask
+                    .unsqueeze(1)?
+                    .broadcast_add(relative_attention_bias)?,
+            ),
+            (Some(attention_mask), None) => Some(attention_mask.unsqueeze(1)?),
+            (None, None) => None,
+            (None, Some(_)) => {
+                candle_core::bail!("Got `relative_attention_bias` but no `attention_mask`")
+            }
+        };
         let attn_weights = Sdpa.run_attention(
             &q,
             &k,
             &v,
-            attention_mask,
+            attention_mask.as_ref(),
             None,
             &SdpaParams {
                 n_kv_groups: 1,
