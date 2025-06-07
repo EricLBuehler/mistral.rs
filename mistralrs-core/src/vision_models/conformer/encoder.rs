@@ -517,7 +517,27 @@ impl EncoderLayer {
     }
 }
 
+struct EncoderEmbedding {
+    global_invstd: Tensor,
+    global_mean: Tensor,
+}
+
+impl EncoderEmbedding {
+    fn new(vb: ShardedVarBuilder) -> Result<Self> {
+        Ok(Self {
+            global_invstd: vb.get_unchecked("global_invstd")?,
+            global_mean: vb.get_unchecked("global_mean")?,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.broadcast_sub(&self.global_mean)?
+            .broadcast_mul(&self.global_invstd)
+    }
+}
+
 pub struct Encoder {
+    encoder_embedding: EncoderEmbedding,
     embed: NemoConvSubsampling,
     pos_embed: AbsolutePositionalEncoding,
     relative_attention_bias_layer: T5RelativeAttentionLogitBias,
@@ -555,7 +575,10 @@ impl Encoder {
             encoders.push(EncoderLayer::new(&cfg, vb.pp("encoders").pp(i))?);
         }
 
+        let encoder_embedding = EncoderEmbedding::new(vb.pp("encoder_embedding"))?;
+
         Ok(Self {
+            encoder_embedding,
             embed,
             pos_embed,
             relative_attention_bias_layer,
@@ -565,7 +588,8 @@ impl Encoder {
 
     pub fn forward(&self, xs: &Tensor, mask: Option<&Tensor>) -> Result<(Tensor, Option<Tensor>)> {
         // Forward through embeddings (subsampling)
-        let (mut input_tensor, masks) = self.embed.forward(xs, mask)?;
+        let xs = self.encoder_embedding.forward(xs)?;
+        let (mut input_tensor, masks) = self.embed.forward(&xs, mask)?;
 
         // Handle long sequences with unfolding
         let max_seq_len = 500;
