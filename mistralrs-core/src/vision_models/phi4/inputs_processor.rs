@@ -548,7 +548,6 @@ impl Phi4MMInputsProcessor {
         }
     }
 
-    // NEW: Simple 2x upsampling for 8kHz -> 16kHz
     fn upsample_2x(&self, wav: &[f32]) -> Vec<f32> {
         let mut upsampled = Vec::with_capacity(wav.len() * 2);
         for &sample in wav {
@@ -558,7 +557,6 @@ impl Phi4MMInputsProcessor {
         upsampled
     }
 
-    // IMPROVED: Better resampling using proper decimation with basic anti-aliasing
     fn resample_audio(&self, wav: &[f32], fs: u32) -> Result<(Vec<f32>, u32)> {
         if fs > 16000 {
             // Simple decimation for downsampling with basic low-pass filtering
