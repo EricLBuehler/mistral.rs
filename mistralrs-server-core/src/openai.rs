@@ -566,6 +566,7 @@ pub struct CompletionRequest {
     #[schema(example = json!(Option::None::<usize>))]
     pub logprobs: Option<usize>,
     #[schema(example = 16)]
+    #[serde(alias = "max_completion_tokens")]
     pub max_tokens: Option<usize>,
     #[serde(rename = "n")]
     #[serde(default = "default_1usize")]
