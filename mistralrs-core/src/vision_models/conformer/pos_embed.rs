@@ -6,6 +6,7 @@ use crate::layers;
 
 use super::config::ConformerEncoderConfig;
 
+#[allow(unused)]
 pub struct AbsolutePositionalEncoding {
     pe: Tensor,
     xscale: f64,
@@ -59,6 +60,7 @@ impl AbsolutePositionalEncoding {
         })
     }
 
+    #[allow(unused)]
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         if xs.dim(1)? >= self.pe.dim(1)? {
             candle_core::bail!("Need to recompute positional embeds");

@@ -134,9 +134,6 @@ impl AudioEmbedding {
         audio_attention_mask: Option<&Tensor>,
         audio_projection_mode: &AudioProjectionMode,
     ) -> Result<Tensor> {
-        let input_embeds = Tensor::read_npy("input_embeds.npy")?
-            .to_dtype(input_embeds.dtype())?
-            .to_device(input_embeds.device())?;
         // Reshape input_ids to 2D
         let input_shape = input_ids.shape();
         let input_ids = if input_shape.rank() > 2 {

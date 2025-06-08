@@ -72,7 +72,7 @@ impl ProcessorCreator for Phi4MMProcessor {
                 audio_feat_stride: pre_processor_config
                     .audio_feat_stride
                     .expect("audio_feat_stride"),
-                eightk_method: "fillzero".to_string(), // Default to fillzero like Python
+                eightk_method: "fillzero".to_string(), // Default to fillzero
             }),
         })
     }
@@ -424,7 +424,7 @@ impl Phi4MMInputsProcessor {
         // Apply mel filterbank
         let mel_features = self.apply_mel_filterbank(&spectrogram, sample_rate)?;
 
-        // Take log - match Python: clip to minimum 1.0 then log
+        // Take log: clip to minimum 1.0 then log
         let log_features: Vec<Vec<f32>> = mel_features
             .iter()
             .map(|frame| frame.iter().map(|&x| (x.max(1.0)).ln()).collect())
@@ -459,7 +459,7 @@ impl Phi4MMInputsProcessor {
         // Create Hamming window
         let window = self.create_hamming_window(win_length);
 
-        // Extract frames - match Python logic exactly
+        // Extract frames
         let n_batch = (wav.len() - win_length) / hop_length + 1;
         let mut frames = Vec::new();
         for i in 0..n_batch {
@@ -470,7 +470,7 @@ impl Phi4MMInputsProcessor {
             }
         }
 
-        // Apply preemphasis - FIXED to match Python
+        // Apply preemphasis
         let preemphasis = 0.97;
         self.apply_preemphasis_frames(&mut frames, preemphasis);
 
@@ -479,7 +479,7 @@ impl Phi4MMInputsProcessor {
         let fft = planner.plan_fft_forward(n_fft);
 
         let mut spectrogram = Vec::new();
-        for (frame_idx, frame) in frames.iter().enumerate() {
+        for (_frame_idx, frame) in frames.iter().enumerate() {
             // Apply window and convert to complex
             let mut windowed: Vec<Complex32> = frame
                 .iter()
@@ -499,7 +499,7 @@ impl Phi4MMInputsProcessor {
                 .map(|c| c.norm())
                 .collect();
 
-            // Handle 8kHz case - FIXED to match Python padding logic
+            // Handle 8kHz case
             if fs == 8000 && self.eightk_method == "fillzero" {
                 // Remove nyquist bin and pad with zeros to match 16kHz structure
                 magnitude.pop(); // Remove nyquist
@@ -513,7 +513,6 @@ impl Phi4MMInputsProcessor {
         Ok(spectrogram)
     }
 
-    // NEW: Fixed preemphasis to match Python frame-level processing
     fn apply_preemphasis_frames(&self, frames: &mut [Vec<f32>], preemphasis: f32) {
         if frames.is_empty() {
             return;
@@ -599,7 +598,6 @@ impl Phi4MMInputsProcessor {
             .collect()
     }
 
-    // FIXED: Apply mel filterbank with proper frequency range matching Python
     fn apply_mel_filterbank(
         &self,
         spectrogram: &[Vec<f32>],
@@ -635,7 +633,6 @@ impl Phi4MMInputsProcessor {
         Ok(mel_features)
     }
 
-    // FIXED: Mel filterbank creation to match Python SpeechLib logic
     fn create_mel_filterbank(
         &self,
         n_mels: usize,
@@ -646,15 +643,14 @@ impl Phi4MMInputsProcessor {
         let fmax = sample_rate / 2.0;
         let fmin = 0.0;
 
-        // Mel scale conversion functions (matching Python)
+        // Mel scale conversion functions
         let hz_to_mel = |f: f32| 1127.0 * (1.0 + f / 700.0).ln();
-        let mel_to_hz = |mel: f32| 700.0 * (mel / 1127.0).exp() - 700.0;
+        let _mel_to_hz = |mel: f32| 700.0 * (mel / 1127.0).exp() - 700.0;
         let bin_to_mel = |fft_bin: usize| {
             1127.0 * (1.0 + (fft_bin as f32 * sample_rate) / (n_fft as f32 * 700.0)).ln()
         };
         let f_to_bin = |f: f32| ((f * n_fft as f32 / sample_rate) + 0.5) as usize;
 
-        // Match Python frequency range logic
         let klo = f_to_bin(fmin) + 1; // Skip DC component
         let khi = f_to_bin(fmax).max(klo);
 
@@ -676,7 +672,7 @@ impl Phi4MMInputsProcessor {
             let center = mel_centers[m + 1];
             let right = mel_centers[m + 2];
 
-            // Match Python frequency range: process from klo to khi
+            // Process from klo to khi
             for fft_bin in klo..khi.min(bank_width) {
                 let mbin = bin_to_mel(fft_bin);
                 if left < mbin && mbin < right {

@@ -529,6 +529,7 @@ impl EncoderEmbedding {
 pub struct ConformerEncoder {
     encoder_embedding: EncoderEmbedding,
     embed: NemoConvSubsampling,
+    #[allow(unused)]
     pos_embed: AbsolutePositionalEncoding,
     relative_attention_bias_layer: T5RelativeAttentionLogitBias,
     encoders: Vec<EncoderLayer>,
