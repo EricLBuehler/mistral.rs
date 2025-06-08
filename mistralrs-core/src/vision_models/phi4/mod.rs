@@ -5,7 +5,7 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 use candle_core::{Device, Result, Tensor, D};
 use candle_nn::Module;
 use mistralrs_quant::{MatMul, QuantMethod, ReplicatedLayer, ShardedVarBuilder};
-use mm_embedding::Phi4MMImageAudioEmbedding;
+use mm_embedding::{InputMode, Phi4MMImageAudioEmbedding};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -20,7 +20,6 @@ use crate::{
         EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, VisionModel,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
-    vision_models::phi4::audio_embedding::AudioProjectionMode,
 };
 
 mod audio_embedding;
@@ -478,8 +477,8 @@ impl Phi4MMModel {
     ) -> Result<Tensor> {
         let mut xs = if input_image_embeds.is_some() || input_audio_embeds.is_some() {
             let projection_mode = match (&input_image_embeds, &input_audio_embeds) {
-                (Some(_), Some(_)) | (Some(_), None) => AudioProjectionMode::Vision,
-                (None, Some(_)) => AudioProjectionMode::Speech,
+                (Some(_), Some(_)) | (Some(_), None) => InputMode::Vision,
+                (None, Some(_)) => InputMode::Speech,
                 _ => unreachable!("already know either are some"),
             };
 

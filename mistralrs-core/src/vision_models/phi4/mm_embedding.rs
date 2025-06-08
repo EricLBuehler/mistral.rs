@@ -5,14 +5,21 @@ use mistralrs_quant::ShardedVarBuilder;
 use crate::{
     utils::unvarbuilder::UnVarBuilder,
     vision_models::phi4::{
-        audio_embedding::{AudioProjectionMode, AUDIO_SPECIAL_TOKEN_ID},
-        image_embedding::IMAGE_SPECIAL_TOKEN_ID,
+        audio_embedding::AUDIO_SPECIAL_TOKEN_ID, image_embedding::IMAGE_SPECIAL_TOKEN_ID,
     },
 };
 
 use super::{audio_embedding::AudioEmbedding, image_embedding::ImageEmbedding, Phi4MMConfig};
 
 const MAX_INPUT_ID: f64 = 1e9;
+
+#[derive(Eq, Hash, PartialEq, Debug, Clone, Copy)]
+pub enum InputMode {
+    /// If only speech
+    Speech,
+    /// If vision + speech or only vision (not sure why that is necessary though)
+    Vision,
+}
 
 pub struct Phi4MMImageAudioEmbedding {
     audio_embed: Option<AudioEmbedding>,
@@ -66,7 +73,7 @@ impl Phi4MMImageAudioEmbedding {
         input_audio_embeds: Option<&Tensor>,
         audio_embed_sizes: Option<Vec<usize>>,
         audio_attention_mask: Option<&Tensor>,
-        audio_projection_mode: AudioProjectionMode,
+        input_mode: InputMode,
     ) -> Result<Tensor> {
         assert!(-MAX_INPUT_ID < self.image_input_id);
 
@@ -88,7 +95,7 @@ impl Phi4MMImageAudioEmbedding {
                 input_audio_embeds.expect("input_audio_embeds"),
                 audio_embed_sizes.expect("audio_embed_sizes"),
                 audio_attention_mask,
-                &audio_projection_mode,
+                &input_mode,
             )?),
             _ => None,
         };

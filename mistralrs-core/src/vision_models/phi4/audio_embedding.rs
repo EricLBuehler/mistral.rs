@@ -8,7 +8,10 @@ use crate::{
     layers::{self, Activation},
     vision_models::{
         conformer::encoder::ConformerEncoder,
-        phi4::config::{Phi4MMAudioConfig, Phi4MMAudioEmbedConfig},
+        phi4::{
+            config::{Phi4MMAudioConfig, Phi4MMAudioEmbedConfig},
+            mm_embedding::InputMode,
+        },
     },
 };
 
@@ -16,17 +19,9 @@ use super::Phi4MMConfig;
 
 pub(super) const AUDIO_SPECIAL_TOKEN_ID: f64 = 200011.;
 
-#[derive(Eq, Hash, PartialEq, Debug, Clone, Copy)]
-pub enum AudioProjectionMode {
-    /// If only speech
-    Speech,
-    /// If vision + speech or only vision (not sure why that is necessary though)
-    Vision,
-}
-
 pub struct AudioEmbedding {
     wte: candle_nn::Embedding,
-    proj: HashMap<AudioProjectionMode, Vec<Arc<dyn Module + Send + Sync>>>,
+    proj: HashMap<InputMode, Vec<Arc<dyn Module + Send + Sync>>>,
     encoder: ConformerEncoder,
     target_device_dtype: (Device, DType),
 }
@@ -89,8 +84,8 @@ impl AudioEmbedding {
                 )?));
             }
 
-            proj.insert(AudioProjectionMode::Speech, layers_for_speech);
-            proj.insert(AudioProjectionMode::Vision, layers_for_vision);
+            proj.insert(InputMode::Speech, layers_for_speech);
+            proj.insert(InputMode::Vision, layers_for_vision);
         }
 
         Ok(Self {
@@ -105,17 +100,14 @@ impl AudioEmbedding {
         &self,
         input_embeds: &Tensor,
         audio_attention_mask: Option<&Tensor>,
-        audio_projection_mode: &AudioProjectionMode,
+        input_mode: &InputMode,
     ) -> Result<Tensor> {
         // Get audio features from encoder
         let (audio_features, _masks) = self.encoder.forward(input_embeds, audio_attention_mask)?;
 
         // Apply projection based on mode
-        let projection_layers = self.proj.get(audio_projection_mode).ok_or_else(|| {
-            candle_core::Error::Msg(format!(
-                "Projection mode {:?} not found",
-                audio_projection_mode
-            ))
+        let projection_layers = self.proj.get(input_mode).ok_or_else(|| {
+            candle_core::Error::Msg(format!("Projection mode {:?} not found", input_mode))
         })?;
 
         let mut audio_set_tensor = audio_features;
@@ -132,7 +124,7 @@ impl AudioEmbedding {
         input_embeds: &Tensor,
         audio_embed_sizes: Vec<usize>,
         audio_attention_mask: Option<&Tensor>,
-        audio_projection_mode: &AudioProjectionMode,
+        input_mode: &InputMode,
     ) -> Result<Tensor> {
         // Reshape input_ids to 2D
         let input_shape = input_ids.shape();
@@ -162,7 +154,7 @@ impl AudioEmbedding {
                 input_embeds.clone()
             };
 
-            self.get_audio_features(&input_embeds, audio_attention_mask, audio_projection_mode)?
+            self.get_audio_features(&input_embeds, audio_attention_mask, input_mode)?
         } else {
             // Return early if no audio tokens and not training
             return self.wte.forward(&input_ids);
