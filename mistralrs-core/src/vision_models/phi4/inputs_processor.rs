@@ -9,7 +9,7 @@ use regex::Regex;
 use tokenizers::Tokenizer;
 use tracing::warn;
 
-use apodize::hamming_iter;
+use apodize::hanning_iter;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
@@ -529,7 +529,7 @@ impl Phi4MMInputsProcessor {
         let fft = planner.plan_fft_forward(n_fft);
 
         // Create Hanning window
-        let window: Vec<f64> = hamming_iter(win_length).collect();
+        let window: Vec<f64> = hanning_iter(win_length).collect();
 
         // Create mel filterbank
         let mel_filters = self.create_mel_filterbank(AUDIO_FEATURE_SIZE, n_fft, fs as f32)?;

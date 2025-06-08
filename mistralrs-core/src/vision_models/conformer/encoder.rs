@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use candle_core::{IndexOp, Result, Tensor, D};
+use candle_core::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{BatchNorm, Conv1d, Conv1dConfig, LayerNorm, Linear, ModuleT};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
@@ -178,7 +178,7 @@ impl DepthWiseSeperableConv1d {
                 groups: cfg.attention_dim,
                 dilation: 1,
             },
-            vb.pp("dw_conv"),
+            vb.pp("dw_conv").set_dtype(DType::F32),
         )?;
 
         let pw_conv = if cfg.depthwise_seperable_out_channel != 0 {
@@ -192,7 +192,7 @@ impl DepthWiseSeperableConv1d {
                     dilation: 1,
                     groups: 1,
                 },
-                vb.pp("pw_conv"),
+                vb.pp("pw_conv").set_dtype(DType::F32),
             )?)
         } else {
             None
@@ -202,9 +202,15 @@ impl DepthWiseSeperableConv1d {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let mut xs = xs.apply(&self.dw_conv)?;
+        let mut xs = xs
+            .to_dtype(DType::F32)?
+            .apply(&self.dw_conv)?
+            .to_dtype(xs.dtype())?;
         if let Some(pw_conv) = &self.pw_conv {
-            xs = xs.apply(pw_conv)?;
+            xs = xs
+                .to_dtype(DType::F32)?
+                .apply(pw_conv)?
+                .to_dtype(xs.dtype())?;
         }
 
         Ok(xs)
@@ -230,7 +236,7 @@ impl GLUPointWiseConv {
                     dilation: 1,
                     groups: 1,
                 },
-                vb.pp("ext_pw_conv_1d"),
+                vb.pp("ext_pw_conv_1d").set_dtype(DType::F32),
             )?
         } else {
             layers::conv1d(
@@ -243,7 +249,7 @@ impl GLUPointWiseConv {
                     dilation: 1,
                     groups: 1,
                 },
-                vb.pp("ext_pw_conv_1d"),
+                vb.pp("ext_pw_conv_1d").set_dtype(DType::F32),
             )?
         };
 
@@ -265,7 +271,10 @@ impl GLUPointWiseConv {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         // Input is (B, T, D), need (B, D, T) for conv1d
         let x = x.transpose(1, 2)?;
-        let x = x.apply(&self.ext_pw_conv_1d)?;
+        let x = x
+            .to_dtype(DType::F32)?
+            .apply(&self.ext_pw_conv_1d)?
+            .to_dtype(x.dtype())?;
 
         // Split for GLU
         let chunks = x.chunk(2, 1)?; // Split along channel dim
@@ -353,7 +362,7 @@ impl ConvModule {
                     dilation: 1,
                     groups: 1,
                 },
-                vb.pp("ext_pw_conv_1d"),
+                vb.pp("ext_pw_conv_1d").set_dtype(DType::F32),
             )?
         } else {
             fix_len1 = false;
@@ -367,7 +376,7 @@ impl ConvModule {
                     dilation: 1,
                     groups: 1,
                 },
-                vb.pp("ext_pw_conv_1d"),
+                vb.pp("ext_pw_conv_1d").set_dtype(DType::F32),
             )?
         };
 
@@ -432,7 +441,10 @@ impl ConvModule {
 
         x = x.apply(&self.act)?;
 
-        x = x.apply(&self.ext_pw_conv_1d)?;
+        x = x
+            .to_dtype(DType::F32)?
+            .apply(&self.ext_pw_conv_1d)?
+            .to_dtype(x.dtype())?;
         if self.fix_len1 {
             let seq_len = x.dim(2)?;
             x = x.i((.., .., ..(seq_len - (self.cfg.ext_pw_kernel_size - 1))))?;
