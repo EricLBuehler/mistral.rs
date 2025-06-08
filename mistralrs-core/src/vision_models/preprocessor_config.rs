@@ -54,6 +54,10 @@ pub struct PreProcessorConfig {
     pub(crate) default_to_square: Option<bool>,
     pub(crate) max_patches: Option<usize>,
     pub(crate) resize_to_max_canvas: Option<bool>,
+
+    pub(crate) audio_compression_rate: Option<usize>,
+    pub(crate) audio_downsample_rate: Option<usize>,
+    pub(crate) audio_feat_stride: Option<usize>,
 }
 
 #[allow(dead_code)]

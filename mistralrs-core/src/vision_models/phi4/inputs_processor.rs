@@ -9,6 +9,9 @@ use regex::Regex;
 use tokenizers::Tokenizer;
 use tracing::warn;
 
+use rustfft::{num_complex::Complex32, FftPlanner};
+use std::f32::consts::PI;
+
 use crate::{
     device_map::DeviceMapper,
     pipeline::{
@@ -29,14 +32,24 @@ use crate::vision_models::{
     ModelInputs,
 };
 
+use super::audio_embedding::AUDIO_SPECIAL_TOKEN_ID;
 use super::image_embedding::IMAGE_SPECIAL_TOKEN_ID;
 
 const COMPATIBLE_IMAGE_SPECIAL_TOKEN_PATTERN: &str = r"<\|image_\d+\|>";
+const COMPATIBLE_AUDIO_SPECIAL_TOKEN_PATTERN: &str = r"<\|audio_\d+\|>";
 const IMAGE_SPECIAL_TOKEN: &str = "<|endoftext10|>";
+const AUDIO_SPECIAL_TOKEN: &str = "<|endoftext11|>";
 pub(crate) const DYHD_BASE_RESOLUTION: usize = 448;
 
+const AUDIO_FEATURE_SIZE: usize = 80; // mel bins
+
 // Input processor
-pub struct Phi4MMInputsProcessor;
+pub struct Phi4MMInputsProcessor {
+    audio_compression_rate: usize,
+    audio_downsample_rate: usize,
+    audio_feat_stride: usize,
+}
+
 // Processor
 pub struct Phi4MMProcessor {
     inputs_processor: Arc<Phi4MMInputsProcessor>,
@@ -45,10 +58,20 @@ pub struct Phi4MMProcessor {
 impl ProcessorCreator for Phi4MMProcessor {
     fn new_processor(
         _: Option<ProcessorConfig>,
-        _: PreProcessorConfig,
+        pre_processor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(Self {
-            inputs_processor: Arc::new(Phi4MMInputsProcessor),
+            inputs_processor: Arc::new(Phi4MMInputsProcessor {
+                audio_compression_rate: pre_processor_config
+                    .audio_compression_rate
+                    .expect("audio_compression_rate"),
+                audio_downsample_rate: pre_processor_config
+                    .audio_downsample_rate
+                    .expect("audio_downsample_rate"),
+                audio_feat_stride: pre_processor_config
+                    .audio_feat_stride
+                    .expect("audio_feat_stride"),
+            }),
         })
     }
 }
@@ -109,6 +132,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
+        let has_audio = true;
         let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         let (pixel_values, pixel_attention_mask, image_sizes, num_img_tokens) = if has_images {
@@ -159,6 +183,8 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 Some(image_sizes_accum),
                 Some(num_img_tokens_accum),
             )
+        } else if has_audio && input_seqs.iter().all(|seq| seq.is_prompt()) {
+            (None, None, None, Some(vec![vec![]; input_seqs.len()]))
         } else {
             return Box::new(
                 text_models_inputs_processor::TextInputsProcessor
@@ -232,6 +258,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             .expect("Decode failed");
 
         let img_token_pattern = Regex::new(COMPATIBLE_IMAGE_SPECIAL_TOKEN_PATTERN).unwrap();
+        let audio_token_pattern = Regex::new(COMPATIBLE_AUDIO_SPECIAL_TOKEN_PATTERN).unwrap();
 
         let mut toks = Vec::new();
 
@@ -241,6 +268,9 @@ impl InputsProcessor for Phi4MMInputsProcessor {
         {
             detokenized = img_token_pattern
                 .replace_all(&detokenized, IMAGE_SPECIAL_TOKEN)
+                .to_string();
+            detokenized = audio_token_pattern
+                .replace_all(&detokenized, AUDIO_SPECIAL_TOKEN)
                 .to_string();
 
             let has_changed_prompt = seq.multimodal.has_changed_prompt;
@@ -307,6 +337,17 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             )
         };
 
+        let (input_audio_embeds, audio_embed_sizes, audio_attention_mask) =
+            match self.process_audio_for_sequences(input_seqs, device) {
+                Ok(result) => result,
+                Err(e) => return Box::new(std::iter::once(Err(anyhow::Error::new(e)))),
+            };
+        dbg!(
+            &input_audio_embeds,
+            &audio_embed_sizes,
+            &audio_attention_mask
+        );
+
         Box::new(iter.into_iter().map(move |metadata| {
             let pixel_values = pixel_values.clone();
             let pixel_attention_mask = pixel_attention_mask.clone();
@@ -332,9 +373,9 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                     input_image_embeds: pixel_values,
                     image_attention_mask: pixel_attention_mask,
                     image_sizes: image_sizes.clone(),
-                    input_audio_embeds: None,   // TODO!
-                    audio_embed_sizes: None,    // TODO!
-                    audio_attention_mask: None, // TODO!
+                    input_audio_embeds: input_audio_embeds.clone(),
+                    audio_embed_sizes: audio_embed_sizes.clone(),
+                    audio_attention_mask: audio_attention_mask.clone(),
                 }),
                 paged_attn_meta,
                 flash_meta,
@@ -344,6 +385,375 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 seq_indices,
             })
         }))
+    }
+}
+
+impl Phi4MMInputsProcessor {
+    fn load_dummy_audio(&self) -> Result<(Vec<f32>, u32)> {
+        // // For now, generate dummy audio data
+        // // TODO: Replace with actual WAV file loading
+        // let sample_rate = 16000;
+        // let duration_seconds = 3.0;
+        // let num_samples = (sample_rate as f32 * duration_seconds) as usize;
+
+        // // Generate a simple test signal (sine wave + noise)
+        // let audio_data: Vec<f32> = (0..num_samples)
+        //     .map(|i| {
+        //         let t = i as f32 / sample_rate as f32;
+        //         0.1 * (2.0 * PI * 440.0 * t).sin() + 0.05 * (2.0 * PI * 880.0 * t).sin()
+        //     })
+        //     .collect();
+
+        // Ok((audio_data, sample_rate))
+
+        let mut reader = hound::WavReader::open("dummy_audio.wav")
+            .map_err(|e| candle_core::Error::Msg(format!("Failed to load audio: {}", e)))?;
+        let spec = reader.spec();
+        let samples: Vec<f32> = reader
+            .samples::<f32>()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| candle_core::Error::Msg(format!("Failed to read samples: {}", e)))?;
+        Ok((samples, spec.sample_rate))
+    }
+
+    fn extract_audio_features(
+        &self,
+        audio_data: &[f32],
+        sample_rate: u32,
+    ) -> Result<Vec<Vec<f32>>> {
+        // Extract spectrogram
+        let spectrogram = self.extract_spectrogram(audio_data, sample_rate)?;
+
+        // Apply mel filterbank
+        let mel_features = self.apply_mel_filterbank(&spectrogram)?;
+
+        // Take log
+        let log_features: Vec<Vec<f32>> = mel_features
+            .iter()
+            .map(|frame| frame.iter().map(|&x| (x.max(1e-10)).ln()).collect())
+            .collect();
+
+        Ok(log_features)
+    }
+
+    fn extract_spectrogram(&self, wav: &[f32], fs: u32) -> Result<Vec<Vec<f32>>> {
+        // Handle resampling to supported rates
+        let (wav, fs) = self.resample_audio(wav, fs)?;
+
+        // Set parameters based on sample rate
+        let (n_fft, win_length, hop_length) = if fs == 8000 {
+            (256, 200, 80)
+        } else if fs == 16000 {
+            (512, 400, 160)
+        } else {
+            return Err(candle_core::Error::Msg(format!(
+                "Unsupported sample rate: {}",
+                fs
+            )));
+        };
+
+        // Create Hamming window
+        let window = self.create_hamming_window(win_length);
+
+        // Extract frames
+        let n_frames = (wav.len() - win_length) / hop_length + 1;
+        let mut frames = Vec::new();
+        for i in 0..n_frames {
+            let start = i * hop_length;
+            let end = start + win_length;
+            if end <= wav.len() {
+                frames.push(wav[start..end].to_vec());
+            }
+        }
+
+        // Apply preemphasis
+        let preemphasis = 0.97;
+        for frame in frames.iter_mut() {
+            let mut prev = if frame.len() > 1 { frame[1] } else { 0.0 };
+            for sample in frame.iter_mut() {
+                let current = *sample;
+                *sample = (current - preemphasis * prev) * 32768.0;
+                prev = current;
+            }
+        }
+
+        // Apply FFT
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(n_fft);
+
+        let mut spectrogram = Vec::new();
+        for frame in frames {
+            // Apply window and convert to complex
+            let mut windowed: Vec<Complex32> = frame
+                .iter()
+                .zip(window.iter())
+                .map(|(s, w)| Complex32::new(s * w, 0.0))
+                .collect();
+
+            // Pad to n_fft length
+            windowed.resize(n_fft, Complex32::new(0.0, 0.0));
+
+            // Apply FFT
+            fft.process(&mut windowed);
+
+            // Take magnitude of positive frequencies
+            let mut magnitude: Vec<f32> = windowed[0..n_fft / 2 + 1]
+                .iter()
+                .map(|c| c.norm())
+                .collect();
+
+            // Handle 8kHz case - pad frequency bins to match 16kHz
+            if fs == 8000 {
+                let nyquist = magnitude.pop().unwrap_or(0.0);
+                let padded_bins = vec![0.0; magnitude.len()];
+                magnitude.extend(padded_bins);
+            }
+
+            spectrogram.push(magnitude);
+        }
+
+        Ok(spectrogram)
+    }
+
+    fn resample_audio(&self, wav: &[f32], fs: u32) -> Result<(Vec<f32>, u32)> {
+        if fs > 16000 {
+            // Simple decimation for downsampling
+            let factor = fs / 16000;
+            let resampled: Vec<f32> = wav.iter().step_by(factor as usize).copied().collect();
+            Ok((resampled, 16000))
+        } else if fs > 8000 && fs < 16000 {
+            let factor = fs / 8000;
+            let resampled: Vec<f32> = wav.iter().step_by(factor as usize).copied().collect();
+            Ok((resampled, 8000))
+        } else if fs < 8000 {
+            Err(candle_core::Error::Msg(format!(
+                "Unsupported sample rate: {}",
+                fs
+            )))
+        } else {
+            // No resampling needed
+            Ok((wav.to_vec(), fs))
+        }
+    }
+
+    fn create_hamming_window(&self, length: usize) -> Vec<f32> {
+        (0..length)
+            .map(|i| 0.54 - 0.46 * (2.0 * PI * i as f32 / (length - 1) as f32).cos())
+            .collect()
+    }
+
+    fn apply_mel_filterbank(&self, spectrogram: &[Vec<f32>]) -> Result<Vec<Vec<f32>>> {
+        const N_MELS: usize = 80;
+        const SAMPLE_RATE: f32 = 16000.0;
+
+        // Create mel filterbank
+        let n_fft = if spectrogram.is_empty() {
+            512
+        } else {
+            (spectrogram[0].len() - 1) * 2
+        };
+        let mel_filters = self.create_mel_filterbank(N_MELS, n_fft, SAMPLE_RATE)?;
+
+        // Apply filterbank to each frame
+        let mut mel_features = Vec::new();
+        for frame in spectrogram {
+            let mut mel_frame = vec![0.0; N_MELS];
+            for (mel_idx, filter) in mel_filters.iter().enumerate() {
+                let mut sum = 0.0;
+                for (freq_idx, &coeff) in filter.iter().enumerate() {
+                    if freq_idx < frame.len() {
+                        sum += frame[freq_idx] * frame[freq_idx] * coeff; // Power spectrum
+                    }
+                }
+                mel_frame[mel_idx] = sum.max(1.0); // Clip to minimum of 1.0
+            }
+            mel_features.push(mel_frame);
+        }
+
+        Ok(mel_features)
+    }
+
+    fn create_mel_filterbank(
+        &self,
+        n_mels: usize,
+        n_fft: usize,
+        sample_rate: f32,
+    ) -> Result<Vec<Vec<f32>>> {
+        let bank_width = n_fft / 2 + 1;
+        let fmax = sample_rate / 2.0;
+        let fmin = 0.0;
+
+        // Mel scale conversion functions
+        let hz_to_mel = |f: f32| 1127.0 * (1.0 + f / 700.0).ln();
+        let mel_to_hz = |mel: f32| 700.0 * (mel / 1127.0).exp() - 700.0;
+
+        let mel_low = hz_to_mel(fmin);
+        let mel_high = hz_to_mel(fmax);
+
+        // Create mel centers
+        let mel_centers: Vec<f32> = (0..=n_mels + 1)
+            .map(|i| mel_low + (mel_high - mel_low) * i as f32 / (n_mels + 1) as f32)
+            .collect();
+
+        // Convert back to Hz
+        let freq_centers: Vec<f32> = mel_centers.iter().map(|&mel| mel_to_hz(mel)).collect();
+
+        // Create triangular filters
+        let mut filters = Vec::new();
+        for m in 0..n_mels {
+            let mut filter = vec![0.0; bank_width];
+            let left_freq = freq_centers[m];
+            let center_freq = freq_centers[m + 1];
+            let right_freq = freq_centers[m + 2];
+
+            for k in 1..bank_width {
+                // Start from 1 to skip DC component
+                let freq = k as f32 * sample_rate / n_fft as f32;
+                if left_freq < freq && freq < right_freq {
+                    if freq <= center_freq {
+                        filter[k] = (freq - left_freq) / (center_freq - left_freq);
+                    } else {
+                        filter[k] = (right_freq - freq) / (right_freq - center_freq);
+                    }
+                }
+            }
+            filters.push(filter);
+        }
+
+        Ok(filters)
+    }
+
+    fn compute_audio_embed_size(
+        &self,
+        audio_frames: usize,
+        compression_rate: usize,
+        downsample_rate: usize,
+    ) -> usize {
+        // First compression
+        let integer = audio_frames / compression_rate;
+        let remainder = audio_frames % compression_rate;
+        let result = if remainder == 0 { integer } else { integer + 1 };
+
+        // Second compression (qformer)
+        let integer = result / downsample_rate;
+        let remainder = result % downsample_rate;
+        if remainder == 0 {
+            integer
+        } else {
+            integer + 1
+        }
+    }
+
+    fn create_audio_attention_mask(
+        &self,
+        audio_frames_list: &[usize],
+        device: &Device,
+    ) -> Result<Tensor> {
+        let max_frames = *audio_frames_list.iter().max().unwrap_or(&0);
+        let batch_size = audio_frames_list.len();
+
+        let mut mask_data = vec![0u8; batch_size * max_frames];
+        for (batch_idx, &frames) in audio_frames_list.iter().enumerate() {
+            for frame_idx in 0..frames.min(max_frames) {
+                mask_data[batch_idx * max_frames + frame_idx] = 1;
+            }
+        }
+
+        Tensor::from_slice(&mask_data, (batch_size, max_frames), device)?.to_dtype(DType::F32)
+    }
+
+    fn process_audio_for_sequences(
+        &self,
+        input_seqs: &[&mut Sequence],
+        device: &Device,
+    ) -> Result<(Option<Tensor>, Option<Vec<usize>>, Option<Tensor>)> {
+        // Check if any sequence has audio tokens
+        let has_audio_tokens = input_seqs.iter().any(|seq| {
+            seq.get_toks()
+                .iter()
+                .any(|&token| token == AUDIO_SPECIAL_TOKEN_ID as u32)
+        });
+
+        if !has_audio_tokens {
+            return Ok((None, None, None));
+        }
+
+        let mut audio_features_list = Vec::new();
+        let mut audio_embed_sizes_list = Vec::new();
+        let mut audio_frames_list = Vec::new();
+
+        // Process audio for each sequence that needs it
+        for seq in input_seqs.iter() {
+            let has_audio = seq
+                .get_toks()
+                .iter()
+                .any(|&token| token == AUDIO_SPECIAL_TOKEN_ID as u32);
+
+            if has_audio {
+                // Load dummy audio (TODO: make this per-sequence)
+                let (audio_data, sample_rate) = self.load_dummy_audio()?;
+
+                // Extract features
+                let features = self.extract_audio_features(&audio_data, sample_rate)?;
+                let audio_frames = features.len() * self.audio_feat_stride;
+
+                let embed_size = self.compute_audio_embed_size(
+                    audio_frames,
+                    self.audio_compression_rate,
+                    self.audio_downsample_rate,
+                );
+
+                // Convert to tensor
+                let features_len = features.len();
+                let features_flat: Vec<f32> = features.into_iter().flatten().collect();
+                let features_tensor =
+                    Tensor::from_slice(&features_flat, (features_len, AUDIO_FEATURE_SIZE), device)?;
+
+                audio_features_list.push(features_tensor);
+                audio_embed_sizes_list.push(embed_size);
+                audio_frames_list.push(audio_frames);
+            }
+        }
+
+        if audio_features_list.is_empty() {
+            return Ok((None, None, None));
+        }
+
+        // Pad sequences to same length
+        let max_len = audio_features_list
+            .iter()
+            .map(|t| t.dim(0).unwrap_or(0))
+            .max()
+            .unwrap_or(0);
+
+        let mut padded_features = Vec::new();
+        for features in audio_features_list {
+            let seq_len = features.dim(0)?;
+            if seq_len < max_len {
+                let padding =
+                    Tensor::zeros((max_len - seq_len, AUDIO_FEATURE_SIZE), DType::F32, device)?;
+                let padded = Tensor::cat(&[features, padding], 0)?;
+                padded_features.push(padded);
+            } else {
+                padded_features.push(features);
+            }
+        }
+
+        // Stack into batch tensor
+        let input_audio_embeds = Tensor::stack(&padded_features, 0)?;
+
+        // Create attention mask if multiple sequences
+        let audio_attention_mask = if audio_frames_list.len() > 1 {
+            Some(self.create_audio_attention_mask(&audio_frames_list, device)?)
+        } else {
+            None
+        };
+
+        Ok((
+            Some(input_audio_embeds),
+            Some(audio_embed_sizes_list),
+            audio_attention_mask,
+        ))
     }
 }
 
