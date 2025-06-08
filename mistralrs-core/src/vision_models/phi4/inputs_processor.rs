@@ -9,8 +9,11 @@ use regex::Regex;
 use tokenizers::Tokenizer;
 use tracing::warn;
 
+use apodize::hamming_iter;
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
 use rustfft::{num_complex::Complex32, FftPlanner};
-use std::f32::consts::PI;
 
 use crate::{
     device_map::DeviceMapper,
@@ -418,32 +421,92 @@ impl Phi4MMInputsProcessor {
         audio_data: &[f32],
         sample_rate: u32,
     ) -> Result<Vec<Vec<f32>>> {
-        // Extract spectrogram
-        let spectrogram = self.extract_spectrogram(audio_data, sample_rate)?;
+        // Resample audio to supported rates using rubato
+        let (resampled_audio, final_sample_rate) =
+            self.resample_audio_with_rubato(audio_data, sample_rate)?;
 
-        // Apply mel filterbank
-        let mel_features = self.apply_mel_filterbank(&spectrogram, sample_rate)?;
+        // Extract mel spectrogram using rustfft and custom mel filterbank
+        let mel_features =
+            self.extract_mel_spectrogram_rustfft(&resampled_audio, final_sample_rate)?;
 
-        // Take log: clip to minimum 1.0 then log
-        let log_features: Vec<Vec<f32>> = mel_features
-            .iter()
-            .map(|frame| frame.iter().map(|&x| (x.max(1.0)).ln()).collect())
-            .collect();
-
-        Ok(log_features)
+        Ok(mel_features)
     }
 
-    fn extract_spectrogram(&self, wav: &[f32], fs: u32) -> Result<Vec<Vec<f32>>> {
-        // Handle resampling to supported rates
-        let (mut wav, mut fs) = self.resample_audio(wav, fs)?;
+    fn resample_audio_with_rubato(&self, wav: &[f32], fs: u32) -> Result<(Vec<f32>, u32)> {
+        let target_fs = if fs > 16000 {
+            16000
+        } else if fs > 8000 && fs < 16000 {
+            8000
+        } else if fs < 8000 {
+            return Err(candle_core::Error::Msg(format!(
+                "Unsupported sample rate: {}",
+                fs
+            )));
+        } else {
+            return Ok((wav.to_vec(), fs)); // No resampling needed
+        };
 
-        // Handle 8kHz case
-        if fs == 8000 && self.eightk_method == "resample" {
-            // Upsample to 16kHz
-            wav = self.upsample_2x(&wav);
-            fs = 16000;
+        if fs == target_fs {
+            return Ok((wav.to_vec(), fs));
         }
 
+        // Handle 8kHz upsampling case
+        if fs == 8000 && self.eightk_method == "resample" {
+            // Upsample to 16kHz using rubato
+            let params = SincInterpolationParameters {
+                sinc_len: 256,
+                f_cutoff: 0.95,
+                interpolation: SincInterpolationType::Linear,
+                oversampling_factor: 256,
+                window: WindowFunction::BlackmanHarris2,
+            };
+
+            let mut resampler = SincFixedIn::<f32>::new(
+                2.0, // resample ratio (16000/8000)
+                2.0,
+                params,
+                wav.len(),
+                1, // mono
+            )
+            .map_err(|e| candle_core::Error::Msg(format!("Resampler creation failed: {}", e)))?;
+
+            let input = vec![wav.to_vec()];
+            let output = resampler
+                .process(&input, None)
+                .map_err(|e| candle_core::Error::Msg(format!("Resampling failed: {}", e)))?;
+
+            return Ok((output[0].clone(), 16000));
+        }
+
+        // Regular downsampling
+        let resample_ratio = target_fs as f64 / fs as f64;
+
+        let params = SincInterpolationParameters {
+            sinc_len: 256,
+            f_cutoff: 0.95,
+            interpolation: SincInterpolationType::Linear,
+            oversampling_factor: 256,
+            window: WindowFunction::BlackmanHarris2,
+        };
+
+        let mut resampler = SincFixedIn::<f32>::new(
+            resample_ratio,
+            2.0,
+            params,
+            wav.len(),
+            1, // mono
+        )
+        .map_err(|e| candle_core::Error::Msg(format!("Resampler creation failed: {}", e)))?;
+
+        let input = vec![wav.to_vec()];
+        let output = resampler
+            .process(&input, None)
+            .map_err(|e| candle_core::Error::Msg(format!("Resampling failed: {}", e)))?;
+
+        Ok((output[0].clone(), target_fs))
+    }
+
+    fn extract_mel_spectrogram_rustfft(&self, wav: &[f32], fs: u32) -> Result<Vec<Vec<f32>>> {
         // Set parameters based on sample rate
         let (n_fft, win_length, hop_length) = if fs == 8000 {
             (256, 200, 80)
@@ -456,35 +519,35 @@ impl Phi4MMInputsProcessor {
             )));
         };
 
-        // Create Hamming window
-        let window = self.create_hamming_window(win_length);
+        // Apply preemphasis first
+        let preemphasized = self.apply_preemphasis(wav, 0.97);
 
-        // Extract frames
-        let n_batch = (wav.len() - win_length) / hop_length + 1;
-        let mut frames = Vec::new();
-        for i in 0..n_batch {
-            let start = i * hop_length;
-            let end = start + win_length;
-            if end <= wav.len() {
-                frames.push(wav[start..end].to_vec());
-            }
-        }
-
-        // Apply preemphasis
-        let preemphasis = 0.97;
-        self.apply_preemphasis_frames(&mut frames, preemphasis);
-
-        // Apply FFT
+        // Create FFT planner
         let mut planner = FftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(n_fft);
 
-        let mut spectrogram = Vec::new();
-        for (_frame_idx, frame) in frames.iter().enumerate() {
+        // Create Hanning window
+        let window: Vec<f64> = hamming_iter(win_length).collect();
+
+        // Create mel filterbank
+        let mel_filters = self.create_mel_filterbank(AUDIO_FEATURE_SIZE, n_fft, fs as f32)?;
+
+        // Extract frames and apply STFT
+        let n_batch = (preemphasized.len() - win_length) / hop_length + 1;
+        let mut mel_features = Vec::new();
+
+        for i in 0..n_batch {
+            let start = i * hop_length;
+            let end = start + win_length;
+            if end > preemphasized.len() {
+                break;
+            }
+
             // Apply window and convert to complex
-            let mut windowed: Vec<Complex32> = frame
+            let mut windowed: Vec<Complex32> = preemphasized[start..end]
                 .iter()
                 .zip(window.iter())
-                .map(|(s, w)| Complex32::new(s * w, 0.0))
+                .map(|(s, w)| Complex32::new(s * *w as f32, 0.0))
                 .collect();
 
             // Pad to n_fft length
@@ -493,142 +556,56 @@ impl Phi4MMInputsProcessor {
             // Apply FFT
             fft.process(&mut windowed);
 
-            // Take magnitude of positive frequencies
-            let mut magnitude: Vec<f32> = windowed[0..n_fft / 2 + 1]
+            // Take power spectrum of positive frequencies
+            let power_spectrum: Vec<f32> = windowed[0..n_fft / 2 + 1]
                 .iter()
-                .map(|c| c.norm())
+                .map(|c| c.norm_sqr())
                 .collect();
 
-            // Handle 8kHz case
-            if fs == 8000 && self.eightk_method == "fillzero" {
-                // Remove nyquist bin and pad with zeros to match 16kHz structure
-                magnitude.pop(); // Remove nyquist
-                let padded_bins = vec![0.0; magnitude.len()];
-                magnitude.extend(padded_bins);
-            }
-
-            spectrogram.push(magnitude);
-        }
-
-        Ok(spectrogram)
-    }
-
-    fn apply_preemphasis_frames(&self, frames: &mut [Vec<f32>], preemphasis: f32) {
-        if frames.is_empty() {
-            return;
-        }
-
-        // Convert to 2D array-like structure for easier manipulation
-        let n_frames = frames.len();
-        let frame_len = frames[0].len();
-
-        // Create previous frame data (roll operation)
-        let mut frames_prev = vec![vec![0.0; frame_len]; n_frames];
-        for i in 0..n_frames {
-            for j in 0..frame_len {
-                if j == 0 {
-                    // For first element, use second element (Python: y_frames_prev[:, 0] = y_frames_prev[:, 1])
-                    frames_prev[i][j] = if frame_len > 1 {
-                        frames[i][1]
-                    } else {
-                        frames[i][0]
-                    };
-                } else {
-                    // Roll operation: shift right by 1
-                    frames_prev[i][j] = frames[i][j - 1];
-                }
-            }
-        }
-
-        // Apply preemphasis: (current - preemphasis * prev) * 32768
-        for i in 0..n_frames {
-            for j in 0..frame_len {
-                frames[i][j] = (frames[i][j] - preemphasis * frames_prev[i][j]) * 32768.0;
-            }
-        }
-    }
-
-    fn upsample_2x(&self, wav: &[f32]) -> Vec<f32> {
-        let mut upsampled = Vec::with_capacity(wav.len() * 2);
-        for &sample in wav {
-            upsampled.push(sample);
-            upsampled.push(sample); // Simple repetition - could be improved with interpolation
-        }
-        upsampled
-    }
-
-    fn resample_audio(&self, wav: &[f32], fs: u32) -> Result<(Vec<f32>, u32)> {
-        if fs > 16000 {
-            // Simple decimation for downsampling with basic low-pass filtering
-            let factor = fs / 16000;
-
-            // Apply simple moving average as anti-aliasing filter
-            let filter_len = factor as usize;
-            let mut filtered = Vec::new();
-
-            for i in 0..wav.len() {
-                let start = i.saturating_sub(filter_len / 2);
-                let end = (i + filter_len / 2 + 1).min(wav.len());
-                let avg = wav[start..end].iter().sum::<f32>() / (end - start) as f32;
-                filtered.push(avg);
-            }
-
-            let resampled: Vec<f32> = filtered.iter().step_by(factor as usize).copied().collect();
-            Ok((resampled, 16000))
-        } else if fs > 8000 && fs < 16000 {
-            let factor = fs / 8000;
-            let resampled: Vec<f32> = wav.iter().step_by(factor as usize).copied().collect();
-            Ok((resampled, 8000))
-        } else if fs < 8000 {
-            Err(candle_core::Error::Msg(format!(
-                "Unsupported sample rate: {}",
-                fs
-            )))
-        } else {
-            // No resampling needed
-            Ok((wav.to_vec(), fs))
-        }
-    }
-
-    fn create_hamming_window(&self, length: usize) -> Vec<f32> {
-        (0..length)
-            .map(|i| 0.54 - 0.46 * (2.0 * PI * i as f32 / (length - 1) as f32).cos())
-            .collect()
-    }
-
-    fn apply_mel_filterbank(
-        &self,
-        spectrogram: &[Vec<f32>],
-        sample_rate: u32,
-    ) -> Result<Vec<Vec<f32>>> {
-        const N_MELS: usize = 80;
-        let sample_rate_f = sample_rate as f32;
-
-        // Create mel filterbank
-        let n_fft = if spectrogram.is_empty() {
-            512
-        } else {
-            (spectrogram[0].len() - 1) * 2
-        };
-        let mel_filters = self.create_mel_filterbank(N_MELS, n_fft, sample_rate_f)?;
-
-        // Apply filterbank to each frame
-        let mut mel_features = Vec::new();
-        for frame in spectrogram {
-            let mut mel_frame = vec![0.0; N_MELS];
+            // Apply mel filterbank
+            let mut mel_frame = vec![0.0; AUDIO_FEATURE_SIZE];
             for (mel_idx, filter) in mel_filters.iter().enumerate() {
                 let mut sum = 0.0;
                 for (freq_idx, &coeff) in filter.iter().enumerate() {
-                    if freq_idx < frame.len() {
-                        sum += frame[freq_idx] * frame[freq_idx] * coeff; // Power spectrum
+                    if freq_idx < power_spectrum.len() {
+                        sum += power_spectrum[freq_idx] * coeff;
                     }
                 }
-                mel_frame[mel_idx] = sum; // Don't clip here, will be done in log step
+                mel_frame[mel_idx] = (sum.max(1.0)).ln(); // Apply log with clipping
             }
+
             mel_features.push(mel_frame);
         }
 
+        // Handle 8kHz case with fillzero method
+        if fs == 8000 && self.eightk_method == "fillzero" {
+            for frame in &mut mel_features {
+                // Extend each frame with zeros to match 16kHz structure
+                let original_len = frame.len();
+                frame.extend(vec![0.0; original_len]);
+            }
+        }
+
         Ok(mel_features)
+    }
+
+    fn apply_preemphasis(&self, wav: &[f32], preemphasis: f32) -> Vec<f32> {
+        if wav.is_empty() {
+            return vec![];
+        }
+
+        let mut preemphasized = Vec::with_capacity(wav.len());
+
+        // First sample: y[0] = x[0] * 32768
+        preemphasized.push(wav[0] * 32768.0);
+
+        // Remaining samples: y[n] = (x[n] - preemphasis * x[n-1]) * 32768
+        for i in 1..wav.len() {
+            let filtered = (wav[i] - preemphasis * wav[i - 1]) * 32768.0;
+            preemphasized.push(filtered);
+        }
+
+        preemphasized
     }
 
     fn create_mel_filterbank(
@@ -643,14 +620,7 @@ impl Phi4MMInputsProcessor {
 
         // Mel scale conversion functions
         let hz_to_mel = |f: f32| 1127.0 * (1.0 + f / 700.0).ln();
-        let _mel_to_hz = |mel: f32| 700.0 * (mel / 1127.0).exp() - 700.0;
-        let bin_to_mel = |fft_bin: usize| {
-            1127.0 * (1.0 + (fft_bin as f32 * sample_rate) / (n_fft as f32 * 700.0)).ln()
-        };
-        let f_to_bin = |f: f32| ((f * n_fft as f32 / sample_rate) + 0.5) as usize;
-
-        let klo = f_to_bin(fmin) + 1; // Skip DC component
-        let khi = f_to_bin(fmax).max(klo);
+        let mel_to_hz = |mel: f32| 700.0 * (mel / 1127.0).exp() - 700.0;
 
         let mel_low = hz_to_mel(fmin);
         let mel_high = hz_to_mel(fmax);
@@ -660,24 +630,37 @@ impl Phi4MMInputsProcessor {
             .map(|i| mel_low + (mel_high - mel_low) * i as f32 / (n_mels + 1) as f32)
             .collect();
 
-        let ms = (mel_high - mel_low) / (n_mels + 1) as f32;
+        let hz_centers: Vec<f32> = mel_centers.iter().map(|&mel| mel_to_hz(mel)).collect();
+
+        // Convert to bin numbers
+        let bin_centers: Vec<usize> = hz_centers
+            .iter()
+            .map(|&f| ((f * n_fft as f32 / sample_rate) + 0.5) as usize)
+            .collect();
 
         // Create triangular filters
         let mut filters = Vec::new();
         for m in 0..n_mels {
             let mut filter = vec![0.0; bank_width];
-            let left = mel_centers[m];
-            let center = mel_centers[m + 1];
-            let right = mel_centers[m + 2];
 
-            // Process from klo to khi
-            for fft_bin in klo..khi.min(bank_width) {
-                let mbin = bin_to_mel(fft_bin);
-                if left < mbin && mbin < right {
-                    let weight = 1.0 - (center - mbin).abs() / ms;
-                    filter[fft_bin] = weight;
+            let left_bin = bin_centers[m];
+            let center_bin = bin_centers[m + 1];
+            let right_bin = bin_centers[m + 2];
+
+            // Left slope
+            for bin in left_bin..center_bin {
+                if bin < bank_width {
+                    filter[bin] = (bin - left_bin) as f32 / (center_bin - left_bin) as f32;
                 }
             }
+
+            // Right slope
+            for bin in center_bin..right_bin {
+                if bin < bank_width {
+                    filter[bin] = (right_bin - bin) as f32 / (right_bin - center_bin) as f32;
+                }
+            }
+
             filters.push(filter);
         }
 

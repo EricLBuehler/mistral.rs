@@ -101,6 +101,8 @@ rustfft = "6.3.0"
 symphonia = "0.5.4"
 hound = "3.5.1"
 cpal = "0.15.3"
+apodize = "1.0.0"
+realfft = "3.4.0"
 
 [features]
 pyo3_macros = ["pyo3"]

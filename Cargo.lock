@@ -164,6 +164,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "apodize"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fca387cdc0a1f9c7a7c26556d584aa2d07fc529843082e4861003cde4ab914ed"
+
+[[package]]
 name = "arbitrary"
 version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3057,6 +3063,7 @@ dependencies = [
  "ahash",
  "akin",
  "anyhow",
+ "apodize",
  "as-any",
  "async-trait",
  "base64 0.22.1",
@@ -3112,6 +3119,7 @@ dependencies = [
  "rand 0.9.1",
  "rand_isaac",
  "rayon",
+ "realfft",
  "regex",
  "regex-automata 0.4.9",
  "reqwest",
