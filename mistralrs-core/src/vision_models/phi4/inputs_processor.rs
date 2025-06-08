@@ -720,7 +720,7 @@ impl Phi4MMInputsProcessor {
 
     fn process_audio_for_sequences(
         &self,
-        input_seqs: &[&mut Sequence],
+        input_seqs: &mut [&mut Sequence],
         device: &Device,
     ) -> AudioProcessingResult {
         // Check if any sequence has audio tokens
@@ -737,12 +737,19 @@ impl Phi4MMInputsProcessor {
         let mut audio_frames_list = Vec::new();
 
         // Process audio for each sequence that needs it
-        for seq in input_seqs.iter() {
+        for seq in input_seqs.iter_mut() {
             let has_audio = seq.get_toks().contains(&(AUDIO_SPECIAL_TOKEN_ID as u32));
 
             if has_audio {
-                // Load dummy audio (TODO: make this per-sequence)
-                let (audio_data, sample_rate) = self.load_dummy_audio()?;
+                let (audio_data, sample_rate) = if let Some(mut audios) = seq.take_audios() {
+                    if let Some(audio) = audios.pop() {
+                        (audio.samples, audio.sample_rate)
+                    } else {
+                        self.load_dummy_audio()?
+                    }
+                } else {
+                    self.load_dummy_audio()?
+                };
 
                 // Extract features
                 let features = self.extract_audio_features(&audio_data, sample_rate)?;

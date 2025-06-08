@@ -97,9 +97,10 @@ pub use pipeline::{
     UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
-    ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
-    LlguidanceGrammar, MessageContent, NormalRequest, Request, RequestMessage, SearchContextSize,
-    TokenizationRequest, WebSearchOptions, WebSearchUserLocation,
+    ApproximateUserLocation, AudioInput, Constraint, DetokenizationRequest,
+    ImageGenerationResponseFormat, LlguidanceGrammar, MessageContent, NormalRequest, Request,
+    RequestMessage, SearchContextSize, TokenizationRequest, WebSearchOptions,
+    WebSearchUserLocation,
 };
 pub use response::*;
 pub use sampler::{

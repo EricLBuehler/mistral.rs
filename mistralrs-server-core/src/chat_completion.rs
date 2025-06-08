@@ -442,6 +442,7 @@ pub async fn parse_request(
                 RequestMessage::VisionChat {
                     messages,
                     images,
+                    audios: Vec::new(),
                     enable_thinking: oairequest.enable_thinking,
                 }
             } else {

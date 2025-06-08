@@ -124,7 +124,7 @@ impl RequestLike for TextMessages {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-/// Text (chat) messages with images.
+/// Text (chat) messages with images and/or audios.
 ///
 /// No constraints, logits processors, logprobs, tools, or adapters.
 ///
@@ -132,6 +132,7 @@ impl RequestLike for TextMessages {
 pub struct VisionMessages {
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,
+    audios: Vec<AudioInput>,
 }
 
 impl Default for VisionMessages {
@@ -145,6 +146,7 @@ impl VisionMessages {
         Self {
             images: Vec::new(),
             messages: Vec::new(),
+            audios: Vec::new(),
         }
     }
 
@@ -197,6 +199,38 @@ impl VisionMessages {
         Ok(self)
     }
 
+    pub fn add_audio_message(
+        mut self,
+        role: TextMessageRole,
+        text: impl ToString,
+        audios: Vec<AudioInput>,
+        model: &Model,
+    ) -> anyhow::Result<Self> {
+        let prefixer = match &model.config().category {
+            ModelCategory::Vision { prefixer } => prefixer,
+            ModelCategory::Text
+            | ModelCategory::Diffusion
+            | ModelCategory::Speech
+            | ModelCategory::Audio => {
+                anyhow::bail!("`add_image_message` expects a vision model.")
+            }
+        };
+
+        let n_added_audios = audios.len();
+        let prefixed = prefixer.prefix_image(
+            (self.audios.len()..self.audios.len() + n_added_audios).collect(),
+            &text.to_string(),
+        );
+
+        self.audios.extend(audios);
+
+        self.messages.push(IndexMap::from([
+            ("role".to_string(), Either::Left(role.to_string())),
+            ("content".to_string(), Either::Left(prefixed)),
+        ]));
+        Ok(self)
+    }
+
     pub fn clear(mut self) -> Self {
         self.messages.clear();
         self.images.clear();
@@ -217,9 +251,12 @@ impl RequestLike for VisionMessages {
         std::mem::swap(&mut other_messages, &mut self.messages);
         let mut other_images = Vec::new();
         std::mem::swap(&mut other_images, &mut self.images);
+        let mut other_audios = Vec::new();
+        std::mem::swap(&mut other_audios, &mut self.audios);
         RequestMessage::VisionChat {
             images: other_images,
             messages: other_messages,
+            audios: other_audios,
             enable_thinking: self.enable_search(),
         }
     }
@@ -262,6 +299,7 @@ impl RequestLike for VisionMessages {
 pub struct RequestBuilder {
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,
+    audios: Vec<AudioInput>,
     logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
     adapters: Vec<String>,
     return_logprobs: bool,
@@ -284,6 +322,7 @@ impl From<TextMessages> for RequestBuilder {
         Self {
             messages: value.0,
             images: Vec::new(),
+            audios: Vec::new(),
             logits_processors: Vec::new(),
             adapters: Vec::new(),
             return_logprobs: false,
@@ -302,6 +341,7 @@ impl From<VisionMessages> for RequestBuilder {
         Self {
             messages: value.messages,
             images: value.images,
+            audios: value.audios,
             logits_processors: Vec::new(),
             adapters: Vec::new(),
             return_logprobs: false,
@@ -320,6 +360,7 @@ impl RequestBuilder {
         Self {
             messages: Vec::new(),
             images: Vec::new(),
+            audios: Vec::new(),
             logits_processors: Vec::new(),
             adapters: Vec::new(),
             return_logprobs: false,
@@ -402,14 +443,70 @@ impl RequestBuilder {
         mut self,
         role: TextMessageRole,
         text: impl ToString,
-        image: DynamicImage,
-    ) -> Self {
+        images: Vec<DynamicImage>,
+        model: &Model,
+    ) -> anyhow::Result<Self> {
+        let prefixer = match &model.config().category {
+            ModelCategory::Vision { prefixer } => prefixer,
+            ModelCategory::Text
+            | ModelCategory::Diffusion
+            | ModelCategory::Speech
+            | ModelCategory::Audio => {
+                anyhow::bail!("`add_image_message` expects a vision model.")
+            }
+        };
+
+        let n_added_images = images.len();
+        let prefixed = prefixer.prefix_image(
+            (self.images.len()..self.images.len() + n_added_images).collect(),
+            &text.to_string(),
+        );
+
+        self.images.extend(images);
+
         self.messages.push(IndexMap::from([
             ("role".to_string(), Either::Left(role.to_string())),
-            ("content".to_string(), Either::Left(text.to_string())),
+            (
+                "content".to_string(),
+                Either::Right(vec![IndexMap::from([
+                    ("type".to_string(), Value::String("text".to_string())),
+                    ("text".to_string(), Value::String(prefixed)),
+                ])]),
+            ),
         ]));
-        self.images.push(image);
-        self
+        Ok(self)
+    }
+
+    pub fn add_audio_message(
+        mut self,
+        role: TextMessageRole,
+        text: impl ToString,
+        audios: Vec<AudioInput>,
+        model: &Model,
+    ) -> anyhow::Result<Self> {
+        let prefixer = match &model.config().category {
+            ModelCategory::Vision { prefixer } => prefixer,
+            ModelCategory::Text
+            | ModelCategory::Diffusion
+            | ModelCategory::Speech
+            | ModelCategory::Audio => {
+                anyhow::bail!("`add_image_message` expects a vision model.")
+            }
+        };
+
+        let n_added_audios = audios.len();
+        let prefixed = prefixer.prefix_image(
+            (self.audios.len()..self.audios.len() + n_added_audios).collect(),
+            &text.to_string(),
+        );
+
+        self.audios.extend(audios);
+
+        self.messages.push(IndexMap::from([
+            ("role".to_string(), Either::Left(role.to_string())),
+            ("content".to_string(), Either::Left(prefixed)),
+        ]));
+        Ok(self)
     }
 
     pub fn add_logits_processor(mut self, processor: Arc<dyn CustomLogitsProcessor>) -> Self {
@@ -547,9 +644,12 @@ impl RequestLike for RequestBuilder {
             std::mem::swap(&mut other_messages, &mut self.messages);
             let mut other_images = Vec::new();
             std::mem::swap(&mut other_images, &mut self.images);
+            let mut other_audios = Vec::new();
+            std::mem::swap(&mut other_audios, &mut self.audios);
             RequestMessage::VisionChat {
                 images: other_images,
                 messages: other_messages,
+                audios: other_audios,
                 enable_thinking: self.enable_thinking,
             }
         }

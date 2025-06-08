@@ -1069,6 +1069,7 @@ impl Runner {
                         RequestMessage::VisionChat {
                             messages: messages_vec,
                             images,
+                            audios: Vec::new(),
                             enable_thinking: request.enable_thinking,
                         }
                     } else {

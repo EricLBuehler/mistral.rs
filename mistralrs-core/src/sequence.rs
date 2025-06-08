@@ -4,7 +4,7 @@ use crate::{
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
-    ChatCompletionResponse, Usage,
+    AudioInput, ChatCompletionResponse, Usage,
 };
 use crate::{
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
@@ -171,6 +171,53 @@ pub struct SequenceImages {
     hashes: Vec<u64>,
 }
 
+#[derive(Clone)]
+pub struct SequenceAudios {
+    audios: Vec<AudioInput>,
+    hashes: Vec<u64>,
+}
+
+impl SequenceAudios {
+    fn new(input_audios: Vec<AudioInput>) -> Self {
+        let hashes = input_audios.iter().map(|a| {
+            let mut hasher = DefaultHasher::new();
+            for s in &a.samples {
+                s.to_bits().hash(&mut hasher);
+            }
+            a.sample_rate.hash(&mut hasher);
+            hasher.finish()
+        });
+        Self {
+            hashes: hashes.collect(),
+            audios: input_audios,
+        }
+    }
+
+    fn clone_audios(&self) -> Vec<AudioInput> {
+        self.audios.clone()
+    }
+
+    fn audios(&self) -> &[AudioInput] {
+        &self.audios
+    }
+
+    fn audios_mut(&mut self) -> &mut Vec<AudioInput> {
+        &mut self.audios
+    }
+
+    fn hashes(&self) -> &[u64] {
+        &self.hashes
+    }
+
+    fn keep_num_audios(&mut self, audios_to_keep: usize) {
+        if self.audios.len() > audios_to_keep {
+            let start = self.audios.len() - audios_to_keep;
+            self.audios = self.audios[start..].to_vec();
+            self.hashes = self.hashes[start..].to_vec();
+        }
+    }
+}
+
 impl SequenceImages {
     fn new(input_images: Vec<image::DynamicImage>) -> Self {
         let hashes = input_images.iter().map(|x| {
@@ -211,6 +258,7 @@ impl SequenceImages {
 // Holds all multimodal (vision/diffusion) data for a Sequence.
 pub struct MultimodalData {
     pub input_images: Option<SequenceImages>,
+    pub input_audios: Option<SequenceAudios>,
     pub cached_pixel_values: Option<Tensor>,
     pub cached_img_thw: Option<Tensor>,
     pub cached_vid_thw: Option<Tensor>,
@@ -222,11 +270,13 @@ pub struct MultimodalData {
 impl MultimodalData {
     pub fn new(
         input_images: Option<Vec<image::DynamicImage>>,
+        input_audios: Option<Vec<AudioInput>>,
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         diffusion_params: Option<DiffusionGenerationParams>,
     ) -> Self {
         MultimodalData {
             input_images: input_images.map(SequenceImages::new),
+            input_audios: input_audios.map(SequenceAudios::new),
             cached_pixel_values: None,
             cached_img_thw: None,
             cached_vid_thw: None,
@@ -266,6 +316,40 @@ impl MultimodalData {
         self.input_images
             .as_ref()
             .is_some_and(|imgs| !imgs.images().is_empty())
+    }
+
+    pub fn take_audios(&mut self) -> Option<Vec<AudioInput>> {
+        if let Some(input_audios) = self.input_audios.as_mut() {
+            let mut audios = Vec::new();
+            std::mem::swap(&mut audios, input_audios.audios_mut());
+            Some(audios)
+        } else {
+            None
+        }
+    }
+
+    pub fn clone_audios(&self) -> Option<Vec<AudioInput>> {
+        self.input_audios.as_ref().map(|a| a.clone_audios())
+    }
+
+    pub fn audios(&self) -> Option<&[AudioInput]> {
+        self.input_audios.as_ref().map(|a| a.audios())
+    }
+
+    pub fn audio_hashes(&self) -> Option<&[u64]> {
+        self.input_audios.as_ref().map(|a| a.hashes())
+    }
+
+    pub fn has_audios(&self) -> bool {
+        self.input_audios
+            .as_ref()
+            .is_some_and(|a| !a.audios().is_empty())
+    }
+
+    pub fn keep_num_audios(&mut self, audios_to_keep: usize) {
+        if let Some(auds) = self.input_audios.as_mut() {
+            auds.keep_num_audios(audios_to_keep)
+        }
     }
 
     pub fn keep_num_images(&mut self, images_to_keep: usize) {
@@ -422,6 +506,7 @@ impl Sequence {
         suffix: Option<String>,
         prefix: Option<String>,
         input_images: Option<Vec<image::DynamicImage>>,
+        input_audios: Option<Vec<AudioInput>>,
         // Paged attention
         block_size: Option<usize>,
         //
@@ -492,6 +577,7 @@ impl Sequence {
             // Multimodal data
             multimodal: MultimodalData::new(
                 input_images,
+                input_audios,
                 image_gen_response_format,
                 diffusion_params,
             ),
@@ -965,6 +1051,30 @@ impl Sequence {
 
     pub fn has_images(&self) -> bool {
         self.multimodal.has_images()
+    }
+
+    pub fn take_audios(&mut self) -> Option<Vec<AudioInput>> {
+        self.multimodal.take_audios()
+    }
+
+    pub fn clone_audios(&self) -> Option<Vec<AudioInput>> {
+        self.multimodal.clone_audios()
+    }
+
+    pub fn audios(&self) -> Option<&[AudioInput]> {
+        self.multimodal.audios()
+    }
+
+    pub fn audio_hashes(&self) -> Option<&[u64]> {
+        self.multimodal.audio_hashes()
+    }
+
+    pub fn has_audios(&self) -> bool {
+        self.multimodal.has_audios()
+    }
+
+    pub fn keep_num_audios(&mut self, audios_to_keep: usize) {
+        self.multimodal.keep_num_audios(audios_to_keep)
     }
 
     /// Keep these last n images

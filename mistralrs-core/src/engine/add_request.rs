@@ -122,7 +122,18 @@ impl Engine {
                 ref images,
                 messages: _,
                 enable_thinking: _,
+                audios: _,
             } => Some(images.clone()),
+            _ => None,
+        };
+
+        let audios = match request.messages {
+            RequestMessage::VisionChat {
+                images: _,
+                messages: _,
+                enable_thinking: _,
+                ref audios,
+            } => Some(audios.clone()),
             _ => None,
         };
 
@@ -157,6 +168,7 @@ impl Engine {
             }
             | RequestMessage::VisionChat {
                 images: _,
+                audios: _,
                 messages,
                 enable_thinking,
             } => {
@@ -497,6 +509,7 @@ impl Engine {
                     None
                 },
                 images.clone(),
+                audios.clone(),
                 block_size,
                 Some(matcher.clone()),
                 image_generation_format,

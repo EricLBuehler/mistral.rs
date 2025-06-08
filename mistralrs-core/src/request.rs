@@ -50,8 +50,10 @@ pub enum RequestMessage {
     },
     CompletionTokens(Vec<u32>),
     VisionChat {
-        #[serde(skip)] // TODO!!!!
+        #[serde(skip)] // TODO
         images: Vec<image::DynamicImage>,
+        #[serde(skip)] // TODO
+        audios: Vec<AudioInput>,
         messages: Vec<IndexMap<String, MessageContent>>,
         enable_thinking: Option<bool>,
     },
@@ -114,6 +116,42 @@ pub struct WebSearchOptions {
     pub search_description: Option<String>,
     /// Override the description for the extraction tool.
     pub extract_description: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+/// Raw audio input consisting of PCM samples and a sample rate.
+pub struct AudioInput {
+    pub samples: Vec<f32>,
+    pub sample_rate: u32,
+}
+
+impl AudioInput {
+    pub fn read_wav(wav_path: &str) -> anyhow::Result<Self> {
+        let mut reader = hound::WavReader::open(wav_path)
+            .map_err(|e| anyhow::Error::msg(format!("Failed to load audio: {}", e)))?;
+        let spec = reader.spec();
+
+        let samples: Vec<f32> = match spec.sample_format {
+            hound::SampleFormat::Float => reader
+                .samples::<f32>()
+                .map(|s| s.map_err(|e| anyhow::Error::msg(e.to_string())))
+                .collect::<std::result::Result<_, _>>()?,
+
+            hound::SampleFormat::Int => reader
+                .samples::<i16>() // read as integers
+                .map(|s| {
+                    s.map(|v| v as f32 / i16::MAX as f32) // scale to –1.0…1.0
+                        .map_err(|e| candle_core::Error::Msg(e.to_string()))
+                })
+                .collect::<std::result::Result<_, _>>()?,
+        };
+
+        Ok(Self {
+            samples,
+            sample_rate: spec.sample_rate,
+        })
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]

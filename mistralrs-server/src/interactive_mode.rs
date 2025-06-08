@@ -2,9 +2,9 @@ use directories::ProjectDirs;
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    speech_utils, ChunkChoice, Constraint, Delta, DiffusionGenerationParams, DrySamplingParams,
-    ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory, NormalRequest,
-    Request, RequestMessage, Response, ResponseOk, SamplingParams, WebSearchOptions,
+    speech_utils, AudioInput, ChunkChoice, Constraint, Delta, DiffusionGenerationParams,
+    DrySamplingParams, ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory,
+    NormalRequest, Request, RequestMessage, Response, ResponseOk, SamplingParams, WebSearchOptions,
     TERMINATE_ALL_NEXT_STEP,
 };
 use once_cell::sync::Lazy;
@@ -110,7 +110,7 @@ Welcome to interactive mode! Because this model is a text model, you can enter p
 const VISION_INTERACTIVE_HELP: &str = r#"
 Welcome to interactive mode! Because this model is a vision model, you can enter prompts and chat with the model.
 
-To specify a message with one or more images, simply include the image URL or path:
+To specify a message with one or more images or audios, simply include the image/audio URL or path:
 
 - `Please describe this image: path/to/image1.jpg path/to/image2.png`
 - `What is in this image: <url here>`
@@ -142,6 +142,7 @@ const TOPP_CMD: &str = "\\topp";
 
 /// Regex string used to extract image URLs from prompts.
 const IMAGE_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:png|jpe?g|bmp|gif|webp)(?:\?\S+?)?)"#;
+const AUDIO_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:wav)(?:\?\S+?)?)"#;
 
 fn interactive_sample_parameters() -> SamplingParams {
     SamplingParams {
@@ -437,10 +438,12 @@ async fn vision_interactive_mode(
 ) {
     // Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
     let image_regex = Regex::new(IMAGE_REGEX).unwrap();
+    let audio_regex = Regex::new(AUDIO_REGEX).unwrap();
 
     let sender = mistralrs.get_sender().unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
     let mut images = Vec::new();
+    let mut audios = Vec::new();
 
     let prefixer = match &mistralrs.config().category {
         ModelCategory::Vision { prefixer } => prefixer,
@@ -517,11 +520,14 @@ async fn vision_interactive_mode(
             }
             _ => {
                 // Extract any image URLs and the remaining text
-                let (urls, text) = parse_files_and_message(prompt_trimmed, &image_regex);
-                if !urls.is_empty() {
+                let (urls_image, text_image) =
+                    parse_files_and_message(prompt_trimmed, &image_regex);
+                let (urls_audio, text_audio) =
+                    parse_files_and_message(prompt_trimmed, &audio_regex);
+                if !urls_image.is_empty() {
                     let mut image_indexes = Vec::new();
                     // Load all images first
-                    for url in &urls {
+                    for url in &urls_image {
                         match util::parse_image_url(url).await {
                             Ok(image) => {
                                 image_indexes.push(images.len());
@@ -536,14 +542,14 @@ async fn vision_interactive_mode(
                     // Build a single user message with multiple images and then the text
                     let mut content_vec: Vec<IndexMap<String, Value>> = Vec::new();
                     // Add one image part per URL
-                    for _ in &urls {
+                    for _ in &urls_image {
                         content_vec.push(IndexMap::from([(
                             "type".to_string(),
                             Value::String("image".to_string()),
                         )]));
                     }
                     // Add the text part once
-                    let text = prefixer.prefix_image(image_indexes, &text);
+                    let text = prefixer.prefix_image(image_indexes, &text_image);
                     content_vec.push(IndexMap::from([
                         ("type".to_string(), Value::String("text".to_string())),
                         ("text".to_string(), Value::String(text.clone())),
@@ -551,6 +557,29 @@ async fn vision_interactive_mode(
                     let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
                     user_message.insert("role".to_string(), Either::Left("user".to_string()));
                     user_message.insert("content".to_string(), Either::Right(content_vec));
+                    messages.push(user_message);
+                } else if !urls_audio.is_empty() {
+                    let mut audio_indexes = Vec::new();
+                    // Load all audios first
+                    for url in &urls_audio {
+                        match AudioInput::read_wav(url) {
+                            Ok(audio) => {
+                                audio_indexes.push(audios.len());
+                                audios.push(audio);
+                            }
+                            Err(e) => {
+                                error!("Failed to read audio from URL/path {}: {}", url, e);
+                                continue 'outer;
+                            }
+                        }
+                    }
+
+                    let text = prefixer.prefix_audio(audio_indexes, &text_audio);
+
+                    let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
+                    user_message.insert("role".to_string(), Either::Left("user".to_string()));
+                    user_message.insert("content".to_string(), Either::Left(text));
+
                     messages.push(user_message);
                 } else {
                     // Default: handle as text-only prompt
@@ -570,6 +599,7 @@ async fn vision_interactive_mode(
 
         let request_messages = RequestMessage::VisionChat {
             images: images.clone(),
+            audios: audios.clone(),
             messages: messages.clone(),
             enable_thinking,
         };
