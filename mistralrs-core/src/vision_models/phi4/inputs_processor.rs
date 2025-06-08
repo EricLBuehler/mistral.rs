@@ -409,10 +409,21 @@ impl Phi4MMInputsProcessor {
         let mut reader = hound::WavReader::open("dummy_audio.wav")
             .map_err(|e| candle_core::Error::Msg(format!("Failed to load audio: {}", e)))?;
         let spec = reader.spec();
-        let samples: Vec<f32> = reader
-            .samples::<f32>()
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| candle_core::Error::Msg(format!("Failed to read samples: {}", e)))?;
+
+        let samples: Vec<f32> = match spec.sample_format {
+            hound::SampleFormat::Float => reader
+                .samples::<f32>()
+                .map(|s| s.map_err(|e| candle_core::Error::Msg(e.to_string())))
+                .collect::<std::result::Result<_, _>>()?,
+
+            hound::SampleFormat::Int => reader
+                .samples::<i16>() // read as integers
+                .map(|s| {
+                    s.map(|v| v as f32 / i16::MAX as f32) // scale to –1.0…1.0
+                        .map_err(|e| candle_core::Error::Msg(e.to_string()))
+                })
+                .collect::<std::result::Result<_, _>>()?,
+        };
         Ok((samples, spec.sample_rate))
     }
 
