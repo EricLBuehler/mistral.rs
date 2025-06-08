@@ -95,15 +95,14 @@ impl Attention {
             ),
             (Some(attention_mask), None) => Some(attention_mask.unsqueeze(1)?),
             (None, None) => None,
-            (None, Some(_)) => {
-                None
-                // candle_core::bail!("Got `relative_attention_bias` but no `attention_mask`")
+            (None, Some(relative_attention_bias)) => {
+                Some(relative_attention_bias.contiguous()?)
             }
         };
         let attn_weights = Sdpa.run_attention(
-            &q,
-            &k,
-            &v,
+            &q.contiguous()?,
+            &k.contiguous()?,
+            &v.contiguous()?,
             attention_mask.as_ref(),
             None,
             &SdpaParams {
@@ -585,6 +584,7 @@ impl ConformerEncoder {
         // Forward through embeddings (subsampling)
         let xs = self.encoder_embedding.forward(xs)?;
         let (mut input_tensor, masks) = self.embed.forward(&xs, mask)?;
+        input_tensor.write_npy("input_tensor_m.npy")?;
 
         // Handle long sequences with unfolding
         let max_seq_len = 500;
@@ -609,11 +609,15 @@ impl ConformerEncoder {
             input_tensor = unfold_tensor(&input_tensor, max_seq_len)?;
         }
 
-        // Apply positional encoding
-        input_tensor = self.pos_embed.forward(&input_tensor)?;
+        // // Apply positional encoding
+        // input_tensor = self.pos_embed.forward(&input_tensor)?;
 
         // Compute relative attention bias if available
         let relative_attention_bias = self.relative_attention_bias_layer.forward(&input_tensor)?;
+        relative_attention_bias.write_npy("relative_attention_bias_m.npy")?;
+        let relative_attention_bias = Tensor::read_npy("relative_attention_bias.npy")?
+            .to_dtype(relative_attention_bias.dtype())?
+            .to_device(relative_attention_bias.device())?;
 
         // Apply encoder layers
         for layer in &self.encoders {
