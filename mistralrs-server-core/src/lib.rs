@@ -46,7 +46,7 @@
 //!     info(
 //!         title = "Hello World API",
 //!         version = "1.0.0",
-//          description = "A simple API that responds with a greeting"
+//!         description = "A simple API that responds with a greeting"
 //!     )
 //! )]
 //! struct ApiDoc;
