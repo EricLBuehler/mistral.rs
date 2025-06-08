@@ -48,6 +48,7 @@ pub struct Phi4MMInputsProcessor {
     audio_compression_rate: usize,
     audio_downsample_rate: usize,
     audio_feat_stride: usize,
+    eightk_method: String, // "fillzero" or "resample"
 }
 
 // Processor
@@ -71,6 +72,7 @@ impl ProcessorCreator for Phi4MMProcessor {
                 audio_feat_stride: pre_processor_config
                     .audio_feat_stride
                     .expect("audio_feat_stride"),
+                eightk_method: "fillzero".to_string(), // Default to fillzero like Python
             }),
         })
     }
@@ -390,22 +392,6 @@ impl InputsProcessor for Phi4MMInputsProcessor {
 
 impl Phi4MMInputsProcessor {
     fn load_dummy_audio(&self) -> Result<(Vec<f32>, u32)> {
-        // // For now, generate dummy audio data
-        // // TODO: Replace with actual WAV file loading
-        // let sample_rate = 16000;
-        // let duration_seconds = 3.0;
-        // let num_samples = (sample_rate as f32 * duration_seconds) as usize;
-
-        // // Generate a simple test signal (sine wave + noise)
-        // let audio_data: Vec<f32> = (0..num_samples)
-        //     .map(|i| {
-        //         let t = i as f32 / sample_rate as f32;
-        //         0.1 * (2.0 * PI * 440.0 * t).sin() + 0.05 * (2.0 * PI * 880.0 * t).sin()
-        //     })
-        //     .collect();
-
-        // Ok((audio_data, sample_rate))
-
         let mut reader = hound::WavReader::open("dummy_audio.wav")
             .map_err(|e| candle_core::Error::Msg(format!("Failed to load audio: {}", e)))?;
         let spec = reader.spec();
@@ -436,12 +422,12 @@ impl Phi4MMInputsProcessor {
         let spectrogram = self.extract_spectrogram(audio_data, sample_rate)?;
 
         // Apply mel filterbank
-        let mel_features = self.apply_mel_filterbank(&spectrogram)?;
+        let mel_features = self.apply_mel_filterbank(&spectrogram, sample_rate)?;
 
-        // Take log
+        // Take log - match Python: clip to minimum 1.0 then log
         let log_features: Vec<Vec<f32>> = mel_features
             .iter()
-            .map(|frame| frame.iter().map(|&x| (x.max(1e-10)).ln()).collect())
+            .map(|frame| frame.iter().map(|&x| (x.max(1.0)).ln()).collect())
             .collect();
 
         Ok(log_features)
@@ -449,7 +435,14 @@ impl Phi4MMInputsProcessor {
 
     fn extract_spectrogram(&self, wav: &[f32], fs: u32) -> Result<Vec<Vec<f32>>> {
         // Handle resampling to supported rates
-        let (wav, fs) = self.resample_audio(wav, fs)?;
+        let (mut wav, mut fs) = self.resample_audio(wav, fs)?;
+
+        // Handle 8kHz case
+        if fs == 8000 && self.eightk_method == "resample" {
+            // Upsample to 16kHz
+            wav = self.upsample_2x(&wav);
+            fs = 16000;
+        }
 
         // Set parameters based on sample rate
         let (n_fft, win_length, hop_length) = if fs == 8000 {
@@ -466,10 +459,10 @@ impl Phi4MMInputsProcessor {
         // Create Hamming window
         let window = self.create_hamming_window(win_length);
 
-        // Extract frames
-        let n_frames = (wav.len() - win_length) / hop_length + 1;
+        // Extract frames - match Python logic exactly
+        let n_batch = (wav.len() - win_length) / hop_length + 1;
         let mut frames = Vec::new();
-        for i in 0..n_frames {
+        for i in 0..n_batch {
             let start = i * hop_length;
             let end = start + win_length;
             if end <= wav.len() {
@@ -477,23 +470,16 @@ impl Phi4MMInputsProcessor {
             }
         }
 
-        // Apply preemphasis
+        // Apply preemphasis - FIXED to match Python
         let preemphasis = 0.97;
-        for frame in frames.iter_mut() {
-            let mut prev = if frame.len() > 1 { frame[1] } else { 0.0 };
-            for sample in frame.iter_mut() {
-                let current = *sample;
-                *sample = (current - preemphasis * prev) * 32768.0;
-                prev = current;
-            }
-        }
+        self.apply_preemphasis_frames(&mut frames, preemphasis);
 
         // Apply FFT
         let mut planner = FftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(n_fft);
 
         let mut spectrogram = Vec::new();
-        for frame in frames {
+        for (frame_idx, frame) in frames.iter().enumerate() {
             // Apply window and convert to complex
             let mut windowed: Vec<Complex32> = frame
                 .iter()
@@ -513,9 +499,10 @@ impl Phi4MMInputsProcessor {
                 .map(|c| c.norm())
                 .collect();
 
-            // Handle 8kHz case - pad frequency bins to match 16kHz
-            if fs == 8000 {
-                let nyquist = magnitude.pop().unwrap_or(0.0);
+            // Handle 8kHz case - FIXED to match Python padding logic
+            if fs == 8000 && self.eightk_method == "fillzero" {
+                // Remove nyquist bin and pad with zeros to match 16kHz structure
+                magnitude.pop(); // Remove nyquist
                 let padded_bins = vec![0.0; magnitude.len()];
                 magnitude.extend(padded_bins);
             }
@@ -526,11 +513,70 @@ impl Phi4MMInputsProcessor {
         Ok(spectrogram)
     }
 
+    // NEW: Fixed preemphasis to match Python frame-level processing
+    fn apply_preemphasis_frames(&self, frames: &mut [Vec<f32>], preemphasis: f32) {
+        if frames.is_empty() {
+            return;
+        }
+
+        // Convert to 2D array-like structure for easier manipulation
+        let n_frames = frames.len();
+        let frame_len = frames[0].len();
+
+        // Create previous frame data (roll operation)
+        let mut frames_prev = vec![vec![0.0; frame_len]; n_frames];
+        for i in 0..n_frames {
+            for j in 0..frame_len {
+                if j == 0 {
+                    // For first element, use second element (Python: y_frames_prev[:, 0] = y_frames_prev[:, 1])
+                    frames_prev[i][j] = if frame_len > 1 {
+                        frames[i][1]
+                    } else {
+                        frames[i][0]
+                    };
+                } else {
+                    // Roll operation: shift right by 1
+                    frames_prev[i][j] = frames[i][j - 1];
+                }
+            }
+        }
+
+        // Apply preemphasis: (current - preemphasis * prev) * 32768
+        for i in 0..n_frames {
+            for j in 0..frame_len {
+                frames[i][j] = (frames[i][j] - preemphasis * frames_prev[i][j]) * 32768.0;
+            }
+        }
+    }
+
+    // NEW: Simple 2x upsampling for 8kHz -> 16kHz
+    fn upsample_2x(&self, wav: &[f32]) -> Vec<f32> {
+        let mut upsampled = Vec::with_capacity(wav.len() * 2);
+        for &sample in wav {
+            upsampled.push(sample);
+            upsampled.push(sample); // Simple repetition - could be improved with interpolation
+        }
+        upsampled
+    }
+
+    // IMPROVED: Better resampling using proper decimation with basic anti-aliasing
     fn resample_audio(&self, wav: &[f32], fs: u32) -> Result<(Vec<f32>, u32)> {
         if fs > 16000 {
-            // Simple decimation for downsampling
+            // Simple decimation for downsampling with basic low-pass filtering
             let factor = fs / 16000;
-            let resampled: Vec<f32> = wav.iter().step_by(factor as usize).copied().collect();
+
+            // Apply simple moving average as anti-aliasing filter
+            let filter_len = factor as usize;
+            let mut filtered = Vec::new();
+
+            for i in 0..wav.len() {
+                let start = i.saturating_sub(filter_len / 2);
+                let end = (i + filter_len / 2 + 1).min(wav.len());
+                let avg = wav[start..end].iter().sum::<f32>() / (end - start) as f32;
+                filtered.push(avg);
+            }
+
+            let resampled: Vec<f32> = filtered.iter().step_by(factor as usize).copied().collect();
             Ok((resampled, 16000))
         } else if fs > 8000 && fs < 16000 {
             let factor = fs / 8000;
@@ -553,9 +599,14 @@ impl Phi4MMInputsProcessor {
             .collect()
     }
 
-    fn apply_mel_filterbank(&self, spectrogram: &[Vec<f32>]) -> Result<Vec<Vec<f32>>> {
+    // FIXED: Apply mel filterbank with proper frequency range matching Python
+    fn apply_mel_filterbank(
+        &self,
+        spectrogram: &[Vec<f32>],
+        sample_rate: u32,
+    ) -> Result<Vec<Vec<f32>>> {
         const N_MELS: usize = 80;
-        const SAMPLE_RATE: f32 = 16000.0;
+        let sample_rate_f = sample_rate as f32;
 
         // Create mel filterbank
         let n_fft = if spectrogram.is_empty() {
@@ -563,7 +614,7 @@ impl Phi4MMInputsProcessor {
         } else {
             (spectrogram[0].len() - 1) * 2
         };
-        let mel_filters = self.create_mel_filterbank(N_MELS, n_fft, SAMPLE_RATE)?;
+        let mel_filters = self.create_mel_filterbank(N_MELS, n_fft, sample_rate_f)?;
 
         // Apply filterbank to each frame
         let mut mel_features = Vec::new();
@@ -576,7 +627,7 @@ impl Phi4MMInputsProcessor {
                         sum += frame[freq_idx] * frame[freq_idx] * coeff; // Power spectrum
                     }
                 }
-                mel_frame[mel_idx] = sum.max(1.0); // Clip to minimum of 1.0
+                mel_frame[mel_idx] = sum; // Don't clip here, will be done in log step
             }
             mel_features.push(mel_frame);
         }
@@ -584,6 +635,7 @@ impl Phi4MMInputsProcessor {
         Ok(mel_features)
     }
 
+    // FIXED: Mel filterbank creation to match Python SpeechLib logic
     fn create_mel_filterbank(
         &self,
         n_mels: usize,
@@ -594,9 +646,17 @@ impl Phi4MMInputsProcessor {
         let fmax = sample_rate / 2.0;
         let fmin = 0.0;
 
-        // Mel scale conversion functions
+        // Mel scale conversion functions (matching Python)
         let hz_to_mel = |f: f32| 1127.0 * (1.0 + f / 700.0).ln();
         let mel_to_hz = |mel: f32| 700.0 * (mel / 1127.0).exp() - 700.0;
+        let bin_to_mel = |fft_bin: usize| {
+            1127.0 * (1.0 + (fft_bin as f32 * sample_rate) / (n_fft as f32 * 700.0)).ln()
+        };
+        let f_to_bin = |f: f32| ((f * n_fft as f32 / sample_rate) + 0.5) as usize;
+
+        // Match Python frequency range logic
+        let klo = f_to_bin(fmin) + 1; // Skip DC component
+        let khi = f_to_bin(fmax).max(klo);
 
         let mel_low = hz_to_mel(fmin);
         let mel_high = hz_to_mel(fmax);
@@ -606,26 +666,22 @@ impl Phi4MMInputsProcessor {
             .map(|i| mel_low + (mel_high - mel_low) * i as f32 / (n_mels + 1) as f32)
             .collect();
 
-        // Convert back to Hz
-        let freq_centers: Vec<f32> = mel_centers.iter().map(|&mel| mel_to_hz(mel)).collect();
+        let ms = (mel_high - mel_low) / (n_mels + 1) as f32;
 
         // Create triangular filters
         let mut filters = Vec::new();
         for m in 0..n_mels {
             let mut filter = vec![0.0; bank_width];
-            let left_freq = freq_centers[m];
-            let center_freq = freq_centers[m + 1];
-            let right_freq = freq_centers[m + 2];
+            let left = mel_centers[m];
+            let center = mel_centers[m + 1];
+            let right = mel_centers[m + 2];
 
-            for k in 1..bank_width {
-                // Start from 1 to skip DC component
-                let freq = k as f32 * sample_rate / n_fft as f32;
-                if left_freq < freq && freq < right_freq {
-                    if freq <= center_freq {
-                        filter[k] = (freq - left_freq) / (center_freq - left_freq);
-                    } else {
-                        filter[k] = (right_freq - freq) / (right_freq - center_freq);
-                    }
+            // Match Python frequency range: process from klo to khi
+            for fft_bin in klo..khi.min(bank_width) {
+                let mbin = bin_to_mel(fft_bin);
+                if left < mbin && mbin < right {
+                    let weight = 1.0 - (center - mbin).abs() / ms;
+                    filter[fft_bin] = weight;
                 }
             }
             filters.push(filter);
