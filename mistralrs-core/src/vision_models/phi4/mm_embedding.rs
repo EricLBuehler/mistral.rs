@@ -56,6 +56,7 @@ impl Phi4MMImageAudioEmbedding {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &self,
         input_ids: &Tensor,

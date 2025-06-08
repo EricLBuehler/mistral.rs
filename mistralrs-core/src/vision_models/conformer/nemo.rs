@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::sync::Arc;
 
 use candle_core::{Result, Tensor};
@@ -29,7 +31,7 @@ impl NemoConvSubsampling {
         let kernel_size = 3;
         let ceil_mode = false;
 
-        assert_eq!(cfg.is_causal, false);
+        assert!(!cfg.is_causal);
         assert_eq!(cfg.subsampling, "dw_striding");
 
         let left_padding = (kernel_size - 1) / 2;
@@ -50,7 +52,7 @@ impl NemoConvSubsampling {
                 kernel_size,
                 Conv2dConfig {
                     padding: left_padding,
-                    stride: stride,
+                    stride,
                     dilation: 1,
                     groups: 1,
                 },
@@ -69,7 +71,7 @@ impl NemoConvSubsampling {
                     kernel_size,
                     Conv2dConfig {
                         padding: left_padding,
-                        stride: stride,
+                        stride,
                         dilation: 1,
                         groups: in_channels,
                     },

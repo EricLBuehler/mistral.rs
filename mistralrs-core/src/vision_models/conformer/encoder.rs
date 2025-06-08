@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::sync::Arc;
 
 use candle_core::{IndexOp, Result, Tensor, D};
@@ -340,11 +342,7 @@ impl ConvModule {
 
         let fix_len1;
         let ext_pw_conv_1d = if cfg.causal {
-            if cfg.ext_pw_kernel_size > 1 {
-                fix_len1 = true;
-            } else {
-                fix_len1 = false;
-            }
+            fix_len1 = cfg.ext_pw_kernel_size > 1;
             layers::conv1d(
                 cfg.attention_dim,
                 cfg.ext_pw_out_channel,
@@ -383,7 +381,7 @@ impl ConvModule {
             None
         };
 
-        assert_eq!(cfg.linear_glu_in_convm, false);
+        assert!(!cfg.linear_glu_in_convm);
         let glu = GLUPointWiseConv::new(cfg, vb.pp("glu"))?;
 
         Ok(Self {

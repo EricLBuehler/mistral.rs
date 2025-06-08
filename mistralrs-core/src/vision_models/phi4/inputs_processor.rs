@@ -46,6 +46,8 @@ pub(crate) const DYHD_BASE_RESOLUTION: usize = 448;
 
 const AUDIO_FEATURE_SIZE: usize = 80; // mel bins
 
+type AudioProcessingResult = Result<(Option<Tensor>, Option<Vec<usize>>, Option<Tensor>)>;
+
 // Input processor
 pub struct Phi4MMInputsProcessor {
     audio_compression_rate: usize,
@@ -648,16 +650,26 @@ impl Phi4MMInputsProcessor {
             let right_bin = bin_centers[m + 2];
 
             // Left slope
-            for bin in left_bin..center_bin {
+            for (bin, filter) in filter
+                .iter_mut()
+                .enumerate()
+                .take(center_bin)
+                .skip(left_bin)
+            {
                 if bin < bank_width {
-                    filter[bin] = (bin - left_bin) as f32 / (center_bin - left_bin) as f32;
+                    *filter = (bin - left_bin) as f32 / (center_bin - left_bin) as f32;
                 }
             }
 
             // Right slope
-            for bin in center_bin..right_bin {
+            for (bin, filter) in filter
+                .iter_mut()
+                .enumerate()
+                .take(right_bin)
+                .skip(center_bin)
+            {
                 if bin < bank_width {
-                    filter[bin] = (right_bin - bin) as f32 / (right_bin - center_bin) as f32;
+                    *filter = (right_bin - bin) as f32 / (right_bin - center_bin) as f32;
                 }
             }
 
@@ -710,13 +722,11 @@ impl Phi4MMInputsProcessor {
         &self,
         input_seqs: &[&mut Sequence],
         device: &Device,
-    ) -> Result<(Option<Tensor>, Option<Vec<usize>>, Option<Tensor>)> {
+    ) -> AudioProcessingResult {
         // Check if any sequence has audio tokens
-        let has_audio_tokens = input_seqs.iter().any(|seq| {
-            seq.get_toks()
-                .iter()
-                .any(|&token| token == AUDIO_SPECIAL_TOKEN_ID as u32)
-        });
+        let has_audio_tokens = input_seqs
+            .iter()
+            .any(|seq| seq.get_toks().contains(&(AUDIO_SPECIAL_TOKEN_ID as u32)));
 
         if !has_audio_tokens {
             return Ok((None, None, None));
@@ -728,10 +738,7 @@ impl Phi4MMInputsProcessor {
 
         // Process audio for each sequence that needs it
         for seq in input_seqs.iter() {
-            let has_audio = seq
-                .get_toks()
-                .iter()
-                .any(|&token| token == AUDIO_SPECIAL_TOKEN_ID as u32);
+            let has_audio = seq.get_toks().contains(&(AUDIO_SPECIAL_TOKEN_ID as u32));
 
             if has_audio {
                 // Load dummy audio (TODO: make this per-sequence)
