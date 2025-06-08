@@ -46,7 +46,7 @@ use crate::{
 /// ### Examples
 ///
 /// ```no_run
-/// use mistralrs_server_core::completion::CompletionOnChunkCallback;
+/// use mistralrs_server_core::completions::CompletionOnChunkCallback;
 ///
 /// let on_chunk: CompletionOnChunkCallback = Box::new(|mut chunk| {
 ///     // Log the chunk or modify its content
@@ -64,7 +64,7 @@ pub type CompletionOnChunkCallback = OnChunkCallback<CompletionChunkResponse>;
 /// ### Examples
 ///
 /// ```no_run
-/// use mistralrs_server_core::completion::CompletionOnDoneCallback;
+/// use mistralrs_server_core::completions::CompletionOnDoneCallback;
 ///
 /// let on_done: CompletionOnDoneCallback = Box::new(|chunks| {
 ///     println!("Stream completed with {} chunks", chunks.len());

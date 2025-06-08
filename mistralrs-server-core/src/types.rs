@@ -22,9 +22,10 @@ pub(crate) type LoadedPipeline = Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sy
 /// ### Examples
 ///
 /// ```no_run
+/// use mistralrs_core::ChatCompletionChunkResponse;
 /// use mistralrs_server_core::types::OnChunkCallback;
 ///
-/// let on_chunk: OnChunkCallback = Box::new(|mut chunk| {
+/// let on_chunk: OnChunkCallback<ChatCompletionChunkResponse> = Box::new(|mut chunk| {
 ///     // Log the chunk or modify its content
 ///     println!("Processing chunk: {:?}", chunk);
 ///     chunk
@@ -40,9 +41,10 @@ pub type OnChunkCallback<R> = Box<dyn Fn(R) -> R + Send + Sync>;
 /// ### Examples
 ///
 /// ```no_run
+/// use mistralrs_core::ChatCompletionChunkResponse;
 /// use mistralrs_server_core::types::OnDoneCallback;
 ///
-/// let on_done: OnDoneCallback = Box::new(|chunks| {
+/// let on_done: OnDoneCallback<ChatCompletionChunkResponse> = Box::new(|chunks| {
 ///     println!("Stream completed with {} chunks", chunks.len());
 ///     // Process all chunks for analytics
 /// });

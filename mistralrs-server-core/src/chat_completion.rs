@@ -48,9 +48,9 @@ use crate::{
 /// ### Examples
 ///
 /// ```no_run
-/// use mistralrs_server_core::chat_completion::OnChunkCallback;
+/// use mistralrs_server_core::chat_completion::ChatCompletionOnChunkCallback;
 ///
-/// let on_chunk: OnChunkCallback = Box::new(|mut chunk| {
+/// let on_chunk: ChatCompletionOnChunkCallback = Box::new(|mut chunk| {
 ///     // Log the chunk or modify its content
 ///     println!("Processing chunk: {:?}", chunk);
 ///     chunk
@@ -66,9 +66,9 @@ pub type ChatCompletionOnChunkCallback = OnChunkCallback<ChatCompletionChunkResp
 /// ### Examples
 ///
 /// ```no_run
-/// use mistralrs_server_core::chat_completion::OnDoneCallback;
+/// use mistralrs_server_core::chat_completion::ChatCompletionOnDoneCallback;
 ///
-/// let on_done: OnDoneCallback = Box::new(|chunks| {
+/// let on_done: ChatCompletionOnDoneCallback = Box::new(|chunks| {
 ///     println!("Stream completed with {} chunks", chunks.len());
 ///     // Process all chunks for analytics
 /// });

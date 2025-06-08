@@ -26,7 +26,7 @@
 //! };
 //! use mistralrs_server_core::{
 //!     chat_completion::{
-//!         ChatCompletionResponder, OnChunkCallback, OnDoneCallback, create_chat_streamer,
+//!         ChatCompletionResponder, ChatCompletionOnChunkCallback, ChatCompletionOnDoneCallback, create_chat_streamer,
 //!         create_response_channel, handle_chat_completion_error, parse_request,
 //!         process_non_streaming_chat_response, send_request,
 //!     },
@@ -173,7 +173,7 @@
 //!     if is_streaming {
 //!         let db_fn = state.db_create;
 //!
-//!         let on_chunk: OnChunkCallback = Box::new(move |mut chunk: ChatCompletionChunkResponse| {
+//!         let on_chunk: ChatCompletionOnChunkCallback = Box::new(move |mut chunk: ChatCompletionChunkResponse| {
 //!             dbg!(&chunk);
 //!
 //!             if let Some(original_content) = &chunk.choices[0].delta.content {
@@ -183,7 +183,7 @@
 //!             chunk.clone()
 //!         });
 //!
-//!         let on_done: OnDoneCallback = Box::new(move |chunks: &[ChatCompletionChunkResponse]| {
+//!         let on_done: ChatCompletionOnDoneCallback = Box::new(move |chunks: &[ChatCompletionChunkResponse]| {
 //!             dbg!(chunks);
 //!             (db_fn)();
 //!         });
@@ -215,7 +215,7 @@
 //! ```
 
 pub mod chat_completion;
-pub mod completion_core;
+mod completion_core;
 pub mod completions;
 pub mod handler_core;
 mod handlers;
