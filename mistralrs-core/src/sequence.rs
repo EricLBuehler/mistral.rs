@@ -213,7 +213,8 @@ impl SequenceAudios {
         if self.audios.len() > audios_to_keep {
             let start = self.audios.len() - audios_to_keep;
             self.audios = self.audios[start..].to_vec();
-            self.hashes = self.hashes[start..].to_vec();
+            // Do not do this because we need all the hashes later in the prefix cacher.
+            // self.hashes = self.hashes[start..].to_vec();
         }
     }
 }
@@ -251,6 +252,8 @@ impl SequenceImages {
         if self.images.len() > images_to_keep {
             let start = self.images.len() - images_to_keep;
             self.images = self.images[start..].to_vec();
+            // Do not do this because we need all the hashes later in the prefix cacher.
+            // self.hashes = self.hashes[start..].to_vec();
         }
     }
 }
