@@ -95,9 +95,7 @@ impl Attention {
             ),
             (Some(attention_mask), None) => Some(attention_mask.unsqueeze(1)?),
             (None, None) => None,
-            (None, Some(relative_attention_bias)) => {
-                Some(relative_attention_bias.contiguous()?)
-            }
+            (None, Some(relative_attention_bias)) => Some(relative_attention_bias.contiguous()?),
         };
         let attn_weights = Sdpa.run_attention(
             &q.contiguous()?,
@@ -215,7 +213,6 @@ struct GLUPointWiseConv {
     ext_pw_conv_1d: Conv1d,
     act: Activation,
     b1_b2: Option<(Tensor, Tensor)>,
-    cfg: ConformerEncoderConfig,
 }
 
 impl GLUPointWiseConv {
@@ -260,14 +257,13 @@ impl GLUPointWiseConv {
             ext_pw_conv_1d,
             act: cfg.conv_glu_type,
             b1_b2,
-            cfg: cfg.clone(),
         })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         // Input is (B, T, D), need (B, D, T) for conv1d
         let x = x.transpose(1, 2)?;
-        let mut x = x.apply(&self.ext_pw_conv_1d)?;
+        let x = x.apply(&self.ext_pw_conv_1d)?;
 
         // Split for GLU
         let chunks = x.chunk(2, 1)?; // Split along channel dim
@@ -584,7 +580,6 @@ impl ConformerEncoder {
         // Forward through embeddings (subsampling)
         let xs = self.encoder_embedding.forward(xs)?;
         let (mut input_tensor, masks) = self.embed.forward(&xs, mask)?;
-        input_tensor.write_npy("input_tensor_m.npy")?;
 
         // Handle long sequences with unfolding
         let max_seq_len = 500;
@@ -614,10 +609,6 @@ impl ConformerEncoder {
 
         // Compute relative attention bias if available
         let relative_attention_bias = self.relative_attention_bias_layer.forward(&input_tensor)?;
-        relative_attention_bias.write_npy("relative_attention_bias_m.npy")?;
-        let relative_attention_bias = Tensor::read_npy("relative_attention_bias.npy")?
-            .to_dtype(relative_attention_bias.dtype())?
-            .to_device(relative_attention_bias.device())?;
 
         // Apply encoder layers
         for layer in &self.encoders {

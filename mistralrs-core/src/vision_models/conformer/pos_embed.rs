@@ -64,7 +64,7 @@ impl AbsolutePositionalEncoding {
             candle_core::bail!("Need to recompute positional embeds");
         }
 
-        (xs * self.xscale)?.broadcast_mul(&self.pe.i((.., ..xs.dim(1)?))?.to_dtype(xs.dtype())?)
+        (xs * self.xscale)?.broadcast_add(&self.pe.i((.., ..xs.dim(1)?))?.to_dtype(xs.dtype())?)
     }
 }
 
@@ -102,13 +102,13 @@ impl T5RelativeAttentionLogitBias {
         let device = x.device();
 
         // Create position matrices
-        let context_position = Tensor::arange(0u32, maxpos as u32, device)?.unsqueeze(1)?;
-        let memory_position = Tensor::arange(0u32, maxpos as u32, device)?.unsqueeze(0)?;
+        let context_position = Tensor::arange(0f32, maxpos as f32, device)?.unsqueeze(1)?;
+        let memory_position = Tensor::arange(0f32, maxpos as f32, device)?.unsqueeze(0)?;
 
         // Calculate relative positions
         let relative_position = memory_position.broadcast_sub(&context_position)?;
 
-        // Clip to max distance
+        // Clip to max distance (equivalent to Python's masked_fill)
         let max_dist = self.max_distance as i64;
         let relative_position = relative_position.clamp(-max_dist, max_dist - 1)?;
 
@@ -122,8 +122,12 @@ impl T5RelativeAttentionLogitBias {
         let bias_idx = if self.symmetric {
             bias_idx.abs()?
         } else {
-            (bias_idx + (self.bias_values.embeddings().dim(0)? as f64 / 2.))?
+            let offset = (self.bias_values.embeddings().dim(0)? / 2) as i64;
+            (bias_idx + offset as f64)?
         };
+
+        // Ensure bias_idx is the right type for embedding lookup
+        let bias_idx = bias_idx.to_dtype(DType::U32)?;
 
         // Get bias values
         let t5_rel_att_bias = self.bias_values.forward(&bias_idx)?; // [L, L, H]
