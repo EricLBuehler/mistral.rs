@@ -39,16 +39,16 @@
 //!
 //! #[derive(OpenApi)]
 //! #[openapi(
-//!      paths(root, custom_chat),
-//!      tags(
-//!          (name = "hello", description = "Hello world endpoints")
-//!      ),
-//!      info(
-//!          title = "Hello World API",
-//!          version = "1.0.0",
-//!          description = "A simple API that responds with a greeting"
-//!      )
-//!  )]
+//!     paths(root, custom_chat),
+//!     tags(
+//!         (name = "hello", description = "Hello world endpoints")
+//!     ),
+//!     info(
+//!         title = "Hello World API",
+//!         version = "1.0.0",
+//          description = "A simple API that responds with a greeting"
+//!     )
+//! )]
 //! struct ApiDoc;
 //!
 //! #[derive(Clone)]
@@ -133,24 +133,24 @@
 //! }
 //!
 //! #[utoipa::path(
-//!      get,
-//!      path = "/",
-//!      tag = "hello",
-//!      responses(
-//!          (status = 200, description = "Successful response with greeting message", body = String)
-//!      )
-//!  )]
+//!     get,
+//!     path = "/",
+//!     tag = "hello",
+//!     responses(
+//!         (status = 200, description = "Successful response with greeting message", body = String)
+//!     )
+//! )]
 //! async fn root() -> &'static str {
 //!     "Hello, World!"
 //! }
 //!
 //! #[utoipa::path(
-//!    post,
-//!    tag = "Custom",
-//!    path = "/chat",
-//!    request_body = ChatCompletionRequest,
-//!    responses((status = 200, description = "Chat completions"))
-//!  )]
+//!     post,
+//!     tag = "Custom",
+//!     path = "/chat",
+//!     request_body = ChatCompletionRequest,
+//!     responses((status = 200, description = "Chat completions"))
+//! )]
 //! pub async fn custom_chat(
 //!     State(state): State<Arc<AppState>>,
 //!     Json(oai_request): Json<ChatCompletionRequest>,
