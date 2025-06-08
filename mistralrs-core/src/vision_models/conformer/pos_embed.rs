@@ -64,7 +64,7 @@ impl AbsolutePositionalEncoding {
             candle_core::bail!("Need to recompute positional embeds");
         }
 
-        (xs * self.xscale)?.broadcast_mul(&self.pe.i((.., ..xs.dim(1)?))?)
+        (xs * self.xscale)?.broadcast_mul(&self.pe.i((.., ..xs.dim(1)?))?.to_dtype(xs.dtype())?)
     }
 }
 

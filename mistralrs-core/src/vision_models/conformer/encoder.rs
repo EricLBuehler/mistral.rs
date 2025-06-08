@@ -33,18 +33,18 @@ impl Attention {
         let head_dim = embed_dim / num_heads;
         let scale = 1.0 / (head_dim as f32).sqrt();
 
-        let q_proj = mistralrs_quant::linear(embed_dim, embed_dim, &None, vb.pp("q_proj"))?;
+        let q_proj = mistralrs_quant::linear(embed_dim, embed_dim, &None, vb.pp("linear_q"))?;
         let k_proj = mistralrs_quant::linear(
             embed_dim,
             embed_dim / cfg.attention_group_size,
             &None,
-            vb.pp("k_proj"),
+            vb.pp("linear_k"),
         )?;
         let v_proj = mistralrs_quant::linear(
             embed_dim,
             embed_dim / cfg.attention_group_size,
             &None,
-            vb.pp("v_proj"),
+            vb.pp("linear_v"),
         )?;
         let o_proj = mistralrs_quant::linear(
             embed_dim / cfg.attention_group_size,

@@ -108,9 +108,7 @@ impl AudioEmbedding {
         audio_projection_mode: &AudioProjectionMode,
     ) -> Result<Tensor> {
         // Get audio features from encoder
-        let (audio_features, _masks) = self
-            .encoder
-            .forward(input_embeds, audio_attention_mask)?;
+        let (audio_features, _masks) = self.encoder.forward(input_embeds, audio_attention_mask)?;
 
         // Apply projection based on mode
         let projection_layers = self.proj.get(audio_projection_mode).ok_or_else(|| {
