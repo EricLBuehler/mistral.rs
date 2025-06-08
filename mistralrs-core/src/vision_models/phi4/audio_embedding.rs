@@ -183,7 +183,7 @@ impl AudioEmbedding {
 
         let mut audio_sets = Vec::new();
         for (i, size) in audio_embed_sizes.into_iter().enumerate() {
-            audio_sets.push(audio_set_tensor.i((i, size, ..))?);
+            audio_sets.push(audio_set_tensor.i((i, ..size, ..))?);
         }
         let merged_audio_set_tensor = Tensor::cat(&audio_sets, 0)?;
 

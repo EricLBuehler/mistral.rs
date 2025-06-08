@@ -260,12 +260,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
         let img_token_pattern = Regex::new(COMPATIBLE_IMAGE_SPECIAL_TOKEN_PATTERN).unwrap();
         let audio_token_pattern = Regex::new(COMPATIBLE_AUDIO_SPECIAL_TOKEN_PATTERN).unwrap();
 
-        let mut toks = Vec::new();
-
-        for (mut detokenized, (seq, num_img_tokens)) in detokenized
-            .into_iter()
-            .zip(input_seqs.iter_mut().zip(num_img_tokens.unwrap()))
-        {
+        for (mut detokenized, seq) in detokenized.into_iter().zip(input_seqs.iter_mut()) {
             detokenized = img_token_pattern
                 .replace_all(&detokenized, IMAGE_SPECIAL_TOKEN)
                 .to_string();
@@ -286,13 +281,29 @@ impl InputsProcessor for Phi4MMInputsProcessor {
 
                 seq.set_initial_prompt(detokenized);
             }
+        }
+
+        let (input_audio_embeds, audio_embed_sizes, audio_attention_mask) =
+            match self.process_audio_for_sequences(input_seqs, device) {
+                Ok(result) => result,
+                Err(e) => return Box::new(std::iter::once(Err(anyhow::Error::new(e)))),
+            };
+
+        let mut toks = Vec::new();
+
+        for (seq, num_img_tokens) in input_seqs.iter_mut().zip(num_img_tokens.unwrap()) {
+            let has_changed_prompt = seq.multimodal.has_changed_prompt;
 
             let mut i = 0;
             let mut image_token_count_iter = num_img_tokens.iter();
+            let audio_sizes_tmp = audio_embed_sizes.clone().unwrap_or(vec![]);
+            let mut audio_embed_sizes = audio_sizes_tmp.iter();
             while i < seq.get_toks().len() {
                 let token_id = seq.get_toks()[i];
                 let token_count = if token_id == IMAGE_SPECIAL_TOKEN_ID as u32 {
                     image_token_count_iter.next().unwrap()
+                } else if token_id == AUDIO_SPECIAL_TOKEN_ID as u32 {
+                    audio_embed_sizes.next().unwrap()
                 } else {
                     i += 1;
                     continue;
@@ -336,17 +347,6 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 mapper,
             )
         };
-
-        let (input_audio_embeds, audio_embed_sizes, audio_attention_mask) =
-            match self.process_audio_for_sequences(input_seqs, device) {
-                Ok(result) => result,
-                Err(e) => return Box::new(std::iter::once(Err(anyhow::Error::new(e)))),
-            };
-        dbg!(
-            &input_audio_embeds,
-            &audio_embed_sizes,
-            &audio_attention_mask
-        );
 
         Box::new(iter.into_iter().map(move |metadata| {
             let pixel_values = pixel_values.clone();

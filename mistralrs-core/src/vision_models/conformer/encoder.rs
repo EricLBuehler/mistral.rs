@@ -96,7 +96,8 @@ impl Attention {
             (Some(attention_mask), None) => Some(attention_mask.unsqueeze(1)?),
             (None, None) => None,
             (None, Some(_)) => {
-                candle_core::bail!("Got `relative_attention_bias` but no `attention_mask`")
+                None
+                // candle_core::bail!("Got `relative_attention_bias` but no `attention_mask`")
             }
         };
         let attn_weights = Sdpa.run_attention(
@@ -268,12 +269,6 @@ impl GLUPointWiseConv {
         // Input is (B, T, D), need (B, D, T) for conv1d
         let x = x.transpose(1, 2)?;
         let mut x = x.apply(&self.ext_pw_conv_1d)?;
-
-        // Handle causal padding removal
-        if self.cfg.causal && self.cfg.kernel_size > 1 {
-            let seq_len = x.dim(2)?;
-            x = x.i((.., .., ..(seq_len - (self.cfg.kernel_size - 1))))?;
-        }
 
         // Split for GLU
         let chunks = x.chunk(2, 1)?; // Split along channel dim
