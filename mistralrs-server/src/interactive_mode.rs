@@ -529,6 +529,7 @@ async fn vision_interactive_mode(
                     for url in &urls_image {
                         match util::parse_image_url(url).await {
                             Ok(image) => {
+                                info!("Added image at `{url}`");
                                 image_indexes.push(images.len());
                                 images.push(image);
                             }
@@ -543,6 +544,7 @@ async fn vision_interactive_mode(
                     for url in &urls_audio {
                         match util::parse_audio_url(url).await {
                             Ok(audio) => {
+                                info!("Added audio at `{url}`");
                                 audio_indexes.push(audios.len());
                                 audios.push(audio);
                             }
