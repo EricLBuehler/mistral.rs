@@ -2,9 +2,9 @@ use directories::ProjectDirs;
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    speech_utils, AudioInput, ChunkChoice, Constraint, Delta, DiffusionGenerationParams,
-    DrySamplingParams, ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory,
-    NormalRequest, Request, RequestMessage, Response, ResponseOk, SamplingParams, WebSearchOptions,
+    speech_utils, ChunkChoice, Constraint, Delta, DiffusionGenerationParams, DrySamplingParams,
+    ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory, NormalRequest,
+    Request, RequestMessage, Response, ResponseOk, SamplingParams, WebSearchOptions,
     TERMINATE_ALL_NEXT_STEP,
 };
 use once_cell::sync::Lazy;
@@ -142,7 +142,7 @@ const TOPP_CMD: &str = "\\topp";
 
 /// Regex string used to extract image URLs from prompts.
 const IMAGE_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:png|jpe?g|bmp|gif|webp)(?:\?\S+?)?)"#;
-const AUDIO_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:wav)(?:\?\S+?)?)"#;
+const AUDIO_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:wav|mp3|flac|ogg)(?:\?\S+?)?)"#;
 
 fn interactive_sample_parameters() -> SamplingParams {
     SamplingParams {
@@ -562,7 +562,7 @@ async fn vision_interactive_mode(
                     let mut audio_indexes = Vec::new();
                     // Load all audios first
                     for url in &urls_audio {
-                        match AudioInput::read_wav(url) {
+                        match util::parse_audio_url(url).await {
                             Ok(audio) => {
                                 audio_indexes.push(audios.len());
                                 audios.push(audio);

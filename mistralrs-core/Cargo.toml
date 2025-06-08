@@ -98,6 +98,7 @@ rubato = "0.16.2"
 rustfft = "6.3.0"
 hound = "3.5.1"
 apodize = "1.0.0"
+symphonia = { version = "0.5.4", default-features = false, features = ["mp3", "flac", "vorbis", "wav", "isomp4", "ogg", "pcm"] }
 
 [features]
 pyo3_macros = ["pyo3"]

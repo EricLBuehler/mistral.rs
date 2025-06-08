@@ -152,6 +152,62 @@ impl AudioInput {
             sample_rate: spec.sample_rate,
         })
     }
+
+    pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
+        use symphonia::core::audio::SampleBuffer;
+        use symphonia::core::codecs::DecoderOptions;
+        use symphonia::core::formats::FormatOptions;
+        use symphonia::core::io::MediaSourceStream;
+        use symphonia::core::meta::MetadataOptions;
+        use symphonia::core::probe::Hint;
+
+        let cursor = std::io::Cursor::new(bytes.to_vec());
+        let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+        let hint = Hint::new();
+
+        let probed = symphonia::default::get_probe().format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )?;
+        let mut format = probed.format;
+
+        let track = format
+            .default_track()
+            .ok_or_else(|| anyhow::anyhow!("no supported audio tracks"))?;
+        let codec_params = &track.codec_params;
+        let sample_rate = codec_params
+            .sample_rate
+            .ok_or_else(|| anyhow::anyhow!("unknown sample rate"))?;
+
+        let mut decoder =
+            symphonia::default::get_codecs().make(codec_params, &DecoderOptions::default())?;
+
+        let mut samples = Vec::new();
+        loop {
+            match format.next_packet() {
+                Ok(packet) => {
+                    let decoded = decoder.decode(&packet)?;
+                    let mut buf =
+                        SampleBuffer::<f32>::new(decoded.capacity() as u64, *decoded.spec());
+                    buf.copy_interleaved_ref(decoded);
+                    samples.extend_from_slice(buf.samples());
+                }
+                Err(symphonia::core::errors::Error::IoError(e))
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    break;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        Ok(Self {
+            samples,
+            sample_rate,
+        })
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
