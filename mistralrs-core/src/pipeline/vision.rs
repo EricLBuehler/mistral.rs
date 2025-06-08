@@ -4,8 +4,8 @@ use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoVisionLoader,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
-    ModelKind, ModelPaths, Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource,
-    VLlama4Loader, VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
+    ModelKind, ModelPaths, MultimodalPromptPrefixer, Phi4MMLoader, PreProcessingMixin, Processor,
+    Qwen2VLLoader, TokenSource, VLlama4Loader, VLlamaLoader, VisionModel, VisionModelLoader,
 };
 use super::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader, Phi3VLoader,
@@ -66,7 +66,7 @@ pub struct VisionPipeline {
     preprocessor_config: Arc<PreProcessorConfig>,
     topology: Option<Topology>,
     silent: bool,
-    prefixer: Arc<dyn VisionPromptPrefixer>,
+    prefixer: Arc<dyn MultimodalPromptPrefixer>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
 
     // For full UQFF serialization

@@ -219,7 +219,7 @@ pub trait AnyMoePipelineMixin {
 pub enum ModelCategory {
     Text,
     Vision {
-        prefixer: Arc<dyn VisionPromptPrefixer>,
+        prefixer: Arc<dyn MultimodalPromptPrefixer>,
     },
     Diffusion,
     Audio,
@@ -255,9 +255,15 @@ impl PartialEq for ModelCategory {
 }
 
 /// Prepend a vision tag appropriate for the model to the prompt. Image indexing is assumed that start at 0.
-pub trait VisionPromptPrefixer: Send + Sync {
+pub trait MultimodalPromptPrefixer: Send + Sync {
     /// Prefix for inclusion in messages (may do nothing if the chat template handles it).
-    fn prefix_image(&self, image_indices: Vec<usize>, prompt: &str) -> String;
+    fn prefix_image(&self, _image_indices: Vec<usize>, prompt: &str) -> String {
+        prompt.to_string()
+    }
+    /// Prefix for inclusion in messages (may do nothing if the chat template handles it).
+    fn prefix_audio(&self, _audio_indexes: Vec<usize>, prompt: &str) -> String {
+        prompt.to_string()
+    }
 }
 
 pub enum CacheBackendMetadata {
