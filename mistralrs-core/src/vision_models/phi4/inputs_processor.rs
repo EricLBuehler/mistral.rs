@@ -396,28 +396,6 @@ impl InputsProcessor for Phi4MMInputsProcessor {
 }
 
 impl Phi4MMInputsProcessor {
-    fn load_dummy_audio(&self) -> Result<(Vec<f32>, u32)> {
-        let mut reader = hound::WavReader::open("dummy_audio.wav")
-            .map_err(|e| candle_core::Error::Msg(format!("Failed to load audio: {}", e)))?;
-        let spec = reader.spec();
-
-        let samples: Vec<f32> = match spec.sample_format {
-            hound::SampleFormat::Float => reader
-                .samples::<f32>()
-                .map(|s| s.map_err(|e| candle_core::Error::Msg(e.to_string())))
-                .collect::<std::result::Result<_, _>>()?,
-
-            hound::SampleFormat::Int => reader
-                .samples::<i16>() // read as integers
-                .map(|s| {
-                    s.map(|v| v as f32 / i16::MAX as f32) // scale to –1.0…1.0
-                        .map_err(|e| candle_core::Error::Msg(e.to_string()))
-                })
-                .collect::<std::result::Result<_, _>>()?,
-        };
-        Ok((samples, spec.sample_rate))
-    }
-
     fn extract_audio_features(
         &self,
         audio_data: &[f32],
@@ -741,14 +719,26 @@ impl Phi4MMInputsProcessor {
             let has_audio = seq.get_toks().contains(&(AUDIO_SPECIAL_TOKEN_ID as u32));
 
             if has_audio {
+                // Convert multi-channel audio to mono by averaging channels
                 let (audio_data, sample_rate) = if let Some(mut audios) = seq.take_audios() {
                     if let Some(audio) = audios.pop() {
-                        (audio.samples, audio.sample_rate)
+                        let channels = audio.channels as usize; // use the actual field name for channel count
+                        let samples = if channels > 1 && audio.samples.len() % channels == 0 {
+                            audio
+                                .samples
+                                .chunks(channels)
+                                .map(|frame| frame.iter().copied().sum::<f32>() / channels as f32)
+                                .collect::<Vec<f32>>()
+                        } else {
+                            audio.samples
+                        };
+
+                        (samples, audio.sample_rate)
                     } else {
-                        self.load_dummy_audio()?
+                        candle_core::bail!("No audios in `process_audio_for_sequences`");
                     }
                 } else {
-                    self.load_dummy_audio()?
+                    candle_core::bail!("No audios in `process_audio_for_sequences`");
                 };
 
                 // Extract features

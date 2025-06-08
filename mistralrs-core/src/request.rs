@@ -124,6 +124,7 @@ pub struct WebSearchOptions {
 pub struct AudioInput {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
+    pub channels: u16,
 }
 
 impl AudioInput {
@@ -150,6 +151,7 @@ impl AudioInput {
         Ok(Self {
             samples,
             sample_rate: spec.sample_rate,
+            channels: spec.channels,
         })
     }
 
@@ -180,6 +182,11 @@ impl AudioInput {
         let sample_rate = codec_params
             .sample_rate
             .ok_or_else(|| anyhow::anyhow!("unknown sample rate"))?;
+        #[allow(clippy::cast_possible_truncation)]
+        let channels = codec_params
+            .channels
+            .map(|channels| channels.count() as u16)
+            .unwrap_or(1);
 
         let mut decoder =
             symphonia::default::get_codecs().make(codec_params, &DecoderOptions::default())?;
@@ -206,6 +213,7 @@ impl AudioInput {
         Ok(Self {
             samples,
             sample_rate,
+            channels,
         })
     }
 }
