@@ -10,7 +10,9 @@ extend-ignore-identifiers-re = [
     "thr",
     "nd",
     "uneeded",
-    "tese"
+    "tese",
+    "seperable",
+    "Seperable",
 ]
 
 [files]

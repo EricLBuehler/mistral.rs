@@ -20,7 +20,7 @@ pub(super) const AUDIO_SPECIAL_TOKEN_ID: f64 = 200011.;
 pub enum AudioProjectionMode {
     /// If only speech
     Speech,
-    /// If vision + speech or only vision (not sure why that is necesary though)
+    /// If vision + speech or only vision (not sure why that is necessary though)
     Vision,
 }
 
