@@ -10,7 +10,7 @@ use tracing::info;
 
 use crate::{
     get_mut_arcmutex,
-    paged_attention::{BlockEngine, LogicalTokenBlock, PhysicalTokenBlock},
+    paged_attention::{BlockEngine, BlockEngineSequence, LogicalTokenBlock, PhysicalTokenBlock},
     pipeline::KvCache,
     sequence::{self, Sequence},
 };
@@ -20,6 +20,7 @@ type BlockBestMatch<'a> = (
     &'a [LogicalTokenBlock],       // logical blocks
     &'a [Arc<PhysicalTokenBlock>], // physical blocks
     usize,                         // images_match_until
+    usize,                         // logical_matches_until
 );
 
 fn hash_logical_blocks(logical_blocks: &[LogicalTokenBlock]) -> Vec<u64> {
@@ -116,26 +117,29 @@ impl PrefixCacheManagerV2 {
             return;
         }
 
-        if let Some(_block_engine) = &self.block_engine {
-            // let logical_token_blocks = seq.logical_token_blocks();
-            // let block_engine = get_mut_arcmutex!(block_engine);
-            // let block_table = &block_engine.block_tables[seq.id()];
-            // let hashed_logical_blocks = hash_logical_blocks(logical_token_blocks);
+        if let Some(block_engine) = &self.block_engine {
+            let logical_token_blocks = seq.logical_token_blocks();
+            let block_engine = get_mut_arcmutex!(block_engine);
+            let block_table = block_engine
+                .block_tables
+                .get(seq.id())
+                .expect("Sequence not allocated in block engine");
+            let hashed_logical_blocks = hash_logical_blocks(logical_token_blocks);
 
-            // if !self.block_caches.contains_key(&hashed_logical_blocks) {
-            //     for block in block_table {
-            //         block.deref_mut().increment_refcount();
-            //     }
+            if !self.block_caches.contains_key(&hashed_logical_blocks) {
+                for block in block_table {
+                    block.deref_mut().increment_refcount();
+                }
 
-            //     self.block_caches.insert(
-            //         hashed_logical_blocks,
-            //         BlockCacheElement {
-            //             logical_blocks: logical_token_blocks.to_vec(),
-            //             physical_blocks: block_table.clone(),
-            //             image_hashes: seq.image_hashes().map(|x| x.to_vec()),
-            //         },
-            //     );
-            // }
+                self.block_caches.insert(
+                    hashed_logical_blocks,
+                    BlockCacheElement {
+                        logical_blocks: logical_token_blocks.to_vec(),
+                        physical_blocks: block_table.clone(),
+                        image_hashes: seq.image_hashes().map(|x| x.to_vec()),
+                    },
+                );
+            }
         } else {
             let cache = seq.normal_cache().to_vec();
 
@@ -294,7 +298,8 @@ impl PrefixCacheManagerV2 {
                     0
                 };
 
-                if best_match.is_some_and(|(best_match_len, _, _, _)| best_match_len < matched_len)
+                if best_match
+                    .is_some_and(|(best_match_len, _, _, _, _)| best_match_len < matched_len)
                     || best_match.is_none()
                 {
                     best_match = Some((
@@ -302,18 +307,24 @@ impl PrefixCacheManagerV2 {
                         &cache_elem.logical_blocks,
                         &cache_elem.physical_blocks,
                         images_match_until,
+                        logical_matches_until,
                     ))
                 }
             }
 
-            let Some((match_len, logical_blocks, physical_blocks, images_match_until)) = best_match
+            let Some((
+                match_len,
+                logical_blocks,
+                physical_blocks,
+                images_match_until,
+                logical_matches_until,
+            )) = best_match
             else {
                 return Ok(None);
             };
 
             // Determine how many blocks cover the matched prefix
-            let mut n_blocks = match_len.div_ceil(block_size);
-            n_blocks = n_blocks.min(logical_blocks.len());
+            let n_blocks = logical_matches_until;
 
             if n_blocks == 0 {
                 return Ok(None);
@@ -326,9 +337,26 @@ impl PrefixCacheManagerV2 {
                 block.deref_mut().increment_refcount();
             }
 
-            // If the last reused block is full, reserve an extra empty block for new tokens
+            // Tokens that are not already covered by the cached prefix.
             let new_toks = toks[match_len..].to_vec();
-            logical_prefix.push(LogicalTokenBlock::new(block_size));
+
+            // If no new tokens need to be processed we can simply return `None` to
+            // signal the caller that the entire sequence is already cached.
+            if new_toks.is_empty() {
+                return Ok(None);
+            }
+
+            // Ensure there is room in the last logical block before we start
+            // appending new tokens. We only create a brand-new empty logical
+            // block when the current last block is already full – this avoids
+            // introducing an off-by-one mis-alignment between logical and
+            // physical blocks.
+            if logical_prefix.last().map(|b| b.is_full()).unwrap_or(true) {
+                logical_prefix.push(LogicalTokenBlock::new(block_size));
+            }
+
+            // Append the new tokens, letting the helper function allocate
+            // additional logical blocks when the previous one becomes full.
             for tok in &new_toks {
                 sequence::util_append_token_to_blocks(
                     *tok as usize,
@@ -336,6 +364,12 @@ impl PrefixCacheManagerV2 {
                     block_size,
                 );
             }
+
+            // The helper automatically creates a new block when the previous
+            // one becomes full, however if the *last* block ends up completely
+            // filled after the appends it will not yet have added an extra
+            // empty block – we do so here to keep the invariant that the last
+            // logical block is never full.
             if logical_prefix.last().is_some_and(|last| last.is_full()) {
                 logical_prefix.push(LogicalTokenBlock::new(block_size));
             }
@@ -348,7 +382,12 @@ impl PrefixCacheManagerV2 {
                 logical_blocks: logical_prefix,
                 physical_blocks: physical_prefix,
                 toks: new_toks,
-                offset: match_len,
+                // For paged-attention we always reset the token offset to 0.  The
+                // KV-cache already contains the reused prefix blocks, therefore
+                // all subsequent indexing (e.g. when mapping completion tokens
+                // to KV slots) should be performed relative to the beginning of
+                // the sequence.
+                offset: 0,
                 images_to_keep,
             }));
         }

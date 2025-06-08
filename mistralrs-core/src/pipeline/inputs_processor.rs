@@ -213,9 +213,13 @@ pub mod text_models_inputs_processor {
                     .collect::<Vec<_>>();
 
                 let start_idx = if let Some(sliding_window) = paged_attn_metadata.sliding_window {
-                    prompt_len.saturating_sub(sliding_window)
+                    if prompt_len > sliding_window {
+                        chunk_offset_toks.min(prompt_len - sliding_window)
+                    } else {
+                        chunk_offset_toks
+                    }
                 } else {
-                    0
+                    chunk_offset_toks
                 };
 
                 let mut slot_mapping = Vec::new();
@@ -391,15 +395,14 @@ pub mod text_models_inputs_processor {
                     .map(|block| block.deref_mut().block_id)
                     .collect::<Vec<_>>();
 
-                let block_pos = start_pos - seq.token_offset();
-                let block_number = if block_pos / paged_attn_metadata.block_size >= table.len() {
-                    panic!("Block table is too small (completion)! start_pos={} block_size={} table_len={}", block_pos, paged_attn_metadata.block_size, table.len());
+                let block_number = if start_pos / paged_attn_metadata.block_size >= table.len() {
+                    panic!("Block table is too small (completion)! start_pos={} block_size={} table_len={}", start_pos, paged_attn_metadata.block_size, table.len());
                 } else {
                     table
-                        .get(block_pos / paged_attn_metadata.block_size)
+                        .get(start_pos / paged_attn_metadata.block_size)
                         .unwrap()
                 };
-                let block_offset = block_pos % paged_attn_metadata.block_size;
+                let block_offset = start_pos % paged_attn_metadata.block_size;
                 let slot = block_number * paged_attn_metadata.block_size + block_offset;
                 let slot = slot.try_into().unwrap();
                 slot_mappings.push(vec![slot]);
