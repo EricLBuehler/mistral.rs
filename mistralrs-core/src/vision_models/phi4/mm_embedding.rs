@@ -3,10 +3,7 @@ use candle_nn::Module;
 use mistralrs_quant::ShardedVarBuilder;
 
 use crate::{
-    utils::unvarbuilder::UnVarBuilder,
-    vision_models::phi4::{
-        audio_embedding::AUDIO_SPECIAL_TOKEN_ID, image_embedding::IMAGE_SPECIAL_TOKEN_ID,
-    },
+    utils::unvarbuilder::UnVarBuilder, vision_models::phi4::image_embedding::IMAGE_SPECIAL_TOKEN_ID,
 };
 
 use super::{audio_embedding::AudioEmbedding, image_embedding::ImageEmbedding, Phi4MMConfig};
@@ -101,7 +98,7 @@ impl Phi4MMImageAudioEmbedding {
         };
 
         let image_position_mask = input_ids.eq(IMAGE_SPECIAL_TOKEN_ID)?;
-        let non_image_position_mask = input_ids.eq(AUDIO_SPECIAL_TOKEN_ID)?;
+        let non_image_position_mask = input_ids.ne(IMAGE_SPECIAL_TOKEN_ID)?;
 
         match (image_hidden_states, audio_hidden_states) {
             (Some(image_hidden_states), Some(audio_hidden_states)) => {

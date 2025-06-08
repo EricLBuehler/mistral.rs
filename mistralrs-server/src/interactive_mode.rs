@@ -112,8 +112,8 @@ Welcome to interactive mode! Because this model is a vision model, you can enter
 
 To specify a message with one or more images or audios, simply include the image/audio URL or path:
 
-- `Please describe this image: path/to/image1.jpg path/to/image2.png`
-- `What is in this image: <url here>`
+- `Describe these images: path/to/image1.jpg path/to/image2.png`
+- `Describe the image and transcribe the audio: path/to/image1.jpg path/to/sound.mp3`
 "#;
 
 const DIFFUSION_INTERACTIVE_HELP: &str = r#"
@@ -519,14 +519,13 @@ async fn vision_interactive_mode(
                 continue;
             }
             _ => {
-                // Extract any image URLs and the remaining text
-                let (urls_image, text_image) =
+                let (urls_image, text_without_images) =
                     parse_files_and_message(prompt_trimmed, &image_regex);
-                let (urls_audio, text_audio) =
-                    parse_files_and_message(prompt_trimmed, &audio_regex);
-                if !urls_image.is_empty() {
+                let (urls_audio, text) =
+                    parse_files_and_message(&text_without_images, &audio_regex);
+                if !urls_image.is_empty() || !urls_audio.is_empty() {
+                    // Load images
                     let mut image_indexes = Vec::new();
-                    // Load all images first
                     for url in &urls_image {
                         match util::parse_image_url(url).await {
                             Ok(image) => {
@@ -539,28 +538,8 @@ async fn vision_interactive_mode(
                             }
                         }
                     }
-                    // Build a single user message with multiple images and then the text
-                    let mut content_vec: Vec<IndexMap<String, Value>> = Vec::new();
-                    // Add one image part per URL
-                    for _ in &urls_image {
-                        content_vec.push(IndexMap::from([(
-                            "type".to_string(),
-                            Value::String("image".to_string()),
-                        )]));
-                    }
-                    // Add the text part once
-                    let text = prefixer.prefix_image(image_indexes, &text_image);
-                    content_vec.push(IndexMap::from([
-                        ("type".to_string(), Value::String("text".to_string())),
-                        ("text".to_string(), Value::String(text.clone())),
-                    ]));
-                    let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
-                    user_message.insert("role".to_string(), Either::Left("user".to_string()));
-                    user_message.insert("content".to_string(), Either::Right(content_vec));
-                    messages.push(user_message);
-                } else if !urls_audio.is_empty() {
+                    // Load audios
                     let mut audio_indexes = Vec::new();
-                    // Load all audios first
                     for url in &urls_audio {
                         match util::parse_audio_url(url).await {
                             Ok(audio) => {
@@ -573,13 +552,39 @@ async fn vision_interactive_mode(
                             }
                         }
                     }
-
-                    let text = prefixer.prefix_audio(audio_indexes, &text_audio);
-
+                    // Build mixed content parts
+                    let mut content_vec: Vec<IndexMap<String, Value>> = Vec::new();
+                    for _ in &urls_image {
+                        content_vec.push(IndexMap::from([(
+                            "type".to_string(),
+                            Value::String("image".to_string()),
+                        )]));
+                    }
+                    for _ in &urls_audio {
+                        content_vec.push(IndexMap::from([(
+                            "type".to_string(),
+                            Value::String("audio".to_string()),
+                        )]));
+                    }
+                    // Prefix the text with any media context
+                    let mut prefixed_text = text.clone();
+                    if !image_indexes.is_empty() {
+                        prefixed_text =
+                            prefixer.prefix_image(image_indexes.clone(), &prefixed_text);
+                    }
+                    if !audio_indexes.is_empty() {
+                        prefixed_text =
+                            prefixer.prefix_audio(audio_indexes.clone(), &prefixed_text);
+                    }
+                    // Add the final text part
+                    content_vec.push(IndexMap::from([
+                        ("type".to_string(), Value::String("text".to_string())),
+                        ("text".to_string(), Value::String(prefixed_text)),
+                    ]));
+                    // Push the combined user message
                     let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
                     user_message.insert("role".to_string(), Either::Left("user".to_string()));
-                    user_message.insert("content".to_string(), Either::Left(text));
-
+                    user_message.insert("content".to_string(), Either::Right(content_vec));
                     messages.push(user_message);
                 } else {
                     // Default: handle as text-only prompt
