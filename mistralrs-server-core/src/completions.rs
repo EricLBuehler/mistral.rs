@@ -29,11 +29,11 @@ use crate::{
         BaseCompletionResponder,
     },
     handler_core::{
-        create_response_channel, process_non_streaming_response, send_model_request,
+        base_process_non_streaming_response, create_response_channel, send_model_request,
         BaseJsonModelError, ErrorToResponse, JsonError, ModelErrorMessage,
     },
     openai::{CompletionRequest, Grammar},
-    streaming::{create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
+    streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
 };
 
@@ -266,33 +266,48 @@ pub async fn completions(
 
     let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx) {
         Ok(x) => x,
-        Err(e) => return handle_completion_error(state, e.into()),
+        Err(e) => return handle_error(state, e.into()),
     };
 
     if let Err(e) = send_model_request(&state, request).await {
-        return handle_completion_error(state, e.into());
+        return handle_error(state, e.into());
     }
 
     if is_streaming {
-        CompletionResponder::Sse(create_completions_streamer(rx, state, None, None))
+        CompletionResponder::Sse(create_streamer(rx, state, None, None))
     } else {
-        process_non_streaming_response(&mut rx, state, match_responses, handle_completion_error)
-            .await
+        process_non_streaming_response(&mut rx, state).await
     }
 }
 
+/// Handle route / generation errors and logging them.
+pub fn handle_error(
+    state: SharedMistralRsState,
+    e: Box<dyn std::error::Error + Send + Sync + 'static>,
+) -> CompletionResponder {
+    handle_completion_error(state, e)
+}
+
 /// Creates a SSE streamer for chat completions with optional callbacks.
-pub fn create_completions_streamer(
+pub fn create_streamer(
     rx: Receiver<Response>,
     state: SharedMistralRsState,
     on_chunk: Option<CompletionOnChunkCallback>,
     on_done: Option<CompletionOnDoneCallback>,
 ) -> Sse<CompletionStreamer> {
-    let streamer = create_streamer(rx, state, on_chunk, on_done);
+    let streamer = base_create_streamer(rx, state, on_chunk, on_done);
     let keep_alive_interval = get_keep_alive_interval();
 
     Sse::new(streamer)
         .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval)))
+}
+
+/// Process non-streaming completion responses.
+pub async fn process_non_streaming_response(
+    rx: &mut Receiver<Response>,
+    state: SharedMistralRsState,
+) -> CompletionResponder {
+    base_process_non_streaming_response(rx, state, match_responses, handle_error).await
 }
 
 /// Matches and processes different types of model responses into appropriate completion responses.

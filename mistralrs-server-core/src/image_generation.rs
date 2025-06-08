@@ -12,11 +12,11 @@ use mistralrs_core::{
     Constraint, DiffusionGenerationParams, ImageGenerationResponse, MistralRs, NormalRequest,
     Request, RequestMessage, Response, SamplingParams,
 };
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
     handler_core::{
-        create_response_channel, process_non_streaming_response, send_model_request,
+        base_process_non_streaming_response, create_response_channel, send_model_request,
         ErrorToResponse, JsonError,
     },
     openai::ImageGenerationRequest,
@@ -97,30 +97,32 @@ pub async fn image_generation(
 
     let request = match parse_request(oairequest, state.clone(), tx) {
         Ok(x) => x,
-        Err(e) => return handle_image_generation_error(state, e.into()),
+        Err(e) => return handle_error(state, e.into()),
     };
 
     if let Err(e) = send_model_request(&state, request).await {
-        return handle_image_generation_error(state, e.into());
+        return handle_error(state, e.into());
     }
 
-    process_non_streaming_response(
-        &mut rx,
-        state,
-        match_responses,
-        handle_image_generation_error,
-    )
-    .await
+    process_non_streaming_response(&mut rx, state).await
 }
 
 /// Helper function to handle image generation errors and logging them.
-pub fn handle_image_generation_error(
+pub fn handle_error(
     state: SharedMistralRsState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> ImageGenerationResponder {
     let e = anyhow::Error::msg(e.to_string());
     MistralRs::maybe_log_error(state, &*e);
     ImageGenerationResponder::InternalError(e.into())
+}
+
+/// Process non-streaming image generation responses.
+pub async fn process_non_streaming_response(
+    rx: &mut Receiver<Response>,
+    state: SharedMistralRsState,
+) -> ImageGenerationResponder {
+    base_process_non_streaming_response(rx, state, match_responses, handle_error).await
 }
 
 /// Matches and processes different types of model responses into appropriate image generation responses.

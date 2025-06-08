@@ -92,7 +92,7 @@ pub async fn speech_generation(
 
     let (request, response_format) = match parse_request(oairequest, state.clone(), tx) {
         Ok(x) => x,
-        Err(e) => return handle_speech_generation_error(state, e.into()),
+        Err(e) => return handle_error(state, e.into()),
     };
 
     // Validate response format here
@@ -106,14 +106,14 @@ pub async fn speech_generation(
     }
 
     if let Err(e) = send_model_request(&state, request).await {
-        return handle_speech_generation_error(state, e.into());
+        return handle_error(state, e.into());
     }
 
-    process_speech_generation_response(&mut rx, state, response_format).await
+    process_non_streaming_response(&mut rx, state, response_format).await
 }
 
 /// Helper function to handle speech generation errors and logging them.
-pub fn handle_speech_generation_error(
+pub fn handle_error(
     state: SharedMistralRsState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> SpeechGenerationResponder {
@@ -122,8 +122,8 @@ pub fn handle_speech_generation_error(
     SpeechGenerationResponder::InternalError(e.into())
 }
 
-/// Processes speech generation responses.
-pub async fn process_speech_generation_response(
+/// Process non-streaming speech generation responses.
+pub async fn process_non_streaming_response(
     rx: &mut Receiver<Response>,
     state: SharedMistralRsState,
     response_format: AudioResponseFormat,
@@ -132,7 +132,7 @@ pub async fn process_speech_generation_response(
         Some(response) => response,
         None => {
             let e = anyhow::Error::msg("No response received from the model.");
-            return handle_speech_generation_error(state, e.into());
+            return handle_error(state, e.into());
         }
     };
 

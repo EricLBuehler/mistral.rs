@@ -99,7 +99,7 @@ pub async fn send_model_request(state: &SharedMistralRsState, request: Request) 
 }
 
 /// Generic function to process non-streaming responses.
-pub(crate) async fn process_non_streaming_response<R>(
+pub(crate) async fn base_process_non_streaming_response<R>(
     rx: &mut Receiver<Response>,
     state: SharedMistralRsState,
     match_fn: fn(SharedMistralRsState, Response) -> R,
