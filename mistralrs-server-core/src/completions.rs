@@ -264,12 +264,6 @@ pub async fn completions(
 ) -> CompletionsResponder {
     let (tx, mut rx) = create_response_channel(None);
 
-    if oairequest.logprobs.is_some() {
-        return CompletionsResponder::ValidationError(
-            "Completion requests do not support logprobs.".into(),
-        );
-    }
-
     let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx) {
         Ok(x) => x,
         Err(e) => return handle_completion_error(state, e.into()),
