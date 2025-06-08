@@ -86,7 +86,7 @@ impl Phi4MMImageAudioEmbedding {
                 &input_ids,
                 input_audio_embeds.expect("input_audio_embeds"),
                 audio_embed_sizes.expect("audio_embed_sizes"),
-                audio_attention_mask.expect("audio_attention_mask"),
+                audio_attention_mask,
                 &audio_projection_mode,
             )?),
             _ => None,

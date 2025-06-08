@@ -104,13 +104,13 @@ impl AudioEmbedding {
     fn get_audio_features(
         &self,
         input_embeds: &Tensor,
-        audio_attention_mask: &Tensor,
+        audio_attention_mask: Option<&Tensor>,
         audio_projection_mode: &AudioProjectionMode,
     ) -> Result<Tensor> {
         // Get audio features from encoder
         let (audio_features, _masks) = self
             .encoder
-            .forward(input_embeds, Some(audio_attention_mask))?;
+            .forward(input_embeds, audio_attention_mask)?;
 
         // Apply projection based on mode
         let projection_layers = self.proj.get(audio_projection_mode).ok_or_else(|| {
@@ -133,7 +133,7 @@ impl AudioEmbedding {
         input_ids: &Tensor,
         input_embeds: &Tensor,
         audio_embed_sizes: Vec<usize>,
-        audio_attention_mask: &Tensor,
+        audio_attention_mask: Option<&Tensor>,
         audio_projection_mode: &AudioProjectionMode,
     ) -> Result<Tensor> {
         // Reshape input_ids to 2D
