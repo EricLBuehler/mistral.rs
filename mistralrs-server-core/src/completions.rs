@@ -156,25 +156,25 @@ impl futures::Stream for CompletionStreamer {
 }
 
 /// Represents different types of completion responses.
-pub type CompletionsResponder = BaseCompletionResponder<CompletionResponse, CompletionStreamer>;
+pub type CompletionResponder = BaseCompletionResponder<CompletionResponse, CompletionStreamer>;
 
 /// JSON error response structure for model errors.
 type JsonModelError = BaseJsonModelError<CompletionResponse>;
 impl ErrorToResponse for JsonModelError {}
 
-impl IntoResponse for CompletionsResponder {
+impl IntoResponse for CompletionResponder {
     /// Converts the completion responder into an HTTP response.
     fn into_response(self) -> axum::response::Response {
         match self {
-            CompletionsResponder::Sse(s) => s.into_response(),
-            CompletionsResponder::Json(s) => Json(s).into_response(),
-            CompletionsResponder::InternalError(e) => {
+            CompletionResponder::Sse(s) => s.into_response(),
+            CompletionResponder::Json(s) => Json(s).into_response(),
+            CompletionResponder::InternalError(e) => {
                 JsonError::new(e.to_string()).to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
             }
-            CompletionsResponder::ValidationError(e) => {
+            CompletionResponder::ValidationError(e) => {
                 JsonError::new(e.to_string()).to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
             }
-            CompletionsResponder::ModelError(msg, response) => JsonModelError::new(msg, response)
+            CompletionResponder::ModelError(msg, response) => JsonModelError::new(msg, response)
                 .to_response(http::StatusCode::INTERNAL_SERVER_ERROR),
         }
     }
@@ -261,7 +261,7 @@ pub fn parse_request(
 pub async fn completions(
     State(state): ExtractedMistralRsState,
     Json(oairequest): Json<CompletionRequest>,
-) -> CompletionsResponder {
+) -> CompletionResponder {
     let (tx, mut rx) = create_response_channel(None);
 
     let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx) {
@@ -274,7 +274,7 @@ pub async fn completions(
     }
 
     if is_streaming {
-        CompletionsResponder::Sse(create_completions_streamer(rx, state, None, None))
+        CompletionResponder::Sse(create_completions_streamer(rx, state, None, None))
     } else {
         process_non_streaming_response(&mut rx, state, match_responses, handle_completion_error)
             .await
@@ -296,21 +296,21 @@ pub fn create_completions_streamer(
 }
 
 /// Matches and processes different types of model responses into appropriate completion responses.
-pub fn match_responses(state: SharedMistralRsState, response: Response) -> CompletionsResponder {
+pub fn match_responses(state: SharedMistralRsState, response: Response) -> CompletionResponder {
     match response {
         Response::InternalError(e) => {
             MistralRs::maybe_log_error(state, &*e);
-            CompletionsResponder::InternalError(e)
+            CompletionResponder::InternalError(e)
         }
         Response::CompletionModelError(msg, response) => {
             MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
             MistralRs::maybe_log_response(state, &response);
-            CompletionsResponder::ModelError(msg, response)
+            CompletionResponder::ModelError(msg, response)
         }
-        Response::ValidationError(e) => CompletionsResponder::ValidationError(e),
+        Response::ValidationError(e) => CompletionResponder::ValidationError(e),
         Response::CompletionDone(response) => {
             MistralRs::maybe_log_response(state, &response);
-            CompletionsResponder::Json(response)
+            CompletionResponder::Json(response)
         }
         Response::CompletionChunk(_) => unreachable!(),
         Response::Chunk(_) => unreachable!(),
