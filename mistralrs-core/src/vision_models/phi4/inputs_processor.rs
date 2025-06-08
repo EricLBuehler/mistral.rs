@@ -139,7 +139,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_audio = true;
+        let has_audios = input_seqs.iter().all(|seq| seq.has_audios());
         let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         let (pixel_values, pixel_attention_mask, image_sizes, num_img_tokens) = if has_images {
@@ -190,7 +190,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 Some(image_sizes_accum),
                 Some(num_img_tokens_accum),
             )
-        } else if has_audio && input_seqs.iter().all(|seq| seq.is_prompt()) {
+        } else if has_audios {
             (None, None, None, Some(vec![vec![]; input_seqs.len()]))
         } else {
             return Box::new(

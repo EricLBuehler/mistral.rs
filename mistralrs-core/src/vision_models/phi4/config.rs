@@ -101,7 +101,7 @@ impl Phi4MMConfig {
     pub fn loras(&self) -> HashMap<String, StaticLoraConfig> {
         let mut accum = HashMap::new();
         // Add all the loras
-        accum.insert("speech".to_string(), self.speech_lora.clone());
+        // accum.insert("speech".to_string(), self.speech_lora.clone());
         accum.insert("vision".to_string(), self.vision_lora.clone());
         accum
     }

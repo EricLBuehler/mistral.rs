@@ -319,12 +319,16 @@ impl MultimodalData {
     }
 
     pub fn take_audios(&mut self) -> Option<Vec<AudioInput>> {
-        if let Some(input_audios) = self.input_audios.as_mut() {
-            let mut audios = Vec::new();
-            std::mem::swap(&mut audios, input_audios.audios_mut());
-            Some(audios)
+        if self.has_changed_prompt {
+            if let Some(input_audios) = self.input_audios.as_mut() {
+                let mut audios = Vec::new();
+                std::mem::swap(&mut audios, input_audios.audios_mut());
+                Some(audios)
+            } else {
+                None
+            }
         } else {
-            None
+            self.input_audios.as_ref().map(|imgs| imgs.clone_audios())
         }
     }
 
@@ -1073,6 +1077,7 @@ impl Sequence {
         self.multimodal.has_audios()
     }
 
+    /// Keep these last n audios
     pub fn keep_num_audios(&mut self, audios_to_keep: usize) {
         self.multimodal.keep_num_audios(audios_to_keep)
     }

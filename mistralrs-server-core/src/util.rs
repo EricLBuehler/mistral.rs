@@ -118,7 +118,7 @@ pub async fn parse_audio_url(url_unparsed: &str) -> Result<AudioInput, anyhow::E
         anyhow::bail!("Unsupported URL scheme: {}", url.scheme());
     };
 
-    Ok(AudioInput::from_bytes(&bytes)?)
+    AudioInput::from_bytes(&bytes)
 }
 
 #[cfg(test)]
