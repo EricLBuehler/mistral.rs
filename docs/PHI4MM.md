@@ -203,11 +203,11 @@ Audio is delivered with the `audio_url` content-type that mirrors OpenAIʼs offi
   "content": [
     {
       "type": "audio_url",
-      "audio_url": { "url": "https://upload.wikimedia.org/wikipedia/commons/a/a0/American_Robin.ogg" }
+      "audio_url": { "url": "https://upload.wikimedia.org/wikipedia/commons/4/42/Bird_singing.ogg" }
     },
     {
       "type": "image_url",
-      "image_url": { "url": "https://upload.wikimedia.org/wikipedia/commons/4/4d/Turdus_migratorius_with_worms_1.jpgg" }
+      "image_url": { "url": "https://www.allaboutbirds.org/guide/assets/og/528129121-1200px.jpgg" }
     },
     {
       "type": "text",
@@ -232,14 +232,14 @@ async fn main() -> Result<()> {
         .await?;
 
     let audio_bytes = reqwest::blocking::get(
-        "https://upload.wikimedia.org/wikipedia/commons/a/a0/American_Robin.ogg",
+        "https://upload.wikimedia.org/wikipedia/commons/4/42/Bird_singing.ogg",
     )?
     .bytes()?
     .to_vec();
     let audio = AudioInput::from_bytes(&audio_bytes)?;
 
     let image_bytes = reqwest::blocking::get(
-        "https://upload.wikimedia.org/wikipedia/commons/4/4d/Turdus_migratorius_with_worms_1.jpg",
+        "https://www.allaboutbirds.org/guide/assets/og/528129121-1200px.jpg",
     )?
     .bytes()?
     .to_vec();

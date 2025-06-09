@@ -31,6 +31,54 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
+### Multimodal (audio + image) example
+
+`mistralrs` also supports multimodal vision models that can reason over both
+images *and* audio clips via the same OpenAI-style `audio_url` / `image_url`
+format. The example below queries the Phi-4-Multimodal model with a single
+image and an audio recording – notice how the text prompt references them via
+`<|audio_1|>` and `<|image_1|>` tokens (indexing starts at 1):
+
+```python
+from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+
+runner = Runner(
+    which=Which.VisionPlain(
+        model_id="microsoft/Phi-4-multimodal-instruct",
+        arch=VisionArchitecture.Phi4MM,
+    ),
+)
+
+IMAGE_URL = "https://www.allaboutbirds.org/guide/assets/og/528129121-1200px.jpg"
+AUDIO_URL = "https://upload.wikimedia.org/wikipedia/commons/4/42/Bird_singing.ogg"
+
+response = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="phi4mm",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "audio_url", "audio_url": {"url": AUDIO_URL}},
+                    {"type": "image_url", "image_url": {"url": IMAGE_URL}},
+                    {
+                        "type": "text",
+                        "text": "<|audio_1|><|image_1|> Describe in detail what is happening, referencing both what you hear and what you see.",
+                    },
+                ],
+            }
+        ],
+        max_tokens=256,
+        temperature=0.2,
+        top_p=0.9,
+    )
+)
+
+print(response.choices[0].message.content)
+```
+
+See [`examples/python/phi4mm_audio.py`](../examples/python/phi4mm_audio.py) for a ready-to-run version.
+
 Please find [API docs here](API.md) and the type stubs [here](mistralrs.pyi), which are another great form of documentation.
 
 We also provide [a cookbook here](../examples/python/cookbook.ipynb)!

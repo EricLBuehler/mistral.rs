@@ -935,6 +935,7 @@ impl Runner {
                 Either::Left(ref messages) => {
                     let mut messages_vec = Vec::new();
                     let mut image_urls = Vec::new();
+                    let mut audio_urls = Vec::new();
                     for message in messages {
                         let role = message["role"].as_ref().left().unwrap().clone();
                         match &message["content"] {
@@ -983,6 +984,7 @@ impl Runner {
                                 enum ContentPart {
                                     Text { text: String },
                                     Image { image_url: String },
+                                    Audio { audio_url: String },
                                 }
 
                                 let mut items = Vec::new();
@@ -998,12 +1000,30 @@ impl Runner {
                                         }
                                         Some(Either::Left(x)) if x == "image_url" => {
                                             items.push(ContentPart::Image {
-                                                image_url: image_message.get("image_url").as_ref()
-                                                    .context("Image sub-content must have `image_url` key.")?.as_ref()
+                                                image_url: image_message
+                                                    .get("image_url")
+                                                    .as_ref()
+                                                    .context("Image sub-content must have `image_url` key.")?
+                                                    .as_ref()
                                                     .right()
                                                     .context("Image sub-content `image_url` key must be an object.")?
                                                     .get("url")
-                                                    .context("Image sub-content `image_url` object must have a `url` key.")?.clone()
+                                                    .context("Image sub-content `image_url` object must have a `url` key.")?
+                                                    .clone(),
+                                            });
+                                        }
+                                        Some(Either::Left(x)) if x == "audio_url" => {
+                                            items.push(ContentPart::Audio {
+                                                audio_url: image_message
+                                                    .get("audio_url")
+                                                    .as_ref()
+                                                    .context("Audio sub-content must have `audio_url` key.")?
+                                                    .as_ref()
+                                                    .right()
+                                                    .context("Audio sub-content `audio_url` key must be an object.")?
+                                                    .get("url")
+                                                    .context("Audio sub-content `audio_url` object must have a `url` key.")?
+                                                    .clone(),
                                             });
                                         }
                                         _ => return Err(PyApiErr::from("Expected array content sub-content to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}"))
@@ -1025,6 +1045,14 @@ impl Runner {
                                     })
                                     .collect::<Vec<_>>();
 
+                                let audio_urls_iter = items
+                                    .iter()
+                                    .filter_map(|item| match item {
+                                        ContentPart::Audio { audio_url } => Some(audio_url.clone()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>();
+
                                 let mut message_map: IndexMap<
                                     String,
                                     Either<String, Vec<IndexMap<String, Value>>>,
@@ -1039,6 +1067,14 @@ impl Runner {
                                         Value::String("image".to_string()),
                                     );
                                     content_map.push(content_image_map);
+                                }
+                                for _ in &audio_urls_iter {
+                                    let mut content_audio_map = IndexMap::new();
+                                    content_audio_map.insert(
+                                        "type".to_string(),
+                                        Value::String("audio".to_string()),
+                                    );
+                                    content_map.push(content_audio_map);
                                 }
                                 {
                                     let mut content_text_map = IndexMap::new();
@@ -1055,10 +1091,11 @@ impl Runner {
                                     .insert("content".to_string(), Either::Right(content_map));
                                 messages_vec.push(message_map);
                                 image_urls.extend(image_urls_iter);
+                                audio_urls.extend(audio_urls_iter);
                             }
                         }
                     }
-                    if !image_urls.is_empty() {
+                    if !image_urls.is_empty() || !audio_urls.is_empty() {
                         let mut images = Vec::new();
                         for url in image_urls {
                             let url_unparsed = url.trim();
@@ -1066,10 +1103,16 @@ impl Runner {
                             let image = util::parse_image_url(url_unparsed)?;
                             images.push(image);
                         }
+                        let mut audios = Vec::new();
+                        for url in audio_urls {
+                            let url_unparsed = url.trim();
+                            let audio = util::parse_audio_url(url_unparsed)?;
+                            audios.push(audio);
+                        }
                         RequestMessage::VisionChat {
                             messages: messages_vec,
                             images,
-                            audios: Vec::new(),
+                            audios,
                             enable_thinking: request.enable_thinking,
                         }
                     } else {

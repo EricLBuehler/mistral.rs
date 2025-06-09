@@ -5,8 +5,8 @@ from openai import OpenAI
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 # Remote assets – feel free to swap for anything else
-IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/4/4d/Turdus_migratorius_with_worms_1.jpg"
-AUDIO_URL = "https://upload.wikimedia.org/wikipedia/commons/a/a0/American_Robin.ogg"
+IMAGE_URL = "https://www.allaboutbirds.org/guide/assets/og/528129121-1200px.jpg"
+AUDIO_URL = "https://upload.wikimedia.org/wikipedia/commons/4/42/Bird_singing.ogg"
 
 completion = client.chat.completions.create(
     model="phi4mm",
