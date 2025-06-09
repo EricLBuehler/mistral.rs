@@ -608,7 +608,7 @@ impl ConformerEncoder {
             };
 
             if chunk_pad_size > 0 {
-                input_tensor = input_tensor.pad_with_zeros(D::Minus1, 0, chunk_pad_size)?;
+                input_tensor = input_tensor.pad_with_zeros(D::Minus2, 0, chunk_pad_size)?;
             }
 
             // Unfold into chunks

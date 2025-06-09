@@ -3,8 +3,8 @@ use mistralrs::{AudioInput, IsqType, TextMessageRole, VisionMessages, VisionMode
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("../hf_models/phi4_multimodal")
-        // .with_isq(IsqType::Q4K)
+    let model = VisionModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
+        .with_isq(IsqType::Q8_0)
         .with_logging()
         .build()
         .await?;
