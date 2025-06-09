@@ -133,7 +133,7 @@ pub struct FluxLoader {
 impl DiffusionModelLoader for FluxLoader {
     fn get_model_paths(&self, api: &ApiRepo, model_id: &Path) -> Result<Vec<PathBuf>> {
         let regex = Regex::new(r"^flux\d+-(schnell|dev)\.safetensors$")?;
-        let flux_name = api_dir_list!(api, model_id)
+        let flux_name = api_dir_list!(api, model_id, true)
             .filter(|x| regex.is_match(x))
             .nth(0)
             .with_context(|| "Expected at least 1 .safetensors file matching the FLUX regex, please raise an issue.")?;

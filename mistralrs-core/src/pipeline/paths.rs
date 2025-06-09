@@ -80,7 +80,7 @@ pub fn get_xlora_paths(
             let model_id = Path::new(&xlora_id);
 
             // Get the path for the xlora classifier
-            let xlora_classifier = &api_dir_list!(api, model_id)
+            let xlora_classifier = &api_dir_list!(api, model_id, true)
                 .filter(|x| x.contains("xlora_classifier.safetensors"))
                 .collect::<Vec<_>>();
             if xlora_classifier.len() > 1 {
@@ -94,7 +94,7 @@ pub fn get_xlora_paths(
 
             // Get the path for the xlora config by checking all for valid versions.
             // NOTE(EricLBuehler): Remove this functionality because all configs should be deserializable
-            let xlora_configs = &api_dir_list!(api, model_id)
+            let xlora_configs = &api_dir_list!(api, model_id, true)
                 .filter(|x| x.contains("xlora_config.json"))
                 .collect::<Vec<_>>();
             if xlora_configs.len() > 1 {
@@ -135,7 +135,7 @@ pub fn get_xlora_paths(
             });
 
             // If there are adapters in the ordering file, get their names and remote paths
-            let adapter_files = api_dir_list!(api, model_id)
+            let adapter_files = api_dir_list!(api, model_id, true)
                 .filter_map(|name| {
                     if let Some(ref adapters) = xlora_order.adapters {
                         for adapter_name in adapters {
@@ -208,7 +208,7 @@ pub fn get_xlora_paths(
                     let mut output = HashMap::new();
                     for adapter in preload_adapters {
                         // Get the names and remote paths of the files associated with this adapter
-                        let adapter_files = api_dir_list!(api, &adapter.adapter_model_id)
+                        let adapter_files = api_dir_list!(api, &adapter.adapter_model_id, true)
                             .filter_map(|f| {
                                 if f.contains(&adapter.name) {
                                     Some((f, adapter.name.clone()))
@@ -348,7 +348,7 @@ pub fn get_model_paths(
             let pickle_match = Regex::new(PICKLE_MATCH)?;
 
             let mut filenames = vec![];
-            let listing = api_dir_list!(api, model_id).filter(|x| {
+            let listing = api_dir_list!(api, model_id, true).filter(|x| {
                 safetensor_match.is_match(x)
                     || pickle_match.is_match(x)
                     || quant_safetensor_match.is_match(x)

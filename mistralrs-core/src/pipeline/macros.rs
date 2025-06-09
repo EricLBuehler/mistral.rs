@@ -1,7 +1,7 @@
 #[doc(hidden)]
 #[macro_export]
 macro_rules! api_dir_list {
-    ($api:expr, $model_id:expr) => {
+    ($api:expr, $model_id:expr, $should_panic:expr) => {
         if std::path::Path::new($model_id).exists() {
             let listing = std::fs::read_dir($model_id);
             if listing.is_err() {
@@ -29,7 +29,14 @@ macro_rules! api_dir_list {
                         .map(|x| x.rfilename.clone())
                         .collect::<Vec<String>>()
                 })
-                .unwrap_or_else(|e| panic!("Could not get directory listing from API: {:?}", e))
+                .unwrap_or_else(|e| {
+                    if $should_panic {
+                        panic!("Could not get directory listing from API: {:?}", e)
+                    } else {
+                        tracing::warn!("Could not get directory listing from API: {:?}", e);
+                        Vec::<String>::new()
+                    }
+                })
                 .into_iter()
         }
     };
@@ -110,7 +117,7 @@ macro_rules! get_paths {
             revision.clone(),
             $this.xlora_order.as_ref(),
         )?;
-        let gen_conf = if $crate::api_dir_list!(api, model_id)
+        let gen_conf = if $crate::api_dir_list!(api, model_id, false)
             .collect::<Vec<_>>()
             .contains(&"generation_config.json".to_string())
         {
@@ -123,7 +130,7 @@ macro_rules! get_paths {
         } else {
             None
         };
-        let preprocessor_config = if $crate::api_dir_list!(api, model_id)
+        let preprocessor_config = if $crate::api_dir_list!(api, model_id, false)
             .collect::<Vec<_>>()
             .contains(&"preprocessor_config.json".to_string())
         {
@@ -136,7 +143,7 @@ macro_rules! get_paths {
         } else {
             None
         };
-        let processor_config = if $crate::api_dir_list!(api, model_id)
+        let processor_config = if $crate::api_dir_list!(api, model_id, false)
             .collect::<Vec<_>>()
             .contains(&"processor_config.json".to_string())
         {
@@ -160,7 +167,7 @@ macro_rules! get_paths {
                 model_id
             ))
         };
-        let chat_template_json_filename = if $crate::api_dir_list!(api, model_id)
+        let chat_template_json_filename = if $crate::api_dir_list!(api, model_id, false)
             .collect::<Vec<_>>()
             .contains(&"chat_template.json".to_string())
         {
@@ -290,6 +297,7 @@ macro_rules! get_paths_gguf {
             false, // Never loading UQFF
         )?;
 
+        info!("GGUF file(s) {:?}", filenames);
         let adapter_paths = get_xlora_paths(
             this_model_id.clone(),
             $this.xlora_model_id.as_ref(),
@@ -299,10 +307,10 @@ macro_rules! get_paths_gguf {
             $this.xlora_order.as_ref(),
         )?;
 
-        let gen_conf = if $crate::api_dir_list!(api, model_id)
-            .collect::<Vec<_>>()
-            .contains(&"generation_config.json".to_string())
-        {
+        let dir_list = $crate::api_dir_list!(api, model_id, false)
+            .collect::<Vec<_>>();
+
+        let gen_conf = if dir_list.contains(&"generation_config.json".to_string()) {
             info!("Loading `generation_config.json` at `{}`", this_model_id);
             Some($crate::api_get_file!(
                 api,
@@ -313,9 +321,7 @@ macro_rules! get_paths_gguf {
             None
         };
 
-        let preprocessor_config = if $crate::api_dir_list!(api, model_id)
-            .collect::<Vec<_>>()
-            .contains(&"preprocessor_config.json".to_string())
+        let preprocessor_config = if dir_list.contains(&"preprocessor_config.json".to_string())
         {
             info!("Loading `preprocessor_config.json` at `{}`", this_model_id);
             Some($crate::api_get_file!(
@@ -327,10 +333,7 @@ macro_rules! get_paths_gguf {
             None
         };
 
-        let processor_config = if $crate::api_dir_list!(api, model_id)
-            .collect::<Vec<_>>()
-            .contains(&"processor_config.json".to_string())
-        {
+        let processor_config = if dir_list.contains(&"processor_config.json".to_string()) {
             info!("Loading `processor_config.json` at `{}`", this_model_id);
             Some($crate::api_get_file!(
                 api,
@@ -341,17 +344,14 @@ macro_rules! get_paths_gguf {
             None
         };
 
-        let tokenizer_filename = if $this.model_id.is_some() {
+        let tokenizer_filename = if $this.model_id.is_some() && dir_list.contains(&"tokenizer.json".to_string()) {
             info!("Loading `tokenizer.json` at `{}`", this_model_id);
             $crate::api_get_file!(api, "tokenizer.json", model_id)
         } else {
             PathBuf::from_str("")?
         };
 
-        let chat_template_json_filename = if $crate::api_dir_list!(api, model_id)
-            .collect::<Vec<_>>()
-            .contains(&"chat_template.json".to_string())
-        {
+        let chat_template_json_filename = if dir_list.contains(&"chat_template.json".to_string()) {
             info!("Loading `chat_template.json` at `{}`", this_model_id);
             Some($crate::api_get_file!(
                 api,

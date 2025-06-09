@@ -962,7 +962,9 @@ impl AnyMoePipelineMixin for VisionPipeline {
             ));
 
             let mut filenames = vec![];
-            for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
+            for rfilename in
+                api_dir_list!(api, model_id, true).filter(|x| x.ends_with(".safetensors"))
+            {
                 filenames.push(api_get_file!(api, &rfilename, model_id));
             }
 
@@ -1018,7 +1020,9 @@ impl AnyMoePipelineMixin for VisionPipeline {
             ));
 
             let mut gate_filenames = vec![];
-            for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
+            for rfilename in
+                api_dir_list!(api, model_id, true).filter(|x| x.ends_with(".safetensors"))
+            {
                 gate_filenames.push(api_get_file!(api, &rfilename, model_id));
             }
             assert_eq!(
