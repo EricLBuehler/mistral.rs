@@ -127,6 +127,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
    - [Rust API](https://ericlbuehler.github.io/mistral.rs/mistralrs/) & [Python API](mistralrs-pyo3/API.md)
    - [Automatic device mapping](docs/DEVICE_MAPPING.md) (multi-GPU, CPU)
    - [Chat templates](docs/CHAT_TOK.md) & tokenizer auto-detection
+   - [MCP protocol](docs/MCP.md) for structured, realtime tool calls
 
 2. **Performance**
    - CPU acceleration (MKL, AVX, [NEON](docs/DEVICE_MAPPING.md#arm-neon), [Accelerate](docs/DEVICE_MAPPING.md#apple-accelerate))
@@ -183,6 +184,16 @@ OpenAI API compatible API server
 - [Launching the server or use the CLI](README.md#run-with-the-cli)
 - [Example](examples/server/chat.py)
 - [Use or extend the server in other axum projects](https://ericlbuehler.github.io/mistral.rs/mistralrs_server_core/)
+
+### MCP Protocol
+
+Serve the same models over the open [MCP](docs/MCP.md) (Model Control Protocol) in parallel to the HTTP API:
+
+```bash
+./mistralrs-server --mcp-port 4321 plain -m Qwen/Qwen3-4B
+```
+
+See the [docs](docs/MCP.md) for feature flags, examples and limitations.
 
 
 ### Llama Index integration

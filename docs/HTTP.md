@@ -4,6 +4,9 @@ Mistral.rs provides a lightweight OpenAI API compatible HTTP server based on [ax
 
 The API consists of the following endpoints. They can be viewed in your browser interactively by going to `http://localhost:<port>/docs`.
 
+> ℹ️  Besides the HTTP endpoints described below `mistralrs-server` can also expose the same functionality via the **MCP protocol**.  
+> Enable it with `--mcp-port <port>` and see [MCP.md](MCP.md) for details.
+
 ## Additional object keys
 
 To support additional features, we have extended the completion and chat completion request objects. Both have the same keys added:
