@@ -133,7 +133,7 @@
 <a href=#133 id=133 data-nosnippet>133</a><span class="kw">impl </span>DiffusionModelLoader <span class="kw">for </span>FluxLoader {
 <a href=#134 id=134 data-nosnippet>134</a>    <span class="kw">fn </span>get_model_paths(<span class="kw-2">&amp;</span><span class="self">self</span>, api: <span class="kw-2">&amp;</span>ApiRepo, model_id: <span class="kw-2">&amp;</span>Path) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;PathBuf&gt;&gt; {
 <a href=#135 id=135 data-nosnippet>135</a>        <span class="kw">let </span>regex = Regex::new(<span class="string">r"^flux\d+-(schnell|dev)\.safetensors$"</span>)<span class="question-mark">?</span>;
-<a href=#136 id=136 data-nosnippet>136</a>        <span class="kw">let </span>flux_name = <span class="macro">api_dir_list!</span>(api, model_id)
+<a href=#136 id=136 data-nosnippet>136</a>        <span class="kw">let </span>flux_name = <span class="macro">api_dir_list!</span>(api, model_id, <span class="bool-val">true</span>)
 <a href=#137 id=137 data-nosnippet>137</a>            .filter(|x| regex.is_match(x))
 <a href=#138 id=138 data-nosnippet>138</a>            .nth(<span class="number">0</span>)
 <a href=#139 id=139 data-nosnippet>139</a>            .with_context(|| <span class="string">"Expected at least 1 .safetensors file matching the FLUX regex, please raise an issue."</span>)<span class="question-mark">?</span>;

@@ -80,7 +80,7 @@
 <a href=#80 id=80 data-nosnippet>80</a>            <span class="kw">let </span>model_id = Path::new(<span class="kw-2">&amp;</span>xlora_id);
 <a href=#81 id=81 data-nosnippet>81</a>
 <a href=#82 id=82 data-nosnippet>82</a>            <span class="comment">// Get the path for the xlora classifier
-<a href=#83 id=83 data-nosnippet>83</a>            </span><span class="kw">let </span>xlora_classifier = <span class="kw-2">&amp;</span><span class="macro">api_dir_list!</span>(api, model_id)
+<a href=#83 id=83 data-nosnippet>83</a>            </span><span class="kw">let </span>xlora_classifier = <span class="kw-2">&amp;</span><span class="macro">api_dir_list!</span>(api, model_id, <span class="bool-val">true</span>)
 <a href=#84 id=84 data-nosnippet>84</a>                .filter(|x| x.contains(<span class="string">"xlora_classifier.safetensors"</span>))
 <a href=#85 id=85 data-nosnippet>85</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 <a href=#86 id=86 data-nosnippet>86</a>            <span class="kw">if </span>xlora_classifier.len() &gt; <span class="number">1 </span>{
@@ -94,7 +94,7 @@
 <a href=#94 id=94 data-nosnippet>94</a>
 <a href=#95 id=95 data-nosnippet>95</a>            <span class="comment">// Get the path for the xlora config by checking all for valid versions.
 <a href=#96 id=96 data-nosnippet>96</a>            // NOTE(EricLBuehler): Remove this functionality because all configs should be deserializable
-<a href=#97 id=97 data-nosnippet>97</a>            </span><span class="kw">let </span>xlora_configs = <span class="kw-2">&amp;</span><span class="macro">api_dir_list!</span>(api, model_id)
+<a href=#97 id=97 data-nosnippet>97</a>            </span><span class="kw">let </span>xlora_configs = <span class="kw-2">&amp;</span><span class="macro">api_dir_list!</span>(api, model_id, <span class="bool-val">true</span>)
 <a href=#98 id=98 data-nosnippet>98</a>                .filter(|x| x.contains(<span class="string">"xlora_config.json"</span>))
 <a href=#99 id=99 data-nosnippet>99</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 <a href=#100 id=100 data-nosnippet>100</a>            <span class="kw">if </span>xlora_configs.len() &gt; <span class="number">1 </span>{
@@ -135,7 +135,7 @@
 <a href=#135 id=135 data-nosnippet>135</a>            });
 <a href=#136 id=136 data-nosnippet>136</a>
 <a href=#137 id=137 data-nosnippet>137</a>            <span class="comment">// If there are adapters in the ordering file, get their names and remote paths
-<a href=#138 id=138 data-nosnippet>138</a>            </span><span class="kw">let </span>adapter_files = <span class="macro">api_dir_list!</span>(api, model_id)
+<a href=#138 id=138 data-nosnippet>138</a>            </span><span class="kw">let </span>adapter_files = <span class="macro">api_dir_list!</span>(api, model_id, <span class="bool-val">true</span>)
 <a href=#139 id=139 data-nosnippet>139</a>                .filter_map(|name| {
 <a href=#140 id=140 data-nosnippet>140</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>adapters) = xlora_order.adapters {
 <a href=#141 id=141 data-nosnippet>141</a>                        <span class="kw">for </span>adapter_name <span class="kw">in </span>adapters {
@@ -208,7 +208,7 @@
 <a href=#208 id=208 data-nosnippet>208</a>                    <span class="kw">let </span><span class="kw-2">mut </span>output = HashMap::new();
 <a href=#209 id=209 data-nosnippet>209</a>                    <span class="kw">for </span>adapter <span class="kw">in </span>preload_adapters {
 <a href=#210 id=210 data-nosnippet>210</a>                        <span class="comment">// Get the names and remote paths of the files associated with this adapter
-<a href=#211 id=211 data-nosnippet>211</a>                        </span><span class="kw">let </span>adapter_files = <span class="macro">api_dir_list!</span>(api, <span class="kw-2">&amp;</span>adapter.adapter_model_id)
+<a href=#211 id=211 data-nosnippet>211</a>                        </span><span class="kw">let </span>adapter_files = <span class="macro">api_dir_list!</span>(api, <span class="kw-2">&amp;</span>adapter.adapter_model_id, <span class="bool-val">true</span>)
 <a href=#212 id=212 data-nosnippet>212</a>                            .filter_map(|f| {
 <a href=#213 id=213 data-nosnippet>213</a>                                <span class="kw">if </span>f.contains(<span class="kw-2">&amp;</span>adapter.name) {
 <a href=#214 id=214 data-nosnippet>214</a>                                    <span class="prelude-val">Some</span>((f, adapter.name.clone()))
@@ -348,7 +348,7 @@
 <a href=#348 id=348 data-nosnippet>348</a>            <span class="kw">let </span>pickle_match = Regex::new(PICKLE_MATCH)<span class="question-mark">?</span>;
 <a href=#349 id=349 data-nosnippet>349</a>
 <a href=#350 id=350 data-nosnippet>350</a>            <span class="kw">let </span><span class="kw-2">mut </span>filenames = <span class="macro">vec!</span>[];
-<a href=#351 id=351 data-nosnippet>351</a>            <span class="kw">let </span>listing = <span class="macro">api_dir_list!</span>(api, model_id).filter(|x| {
+<a href=#351 id=351 data-nosnippet>351</a>            <span class="kw">let </span>listing = <span class="macro">api_dir_list!</span>(api, model_id, <span class="bool-val">true</span>).filter(|x| {
 <a href=#352 id=352 data-nosnippet>352</a>                safetensor_match.is_match(x)
 <a href=#353 id=353 data-nosnippet>353</a>                    || pickle_match.is_match(x)
 <a href=#354 id=354 data-nosnippet>354</a>                    || quant_safetensor_match.is_match(x)
