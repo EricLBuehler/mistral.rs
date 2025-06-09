@@ -55,6 +55,84 @@ fn validate_image_upload(
     }
 }
 
+fn validate_audio_upload(
+    filename: Option<&str>,
+    content_type: Option<&str>,
+) -> Result<String, &'static str> {
+    // Check MIME type first
+    if let Some(mime) = content_type {
+        if !mime.starts_with("audio/") {
+            return Err("File must be an audio file");
+        }
+    }
+
+    let ext = if let Some(name) = filename {
+        name.rsplit('.').next().unwrap_or("").to_lowercase()
+    } else {
+        return Err("No filename provided");
+    };
+
+    match ext.as_str() {
+        "wav" | "mp3" | "ogg" | "flac" | "m4a" | "aac" | "opus" | "webm" => Ok(ext),
+        "" => Err("No file extension"),
+        _ => Err("Unsupported audio format"),
+    }
+}
+
+/// Accepts multipart audio upload, stores under `cache/uploads/`, returns its URL.
+pub async fn upload_audio(
+    State(_app): State<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    if let Ok(Some(field)) = multipart.next_field().await {
+        let orig_filename = field.file_name().map(|s| s.to_string());
+        let content_type_opt = field.content_type().map(|s| s.to_string());
+
+        let ext = match validate_audio_upload(orig_filename.as_deref(), content_type_opt.as_deref())
+        {
+            Ok(ext) => ext,
+            Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+        };
+
+        // Read bytes (limit 50MB like images)
+        let data = match field.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                error!("multipart bytes error: {}", e);
+                let msg = if e.to_string().contains("exceeded") {
+                    "audio too large (limit 50 MB)"
+                } else {
+                    "failed to read upload"
+                };
+                return (StatusCode::BAD_REQUEST, msg).into_response();
+            }
+        };
+
+        // Ensure upload directory exists
+        let uploads_dir = get_cache_dir().join("uploads");
+        if let Err(e) = tokio::fs::create_dir_all(&uploads_dir).await {
+            error!("create uploads dir error: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to create uploads directory",
+            )
+                .into_response();
+        }
+
+        let filename = format!("{}.{}", Uuid::new_v4(), ext);
+        let filepath = uploads_dir.join(&filename);
+        if let Err(e) = tokio::fs::write(&filepath, &data).await {
+            error!("write upload error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to save audio").into_response();
+        }
+
+        let url = filepath.to_string_lossy();
+        (StatusCode::OK, Json(json!({ "url": url }))).into_response()
+    } else {
+        (StatusCode::BAD_REQUEST, "missing audio part").into_response()
+    }
+}
+
 fn validate_text_upload(
     filename: Option<&str>,
     content_type: Option<&str>,

@@ -9,7 +9,8 @@ A minimal, fast, and modern web chat interface for [mistral.rs](https://github.c
 ## Features
 
 - **Text & Vision Model Support:** Choose from multiple loaded models.
-- **Speech Model Support:** Generate speech from text prompts and download as WAV files.
+- **Text-to-speech Model Support:** Generate speech from text prompts and download as WAV files.
+- **Speech Input Model Support:** Upload audio inputs for multimodal models.
 - **File Upload:** Upload and work with files.
 - **Drag & Drop Image Upload:** Instantly preview and send images to vision models.
 - **Markdown Output:** Responses are rendered in markdown, including code blocks.

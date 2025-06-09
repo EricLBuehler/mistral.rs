@@ -643,7 +643,7 @@ impl RequestLike for RequestBuilder {
     }
 
     fn take_messages(&mut self) -> RequestMessage {
-        if self.images.is_empty() {
+        if self.images.is_empty() && self.audios.is_empty() {
             let mut other = Vec::new();
             std::mem::swap(&mut other, &mut self.messages);
             RequestMessage::Chat {

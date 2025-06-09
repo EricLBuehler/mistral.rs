@@ -313,7 +313,56 @@ function initUI() {
   initTextareaResize();
   initImageUpload();
   initTextUpload();
+  initAudioUpload();
   initDragAndDrop();
   initWebSearchControls();
   initStopButton();
+}
+
+// ---------------------- Audio Upload ----------------------
+
+async function handleAudioUpload(file) {
+  if (!file.type.startsWith('audio/')) {
+    alert('Please select an audio file');
+    return;
+  }
+  // Limit 50MB
+  const maxSize = 50 * 1024 * 1024;
+  if (file.size > maxSize) {
+    alert('Audio file is too large. Maximum size is 50MB.');
+    return;
+  }
+
+  const preview = createAudioPreview(URL.createObjectURL(file));
+  document.getElementById('audio-container').appendChild(preview);
+
+  const fd = new FormData();
+  fd.append('audio', file);
+
+  try {
+    const r = await fetch('/api/upload_audio', { method: 'POST', body: fd });
+    if (r.ok) {
+      const j = await r.json();
+      preview.dataset.uploadUrl = j.url;
+    } else {
+      const errText = await r.text();
+      alert(`Upload failed: ${errText}`);
+      preview.remove();
+    }
+  } catch (e) {
+    alert(`Upload failed: ${e.message}`);
+    preview.remove();
+  }
+}
+
+function initAudioUpload() {
+  const audioInput = document.getElementById('audioInput');
+  if (!audioInput) return;
+
+  audioInput.addEventListener('change', async () => {
+    const f = audioInput.files[0];
+    if (!f) return;
+    await handleAudioUpload(f);
+    audioInput.value = '';
+  });
 }
