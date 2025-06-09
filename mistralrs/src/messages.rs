@@ -206,7 +206,7 @@ impl VisionMessages {
 
         // Audios
         let n_added_audios = audios.len();
-        let prefixed = prefixer.prefix_image(
+        let prefixed = prefixer.prefix_audio(
             (self.audios.len()..self.audios.len() + n_added_audios).collect(),
             &prefixed,
         );
@@ -491,7 +491,7 @@ impl RequestBuilder {
 
         // Audios
         let n_added_audios = audios.len();
-        let prefixed = prefixer.prefix_image(
+        let prefixed = prefixer.prefix_audio(
             (self.audios.len()..self.audios.len() + n_added_audios).collect(),
             &prefixed,
         );
