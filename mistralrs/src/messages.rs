@@ -159,50 +159,30 @@ impl VisionMessages {
     }
 
     pub fn add_image_message(
-        mut self,
+        self,
         role: TextMessageRole,
         text: impl ToString,
         images: Vec<DynamicImage>,
         model: &Model,
     ) -> anyhow::Result<Self> {
-        let prefixer = match &model.config().category {
-            ModelCategory::Vision { prefixer } => prefixer,
-            ModelCategory::Text
-            | ModelCategory::Diffusion
-            | ModelCategory::Speech
-            | ModelCategory::Audio => {
-                anyhow::bail!("`add_image_message` expects a vision model.")
-            }
-        };
-
-        let n_added_images = images.len();
-        let prefixed = prefixer.prefix_image(
-            (self.images.len()..self.images.len() + n_added_images).collect(),
-            &text.to_string(),
-        );
-
-        self.images.extend(images);
-
-        self.messages.push(IndexMap::from([
-            ("role".to_string(), Either::Left(role.to_string())),
-            (
-                "content".to_string(),
-                Either::Right(vec![
-                    IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
-                    IndexMap::from([
-                        ("type".to_string(), Value::String("text".to_string())),
-                        ("text".to_string(), Value::String(prefixed)),
-                    ]),
-                ]),
-            ),
-        ]));
-        Ok(self)
+        self.add_multimodal_message(role, text, images, vec![], model)
     }
 
     pub fn add_audio_message(
+        self,
+        role: TextMessageRole,
+        text: impl ToString,
+        audios: Vec<AudioInput>,
+        model: &Model,
+    ) -> anyhow::Result<Self> {
+        self.add_multimodal_message(role, text, vec![], audios, model)
+    }
+
+    pub fn add_multimodal_message(
         mut self,
         role: TextMessageRole,
         text: impl ToString,
+        images: Vec<DynamicImage>,
         audios: Vec<AudioInput>,
         model: &Model,
     ) -> anyhow::Result<Self> {
@@ -216,18 +196,42 @@ impl VisionMessages {
             }
         };
 
+        // Images
+        let n_added_images = images.len();
+        let prefixed = prefixer.prefix_image(
+            (self.images.len()..self.images.len() + n_added_images).collect(),
+            &text.to_string(),
+        );
+        self.images.extend(images);
+
+        // Audios
         let n_added_audios = audios.len();
         let prefixed = prefixer.prefix_image(
             (self.audios.len()..self.audios.len() + n_added_audios).collect(),
-            &text.to_string(),
+            &prefixed,
         );
-
         self.audios.extend(audios);
 
-        self.messages.push(IndexMap::from([
-            ("role".to_string(), Either::Left(role.to_string())),
-            ("content".to_string(), Either::Left(prefixed)),
-        ]));
+        if n_added_images > 0 {
+            self.messages.push(IndexMap::from([
+                ("role".to_string(), Either::Left(role.to_string())),
+                (
+                    "content".to_string(),
+                    Either::Right(vec![
+                        IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
+                        IndexMap::from([
+                            ("type".to_string(), Value::String("text".to_string())),
+                            ("text".to_string(), Value::String(prefixed)),
+                        ]),
+                    ]),
+                ),
+            ]));
+        } else {
+            self.messages.push(IndexMap::from([
+                ("role".to_string(), Either::Left(role.to_string())),
+                ("content".to_string(), Either::Left(prefixed)),
+            ]));
+        }
         Ok(self)
     }
 
@@ -440,47 +444,30 @@ impl RequestBuilder {
     }
 
     pub fn add_image_message(
-        mut self,
+        self,
         role: TextMessageRole,
         text: impl ToString,
         images: Vec<DynamicImage>,
         model: &Model,
     ) -> anyhow::Result<Self> {
-        let prefixer = match &model.config().category {
-            ModelCategory::Vision { prefixer } => prefixer,
-            ModelCategory::Text
-            | ModelCategory::Diffusion
-            | ModelCategory::Speech
-            | ModelCategory::Audio => {
-                anyhow::bail!("`add_image_message` expects a vision model.")
-            }
-        };
-
-        let n_added_images = images.len();
-        let prefixed = prefixer.prefix_image(
-            (self.images.len()..self.images.len() + n_added_images).collect(),
-            &text.to_string(),
-        );
-
-        self.images.extend(images);
-
-        self.messages.push(IndexMap::from([
-            ("role".to_string(), Either::Left(role.to_string())),
-            (
-                "content".to_string(),
-                Either::Right(vec![IndexMap::from([
-                    ("type".to_string(), Value::String("text".to_string())),
-                    ("text".to_string(), Value::String(prefixed)),
-                ])]),
-            ),
-        ]));
-        Ok(self)
+        self.add_multimodal_message(role, text, images, vec![], model)
     }
 
     pub fn add_audio_message(
+        self,
+        role: TextMessageRole,
+        text: impl ToString,
+        audios: Vec<AudioInput>,
+        model: &Model,
+    ) -> anyhow::Result<Self> {
+        self.add_multimodal_message(role, text, vec![], audios, model)
+    }
+
+    pub fn add_multimodal_message(
         mut self,
         role: TextMessageRole,
         text: impl ToString,
+        images: Vec<DynamicImage>,
         audios: Vec<AudioInput>,
         model: &Model,
     ) -> anyhow::Result<Self> {
@@ -494,18 +481,42 @@ impl RequestBuilder {
             }
         };
 
+        // Images
+        let n_added_images = images.len();
+        let prefixed = prefixer.prefix_image(
+            (self.images.len()..self.images.len() + n_added_images).collect(),
+            &text.to_string(),
+        );
+        self.images.extend(images);
+
+        // Audios
         let n_added_audios = audios.len();
         let prefixed = prefixer.prefix_image(
             (self.audios.len()..self.audios.len() + n_added_audios).collect(),
-            &text.to_string(),
+            &prefixed,
         );
-
         self.audios.extend(audios);
 
-        self.messages.push(IndexMap::from([
-            ("role".to_string(), Either::Left(role.to_string())),
-            ("content".to_string(), Either::Left(prefixed)),
-        ]));
+        if n_added_images > 0 {
+            self.messages.push(IndexMap::from([
+                ("role".to_string(), Either::Left(role.to_string())),
+                (
+                    "content".to_string(),
+                    Either::Right(vec![
+                        IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
+                        IndexMap::from([
+                            ("type".to_string(), Value::String("text".to_string())),
+                            ("text".to_string(), Value::String(prefixed)),
+                        ]),
+                    ]),
+                ),
+            ]));
+        } else {
+            self.messages.push(IndexMap::from([
+                ("role".to_string(), Either::Left(role.to_string())),
+                ("content".to_string(), Either::Left(prefixed)),
+            ]));
+        }
         Ok(self)
     }
 
