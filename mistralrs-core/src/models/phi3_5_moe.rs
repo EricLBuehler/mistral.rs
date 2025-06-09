@@ -319,6 +319,10 @@ impl Mlp {
         })
     }
 
+    fn device(&self) -> Device {
+        self.w1.dtype_and_device().1
+    }
+
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
@@ -465,7 +469,7 @@ impl MoeMlp {
                 .index_select(&top_x, 0)?
                 .gather(&idx.unsqueeze(1)?.contiguous()?, 1)?;
             let exp_out = expert
-                .forward(&current_state.to_device(xs_dev)?)?
+                .forward(&current_state.to_device(&expert.device())?)?
                 .to_device(&Device::Cpu)?;
 
             let current_hidden_states = exp_out.broadcast_mul(&current_routing_weights)?;
