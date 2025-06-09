@@ -81,6 +81,7 @@ pub use device_map::{
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, LayerDeviceMapper,
 };
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
+pub use mistralrs_audio::AudioInput;
 pub use mistralrs_quant::{IsqType, MULTI_LORA_DELIMITER};
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
 pub use pipeline::{
@@ -89,11 +90,12 @@ pub use pipeline::{
     DiffusionLoaderBuilder, DiffusionLoaderType, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig,
     GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, Idefics2Loader,
     IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths,
-    LoraAdapterPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader,
-    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
-    Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
-    SpeechLoader, SpeechPipeline, Starcoder2Loader, TokenSource, VisionLoader, VisionLoaderBuilder,
-    VisionLoaderType, VisionPromptPrefixer, VisionSpecificConfig, UQFF_MULTI_FILE_DELIMITER,
+    LoraAdapterPaths, MistralLoader, MixtralLoader, Modalities, ModelKind, ModelPaths,
+    MultimodalPromptPrefixer, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
+    NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
+    SpeculativeLoader, SpeculativePipeline, SpeechLoader, SpeechPipeline, Starcoder2Loader,
+    TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
     ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
@@ -132,6 +134,7 @@ pub struct MistralRsConfig {
     pub kind: ModelKind,
     pub device: Device,
     pub category: ModelCategory,
+    pub modalities: Modalities,
 }
 
 /// The MistralRs struct handles sending requests to the engine.
@@ -338,10 +341,19 @@ impl MistralRs {
 
         let kind = pipeline.try_lock().unwrap().get_metadata().kind.clone();
         let device = pipeline.try_lock().unwrap().device();
+        let modalities = pipeline
+            .try_lock()
+            .unwrap()
+            .get_metadata()
+            .modalities
+            .clone();
+        info!("Pipeline input modalities are {:?}", &modalities.input);
+        info!("Pipeline output modalities are {:?}", &modalities.output);
         let config = MistralRsConfig {
             kind,
             device,
             category: category.clone(),
+            modalities,
         };
 
         let engine_handler = thread::spawn(move || {

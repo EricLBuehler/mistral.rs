@@ -4,6 +4,7 @@ use std::{
 };
 
 use image::DynamicImage;
+use mistralrs_core::AudioInput;
 use mistralrs_core::ResponseErr;
 use pyo3::{exceptions::PyValueError, PyErr};
 
@@ -130,4 +131,54 @@ pub(crate) fn parse_image_url(url_unparsed: &str) -> PyApiResult<DynamicImage> {
     };
 
     image::load_from_memory(&bytes).map_err(|e| PyApiErr::from(format!("{e}")))
+}
+
+/// Parses and loads an audio file from a URL, file path, or data URL.
+/// Mirrors `parse_image_url` but returns an `AudioInput`.
+pub(crate) fn parse_audio_url(url_unparsed: &str) -> PyApiResult<AudioInput> {
+    let url = if let Ok(url) = url::Url::parse(url_unparsed) {
+        url
+    } else if File::open(url_unparsed).is_ok() {
+        url::Url::from_file_path(std::path::absolute(url_unparsed)?)
+            .map_err(|_| format!("Could not parse file path: {}", url_unparsed))?
+    } else {
+        url::Url::parse(url_unparsed)
+            .map_err(|_| format!("Could not parse as base64 data: {}", url_unparsed))?
+    };
+
+    let bytes = if url.scheme() == "http" || url.scheme() == "https" {
+        match reqwest::blocking::get(url.clone()) {
+            Ok(http_resp) => http_resp
+                .bytes()
+                .map_err(|e| PyApiErr::from(format!("{e}")))?
+                .to_vec(),
+            Err(e) => return Err(PyApiErr::from(format!("{e}"))),
+        }
+    } else if url.scheme() == "file" {
+        let path = url
+            .to_file_path()
+            .map_err(|_| format!("Could not parse file path: {}", url))?;
+
+        if let Ok(mut f) = File::open(&path) {
+            let metadata = fs::metadata(&path)?;
+            let mut buffer = vec![0; metadata.len() as usize];
+            f.read_exact(&mut buffer)?;
+            buffer
+        } else {
+            return Err(PyApiErr::from(format!(
+                "Could not open file at path: {}",
+                url
+            )));
+        }
+    } else if url.scheme() == "data" {
+        let data_url = data_url::DataUrl::process(url.as_str()).map_err(|e| format!("{e}"))?;
+        data_url.decode_to_vec().map_err(|e| format!("{e}"))?.0
+    } else {
+        return Err(PyApiErr::from(format!(
+            "Unsupported URL scheme: {}",
+            url.scheme()
+        )));
+    };
+
+    AudioInput::from_bytes(&bytes).map_err(|e| PyApiErr::from(format!("{e}")))
 }

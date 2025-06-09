@@ -7,7 +7,8 @@ use candle_core::{
     Context, DType, Device, IndexOp, Result, Tensor, D,
 };
 use candle_nn::{
-    Conv2d, Conv2dConfig, Embedding, GroupNorm, LayerNorm, LayerNormConfig, Linear, Module,
+    BatchNorm, BatchNormConfig, Conv1d, Conv1dConfig, Conv2d, Conv2dConfig, Embedding, GroupNorm,
+    LayerNorm, LayerNormConfig, Linear, Module,
 };
 use float8::F8E4M3;
 use half::{bf16, f16};
@@ -67,6 +68,34 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
     }
 }
 
+pub fn batch_norm<C: Into<BatchNormConfig>>(
+    num_features: usize,
+    config: C,
+    vb: ShardedVarBuilder,
+) -> Result<BatchNorm> {
+    let config = config.into();
+    if config.eps < 0. {
+        candle_core::bail!("batch-norm eps cannot be negative {}", config.eps)
+    }
+    let running_mean = vb.get(num_features, "running_mean")?;
+    let running_var = vb.get(num_features, "running_var")?;
+
+    if config.affine {
+        let weight = vb.get(num_features, "weight")?;
+        let bias = vb.get(num_features, "bias")?;
+        BatchNorm::new(
+            num_features,
+            running_mean,
+            running_var,
+            weight,
+            bias,
+            config.eps,
+        )
+    } else {
+        BatchNorm::new_no_bias(num_features, running_mean, running_var, config.eps)
+    }
+}
+
 pub fn group_norm(
     num_groups: usize,
     num_channels: usize,
@@ -115,6 +144,35 @@ pub fn conv2d_no_bias(
         "weight",
     )?;
     Ok(Conv2d::new(ws, None, cfg))
+}
+
+pub fn conv1d(
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    cfg: Conv1dConfig,
+    vb: ShardedVarBuilder,
+) -> Result<Conv1d> {
+    let ws = vb.get(
+        (out_channels, in_channels / cfg.groups, kernel_size),
+        "weight",
+    )?;
+    let bs = vb.get(out_channels, "bias")?;
+    Ok(Conv1d::new(ws, Some(bs), cfg))
+}
+
+pub fn conv1d_no_bias(
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    cfg: Conv1dConfig,
+    vb: ShardedVarBuilder,
+) -> Result<Conv1d> {
+    let ws = vb.get(
+        (out_channels, in_channels / cfg.groups, kernel_size),
+        "weight",
+    )?;
+    Ok(Conv1d::new(ws, None, cfg))
 }
 
 pub fn linear(in_dim: usize, out_dim: usize, vb: ShardedVarBuilder) -> Result<Linear> {

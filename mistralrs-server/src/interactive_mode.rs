@@ -110,10 +110,10 @@ Welcome to interactive mode! Because this model is a text model, you can enter p
 const VISION_INTERACTIVE_HELP: &str = r#"
 Welcome to interactive mode! Because this model is a vision model, you can enter prompts and chat with the model.
 
-To specify a message with one or more images, simply include the image URL or path:
+To specify a message with one or more images or audios, simply include the image/audio URL or path:
 
-- `Please describe this image: path/to/image1.jpg path/to/image2.png`
-- `What is in this image: <url here>`
+- `Describe these images: path/to/image1.jpg path/to/image2.png`
+- `Describe the image and transcribe the audio: path/to/image1.jpg path/to/sound.mp3`
 "#;
 
 const DIFFUSION_INTERACTIVE_HELP: &str = r#"
@@ -142,6 +142,7 @@ const TOPP_CMD: &str = "\\topp";
 
 /// Regex string used to extract image URLs from prompts.
 const IMAGE_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:png|jpe?g|bmp|gif|webp)(?:\?\S+?)?)"#;
+const AUDIO_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:wav|mp3|flac|ogg)(?:\?\S+?)?)"#;
 
 fn interactive_sample_parameters() -> SamplingParams {
     SamplingParams {
@@ -437,10 +438,12 @@ async fn vision_interactive_mode(
 ) {
     // Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
     let image_regex = Regex::new(IMAGE_REGEX).unwrap();
+    let audio_regex = Regex::new(AUDIO_REGEX).unwrap();
 
     let sender = mistralrs.get_sender().unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
     let mut images = Vec::new();
+    let mut audios = Vec::new();
 
     let prefixer = match &mistralrs.config().category {
         ModelCategory::Vision { prefixer } => prefixer,
@@ -516,14 +519,17 @@ async fn vision_interactive_mode(
                 continue;
             }
             _ => {
-                // Extract any image URLs and the remaining text
-                let (urls, text) = parse_files_and_message(prompt_trimmed, &image_regex);
-                if !urls.is_empty() {
+                let (urls_image, text_without_images) =
+                    parse_files_and_message(prompt_trimmed, &image_regex);
+                let (urls_audio, text) =
+                    parse_files_and_message(&text_without_images, &audio_regex);
+                if !urls_image.is_empty() || !urls_audio.is_empty() {
+                    // Load images
                     let mut image_indexes = Vec::new();
-                    // Load all images first
-                    for url in &urls {
+                    for url in &urls_image {
                         match util::parse_image_url(url).await {
                             Ok(image) => {
+                                info!("Added image at `{url}`");
                                 image_indexes.push(images.len());
                                 images.push(image);
                             }
@@ -533,21 +539,51 @@ async fn vision_interactive_mode(
                             }
                         }
                     }
-                    // Build a single user message with multiple images and then the text
+                    // Load audios
+                    let mut audio_indexes = Vec::new();
+                    for url in &urls_audio {
+                        match util::parse_audio_url(url).await {
+                            Ok(audio) => {
+                                info!("Added audio at `{url}`");
+                                audio_indexes.push(audios.len());
+                                audios.push(audio);
+                            }
+                            Err(e) => {
+                                error!("Failed to read audio from URL/path {}: {}", url, e);
+                                continue 'outer;
+                            }
+                        }
+                    }
+                    // Build mixed content parts
                     let mut content_vec: Vec<IndexMap<String, Value>> = Vec::new();
-                    // Add one image part per URL
-                    for _ in &urls {
+                    for _ in &urls_image {
                         content_vec.push(IndexMap::from([(
                             "type".to_string(),
                             Value::String("image".to_string()),
                         )]));
                     }
-                    // Add the text part once
-                    let text = prefixer.prefix_image(image_indexes, &text);
+                    for _ in &urls_audio {
+                        content_vec.push(IndexMap::from([(
+                            "type".to_string(),
+                            Value::String("audio".to_string()),
+                        )]));
+                    }
+                    // Prefix the text with any media context
+                    let mut prefixed_text = text.clone();
+                    if !image_indexes.is_empty() {
+                        prefixed_text =
+                            prefixer.prefix_image(image_indexes.clone(), &prefixed_text);
+                    }
+                    if !audio_indexes.is_empty() {
+                        prefixed_text =
+                            prefixer.prefix_audio(audio_indexes.clone(), &prefixed_text);
+                    }
+                    // Add the final text part
                     content_vec.push(IndexMap::from([
                         ("type".to_string(), Value::String("text".to_string())),
-                        ("text".to_string(), Value::String(text.clone())),
+                        ("text".to_string(), Value::String(prefixed_text)),
                     ]));
+                    // Push the combined user message
                     let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
                     user_message.insert("role".to_string(), Either::Left("user".to_string()));
                     user_message.insert("content".to_string(), Either::Right(content_vec));
@@ -570,6 +606,7 @@ async fn vision_interactive_mode(
 
         let request_messages = RequestMessage::VisionChat {
             images: images.clone(),
+            audios: audios.clone(),
             messages: messages.clone(),
             enable_thinking,
         };

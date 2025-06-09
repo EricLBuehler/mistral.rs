@@ -8,6 +8,7 @@ from mistralrs import (
     ToolChoice,
 )
 
+
 def local_search(query: str):
     results = []
     for root, _, files in os.walk("."):
@@ -35,6 +36,7 @@ def tool_cb(name: str, args: dict) -> str:
         return json.dumps(local_search(args.get("query", "")))
     return ""
 
+
 schema = json.dumps(
     {
         "type": "function",
@@ -51,7 +53,9 @@ schema = json.dumps(
 )
 
 runner = Runner(
-    which=Which.Plain(model_id="NousResearch/Hermes-3-Llama-3.1-8B", arch=Architecture.Llama),
+    which=Which.Plain(
+        model_id="NousResearch/Hermes-3-Llama-3.1-8B", arch=Architecture.Llama
+    ),
     tool_callbacks={"local_search": tool_cb},
 )
 

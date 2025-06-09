@@ -88,9 +88,11 @@ function handleWebSocketMessage(ev) {
 function hasUploadedFiles() {
   const imageContainer = document.getElementById('image-container');
   const textContainer = document.getElementById('text-files-container');
+  const audioContainer = document.getElementById('audio-container');
   const hasImages = imageContainer.querySelectorAll('.image-preview-container').length > 0;
   const hasTextFiles = textContainer.querySelectorAll('.text-file-preview').length > 0;
-  return hasImages || hasTextFiles;
+  const hasAudios = audioContainer.querySelectorAll('.audio-preview-container').length > 0;
+  return hasImages || hasTextFiles || hasAudios;
 }
 
 /**
@@ -176,6 +178,10 @@ ${content}
   // Check if there are any images in the image-container
   const imageContainer = document.getElementById('image-container');
   const imageContainers = imageContainer.querySelectorAll('.image-preview-container');
+
+  // Check for audio attachments
+  const audioContainerDiv = document.getElementById('audio-container');
+  const audioContainers = audioContainerDiv.querySelectorAll('.audio-preview-container');
   
   if (imageContainers.length > 0) {
     // Send images to server context (once per message)
@@ -205,6 +211,35 @@ ${content}
 
     userDiv.appendChild(imgWrap);
   }
+
+  // ----- Handle audio attachments -----
+  if (audioContainers.length > 0) {
+    // Send audio URLs first
+    audioContainers.forEach(container => {
+      const url = container.dataset.uploadUrl;
+      if (url) {
+        ws.send(JSON.stringify({ audio: url }));
+      }
+    });
+
+    // Add audio players to user message
+    const audioWrap = document.createElement('div');
+    audioWrap.className = 'chat-audios';
+    audioWrap.style.display = 'flex';
+    audioWrap.style.flexDirection = 'column';
+    audioWrap.style.gap = '1rem';
+
+    audioContainers.forEach(container => {
+      const audioEl = container.querySelector('audio');
+      if (audioEl) {
+        const clone = audioEl.cloneNode(true);
+        clone.controls = true;
+        clone.style.maxWidth = '240px';
+        audioWrap.appendChild(clone);
+      }
+    });
+    userDiv.appendChild(audioWrap);
+  }
   
   assistantBuf = ''; 
   assistantDiv = null;
@@ -231,6 +266,7 @@ ${content}
   // Clear uploaded files after sending
   clearImagePreviews();
   clearTextFilePreviews();
+  clearAudioPreviews();
   
   // Trigger textarea resize
   const event = new Event('input');

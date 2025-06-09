@@ -47,8 +47,12 @@
       <input type="file" id="imageInput" accept="image/*" hidden />
       <input type="file" id="textInput" accept=".txt,.md,.markdown,.py,.js,.ts,.rs,.html,.css,.json,.xml,.yaml,.yml,.toml,.c,.cpp,.java,.go,.rb,.php,.sh,.sql,.log,.csv" hidden />
 
+      <!-- audio input (wav/mp3/ogg/… ) -->
+      <input type="file" id="audioInput" accept="audio/*" hidden />
+
       <!-- file upload buttons and send button share the same class -->
       <label for="imageInput" class="btn" id="imageLabel">📎 Image</label>
+      <label for="audioInput" class="btn" id="audioLabel">🎤 Audio</label>
       <label for="textInput" class="btn" id="textLabel">📄 File</label>
       <button type="submit" class="btn">Send</button>
       <button type="button" class="btn" id="stopBtn">⏹️ Stop</button>
@@ -56,6 +60,7 @@
     </form>
 
     <div id="image-container"></div>
+    <div id="audio-container"></div>
     <div id="text-files-container"></div>
 
     <!-- External dependencies -->

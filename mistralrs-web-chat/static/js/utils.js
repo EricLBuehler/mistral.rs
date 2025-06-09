@@ -104,16 +104,30 @@ function clearTextFilePreviews() {
 }
 
 /**
+ * Clear audio previews from the audio container
+ */
+function clearAudioPreviews() {
+  const audioContainer = document.getElementById('audio-container');
+  if (audioContainer) audioContainer.innerHTML = '';
+}
+
+/**
  * Update image input visibility based on model kind
  */
 function updateImageVisibility(kind) {
   const imageLabel = document.getElementById('imageLabel');
   const imageInput = document.getElementById('imageInput');
+  const audioLabel = document.getElementById('audioLabel');
+  const audioInput = document.getElementById('audioInput');
   const textLabel = document.getElementById('textLabel');
   const textInput = document.getElementById('textInput');
   
   const isVision = (kind === 'vision');
   const isText = (kind === 'text');
+
+  // Show audio upload for vision models as well (covers audio-enabled models)
+  audioLabel.style.display = isVision ? 'inline-block' : 'none';
+  if (!isVision) audioInput.value = '';
   
   // Toggle image upload only for vision models
   imageLabel.style.display = isVision ? 'inline-block' : 'none';
@@ -173,6 +187,56 @@ function createImagePreview(imageSrc) {
 
   // Store the upload URL for sending to the server
   container.dataset.uploadUrl = imageSrc;
+
+  return container;
+}
+
+/**
+ * Create an audio preview element with delete button
+ */
+function createAudioPreview(audioSrc) {
+  const container = document.createElement('div');
+  container.className = 'audio-preview-container';
+  container.style.position = 'relative';
+  container.style.display = 'inline-block';
+
+  const audio = document.createElement('audio');
+  audio.src = audioSrc;
+  audio.controls = true;
+  audio.style.maxWidth = '240px';
+
+  const removeBtn = document.createElement('button');
+  removeBtn.className = 'audio-remove-btn';
+  removeBtn.textContent = '×';
+  removeBtn.title = 'Remove audio';
+  removeBtn.style.position = 'absolute';
+  removeBtn.style.top = '5px';
+  removeBtn.style.right = '5px';
+  removeBtn.style.background = 'rgba(0,0,0,0.7)';
+  removeBtn.style.color = 'white';
+  removeBtn.style.border = 'none';
+  removeBtn.style.borderRadius = '50%';
+  removeBtn.style.width = '20px';
+  removeBtn.style.height = '20px';
+  removeBtn.style.cursor = 'pointer';
+  removeBtn.style.fontSize = '12px';
+
+  removeBtn.addEventListener('click', () => {
+    container.remove();
+  });
+
+  removeBtn.addEventListener('mouseenter', () => {
+    removeBtn.style.background = '#ff4444';
+  });
+
+  removeBtn.addEventListener('mouseleave', () => {
+    removeBtn.style.background = 'rgba(0,0,0,0.7)';
+  });
+
+  container.appendChild(audio);
+  container.appendChild(removeBtn);
+
+  container.dataset.uploadUrl = audioSrc;
 
   return container;
 }

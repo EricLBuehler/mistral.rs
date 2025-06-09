@@ -9,6 +9,12 @@ use regex::Regex;
 use tokenizers::Tokenizer;
 use tracing::warn;
 
+use apodize::hanning_iter;
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
+use rustfft::{num_complex::Complex32, FftPlanner};
+
 use crate::{
     device_map::DeviceMapper,
     pipeline::{
@@ -29,14 +35,27 @@ use crate::vision_models::{
     ModelInputs,
 };
 
+use super::audio_embedding::AUDIO_SPECIAL_TOKEN_ID;
 use super::image_embedding::IMAGE_SPECIAL_TOKEN_ID;
 
 const COMPATIBLE_IMAGE_SPECIAL_TOKEN_PATTERN: &str = r"<\|image_\d+\|>";
+const COMPATIBLE_AUDIO_SPECIAL_TOKEN_PATTERN: &str = r"<\|audio_\d+\|>";
 const IMAGE_SPECIAL_TOKEN: &str = "<|endoftext10|>";
+const AUDIO_SPECIAL_TOKEN: &str = "<|endoftext11|>";
 pub(crate) const DYHD_BASE_RESOLUTION: usize = 448;
 
+const AUDIO_FEATURE_SIZE: usize = 80; // mel bins
+
+type AudioProcessingResult = Result<(Option<Tensor>, Option<Vec<usize>>, Option<Tensor>)>;
+
 // Input processor
-pub struct Phi4MMInputsProcessor;
+pub struct Phi4MMInputsProcessor {
+    audio_compression_rate: usize,
+    audio_downsample_rate: usize,
+    audio_feat_stride: usize,
+    eightk_method: String, // "fillzero" or "resample"
+}
+
 // Processor
 pub struct Phi4MMProcessor {
     inputs_processor: Arc<Phi4MMInputsProcessor>,
@@ -45,10 +64,21 @@ pub struct Phi4MMProcessor {
 impl ProcessorCreator for Phi4MMProcessor {
     fn new_processor(
         _: Option<ProcessorConfig>,
-        _: PreProcessorConfig,
+        pre_processor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(Self {
-            inputs_processor: Arc::new(Phi4MMInputsProcessor),
+            inputs_processor: Arc::new(Phi4MMInputsProcessor {
+                audio_compression_rate: pre_processor_config
+                    .audio_compression_rate
+                    .expect("audio_compression_rate"),
+                audio_downsample_rate: pre_processor_config
+                    .audio_downsample_rate
+                    .expect("audio_downsample_rate"),
+                audio_feat_stride: pre_processor_config
+                    .audio_feat_stride
+                    .expect("audio_feat_stride"),
+                eightk_method: "fillzero".to_string(), // Default to fillzero
+            }),
         })
     }
 }
@@ -109,6 +139,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
+        let has_audios = input_seqs.iter().all(|seq| seq.has_audios());
         let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         let (pixel_values, pixel_attention_mask, image_sizes, num_img_tokens) = if has_images {
@@ -159,6 +190,8 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 Some(image_sizes_accum),
                 Some(num_img_tokens_accum),
             )
+        } else if has_audios {
+            (None, None, None, Some(vec![vec![]; input_seqs.len()]))
         } else {
             return Box::new(
                 text_models_inputs_processor::TextInputsProcessor
@@ -203,9 +236,12 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                             position_ids,
                             pixel_values: None,
                             model_specific_args: Box::new(Phi4MMVisionSpecificArgs {
-                                image_sizes: None,
-                                image_attention_mask: None,
                                 input_image_embeds: None,
+                                image_attention_mask: None,
+                                image_sizes: None,
+                                input_audio_embeds: None,
+                                audio_embed_sizes: None,
+                                audio_attention_mask: None,
                             }),
                             paged_attn_meta,
                             flash_meta,
@@ -229,15 +265,14 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             .expect("Decode failed");
 
         let img_token_pattern = Regex::new(COMPATIBLE_IMAGE_SPECIAL_TOKEN_PATTERN).unwrap();
+        let audio_token_pattern = Regex::new(COMPATIBLE_AUDIO_SPECIAL_TOKEN_PATTERN).unwrap();
 
-        let mut toks = Vec::new();
-
-        for (mut detokenized, (seq, num_img_tokens)) in detokenized
-            .into_iter()
-            .zip(input_seqs.iter_mut().zip(num_img_tokens.unwrap()))
-        {
+        for (mut detokenized, seq) in detokenized.into_iter().zip(input_seqs.iter_mut()) {
             detokenized = img_token_pattern
                 .replace_all(&detokenized, IMAGE_SPECIAL_TOKEN)
+                .to_string();
+            detokenized = audio_token_pattern
+                .replace_all(&detokenized, AUDIO_SPECIAL_TOKEN)
                 .to_string();
 
             let has_changed_prompt = seq.multimodal.has_changed_prompt;
@@ -253,13 +288,29 @@ impl InputsProcessor for Phi4MMInputsProcessor {
 
                 seq.set_initial_prompt(detokenized);
             }
+        }
+
+        let (input_audio_embeds, audio_embed_sizes, audio_attention_mask) =
+            match self.process_audio_for_sequences(input_seqs, device) {
+                Ok(result) => result,
+                Err(e) => return Box::new(std::iter::once(Err(anyhow::Error::new(e)))),
+            };
+
+        let mut toks = Vec::new();
+
+        for (seq, num_img_tokens) in input_seqs.iter_mut().zip(num_img_tokens.unwrap()) {
+            let has_changed_prompt = seq.multimodal.has_changed_prompt;
 
             let mut i = 0;
             let mut image_token_count_iter = num_img_tokens.iter();
+            let audio_sizes_tmp = audio_embed_sizes.clone().unwrap_or(vec![]);
+            let mut audio_embed_sizes = audio_sizes_tmp.iter();
             while i < seq.get_toks().len() {
                 let token_id = seq.get_toks()[i];
                 let token_count = if token_id == IMAGE_SPECIAL_TOKEN_ID as u32 {
                     image_token_count_iter.next().unwrap()
+                } else if token_id == AUDIO_SPECIAL_TOKEN_ID as u32 {
+                    audio_embed_sizes.next().unwrap()
                 } else {
                     i += 1;
                     continue;
@@ -326,9 +377,12 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 position_ids,
                 pixel_values: pixel_values.clone(),
                 model_specific_args: Box::new(Phi4MMVisionSpecificArgs {
-                    image_sizes: image_sizes.clone(),
-                    image_attention_mask: pixel_attention_mask,
                     input_image_embeds: pixel_values,
+                    image_attention_mask: pixel_attention_mask,
+                    image_sizes: image_sizes.clone(),
+                    input_audio_embeds: input_audio_embeds.clone(),
+                    audio_embed_sizes: audio_embed_sizes.clone(),
+                    audio_attention_mask: audio_attention_mask.clone(),
                 }),
                 paged_attn_meta,
                 flash_meta,
@@ -338,6 +392,406 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 seq_indices,
             })
         }))
+    }
+}
+
+impl Phi4MMInputsProcessor {
+    fn extract_audio_features(
+        &self,
+        audio_data: &[f32],
+        sample_rate: u32,
+    ) -> Result<Vec<Vec<f32>>> {
+        // Resample audio to supported rates using rubato
+        let (resampled_audio, final_sample_rate) =
+            self.resample_audio_with_rubato(audio_data, sample_rate)?;
+
+        // Extract mel spectrogram using rustfft and custom mel filterbank
+        let mel_features =
+            self.extract_mel_spectrogram_rustfft(&resampled_audio, final_sample_rate)?;
+
+        Ok(mel_features)
+    }
+
+    fn resample_audio_with_rubato(&self, wav: &[f32], fs: u32) -> Result<(Vec<f32>, u32)> {
+        let target_fs = if fs > 16000 {
+            16000
+        } else if fs > 8000 && fs < 16000 {
+            8000
+        } else if fs < 8000 {
+            return Err(candle_core::Error::Msg(format!(
+                "Unsupported sample rate: {}",
+                fs
+            )));
+        } else {
+            return Ok((wav.to_vec(), fs)); // No resampling needed
+        };
+
+        if fs == target_fs {
+            return Ok((wav.to_vec(), fs));
+        }
+
+        // Handle 8kHz upsampling case
+        if fs == 8000 && self.eightk_method == "resample" {
+            // Upsample to 16kHz using rubato
+            let params = SincInterpolationParameters {
+                sinc_len: 256,
+                f_cutoff: 0.95,
+                interpolation: SincInterpolationType::Linear,
+                oversampling_factor: 256,
+                window: WindowFunction::BlackmanHarris2,
+            };
+
+            let mut resampler = SincFixedIn::<f32>::new(
+                2.0, // resample ratio (16000/8000)
+                2.0,
+                params,
+                wav.len(),
+                1, // mono
+            )
+            .map_err(|e| candle_core::Error::Msg(format!("Resampler creation failed: {}", e)))?;
+
+            let input = vec![wav.to_vec()];
+            let output = resampler
+                .process(&input, None)
+                .map_err(|e| candle_core::Error::Msg(format!("Resampling failed: {}", e)))?;
+
+            return Ok((output[0].clone(), 16000));
+        }
+
+        // Regular downsampling
+        let resample_ratio = target_fs as f64 / fs as f64;
+
+        let params = SincInterpolationParameters {
+            sinc_len: 256,
+            f_cutoff: 0.95,
+            interpolation: SincInterpolationType::Linear,
+            oversampling_factor: 256,
+            window: WindowFunction::BlackmanHarris2,
+        };
+
+        let mut resampler = SincFixedIn::<f32>::new(
+            resample_ratio,
+            2.0,
+            params,
+            wav.len(),
+            1, // mono
+        )
+        .map_err(|e| candle_core::Error::Msg(format!("Resampler creation failed: {}", e)))?;
+
+        let input = vec![wav.to_vec()];
+        let output = resampler
+            .process(&input, None)
+            .map_err(|e| candle_core::Error::Msg(format!("Resampling failed: {}", e)))?;
+
+        Ok((output[0].clone(), target_fs))
+    }
+
+    fn extract_mel_spectrogram_rustfft(&self, wav: &[f32], fs: u32) -> Result<Vec<Vec<f32>>> {
+        // Set parameters based on sample rate
+        let (n_fft, win_length, hop_length) = if fs == 8000 {
+            (256, 200, 80)
+        } else if fs == 16000 {
+            (512, 400, 160)
+        } else {
+            return Err(candle_core::Error::Msg(format!(
+                "Unsupported sample rate: {}",
+                fs
+            )));
+        };
+
+        // Apply preemphasis first
+        let preemphasized = self.apply_preemphasis(wav, 0.97);
+
+        // Create FFT planner
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(n_fft);
+
+        // Create Hanning window
+        let window: Vec<f64> = hanning_iter(win_length).collect();
+
+        // Create mel filterbank
+        let mel_filters = self.create_mel_filterbank(AUDIO_FEATURE_SIZE, n_fft, fs as f32)?;
+
+        // Extract frames and apply STFT
+        let n_batch = (preemphasized.len() - win_length) / hop_length + 1;
+        let mut mel_features = Vec::new();
+
+        for i in 0..n_batch {
+            let start = i * hop_length;
+            let end = start + win_length;
+            if end > preemphasized.len() {
+                break;
+            }
+
+            // Apply window and convert to complex
+            let mut windowed: Vec<Complex32> = preemphasized[start..end]
+                .iter()
+                .zip(window.iter())
+                .map(|(s, w)| Complex32::new(s * *w as f32, 0.0))
+                .collect();
+
+            // Pad to n_fft length
+            windowed.resize(n_fft, Complex32::new(0.0, 0.0));
+
+            // Apply FFT
+            fft.process(&mut windowed);
+
+            // Take power spectrum of positive frequencies
+            let power_spectrum: Vec<f32> = windowed[0..n_fft / 2 + 1]
+                .iter()
+                .map(|c| c.norm_sqr())
+                .collect();
+
+            // Apply mel filterbank
+            let mut mel_frame = vec![0.0; AUDIO_FEATURE_SIZE];
+            for (mel_idx, filter) in mel_filters.iter().enumerate() {
+                let mut sum = 0.0;
+                for (freq_idx, &coeff) in filter.iter().enumerate() {
+                    if freq_idx < power_spectrum.len() {
+                        sum += power_spectrum[freq_idx] * coeff;
+                    }
+                }
+                mel_frame[mel_idx] = (sum.max(1.0)).ln(); // Apply log with clipping
+            }
+
+            mel_features.push(mel_frame);
+        }
+
+        // Handle 8kHz case with fillzero method
+        if fs == 8000 && self.eightk_method == "fillzero" {
+            for frame in &mut mel_features {
+                // Extend each frame with zeros to match 16kHz structure
+                let original_len = frame.len();
+                frame.extend(vec![0.0; original_len]);
+            }
+        }
+
+        Ok(mel_features)
+    }
+
+    fn apply_preemphasis(&self, wav: &[f32], preemphasis: f32) -> Vec<f32> {
+        if wav.is_empty() {
+            return vec![];
+        }
+
+        let mut preemphasized = Vec::with_capacity(wav.len());
+
+        // First sample: y[0] = x[0] * 32768
+        preemphasized.push(wav[0] * 32768.0);
+
+        // Remaining samples: y[n] = (x[n] - preemphasis * x[n-1]) * 32768
+        for i in 1..wav.len() {
+            let filtered = (wav[i] - preemphasis * wav[i - 1]) * 32768.0;
+            preemphasized.push(filtered);
+        }
+
+        preemphasized
+    }
+
+    fn create_mel_filterbank(
+        &self,
+        n_mels: usize,
+        n_fft: usize,
+        sample_rate: f32,
+    ) -> Result<Vec<Vec<f32>>> {
+        let bank_width = n_fft / 2 + 1;
+        let fmax = sample_rate / 2.0;
+        let fmin = 0.0;
+
+        // Mel scale conversion functions
+        let hz_to_mel = |f: f32| 1127.0 * (1.0 + f / 700.0).ln();
+        let mel_to_hz = |mel: f32| 700.0 * (mel / 1127.0).exp() - 700.0;
+
+        let mel_low = hz_to_mel(fmin);
+        let mel_high = hz_to_mel(fmax);
+
+        // Create mel centers
+        let mel_centers: Vec<f32> = (0..=n_mels + 1)
+            .map(|i| mel_low + (mel_high - mel_low) * i as f32 / (n_mels + 1) as f32)
+            .collect();
+
+        let hz_centers: Vec<f32> = mel_centers.iter().map(|&mel| mel_to_hz(mel)).collect();
+
+        // Convert to bin numbers
+        let bin_centers: Vec<usize> = hz_centers
+            .iter()
+            .map(|&f| ((f * n_fft as f32 / sample_rate) + 0.5) as usize)
+            .collect();
+
+        // Create triangular filters
+        let mut filters = Vec::new();
+        for m in 0..n_mels {
+            let mut filter = vec![0.0; bank_width];
+
+            let left_bin = bin_centers[m];
+            let center_bin = bin_centers[m + 1];
+            let right_bin = bin_centers[m + 2];
+
+            // Left slope
+            for (bin, filter) in filter
+                .iter_mut()
+                .enumerate()
+                .take(center_bin)
+                .skip(left_bin)
+            {
+                if bin < bank_width {
+                    *filter = (bin - left_bin) as f32 / (center_bin - left_bin) as f32;
+                }
+            }
+
+            // Right slope
+            for (bin, filter) in filter
+                .iter_mut()
+                .enumerate()
+                .take(right_bin)
+                .skip(center_bin)
+            {
+                if bin < bank_width {
+                    *filter = (right_bin - bin) as f32 / (right_bin - center_bin) as f32;
+                }
+            }
+
+            filters.push(filter);
+        }
+
+        Ok(filters)
+    }
+
+    fn compute_audio_embed_size(
+        &self,
+        audio_frames: usize,
+        compression_rate: usize,
+        downsample_rate: usize,
+    ) -> usize {
+        // First compression
+        let integer = audio_frames / compression_rate;
+        let remainder = audio_frames % compression_rate;
+        let result = if remainder == 0 { integer } else { integer + 1 };
+
+        // Second compression (qformer)
+        let integer = result / downsample_rate;
+        let remainder = result % downsample_rate;
+        if remainder == 0 {
+            integer
+        } else {
+            integer + 1
+        }
+    }
+
+    fn create_audio_attention_mask(
+        &self,
+        audio_frames_list: &[usize],
+        device: &Device,
+    ) -> Result<Tensor> {
+        let max_frames = *audio_frames_list.iter().max().unwrap_or(&0);
+        let batch_size = audio_frames_list.len();
+
+        let mut mask_data = vec![0u8; batch_size * max_frames];
+        for (batch_idx, &frames) in audio_frames_list.iter().enumerate() {
+            for frame_idx in 0..frames.min(max_frames) {
+                mask_data[batch_idx * max_frames + frame_idx] = 1;
+            }
+        }
+
+        Tensor::from_slice(&mask_data, (batch_size, max_frames), device)?.to_dtype(DType::F32)
+    }
+
+    fn process_audio_for_sequences(
+        &self,
+        input_seqs: &mut [&mut Sequence],
+        device: &Device,
+    ) -> AudioProcessingResult {
+        // Check if any sequence has audio tokens
+        let has_audio_tokens = input_seqs
+            .iter()
+            .any(|seq| seq.get_toks().contains(&(AUDIO_SPECIAL_TOKEN_ID as u32)));
+
+        if !has_audio_tokens {
+            return Ok((None, None, None));
+        }
+
+        let mut audio_features_list = Vec::new();
+        let mut audio_embed_sizes_list = Vec::new();
+        let mut audio_frames_list = Vec::new();
+
+        // Process audio for each sequence that needs it
+        for seq in input_seqs.iter_mut() {
+            let has_audio = seq.get_toks().contains(&(AUDIO_SPECIAL_TOKEN_ID as u32));
+
+            if has_audio {
+                if let Some(audios) = seq.take_audios() {
+                    for audio in audios.into_iter() {
+                        // Convert multi-channel audio to mono by averaging channels
+                        let samples = audio.to_mono();
+
+                        // Extract features
+                        let features = self.extract_audio_features(&samples, audio.sample_rate)?;
+                        let audio_frames = features.len() * self.audio_feat_stride;
+
+                        let embed_size = self.compute_audio_embed_size(
+                            audio_frames,
+                            self.audio_compression_rate,
+                            self.audio_downsample_rate,
+                        );
+
+                        // Convert to tensor
+                        let features_len = features.len();
+                        let features_flat: Vec<f32> = features.into_iter().flatten().collect();
+                        let features_tensor = Tensor::from_slice(
+                            &features_flat,
+                            (features_len, AUDIO_FEATURE_SIZE),
+                            device,
+                        )?;
+
+                        audio_features_list.push(features_tensor);
+                        audio_embed_sizes_list.push(embed_size);
+                        audio_frames_list.push(audio_frames);
+                    }
+                } else {
+                    candle_core::bail!("No audios in `process_audio_for_sequences`");
+                };
+            }
+        }
+
+        if audio_features_list.is_empty() {
+            return Ok((None, None, None));
+        }
+
+        // Pad sequences to same length
+        let max_len = audio_features_list
+            .iter()
+            .map(|t| t.dim(0).unwrap_or(0))
+            .max()
+            .unwrap_or(0);
+
+        let mut padded_features = Vec::new();
+        for features in audio_features_list {
+            let seq_len = features.dim(0)?;
+            if seq_len < max_len {
+                let padding =
+                    Tensor::zeros((max_len - seq_len, AUDIO_FEATURE_SIZE), DType::F32, device)?;
+                let padded = Tensor::cat(&[features, padding], 0)?;
+                padded_features.push(padded);
+            } else {
+                padded_features.push(features);
+            }
+        }
+
+        // Stack into batch tensor
+        let input_audio_embeds = Tensor::stack(&padded_features, 0)?;
+
+        // Create attention mask if multiple sequences
+        let audio_attention_mask = if audio_frames_list.len() > 1 {
+            Some(self.create_audio_attention_mask(&audio_frames_list, device)?)
+        } else {
+            None
+        };
+
+        Ok((
+            Some(input_audio_embeds),
+            Some(audio_embed_sizes_list),
+            audio_attention_mask,
+        ))
     }
 }
 

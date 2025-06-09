@@ -94,6 +94,12 @@ ahash.workspace = true
 num-traits.workspace = true
 libc.workspace = true
 bm25.workspace = true
+rubato.workspace = true
+rustfft.workspace = true
+hound.workspace = true
+apodize.workspace = true
+symphonia.workspace = true
+mistralrs-audio.workspace = true
 
 [features]
 pyo3_macros = ["pyo3"]

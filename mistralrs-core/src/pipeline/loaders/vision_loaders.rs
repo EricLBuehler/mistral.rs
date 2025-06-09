@@ -26,7 +26,10 @@ use crate::paged_attention::{AttentionImplementation, ModelConfigLike, ModelConf
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::loaders::AutoDeviceMapParams;
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
-use crate::pipeline::{EitherCache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer};
+use crate::pipeline::{
+    EitherCache, IsqModel, Modalities, MultimodalPromptPrefixer, Processor, ProcessorCreator,
+    SupportedModality,
+};
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::vision_models::clip::ClipConfig;
 use crate::vision_models::gemma3::config::Gemma3Config;
@@ -102,7 +105,8 @@ pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         // Default is false, specific model must override.
         false
     }
-    fn prefixer(&self, config: &str) -> Arc<dyn VisionPromptPrefixer>;
+    fn modalities(&self, config: &str) -> Result<Modalities>;
+    fn prefixer(&self, config: &str) -> Arc<dyn MultimodalPromptPrefixer>;
     fn get_device_for_tensor(
         &self,
         config: &str,
@@ -309,13 +313,17 @@ impl VisionModelLoader for AutoVisionLoader {
             .supports_paged_attention(config)
     }
 
+    fn modalities(&self, config: &str) -> Result<Modalities> {
+        Self::get_loader(config)?.modalities(config)
+    }
+
     fn supports_prefix_cacher(&self, config: &str) -> bool {
         Self::get_loader(config)
             .expect("AutoVisionLoader")
             .supports_prefix_cacher(config)
     }
 
-    fn prefixer(&self, config: &str) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Self::get_loader(config)
             .expect("AutoVisionLoader")
             .prefixer(config)
@@ -442,7 +450,7 @@ pub struct Phi3VLoader;
 
 pub struct Phi3VPrefixer;
 
-impl VisionPromptPrefixer for Phi3VPrefixer {
+impl MultimodalPromptPrefixer for Phi3VPrefixer {
     fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
         // Image indexing starts at 0.
         format!(
@@ -494,8 +502,14 @@ impl VisionModelLoader for Phi3VLoader {
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Phi3VPrefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -716,7 +730,7 @@ pub struct Idefics2Loader;
 
 pub struct Idefics2Prefixer;
 
-impl VisionPromptPrefixer for Idefics2Prefixer {
+impl MultimodalPromptPrefixer for Idefics2Prefixer {
     fn prefix_image(&self, _image_indexes: Vec<usize>, prompt: &str) -> String {
         // Chat template does it
         prompt.to_string()
@@ -766,8 +780,14 @@ impl VisionModelLoader for Idefics2Loader {
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Idefics2Prefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -1059,7 +1079,7 @@ pub struct LLaVANextLoader;
 
 pub struct LLaVANextPrefixer;
 
-impl VisionPromptPrefixer for LLaVANextPrefixer {
+impl MultimodalPromptPrefixer for LLaVANextPrefixer {
     fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
         format!("{}{prompt}", "<image>".repeat(image_indexes.len()))
     }
@@ -1104,8 +1124,14 @@ impl VisionModelLoader for LLaVANextLoader {
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(LLaVANextPrefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -1321,7 +1347,7 @@ pub struct LLaVALoader;
 
 pub struct LLaVAPrefixer;
 
-impl VisionPromptPrefixer for LLaVAPrefixer {
+impl MultimodalPromptPrefixer for LLaVAPrefixer {
     fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
         format!("{}{prompt}", "<image>".repeat(image_indexes.len()))
     }
@@ -1366,8 +1392,14 @@ impl VisionModelLoader for LLaVALoader {
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(LLaVAPrefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -1575,7 +1607,7 @@ pub struct VLlamaLoader;
 
 pub struct VLlamaPrefixer;
 
-impl VisionPromptPrefixer for VLlamaPrefixer {
+impl MultimodalPromptPrefixer for VLlamaPrefixer {
     fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
         format!("{}{prompt}", "<|image|>".repeat(image_indexes.len()))
     }
@@ -1620,8 +1652,14 @@ impl VisionModelLoader for VLlamaLoader {
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(VLlamaPrefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -1953,7 +1991,7 @@ pub struct Qwen2VLLoader;
 
 pub struct Qwen2VLPrefixer;
 
-impl VisionPromptPrefixer for Qwen2VLPrefixer {
+impl MultimodalPromptPrefixer for Qwen2VLPrefixer {
     fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
         format!(
             "{}{prompt}",
@@ -2004,8 +2042,14 @@ impl VisionModelLoader for Qwen2VLLoader {
     fn supports_paged_attention(&self, _config: &str) -> bool {
         false
     }
-    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen2VLPrefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -2242,7 +2286,7 @@ pub struct Idefics3Loader;
 
 pub struct Idefics3Prefixer;
 
-impl VisionPromptPrefixer for Idefics3Prefixer {
+impl MultimodalPromptPrefixer for Idefics3Prefixer {
     fn prefix_image(&self, _image_indexes: Vec<usize>, prompt: &str) -> String {
         // Chat template does it
         prompt.to_string()
@@ -2292,8 +2336,14 @@ impl VisionModelLoader for Idefics3Loader {
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Idefics3Prefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -2552,7 +2602,7 @@ pub struct MiniCpmOLoader;
 
 pub struct MiniCpmOPrefixer;
 
-impl VisionPromptPrefixer for MiniCpmOPrefixer {
+impl MultimodalPromptPrefixer for MiniCpmOPrefixer {
     fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
         format!(
             "{}{prompt}",
@@ -2601,8 +2651,14 @@ impl VisionModelLoader for MiniCpmOLoader {
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(MiniCpmOPrefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -2823,7 +2879,7 @@ pub struct Phi4MMLoader;
 
 pub struct Phi4MMPrefixer;
 
-impl VisionPromptPrefixer for Phi4MMPrefixer {
+impl MultimodalPromptPrefixer for Phi4MMPrefixer {
     fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
         // Image indexing starts at 0.
 
@@ -2832,6 +2888,17 @@ impl VisionPromptPrefixer for Phi4MMPrefixer {
             image_indexes
                 .into_iter()
                 .map(|image_index| format!("<|image_{}|>", image_index + 1))
+                .join("")
+        )
+    }
+    fn prefix_audio(&self, audio_indexes: Vec<usize>, prompt: &str) -> String {
+        // Image indexing starts at 0.
+
+        format!(
+            "{}{prompt}",
+            audio_indexes
+                .into_iter()
+                .map(|audio_index| format!("<|audio_{}|>", audio_index + 1))
                 .join("")
         )
     }
@@ -2876,8 +2943,18 @@ impl VisionModelLoader for Phi4MMLoader {
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Phi4MMPrefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![
+                SupportedModality::Text,
+                SupportedModality::Vision,
+                SupportedModality::Audio,
+            ],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -3146,7 +3223,7 @@ pub struct Qwen2_5VLLoader;
 
 pub struct Qwen2_5VLPrefixer;
 
-impl VisionPromptPrefixer for Qwen2_5VLPrefixer {
+impl MultimodalPromptPrefixer for Qwen2_5VLPrefixer {
     fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
         format!(
             "{}{prompt}",
@@ -3197,8 +3274,14 @@ impl VisionModelLoader for Qwen2_5VLLoader {
     fn supports_paged_attention(&self, _config: &str) -> bool {
         false
     }
-    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen2_5VLPrefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -3434,7 +3517,7 @@ pub struct Gemma3Loader;
 
 pub struct Gemma3Prefixer;
 
-impl VisionPromptPrefixer for Gemma3Prefixer {
+impl MultimodalPromptPrefixer for Gemma3Prefixer {
     fn prefix_image(&self, _image_indexes: Vec<usize>, prompt: &str) -> String {
         prompt.to_string()
     }
@@ -3484,8 +3567,14 @@ impl VisionModelLoader for Gemma3Loader {
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Gemma3Prefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -3766,7 +3855,7 @@ pub struct Mistral3Loader;
 
 pub struct Mistral3Prefixer;
 
-impl VisionPromptPrefixer for Mistral3Prefixer {
+impl MultimodalPromptPrefixer for Mistral3Prefixer {
     fn prefix_image(&self, _image_indexes: Vec<usize>, prompt: &str) -> String {
         prompt.to_string()
     }
@@ -3811,8 +3900,14 @@ impl VisionModelLoader for Mistral3Loader {
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Mistral3Prefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -4082,7 +4177,7 @@ pub struct VLlama4Loader;
 
 pub struct VLlama4Prefixer;
 
-impl VisionPromptPrefixer for VLlama4Prefixer {
+impl MultimodalPromptPrefixer for VLlama4Prefixer {
     fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
         format!(
             "{}{prompt}",
@@ -4127,8 +4222,14 @@ impl VisionModelLoader for VLlama4Loader {
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
-    fn prefixer(&self, _config: &str) -> Arc<dyn VisionPromptPrefixer> {
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(VLlama4Prefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 

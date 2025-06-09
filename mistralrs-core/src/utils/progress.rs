@@ -170,16 +170,17 @@ where
     ///
     /// - `is_parallel`: If true, uses Rayon parallel iteration; otherwise uses sequential iteration.
     /// - `f`: A closure to apply to each item.
-    pub fn run<F, U>(self, is_parallel: bool, f: F) -> candle_core::Result<Vec<U>>
+    pub fn run<F, U>(self, _is_parallel: bool, f: F) -> candle_core::Result<Vec<U>>
     where
         F: Fn(<T as IntoParallelIterator>::Item) -> candle_core::Result<U> + Sync + Send,
         U: Send,
     {
-        if is_parallel {
-            self.into_par_iter().map(f).collect()
-        } else {
-            self.into_iter().map(f).collect()
-        }
+        // if is_parallel {
+        //     self.into_par_iter().map(f).collect()
+        // } else {
+        //     self.into_iter().map(f).collect()
+        // }
+        self.into_iter().map(f).collect()
     }
 
     /// Applies the given closure over the items, optionally in parallel, and collects the results.
