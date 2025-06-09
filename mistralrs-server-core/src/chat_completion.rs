@@ -36,7 +36,7 @@ use crate::{
     },
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
-    util::parse_image_url,
+    util::{parse_audio_url, parse_image_url},
 };
 
 /// A callback function that processes streaming response chunks before they are sent to the client.
@@ -386,7 +386,7 @@ pub async fn parse_request(
                 // Parse audios
                 let mut audios = Vec::new();
                 for url_unparsed in audio_urls {
-                    let audio = util::parse_audio_url(&url_unparsed)
+                    let audio = parse_audio_url(&url_unparsed)
                         .await
                         .context(format!("Failed to parse audio resource: {}", url_unparsed))?;
                     audios.push(audio);
