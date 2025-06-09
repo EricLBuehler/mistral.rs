@@ -94,11 +94,12 @@ ahash.workspace = true
 num-traits.workspace = true
 libc.workspace = true
 bm25.workspace = true
-rubato = "0.16.2"
-rustfft = "6.3.0"
-hound = "3.5.1"
-apodize = "1.0.0"
-symphonia = { version = "0.5.4", default-features = false, features = ["mp3", "flac", "vorbis", "wav", "isomp4", "ogg", "pcm"] }
+rubato.workspace = true
+rustfft.workspace = true
+hound.workspace = true
+apodize.workspace = true
+symphonia.workspace = true
+mistralrs-audio.workspace = true
 
 [features]
 pyo3_macros = ["pyo3"]

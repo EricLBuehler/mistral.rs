@@ -81,6 +81,7 @@ pub use device_map::{
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, LayerDeviceMapper,
 };
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
+pub use mistralrs_audio::AudioInput;
 pub use mistralrs_quant::{IsqType, MULTI_LORA_DELIMITER};
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
 pub use pipeline::{
@@ -97,10 +98,9 @@ pub use pipeline::{
     UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
-    ApproximateUserLocation, AudioInput, Constraint, DetokenizationRequest,
-    ImageGenerationResponseFormat, LlguidanceGrammar, MessageContent, NormalRequest, Request,
-    RequestMessage, SearchContextSize, TokenizationRequest, WebSearchOptions,
-    WebSearchUserLocation,
+    ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
+    LlguidanceGrammar, MessageContent, NormalRequest, Request, RequestMessage, SearchContextSize,
+    TokenizationRequest, WebSearchOptions, WebSearchUserLocation,
 };
 pub use response::*;
 pub use sampler::{

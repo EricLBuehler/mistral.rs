@@ -722,16 +722,7 @@ impl Phi4MMInputsProcessor {
                 // Convert multi-channel audio to mono by averaging channels
                 let (audio_data, sample_rate) = if let Some(mut audios) = seq.take_audios() {
                     if let Some(audio) = audios.pop() {
-                        let channels = audio.channels as usize; // use the actual field name for channel count
-                        let samples = if channels > 1 && audio.samples.len() % channels == 0 {
-                            audio
-                                .samples
-                                .chunks(channels)
-                                .map(|frame| frame.iter().copied().sum::<f32>() / channels as f32)
-                                .collect::<Vec<f32>>()
-                        } else {
-                            audio.samples
-                        };
+                        let samples = audio.to_mono();
 
                         (samples, audio.sample_rate)
                     } else {

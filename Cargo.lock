@@ -2716,6 +2716,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mistralrs-audio"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "apodize",
+ "hound",
+ "symphonia",
+]
+
+[[package]]
 name = "mistralrs-bench"
 version = "0.6.0"
 dependencies = [
@@ -2778,6 +2788,7 @@ dependencies = [
  "metal",
  "minijinja",
  "minijinja-contrib",
+ "mistralrs-audio",
  "mistralrs-paged-attn",
  "mistralrs-quant",
  "mistralrs-vision",

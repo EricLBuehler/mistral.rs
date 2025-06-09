@@ -1,5 +1,6 @@
 use either::Either;
 use indexmap::IndexMap;
+use mistralrs_audio::AudioInput;
 use mistralrs_quant::IsqType;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -116,106 +117,6 @@ pub struct WebSearchOptions {
     pub search_description: Option<String>,
     /// Override the description for the extraction tool.
     pub extract_description: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-/// Raw audio input consisting of PCM samples and a sample rate.
-pub struct AudioInput {
-    pub samples: Vec<f32>,
-    pub sample_rate: u32,
-    pub channels: u16,
-}
-
-impl AudioInput {
-    pub fn read_wav(wav_path: &str) -> anyhow::Result<Self> {
-        let mut reader = hound::WavReader::open(wav_path)
-            .map_err(|e| anyhow::Error::msg(format!("Failed to load audio: {}", e)))?;
-        let spec = reader.spec();
-
-        let samples: Vec<f32> = match spec.sample_format {
-            hound::SampleFormat::Float => reader
-                .samples::<f32>()
-                .map(|s| s.map_err(|e| anyhow::Error::msg(e.to_string())))
-                .collect::<std::result::Result<_, _>>()?,
-
-            hound::SampleFormat::Int => reader
-                .samples::<i16>() // read as integers
-                .map(|s| {
-                    s.map(|v| v as f32 / i16::MAX as f32) // scale to –1.0…1.0
-                        .map_err(|e| candle_core::Error::Msg(e.to_string()))
-                })
-                .collect::<std::result::Result<_, _>>()?,
-        };
-
-        Ok(Self {
-            samples,
-            sample_rate: spec.sample_rate,
-            channels: spec.channels,
-        })
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
-        use symphonia::core::audio::SampleBuffer;
-        use symphonia::core::codecs::DecoderOptions;
-        use symphonia::core::formats::FormatOptions;
-        use symphonia::core::io::MediaSourceStream;
-        use symphonia::core::meta::MetadataOptions;
-        use symphonia::core::probe::Hint;
-
-        let cursor = std::io::Cursor::new(bytes.to_vec());
-        let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
-        let hint = Hint::new();
-
-        let probed = symphonia::default::get_probe().format(
-            &hint,
-            mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
-        )?;
-        let mut format = probed.format;
-
-        let track = format
-            .default_track()
-            .ok_or_else(|| anyhow::anyhow!("no supported audio tracks"))?;
-        let codec_params = &track.codec_params;
-        let sample_rate = codec_params
-            .sample_rate
-            .ok_or_else(|| anyhow::anyhow!("unknown sample rate"))?;
-        #[allow(clippy::cast_possible_truncation)]
-        let channels = codec_params
-            .channels
-            .map(|channels| channels.count() as u16)
-            .unwrap_or(1);
-
-        let mut decoder =
-            symphonia::default::get_codecs().make(codec_params, &DecoderOptions::default())?;
-
-        let mut samples = Vec::new();
-        loop {
-            match format.next_packet() {
-                Ok(packet) => {
-                    let decoded = decoder.decode(&packet)?;
-                    let mut buf =
-                        SampleBuffer::<f32>::new(decoded.capacity() as u64, *decoded.spec());
-                    buf.copy_interleaved_ref(decoded);
-                    samples.extend_from_slice(buf.samples());
-                }
-                Err(symphonia::core::errors::Error::IoError(e))
-                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-                {
-                    break;
-                }
-                Err(e) => return Err(e.into()),
-            }
-        }
-
-        Ok(Self {
-            samples,
-            sample_rate,
-            channels,
-        })
-    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
