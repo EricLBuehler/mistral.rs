@@ -10,6 +10,7 @@ use mistralrs_server_core::{
 
 mod interactive_mode;
 use interactive_mode::interactive_mode;
+mod mcp_server;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -134,6 +135,10 @@ struct Args {
     /// Enable thinking for interactive mode and models that support it.
     #[arg(long = "enable-thinking")]
     enable_thinking: bool,
+
+    /// Port to serve MCP protocol on
+    #[arg(long)]
+    mcp_port: Option<u16>,
 }
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
@@ -188,7 +193,10 @@ async fn main() -> Result<()> {
     // Needs to be after the .build call as that is where the daemon waits.
     let setting_server = if !args.interactive_mode {
         let port = args.port.expect("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?");
-        let ip = args.serve_ip.unwrap_or_else(|| "0.0.0.0".to_string());
+        let ip = args
+            .serve_ip
+            .clone()
+            .unwrap_or_else(|| "0.0.0.0".to_string());
 
         // Create listener early to validate address before model loading
         let listener = tokio::net::TcpListener::bind(format!("{ip}:{port}")).await?;
@@ -196,6 +204,19 @@ async fn main() -> Result<()> {
     } else {
         None
     };
+
+    if let Some(port) = args.mcp_port {
+        let host = args
+            .serve_ip
+            .clone()
+            .unwrap_or_else(|| "0.0.0.0".to_string());
+        let mcp_server = mcp_server::create_mcp_server(mistralrs.clone(), host, port);
+        tokio::spawn(async move {
+            if let Err(e) = mcp_server.start().await {
+                eprintln!("MCP server error: {e}");
+            }
+        });
+    }
 
     let app = MistralRsServerRouterBuilder::new()
         .with_mistralrs(mistralrs)
