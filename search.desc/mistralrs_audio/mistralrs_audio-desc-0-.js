@@ -1,0 +1,1 @@
+searchState.loadedDescShard("mistralrs_audio", 0, "Audio utilities for <code>mistral.rs</code>.\nRaw audio input consisting of PCM samples and a sample …\nReturns the argument unchanged.\nDecode audio bytes using <code>symphonia</code>.\nCalls <code>U::from(self)</code>.\nRead a wav file from disk.\nConvert multi channel audio to mono by averaging channels.")

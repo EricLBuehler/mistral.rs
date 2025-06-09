@@ -8,7 +8,7 @@
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span><span class="kw">crate</span>::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span><span class="kw">crate</span>::paged_attention::AttentionImplementation;
-<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
+<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, Modalities, SupportedModality};
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManagerV2;
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span><span class="kw">crate</span>::utils::varbuilder_utils::DeviceForLoadTensor;
@@ -222,113 +222,117 @@
 <a href=#222 id=222 data-nosnippet>222</a>                cache_engine: <span class="prelude-val">None</span>,
 <a href=#223 id=223 data-nosnippet>223</a>                prompt_chunksize: <span class="prelude-val">None</span>,
 <a href=#224 id=224 data-nosnippet>224</a>                model_metadata: <span class="prelude-val">None</span>,
-<a href=#225 id=225 data-nosnippet>225</a>            }),
-<a href=#226 id=226 data-nosnippet>226</a>            dummy_cache: EitherCache::Full(Cache::new(<span class="number">0</span>, <span class="bool-val">false</span>)),
-<a href=#227 id=227 data-nosnippet>227</a>        })))
-<a href=#228 id=228 data-nosnippet>228</a>    }
-<a href=#229 id=229 data-nosnippet>229</a>
-<a href=#230 id=230 data-nosnippet>230</a>    <span class="kw">fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-<a href=#231 id=231 data-nosnippet>231</a>        <span class="self">self</span>.model_id.to_string()
+<a href=#225 id=225 data-nosnippet>225</a>                modalities: Modalities {
+<a href=#226 id=226 data-nosnippet>226</a>                    input: <span class="macro">vec!</span>[SupportedModality::Text],
+<a href=#227 id=227 data-nosnippet>227</a>                    output: <span class="macro">vec!</span>[SupportedModality::Vision],
+<a href=#228 id=228 data-nosnippet>228</a>                },
+<a href=#229 id=229 data-nosnippet>229</a>            }),
+<a href=#230 id=230 data-nosnippet>230</a>            dummy_cache: EitherCache::Full(Cache::new(<span class="number">0</span>, <span class="bool-val">false</span>)),
+<a href=#231 id=231 data-nosnippet>231</a>        })))
 <a href=#232 id=232 data-nosnippet>232</a>    }
 <a href=#233 id=233 data-nosnippet>233</a>
-<a href=#234 id=234 data-nosnippet>234</a>    <span class="kw">fn </span>get_kind(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelKind {
-<a href=#235 id=235 data-nosnippet>235</a>        <span class="self">self</span>.kind.clone()
+<a href=#234 id=234 data-nosnippet>234</a>    <span class="kw">fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+<a href=#235 id=235 data-nosnippet>235</a>        <span class="self">self</span>.model_id.to_string()
 <a href=#236 id=236 data-nosnippet>236</a>    }
-<a href=#237 id=237 data-nosnippet>237</a>}
-<a href=#238 id=238 data-nosnippet>238</a>
-<a href=#239 id=239 data-nosnippet>239</a><span class="kw">impl </span>PreProcessingMixin <span class="kw">for </span>DiffusionPipeline {
-<a href=#240 id=240 data-nosnippet>240</a>    <span class="kw">fn </span>get_processor(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span>Processor&gt; {
-<a href=#241 id=241 data-nosnippet>241</a>        Arc::new(DiffusionProcessor)
-<a href=#242 id=242 data-nosnippet>242</a>    }
-<a href=#243 id=243 data-nosnippet>243</a>    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;ChatTemplate&gt;&gt; {
-<a href=#244 id=244 data-nosnippet>244</a>        <span class="prelude-val">None
-<a href=#245 id=245 data-nosnippet>245</a>    </span>}
-<a href=#246 id=246 data-nosnippet>246</a>    <span class="kw">fn </span>get_input_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt; {
-<a href=#247 id=247 data-nosnippet>247</a>        <span class="prelude-val">None
-<a href=#248 id=248 data-nosnippet>248</a>    </span>}
-<a href=#249 id=249 data-nosnippet>249</a>}
-<a href=#250 id=250 data-nosnippet>250</a>
-<a href=#251 id=251 data-nosnippet>251</a><span class="kw">impl </span>IsqPipelineMixin <span class="kw">for </span>DiffusionPipeline {
-<a href=#252 id=252 data-nosnippet>252</a>    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _dtype: IsqType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#253 id=253 data-nosnippet>253</a>        <span class="macro">anyhow::bail!</span>(<span class="string">"Diffusion models do not support ISQ for now."</span>)
-<a href=#254 id=254 data-nosnippet>254</a>    }
-<a href=#255 id=255 data-nosnippet>255</a>}
-<a href=#256 id=256 data-nosnippet>256</a>
-<a href=#257 id=257 data-nosnippet>257</a><span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>DiffusionPipeline {
-<a href=#258 id=258 data-nosnippet>258</a>    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {}
-<a href=#259 id=259 data-nosnippet>259</a>    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {}
-<a href=#260 id=260 data-nosnippet>260</a>    <span class="kw">fn </span>set_none_cache(
-<a href=#261 id=261 data-nosnippet>261</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#262 id=262 data-nosnippet>262</a>        _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-<a href=#263 id=263 data-nosnippet>263</a>        _reset_non_granular: bool,
-<a href=#264 id=264 data-nosnippet>264</a>        _modify_draft_cache: bool,
-<a href=#265 id=265 data-nosnippet>265</a>        _load_preallocated_cache: bool,
-<a href=#266 id=266 data-nosnippet>266</a>    ) {
-<a href=#267 id=267 data-nosnippet>267</a>    }
-<a href=#268 id=268 data-nosnippet>268</a>    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
-<a href=#269 id=269 data-nosnippet>269</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.dummy_cache
-<a href=#270 id=270 data-nosnippet>270</a>    }
-<a href=#271 id=271 data-nosnippet>271</a>}
-<a href=#272 id=272 data-nosnippet>272</a>
-<a href=#273 id=273 data-nosnippet>273</a><span class="kw">impl </span>MetadataMixin <span class="kw">for </span>DiffusionPipeline {
-<a href=#274 id=274 data-nosnippet>274</a>    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device {
-<a href=#275 id=275 data-nosnippet>275</a>        <span class="self">self</span>.model.device().clone()
-<a href=#276 id=276 data-nosnippet>276</a>    }
-<a href=#277 id=277 data-nosnippet>277</a>    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;GeneralMetadata&gt; {
-<a href=#278 id=278 data-nosnippet>278</a>        <span class="self">self</span>.metadata.clone()
-<a href=#279 id=279 data-nosnippet>279</a>    }
-<a href=#280 id=280 data-nosnippet>280</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-<a href=#281 id=281 data-nosnippet>281</a>        <span class="self">self</span>.model_id.clone()
-<a href=#282 id=282 data-nosnippet>282</a>    }
-<a href=#283 id=283 data-nosnippet>283</a>    <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {}
-<a href=#284 id=284 data-nosnippet>284</a>    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt; {
-<a href=#285 id=285 data-nosnippet>285</a>        <span class="prelude-val">None
-<a href=#286 id=286 data-nosnippet>286</a>    </span>}
-<a href=#287 id=287 data-nosnippet>287</a>    <span class="kw">fn </span>device_mapper(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt; {
-<a href=#288 id=288 data-nosnippet>288</a>        <span class="prelude-val">None
-<a href=#289 id=289 data-nosnippet>289</a>    </span>}
-<a href=#290 id=290 data-nosnippet>290</a>}
-<a href=#291 id=291 data-nosnippet>291</a>
-<a href=#292 id=292 data-nosnippet>292</a><span class="attr">#[async_trait::async_trait]
-<a href=#293 id=293 data-nosnippet>293</a></span><span class="kw">impl </span>Pipeline <span class="kw">for </span>DiffusionPipeline {
-<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">fn </span>forward_inputs(
-<a href=#295 id=295 data-nosnippet>295</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#296 id=296 data-nosnippet>296</a>        inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
-<a href=#297 id=297 data-nosnippet>297</a>        return_raw_logits: bool,
-<a href=#298 id=298 data-nosnippet>298</a>    ) -&gt; candle_core::Result&lt;ForwardInputsResult&gt; {
-<a href=#299 id=299 data-nosnippet>299</a>        <span class="macro">assert!</span>(!return_raw_logits);
-<a href=#300 id=300 data-nosnippet>300</a>
-<a href=#301 id=301 data-nosnippet>301</a>        <span class="kw">let </span>ModelInputs { prompts, params } = <span class="kw-2">*</span>inputs.downcast().expect(<span class="string">"Downcast failed."</span>);
-<a href=#302 id=302 data-nosnippet>302</a>        <span class="kw">let </span>img = <span class="self">self</span>.model.forward(prompts, params)<span class="question-mark">?</span>.to_dtype(DType::U8)<span class="question-mark">?</span>;
-<a href=#303 id=303 data-nosnippet>303</a>        <span class="kw">let </span>(_b, c, h, w) = img.dims4()<span class="question-mark">?</span>;
-<a href=#304 id=304 data-nosnippet>304</a>        <span class="kw">let </span><span class="kw-2">mut </span>images = Vec::new();
-<a href=#305 id=305 data-nosnippet>305</a>        <span class="kw">for </span>b_img <span class="kw">in </span>img.chunk(img.dim(<span class="number">0</span>)<span class="question-mark">?</span>, <span class="number">0</span>)<span class="question-mark">? </span>{
-<a href=#306 id=306 data-nosnippet>306</a>            <span class="kw">let </span>flattened = b_img.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>.permute((<span class="number">1</span>, <span class="number">2</span>, <span class="number">0</span>))<span class="question-mark">?</span>.flatten_all()<span class="question-mark">?</span>;
-<a href=#307 id=307 data-nosnippet>307</a>            <span class="kw">if </span>c != <span class="number">3 </span>{
-<a href=#308 id=308 data-nosnippet>308</a>                <span class="macro">candle_core::bail!</span>(<span class="string">"Expected 3 channels in image output"</span>);
-<a href=#309 id=309 data-nosnippet>309</a>            }
-<a href=#310 id=310 data-nosnippet>310</a>            <span class="attr">#[allow(clippy::cast_possible_truncation)]
-<a href=#311 id=311 data-nosnippet>311</a>            </span>images.push(DynamicImage::ImageRgb8(
-<a href=#312 id=312 data-nosnippet>312</a>                RgbImage::from_raw(w <span class="kw">as </span>u32, h <span class="kw">as </span>u32, flattened.to_vec1::&lt;u8&gt;()<span class="question-mark">?</span>).ok_or(
-<a href=#313 id=313 data-nosnippet>313</a>                    candle_core::Error::Msg(<span class="string">"RgbImage has invalid capacity."</span>.to_string()),
-<a href=#314 id=314 data-nosnippet>314</a>                )<span class="question-mark">?</span>,
-<a href=#315 id=315 data-nosnippet>315</a>            ));
-<a href=#316 id=316 data-nosnippet>316</a>        }
-<a href=#317 id=317 data-nosnippet>317</a>        <span class="prelude-val">Ok</span>(ForwardInputsResult::Image { images })
-<a href=#318 id=318 data-nosnippet>318</a>    }
-<a href=#319 id=319 data-nosnippet>319</a>    <span class="kw">async fn </span>sample_causal_gen(
-<a href=#320 id=320 data-nosnippet>320</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#321 id=321 data-nosnippet>321</a>        _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-<a href=#322 id=322 data-nosnippet>322</a>        _logits: Vec&lt;Tensor&gt;,
-<a href=#323 id=323 data-nosnippet>323</a>        _prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManagerV2,
-<a href=#324 id=324 data-nosnippet>324</a>        _disable_eos_stop: bool,
-<a href=#325 id=325 data-nosnippet>325</a>        _srng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
-<a href=#326 id=326 data-nosnippet>326</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt; {
-<a href=#327 id=327 data-nosnippet>327</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"`sample_causal_gen` is incompatible with `DiffusionPipeline`"</span>);
-<a href=#328 id=328 data-nosnippet>328</a>    }
-<a href=#329 id=329 data-nosnippet>329</a>    <span class="kw">fn </span>category(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelCategory {
-<a href=#330 id=330 data-nosnippet>330</a>        ModelCategory::Diffusion
-<a href=#331 id=331 data-nosnippet>331</a>    }
-<a href=#332 id=332 data-nosnippet>332</a>}
-<a href=#333 id=333 data-nosnippet>333</a>
-<a href=#334 id=334 data-nosnippet>334</a><span class="kw">impl </span>AnyMoePipelineMixin <span class="kw">for </span>DiffusionPipeline {}</code></pre></div></section></main></body></html>
+<a href=#237 id=237 data-nosnippet>237</a>
+<a href=#238 id=238 data-nosnippet>238</a>    <span class="kw">fn </span>get_kind(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelKind {
+<a href=#239 id=239 data-nosnippet>239</a>        <span class="self">self</span>.kind.clone()
+<a href=#240 id=240 data-nosnippet>240</a>    }
+<a href=#241 id=241 data-nosnippet>241</a>}
+<a href=#242 id=242 data-nosnippet>242</a>
+<a href=#243 id=243 data-nosnippet>243</a><span class="kw">impl </span>PreProcessingMixin <span class="kw">for </span>DiffusionPipeline {
+<a href=#244 id=244 data-nosnippet>244</a>    <span class="kw">fn </span>get_processor(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span>Processor&gt; {
+<a href=#245 id=245 data-nosnippet>245</a>        Arc::new(DiffusionProcessor)
+<a href=#246 id=246 data-nosnippet>246</a>    }
+<a href=#247 id=247 data-nosnippet>247</a>    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;ChatTemplate&gt;&gt; {
+<a href=#248 id=248 data-nosnippet>248</a>        <span class="prelude-val">None
+<a href=#249 id=249 data-nosnippet>249</a>    </span>}
+<a href=#250 id=250 data-nosnippet>250</a>    <span class="kw">fn </span>get_input_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt; {
+<a href=#251 id=251 data-nosnippet>251</a>        <span class="prelude-val">None
+<a href=#252 id=252 data-nosnippet>252</a>    </span>}
+<a href=#253 id=253 data-nosnippet>253</a>}
+<a href=#254 id=254 data-nosnippet>254</a>
+<a href=#255 id=255 data-nosnippet>255</a><span class="kw">impl </span>IsqPipelineMixin <span class="kw">for </span>DiffusionPipeline {
+<a href=#256 id=256 data-nosnippet>256</a>    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _dtype: IsqType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#257 id=257 data-nosnippet>257</a>        <span class="macro">anyhow::bail!</span>(<span class="string">"Diffusion models do not support ISQ for now."</span>)
+<a href=#258 id=258 data-nosnippet>258</a>    }
+<a href=#259 id=259 data-nosnippet>259</a>}
+<a href=#260 id=260 data-nosnippet>260</a>
+<a href=#261 id=261 data-nosnippet>261</a><span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>DiffusionPipeline {
+<a href=#262 id=262 data-nosnippet>262</a>    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {}
+<a href=#263 id=263 data-nosnippet>263</a>    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {}
+<a href=#264 id=264 data-nosnippet>264</a>    <span class="kw">fn </span>set_none_cache(
+<a href=#265 id=265 data-nosnippet>265</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#266 id=266 data-nosnippet>266</a>        _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+<a href=#267 id=267 data-nosnippet>267</a>        _reset_non_granular: bool,
+<a href=#268 id=268 data-nosnippet>268</a>        _modify_draft_cache: bool,
+<a href=#269 id=269 data-nosnippet>269</a>        _load_preallocated_cache: bool,
+<a href=#270 id=270 data-nosnippet>270</a>    ) {
+<a href=#271 id=271 data-nosnippet>271</a>    }
+<a href=#272 id=272 data-nosnippet>272</a>    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
+<a href=#273 id=273 data-nosnippet>273</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.dummy_cache
+<a href=#274 id=274 data-nosnippet>274</a>    }
+<a href=#275 id=275 data-nosnippet>275</a>}
+<a href=#276 id=276 data-nosnippet>276</a>
+<a href=#277 id=277 data-nosnippet>277</a><span class="kw">impl </span>MetadataMixin <span class="kw">for </span>DiffusionPipeline {
+<a href=#278 id=278 data-nosnippet>278</a>    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device {
+<a href=#279 id=279 data-nosnippet>279</a>        <span class="self">self</span>.model.device().clone()
+<a href=#280 id=280 data-nosnippet>280</a>    }
+<a href=#281 id=281 data-nosnippet>281</a>    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;GeneralMetadata&gt; {
+<a href=#282 id=282 data-nosnippet>282</a>        <span class="self">self</span>.metadata.clone()
+<a href=#283 id=283 data-nosnippet>283</a>    }
+<a href=#284 id=284 data-nosnippet>284</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+<a href=#285 id=285 data-nosnippet>285</a>        <span class="self">self</span>.model_id.clone()
+<a href=#286 id=286 data-nosnippet>286</a>    }
+<a href=#287 id=287 data-nosnippet>287</a>    <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {}
+<a href=#288 id=288 data-nosnippet>288</a>    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt; {
+<a href=#289 id=289 data-nosnippet>289</a>        <span class="prelude-val">None
+<a href=#290 id=290 data-nosnippet>290</a>    </span>}
+<a href=#291 id=291 data-nosnippet>291</a>    <span class="kw">fn </span>device_mapper(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt; {
+<a href=#292 id=292 data-nosnippet>292</a>        <span class="prelude-val">None
+<a href=#293 id=293 data-nosnippet>293</a>    </span>}
+<a href=#294 id=294 data-nosnippet>294</a>}
+<a href=#295 id=295 data-nosnippet>295</a>
+<a href=#296 id=296 data-nosnippet>296</a><span class="attr">#[async_trait::async_trait]
+<a href=#297 id=297 data-nosnippet>297</a></span><span class="kw">impl </span>Pipeline <span class="kw">for </span>DiffusionPipeline {
+<a href=#298 id=298 data-nosnippet>298</a>    <span class="kw">fn </span>forward_inputs(
+<a href=#299 id=299 data-nosnippet>299</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#300 id=300 data-nosnippet>300</a>        inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
+<a href=#301 id=301 data-nosnippet>301</a>        return_raw_logits: bool,
+<a href=#302 id=302 data-nosnippet>302</a>    ) -&gt; candle_core::Result&lt;ForwardInputsResult&gt; {
+<a href=#303 id=303 data-nosnippet>303</a>        <span class="macro">assert!</span>(!return_raw_logits);
+<a href=#304 id=304 data-nosnippet>304</a>
+<a href=#305 id=305 data-nosnippet>305</a>        <span class="kw">let </span>ModelInputs { prompts, params } = <span class="kw-2">*</span>inputs.downcast().expect(<span class="string">"Downcast failed."</span>);
+<a href=#306 id=306 data-nosnippet>306</a>        <span class="kw">let </span>img = <span class="self">self</span>.model.forward(prompts, params)<span class="question-mark">?</span>.to_dtype(DType::U8)<span class="question-mark">?</span>;
+<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">let </span>(_b, c, h, w) = img.dims4()<span class="question-mark">?</span>;
+<a href=#308 id=308 data-nosnippet>308</a>        <span class="kw">let </span><span class="kw-2">mut </span>images = Vec::new();
+<a href=#309 id=309 data-nosnippet>309</a>        <span class="kw">for </span>b_img <span class="kw">in </span>img.chunk(img.dim(<span class="number">0</span>)<span class="question-mark">?</span>, <span class="number">0</span>)<span class="question-mark">? </span>{
+<a href=#310 id=310 data-nosnippet>310</a>            <span class="kw">let </span>flattened = b_img.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>.permute((<span class="number">1</span>, <span class="number">2</span>, <span class="number">0</span>))<span class="question-mark">?</span>.flatten_all()<span class="question-mark">?</span>;
+<a href=#311 id=311 data-nosnippet>311</a>            <span class="kw">if </span>c != <span class="number">3 </span>{
+<a href=#312 id=312 data-nosnippet>312</a>                <span class="macro">candle_core::bail!</span>(<span class="string">"Expected 3 channels in image output"</span>);
+<a href=#313 id=313 data-nosnippet>313</a>            }
+<a href=#314 id=314 data-nosnippet>314</a>            <span class="attr">#[allow(clippy::cast_possible_truncation)]
+<a href=#315 id=315 data-nosnippet>315</a>            </span>images.push(DynamicImage::ImageRgb8(
+<a href=#316 id=316 data-nosnippet>316</a>                RgbImage::from_raw(w <span class="kw">as </span>u32, h <span class="kw">as </span>u32, flattened.to_vec1::&lt;u8&gt;()<span class="question-mark">?</span>).ok_or(
+<a href=#317 id=317 data-nosnippet>317</a>                    candle_core::Error::Msg(<span class="string">"RgbImage has invalid capacity."</span>.to_string()),
+<a href=#318 id=318 data-nosnippet>318</a>                )<span class="question-mark">?</span>,
+<a href=#319 id=319 data-nosnippet>319</a>            ));
+<a href=#320 id=320 data-nosnippet>320</a>        }
+<a href=#321 id=321 data-nosnippet>321</a>        <span class="prelude-val">Ok</span>(ForwardInputsResult::Image { images })
+<a href=#322 id=322 data-nosnippet>322</a>    }
+<a href=#323 id=323 data-nosnippet>323</a>    <span class="kw">async fn </span>sample_causal_gen(
+<a href=#324 id=324 data-nosnippet>324</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#325 id=325 data-nosnippet>325</a>        _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+<a href=#326 id=326 data-nosnippet>326</a>        _logits: Vec&lt;Tensor&gt;,
+<a href=#327 id=327 data-nosnippet>327</a>        _prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManagerV2,
+<a href=#328 id=328 data-nosnippet>328</a>        _disable_eos_stop: bool,
+<a href=#329 id=329 data-nosnippet>329</a>        _srng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
+<a href=#330 id=330 data-nosnippet>330</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt; {
+<a href=#331 id=331 data-nosnippet>331</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"`sample_causal_gen` is incompatible with `DiffusionPipeline`"</span>);
+<a href=#332 id=332 data-nosnippet>332</a>    }
+<a href=#333 id=333 data-nosnippet>333</a>    <span class="kw">fn </span>category(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelCategory {
+<a href=#334 id=334 data-nosnippet>334</a>        ModelCategory::Diffusion
+<a href=#335 id=335 data-nosnippet>335</a>    }
+<a href=#336 id=336 data-nosnippet>336</a>}
+<a href=#337 id=337 data-nosnippet>337</a>
+<a href=#338 id=338 data-nosnippet>338</a><span class="kw">impl </span>AnyMoePipelineMixin <span class="kw">for </span>DiffusionPipeline {}</code></pre></div></section></main></body></html>

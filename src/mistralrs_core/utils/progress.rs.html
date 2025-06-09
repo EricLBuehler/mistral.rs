@@ -170,26 +170,27 @@
 <a href=#170 id=170 data-nosnippet>170</a>    ///
 <a href=#171 id=171 data-nosnippet>171</a>    /// - `is_parallel`: If true, uses Rayon parallel iteration; otherwise uses sequential iteration.
 <a href=#172 id=172 data-nosnippet>172</a>    /// - `f`: A closure to apply to each item.
-<a href=#173 id=173 data-nosnippet>173</a>    </span><span class="kw">pub fn </span>run&lt;F, U&gt;(<span class="self">self</span>, is_parallel: bool, f: F) -&gt; candle_core::Result&lt;Vec&lt;U&gt;&gt;
+<a href=#173 id=173 data-nosnippet>173</a>    </span><span class="kw">pub fn </span>run&lt;F, U&gt;(<span class="self">self</span>, _is_parallel: bool, f: F) -&gt; candle_core::Result&lt;Vec&lt;U&gt;&gt;
 <a href=#174 id=174 data-nosnippet>174</a>    <span class="kw">where
 <a href=#175 id=175 data-nosnippet>175</a>        </span>F: Fn(&lt;T <span class="kw">as </span>IntoParallelIterator&gt;::Item) -&gt; candle_core::Result&lt;U&gt; + Sync + Send,
 <a href=#176 id=176 data-nosnippet>176</a>        U: Send,
 <a href=#177 id=177 data-nosnippet>177</a>    {
-<a href=#178 id=178 data-nosnippet>178</a>        <span class="kw">if </span>is_parallel {
-<a href=#179 id=179 data-nosnippet>179</a>            <span class="self">self</span>.into_par_iter().map(f).collect()
-<a href=#180 id=180 data-nosnippet>180</a>        } <span class="kw">else </span>{
-<a href=#181 id=181 data-nosnippet>181</a>            <span class="self">self</span>.into_iter().map(f).collect()
-<a href=#182 id=182 data-nosnippet>182</a>        }
-<a href=#183 id=183 data-nosnippet>183</a>    }
-<a href=#184 id=184 data-nosnippet>184</a>
-<a href=#185 id=185 data-nosnippet>185</a>    <span class="doccomment">/// Applies the given closure over the items, optionally in parallel, and collects the results.
-<a href=#186 id=186 data-nosnippet>186</a>    ///
-<a href=#187 id=187 data-nosnippet>187</a>    /// - `f`: A closure to apply to each item.
-<a href=#188 id=188 data-nosnippet>188</a>    </span><span class="kw">pub fn </span>par_iter_if_isq&lt;F, U&gt;(<span class="self">self</span>, f: F) -&gt; candle_core::Result&lt;Vec&lt;U&gt;&gt;
-<a href=#189 id=189 data-nosnippet>189</a>    <span class="kw">where
-<a href=#190 id=190 data-nosnippet>190</a>        </span>F: Fn(&lt;T <span class="kw">as </span>IntoParallelIterator&gt;::Item) -&gt; candle_core::Result&lt;U&gt; + Sync + Send,
-<a href=#191 id=191 data-nosnippet>191</a>        U: Send,
-<a href=#192 id=192 data-nosnippet>192</a>    {
-<a href=#193 id=193 data-nosnippet>193</a>        <span class="self">self</span>.run(get_immediate_isq().is_some_and(|x| x.ty.is_some()), f)
-<a href=#194 id=194 data-nosnippet>194</a>    }
-<a href=#195 id=195 data-nosnippet>195</a>}</code></pre></div></section></main></body></html>
+<a href=#178 id=178 data-nosnippet>178</a>        <span class="comment">// if is_parallel {
+<a href=#179 id=179 data-nosnippet>179</a>        //     self.into_par_iter().map(f).collect()
+<a href=#180 id=180 data-nosnippet>180</a>        // } else {
+<a href=#181 id=181 data-nosnippet>181</a>        //     self.into_iter().map(f).collect()
+<a href=#182 id=182 data-nosnippet>182</a>        // }
+<a href=#183 id=183 data-nosnippet>183</a>        </span><span class="self">self</span>.into_iter().map(f).collect()
+<a href=#184 id=184 data-nosnippet>184</a>    }
+<a href=#185 id=185 data-nosnippet>185</a>
+<a href=#186 id=186 data-nosnippet>186</a>    <span class="doccomment">/// Applies the given closure over the items, optionally in parallel, and collects the results.
+<a href=#187 id=187 data-nosnippet>187</a>    ///
+<a href=#188 id=188 data-nosnippet>188</a>    /// - `f`: A closure to apply to each item.
+<a href=#189 id=189 data-nosnippet>189</a>    </span><span class="kw">pub fn </span>par_iter_if_isq&lt;F, U&gt;(<span class="self">self</span>, f: F) -&gt; candle_core::Result&lt;Vec&lt;U&gt;&gt;
+<a href=#190 id=190 data-nosnippet>190</a>    <span class="kw">where
+<a href=#191 id=191 data-nosnippet>191</a>        </span>F: Fn(&lt;T <span class="kw">as </span>IntoParallelIterator&gt;::Item) -&gt; candle_core::Result&lt;U&gt; + Sync + Send,
+<a href=#192 id=192 data-nosnippet>192</a>        U: Send,
+<a href=#193 id=193 data-nosnippet>193</a>    {
+<a href=#194 id=194 data-nosnippet>194</a>        <span class="self">self</span>.run(get_immediate_isq().is_some_and(|x| x.ty.is_some()), f)
+<a href=#195 id=195 data-nosnippet>195</a>    }
+<a href=#196 id=196 data-nosnippet>196</a>}</code></pre></div></section></main></body></html>

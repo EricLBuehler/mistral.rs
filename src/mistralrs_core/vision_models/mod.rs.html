@@ -3,39 +3,40 @@
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>candle_core::Tensor;
 <a href=#4 id=4 data-nosnippet>4</a>
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>clip;
-<a href=#6 id=6 data-nosnippet>6</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>idefics2;
-<a href=#7 id=7 data-nosnippet>7</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>idefics2::idefics2_input_processor;
-<a href=#8 id=8 data-nosnippet>8</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>image_processor;
-<a href=#9 id=9 data-nosnippet>9</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>llava;
-<a href=#10 id=10 data-nosnippet>10</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>mllama;
-<a href=#11 id=11 data-nosnippet>11</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>phi3;
-<a href=#12 id=12 data-nosnippet>12</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>phi3::phi3_inputs_processor;
-<a href=#13 id=13 data-nosnippet>13</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>preprocessor_config;
-<a href=#14 id=14 data-nosnippet>14</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>processor_config;
-<a href=#15 id=15 data-nosnippet>15</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>qwen2_5_vl;
-<a href=#16 id=16 data-nosnippet>16</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>qwen2vl;
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llava::llava15;
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llava::llava_inputs_processor;
-<a href=#19 id=19 data-nosnippet>19</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llava::llava_next;
-<a href=#20 id=20 data-nosnippet>20</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llava::llava_next_inputs_processor;
-<a href=#21 id=21 data-nosnippet>21</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>idefics3;
-<a href=#22 id=22 data-nosnippet>22</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>minicpmo;
-<a href=#23 id=23 data-nosnippet>23</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>phi4;
-<a href=#24 id=24 data-nosnippet>24</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>phi4::inputs_processor;
-<a href=#25 id=25 data-nosnippet>25</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>gemma3;
-<a href=#26 id=26 data-nosnippet>26</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>llama4;
-<a href=#27 id=27 data-nosnippet>27</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>mistral3;
-<a href=#28 id=28 data-nosnippet>28</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>siglip;
-<a href=#29 id=29 data-nosnippet>29</a>
-<a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
-<a href=#31 id=31 data-nosnippet>31</a>
-<a href=#32 id=32 data-nosnippet>32</a><span class="kw">pub struct </span>ModelInputs {
-<a href=#33 id=33 data-nosnippet>33</a>    <span class="kw">pub </span>input_ids: Tensor,
-<a href=#34 id=34 data-nosnippet>34</a>    <span class="kw">pub </span>seqlen_offsets: Vec&lt;usize&gt;,
-<a href=#35 id=35 data-nosnippet>35</a>    <span class="kw">pub </span>context_lens: Vec&lt;(usize, usize)&gt;,
-<a href=#36 id=36 data-nosnippet>36</a>    <span class="kw">pub </span>position_ids: Vec&lt;usize&gt;,
-<a href=#37 id=37 data-nosnippet>37</a>    <span class="kw">pub </span>pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
-<a href=#38 id=38 data-nosnippet>38</a>    <span class="kw">pub </span>model_specific_args: Box&lt;<span class="kw">dyn </span>Any&gt;,
-<a href=#39 id=39 data-nosnippet>39</a>    <span class="kw">pub </span>paged_attn_meta: <span class="prelude-ty">Option</span>&lt;PagedAttentionInputMetadata&gt;,
-<a href=#40 id=40 data-nosnippet>40</a>    <span class="kw">pub </span>flash_meta: FlashParams,
-<a href=#41 id=41 data-nosnippet>41</a>}</code></pre></div></section></main></body></html>
+<a href=#6 id=6 data-nosnippet>6</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>conformer;
+<a href=#7 id=7 data-nosnippet>7</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>idefics2;
+<a href=#8 id=8 data-nosnippet>8</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>idefics2::idefics2_input_processor;
+<a href=#9 id=9 data-nosnippet>9</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>image_processor;
+<a href=#10 id=10 data-nosnippet>10</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>llava;
+<a href=#11 id=11 data-nosnippet>11</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>mllama;
+<a href=#12 id=12 data-nosnippet>12</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>phi3;
+<a href=#13 id=13 data-nosnippet>13</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>phi3::phi3_inputs_processor;
+<a href=#14 id=14 data-nosnippet>14</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>preprocessor_config;
+<a href=#15 id=15 data-nosnippet>15</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>processor_config;
+<a href=#16 id=16 data-nosnippet>16</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>qwen2_5_vl;
+<a href=#17 id=17 data-nosnippet>17</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>qwen2vl;
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llava::llava15;
+<a href=#19 id=19 data-nosnippet>19</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llava::llava_inputs_processor;
+<a href=#20 id=20 data-nosnippet>20</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llava::llava_next;
+<a href=#21 id=21 data-nosnippet>21</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llava::llava_next_inputs_processor;
+<a href=#22 id=22 data-nosnippet>22</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>idefics3;
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>minicpmo;
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>phi4;
+<a href=#25 id=25 data-nosnippet>25</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>phi4::inputs_processor;
+<a href=#26 id=26 data-nosnippet>26</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>gemma3;
+<a href=#27 id=27 data-nosnippet>27</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>llama4;
+<a href=#28 id=28 data-nosnippet>28</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>mistral3;
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>siglip;
+<a href=#30 id=30 data-nosnippet>30</a>
+<a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
+<a href=#32 id=32 data-nosnippet>32</a>
+<a href=#33 id=33 data-nosnippet>33</a><span class="kw">pub struct </span>ModelInputs {
+<a href=#34 id=34 data-nosnippet>34</a>    <span class="kw">pub </span>input_ids: Tensor,
+<a href=#35 id=35 data-nosnippet>35</a>    <span class="kw">pub </span>seqlen_offsets: Vec&lt;usize&gt;,
+<a href=#36 id=36 data-nosnippet>36</a>    <span class="kw">pub </span>context_lens: Vec&lt;(usize, usize)&gt;,
+<a href=#37 id=37 data-nosnippet>37</a>    <span class="kw">pub </span>position_ids: Vec&lt;usize&gt;,
+<a href=#38 id=38 data-nosnippet>38</a>    <span class="kw">pub </span>pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+<a href=#39 id=39 data-nosnippet>39</a>    <span class="kw">pub </span>model_specific_args: Box&lt;<span class="kw">dyn </span>Any&gt;,
+<a href=#40 id=40 data-nosnippet>40</a>    <span class="kw">pub </span>paged_attn_meta: <span class="prelude-ty">Option</span>&lt;PagedAttentionInputMetadata&gt;,
+<a href=#41 id=41 data-nosnippet>41</a>    <span class="kw">pub </span>flash_meta: FlashParams,
+<a href=#42 id=42 data-nosnippet>42</a>}</code></pre></div></section></main></body></html>

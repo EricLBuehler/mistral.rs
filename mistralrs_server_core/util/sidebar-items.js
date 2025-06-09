@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["parse_image_url"]};
+window.SIDEBAR_ITEMS = {"fn":["parse_audio_url","parse_image_url"]};

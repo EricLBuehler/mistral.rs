@@ -54,24 +54,28 @@
 <a href=#54 id=54 data-nosnippet>54</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) default_to_square: <span class="prelude-ty">Option</span>&lt;bool&gt;,
 <a href=#55 id=55 data-nosnippet>55</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) max_patches: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 <a href=#56 id=56 data-nosnippet>56</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) resize_to_max_canvas: <span class="prelude-ty">Option</span>&lt;bool&gt;,
-<a href=#57 id=57 data-nosnippet>57</a>}
-<a href=#58 id=58 data-nosnippet>58</a>
-<a href=#59 id=59 data-nosnippet>59</a><span class="attr">#[allow(dead_code)]
-<a href=#60 id=60 data-nosnippet>60</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>ToFilter {
-<a href=#61 id=61 data-nosnippet>61</a>    <span class="kw">fn </span>to_filter(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;FilterType&gt;;
-<a href=#62 id=62 data-nosnippet>62</a>}
-<a href=#63 id=63 data-nosnippet>63</a>
-<a href=#64 id=64 data-nosnippet>64</a><span class="kw">impl </span>ToFilter <span class="kw">for </span><span class="prelude-ty">Option</span>&lt;usize&gt; {
-<a href=#65 id=65 data-nosnippet>65</a>    <span class="comment">// https://github.com/python-pillow/Pillow/blob/4b68563e8a818fb9c528fa159ddf3f4eaefa35e6/src/PIL/Image.py#L164-L170
-<a href=#66 id=66 data-nosnippet>66</a>    // Default: https://github.com/huggingface/transformers/blob/0df888ffb72ea370555efdef45985378d3cc7b2b/src/transformers/models/idefics2/image_processing_idefics2.py#L226
-<a href=#67 id=67 data-nosnippet>67</a>    </span><span class="kw">fn </span>to_filter(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;FilterType&gt; {
-<a href=#68 id=68 data-nosnippet>68</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#69 id=69 data-nosnippet>69</a>            <span class="prelude-val">Some</span>(<span class="number">0</span>) =&gt; <span class="prelude-val">Ok</span>(FilterType::Nearest),
-<a href=#70 id=70 data-nosnippet>70</a>            <span class="prelude-val">Some</span>(<span class="number">1</span>) =&gt; <span class="prelude-val">Ok</span>(FilterType::Lanczos3),
-<a href=#71 id=71 data-nosnippet>71</a>            <span class="prelude-val">Some</span>(<span class="number">2</span>) | <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Ok</span>(FilterType::Triangle), <span class="comment">// BiLinear
-<a href=#72 id=72 data-nosnippet>72</a>            </span><span class="prelude-val">Some</span>(<span class="number">3</span>) =&gt; <span class="prelude-val">Ok</span>(FilterType::CatmullRom),      <span class="comment">// BiCubic
-<a href=#73 id=73 data-nosnippet>73</a>            </span><span class="prelude-val">Some</span>(<span class="number">4</span>) =&gt; <span class="prelude-val">Ok</span>(FilterType::Nearest),
-<a href=#74 id=74 data-nosnippet>74</a>            <span class="prelude-val">Some</span>(x) =&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"Filter number {x} not supported"</span>),
-<a href=#75 id=75 data-nosnippet>75</a>        }
-<a href=#76 id=76 data-nosnippet>76</a>    }
-<a href=#77 id=77 data-nosnippet>77</a>}</code></pre></div></section></main></body></html>
+<a href=#57 id=57 data-nosnippet>57</a>
+<a href=#58 id=58 data-nosnippet>58</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) audio_compression_rate: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#59 id=59 data-nosnippet>59</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) audio_downsample_rate: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#60 id=60 data-nosnippet>60</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) audio_feat_stride: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#61 id=61 data-nosnippet>61</a>}
+<a href=#62 id=62 data-nosnippet>62</a>
+<a href=#63 id=63 data-nosnippet>63</a><span class="attr">#[allow(dead_code)]
+<a href=#64 id=64 data-nosnippet>64</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>ToFilter {
+<a href=#65 id=65 data-nosnippet>65</a>    <span class="kw">fn </span>to_filter(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;FilterType&gt;;
+<a href=#66 id=66 data-nosnippet>66</a>}
+<a href=#67 id=67 data-nosnippet>67</a>
+<a href=#68 id=68 data-nosnippet>68</a><span class="kw">impl </span>ToFilter <span class="kw">for </span><span class="prelude-ty">Option</span>&lt;usize&gt; {
+<a href=#69 id=69 data-nosnippet>69</a>    <span class="comment">// https://github.com/python-pillow/Pillow/blob/4b68563e8a818fb9c528fa159ddf3f4eaefa35e6/src/PIL/Image.py#L164-L170
+<a href=#70 id=70 data-nosnippet>70</a>    // Default: https://github.com/huggingface/transformers/blob/0df888ffb72ea370555efdef45985378d3cc7b2b/src/transformers/models/idefics2/image_processing_idefics2.py#L226
+<a href=#71 id=71 data-nosnippet>71</a>    </span><span class="kw">fn </span>to_filter(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;FilterType&gt; {
+<a href=#72 id=72 data-nosnippet>72</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#73 id=73 data-nosnippet>73</a>            <span class="prelude-val">Some</span>(<span class="number">0</span>) =&gt; <span class="prelude-val">Ok</span>(FilterType::Nearest),
+<a href=#74 id=74 data-nosnippet>74</a>            <span class="prelude-val">Some</span>(<span class="number">1</span>) =&gt; <span class="prelude-val">Ok</span>(FilterType::Lanczos3),
+<a href=#75 id=75 data-nosnippet>75</a>            <span class="prelude-val">Some</span>(<span class="number">2</span>) | <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Ok</span>(FilterType::Triangle), <span class="comment">// BiLinear
+<a href=#76 id=76 data-nosnippet>76</a>            </span><span class="prelude-val">Some</span>(<span class="number">3</span>) =&gt; <span class="prelude-val">Ok</span>(FilterType::CatmullRom),      <span class="comment">// BiCubic
+<a href=#77 id=77 data-nosnippet>77</a>            </span><span class="prelude-val">Some</span>(<span class="number">4</span>) =&gt; <span class="prelude-val">Ok</span>(FilterType::Nearest),
+<a href=#78 id=78 data-nosnippet>78</a>            <span class="prelude-val">Some</span>(x) =&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"Filter number {x} not supported"</span>),
+<a href=#79 id=79 data-nosnippet>79</a>        }
+<a href=#80 id=80 data-nosnippet>80</a>    }
+<a href=#81 id=81 data-nosnippet>81</a>}</code></pre></div></section></main></body></html>
