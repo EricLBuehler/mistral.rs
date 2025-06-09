@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use mistralrs_core::{initialize_logging, ModelSelected, TokenSource};
+use rust_mcp_sdk::schema::LATEST_PROTOCOL_VERSION;
 use tracing::info;
 
 use mistralrs_server_core::{
@@ -210,6 +211,8 @@ async fn main() -> Result<()> {
             .serve_ip
             .clone()
             .unwrap_or_else(|| "0.0.0.0".to_string());
+        info!("MCP server listening on http://{host}:{port}.");
+        info!("MCP protocol version is {}.", LATEST_PROTOCOL_VERSION);
         let mcp_server = mcp_server::create_mcp_server(mistralrs.clone(), host, port);
         tokio::spawn(async move {
             if let Err(e) = mcp_server.start().await {
@@ -224,7 +227,7 @@ async fn main() -> Result<()> {
         .await?;
 
     if let Some((listener, ip, port)) = setting_server {
-        info!("Serving on http://{ip}:{}.", port);
+        info!("OpenAI-compatible server listening on http://{ip}:{port}.");
         axum::serve(listener, app).await?;
     };
 

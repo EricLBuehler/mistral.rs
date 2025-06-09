@@ -1,7 +1,9 @@
 # MCP protocol support
 
 `mistralrs-server` can serve **MCP (Model Control Protocol)** traffic next to the regular OpenAI-compatible HTTP interface.  
+
 MCP is an open, tool-based protocol that lets clients interact with models through structured *tool calls* instead of free-form HTTP routes.  
+
 Under the hood the server uses [`rust-mcp-sdk`](https://crates.io/crates/rust-mcp-sdk) and exposes a single tool called **`chat`** that mirrors the behaviour of the `/v1/chat/completions` endpoint.
 
 ---
@@ -27,12 +29,6 @@ Start the normal HTTP server and add the `--mcp-port` flag to spin up an MCP ser
 ```
 
 * `--mcp-port` takes precedence over `--port` – you can run the HTTP and MCP servers on totally independent ports or omit `--port` when you only need MCP.*
-
-The server prints an extra line such as
-
-```
-MCP ‑ listening on http://0.0.0.0:9001
-```
 
 ## 3. Capabilities announced to clients
 
