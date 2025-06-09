@@ -203,10 +203,10 @@ async fn main() -> Result<()> {
             .unwrap_or_else(|| "0.0.0.0".to_string());
         info!("MCP server listening on http://{host}:{port}.");
         info!("MCP protocol version is {}.", LATEST_PROTOCOL_VERSION);
-        let mcp_server = mcp_server::create_mcp_server(mistralrs.clone(), host, port);
+        let mcp_server = mcp_server::create_http_mcp_server(mistralrs.clone(), host, port);
 
         tokio::spawn(async move {
-            if let Err(e) = mcp_server.start().await {
+            if let Err(e) = mcp_server.await {
                 eprintln!("MCP server error: {e}");
             }
         })

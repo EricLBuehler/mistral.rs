@@ -1,35 +1,64 @@
 use async_trait::async_trait;
-use rust_mcp_sdk::{
-    mcp_server::{hyper_server, HyperServerOptions, ServerHandler},
-    schema::{
-        schema_utils::CallToolError, CallToolRequest, CallToolResult, CallToolResultContentItem,
-        Implementation, InitializeResult, ListToolsRequest, ListToolsResult, RpcError,
-        ServerCapabilities, ServerCapabilitiesTools, TextContent, Tool, ToolInputSchema,
-        LATEST_PROTOCOL_VERSION,
-    },
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::Json,
+    routing::post,
+    Router,
 };
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
+use tokio::net::TcpListener;
 
 use mistralrs_server_core::{
     chat_completion::{create_response_channel, parse_request},
     types::SharedMistralRsState,
 };
 
+// Import your existing types
+use rust_mcp_sdk::schema::{
+    schema_utils::CallToolError, CallToolRequest, CallToolResult, CallToolResultContentItem,
+    Implementation, InitializeResult, ListToolsRequest, ListToolsResult, RpcError,
+    ServerCapabilities, ServerCapabilitiesTools, TextContent, Tool, ToolInputSchema,
+    LATEST_PROTOCOL_VERSION,
+};
+
+// JSON-RPC types
+#[derive(serde::Deserialize)]
+struct JsonRpcRequest {
+    jsonrpc: String,
+    id: Option<serde_json::Value>,
+    method: String,
+    params: Option<serde_json::Value>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonRpcResponse {
+    jsonrpc: String,
+    id: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<JsonRpcError>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonRpcError {
+    code: i32,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<serde_json::Value>,
+}
+
+// Keep your existing McpTool trait and ChatTool implementation
 #[async_trait]
 pub trait McpTool: Send + Sync {
-    /// Unique tool identifier
     fn name(&self) -> &str;
-
-    /// Short human‑readable description.
     fn description(&self) -> Option<&str>;
-
-    /// JSON‑Schema for the tool’s arguments.
     fn input_schema(&self) -> &ToolInputSchema;
-
-    /// Convert to the `Tool` record used by the MCP `tools/list` endpoint.
+    
     fn as_tool_record(&self) -> Tool {
         Tool {
             name: self.name().to_string(),
@@ -39,7 +68,6 @@ pub trait McpTool: Send + Sync {
         }
     }
 
-    /// Handle an incoming `call_tool` request.
     async fn call(
         &self,
         args: serde_json::Value,
@@ -47,16 +75,12 @@ pub trait McpTool: Send + Sync {
     ) -> std::result::Result<CallToolResult, CallToolError>;
 }
 
-/// ---------------------------------------------------------------------------
-/// Built‑in `chat` tool
-/// ---------------------------------------------------------------------------
 pub struct ChatTool {
     input_schema: ToolInputSchema,
 }
 
 impl ChatTool {
     pub fn new() -> Self {
-        // Reuse the argument schema we previously constructed for the `chat` tool.
         let required = vec!["messages".to_string()];
 
         let mut properties: HashMap<String, Map<String, Value>> = HashMap::new();
@@ -184,70 +208,146 @@ This server provides LLM text and multimodal model inference. You can use the fo
 - `chat` for sending a chat completion request with a model message history
 "#;
 
-pub struct MistralMcpHandler {
+// HTTP MCP Handler
+pub struct HttpMcpHandler {
     pub state: SharedMistralRsState,
     tools: HashMap<String, Arc<dyn McpTool>>,
+    server_info: InitializeResult,
 }
 
-impl MistralMcpHandler {
+impl HttpMcpHandler {
     pub fn new(state: SharedMistralRsState) -> Self {
         let mut tools: HashMap<String, Arc<dyn McpTool>> = HashMap::new();
         tools.insert("chat".to_string(), Arc::new(ChatTool::new()));
-        Self { state, tools }
+        
+        let server_info = InitializeResult {
+            server_info: Implementation {
+                name: "mistralrs".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+            },
+            capabilities: ServerCapabilities {
+                tools: Some(ServerCapabilitiesTools { list_changed: None }),
+                ..Default::default()
+            },
+            meta: None,
+            instructions: Some(MCP_INSTRUCTIONS.to_string()),
+            protocol_version: LATEST_PROTOCOL_VERSION.to_string(),
+        };
+        
+        Self { state, tools, server_info }
     }
-}
 
-#[async_trait]
-impl ServerHandler for MistralMcpHandler {
-    async fn handle_call_tool_request(
-        &self,
-        request: CallToolRequest,
-        _runtime: &dyn rust_mcp_sdk::McpServer,
-    ) -> std::result::Result<CallToolResult, CallToolError> {
-        let args = request.params.arguments.into();
-        match self.tools.get(&request.params.name) {
-            Some(tool) => tool.call(args, &self.state).await,
-            None => Err(CallToolError::unknown_tool(request.params.name)),
+    async fn handle_request(&self, request: JsonRpcRequest) -> JsonRpcResponse {
+        match request.method.as_str() {
+            "initialize" => {
+                JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id: request.id,
+                    result: Some(serde_json::to_value(&self.server_info).unwrap()),
+                    error: None,
+                }
+            }
+            "tools/list" => {
+                let tools: Vec<Tool> = self.tools.values().map(|t| t.as_tool_record()).collect();
+                let result = ListToolsResult {
+                    tools,
+                    meta: None,
+                    next_cursor: None,
+                };
+                JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id: request.id,
+                    result: Some(serde_json::to_value(result).unwrap()),
+                    error: None,
+                }
+            }
+            "tools/call" => {
+                let params = request.params.unwrap_or(json!({}));
+                
+                // Extract tool name and arguments from params
+                let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                
+                match self.tools.get(tool_name) {
+                    Some(tool) => {
+                        match tool.call(args, &self.state).await {
+                            Ok(result) => {
+                                JsonRpcResponse {
+                                    jsonrpc: "2.0".to_string(),
+                                    id: request.id,
+                                    result: Some(serde_json::to_value(result).unwrap()),
+                                    error: None,
+                                }
+                            }
+                            Err(e) => {
+                                JsonRpcResponse {
+                                    jsonrpc: "2.0".to_string(),
+                                    id: request.id,
+                                    result: None,
+                                    error: Some(JsonRpcError {
+                                        code: -32603,
+                                        message: format!("Tool execution error: {}", e),
+                                        data: None,
+                                    }),
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        JsonRpcResponse {
+                            jsonrpc: "2.0".to_string(),
+                            id: request.id,
+                            result: None,
+                            error: Some(JsonRpcError {
+                                code: -32601,
+                                message: format!("Unknown tool: {}", tool_name),
+                                data: None,
+                            }),
+                        }
+                    }
+                }
+            }
+            _ => {
+                JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id: request.id,
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: -32601,
+                        message: format!("Method not found: {}", request.method),
+                        data: None,
+                    }),
+                }
+            }
         }
     }
-
-    async fn handle_list_tools_request(
-        &self,
-        _request: ListToolsRequest,
-        _runtime: &dyn rust_mcp_sdk::McpServer,
-    ) -> std::result::Result<ListToolsResult, RpcError> {
-        let tools: Vec<Tool> = self.tools.values().map(|t| t.as_tool_record()).collect();
-        Ok(ListToolsResult {
-            tools,
-            meta: None,
-            next_cursor: None,
-        })
-    }
 }
 
-pub fn create_mcp_server(
+// Axum handler
+async fn handle_jsonrpc(
+    State(handler): State<Arc<HttpMcpHandler>>,
+    Json(request): Json<JsonRpcRequest>,
+) -> Result<Json<JsonRpcResponse>, StatusCode> {
+    let response = handler.handle_request(request).await;
+    Ok(Json(response))
+}
+
+// Create HTTP MCP server - this replaces your old create_mcp_server function
+pub async fn create_http_mcp_server(
     state: SharedMistralRsState,
     host: String,
     port: u16,
-) -> rust_mcp_sdk::mcp_server::HyperServer {
-    let server_details = InitializeResult {
-        server_info: Implementation {
-            name: "mistralrs".to_string(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-        },
-        capabilities: ServerCapabilities {
-            tools: Some(ServerCapabilitiesTools { list_changed: None }),
-            ..Default::default()
-        },
-        meta: None,
-        instructions: Some(MCP_INSTRUCTIONS.to_string()),
-        protocol_version: LATEST_PROTOCOL_VERSION.to_string(),
-    };
-    let handler = MistralMcpHandler::new(state);
-    let opts = HyperServerOptions {
-        host,
-        port,
-        ..Default::default()
-    };
-    hyper_server::create_server(server_details, handler, opts)
+) -> Result<(), Box<dyn std::error::Error>> {
+    let handler = Arc::new(HttpMcpHandler::new(state));
+    
+    let app = Router::new()
+        .route("/", post(handle_jsonrpc))
+        .with_state(handler);
+    
+    let addr = format!("{}:{}", host, port);
+    let listener = TcpListener::bind(&addr).await?;
+        
+    axum::serve(listener, app).await?;
+    
+    Ok(())
 }
