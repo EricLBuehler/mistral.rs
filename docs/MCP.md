@@ -87,7 +87,107 @@ The response is a `CallToolResult` event whose `content` array contains a single
 
 Error cases are mapped to `CallToolError` with `is_error = true`.
 
-## 5. Limitations & future work
+## 5. Example clients
+
+### Rust
+
+```rust
+use anyhow::Result;
+use rust_mcp_sdk::{
+    mcp_client::client_runtime,
+    schema::{
+        CallToolRequestParams, ClientCapabilities, CreateMessageRequest,
+        Implementation, InitializeRequestParams, Message, LATEST_PROTOCOL_VERSION,
+    },
+    ClientSseTransport, ClientSseTransportOptions,
+};
+
+struct Handler;
+#[async_trait::async_trait]
+impl rust_mcp_sdk::mcp_client::ClientHandler for Handler {}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let transport = ClientSseTransport::new(
+        "http://localhost:4321/mcp/stream",
+        ClientSseTransportOptions::default(),
+    )?;
+
+    let details = InitializeRequestParams {
+        capabilities: ClientCapabilities::default(),
+        client_info: Implementation { name: "mcp-client".into(), version: "0.1".into() },
+        protocol_version: LATEST_PROTOCOL_VERSION.into(),
+    };
+
+    let client = client_runtime::create_client(details, transport, Handler);
+    client.clone().start().await?;
+
+    let req = CreateMessageRequest {
+        model: "mistralai/Mistral-7B-Instruct-v0.3".into(),
+        messages: vec![Message::user("Explain Rust ownership.")],
+        ..Default::default()
+    };
+
+    let result = client
+        .call_tool(CallToolRequestParams::new("chat", req.into()))
+        .await?;
+
+    println!("{}", result.content[0].as_text_content()?.text);
+    client.shut_down().await?;
+    Ok(())
+}
+```
+
+### Python
+
+```py
+import json
+import requests
+from sseclient import SSEClient
+
+payload = {
+    "kind": "callToolRequest",
+    "id": "123",
+    "params": {
+        "name": "chat",
+        "arguments": {
+            "model": "mistralai/Mistral-7B-Instruct-v0.3",
+            "messages": [
+                {"role": "user", "content": "Explain Rust ownership."}
+            ],
+        },
+    },
+}
+
+resp = requests.post(
+    "http://localhost:4321/mcp/stream",
+    headers={"Content-Type": "application/json"},
+    data=json.dumps(payload),
+    stream=True,
+)
+for event in SSEClient(resp):
+    print(event.data)
+```
+
+### HTTP
+
+```bash
+curl -N -X POST http://localhost:4321/mcp/stream \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "kind": "callToolRequest",
+    "id": "123",
+    "params": {
+      "name": "chat",
+      "arguments": {
+        "model": "mistralai/Mistral-7B-Instruct-v0.3",
+        "messages": [{"role": "user", "content": "Explain Rust ownership."}]
+      }
+    }
+  }'
+```
+
+## 6. Limitations & future work
 
 • Only synchronous, single-shot requests are supported right now.  
 • Streaming responses (`partialCallToolResult`) are not yet implemented.  
