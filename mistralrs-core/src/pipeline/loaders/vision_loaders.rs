@@ -27,7 +27,8 @@ use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::loaders::AutoDeviceMapParams;
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{
-    EitherCache, IsqModel, MultimodalPromptPrefixer, Processor, ProcessorCreator,
+    EitherCache, IsqModel, Modalities, MultimodalPromptPrefixer, Processor, ProcessorCreator,
+    SupportedModality,
 };
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::vision_models::clip::ClipConfig;
@@ -104,6 +105,7 @@ pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         // Default is false, specific model must override.
         false
     }
+    fn modalities(&self, config: &str) -> Result<Modalities>;
     fn prefixer(&self, config: &str) -> Arc<dyn MultimodalPromptPrefixer>;
     fn get_device_for_tensor(
         &self,
@@ -311,6 +313,10 @@ impl VisionModelLoader for AutoVisionLoader {
             .supports_paged_attention(config)
     }
 
+    fn modalities(&self, config: &str) -> Result<Modalities> {
+        Self::get_loader(config)?.modalities(config)
+    }
+
     fn supports_prefix_cacher(&self, config: &str) -> bool {
         Self::get_loader(config)
             .expect("AutoVisionLoader")
@@ -498,6 +504,12 @@ impl VisionModelLoader for Phi3VLoader {
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Phi3VPrefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -770,6 +782,12 @@ impl VisionModelLoader for Idefics2Loader {
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Idefics2Prefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -1109,6 +1127,12 @@ impl VisionModelLoader for LLaVANextLoader {
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(LLaVANextPrefixer)
     }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
+    }
 }
 
 impl IsqModelLoader for LLaVANextLoader {
@@ -1371,6 +1395,12 @@ impl VisionModelLoader for LLaVALoader {
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(LLaVAPrefixer)
     }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
+    }
 }
 
 impl IsqModelLoader for LLaVALoader {
@@ -1624,6 +1654,12 @@ impl VisionModelLoader for VLlamaLoader {
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(VLlamaPrefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -2009,6 +2045,12 @@ impl VisionModelLoader for Qwen2VLLoader {
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen2VLPrefixer)
     }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
+    }
 }
 
 impl IsqModelLoader for Qwen2VLLoader {
@@ -2296,6 +2338,12 @@ impl VisionModelLoader for Idefics3Loader {
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Idefics3Prefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -2606,6 +2654,12 @@ impl VisionModelLoader for MiniCpmOLoader {
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(MiniCpmOPrefixer)
     }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
+    }
 }
 
 impl IsqModelLoader for MiniCpmOLoader {
@@ -2891,6 +2945,16 @@ impl VisionModelLoader for Phi4MMLoader {
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Phi4MMPrefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![
+                SupportedModality::Text,
+                SupportedModality::Vision,
+                SupportedModality::Audio,
+            ],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -3213,6 +3277,12 @@ impl VisionModelLoader for Qwen2_5VLLoader {
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen2_5VLPrefixer)
     }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
+    }
 }
 
 impl IsqModelLoader for Qwen2_5VLLoader {
@@ -3499,6 +3569,12 @@ impl VisionModelLoader for Gemma3Loader {
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Gemma3Prefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 
@@ -3827,6 +3903,12 @@ impl VisionModelLoader for Mistral3Loader {
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Mistral3Prefixer)
     }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
+    }
 }
 
 impl IsqModelLoader for Mistral3Loader {
@@ -4142,6 +4224,12 @@ impl VisionModelLoader for VLlama4Loader {
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(VLlama4Prefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
     }
 }
 

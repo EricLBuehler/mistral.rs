@@ -721,6 +721,7 @@ impl Loader for VisionLoader {
                 cache_engine,
                 prompt_chunksize: self.config.prompt_chunksize,
                 model_metadata: Some(model_metadata),
+                modalities: self.inner.modalities(&config)?,
             }),
             processor,
             prefixer: self.inner.prefixer(&config),

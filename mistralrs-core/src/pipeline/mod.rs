@@ -57,6 +57,7 @@ pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline}
 pub use speech::{SpeechLoader, SpeechPipeline};
 use std::any::Any;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -76,6 +77,29 @@ pub use crate::kv_cache::{
     Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache, NormalCacheType,
 };
 
+#[derive(Clone)]
+pub enum SupportedModality {
+    Text,
+    Audio,
+    Vision,
+}
+
+impl Debug for SupportedModality {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Text => write!(f, "📝 Text"),
+            Self::Audio => write!(f, "🔊 Audio"),
+            Self::Vision => write!(f, "🖼️ Vision"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Modalities {
+    pub input: Vec<SupportedModality>,
+    pub output: Vec<SupportedModality>,
+}
+
 pub struct GeneralMetadata {
     pub max_seq_len: usize,
     /// Only None if it doesn't make sense for the model
@@ -94,6 +118,7 @@ pub struct GeneralMetadata {
     pub cache_engine: Option<CacheEngine>,
     pub prompt_chunksize: Option<NonZeroUsize>,
     pub model_metadata: Option<Arc<dyn ModelConfigLike + Send + Sync>>,
+    pub modalities: Modalities,
 }
 
 impl GeneralMetadata {

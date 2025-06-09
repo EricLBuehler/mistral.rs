@@ -6,7 +6,7 @@ use super::{
     PreProcessingMixin, Processor, TokenSource,
 };
 use crate::device_map::DeviceMapper;
-use crate::pipeline::ChatTemplate;
+use crate::pipeline::{ChatTemplate, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::speech_models::{DiaConfig, DiaPipeline, SpeechGenerationOutput, SpeechLoaderType};
@@ -306,6 +306,10 @@ impl Loader for SpeechLoader {
                 cache_engine: None,
                 prompt_chunksize: None,
                 model_metadata: None,
+                modalities: Modalities {
+                    input: vec![SupportedModality::Text],
+                    output: vec![SupportedModality::Audio],
+                },
             }),
             dummy_cache: EitherCache::Full(Cache::new(0, false)),
             cfg: self
