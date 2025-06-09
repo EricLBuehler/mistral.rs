@@ -1,10 +1,14 @@
+use std::io::Write;
+
 use anyhow::Result;
-use mistralrs::{AudioInput, IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{
+    AudioInput, ChatCompletionChunkResponse, ChunkChoice, Delta, Response, TextMessageRole,
+    VisionMessages, VisionModelBuilder,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = VisionModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
-        .with_isq(IsqType::Q8_0)
         .with_logging()
         .build()
         .await?;
@@ -33,8 +37,25 @@ async fn main() -> Result<()> {
         &model,
     )?;
 
-    let response = model.send_chat_request(messages).await?;
+    let mut stream = model.stream_chat_request(messages).await?;
 
-    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    while let Some(chunk) = stream.next().await {
+        if let Response::Chunk(ChatCompletionChunkResponse { choices, .. }) = chunk {
+            if let Some(ChunkChoice {
+                delta:
+                    Delta {
+                        content: Some(content),
+                        ..
+                    },
+                ..
+            }) = choices.first()
+            {
+                print!("{content}");
+                std::io::stdout().flush()?;
+            };
+        } else {
+            // Handle errors
+        }
+    }
     Ok(())
 }
