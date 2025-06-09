@@ -719,38 +719,37 @@ impl Phi4MMInputsProcessor {
             let has_audio = seq.get_toks().contains(&(AUDIO_SPECIAL_TOKEN_ID as u32));
 
             if has_audio {
-                // Convert multi-channel audio to mono by averaging channels
-                let (audio_data, sample_rate) = if let Some(mut audios) = seq.take_audios() {
-                    if let Some(audio) = audios.pop() {
+                if let Some(audios) = seq.take_audios() {
+                    for audio in audios.into_iter() {
+                        // Convert multi-channel audio to mono by averaging channels
                         let samples = audio.to_mono();
 
-                        (samples, audio.sample_rate)
-                    } else {
-                        candle_core::bail!("No audios in `process_audio_for_sequences`");
+                        // Extract features
+                        let features = self.extract_audio_features(&samples, audio.sample_rate)?;
+                        let audio_frames = features.len() * self.audio_feat_stride;
+
+                        let embed_size = self.compute_audio_embed_size(
+                            audio_frames,
+                            self.audio_compression_rate,
+                            self.audio_downsample_rate,
+                        );
+
+                        // Convert to tensor
+                        let features_len = features.len();
+                        let features_flat: Vec<f32> = features.into_iter().flatten().collect();
+                        let features_tensor = Tensor::from_slice(
+                            &features_flat,
+                            (features_len, AUDIO_FEATURE_SIZE),
+                            device,
+                        )?;
+
+                        audio_features_list.push(features_tensor);
+                        audio_embed_sizes_list.push(embed_size);
+                        audio_frames_list.push(audio_frames);
                     }
                 } else {
                     candle_core::bail!("No audios in `process_audio_for_sequences`");
                 };
-
-                // Extract features
-                let features = self.extract_audio_features(&audio_data, sample_rate)?;
-                let audio_frames = features.len() * self.audio_feat_stride;
-
-                let embed_size = self.compute_audio_embed_size(
-                    audio_frames,
-                    self.audio_compression_rate,
-                    self.audio_downsample_rate,
-                );
-
-                // Convert to tensor
-                let features_len = features.len();
-                let features_flat: Vec<f32> = features.into_iter().flatten().collect();
-                let features_tensor =
-                    Tensor::from_slice(&features_flat, (features_len, AUDIO_FEATURE_SIZE), device)?;
-
-                audio_features_list.push(features_tensor);
-                audio_embed_sizes_list.push(embed_size);
-                audio_frames_list.push(audio_frames);
             }
         }
 
