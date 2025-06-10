@@ -103,6 +103,7 @@ apodize.workspace = true
 symphonia.workspace = true
 mistralrs-audio.workspace = true
 rust-mcp-schema.workspace = true
+mistralrs-mcp = { workspace = true, features = ["pyo3_macros", "utoipa"] }
 
 [features]
 pyo3_macros = ["pyo3"]

@@ -1,6 +1,6 @@
 use anyhow::Result;
-use futures::stream::{SplitSink, SplitStream};
-use futures::{SinkExt, StreamExt};
+use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::{SinkExt, StreamExt};
 use http::{Request, Uri};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -46,7 +46,7 @@ pub trait McpTransport: Send + Sync {
 /// # Example Usage
 ///
 /// ```rust,no_run
-/// use mistralrs_core::mcp_client::transport::{HttpTransport, McpTransport};
+/// use mistralrs_mcp::transport::{HttpTransport, McpTransport};
 /// use std::collections::HashMap;
 ///
 /// #[tokio::main]
@@ -106,7 +106,7 @@ impl HttpTransport {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use mistralrs_core::mcp_client::transport::HttpTransport;
+    /// use mistralrs_mcp::transport::HttpTransport;
     /// use std::collections::HashMap;
     ///
     /// // Basic HTTP transport
@@ -232,7 +232,7 @@ impl McpTransport for HttpTransport {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use mistralrs_core::mcp_client::transport::{HttpTransport, McpTransport};
+    /// use mistralrs_mcp::transport::{HttpTransport, McpTransport};
     /// use serde_json::json;
     ///
     /// #[tokio::main]
@@ -371,7 +371,7 @@ impl McpTransport for HttpTransport {
 /// # Example Usage
 ///
 /// ```rust,no_run
-/// use mistralrs_core::mcp_client::transport::{ProcessTransport, McpTransport};
+/// use mistralrs_mcp::transport::{ProcessTransport, McpTransport};
 /// use std::collections::HashMap;
 ///
 /// #[tokio::main]
@@ -454,7 +454,7 @@ impl ProcessTransport {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use mistralrs_core::mcp_client::transport::ProcessTransport;
+    /// use mistralrs_mcp::transport::ProcessTransport;
     /// use std::collections::HashMap;
     ///
     /// #[tokio::main]
@@ -555,7 +555,7 @@ impl McpTransport for ProcessTransport {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use mistralrs_core::mcp_client::transport::{ProcessTransport, McpTransport};
+    /// use mistralrs_mcp::transport::{ProcessTransport, McpTransport};
     /// use serde_json::json;
     ///
     /// #[tokio::main]
@@ -694,7 +694,7 @@ impl McpTransport for ProcessTransport {
 /// # Example Usage
 ///
 /// ```rust,no_run
-/// use mistralrs_core::mcp_client::transport::{WebSocketTransport, McpTransport};
+/// use mistralrs_mcp::transport::{WebSocketTransport, McpTransport};
 /// use std::collections::HashMap;
 ///
 /// #[tokio::main]
@@ -754,7 +754,7 @@ impl WebSocketTransport {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use mistralrs_core::mcp_client::transport::WebSocketTransport;
+    /// use mistralrs_mcp::transport::WebSocketTransport;
     /// use std::collections::HashMap;
     ///
     /// #[tokio::main]
@@ -844,7 +844,7 @@ impl McpTransport for WebSocketTransport {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use mistralrs_core::mcp_client::transport::{WebSocketTransport, McpTransport};
+    /// use mistralrs_mcp::transport::{WebSocketTransport, McpTransport};
     /// use serde_json::json;
     ///
     /// #[tokio::main]

@@ -61,7 +61,6 @@ use dummy_paged_attention as paged_attention;
 mod attention;
 mod diffusion_models;
 pub mod distributed;
-pub mod mcp_client;
 mod pipeline;
 mod prefix_cacher;
 mod request;
@@ -82,8 +81,13 @@ pub use device_map::{
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, LayerDeviceMapper,
 };
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
-pub use mcp_client::{McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo};
 pub use mistralrs_audio::AudioInput;
+pub use mistralrs_mcp::{
+    CalledFunction, Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType,
+};
+pub use mistralrs_mcp::{
+    McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
+};
 pub use mistralrs_quant::{IsqType, MULTI_LORA_DELIMITER};
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
 pub use pipeline::{
@@ -114,10 +118,7 @@ use serde::Serialize;
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
-pub use tools::{
-    CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolCallback, ToolCallbacks,
-    ToolChoice, ToolType,
-};
+pub use tools::{ToolCallResponse, ToolCallType, ToolCallbacks, ToolChoice};
 pub use topology::{LayerTopology, Topology};
 pub use utils::debug::initialize_logging;
 pub use utils::memory_usage::MemoryUsage;
@@ -170,7 +171,7 @@ struct RebootState {
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
-    mcp_client_config: Option<mcp_client::McpClientConfig>,
+    mcp_client_config: Option<McpClientConfig>,
 }
 
 #[derive(Debug)]
@@ -211,7 +212,7 @@ pub struct MistralRsBuilder {
     search_callback: Option<Arc<SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
-    mcp_client_config: Option<mcp_client::McpClientConfig>,
+    mcp_client_config: Option<McpClientConfig>,
 }
 
 impl MistralRsBuilder {
@@ -280,7 +281,7 @@ impl MistralRsBuilder {
     pub fn with_tool_callback(
         mut self,
         name: impl Into<String>,
-        tool_callback: Arc<tools::ToolCallback>,
+        tool_callback: Arc<ToolCallback>,
     ) -> Self {
         self.tool_callbacks.insert(name.into(), tool_callback);
         self
@@ -291,13 +292,13 @@ impl MistralRsBuilder {
     pub fn with_tool_callback_and_tool(
         mut self,
         name: impl Into<String>,
-        tool_callback: Arc<tools::ToolCallback>,
-        tool: tools::Tool,
+        tool_callback: Arc<ToolCallback>,
+        tool: Tool,
     ) -> Self {
         let name = name.into();
         self.tool_callbacks_with_tools.insert(
             name,
-            tools::ToolCallbackWithTool {
+            ToolCallbackWithTool {
                 callback: tool_callback,
                 tool,
             },
@@ -306,7 +307,7 @@ impl MistralRsBuilder {
     }
 
     /// Configure MCP client to connect to external MCP servers.
-    pub fn with_mcp_client(mut self, config: mcp_client::McpClientConfig) -> Self {
+    pub fn with_mcp_client(mut self, config: McpClientConfig) -> Self {
         self.mcp_client_config = Some(config);
         self
     }
@@ -357,7 +358,7 @@ impl MistralRs {
 
         // Initialize MCP client if configured
         if let Some(config) = &mcp_client_config {
-            let mut mcp_client = mcp_client::McpClient::new(config.clone());
+            let mut mcp_client = McpClient::new(config.clone());
             let total_servers = config.servers.len();
 
             match mcp_client.initialize().await {
@@ -589,7 +590,7 @@ impl MistralRs {
                     // Initialize MCP client for rebooted engine
                     let mut tool_callbacks = reboot_state.tool_callbacks.clone();
                     if let Some(config) = &reboot_state.mcp_client_config {
-                        let mut mcp_client = mcp_client::McpClient::new(config.clone());
+                        let mut mcp_client = McpClient::new(config.clone());
                         if let Ok(()) = mcp_client.initialize().await {
                             let mcp_callbacks = mcp_client.get_tool_callbacks();
                             for (name, callback) in mcp_callbacks {

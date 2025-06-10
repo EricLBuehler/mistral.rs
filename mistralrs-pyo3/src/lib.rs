@@ -19,7 +19,6 @@ use tokio::{runtime::Runtime, sync::mpsc::channel};
 use util::{PyApiErr, PyApiResult};
 
 use candle_core::{Device, Result};
-use mistralrs_core::mcp_client::{McpClientConfig, McpServerConfig, McpServerSource};
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader, AutoDeviceMapParams,
     BertEmbeddingModel, ChatCompletionResponse, CompletionResponse, Constraint,
@@ -37,6 +36,7 @@ use mistralrs_core::{
     CalledFunction, SearchCallback, SearchFunctionParameters, SearchResult, ToolCallback,
     ToolCallbacks,
 };
+use mistralrs_mcp::{McpClientConfig, McpServerConfig, McpServerSource};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use pyo3::Bound;

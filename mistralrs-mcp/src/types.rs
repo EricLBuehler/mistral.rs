@@ -67,8 +67,8 @@ pub struct McpServerInfo {
     pub version: String,
 }
 
-impl From<crate::mcp_client::McpToolInfo> for McpToolSchema {
-    fn from(tool_info: crate::mcp_client::McpToolInfo) -> Self {
+impl From<crate::McpToolInfo> for McpToolSchema {
+    fn from(tool_info: crate::McpToolInfo) -> Self {
         Self {
             tool_type: "function".to_string(),
             function: McpFunctionSchema {

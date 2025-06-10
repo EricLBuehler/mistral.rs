@@ -14,13 +14,7 @@ impl std::fmt::Display for ToolCallType {
     }
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass)]
-#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct CalledFunction {
-    pub name: String,
-    pub arguments: String,
-}
+use mistralrs_mcp::CalledFunction;
 
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]

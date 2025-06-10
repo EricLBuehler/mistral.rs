@@ -6,10 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    response::Response,
-    sampler::SamplingParams,
-    tools::{Tool, ToolChoice},
-    CustomLogitsProcessor, DiffusionGenerationParams,
+    response::Response, sampler::SamplingParams, tools::ToolChoice, CustomLogitsProcessor,
+    DiffusionGenerationParams, Tool,
 };
 use std::{fmt::Debug, sync::Arc};
 use tokio::sync::mpsc::Sender;

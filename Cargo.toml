@@ -11,6 +11,7 @@ members = [
     "mistralrs-paged-attn",
     "mistralrs-web-chat",
     "mistralrs-audio",
+    "mistralrs-mcp",
 ]
 resolver = "2"
 
@@ -176,6 +177,7 @@ mistralrs-vision = { path = "mistralrs-vision" }
 mistralrs-server-core = { path = "mistralrs-server-core" }
 mistralrs = { path = "mistralrs" }
 mistralrs-audio = { path = "mistralrs-audio" }
+mistralrs-mcp = { path = "mistralrs-mcp" }
 
 [profile.release-with-debug]
 inherits = "release"
