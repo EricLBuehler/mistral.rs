@@ -1,69 +1,115 @@
-# MCP Client Usage Guide
+# MCP Quick Start Guide
 
-Connect your models to external tools and services using the Model Context Protocol (MCP).
+🔗 **Connect your models to external tools and services** using the Model Context Protocol (MCP).
 
-You can find [more details here](../docs/MCP/README.md).
+**What is MCP?** The Model Context Protocol allows your AI models to access external tools like web search, file systems, databases, and APIs automatically during conversations.
+
+**Key Benefits:**
+- 🚀 **Zero setup** - Tools work automatically once configured
+- 🔧 **Multi-tool support** - Connect to multiple services simultaneously  
+- 🌐 **Universal protocol** - Works with any MCP-compatible server
+- 🔒 **Secure** - Built-in authentication and timeout controls
+
+[📚 Full Documentation](../docs/MCP/README.md) | [⚙️ Configuration Reference](../docs/MCP/configuration.md)
 
 ## Quick Start
 
 ### 1. Create Configuration File
 
-Create `mcp-config.json`:
+Create `mcp-config.json` with a **working example** using the filesystem server:
+
 ```json
 {
   "servers": [
     {
-      "name": "Web Search Tool",
+      "name": "Filesystem Tools",
       "source": {
-        "type": "Http",
-        "url": "https://api.example.com/mcp"
-      },
+        "type": "Process",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-filesystem", "/tmp"]
+      }
     }
-  ]
+  ],
+  "auto_register_tools": true
 }
 ```
 
-### 2. Start Server
+**Alternative: Web Search Example**
+```json
+{
+  "servers": [
+    {
+      "name": "Brave Search",
+      "source": {
+        "type": "Process", 
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-brave-search"]
+      },
+      "env": {
+        "BRAVE_API_KEY": "your-brave-api-key"
+      }
+    }
+  ],
+  "auto_register_tools": true
+}
+```
+
+### 2. Start Server with MCP Tools
 
 ```bash
-# With config file
+# Start with MCP configuration
 mistralrs-server --mcp-config mcp-config.json --port 1234 run -m Qwen/Qwen3-4B
 
-# Or with environment variable
+# Alternative: Use environment variable
 export MCP_CONFIG_PATH=mcp-config.json
 mistralrs-server --port 1234 run -m Qwen/Qwen3-4B
 ```
 
+✅ **Server starts with tools automatically loaded!**
+
 ### 3. Use Tools Automatically
 
+**That's it! Tools work automatically in conversations:**
+
 ```bash
+# File operations example
 curl -X POST http://localhost:1234/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "Qwen/Qwen3-4B",
+    "messages": [
+      {"role": "user", "content": "List the files in /tmp and create a hello.txt file"}
+    ]
+  }'
+```
+
+```bash  
+# Web search example (if using Brave search config)
+curl -X POST http://localhost:1234/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3-4B", 
     "messages": [
       {"role": "user", "content": "Search for the latest AI news"}
     ]
   }'
 ```
 
-**Tools are automatically available!** The model can now use your MCP servers.
+🎉 **The model automatically uses tools when needed - no extra steps required!**
 
-## Check Integration Status
+## ✅ Verify Tools are Working
 
 ```bash
 curl http://localhost:1234/v1/models
 ```
 
-Response includes MCP information:
+Look for MCP status in the response:
 ```json
 {
   "object": "list",
   "data": [{
     "id": "Qwen/Qwen3-4B",
-    "object": "model",
-    "created": 1699027200,
-    "owned_by": "local",
+    "object": "model", 
     "tools_available": true,
     "mcp_tools_count": 3,
     "mcp_servers_connected": 1
@@ -71,54 +117,86 @@ Response includes MCP information:
 }
 ```
 
-## Transport Types
+**✅ `tools_available: true` means MCP tools are working!**
 
-| Transport | Use Case | Example |
-|-----------|----------|---------|
-| **HTTP** | REST APIs, cloud services | Web search, databases |
-| **Process** | Local tools, CLI tools | File operations, local scripts |
-| **WebSocket** | Real-time data, streaming | Live data feeds, interactive tools |
+## 🚀 Popular MCP Servers
 
-## Configuration Examples
+| Server | Description | Installation | Use Case |
+|--------|-------------|--------------|----------|
+| **Filesystem** | File operations | `npm i -g @modelcontextprotocol/server-filesystem` | Read/write files |
+| **Brave Search** | Web search | `npm i -g @modelcontextprotocol/server-brave-search` | Search the web |
+| **GitHub** | GitHub API | `npm i -g @modelcontextprotocol/server-github` | Repository access |
+| **Postgres** | Database | `npm i -g @modelcontextprotocol/server-postgres` | SQL queries |
 
-### HTTP Server
+### Transport Types
+| Transport | When to Use | Examples |
+|-----------|-------------|----------|
+| **Process** | Local tools, npm packages | Most MCP servers |
+| **HTTP** | REST APIs, cloud services | Custom web services |
+| **WebSocket** | Real-time streaming | Live data feeds |
+
+## 📋 Ready-to-Use Configurations
+
+### Filesystem Server (Recommended for testing)
 ```json
 {
-  "name": "web_api",
-  "source": {
-    "type": "Http",
-    "url": "https://api.example.com/mcp",
-    "headers": {
-      "User-Agent": "mistral-rs/0.6.0"
+  "servers": [{
+    "name": "File Operations",
+    "source": {
+      "type": "Process",
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-filesystem", "/tmp"]
     }
-  },
-  "bearer_token": "your-api-key"
+  }],
+  "auto_register_tools": true
 }
 ```
 
-### Local Process
+### Web Search Server
 ```json
 {
-  "name": "filesystem",
-  "source": {
-    "type": "Process",
-    "command": "mcp-server-filesystem",
-    "args": ["--root", "/workspace", "--readonly"],
+  "servers": [{
+    "name": "Brave Search",
+    "source": {
+      "type": "Process",
+      "command": "npx", 
+      "args": ["@modelcontextprotocol/server-brave-search"]
+    },
     "env": {
-      "LOG_LEVEL": "info"
+      "BRAVE_API_KEY": "your-api-key-here"
     }
-  }
+  }],
+  "auto_register_tools": true
 }
 ```
 
-### WebSocket Server
+### Multi-Server Setup
 ```json
 {
-  "name": "realtime",
-  "source": {
-    "type": "WebSocket",
-    "url": "wss://data.example.com/mcp"
-  }
+  "servers": [
+    {
+      "name": "Filesystem",
+      "source": {
+        "type": "Process",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-filesystem", "/workspace"]
+      },
+      "tool_prefix": "fs"
+    },
+    {
+      "name": "GitHub", 
+      "source": {
+        "type": "Process",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-github"]
+      },
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "your-github-token"
+      },
+      "tool_prefix": "gh"
+    }
+  ],
+  "auto_register_tools": true
 }
 ```
 
@@ -129,8 +207,15 @@ The system gracefully handles failures:
 - **Runtime**: Failed MCP connections are logged as warnings, server continues without MCP
 - **Tools**: Individual tool failures don't crash the server
 
-## See Also
+## 📚 Next Steps
 
-- [Configuration Reference](mcp-config-reference.json) - Complete configuration options
-- [Configuration Examples](mcp-server-config.json) - Real-world examples
-- [Test Configuration](mcp-test-config.json) - Simple test setup
+**Ready for more?**
+- 🔧 [Configuration Reference](mcp-config-reference.json) - All available options
+- 📖 [Full MCP Documentation](../docs/MCP/README.md) - Complete guide  
+- 🛠️ [Server Examples](mcp-server-config.json) - Real-world configurations
+- 🚀 [Advanced Usage](../docs/MCP/advanced.md) - Multi-server setups
+
+**Need help?** 
+- [MCP Server Registry](https://github.com/modelcontextprotocol/servers) - Find more servers
+- [Troubleshooting](../docs/MCP/README.md#troubleshooting) - Common issues
+- [Discord Community](https://discord.gg/SZrecqK8qw) - Get support
