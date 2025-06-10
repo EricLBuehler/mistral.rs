@@ -18,7 +18,7 @@ async fn main() -> Result<()> {
                 id: "example_server".to_string(),
                 name: "Example MCP Server".to_string(),
                 source: McpServerSource::Http {
-                    url: "http://localhost:8080/mcp".to_string(),
+                    url: "https://hf.co/mcp".to_string(),
                     timeout_secs: Some(30),
                     headers: Some({
                         let mut headers = HashMap::new();
