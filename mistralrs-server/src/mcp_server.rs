@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use axum::{extract::State, http::StatusCode, response::Json, routing::post, Router};
+use mistralrs_core::SupportedModality;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::io;
@@ -216,8 +217,14 @@ pub struct HttpMcpHandler {
 
 impl HttpMcpHandler {
     pub fn new(state: SharedMistralRsState) -> Self {
+        let modalities = &state.config().modalities;
+
         let mut tools: HashMap<String, Arc<dyn McpTool>> = HashMap::new();
-        tools.insert("chat".to_string(), Arc::new(ChatTool::new()));
+        if modalities.input.contains(&SupportedModality::Text)
+            && modalities.output.contains(&SupportedModality::Text)
+        {
+            tools.insert("chat".to_string(), Arc::new(ChatTool::new()));
+        }
 
         let server_info = InitializeResult {
             server_info: Implementation {
