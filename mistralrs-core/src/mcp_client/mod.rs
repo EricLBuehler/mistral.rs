@@ -1,3 +1,141 @@
+//! Model Context Protocol (MCP) Client Implementation
+//!
+//! This module provides a comprehensive client implementation for the Model Context Protocol (MCP),
+//! enabling AI assistants to connect to and interact with external tools and resources through
+//! standardized server interfaces.
+//!
+//! # Overview
+//!
+//! The MCP client supports multiple transport protocols and provides automatic tool discovery,
+//! registration, and execution. It seamlessly integrates with the existing tool calling system
+//! in mistral.rs, allowing MCP tools to be used alongside built-in tools.
+//!
+//! # Features
+//!
+//! - **Multiple Transport Protocols**: HTTP, WebSocket, and Process-based connections
+//! - **Automatic Tool Discovery**: Discovers and registers tools from connected MCP servers
+//! - **Bearer Token Authentication**: Supports authentication for secured MCP servers
+//! - **Concurrent Tool Execution**: Handles multiple tool calls efficiently
+//! - **Resource Access**: Access to MCP server resources like files and data
+//! - **Tool Naming Prefix**: Avoid conflicts with customizable tool name prefixes
+//!
+//! # Transport Protocols
+//!
+//! ## HTTP Transport
+//!
+//! For MCP servers accessible via HTTP endpoints with JSON-RPC over HTTP.
+//! Supports both regular JSON responses and Server-Sent Events (SSE).
+//!
+//! ## WebSocket Transport
+//!
+//! For real-time bidirectional communication with MCP servers over WebSocket.
+//! Ideal for interactive applications requiring low-latency tool calls.
+//!
+//! ## Process Transport
+//!
+//! For local MCP servers running as separate processes, communicating via stdin/stdout
+//! using JSON-RPC messages.
+//!
+//! # Example Usage
+//!
+//! ```rust,no_run
+//! use mistralrs_core::mcp_client::{McpClientConfig, McpServerConfig, McpServerSource};
+//! use std::collections::HashMap;
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     // Configure MCP client with multiple servers
+//!     let config = McpClientConfig {
+//!         servers: vec![
+//!             // HTTP server with Bearer token
+//!             McpServerConfig {
+//!                 id: "web_search".to_string(),
+//!                 name: "Web Search MCP".to_string(),
+//!                 source: McpServerSource::Http {
+//!                     url: "https://api.example.com/mcp".to_string(),
+//!                     timeout_secs: Some(30),
+//!                     headers: None,
+//!                 },
+//!                 enabled: true,
+//!                 tool_prefix: Some("web".to_string()),
+//!                 resources: None,
+//!                 bearer_token: Some("your-api-token".to_string()),
+//!             },
+//!             // WebSocket server
+//!             McpServerConfig {
+//!                 id: "realtime_data".to_string(),
+//!                 name: "Real-time Data MCP".to_string(),
+//!                 source: McpServerSource::WebSocket {
+//!                     url: "wss://realtime.example.com/mcp".to_string(),
+//!                     timeout_secs: Some(60),
+//!                     headers: None,
+//!                 },
+//!                 enabled: true,
+//!                 tool_prefix: Some("rt".to_string()),
+//!                 resources: None,
+//!                 bearer_token: Some("ws-token".to_string()),
+//!             },
+//!             // Process-based server
+//!             McpServerConfig {
+//!                 id: "filesystem".to_string(),
+//!                 name: "Filesystem MCP".to_string(),
+//!                 source: McpServerSource::Process {
+//!                     command: "mcp-server-filesystem".to_string(),
+//!                     args: vec!["--root".to_string(), "/tmp".to_string()],
+//!                     work_dir: None,
+//!                     env: None,
+//!                 },
+//!                 enabled: true,
+//!                 tool_prefix: Some("fs".to_string()),
+//!                 resources: Some(vec!["file://**".to_string()]),
+//!                 bearer_token: None,
+//!             },
+//!         ],
+//!         auto_register_tools: true,
+//!         tool_timeout_secs: Some(30),
+//!         max_concurrent_calls: Some(5),
+//!     };
+//!     
+//!     // Initialize MCP client
+//!     let mut client = McpClient::new(config);
+//!     client.initialize().await?;
+//!     
+//!     // Get tool callbacks for integration with model builder
+//!     let tool_callbacks = client.get_tool_callbacks_with_tools();
+//!     println!("Registered {} MCP tools", tool_callbacks.len());
+//!     
+//!     Ok(())
+//! }
+//! ```
+//!
+//! # Integration with Model Builders
+//!
+//! The MCP client integrates seamlessly with mistral.rs model builders:
+//!
+//! ```rust,no_run
+//! use mistralrs::{TextModelBuilder, IsqType};
+//! use mistralrs_core::mcp_client::{McpClientConfig, McpServerConfig, McpServerSource};
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     let mcp_config = McpClientConfig {
+//!         servers: vec![/* your server configs */],
+//!         auto_register_tools: true,
+//!         tool_timeout_secs: Some(30),
+//!         max_concurrent_calls: Some(5),
+//!     };
+//!     
+//!     let model = TextModelBuilder::new("path/to/model".to_string())
+//!         .with_isq(IsqType::Q8_0)
+//!         .with_mcp_client(mcp_config)  // MCP tools automatically registered
+//!         .build()
+//!         .await?;
+//!     
+//!     // MCP tools are now available for automatic tool calling
+//!     Ok(())
+//! }
+//! ```
+
 use anyhow::Result;
 use rust_mcp_schema::Resource;
 use serde::{Deserialize, Serialize};
@@ -10,35 +148,47 @@ pub mod types;
 
 use crate::tools::{Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType};
 
-/// Supported MCP server sources
+/// Supported MCP server transport sources
+///
+/// Defines the different ways to connect to MCP servers, each optimized for
+/// specific use cases and deployment scenarios.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum McpServerSource {
-    /// HTTP-based MCP server
+    /// HTTP-based MCP server using JSON-RPC over HTTP
+    ///
+    /// Best for: Public APIs, RESTful services, servers behind load balancers
+    /// Features: SSE support, standard HTTP semantics, easy debugging
     Http {
-        /// Base URL of the MCP server
+        /// Base URL of the MCP server (http:// or https://)
         url: String,
-        /// Optional timeout in seconds
+        /// Optional timeout in seconds for HTTP requests
         timeout_secs: Option<u64>,
-        /// Optional headers to include in requests
+        /// Optional headers to include in requests (e.g., API keys, custom headers)
         headers: Option<HashMap<String, String>>,
     },
-    /// Local process-based MCP server
+    /// Local process-based MCP server using stdin/stdout communication
+    ///
+    /// Best for: Local tools, development servers, sandboxed environments
+    /// Features: Process isolation, no network overhead, easy deployment
     Process {
-        /// Command to execute
+        /// Command to execute (e.g., "mcp-server-filesystem")
         command: String,
         /// Arguments to pass to the command
         args: Vec<String>,
-        /// Optional working directory
+        /// Optional working directory for the process
         work_dir: Option<String>,
-        /// Optional environment variables
+        /// Optional environment variables for the process
         env: Option<HashMap<String, String>>,
     },
-    /// WebSocket-based MCP server
+    /// WebSocket-based MCP server for real-time bidirectional communication
+    ///
+    /// Best for: Interactive applications, real-time data, low-latency requirements
+    /// Features: Persistent connections, server-initiated notifications, minimal overhead
     WebSocket {
-        /// WebSocket URL
+        /// WebSocket URL (ws:// or wss://)
         url: String,
-        /// Optional timeout in seconds
+        /// Optional timeout in seconds for connection establishment
         timeout_secs: Option<u64>,
         /// Optional headers for the WebSocket handshake
         headers: Option<HashMap<String, String>>,
@@ -46,63 +196,136 @@ pub enum McpServerSource {
 }
 
 /// Configuration for MCP client integration
+///
+/// This structure defines how the MCP client should connect to and manage
+/// multiple MCP servers, including authentication, tool registration, and
+/// execution policies.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpClientConfig {
     /// List of MCP servers to connect to
     pub servers: Vec<McpServerConfig>,
-    /// Whether to automatically register discovered tools
+    /// Whether to automatically register discovered tools with the model
+    ///
+    /// When enabled, tools from MCP servers are automatically converted to
+    /// the internal Tool format and registered for automatic tool calling.
     pub auto_register_tools: bool,
-    /// Timeout for tool execution in seconds
+    /// Timeout for individual tool execution in seconds
+    ///
+    /// Controls how long to wait for a tool call to complete before timing out.
+    /// Defaults to 30 seconds if not specified.
     pub tool_timeout_secs: Option<u64>,
-    /// Maximum number of concurrent tool calls
+    /// Maximum number of concurrent tool calls across all MCP servers
+    ///
+    /// Limits resource usage and prevents overwhelming servers with too many
+    /// simultaneous requests. Defaults to 10 if not specified.
     pub max_concurrent_calls: Option<usize>,
 }
 
-/// Configuration for individual MCP server
+/// Configuration for an individual MCP server
+///
+/// Defines connection parameters, authentication, and tool management
+/// settings for a single MCP server instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
-    /// Unique identifier for this server
+    /// Unique identifier for this server within the client
+    ///
+    /// Used internally to track connections and must be unique across all servers.
     pub id: String,
     /// Human-readable name for this server
+    ///
+    /// Used for logging, debugging, and user-facing displays.
     pub name: String,
-    /// Source specification for connecting to the server
+    /// Transport configuration for connecting to the server
     pub source: McpServerSource,
-    /// Whether this server is enabled
+    /// Whether this server should be activated
+    ///
+    /// Disabled servers are ignored during initialization, allowing for
+    /// easy toggling of server connections.
     pub enabled: bool,
-    /// Optional tool name prefix to avoid conflicts
+    /// Optional prefix to add to tool names from this server
+    ///
+    /// Helps avoid naming conflicts when multiple servers provide tools
+    /// with similar names. For example, "web_search" vs "local_search".
     pub tool_prefix: Option<String>,
-    /// Resource patterns to subscribe to (optional)
+    /// Resource URI patterns this client is interested in (optional)
+    ///
+    /// Allows subscribing to specific resource types or patterns from
+    /// the server. Uses glob-like patterns (e.g., "file://**", "db://users/*").
     pub resources: Option<Vec<String>>,
-    /// Optional Bearer token for authentication
+    /// Bearer token for authentication (optional)
+    ///
+    /// Automatically added as "Authorization: Bearer <token>" header for
+    /// HTTP and WebSocket connections. Process connections typically don't
+    /// need authentication.
     pub bearer_token: Option<String>,
 }
 
 /// Information about a discovered MCP tool
+///
+/// Contains metadata about tools discovered from MCP servers, including
+/// their schemas and server association for proper routing and execution.
 #[derive(Debug, Clone)]
 pub struct McpToolInfo {
-    /// Name of the tool
+    /// Name of the tool as reported by the MCP server
     pub name: String,
-    /// Description of the tool
+    /// Human-readable description of the tool's purpose
     pub description: Option<String>,
-    /// JSON schema for the tool's input parameters
+    /// JSON schema defining the tool's input parameters
+    ///
+    /// This schema is used to validate tool calls and can be converted
+    /// to the internal Tool parameter format for automatic tool calling.
     pub input_schema: serde_json::Value,
     /// ID of the server this tool comes from
+    ///
+    /// Used to route tool calls to the correct MCP server connection.
     pub server_id: String,
-    /// Server name for display purposes
+    /// Display name of the server for logging and debugging
     pub server_name: String,
 }
 
 /// MCP client that manages connections to multiple MCP servers
+///
+/// The main interface for interacting with Model Context Protocol servers.
+/// Handles connection lifecycle, tool discovery, and provides integration
+/// with the mistral.rs tool calling system.
+///
+/// # Features
+///
+/// - **Multi-server Management**: Connects to and manages multiple MCP servers simultaneously
+/// - **Automatic Tool Discovery**: Discovers available tools from connected servers
+/// - **Tool Registration**: Converts MCP tools to internal Tool format for seamless integration
+/// - **Connection Pooling**: Maintains persistent connections for efficient tool execution
+/// - **Error Handling**: Robust error handling with proper cleanup and reconnection logic
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use mistralrs_core::mcp_client::{McpClient, McpClientConfig};
+///
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     let config = McpClientConfig::default();
+///     let mut client = McpClient::new(config);
+///     
+///     // Initialize all configured server connections
+///     client.initialize().await?;
+///     
+///     // Get tool callbacks for model integration
+///     let callbacks = client.get_tool_callbacks_with_tools();
+///     
+///     Ok(())
+/// }
+/// ```
 pub struct McpClient {
-    /// Configuration for the client
+    /// Configuration for the client including server list and policies
     config: McpClientConfig,
-    /// Connected MCP servers
+    /// Active connections to MCP servers, indexed by server ID
     servers: HashMap<String, Arc<dyn McpServerConnection>>,
-    /// Discovered tools from all servers
+    /// Registry of discovered tools from all connected servers
     tools: HashMap<String, McpToolInfo>,
-    /// Tool callbacks that can be used with the existing tool calling system
+    /// Legacy tool callbacks for backward compatibility
     tool_callbacks: HashMap<String, Arc<ToolCallback>>,
-    /// Tool callbacks with their associated Tool definitions
+    /// Tool callbacks with associated Tool definitions for automatic tool calling
     tool_callbacks_with_tools: HashMap<String, ToolCallbackWithTool>,
 }
 

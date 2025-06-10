@@ -373,6 +373,52 @@ impl McpServerConnection for ProcessMcpConnection {
 }
 
 /// WebSocket-based MCP server connection
+///
+/// Provides an MCP client connection over WebSocket transport, enabling real-time
+/// bidirectional communication with MCP servers. This connection type is ideal for
+/// interactive applications that need low-latency tool calls and server-initiated
+/// notifications.
+///
+/// # Features
+///
+/// - **Real-time Communication**: WebSocket enables instant bidirectional messaging
+/// - **Bearer Token Authentication**: Supports authentication during WebSocket handshake
+/// - **Connection Persistence**: Maintains long-lived connections for reduced overhead
+/// - **Automatic Protocol Handling**: Manages MCP initialization and JSON-RPC communication
+///
+/// # Example Usage
+///
+/// ```rust,no_run
+/// use mistralrs_core::mcp_client::client::WebSocketMcpConnection;
+/// use std::collections::HashMap;
+///
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     // Create connection with Bearer token
+///     let mut headers = HashMap::new();
+///     headers.insert("Authorization".to_string(), "Bearer your-token".to_string());
+///     
+///     let connection = WebSocketMcpConnection::new(
+///         "ws_server".to_string(),
+///         "My WebSocket MCP Server".to_string(),
+///         "wss://api.example.com/mcp".to_string(),
+///         Some(30),
+///         Some(headers)
+///     ).await?;
+///     
+///     // List available tools
+///     let tools = connection.list_tools().await?;
+///     println!("Available tools: {:?}", tools);
+///     
+///     // Call a tool
+///     let result = connection.call_tool("search", serde_json::json!({
+///         "query": "example search"
+///     })).await?;
+///     println!("Tool result: {}", result);
+///     
+///     Ok(())
+/// }
+/// ```
 pub struct WebSocketMcpConnection {
     server_id: String,
     server_name: String,
@@ -380,6 +426,55 @@ pub struct WebSocketMcpConnection {
 }
 
 impl WebSocketMcpConnection {
+    /// Creates a new WebSocket MCP connection with automatic initialization
+    ///
+    /// This constructor establishes a WebSocket connection to the MCP server and
+    /// automatically performs the MCP initialization handshake. The connection
+    /// is ready to use for tool calls and resource access upon successful return.
+    ///
+    /// # Arguments
+    ///
+    /// * `server_id` - Unique identifier for this server connection
+    /// * `server_name` - Human-readable name for the server
+    /// * `url` - WebSocket URL (ws:// or wss://) of the MCP server
+    /// * `timeout_secs` - Connection timeout in seconds (reserved for future use)
+    /// * `headers` - Optional HTTP headers for WebSocket handshake (e.g., Bearer tokens)
+    ///
+    /// # Returns
+    ///
+    /// A fully initialized WebSocketMcpConnection ready for MCP operations
+    ///
+    /// # Errors
+    ///
+    /// - WebSocket connection failure
+    /// - MCP initialization failure
+    /// - Authentication errors (invalid Bearer token)
+    /// - Network connectivity issues
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use mistralrs_core::mcp_client::client::WebSocketMcpConnection;
+    /// use std::collections::HashMap;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> anyhow::Result<()> {
+    ///     // Connection with authentication
+    ///     let mut headers = HashMap::new();
+    ///     headers.insert("Authorization".to_string(), "Bearer abc123".to_string());
+    ///     
+    ///     let connection = WebSocketMcpConnection::new(
+    ///         "my_ws_server".to_string(),
+    ///         "Development WebSocket Server".to_string(),
+    ///         "wss://dev.example.com/mcp".to_string(),
+    ///         Some(60), // 1 minute timeout
+    ///         Some(headers)
+    ///     ).await?;
+    ///     
+    ///     // Connection is ready to use
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn new(
         server_id: String,
         server_name: String,

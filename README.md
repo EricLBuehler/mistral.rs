@@ -14,6 +14,7 @@ Blazingly fast LLM inference.
 **Mistral.rs is a cross-platform, highly-multimodal inference engine that brings you:**
 - All-in-one multimodal workflow: text↔text, text+vision↔text, text+vision+audio↔text, text→speech, text→image
 - APIs: Rust, Python, OpenAI HTTP server, MCP server
+- MCP Client: Connect to external tools and services with Model Context Protocol support
 - Performance: ISQ, PagedAttention, FlashAttention
 
 Please submit requests for new models [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
@@ -29,6 +30,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     - [Rust](mistralrs/examples)
     - [OpenAI-compatible HTTP server](README.md#openai-http-server)
     - [Interactive mode](README.md#interactive-mode)
+    - [MCP Client](docs/MCP_CLIENT.md) - Connect to external tools and services
 
 4) Try the **web chat app** for local in-browser conversation (text, vision, and speech support):
     - Quickstart [here](mistralrs-web-chat/README.md)
@@ -119,6 +121,41 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ```
   </details>
 
+- 🔗 **MCP Client** - Connect to external tools and services via Model Context Protocol: [documentation](docs/MCP_CLIENT.md)  
+  <details>
+    <summary>Show example</summary>
+
+    ```rust
+    use mistralrs::{TextModelBuilder, McpClientConfig, McpServerConfig, McpServerSource};
+    
+    let mcp_config = McpClientConfig {
+        servers: vec![
+            McpServerConfig {
+                id: "web_search".to_string(),
+                name: "Web Search API".to_string(),
+                source: McpServerSource::Http {
+                    url: "https://api.example.com/mcp".to_string(),
+                    timeout_secs: Some(30),
+                    headers: None,
+                },
+                enabled: true,
+                tool_prefix: Some("web".to_string()),
+                resources: None,
+                bearer_token: Some("your-api-key".to_string()),
+            },
+        ],
+        auto_register_tools: true,
+        tool_timeout_secs: Some(30),
+        max_concurrent_calls: Some(5),
+    };
+
+    let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+        .with_mcp_client(mcp_config) // Tools automatically available!
+        .build()
+        .await?;
+    ```
+  </details>
+
 ## Description
 
 [mistral.rs](https://github.com/EricLBuehler/mistral.rs) is a blazing-fast, cross-platform LLM inference engine with support for text, vision, image generation, and speech.
@@ -130,7 +167,8 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
    - [Rust API](https://ericlbuehler.github.io/mistral.rs/mistralrs/) & [Python API](mistralrs-pyo3/API.md)
    - [Automatic device mapping](docs/DEVICE_MAPPING.md) (multi-GPU, CPU)
    - [Chat templates](docs/CHAT_TOK.md) & tokenizer auto-detection
-   - [MCP protocol](docs/MCP.md) for structured, realtime tool calls
+   - [MCP server](docs/MCP.md) for structured, realtime tool calls
+   - [MCP client](docs/MCP_CLIENT.md) to connect to external tools and services
 
 2. **Performance**
    - CPU acceleration (MKL, AVX, [NEON](docs/DEVICE_MAPPING.md#arm-neon), [Accelerate](docs/DEVICE_MAPPING.md#apple-accelerate))

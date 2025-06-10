@@ -1,21 +1,87 @@
 # MCP Client Support
 
-mistral.rs supports acting as a Model Context Protocol (MCP) client, allowing it to connect to external MCP servers and automatically register their tools for use in automatic tool calling.
+mistral.rs provides comprehensive support for acting as a Model Context Protocol (MCP) client, enabling seamless integration with external MCP servers and automatic registration of their tools for use in AI conversations.
 
 ## Overview
 
-The MCP client feature enables mistral.rs to:
+The MCP client feature transforms mistral.rs into a powerful AI assistant that can:
 
-- Connect to multiple MCP servers simultaneously
-- Automatically discover tools from connected servers
-- Register discovered tools with the existing automatic tool calling system
-- Support HTTP, process-based, and WebSocket MCP server connections
-- Handle tool name conflicts with configurable prefixes
-- Manage server connections and handle failures gracefully
+- **Connect to Multiple Servers**: Simultaneously manage connections to various MCP servers
+- **Automatic Tool Discovery**: Dynamically discover and register tools from connected servers
+- **Seamless Integration**: Tools work naturally with mistral.rs's automatic tool calling system
+- **Multi-Transport Support**: Connect via HTTP/HTTPS, WebSocket, or local processes
+- **Authentication Support**: Built-in Bearer token and custom header authentication
+- **Conflict Resolution**: Configurable tool name prefixes to avoid conflicts
+- **Robust Error Handling**: Graceful handling of server failures and network issues
+- **Real-time Communication**: WebSocket support for low-latency interactive applications
+
+## Transport Protocols
+
+### HTTP/HTTPS Transport
+
+**Best for**: Public APIs, RESTful services, servers behind load balancers
+
+**Features**:
+- HTTPS/TLS encryption for secure communication
+- Server-Sent Events (SSE) support for streaming responses
+- Bearer token authentication
+- Custom headers for API keys and versioning
+- Configurable request timeouts
+
+```rust
+McpServerSource::Http {
+    url: "https://api.example.com/mcp".to_string(),
+    timeout_secs: Some(30),
+    headers: None, // Custom headers can be added here
+}
+```
+
+### WebSocket Transport
+
+**Best for**: Interactive applications, real-time data, low-latency requirements
+
+**Features**:
+- Persistent bidirectional connections
+- Real-time communication with minimal overhead
+- Bearer token authentication in handshake
+- Automatic request/response correlation
+- Concurrent operations with split streams
+
+```rust
+McpServerSource::WebSocket {
+    url: "wss://realtime.example.com/mcp".to_string(),
+    timeout_secs: Some(60),
+    headers: None, // Headers for WebSocket handshake
+}
+```
+
+### Process Transport
+
+**Best for**: Local tools, development servers, sandboxed environments
+
+**Features**:
+- Process isolation for security
+- No network overhead (direct pipes)
+- Full environment control
+- Automatic process lifecycle management
+- JSON-RPC over stdin/stdout
+
+```rust
+McpServerSource::Process {
+    command: "mcp-server-filesystem".to_string(),
+    args: vec!["--root".to_string(), "/tmp".to_string()],
+    work_dir: Some("/path/to/workdir".to_string()),
+    env: Some({
+        let mut env = HashMap::new();
+        env.insert("MCP_LOG_LEVEL".to_string(), "debug".to_string());
+        env
+    }),
+}
+```
 
 ## Configuration
 
-MCP client functionality is configured using the `McpClientConfig` struct:
+Configure multiple MCP servers with different transport protocols and authentication:
 
 ```rust
 use mistralrs::{McpClientConfig, McpServerConfig, McpServerSource};
@@ -23,6 +89,35 @@ use std::collections::HashMap;
 
 let mcp_config = McpClientConfig {
     servers: vec![
+        // HTTP server with Bearer token authentication
+        McpServerConfig {
+            id: "web_search".to_string(),
+            name: "Web Search MCP".to_string(),
+            source: McpServerSource::Http {
+                url: "https://api.example.com/mcp".to_string(),
+                timeout_secs: Some(30),
+                headers: None,
+            },
+            enabled: true,
+            tool_prefix: Some("web".to_string()),
+            resources: None,
+            bearer_token: Some("your-api-token".to_string()),
+        },
+        // WebSocket server for real-time communication
+        McpServerConfig {
+            id: "realtime_data".to_string(),
+            name: "Real-time Data MCP".to_string(),
+            source: McpServerSource::WebSocket {
+                url: "wss://realtime.example.com/mcp".to_string(),
+                timeout_secs: Some(60),
+                headers: None,
+            },
+            enabled: true,
+            tool_prefix: Some("rt".to_string()),
+            resources: None,
+            bearer_token: Some("ws-auth-token".to_string()),
+        },
+        // Process-based local server
         McpServerConfig {
             id: "filesystem_server".to_string(),
             name: "Filesystem MCP Server".to_string(),
@@ -35,6 +130,7 @@ let mcp_config = McpClientConfig {
             enabled: true,
             tool_prefix: Some("fs".to_string()),
             resources: Some(vec!["file://**".to_string()]),
+            bearer_token: None, // Process servers don't typically need authentication
         },
     ],
     auto_register_tools: true,
@@ -43,84 +139,70 @@ let mcp_config = McpClientConfig {
 };
 ```
 
-## Server Source Types
+## Authentication
 
-### HTTP Servers
+### Bearer Token Authentication
 
-Connect to MCP servers over HTTP:
+Automatically handled for HTTP and WebSocket connections:
+
+```rust
+McpServerConfig {
+    // ... other fields
+    bearer_token: Some("your-secret-token".to_string()),
+    // Automatically adds: Authorization: Bearer your-secret-token
+}
+```
+
+### Custom Headers
+
+Add additional headers for API keys, versioning, etc.:
 
 ```rust
 McpServerSource::Http {
-    url: "http://localhost:8080/mcp".to_string(),
+    url: "https://api.example.com/mcp".to_string(),
     timeout_secs: Some(30),
     headers: Some({
         let mut headers = HashMap::new();
-        headers.insert("Authorization".to_string(), "Bearer token".to_string());
+        headers.insert("X-API-Version".to_string(), "v1".to_string());
+        headers.insert("X-Client-ID".to_string(), "mistral-rs".to_string());
         headers
     }),
 }
 ```
 
-### Process Servers
-
-Launch and communicate with MCP servers as child processes:
-
-```rust
-McpServerSource::Process {
-    command: "mcp-server-filesystem".to_string(),
-    args: vec!["--root".to_string(), "/tmp".to_string()],
-    work_dir: Some("/path/to/workdir".to_string()),
-    env: Some({
-        let mut env = HashMap::new();
-        env.insert("API_KEY".to_string(), "your-api-key".to_string());
-        env
-    }),
-}
-```
-
-### WebSocket Servers
-
-Connect to MCP servers via WebSocket (planned):
-
-```rust
-McpServerSource::WebSocket {
-    url: "ws://localhost:9090/mcp".to_string(),
-    timeout_secs: Some(30),
-    headers: None,
-}
-```
-
-## Usage with TextModelBuilder
+## Usage with Model Builders
 
 Configure MCP client support when building your model:
 
 ```rust
-use mistralrs::{TextModelBuilder, McpClientConfig, McpServerConfig, McpServerSource};
+use mistralrs::{TextModelBuilder, IsqType};
 
 let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
-    .with_mcp_client(mcp_config)
+    .with_isq(IsqType::Q8_0)
+    .with_mcp_client(mcp_config) // MCP tools automatically available
     .build()
     .await?;
 ```
 
 ## Tool Discovery and Registration
 
-When the MCP client is initialized:
+When the MCP client initializes:
 
-1. **Connection**: Connects to all enabled MCP servers
-2. **Discovery**: Lists available tools from each server
-3. **Registration**: Automatically registers tools with the tool calling system
-4. **Prefixing**: Applies tool prefixes to avoid naming conflicts
-5. **Integration**: Tools become available for automatic tool calling
+1. **Connection**: Establishes connections to all enabled MCP servers
+2. **Discovery**: Lists available tools from each connected server
+3. **Schema Conversion**: Converts MCP tool schemas to internal Tool format
+4. **Registration**: Automatically registers tools with the tool calling system
+5. **Prefixing**: Applies configurable prefixes to avoid naming conflicts
+6. **Integration**: Tools become immediately available for automatic tool calling
 
-### Tool Naming
+### Tool Naming and Conflicts
 
 Tools from MCP servers are registered with optional prefixes:
 
-- Without prefix: `list_files` (from filesystem server)
-- With prefix: `fs_list_files` (with "fs" prefix)
+- Without prefix: `search_web` (original tool name)
+- With prefix: `web_search_web` (with "web" prefix)
 
-This prevents naming conflicts when multiple servers provide similar tools.
+This prevents conflicts when multiple servers provide similar tools.
 
 ## Automatic Tool Calling Integration
 
@@ -129,82 +211,196 @@ MCP tools integrate seamlessly with mistral.rs's automatic tool calling:
 ```rust
 let messages = TextMessages::new()
     .add_message(
+        TextMessageRole::System,
+        "You have access to web search, filesystem, and real-time data tools via MCP servers."
+    )
+    .add_message(
         TextMessageRole::User,
-        "List the files in /tmp and search for Rust information"
+        "Search for recent AI news and save a summary to /tmp/ai_news.txt"
     );
 
 let response = model.send_chat_request(messages).await?;
 
-// Model will automatically call MCP tools as needed
+// Model automatically calls MCP tools as needed
 if let Some(tool_calls) = &response.choices[0].message.tool_calls {
+    println!("MCP tools called:");
     for tool_call in tool_calls {
-        println!("Called tool: {}", tool_call.function.name);
+        println!("- {}: {}", tool_call.function.name, tool_call.function.arguments);
     }
 }
 ```
 
-## Error Handling
+## Error Handling and Resilience
 
-The MCP client handles various error scenarios:
+The MCP client provides robust error handling:
 
-- **Connection failures**: Logs warnings and continues with other servers
-- **Tool call timeouts**: Configurable timeouts with fallback behavior
-- **Server disconnections**: Automatic reconnection attempts
-- **Invalid responses**: Graceful error handling with informative messages
+- **Connection Failures**: Logs warnings and continues with available servers
+- **Authentication Errors**: Clear error messages for token/credential issues
+- **Tool Call Timeouts**: Configurable timeouts with graceful fallback
+- **Server Disconnections**: Automatic reconnection attempts for persistent connections
+- **Invalid Responses**: Graceful handling with informative error messages
+- **Process Crashes**: Automatic cleanup and optional restart for process servers
 
 ## Configuration Options
 
 ### McpClientConfig
 
-- `servers`: List of MCP server configurations
+- `servers`: List of MCP server configurations to connect to
 - `auto_register_tools`: Whether to automatically register discovered tools (default: true)
-- `tool_timeout_secs`: Timeout for individual tool calls (default: 30)
-- `max_concurrent_calls`: Maximum concurrent tool calls (default: 10)
+- `tool_timeout_secs`: Timeout for individual tool calls in seconds (default: 30)
+- `max_concurrent_calls`: Maximum concurrent tool calls across all servers (default: 10)
 
 ### McpServerConfig
 
-- `id`: Unique identifier for the server
-- `name`: Human-readable name
-- `source`: Connection configuration (HTTP, Process, or WebSocket)
-- `enabled`: Whether this server should be used
-- `tool_prefix`: Optional prefix for tool names
-- `resources`: Optional resource patterns to subscribe to
+- `id`: Unique identifier for the server (used for internal tracking)
+- `name`: Human-readable name for logging and debugging
+- `source`: Transport configuration (HTTP, WebSocket, or Process)
+- `enabled`: Whether this server should be activated
+- `tool_prefix`: Optional prefix to add to tool names (prevents conflicts)
+- `resources`: Optional resource URI patterns to subscribe to
+- `bearer_token`: Optional Bearer token for authentication
+
+## Performance Considerations
+
+### Transport Selection
+
+- **HTTP**: Best for stateless interactions, caching, load balancing
+- **WebSocket**: Best for interactive applications, real-time updates
+- **Process**: Best for local tools, no network overhead, maximum security
+
+### Concurrent Operations
+
+- Configure `max_concurrent_calls` based on server capacity
+- WebSocket transport supports true concurrent operations
+- HTTP transport benefits from connection pooling
+- Process transport is limited by stdin/stdout serialization
 
 ## Examples
 
-See the example implementations:
+### Complete Example
 
+```rust
+use mistralrs::{
+    TextModelBuilder, TextMessages, TextMessageRole, 
+    McpClientConfig, McpServerConfig, McpServerSource,
+    IsqType
+};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let mcp_config = McpClientConfig {
+        servers: vec![
+            McpServerConfig {
+                id: "web_search".to_string(),
+                name: "Web Search API".to_string(),
+                source: McpServerSource::Http {
+                    url: "https://api.example.com/mcp".to_string(),
+                    timeout_secs: Some(30),
+                    headers: None,
+                },
+                enabled: true,
+                tool_prefix: Some("web".to_string()),
+                resources: None,
+                bearer_token: Some("your-api-key".to_string()),
+            },
+        ],
+        auto_register_tools: true,
+        tool_timeout_secs: Some(30),
+        max_concurrent_calls: Some(5),
+    };
+
+    let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+        .with_isq(IsqType::Q8_0)
+        .with_mcp_client(mcp_config)
+        .build()
+        .await?;
+
+    let messages = TextMessages::new()
+        .add_message(
+            TextMessageRole::User,
+            "Search for information about Rust programming language"
+        );
+
+    let response = model.send_chat_request(messages).await?;
+    println!("Response: {}", response.choices[0].message.content.as_ref().unwrap());
+
+    Ok(())
+}
+```
+
+See also:
 - **Rust**: `mistralrs/examples/mcp_client/main.rs`
 - **Python**: `examples/python/mcp_client.py`
-
-## Current Limitations
-
-1. **WebSocket Transport**: Not yet implemented (HTTP and Process work)
-2. **Resource Subscriptions**: Basic implementation, full resource management pending
-3. **Reconnection Logic**: Basic reconnection, advanced scenarios pending
-4. **Authentication**: Basic header-based auth, advanced auth methods pending
-
-## Future Enhancements
-
-- Full WebSocket transport implementation
-- Advanced authentication mechanisms (OAuth, JWT, etc.)
-- Resource subscription and notification handling
-- Connection pooling and load balancing
-- Metrics and monitoring integration
-- Configuration hot-reloading
 
 ## Compatibility
 
 The MCP client is compatible with:
 
-- MCP protocol version 2025-03-26
-- Any MCP server implementing the standard protocol
-- Existing mistral.rs tool calling functionality
-- All model types that support tool calling
+- **MCP Protocol**: Version 2025-03-26 and compatible versions
+- **MCP Servers**: Any server implementing the standard MCP protocol
+- **Model Types**: All mistral.rs model types that support tool calling
+- **Existing Tools**: Works alongside built-in and custom tool calling functions
 
 ## Security Considerations
 
-- **Process Servers**: Child processes inherit environment and permissions
-- **HTTP Servers**: Use HTTPS and proper authentication for production
-- **Tool Execution**: MCP tools run with the same privileges as mistral.rs
-- **Input Validation**: Ensure MCP servers properly validate tool arguments
+### Process Servers
+- Child processes inherit the environment and permissions of mistral.rs
+- Use dedicated user accounts with minimal privileges when possible
+- Validate all inputs to prevent command injection
+
+### HTTP/WebSocket Servers
+- Always use HTTPS/WSS in production environments
+- Implement proper Bearer token rotation and management
+- Validate server certificates and use pinning when appropriate
+- Monitor for authentication failures and suspicious activity
+
+### Tool Execution
+- MCP tools execute with the same privileges as the mistral.rs process
+- Implement input validation and sanitization in MCP servers
+- Consider sandboxing for untrusted tools
+- Log all tool executions for audit purposes
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Connection Failures**
+   - Check network connectivity and firewall settings
+   - Verify server URLs and authentication credentials
+   - Review server logs for detailed error information
+
+2. **Authentication Errors**
+   - Ensure Bearer tokens are valid and not expired
+   - Check custom headers for correct format
+   - Verify server authentication requirements
+
+3. **Tool Discovery Issues**
+   - Confirm MCP servers implement the tools/list method
+   - Check server logs for tool registration errors
+   - Verify tool schemas are valid JSON
+
+4. **Performance Issues**
+   - Adjust `max_concurrent_calls` based on server capacity
+   - Monitor tool execution times and adjust timeouts
+   - Consider using WebSocket for high-frequency operations
+
+### Debug Configuration
+
+Enable detailed logging for troubleshooting:
+
+```rust
+use tracing_subscriber;
+
+tracing_subscriber::fmt()
+    .with_env_filter("mistralrs_core::mcp_client=debug")
+    .init();
+```
+
+## Future Enhancements
+
+- **Advanced Authentication**: OAuth 2.0, JWT, mutual TLS support
+- **Resource Management**: Full resource subscription and notification handling
+- **Connection Pooling**: Advanced connection management and load balancing
+- **Metrics Integration**: Prometheus metrics and health monitoring
+- **Configuration Hot-reload**: Dynamic server configuration updates
+- **Caching Layer**: Intelligent caching for tool results and schemas

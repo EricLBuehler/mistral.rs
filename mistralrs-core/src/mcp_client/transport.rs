@@ -22,6 +22,62 @@ pub trait McpTransport: Send + Sync {
 }
 
 /// HTTP-based MCP transport
+///
+/// Provides communication with MCP servers over HTTP using JSON-RPC 2.0 protocol.
+/// This transport is ideal for RESTful MCP services, public APIs, and servers
+/// behind load balancers. Supports both regular JSON responses and Server-Sent Events (SSE).
+///
+/// # Features
+///
+/// - **HTTP/HTTPS Support**: Secure communication with TLS encryption
+/// - **Server-Sent Events**: Handles streaming responses via SSE format
+/// - **Bearer Token Authentication**: Automatic Authorization header injection
+/// - **Custom Headers**: Support for additional headers (API keys, versioning, etc.)
+/// - **Configurable Timeouts**: Request-level timeout control
+/// - **Error Handling**: Comprehensive JSON-RPC and HTTP error handling
+///
+/// # Use Cases
+///
+/// - **Public MCP APIs**: Connect to hosted MCP services
+/// - **RESTful Services**: Integration with REST-based tool providers
+/// - **Load-Balanced Servers**: Works well behind HTTP load balancers
+/// - **Development/Testing**: Easy debugging with standard HTTP tools
+///
+/// # Example Usage
+///
+/// ```rust,no_run
+/// use mistralrs_core::mcp_client::transport::HttpTransport;
+/// use std::collections::HashMap;
+///
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     // Create headers with Bearer token and API version
+///     let mut headers = HashMap::new();
+///     headers.insert("Authorization".to_string(), "Bearer your-api-token".to_string());
+///     headers.insert("X-API-Version".to_string(), "v1".to_string());
+///
+///     // Connect to HTTP MCP server
+///     let transport = HttpTransport::new(
+///         "https://api.example.com/mcp".to_string(),
+///         Some(30), // 30 second timeout
+///         Some(headers)
+///     )?;
+///
+///     // Use the transport for MCP communication
+///     let result = transport.send_request("tools/list", serde_json::Value::Null).await?;
+///     println!("Available tools: {}", result);
+///
+///     Ok(())
+/// }
+/// ```
+///
+/// # Protocol Support
+///
+/// This transport implements JSON-RPC 2.0 over HTTP with support for:
+/// - Standard JSON responses
+/// - Server-Sent Events (SSE) for streaming data
+/// - Bearer token authentication
+/// - Custom HTTP headers
 pub struct HttpTransport {
     client: reqwest::Client,
     base_url: String,
@@ -29,6 +85,49 @@ pub struct HttpTransport {
 }
 
 impl HttpTransport {
+    /// Creates a new HTTP transport for MCP communication
+    ///
+    /// # Arguments
+    ///
+    /// * `base_url` - Base URL of the MCP server (http:// or https://)
+    /// * `timeout_secs` - Optional timeout for HTTP requests in seconds (defaults to 30s)
+    /// * `headers` - Optional custom headers to include in all requests
+    ///
+    /// # Returns
+    ///
+    /// A configured HttpTransport ready for MCP communication
+    ///
+    /// # Errors
+    ///
+    /// - Invalid URL format
+    /// - HTTP client configuration errors
+    /// - TLS/SSL setup failures
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use mistralrs_core::mcp_client::transport::HttpTransport;
+    /// use std::collections::HashMap;
+    ///
+    /// // Basic HTTP transport
+    /// let transport = HttpTransport::new(
+    ///     "https://api.example.com/mcp".to_string(),
+    ///     Some(60), // 1 minute timeout
+    ///     None
+    /// )?;
+    ///
+    /// // With custom headers and authentication
+    /// let mut headers = HashMap::new();
+    /// headers.insert("Authorization".to_string(), "Bearer token123".to_string());
+    /// headers.insert("X-Client-Version".to_string(), "1.0.0".to_string());
+    ///
+    /// let transport = HttpTransport::new(
+    ///     "https://secure-api.example.com/mcp".to_string(),
+    ///     Some(30),
+    ///     Some(headers)
+    /// )?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn new(
         base_url: String,
         timeout_secs: Option<u64>,
@@ -47,6 +146,23 @@ impl HttpTransport {
     }
 
     /// Parse Server-Sent Events response to extract JSON-RPC message
+    ///
+    /// Handles SSE format used by some MCP servers for streaming responses.
+    /// SSE format: `data: <json>\n\n` or `event: <type>\ndata: <json>\n\n`
+    ///
+    /// # Arguments
+    ///
+    /// * `sse_text` - Raw SSE response text from the server
+    ///
+    /// # Returns
+    ///
+    /// Parsed JSON value from the SSE data field
+    ///
+    /// # Errors
+    ///
+    /// - No valid JSON data found in SSE response
+    /// - Malformed SSE format
+    /// - JSON parsing errors
     fn parse_sse_response(sse_text: &str) -> Result<Value> {
         // SSE format: data: <json>\n\n or event: <type>\ndata: <json>\n\n
         let mut json_data = None;
@@ -90,6 +206,56 @@ impl HttpTransport {
 
 #[async_trait::async_trait]
 impl McpTransport for HttpTransport {
+    /// Sends an MCP request over HTTP and returns the response
+    ///
+    /// This method implements JSON-RPC 2.0 over HTTP with support for both
+    /// standard JSON responses and Server-Sent Events (SSE). It handles
+    /// authentication, custom headers, and comprehensive error reporting.
+    ///
+    /// # Arguments
+    ///
+    /// * `method` - The MCP method name (e.g., "tools/list", "tools/call", "resources/read")
+    /// * `params` - JSON parameters for the method call
+    ///
+    /// # Returns
+    ///
+    /// The result portion of the JSON-RPC response
+    ///
+    /// # Errors
+    ///
+    /// - HTTP connection errors (network issues, DNS resolution)
+    /// - HTTP status errors (4xx, 5xx responses)
+    /// - JSON serialization/deserialization errors
+    /// - MCP server errors (returned in JSON-RPC error field)
+    /// - SSE parsing errors for streaming responses
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use mistralrs_core::mcp_client::transport::HttpTransport;
+    /// use serde_json::json;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> anyhow::Result<()> {
+    ///     let transport = HttpTransport::new(
+    ///         "https://api.example.com/mcp".to_string(),
+    ///         None,
+    ///         None
+    ///     )?;
+    ///     
+    ///     // List available tools
+    ///     let tools = transport.send_request("tools/list", serde_json::Value::Null).await?;
+    ///     
+    ///     // Call a specific tool
+    ///     let params = json!({
+    ///         "name": "search",
+    ///         "arguments": {"query": "example search"}
+    ///     });
+    ///     let result = transport.send_request("tools/call", params).await?;
+    ///     
+    ///     Ok(())
+    /// }
+    /// ```
     async fn send_request(&self, method: &str, params: Value) -> Result<Value> {
         // Ensure params is an object, not null
         let params = if params.is_null() {
@@ -145,18 +311,113 @@ impl McpTransport for HttpTransport {
             .ok_or_else(|| anyhow::anyhow!("No result in MCP response"))
     }
 
+    /// Tests the HTTP connection by sending a ping request
+    ///
+    /// Sends a "ping" method call to verify that the MCP server is responsive
+    /// and the HTTP connection is working properly.
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) if the ping was successful
+    ///
+    /// # Errors
+    ///
+    /// - HTTP connection errors
+    /// - Server unavailable or unresponsive
+    /// - Authentication failures
     async fn ping(&self) -> Result<()> {
         self.send_request("ping", Value::Null).await?;
         Ok(())
     }
 
+    /// Closes the HTTP transport connection
+    ///
+    /// HTTP connections are stateless and managed by the underlying HTTP client,
+    /// so this method is a no-op but provided for interface compatibility.
+    ///
+    /// # Returns
+    ///
+    /// Always returns Ok(()) as HTTP connections don't require explicit cleanup
     async fn close(&self) -> Result<()> {
         // HTTP connections don't need explicit closing
         Ok(())
     }
 }
 
-/// Process-based MCP transport using stdin/stdout
+/// Process-based MCP transport using stdin/stdout communication
+///
+/// Provides communication with local MCP servers running as separate processes
+/// using JSON-RPC 2.0 over stdin/stdout pipes. This transport is ideal for
+/// local tools, development servers, and sandboxed environments where you need
+/// process isolation and direct control over the MCP server lifecycle.
+///
+/// # Features
+///
+/// - **Process Isolation**: Each MCP server runs in its own process for security
+/// - **No Network Overhead**: Direct pipe communication for maximum performance
+/// - **Environment Control**: Full control over working directory and environment variables
+/// - **Resource Management**: Automatic process cleanup and lifecycle management
+/// - **Synchronous Communication**: Request/response correlation over stdin/stdout
+/// - **Error Handling**: Comprehensive process and communication error handling
+///
+/// # Use Cases
+///
+/// - **Local Development**: Running MCP servers during development and testing
+/// - **Filesystem Tools**: Local file operations and system utilities
+/// - **Sandboxed Execution**: Isolated execution environments for security
+/// - **Custom Tools**: Private or proprietary MCP servers
+/// - **CI/CD Integration**: Running MCP servers in automated environments
+///
+/// # Example Usage
+///
+/// ```rust,no_run
+/// use mistralrs_core::mcp_client::transport::ProcessTransport;
+/// use std::collections::HashMap;
+///
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     // Basic process transport
+///     let transport = ProcessTransport::new(
+///         "mcp-server-filesystem".to_string(),
+///         vec!["--root".to_string(), "/tmp".to_string()],
+///         None,
+///         None
+///     ).await?;
+///
+///     // With custom working directory and environment
+///     let mut env = HashMap::new();
+///     env.insert("MCP_LOG_LEVEL".to_string(), "debug".to_string());
+///     env.insert("MCP_TIMEOUT".to_string(), "30".to_string());
+///
+///     let transport = ProcessTransport::new(
+///         "/usr/local/bin/my-mcp-server".to_string(),
+///         vec!["--config".to_string(), "production.json".to_string()],
+///         Some("/opt/mcp-server".to_string()), // Working directory
+///         Some(env) // Environment variables
+///     ).await?;
+///
+///     // Use the transport for MCP communication
+///     let result = transport.send_request("tools/list", serde_json::Value::Null).await?;
+///     println!("Available tools: {}", result);
+///
+///     Ok(())
+/// }
+/// ```
+///
+/// # Process Management
+///
+/// The transport automatically manages the child process lifecycle:
+/// - Spawns the process with configured arguments and environment
+/// - Sets up stdin/stdout pipes for JSON-RPC communication
+/// - Monitors process health and handles crashes
+/// - Cleans up resources when the transport is dropped or closed
+///
+/// # Communication Protocol
+///
+/// Uses JSON-RPC 2.0 over stdin/stdout with line-delimited messages:
+/// - Each request is a single line of JSON sent to stdin
+/// - Each response is a single line of JSON read from stdout
+/// - Stderr is captured for debugging and error reporting
 pub struct ProcessTransport {
     child: std::sync::Arc<tokio::sync::Mutex<tokio::process::Child>>,
     stdin: std::sync::Arc<tokio::sync::Mutex<tokio::process::ChildStdin>>,
@@ -165,6 +426,62 @@ pub struct ProcessTransport {
 }
 
 impl ProcessTransport {
+    /// Creates a new process transport by spawning an MCP server process
+    ///
+    /// This constructor spawns a new process with the specified command, arguments,
+    /// and environment, then sets up stdin/stdout pipes for JSON-RPC communication.
+    /// The process is ready to receive MCP requests immediately after creation.
+    ///
+    /// # Arguments
+    ///
+    /// * `command` - The command to execute (e.g., "mcp-server-filesystem", "/usr/bin/python")
+    /// * `args` - Command-line arguments to pass to the process
+    /// * `work_dir` - Optional working directory for the process (defaults to current directory)
+    /// * `env` - Optional environment variables to set for the process
+    ///
+    /// # Returns
+    ///
+    /// A configured ProcessTransport with the spawned process ready for communication
+    ///
+    /// # Errors
+    ///
+    /// - Command not found or not executable
+    /// - Permission denied errors
+    /// - Process spawn failures
+    /// - Pipe setup errors (stdin/stdout/stderr)
+    /// - Working directory access errors
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use mistralrs_core::mcp_client::transport::ProcessTransport;
+    /// use std::collections::HashMap;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> anyhow::Result<()> {
+    ///     // Simple filesystem server
+    ///     let transport = ProcessTransport::new(
+    ///         "mcp-server-filesystem".to_string(),
+    ///         vec!["--root".to_string(), "/home/user/documents".to_string()],
+    ///         None,
+    ///         None
+    ///     ).await?;
+    ///
+    ///     // Python-based MCP server with custom environment
+    ///     let mut env = HashMap::new();
+    ///     env.insert("PYTHONPATH".to_string(), "/opt/mcp-servers".to_string());
+    ///     env.insert("MCP_DEBUG".to_string(), "1".to_string());
+    ///
+    ///     let transport = ProcessTransport::new(
+    ///         "python".to_string(),
+    ///         vec!["-m".to_string(), "my_mcp_server".to_string(), "--port".to_string(), "8080".to_string()],
+    ///         Some("/opt/mcp-servers".to_string()),
+    ///         Some(env)
+    ///     ).await?;
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn new(
         command: String,
         args: Vec<String>,
@@ -211,6 +528,58 @@ impl ProcessTransport {
 
 #[async_trait::async_trait]
 impl McpTransport for ProcessTransport {
+    /// Sends an MCP request to the child process and returns the response
+    ///
+    /// This method implements JSON-RPC 2.0 over stdin/stdout pipes. It sends
+    /// a line-delimited JSON request to the process stdin and reads the
+    /// corresponding response from stdout. Communication is synchronous with
+    /// proper request/response correlation.
+    ///
+    /// # Arguments
+    ///
+    /// * `method` - The MCP method name (e.g., "tools/list", "tools/call", "resources/read")
+    /// * `params` - JSON parameters for the method call
+    ///
+    /// # Returns
+    ///
+    /// The result portion of the JSON-RPC response
+    ///
+    /// # Errors
+    ///
+    /// - Process communication errors (broken pipes)
+    /// - Process crashes or unexpected termination
+    /// - JSON serialization/deserialization errors
+    /// - MCP server errors (returned in JSON-RPC error field)
+    /// - I/O errors on stdin/stdout
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use mistralrs_core::mcp_client::transport::ProcessTransport;
+    /// use serde_json::json;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> anyhow::Result<()> {
+    ///     let transport = ProcessTransport::new(
+    ///         "mcp-server-filesystem".to_string(),
+    ///         vec!["--root".to_string(), "/tmp".to_string()],
+    ///         None,
+    ///         None
+    ///     ).await?;
+    ///     
+    ///     // List available tools
+    ///     let tools = transport.send_request("tools/list", serde_json::Value::Null).await?;
+    ///     
+    ///     // Call a specific tool
+    ///     let params = json!({
+    ///         "name": "read_file",
+    ///         "arguments": {"path": "/tmp/example.txt"}
+    ///     });
+    ///     let result = transport.send_request("tools/call", params).await?;
+    ///     
+    ///     Ok(())
+    /// }
+    /// ```
     async fn send_request(&self, method: &str, params: Value) -> Result<Value> {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
@@ -255,11 +624,45 @@ impl McpTransport for ProcessTransport {
             .ok_or_else(|| anyhow::anyhow!("No result in MCP response"))
     }
 
+    /// Tests the process connection by sending a ping request
+    ///
+    /// Sends a "ping" method call to verify that the MCP server process is
+    /// responsive and the stdin/stdout communication is working properly.
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) if the ping was successful
+    ///
+    /// # Errors
+    ///
+    /// - Process communication errors
+    /// - Process crashed or terminated
+    /// - Broken stdin/stdout pipes
     async fn ping(&self) -> Result<()> {
         self.send_request("ping", Value::Null).await?;
         Ok(())
     }
 
+    /// Terminates the child process and cleans up resources
+    ///
+    /// This method forcefully terminates the MCP server process and closes
+    /// all associated pipes. Any pending requests will fail after this call.
+    /// The transport cannot be used after closing.
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) if the process was terminated successfully
+    ///
+    /// # Errors
+    ///
+    /// - Process termination errors
+    /// - Resource cleanup failures
+    ///
+    /// # Note
+    ///
+    /// This method sends SIGKILL to the process, which may not allow for
+    /// graceful cleanup. Consider implementing graceful shutdown through
+    /// MCP protocol methods before calling this method.
     async fn close(&self) -> Result<()> {
         let mut child = self.child.lock().await;
         child.kill().await?;
@@ -268,6 +671,57 @@ impl McpTransport for ProcessTransport {
 }
 
 /// WebSocket-based MCP transport
+///
+/// Provides real-time bidirectional communication with MCP servers over WebSocket connections.
+/// This transport supports secure connections (WSS), Bearer token authentication, and concurrent
+/// request/response handling with proper JSON-RPC 2.0 message correlation.
+///
+/// # Features
+///
+/// - **Async WebSocket Communication**: Built on tokio-tungstenite for high-performance async I/O
+/// - **Request/Response Matching**: Automatic correlation of responses using atomic request IDs
+/// - **Bearer Token Support**: Authentication via Authorization header during handshake
+/// - **Connection Management**: Proper ping/pong and connection lifecycle handling
+/// - **Concurrent Operations**: Split stream architecture allows simultaneous read/write operations
+///
+/// # Architecture
+///
+/// The transport uses a split-stream design where the WebSocket connection is divided into
+/// separate read and write halves, each protected by async mutexes. This allows concurrent
+/// operations while maintaining thread safety. Request IDs are generated atomically to ensure
+/// unique identification of requests and proper response correlation.
+///
+/// # Example Usage
+///
+/// ```rust,no_run
+/// use mistralrs_core::mcp_client::transport::WebSocketTransport;
+/// use std::collections::HashMap;
+///
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     // Create headers with Bearer token
+///     let mut headers = HashMap::new();
+///     headers.insert("Authorization".to_string(), "Bearer your-token".to_string());
+///
+///     // Connect to WebSocket MCP server
+///     let transport = WebSocketTransport::new(
+///         "wss://api.example.com/mcp".to_string(),
+///         Some(30), // 30 second timeout
+///         Some(headers)
+///     ).await?;
+///
+///     // Use the transport for MCP communication
+///     let result = transport.send_request("tools/list", serde_json::Value::Null).await?;
+///     println!("Available tools: {}", result);
+///
+///     Ok(())
+/// }
+/// ```
+///
+/// # Protocol Compliance
+///
+/// This transport implements the Model Context Protocol (MCP) specification over WebSocket,
+/// adhering to JSON-RPC 2.0 message format with proper error handling and response correlation.
 pub struct WebSocketTransport {
     write: std::sync::Arc<
         tokio::sync::Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>,
@@ -278,6 +732,45 @@ pub struct WebSocketTransport {
 }
 
 impl WebSocketTransport {
+    /// Creates a new WebSocket transport connection to an MCP server
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - WebSocket URL (ws:// or wss://)
+    /// * `_timeout_secs` - Connection timeout (currently unused, reserved for future use)
+    /// * `headers` - Optional HTTP headers for WebSocket handshake (e.g., Bearer tokens)
+    ///
+    /// # Returns
+    ///
+    /// A configured WebSocketTransport ready for MCP communication
+    ///
+    /// # Errors
+    ///
+    /// - Invalid URL format
+    /// - WebSocket connection failure
+    /// - Header parsing errors
+    /// - Network connectivity issues
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use mistralrs_core::mcp_client::transport::WebSocketTransport;
+    /// use std::collections::HashMap;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> anyhow::Result<()> {
+    ///     let mut headers = HashMap::new();
+    ///     headers.insert("Authorization".to_string(), "Bearer token123".to_string());
+    ///     
+    ///     let transport = WebSocketTransport::new(
+    ///         "wss://mcp.example.com/api".to_string(),
+    ///         Some(30),
+    ///         Some(headers)
+    ///     ).await?;
+    ///     
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn new(
         url: String,
         _timeout_secs: Option<u64>,
@@ -324,6 +817,54 @@ impl WebSocketTransport {
 
 #[async_trait::async_trait]
 impl McpTransport for WebSocketTransport {
+    /// Sends an MCP request over WebSocket and waits for the corresponding response
+    ///
+    /// This method implements the JSON-RPC 2.0 protocol over WebSocket, handling:
+    /// - Unique request ID generation for response correlation
+    /// - Concurrent request processing with proper message ordering
+    /// - Error handling for both transport and protocol errors
+    /// - Message filtering to match responses with requests
+    ///
+    /// # Arguments
+    ///
+    /// * `method` - The MCP method name (e.g., "tools/list", "tools/call")
+    /// * `params` - JSON parameters for the method call
+    ///
+    /// # Returns
+    ///
+    /// The result portion of the JSON-RPC response
+    ///
+    /// # Errors
+    ///
+    /// - WebSocket connection errors
+    /// - JSON serialization/deserialization errors  
+    /// - MCP server errors (returned in JSON-RPC error field)
+    /// - Timeout or connection closure
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use mistralrs_core::mcp_client::transport::WebSocketTransport;
+    /// use serde_json::json;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> anyhow::Result<()> {
+    ///     let transport = WebSocketTransport::new(
+    ///         "wss://api.example.com/mcp".to_string(),
+    ///         None,
+    ///         None
+    ///     ).await?;
+    ///     
+    ///     // List available tools
+    ///     let tools = transport.send_request("tools/list", serde_json::Value::Null).await?;
+    ///     
+    ///     // Call a specific tool
+    ///     let params = json!({"query": "example search"});
+    ///     let result = transport.send_request("tools/call", params).await?;
+    ///     
+    ///     Ok(())
+    /// }
+    /// ```
     async fn send_request(&self, method: &str, params: Value) -> Result<Value> {
         // Ensure params is an object, not null
         let params = if params.is_null() {
@@ -404,6 +945,19 @@ impl McpTransport for WebSocketTransport {
         }
     }
 
+    /// Sends a WebSocket ping frame to test connection health
+    ///
+    /// This method sends a ping frame to the server and expects a pong response,
+    /// which helps verify that the WebSocket connection is still active and responsive.
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) if the ping was sent successfully
+    ///
+    /// # Errors
+    ///
+    /// - WebSocket send errors
+    /// - Connection closure
     async fn ping(&self) -> Result<()> {
         let ping_message = Message::Ping(vec![]);
         let mut write = self.write.lock().await;
@@ -414,6 +968,20 @@ impl McpTransport for WebSocketTransport {
         Ok(())
     }
 
+    /// Gracefully closes the WebSocket connection
+    ///
+    /// Sends a close frame to the server to properly terminate the connection
+    /// according to the WebSocket protocol. The server should respond with its
+    /// own close frame to complete the closing handshake.
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) if the close frame was sent successfully
+    ///
+    /// # Errors
+    ///
+    /// - WebSocket send errors
+    /// - Connection already closed
     async fn close(&self) -> Result<()> {
         let close_message = Message::Close(None);
         let mut write = self.write.lock().await;
