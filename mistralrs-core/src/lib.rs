@@ -94,8 +94,8 @@ pub use pipeline::{
     MultimodalPromptPrefixer, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
     NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
     SpeculativeLoader, SpeculativePipeline, SpeechLoader, SpeechPipeline, Starcoder2Loader,
-    TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
-    UQFF_MULTI_FILE_DELIMITER,
+    SupportedModality, TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType,
+    VisionSpecificConfig, UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
     ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,

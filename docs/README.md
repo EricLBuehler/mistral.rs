@@ -38,6 +38,7 @@
 - [Sampling](SAMPLING.md)
 - [TOML selector](TOML_SELECTOR.md)
 - [Tool calling](TOOL_CALLING.md)
+- [MCP protocol](MCP.md)
 
 ## Cross-device inference
 - [Device mapping](DEVICE_MAPPING.md)

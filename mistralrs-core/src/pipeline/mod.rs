@@ -77,7 +77,7 @@ pub use crate::kv_cache::{
     Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache, NormalCacheType,
 };
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum SupportedModality {
     Text,
     Audio,
