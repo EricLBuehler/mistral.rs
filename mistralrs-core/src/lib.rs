@@ -75,6 +75,7 @@ mod topology;
 mod utils;
 mod vision_models;
 mod xlora_models;
+pub mod mcp_client;
 
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{
@@ -115,6 +116,9 @@ use toml_selector::{TomlLoaderArgs, TomlSelector};
 pub use tools::{
     CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolCallback, ToolCallbacks,
     ToolChoice, ToolType,
+};
+pub use mcp_client::{
+    McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
 pub use topology::{LayerTopology, Topology};
 pub use utils::debug::initialize_logging;
@@ -167,6 +171,7 @@ struct RebootState {
     search_embedding_model: Option<BertEmbeddingModel>,
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
+    mcp_client_config: Option<mcp_client::McpClientConfig>,
 }
 
 #[derive(Debug)]
@@ -206,6 +211,7 @@ pub struct MistralRsBuilder {
     search_embedding_model: Option<BertEmbeddingModel>,
     search_callback: Option<Arc<SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
+    mcp_client_config: Option<mcp_client::McpClientConfig>,
 }
 
 impl MistralRsBuilder {
@@ -231,6 +237,7 @@ impl MistralRsBuilder {
             search_embedding_model,
             search_callback: None,
             tool_callbacks: HashMap::new(),
+            mcp_client_config: None,
         }
     }
     pub fn with_log(mut self, log: String) -> Self {
@@ -278,6 +285,12 @@ impl MistralRsBuilder {
         self
     }
 
+    /// Configure MCP client to connect to external MCP servers.
+    pub fn with_mcp_client(mut self, config: mcp_client::McpClientConfig) -> Self {
+        self.mcp_client_config = Some(config);
+        self
+    }
+
     pub fn build(self) -> Arc<MistralRs> {
         MistralRs::new(self)
     }
@@ -306,7 +319,8 @@ impl MistralRs {
             throughput_logging_enabled,
             search_embedding_model,
             search_callback,
-            tool_callbacks,
+            mut tool_callbacks,
+            mcp_client_config,
         } = config;
 
         let category = pipeline.try_lock().unwrap().category();
@@ -320,6 +334,27 @@ impl MistralRs {
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
 
+        // Initialize MCP client if configured
+        if let Some(config) = &mcp_client_config {
+            let rt = Runtime::new().expect("Failed to create tokio runtime for MCP client");
+            let mut mcp_client = mcp_client::McpClient::new(config.clone());
+            
+            match rt.block_on(mcp_client.initialize()) {
+                Ok(()) => {
+                    info!("MCP client initialized successfully");
+                    // Merge MCP tool callbacks with existing tool callbacks
+                    let mcp_callbacks = mcp_client.get_tool_callbacks();
+                    for (name, callback) in mcp_callbacks {
+                        tool_callbacks.insert(name.clone(), callback.clone());
+                    }
+                    info!("Registered {} MCP tools", mcp_callbacks.len());
+                }
+                Err(e) => {
+                    warn!("Failed to initialize MCP client: {}", e);
+                }
+            }
+        }
+
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
             method: method.clone(),
@@ -332,6 +367,7 @@ impl MistralRs {
             search_embedding_model: search_embedding_model.clone(),
             search_callback: search_callback.clone(),
             tool_callbacks: tool_callbacks.clone(),
+            mcp_client_config: mcp_client_config.clone(),
         };
 
         let (tx, rx) = channel(10_000);
@@ -510,6 +546,18 @@ impl MistralRs {
             let new_engine_handler = thread::spawn(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
+                    // Initialize MCP client for rebooted engine
+                    let mut tool_callbacks = reboot_state.tool_callbacks.clone();
+                    if let Some(config) = &reboot_state.mcp_client_config {
+                        let mut mcp_client = mcp_client::McpClient::new(config.clone());
+                        if let Ok(()) = mcp_client.initialize().await {
+                            let mcp_callbacks = mcp_client.get_tool_callbacks();
+                            for (name, callback) in mcp_callbacks {
+                                tool_callbacks.insert(name.clone(), callback.clone());
+                            }
+                        }
+                    }
+
                     let engine = Engine::new(
                         rx,
                         reboot_state.pipeline.clone(),
@@ -522,7 +570,7 @@ impl MistralRs {
                         reboot_state.throughput_logging_enabled,
                         reboot_state.search_embedding_model,
                         reboot_state.search_callback.clone(),
-                        reboot_state.tool_callbacks.clone(),
+                        tool_callbacks,
                     )
                     .expect("Engine creation failed");
                     Arc::new(engine).run().await;

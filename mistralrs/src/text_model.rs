@@ -30,6 +30,7 @@ pub struct TextModelBuilder {
     pub(crate) search_bert_model: Option<BertEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
     pub(crate) tool_callbacks: HashMap<String, Arc<ToolCallback>>,
+    pub(crate) mcp_client_config: Option<McpClientConfig>,
     pub(crate) device: Option<Device>,
 
     // Model running
@@ -121,6 +122,7 @@ impl TextModelBuilder {
             search_bert_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
+            mcp_client_config: None,
             device: None,
         }
     }
@@ -144,6 +146,13 @@ impl TextModelBuilder {
         callback: Arc<ToolCallback>,
     ) -> Self {
         self.tool_callbacks.insert(name.into(), callback);
+        self
+    }
+
+    /// Configure MCP client to connect to external MCP servers and automatically
+    /// register their tools for use in automatic tool calling.
+    pub fn with_mcp_client(mut self, config: McpClientConfig) -> Self {
+        self.mcp_client_config = Some(config);
         self
     }
 
@@ -391,6 +400,9 @@ impl TextModelBuilder {
         }
         for (name, cb) in &self.tool_callbacks {
             runner = runner.with_tool_callback(name.clone(), cb.clone());
+        }
+        if let Some(mcp_config) = self.mcp_client_config {
+            runner = runner.with_mcp_client(mcp_config);
         }
         runner = runner
             .with_no_kv_cache(self.no_kv_cache)

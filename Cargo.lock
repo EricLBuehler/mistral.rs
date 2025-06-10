@@ -2869,6 +2869,7 @@ dependencies = [
  "regex-automata 0.4.9",
  "reqwest",
  "rubato",
+ "rust-mcp-schema 0.1.11",
  "rustc-hash",
  "rustfft",
  "safetensors",
@@ -4150,6 +4151,16 @@ dependencies = [
 
 [[package]]
 name = "rust-mcp-schema"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69c8c97bf79c576f8dc582be9f6c9825ed91bd921aac65bd7990992257727e39"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rust-mcp-schema"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c9966340f5104a8d22b6c2db8901f8626a0f737820a385db3ffbb29b1f6ae0f"
@@ -4170,7 +4181,7 @@ dependencies = [
  "futures",
  "hyper",
  "rust-mcp-macros",
- "rust-mcp-schema",
+ "rust-mcp-schema 0.5.2",
  "rust-mcp-transport",
  "serde",
  "serde_json",
@@ -4191,7 +4202,7 @@ dependencies = [
  "bytes",
  "futures",
  "reqwest",
- "rust-mcp-schema",
+ "rust-mcp-schema 0.5.2",
  "serde",
  "serde_json",
  "thiserror 2.0.12",
