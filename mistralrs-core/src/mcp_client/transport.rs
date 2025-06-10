@@ -1,7 +1,12 @@
 use anyhow::Result;
+use futures::stream::{SplitSink, SplitStream};
+use futures::{SinkExt, StreamExt};
+use http::{Request, Uri};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
+use tokio::net::TcpStream;
+use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 /// Transport layer for MCP communication
 #[async_trait::async_trait]
@@ -262,13 +267,14 @@ impl McpTransport for ProcessTransport {
     }
 }
 
-#[allow(dead_code)]
 /// WebSocket-based MCP transport
 pub struct WebSocketTransport {
-    // WebSocket implementation would go here
-    // For now, this is a placeholder
-    url: String,
-    headers: HashMap<String, String>,
+    write: std::sync::Arc<
+        tokio::sync::Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>,
+    >,
+    read:
+        std::sync::Arc<tokio::sync::Mutex<SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>>>,
+    request_id: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl WebSocketTransport {
@@ -277,29 +283,144 @@ impl WebSocketTransport {
         _timeout_secs: Option<u64>,
         headers: Option<HashMap<String, String>>,
     ) -> Result<Self> {
+        // Create request with headers
+        let uri: Uri = url
+            .parse()
+            .map_err(|e| anyhow::anyhow!("Invalid WebSocket URL: {}", e))?;
+        let mut request = Request::builder()
+            .uri(uri)
+            .body(())
+            .map_err(|e| anyhow::anyhow!("Failed to create WebSocket request: {}", e))?;
+
+        // Add headers if provided
+        if let Some(headers) = headers {
+            let req_headers = request.headers_mut();
+            for (key, value) in headers {
+                let header_name = key
+                    .parse::<http::header::HeaderName>()
+                    .map_err(|e| anyhow::anyhow!("Invalid header key: {}", e))?;
+                let header_value = value
+                    .parse::<http::header::HeaderValue>()
+                    .map_err(|e| anyhow::anyhow!("Invalid header value: {}", e))?;
+                req_headers.insert(header_name, header_value);
+            }
+        }
+
+        // Connect to WebSocket
+        let (ws_stream, _) = connect_async(request)
+            .await
+            .map_err(|e| anyhow::anyhow!("WebSocket connection failed: {}", e))?;
+
+        // Split the stream
+        let (write, read) = ws_stream.split();
+
         Ok(Self {
-            url,
-            headers: headers.unwrap_or_default(),
+            write: std::sync::Arc::new(tokio::sync::Mutex::new(write)),
+            read: std::sync::Arc::new(tokio::sync::Mutex::new(read)),
+            request_id: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
         })
     }
 }
 
 #[async_trait::async_trait]
 impl McpTransport for WebSocketTransport {
-    async fn send_request(&self, _method: &str, _params: Value) -> Result<Value> {
-        // WebSocket implementation would go here
-        // This is a placeholder for now
-        // TODO
-        Err(anyhow::anyhow!("WebSocket transport not yet implemented"))
+    async fn send_request(&self, method: &str, params: Value) -> Result<Value> {
+        // Ensure params is an object, not null
+        let params = if params.is_null() {
+            serde_json::json!({})
+        } else {
+            params
+        };
+
+        // Generate unique request ID
+        let id = self
+            .request_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        let request_body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params
+        });
+
+        // Send request
+        let message = Message::Text(serde_json::to_string(&request_body)?);
+
+        {
+            let mut write = self.write.lock().await;
+            write
+                .send(message)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to send WebSocket message: {}", e))?;
+        }
+
+        // Read response
+        loop {
+            let mut read = self.read.lock().await;
+            let msg = read
+                .next()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("WebSocket connection closed"))?
+                .map_err(|e| anyhow::anyhow!("WebSocket read error: {}", e))?;
+            drop(read);
+
+            match msg {
+                Message::Text(text) => {
+                    let response_body: Value = serde_json::from_str(&text)?;
+
+                    // Check if this is the response to our request
+                    if let Some(response_id) = response_body.get("id").and_then(|v| v.as_u64()) {
+                        if response_id == id {
+                            // Check for JSON-RPC errors
+                            if let Some(error) = response_body.get("error") {
+                                return Err(anyhow::anyhow!("MCP server error: {}", error));
+                            }
+
+                            return response_body
+                                .get("result")
+                                .cloned()
+                                .ok_or_else(|| anyhow::anyhow!("No result in MCP response"));
+                        }
+                    }
+                    // If it's not our response, continue reading
+                }
+                Message::Binary(_) => {
+                    // Handle binary messages if needed, for now skip
+                    continue;
+                }
+                Message::Close(_) => {
+                    return Err(anyhow::anyhow!("WebSocket connection closed by server"));
+                }
+                Message::Ping(_) | Message::Pong(_) => {
+                    // Handle ping/pong frames, continue reading
+                    continue;
+                }
+                Message::Frame(_) => {
+                    // Raw frames, continue reading
+                    continue;
+                }
+            }
+        }
     }
 
     async fn ping(&self) -> Result<()> {
-        self.send_request("ping", Value::Null).await?;
+        let ping_message = Message::Ping(vec![]);
+        let mut write = self.write.lock().await;
+        write
+            .send(ping_message)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to send ping: {}", e))?;
         Ok(())
     }
 
     async fn close(&self) -> Result<()> {
-        // WebSocket cleanup would go here
+        let close_message = Message::Close(None);
+        let mut write = self.write.lock().await;
+        write
+            .send(close_message)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to send close message: {}", e))?;
         Ok(())
     }
 }

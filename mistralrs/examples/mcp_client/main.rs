@@ -5,18 +5,14 @@ use mistralrs::{
 };
 // use std::collections::HashMap; // Uncomment if using manual headers in examples below
 
-/// This example demonstrates how to use mistral.rs as an MCP client to connect
-/// to external MCP servers and automatically register their tools for use in
-/// automatic tool calling.
 #[tokio::main]
 async fn main() -> Result<()> {
     // Create MCP client configuration with example servers
     let mcp_config = McpClientConfig {
         servers: vec![
-            // Example HTTP-based MCP server with Bearer token authentication
             McpServerConfig {
                 id: "example_server".to_string(),
-                name: "Example MCP Server".to_string(),
+                name: "Hugging Face MCP".to_string(),
                 source: McpServerSource::Http {
                     url: "https://hf.co/mcp".to_string(),
                     timeout_secs: Some(30),
@@ -25,7 +21,7 @@ async fn main() -> Result<()> {
                 enabled: true,
                 tool_prefix: Some("example".to_string()),
                 resources: None,
-                bearer_token: Some("hf_xxx".to_string()), // Bearer token for authentication
+                bearer_token: Some("hf_xxx".to_string()), // Add your Hugging Face token here
             },
             // // Example process-based MCP server (no authentication needed)
             // McpServerConfig {
@@ -62,18 +58,19 @@ async fn main() -> Result<()> {
             //     resources: None,
             //     bearer_token: Some("your-bearer-token".to_string()), // Will be added as Authorization: Bearer <token>
             // },
-            // // Example WebSocket-based MCP server (placeholder)
+            // // Example WebSocket-based MCP server
             // McpServerConfig {
             //     id: "websocket_server".to_string(),
             //     name: "WebSocket MCP Server".to_string(),
             //     source: McpServerSource::WebSocket {
-            //         url: "ws://localhost:9090/mcp".to_string(),
+            //         url: "wss://api.example.com/mcp".to_string(),
             //         timeout_secs: Some(30),
             //         headers: None,
             //     },
-            //     enabled: false, // Disabled since WebSocket transport is not yet implemented
+            //     enabled: false, // Disabled for example - change to true to use
             //     tool_prefix: Some("ws".to_string()),
             //     resources: None,
+            //     bearer_token: Some("your-websocket-token".to_string()), // WebSocket Bearer token support
             // },
         ],
         auto_register_tools: true,
