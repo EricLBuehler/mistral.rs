@@ -58,7 +58,7 @@
     }
   ],
   
-  "_comment_global": "Global Settings",
+  "auto_register_tools": true,
   "tool_timeout_secs": 30,
   "max_concurrent_calls": 10
 }

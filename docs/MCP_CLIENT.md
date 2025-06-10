@@ -22,7 +22,10 @@ cat > mcp-config.json << 'EOF'
       "enabled": true,
       "tool_prefix": "web"
     }
-  ]
+  ],
+  "auto_register_tools": true,
+  "tool_timeout_secs": 30,
+  "max_concurrent_calls": 10
 }
 EOF
 
@@ -87,8 +90,9 @@ let mcp_config = McpClientConfig {
             bearer_token: None,
         },
     ],
-    tool_timeout_secs: Some(30),
-    max_concurrent_calls: Some(5),
+    auto_register_tools: true,      // Automatically register discovered tools
+    tool_timeout_secs: Some(30),    // 30 second timeout per tool call
+    max_concurrent_calls: Some(5),  // Max 5 concurrent tool calls
 };
 
 let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
@@ -339,6 +343,7 @@ The MCP client provides robust error handling:
 ### McpClientConfig
 
 - `servers`: List of MCP server configurations to connect to
+- `auto_register_tools`: Whether to automatically register discovered tools with the model (default: true)
 - `tool_timeout_secs`: Timeout for individual tool calls in seconds (default: 30)
 - `max_concurrent_calls`: Maximum concurrent tool calls across all servers (default: 10)
 

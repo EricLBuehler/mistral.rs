@@ -93,7 +93,7 @@
 //!         ],
 //!         auto_register_tools: true,
 //!         tool_timeout_secs: Some(30),
-//!         max_concurrent_calls: Some(5),
+//!         max_concurrent_calls: Some(10),
 //!     };
 //!     
 //!     // Initialize MCP client
@@ -114,6 +114,8 @@ use rust_mcp_schema::Resource;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Semaphore;
 
 pub mod client;
 pub mod transport;
@@ -300,6 +302,8 @@ pub struct McpClient {
     tool_callbacks: HashMap<String, Arc<ToolCallback>>,
     /// Tool callbacks with associated Tool definitions for automatic tool calling
     tool_callbacks_with_tools: HashMap<String, ToolCallbackWithTool>,
+    /// Semaphore to control maximum concurrent tool calls
+    concurrency_semaphore: Arc<Semaphore>,
 }
 
 /// Trait for MCP server connections
@@ -341,12 +345,14 @@ impl Default for McpClientConfig {
 impl McpClient {
     /// Create a new MCP client with the given configuration
     pub fn new(config: McpClientConfig) -> Self {
+        let max_concurrent = config.max_concurrent_calls.unwrap_or(10);
         Self {
             config,
             servers: HashMap::new(),
             tools: HashMap::new(),
             tool_callbacks: HashMap::new(),
             tool_callbacks_with_tools: HashMap::new(),
+            concurrency_semaphore: Arc::new(Semaphore::new(max_concurrent)),
         }
     }
 
@@ -467,21 +473,42 @@ impl McpClient {
                     tool.name.clone()
                 };
 
-                // Create tool callback that calls the MCP server
+                // Create tool callback that calls the MCP server with timeout and concurrency controls
                 let connection_clone = Arc::clone(connection);
                 let original_tool_name = tool.name.clone();
+                let semaphore_clone = Arc::clone(&self.concurrency_semaphore);
+                let timeout_duration = Duration::from_secs(self.config.tool_timeout_secs.unwrap_or(30));
+                
                 let callback: Arc<ToolCallback> = Arc::new(move |called_function| {
                     let connection = Arc::clone(&connection_clone);
                     let tool_name = original_tool_name.clone();
+                    let semaphore = Arc::clone(&semaphore_clone);
                     let arguments: serde_json::Value =
                         serde_json::from_str(&called_function.arguments)?;
 
                     // Use tokio::task::spawn_blocking to handle the async-to-sync bridge
                     let rt = tokio::runtime::Handle::current();
                     std::thread::spawn(move || {
-                        rt.block_on(
-                            async move { connection.call_tool(&tool_name, arguments).await },
-                        )
+                        rt.block_on(async move {
+                            // Acquire semaphore permit for concurrency control
+                            let _permit = semaphore.acquire().await.map_err(|_| {
+                                anyhow::anyhow!("Failed to acquire concurrency permit")
+                            })?;
+
+                            // Execute tool call with timeout
+                            match tokio::time::timeout(
+                                timeout_duration,
+                                connection.call_tool(&tool_name, arguments),
+                            )
+                            .await
+                            {
+                                Ok(result) => result,
+                                Err(_) => Err(anyhow::anyhow!(
+                                    "Tool call timed out after {} seconds",
+                                    timeout_duration.as_secs()
+                                )),
+                            }
+                        })
                     })
                     .join()
                     .map_err(|_| anyhow::anyhow!("Tool call thread panicked"))?

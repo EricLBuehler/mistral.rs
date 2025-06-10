@@ -66,6 +66,7 @@ def main():
     # Create MCP client configuration
     mcp_config = mistralrs.McpClientConfigPy(
         servers=[http_server],  # Add process_server, websocket_server if enabled
+        auto_register_tools=True,  # Automatically register discovered tools with the model
         tool_timeout_secs=30,      # Timeout for individual tool calls (30 seconds)
         max_concurrent_calls=5     # Maximum concurrent tool calls across all servers
     )
