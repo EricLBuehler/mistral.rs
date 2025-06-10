@@ -171,8 +171,8 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
    - [Rust API](https://ericlbuehler.github.io/mistral.rs/mistralrs/) & [Python API](mistralrs-pyo3/API.md)
    - [Automatic device mapping](docs/DEVICE_MAPPING.md) (multi-GPU, CPU)
    - [Chat templates](docs/CHAT_TOK.md) & tokenizer auto-detection
-   - [MCP server](docs/MCP_SERVER.md) for structured, realtime tool calls
-   - [MCP client](docs/MCP_CLIENT.md) to connect to external tools and services
+   - [MCP server](docs/MCP/server.md) for structured, realtime tool calls
+   - ⭐ [MCP client](docs/MCP/README.md) to connect to external tools and services
 
 2. **Performance**
    - CPU acceleration (MKL, AVX, [NEON](docs/DEVICE_MAPPING.md#arm-neon), [Accelerate](docs/DEVICE_MAPPING.md#apple-accelerate))

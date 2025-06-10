@@ -10,7 +10,7 @@ This example shows how to:
 
 Usage:
 1. First, start the mistral.rs server with MCP config:
-   cargo run --release --bin mistralrs-server -- --port 1234 plain -m Qwen/Qwen3-4B -a qwen3 --mcp-config examples/mcp-test-config.json
+   cargo run --release --bin mistralrs-server -- --port 1234 --mcp-config examples/mcp-test-config.json plain -m Qwen/Qwen3-4B -a qwen3
 
 2. Then run this script:
    python examples/server/mcp_chat.py
@@ -93,7 +93,7 @@ def main():
         print(f"Error making request: {e}")
         print()
         print("Make sure the mistral.rs server is running with MCP configuration:")
-        print("cargo run --release --bin mistralrs-server -- --port 1234 plain -m Qwen/Qwen3-4B -a qwen3 --mcp-config examples/mcp-test-config.json")
+        print("cargo run --release --bin mistralrs-server -- --port 1234 --mcp-config examples/mcp-test-config.json plain -m Qwen/Qwen3-4B -a qwen3")
         print()
         print("And that the MCP configuration file (examples/mcp-test-config.json) exists and is properly configured.")
 
