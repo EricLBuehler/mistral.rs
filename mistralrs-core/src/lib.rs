@@ -169,6 +169,7 @@ struct RebootState {
     search_embedding_model: Option<BertEmbeddingModel>,
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
+    tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
     mcp_client_config: Option<mcp_client::McpClientConfig>,
 }
 
@@ -209,6 +210,7 @@ pub struct MistralRsBuilder {
     search_embedding_model: Option<BertEmbeddingModel>,
     search_callback: Option<Arc<SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
+    tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
     mcp_client_config: Option<mcp_client::McpClientConfig>,
 }
 
@@ -235,6 +237,7 @@ impl MistralRsBuilder {
             search_embedding_model,
             search_callback: None,
             tool_callbacks: HashMap::new(),
+            tool_callbacks_with_tools: HashMap::new(),
             mcp_client_config: None,
         }
     }
@@ -283,6 +286,25 @@ impl MistralRsBuilder {
         self
     }
 
+    /// Register a custom callback with its associated Tool definition. The Tool will be
+    /// automatically added to requests when tool callbacks are active.
+    pub fn with_tool_callback_and_tool(
+        mut self,
+        name: impl Into<String>,
+        tool_callback: Arc<tools::ToolCallback>,
+        tool: tools::Tool,
+    ) -> Self {
+        let name = name.into();
+        self.tool_callbacks_with_tools.insert(
+            name,
+            tools::ToolCallbackWithTool {
+                callback: tool_callback,
+                tool,
+            },
+        );
+        self
+    }
+
     /// Configure MCP client to connect to external MCP servers.
     pub fn with_mcp_client(mut self, config: mcp_client::McpClientConfig) -> Self {
         self.mcp_client_config = Some(config);
@@ -317,7 +339,8 @@ impl MistralRs {
             throughput_logging_enabled,
             search_embedding_model,
             search_callback,
-            mut tool_callbacks,
+            tool_callbacks,
+            mut tool_callbacks_with_tools,
             mcp_client_config,
         } = config;
 
@@ -339,12 +362,15 @@ impl MistralRs {
             match mcp_client.initialize().await {
                 Ok(()) => {
                     info!("MCP client initialized successfully");
-                    // Merge MCP tool callbacks with existing tool callbacks
-                    let mcp_callbacks = mcp_client.get_tool_callbacks();
-                    for (name, callback) in mcp_callbacks {
-                        tool_callbacks.insert(name.clone(), callback.clone());
+                    // Merge MCP tool callbacks with tools into the new collection
+                    let mcp_callbacks_with_tools = mcp_client.get_tool_callbacks_with_tools();
+                    for (name, callback_with_tool) in mcp_callbacks_with_tools {
+                        tool_callbacks_with_tools.insert(name.clone(), callback_with_tool.clone());
                     }
-                    info!("Registered {} MCP tools", mcp_callbacks.len());
+                    info!(
+                        "Registered {} MCP tools with automatic Tool definitions",
+                        mcp_callbacks_with_tools.len()
+                    );
                 }
                 Err(e) => {
                     warn!("Failed to initialize MCP client: {}", e);
@@ -364,6 +390,7 @@ impl MistralRs {
             search_embedding_model: search_embedding_model.clone(),
             search_callback: search_callback.clone(),
             tool_callbacks: tool_callbacks.clone(),
+            tool_callbacks_with_tools: tool_callbacks_with_tools.clone(),
             mcp_client_config: mcp_client_config.clone(),
         };
 
@@ -407,6 +434,7 @@ impl MistralRs {
                         search_embedding_model,
                         search_callback.clone(),
                         tool_callbacks.clone(),
+                        tool_callbacks_with_tools.clone(),
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -430,6 +458,7 @@ impl MistralRs {
                         search_embedding_model,
                         search_callback.clone(),
                         tool_callbacks.clone(),
+                        tool_callbacks_with_tools.clone(),
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -568,6 +597,7 @@ impl MistralRs {
                         reboot_state.search_embedding_model,
                         reboot_state.search_callback.clone(),
                         tool_callbacks,
+                        reboot_state.tool_callbacks_with_tools.clone(),
                     )
                     .expect("Engine creation failed");
                     Arc::new(engine).run().await;

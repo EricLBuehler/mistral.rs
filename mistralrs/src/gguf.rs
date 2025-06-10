@@ -1,11 +1,18 @@
 use candle_core::Device;
 use mistralrs_core::*;
-use mistralrs_core::{SearchCallback, ToolCallback};
+use mistralrs_core::{SearchCallback, Tool, ToolCallback};
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 
 use crate::{best_device, Model};
 use std::sync::Arc;
+
+/// A tool callback with its associated Tool definition.
+#[derive(Clone)]
+pub struct ToolCallbackWithTool {
+    pub callback: Arc<ToolCallback>,
+    pub tool: Tool,
+}
 
 /// Configure a text GGUF model with the various parameters for loading, running, and other inference behaviors.
 pub struct GgufModelBuilder {
@@ -22,6 +29,7 @@ pub struct GgufModelBuilder {
     pub(crate) search_bert_model: Option<BertEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
     pub(crate) tool_callbacks: HashMap<String, Arc<ToolCallback>>,
+    pub(crate) tool_callbacks_with_tools: HashMap<String, ToolCallbackWithTool>,
     pub(crate) device: Option<Device>,
 
     // Model running
@@ -68,6 +76,7 @@ impl GgufModelBuilder {
             search_bert_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
+            tool_callbacks_with_tools: HashMap::new(),
             device: None,
         }
     }
@@ -90,6 +99,20 @@ impl GgufModelBuilder {
         callback: Arc<ToolCallback>,
     ) -> Self {
         self.tool_callbacks.insert(name.into(), callback);
+        self
+    }
+
+    /// Register a callback with an associated Tool definition that will be automatically
+    /// added to requests when tool callbacks are active.
+    pub fn with_tool_callback_and_tool(
+        mut self,
+        name: impl Into<String>,
+        callback: Arc<ToolCallback>,
+        tool: Tool,
+    ) -> Self {
+        let name = name.into();
+        self.tool_callbacks_with_tools
+            .insert(name, ToolCallbackWithTool { callback, tool });
         self
     }
 
@@ -273,6 +296,13 @@ impl GgufModelBuilder {
         }
         for (name, cb) in &self.tool_callbacks {
             runner = runner.with_tool_callback(name.clone(), cb.clone());
+        }
+        for (name, callback_with_tool) in &self.tool_callbacks_with_tools {
+            runner = runner.with_tool_callback_and_tool(
+                name.clone(),
+                callback_with_tool.callback.clone(),
+                callback_with_tool.tool.clone(),
+            );
         }
         runner = runner
             .with_no_kv_cache(self.no_kv_cache)

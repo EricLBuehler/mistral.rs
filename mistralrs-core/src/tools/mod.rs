@@ -18,8 +18,18 @@ use crate::Pipeline;
 /// (name and JSON arguments) and returns the tool output as a string.
 pub type ToolCallback = dyn Fn(&CalledFunction) -> anyhow::Result<String> + Send + Sync;
 
+/// A tool callback with its associated Tool definition.
+#[derive(Clone)]
+pub struct ToolCallbackWithTool {
+    pub callback: Arc<ToolCallback>,
+    pub tool: Tool,
+}
+
 /// Collection of callbacks keyed by tool name.
 pub type ToolCallbacks = HashMap<String, Arc<ToolCallback>>;
+
+/// Collection of callbacks with their tool definitions keyed by tool name.
+pub type ToolCallbacksWithTools = HashMap<String, ToolCallbackWithTool>;
 
 fn contains_tool_call_prefix(prefix: &str) -> bool {
     prefix.contains("<tool_call>")

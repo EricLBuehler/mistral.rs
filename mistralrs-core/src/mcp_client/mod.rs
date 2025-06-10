@@ -8,7 +8,7 @@ pub mod client;
 pub mod transport;
 pub mod types;
 
-use crate::tools::ToolCallback;
+use crate::tools::{Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType};
 
 /// Supported MCP server sources
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +100,8 @@ pub struct McpClient {
     tools: HashMap<String, McpToolInfo>,
     /// Tool callbacks that can be used with the existing tool calling system
     tool_callbacks: HashMap<String, Arc<ToolCallback>>,
+    /// Tool callbacks with their associated Tool definitions
+    tool_callbacks_with_tools: HashMap<String, ToolCallbackWithTool>,
 }
 
 /// Trait for MCP server connections
@@ -146,6 +148,7 @@ impl McpClient {
             servers: HashMap::new(),
             tools: HashMap::new(),
             tool_callbacks: HashMap::new(),
+            tool_callbacks_with_tools: HashMap::new(),
         }
     }
 
@@ -168,6 +171,11 @@ impl McpClient {
     /// Get tool callbacks that can be used with the existing tool calling system
     pub fn get_tool_callbacks(&self) -> &HashMap<String, Arc<ToolCallback>> {
         &self.tool_callbacks
+    }
+
+    /// Get tool callbacks with their associated Tool definitions
+    pub fn get_tool_callbacks_with_tools(&self) -> &HashMap<String, ToolCallbackWithTool> {
+        &self.tool_callbacks_with_tools
     }
 
     /// Get discovered tools information
@@ -258,16 +266,77 @@ impl McpClient {
                     let arguments: serde_json::Value =
                         serde_json::from_str(&called_function.arguments)?;
 
-                    // Use tokio runtime to call async function
+                    // Use tokio::task::spawn_blocking to handle the async-to-sync bridge
                     let rt = tokio::runtime::Handle::current();
-                    rt.block_on(async move { connection.call_tool(&tool_name, arguments).await })
+                    std::thread::spawn(move || {
+                        rt.block_on(async move { connection.call_tool(&tool_name, arguments).await })
+                    })
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("Tool call thread panicked"))?
                 });
 
-                self.tool_callbacks.insert(tool_name.clone(), callback);
+                // Convert MCP tool schema to Tool definition
+                let function_def = Function {
+                    name: tool_name.clone(),
+                    description: tool.description.clone(),
+                    parameters: Self::convert_mcp_schema_to_parameters(&tool.input_schema),
+                };
+
+                let tool_def = Tool {
+                    tp: ToolType::Function,
+                    function: function_def,
+                };
+
+                // Store in both collections for backward compatibility
+                self.tool_callbacks
+                    .insert(tool_name.clone(), callback.clone());
+                self.tool_callbacks_with_tools.insert(
+                    tool_name.clone(),
+                    ToolCallbackWithTool {
+                        callback,
+                        tool: tool_def,
+                    },
+                );
                 self.tools.insert(tool_name, tool);
             }
         }
 
         Ok(())
+    }
+
+    /// Convert MCP tool input schema to Tool parameters format
+    fn convert_mcp_schema_to_parameters(
+        schema: &serde_json::Value,
+    ) -> Option<HashMap<String, serde_json::Value>> {
+        // MCP tools can have various schema formats, we'll try to convert common ones
+        match schema {
+            serde_json::Value::Object(obj) => {
+                let mut params = HashMap::new();
+
+                // If it's a JSON schema object, extract properties
+                if let Some(properties) = obj.get("properties") {
+                    if let serde_json::Value::Object(props) = properties {
+                        for (key, value) in props {
+                            params.insert(key.clone(), value.clone());
+                        }
+                    }
+                } else {
+                    // If it's just a direct object, use it as-is
+                    for (key, value) in obj {
+                        params.insert(key.clone(), value.clone());
+                    }
+                }
+
+                if params.is_empty() {
+                    None
+                } else {
+                    Some(params)
+                }
+            }
+            _ => {
+                // For non-object schemas, we can't easily convert to parameters
+                None
+            }
+        }
     }
 }

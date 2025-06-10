@@ -75,6 +75,7 @@ pub struct Engine {
     bert_pipeline: Arc<Mutex<Option<BertPipeline>>>,
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
+    tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
     scheduler: Arc<Mutex<dyn Scheduler>>,
     id: Arc<Mutex<usize>>,
     truncate_sequence: bool,
@@ -110,6 +111,7 @@ impl Engine {
         search_embedding_model: Option<BertEmbeddingModel>,
         search_callback: Option<Arc<search::SearchCallback>>,
         tool_callbacks: tools::ToolCallbacks,
+        tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
     ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
@@ -135,6 +137,7 @@ impl Engine {
             bert_pipeline: Arc::new(Mutex::new(bert_pipeline)),
             search_callback,
             tool_callbacks,
+            tool_callbacks_with_tools,
             scheduler: scheduler.clone(),
             id: Arc::new(Mutex::new(0)),
             truncate_sequence,
