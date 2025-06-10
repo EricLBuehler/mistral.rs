@@ -1,11 +1,5 @@
 use async_trait::async_trait;
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::Json,
-    routing::post,
-    Router,
-};
+use axum::{extract::State, http::StatusCode, response::Json, routing::post, Router};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::io;
@@ -19,11 +13,21 @@ use mistralrs_server_core::{
 
 // Import your existing types
 use rust_mcp_sdk::schema::{
-    schema_utils::CallToolError, CallToolRequest, CallToolResult, CallToolResultContentItem,
-    Implementation, InitializeResult, ListToolsRequest, ListToolsResult, RpcError,
-    ServerCapabilities, ServerCapabilitiesTools, TextContent, Tool, ToolInputSchema,
-    LATEST_PROTOCOL_VERSION,
+    schema_utils::CallToolError, CallToolResult, CallToolResultContentItem, Implementation,
+    InitializeResult, ListToolsResult, ServerCapabilities, ServerCapabilitiesTools, TextContent,
+    Tool, ToolInputSchema, LATEST_PROTOCOL_VERSION,
 };
+
+mod errors {
+    #![allow(dead_code)]
+
+    /// JSON-RPC error codes based on MCPEx.Protocol.Errors
+    pub const PARSE_ERROR: i32 = -32700;
+    pub const INVALID_REQUEST: i32 = -32600;
+    pub const METHOD_NOT_FOUND: i32 = -32601;
+    pub const INVALID_PARAMS: i32 = -32602;
+    pub const INTERNAL_ERROR: i32 = -32603;
+}
 
 // JSON-RPC types
 #[derive(serde::Deserialize)]
@@ -58,7 +62,7 @@ pub trait McpTool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> Option<&str>;
     fn input_schema(&self) -> &ToolInputSchema;
-    
+
     fn as_tool_record(&self) -> Tool {
         Tool {
             name: self.name().to_string(),
@@ -159,14 +163,9 @@ impl McpTool for ChatTool {
         args: serde_json::Value,
         state: &SharedMistralRsState,
     ) -> std::result::Result<CallToolResult, CallToolError> {
-        // Deserialize arguments into the canonical CreateMessageRequest.
-        let req: rust_mcp_sdk::schema::CreateMessageRequest =
-            serde_json::from_value(args).map_err(|e| CallToolError::new(io::Error::other(e)))?;
-
         // Translate to the internal ChatCompletionRequest.
         let chat_req: mistralrs_server_core::openai::ChatCompletionRequest =
-            serde_json::from_value(serde_json::to_value(req).unwrap())
-                .map_err(CallToolError::new)?;
+            serde_json::from_value(args).map_err(CallToolError::new)?;
 
         // Execute the request using existing helper utilities.
         let (tx, mut rx) = create_response_channel(None);
@@ -219,7 +218,7 @@ impl HttpMcpHandler {
     pub fn new(state: SharedMistralRsState) -> Self {
         let mut tools: HashMap<String, Arc<dyn McpTool>> = HashMap::new();
         tools.insert("chat".to_string(), Arc::new(ChatTool::new()));
-        
+
         let server_info = InitializeResult {
             server_info: Implementation {
                 name: "mistralrs".to_string(),
@@ -233,20 +232,35 @@ impl HttpMcpHandler {
             instructions: Some(MCP_INSTRUCTIONS.to_string()),
             protocol_version: LATEST_PROTOCOL_VERSION.to_string(),
         };
-        
-        Self { state, tools, server_info }
+
+        Self {
+            state,
+            tools,
+            server_info,
+        }
     }
 
     async fn handle_request(&self, request: JsonRpcRequest) -> JsonRpcResponse {
+        if request.jsonrpc != "2.0" {
+            return JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id: request.id,
+                result: None,
+                error: Some(JsonRpcError {
+                    code: errors::INVALID_REQUEST,
+                    message: "Expected jsonrpc to be 2.0".to_string(),
+                    data: None,
+                }),
+            };
+        }
+
         match request.method.as_str() {
-            "initialize" => {
-                JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
-                    id: request.id,
-                    result: Some(serde_json::to_value(&self.server_info).unwrap()),
-                    error: None,
-                }
-            }
+            "initialize" => JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id: request.id,
+                result: Some(serde_json::to_value(&self.server_info).unwrap()),
+                error: None,
+            },
             "tools/list" => {
                 let tools: Vec<Tool> = self.tools.values().map(|t| t.as_tool_record()).collect();
                 let result = ListToolsResult {
@@ -263,62 +277,52 @@ impl HttpMcpHandler {
             }
             "tools/call" => {
                 let params = request.params.unwrap_or(json!({}));
-                
+
                 // Extract tool name and arguments from params
                 let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
-                
+
                 match self.tools.get(tool_name) {
-                    Some(tool) => {
-                        match tool.call(args, &self.state).await {
-                            Ok(result) => {
-                                JsonRpcResponse {
-                                    jsonrpc: "2.0".to_string(),
-                                    id: request.id,
-                                    result: Some(serde_json::to_value(result).unwrap()),
-                                    error: None,
-                                }
-                            }
-                            Err(e) => {
-                                JsonRpcResponse {
-                                    jsonrpc: "2.0".to_string(),
-                                    id: request.id,
-                                    result: None,
-                                    error: Some(JsonRpcError {
-                                        code: -32603,
-                                        message: format!("Tool execution error: {}", e),
-                                        data: None,
-                                    }),
-                                }
-                            }
-                        }
-                    }
-                    None => {
-                        JsonRpcResponse {
+                    Some(tool) => match tool.call(args, &self.state).await {
+                        Ok(result) => JsonRpcResponse {
+                            jsonrpc: "2.0".to_string(),
+                            id: request.id,
+                            result: Some(serde_json::to_value(result).unwrap()),
+                            error: None,
+                        },
+                        Err(e) => JsonRpcResponse {
                             jsonrpc: "2.0".to_string(),
                             id: request.id,
                             result: None,
                             error: Some(JsonRpcError {
-                                code: -32601,
-                                message: format!("Unknown tool: {}", tool_name),
+                                code: errors::INTERNAL_ERROR,
+                                message: format!("Tool execution error: {}", e),
                                 data: None,
                             }),
-                        }
-                    }
+                        },
+                    },
+                    None => JsonRpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: request.id,
+                        result: None,
+                        error: Some(JsonRpcError {
+                            code: errors::METHOD_NOT_FOUND,
+                            message: format!("Unknown tool: {}", tool_name),
+                            data: None,
+                        }),
+                    },
                 }
             }
-            _ => {
-                JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
-                    id: request.id,
-                    result: None,
-                    error: Some(JsonRpcError {
-                        code: -32601,
-                        message: format!("Method not found: {}", request.method),
-                        data: None,
-                    }),
-                }
-            }
+            _ => JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id: request.id,
+                result: None,
+                error: Some(JsonRpcError {
+                    code: errors::METHOD_NOT_FOUND,
+                    message: format!("Method not found: {}", request.method),
+                    data: None,
+                }),
+            },
         }
     }
 }
@@ -339,15 +343,15 @@ pub async fn create_http_mcp_server(
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let handler = Arc::new(HttpMcpHandler::new(state));
-    
+
     let app = Router::new()
-        .route("/", post(handle_jsonrpc))
+        .route("/mcp", post(handle_jsonrpc))
         .with_state(handler);
-    
+
     let addr = format!("{}:{}", host, port);
     let listener = TcpListener::bind(&addr).await?;
-        
+
     axum::serve(listener, app).await?;
-    
+
     Ok(())
 }
