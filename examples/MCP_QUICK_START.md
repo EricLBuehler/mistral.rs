@@ -131,7 +131,6 @@ The system gracefully handles failures:
 
 ## See Also
 
-- [Full MCP Client Documentation](../docs/MCP_CLIENT.md)
 - [Configuration Reference](mcp-config-reference.json) - Complete configuration options
 - [Configuration Examples](mcp-server-config.json) - Real-world examples
 - [Test Configuration](mcp-test-config.json) - Simple test setup
