@@ -29,7 +29,7 @@
 //!         create_streamer, handle_error, parse_request, process_non_streaming_response,
 //!         ChatCompletionOnChunkCallback, ChatCompletionOnDoneCallback, ChatCompletionResponder,
 //!     },
-//!     handler_core::{create_response_channel, send_model_request},
+//!     handler_core::{create_response_channel, send_request},
 //!     mistralrs_for_server_builder::MistralRsForServerBuilder,
 //!     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
 //!     openai::ChatCompletionRequest,
@@ -166,7 +166,7 @@
 //!
 //!     dbg!(request.clone());
 //!
-//!     if let Err(e) = send_model_request(&mistralrs_state, request).await {
+//!     if let Err(e) = send_request(&mistralrs_state, request).await {
 //!         return handle_error(mistralrs_state, e.into());
 //!     }
 //!
