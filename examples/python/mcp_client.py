@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import asyncio
-from mistralrs import Runner, Which, ChatCompletionRequest
+from mistralrs import Architecture, Runner, Which, ChatCompletionRequest
 
 
 async def main():
@@ -22,9 +22,8 @@ async def main():
 
     runner = Runner(
         which=Which.Plain(
-            model_id="microsoft/Phi-3.5-mini-instruct",
-            arch=None,
-            dtype=None,
+            model_id="Qwen/Qwen3-4B",
+            arch=Architecture.Qwen3,
         ),
         max_seqs=10,
         no_kv_cache=False,

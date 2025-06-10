@@ -477,8 +477,9 @@ impl McpClient {
                 let connection_clone = Arc::clone(connection);
                 let original_tool_name = tool.name.clone();
                 let semaphore_clone = Arc::clone(&self.concurrency_semaphore);
-                let timeout_duration = Duration::from_secs(self.config.tool_timeout_secs.unwrap_or(30));
-                
+                let timeout_duration =
+                    Duration::from_secs(self.config.tool_timeout_secs.unwrap_or(30));
+
                 let callback: Arc<ToolCallback> = Arc::new(move |called_function| {
                     let connection = Arc::clone(&connection_clone);
                     let tool_name = original_tool_name.clone();

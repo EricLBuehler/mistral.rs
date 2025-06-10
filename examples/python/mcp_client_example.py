@@ -76,10 +76,9 @@ def main():
     # Build the model with MCP client configuration
     # The MCP client will automatically connect to configured servers and discover available tools
     runner = mistralrs.Runner(
-        which=mistralrs.Which.GGUF(
-            tok_model_id="../hf_models/qwen3_4b",
-            quantized_model_id="../hf_models/qwen3_4b",
-            quantized_filename=["model.gguf"]
+        which=mistralrs.Which.Plain(
+            model_id="Qwen/Qwen3-4B",
+            arch=mistralrs.Architecture.Qwen3,
         ),
         mcp_client_config=mcp_config  # This automatically connects to MCP servers and registers tools
     )
