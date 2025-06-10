@@ -1,17 +1,19 @@
 {
   "servers": [
     {
-      "id": "test_server",
-      "name": "Test MCP Server",
+      "id": "hf_server",
+      "name": "Hugging Face MCP Server",
       "source": {
         "type": "Http",
-        "url": "https://httpbin.org/json",
-        "timeout_secs": 10
+        "url": "https://hf.co/mcp",
+        "timeout_secs": 30
       },
       "enabled": true,
-      "tool_prefix": "test"
+      "tool_prefix": "hf",
+      "bearer_token": "hf_xxx"
     }
   ],
+  "auto_register_tools": true,
   "tool_timeout_secs": 30,
   "max_concurrent_calls": 5
 }

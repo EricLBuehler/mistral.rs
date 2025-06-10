@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
         servers: vec![
             // Example: HTTP-based MCP server with Bearer token authentication
             McpServerConfig {
-                id: "example_server".to_string(),
+                id: "hf_server".to_string(),
                 name: "Hugging Face MCP".to_string(),
                 source: McpServerSource::Http {
                     url: "https://hf.co/mcp".to_string(),
@@ -32,7 +32,7 @@ async fn main() -> Result<()> {
                     headers: None, // Additional headers can be specified here if needed
                 },
                 enabled: true,
-                tool_prefix: Some("example".to_string()), // Prefixes tool names to avoid conflicts
+                tool_prefix: Some("hf".to_string()), // Prefixes tool names to avoid conflicts
                 resources: None,
                 bearer_token: Some("hf_xxx".to_string()), // Replace with your actual Hugging Face token
             },

@@ -1,21 +1,20 @@
 {
   "servers": [
     {
-      "id": "web_search",
-      "name": "Web Search MCP Server",
+      "id": "hf_server",
+      "name": "Hugging Face MCP Server",
       "source": {
         "type": "Http",
-        "url": "https://api.search.example.com/mcp",
+        "url": "https://hf.co/mcp",
         "timeout_secs": 30,
         "headers": {
-          "X-API-Version": "v1",
           "User-Agent": "mistral-rs/0.6.0"
         }
       },
       "enabled": true,
-      "tool_prefix": "web",
+      "tool_prefix": "hf",
       "resources": null,
-      "bearer_token": "your-search-api-token"
+      "bearer_token": "hf_xxx"
     },
     {
       "id": "filesystem",
@@ -30,10 +29,27 @@
           "MCP_TIMEOUT": "30"
         }
       },
-      "enabled": true,
+      "enabled": false,
       "tool_prefix": "fs",
       "resources": ["file://**"],
       "bearer_token": null
+    },
+    {
+      "id": "web_search",
+      "name": "Web Search MCP Server",
+      "source": {
+        "type": "Http",
+        "url": "https://api.search.example.com/mcp",
+        "timeout_secs": 30,
+        "headers": {
+          "X-API-Version": "v1",
+          "User-Agent": "mistral-rs/0.6.0"
+        }
+      },
+      "enabled": false,
+      "tool_prefix": "web",
+      "resources": null,
+      "bearer_token": "your-search-api-token"
     },
     {
       "id": "realtime_data",
