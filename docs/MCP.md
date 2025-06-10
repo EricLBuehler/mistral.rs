@@ -1,16 +1,15 @@
 # MCP protocol support
 
-`mistralrs-server` can serve **MCP (Model Control Protocol)** traffic next to the regular OpenAI-compatible HTTP interface!
+`mistralrs-server` can speak the **MCP – Model-Control-Protocol** in addition to the regular OpenAI-compatible REST API.
 
-MCP is an open, tool-based protocol that lets clients interact with models through structured *tool calls* instead of free-form HTTP routes.  
-
-Under the hood the server uses [`rust-mcp-sdk`](https://crates.io/crates/rust-mcp-sdk) and exposes tools based on the supported modalities of the loaded model.
+At a high-level, MCP is an opinionated, tool-based JSON-RPC 2.0 protocol that lets clients interact with models through structured *tool calls* instead of specialised HTTP routes.  
+The implementation in Mistral.rs is powered by [`rust-mcp-sdk`](https://crates.io/crates/rust-mcp-sdk) and automatically registers tools based on the modalities supported by the loaded model (text, vision, …).
 
 Exposed tools:
 
 | Tool | Minimum `input` -> `output` modalities | Description |
 | -- | -- | -- |
-| `chat` | `Text` -> `Text` | Wraps the OpenAI `/v1/chat/completions` endpoint. |
+| `chat` | `Text` → `Text` | Wraps the OpenAI `/v1/chat/completions` endpoint |
 
 
 ---
@@ -21,27 +20,27 @@ Exposed tools:
   - [Running](#running)
   - [Check if it's working](#check-if-its-working)
   - [Example clients](#example-clients)
-    - [Rust](#rust)
     - [Python](#python)
+    - [Rust](#rust)
     - [HTTP](#http)
-  - [Limitations](#limitations)
+  - [Limitations \& roadmap](#limitations--roadmap)
 
 ---
 
 ## Running
 
-Start the normal HTTP server and add the `--mcp-port` flag to spin up an MCP server on a separate port:
+Start the normal HTTP server and add the `--mcp-port` flag to expose an MCP endpoint **in parallel** on a separate port:
 
 ```bash
 ./target/release/mistralrs-server \
-  --port 1234            # OpenAI compatible HTTP API
-  --mcp-port 4321        # MCP protocol endpoint (Streamable HTTP)
+  --port 1234            # OpenAI-compatible REST API
+  --mcp-port 4321        # MCP endpoint (Streamable HTTP)
   plain -m mistralai/Mistral-7B-Instruct-v0.3
 ```
 
 ## Check if it's working
 
-Run this `curl` command to check the available tools:
+The following `curl` command lists the tools advertised by the server and therefore serves as a quick smoke-test:
 
 ```
 curl -X POST http://localhost:4321/mcp \
@@ -55,6 +54,60 @@ curl -X POST http://localhost:4321/mcp \
 ```
 
 ## Example clients
+
+
+### Python
+
+The [reference Python SDK](https://pypi.org/project/mcp/) can be installed via:
+
+```bash
+pip install --upgrade mcp
+```
+
+Here is a minimal end-to-end example that initialises a session, lists the available tools and finally sends a chat request:
+
+```python
+import asyncio
+
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+
+SERVER_URL = "http://localhost:4321/mcp"
+
+
+async def main() -> None:
+    # The helper creates an SSE (Server-Sent-Events) transport under the hood
+    async with streamablehttp_client(SERVER_URL) as (read, write, _):
+        async with ClientSession(read, write) as session:
+
+            # --- INITIALIZE ---
+            init_result = await session.initialize()
+            print("Server info:", init_result.serverInfo)
+
+            # --- LIST TOOLS ---
+            tools = await session.list_tools()
+            print("Available tools:", [t.name for t in tools.tools])
+
+            # --- CALL TOOL ---
+            resp = await session.call_tool(
+                "chat",
+                arguments={
+                    "messages": [
+                        {"role": "user", "content": "Hello MCP 👋"},
+                        {"role": "assistant", "content": "Hi there!"}
+                    ],
+                    "maxTokens": 50,
+                    "temperature": 0.7,
+                },
+            )
+            # resp.content is a list[CallToolResultContentItem]; extract text parts
+            text = "\n".join(c.text for c in resp.content if c.type == "text")
+            print("Model replied:", text)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
 
 ### Rust
 
@@ -105,47 +158,6 @@ async fn main() -> Result<()> {
 }
 ```
 
-### Python
-
-```py
-import asyncio
-from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
-
-SERVER_URL = "http://localhost:4321/mcp"
-
-async def main() -> None:
-    async with streamablehttp_client(SERVER_URL) as (read, write, _):
-        async with ClientSession(read, write) as session:
-
-            # --- INITIALIZE ---
-            init_result = await session.initialize()
-            print("Server info:", init_result.serverInfo)
-
-            # --- LIST TOOLS ---
-            tools = await session.list_tools()
-            print("Available tools:", [t.name for t in tools.tools])
-
-            # --- CALL TOOL ---
-            resp = await session.call_tool(
-                "chat",
-                arguments={
-                    "messages": [
-                        {"role": "user", "content": "Hello MCP 👋"},
-                        {"role": "assistant", "content": "Hi there!"}
-                    ],
-                    "maxTokens": 50,
-                    "temperature": 0.7,
-                },
-            )
-            # resp.content is a list[CallToolResultContentItem]; extract text parts
-            text = "\n".join(c.text for c in resp.content if c.type == "text")
-            print("Model replied:", text)
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
 ### HTTP
 
 **Call a tool:**
@@ -194,9 +206,12 @@ curl -X POST http://localhost:4321/mcp \
 }'      
 ```
 
-## Limitations
+## Limitations & roadmap
 
-- Streaming requests are not implemented.
-- No authentication layer is provided – run the MCP port behind a reverse proxy if you need auth.
+The MCP support that ships with the current Mistral.rs release focuses on the **happy-path**.  A few niceties have not yet been implemented and PRs are more than welcome:
 
-Contributions to extend MCP coverage (streaming, more tools, auth hooks) are welcome!
+1. Streaming token responses (similar to the `stream=true` flag in the OpenAI API).
+2. An authentication layer – if you are exposing the MCP port publicly run it behind a reverse-proxy that handles auth (e.g.  nginx + OIDC).
+3. Additional tools for other modalities such as vision or audio once the underlying crates stabilise.
+
+If you would like to work on any of the above please open an issue first so the work can be coordinated.
