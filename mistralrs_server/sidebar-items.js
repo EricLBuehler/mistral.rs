@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["main","parse_token_source"],"mod":["interactive_mode"],"struct":["Args"]};
+window.SIDEBAR_ITEMS = {"fn":["main","parse_token_source"],"mod":["interactive_mode","mcp_server"],"struct":["Args"]};

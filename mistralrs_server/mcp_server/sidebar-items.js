@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MCP_INSTRUCTIONS"],"fn":["create_http_mcp_server","handle_jsonrpc"],"mod":["errors"],"struct":["ChatTool","HttpMcpHandler","JsonRpcError","JsonRpcRequest","JsonRpcResponse"],"trait":["McpTool"]};
