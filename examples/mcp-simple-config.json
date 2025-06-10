@@ -1,0 +1,10 @@
+{
+  "servers": [{
+    "name": "Hugging Face MCP Server",
+    "source": {
+      "type": "Http",
+      "url": "https://hf.co/mcp"
+    },
+    "bearer_token": "hf_xxx"
+  }]
+}
