@@ -11,9 +11,9 @@ maturin build -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.1
 
 # Metal
 
-MACOSX_DEPLOYMENT_TARGET=15 maturin build -o wheels-metal -m mistralrs-pyo3/Cargo.toml --interpreter python3.10 --features metal
-MACOSX_DEPLOYMENT_TARGET=15 maturin build -o wheels-metal -m mistralrs-pyo3/Cargo.toml --interpreter python3.11 --features metal
-MACOSX_DEPLOYMENT_TARGET=15 maturin build -o wheels-metal -m mistralrs-pyo3/Cargo.toml --interpreter python3.12 --features metal
+MACOSX_DEPLOYMENT_TARGET=15.0 maturin build -o wheels-metal -m mistralrs-pyo3/Cargo.toml --interpreter python3.10 --features metal
+MACOSX_DEPLOYMENT_TARGET=15.0 maturin build -o wheels-metal -m mistralrs-pyo3/Cargo.toml --interpreter python3.11 --features metal
+MACOSX_DEPLOYMENT_TARGET=15.0 maturin build -o wheels-metal -m mistralrs-pyo3/Cargo.toml --interpreter python3.12 --features metal
 
 # Accelerate
 
