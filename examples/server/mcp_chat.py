@@ -33,6 +33,8 @@ def main():
     print()
     print("This example demonstrates using mistral.rs HTTP server with MCP client support.")
     print("The server should be started with MCP configuration like:")
+    print("cargo run --release --bin mistralrs-server -- --port 1234 plain -m Qwen/Qwen3-4B -a qwen3 --mcp-config examples/mcp-simple-config.json")
+    print("or for more advanced configuration:")
     print("cargo run --release --bin mistralrs-server -- --port 1234 plain -m Qwen/Qwen3-4B -a qwen3 --mcp-config examples/mcp-test-config.json")
     print()
 
@@ -93,9 +95,11 @@ def main():
         print(f"Error making request: {e}")
         print()
         print("Make sure the mistral.rs server is running with MCP configuration:")
+        print("cargo run --release --bin mistralrs-server -- --port 1234 --mcp-config examples/mcp-simple-config.json plain -m Qwen/Qwen3-4B -a qwen3")
+        print("or for advanced configuration:")
         print("cargo run --release --bin mistralrs-server -- --port 1234 --mcp-config examples/mcp-test-config.json plain -m Qwen/Qwen3-4B -a qwen3")
         print()
-        print("And that the MCP configuration file (examples/mcp-test-config.json) exists and is properly configured.")
+        print("And that the MCP configuration file exists and is properly configured.")
 
 
 if __name__ == "__main__":

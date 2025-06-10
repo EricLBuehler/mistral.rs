@@ -21,8 +21,17 @@ async def main():
     # Create MCP client configuration using the Hugging Face MCP server
     # Note: Replace 'hf_xxx' with your actual Hugging Face token
     
-    # Primary example: Hugging Face MCP server (HTTP)
-    hf_server = mistralrs.McpServerConfigPy(
+    # Simple example using defaults (enabled=True, UUID for id/prefix, no timeouts)
+    hf_server_simple = mistralrs.McpServerConfigPy(
+        name="Hugging Face MCP Server",
+        source=mistralrs.McpServerSourcePy.Http(
+            url="https://hf.co/mcp"
+        ),
+        bearer_token="hf_xxx"  # Replace with your actual Hugging Face token
+    )
+    
+    # Alternative: Full configuration with custom settings
+    hf_server_full = mistralrs.McpServerConfigPy(
         id="hf_server",
         name="Hugging Face MCP",
         source=mistralrs.McpServerSourcePy.Http(
@@ -69,13 +78,22 @@ async def main():
     #     bearer_token="your-websocket-token"
     # )
     
-    # Create MCP client configuration
-    mcp_config = mistralrs.McpClientConfigPy(
-        servers=[hf_server],  # Add filesystem_server, websocket_server if enabled
+    # Simple MCP client configuration using defaults
+    # (auto_register_tools=True, no timeouts, max_concurrent_calls=1)
+    mcp_config_simple = mistralrs.McpClientConfigPy(
+        servers=[hf_server_simple]
+    )
+    
+    # Alternative: Full MCP client configuration with custom settings
+    mcp_config_full = mistralrs.McpClientConfigPy(
+        servers=[hf_server_full],  # Add filesystem_server, websocket_server if enabled
         auto_register_tools=True,
         tool_timeout_secs=30,
         max_concurrent_calls=5
     )
+    
+    # Use the simple configuration for this example
+    mcp_config = mcp_config_simple
 
     print("Building model with MCP client support...")
     

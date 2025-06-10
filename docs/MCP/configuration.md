@@ -2,6 +2,31 @@
 
 This page provides a complete reference for configuring the MCP client in mistral.rs.
 
+## Quick Start - Minimal Configuration
+
+For simple use cases, you can now use a minimal configuration that leverages smart defaults:
+
+```json
+{
+  "servers": [{
+    "name": "Hugging Face MCP Server",
+    "source": {
+      "type": "Http",
+      "url": "https://hf.co/mcp"
+    },
+    "bearer_token": "hf_xxx"
+  }]
+}
+```
+
+This automatically provides:
+- **UUID-based server ID**: Unique identifier generated automatically
+- **Enabled by default**: Server is active without explicit `enabled: true`
+- **UUID-based tool prefix**: Prevents naming conflicts automatically
+- **No timeouts**: Tools and connections don't timeout by default
+- **Sequential execution**: Only 1 concurrent tool call to prevent overwhelming servers
+- **Auto-registration**: Tools are automatically discovered and registered
+
 ## Configuration Structure
 
 ### McpClientConfig
@@ -11,9 +36,9 @@ The top-level configuration for the MCP client:
 ```json
 {
   "servers": [...],                    // Array of MCP server configurations
-  "auto_register_tools": true,         // Automatically register discovered tools
-  "tool_timeout_secs": 30,            // Timeout for individual tool calls (seconds)
-  "max_concurrent_calls": 10          // Maximum concurrent tool executions
+  "auto_register_tools": true,         // Automatically register discovered tools (default: true)
+  "tool_timeout_secs": null,           // Timeout for individual tool calls, null = no timeout (default: null)
+  "max_concurrent_calls": 1            // Maximum concurrent tool executions (default: 1)
 }
 ```
 
@@ -23,11 +48,11 @@ Configuration for each MCP server:
 
 ```json
 {
-  "id": "unique_id",                  // Unique identifier for this server
+  "id": "unique_id",                  // Unique identifier (default: UUID if not specified)
   "name": "Display Name",             // Human-readable name
   "source": {...},                    // Transport configuration (see below)
-  "enabled": true,                    // Enable/disable this server
-  "tool_prefix": "prefix",            // Optional prefix for tool names
+  "enabled": true,                    // Enable/disable this server (default: true)
+  "tool_prefix": "mcp_abc123",         // Prefix for tool names (default: UUID-based if not specified)
   "resources": ["pattern"],           // Optional resource patterns
   "bearer_token": "token"             // Optional authentication token
 }
@@ -41,7 +66,7 @@ Configuration for each MCP server:
 {
   "type": "Http",
   "url": "https://api.example.com/mcp",
-  "timeout_secs": 30,                 // Optional, defaults to 30
+  "timeout_secs": null,               // Optional, null = no timeout (default)
   "headers": {                        // Optional custom headers
     "X-API-Version": "v1",
     "User-Agent": "mistral-rs/0.6.0"
@@ -55,7 +80,7 @@ Configuration for each MCP server:
 {
   "type": "WebSocket", 
   "url": "wss://realtime.example.com/mcp",
-  "timeout_secs": 60,                 // Optional, defaults to 60
+  "timeout_secs": null,               // Optional, null = no timeout (default)
   "headers": {                        // Optional WebSocket headers
     "Origin": "https://mistral.rs",
     "Sec-WebSocket-Protocol": "mcp"
@@ -85,18 +110,18 @@ Configuration for each MCP server:
 |-------|------|----------|---------|-------------|
 | `servers` | Array | Yes | - | List of MCP server configurations |
 | `auto_register_tools` | Boolean | No | `true` | Automatically discover and register tools at startup |
-| `tool_timeout_secs` | Integer | No | `30` | Timeout in seconds for individual tool calls |
-| `max_concurrent_calls` | Integer | No | `10` | Maximum number of concurrent tool executions |
+| `tool_timeout_secs` | Integer | No | `null` | Timeout in seconds for individual tool calls (null = no timeout) |
+| `max_concurrent_calls` | Integer | No | `1` | Maximum number of concurrent tool executions |
 
 ### McpServerConfig Fields
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `id` | String | Yes | - | Unique identifier for the server |
+| `id` | String | No | UUID | Unique identifier for the server (UUID generated if not provided) |
 | `name` | String | Yes | - | Human-readable server name |
 | `source` | Object | Yes | - | Transport configuration |
 | `enabled` | Boolean | No | `true` | Whether to connect to this server |
-| `tool_prefix` | String | No | None | Prefix to add to all tool names |
+| `tool_prefix` | String | No | UUID-based | Prefix to add to all tool names (UUID-based if not provided) |
 | `resources` | Array | No | None | Resource URI patterns to subscribe to |
 | `bearer_token` | String | No | None | Bearer token for authentication |
 
@@ -107,7 +132,7 @@ Configuration for each MCP server:
 |-------|------|----------|---------|-------------|
 | `type` | String | Yes | - | Must be "Http" |
 | `url` | String | Yes | - | HTTP/HTTPS URL of the MCP server |
-| `timeout_secs` | Integer | No | `30` | Request timeout in seconds |
+| `timeout_secs` | Integer | No | `null` | Request timeout in seconds (null = no timeout) |
 | `headers` | Object | No | None | Additional HTTP headers |
 
 #### WebSocket Source
@@ -115,7 +140,7 @@ Configuration for each MCP server:
 |-------|------|----------|---------|-------------|
 | `type` | String | Yes | - | Must be "WebSocket" |
 | `url` | String | Yes | - | WS/WSS URL of the MCP server |
-| `timeout_secs` | Integer | No | `60` | Connection timeout in seconds |
+| `timeout_secs` | Integer | No | `null` | Connection timeout in seconds (null = no timeout) |
 | `headers` | Object | No | None | WebSocket handshake headers |
 
 #### Process Source
@@ -228,7 +253,21 @@ McpServerConfigPy(
 
 ## Example Configurations
 
-### Single Server (Hugging Face)
+### Single Server (Hugging Face) - Minimal
+```json
+{
+  "servers": [{
+    "name": "Hugging Face MCP Server",
+    "source": {
+      "type": "Http",
+      "url": "https://hf.co/mcp"
+    },
+    "bearer_token": "hf_xxx"
+  }]
+}
+```
+
+### Single Server (Hugging Face) - Full Configuration
 ```json
 {
   "servers": [{
@@ -240,9 +279,12 @@ McpServerConfigPy(
       "timeout_secs": 30
     },
     "enabled": true,
+    "tool_prefix": "hf",
     "bearer_token": "hf_xxx"
   }],
-  "auto_register_tools": true
+  "auto_register_tools": true,
+  "tool_timeout_secs": 30,
+  "max_concurrent_calls": 5
 }
 ```
 

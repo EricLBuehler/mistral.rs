@@ -38,13 +38,51 @@
 //!
 //! # Example Usage
 //!
+//! ## Simple Configuration
+//!
+//! ```rust,no_run
+//! use mistralrs_mcp::{McpClientConfig, McpServerConfig, McpServerSource, McpClient};
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     // Simple configuration with minimal settings
+//!     // Most fields use sensible defaults (enabled=true, UUID for id/prefix, no timeouts)
+//!     let config = McpClientConfig {
+//!         servers: vec![
+//!             McpServerConfig {
+//!                 name: "Hugging Face MCP Server".to_string(),
+//!                 source: McpServerSource::Http {
+//!                     url: "https://hf.co/mcp".to_string(),
+//!                     ..Default::default()
+//!                 },
+//!                 bearer_token: Some("hf_xxx".to_string()),
+//!                 ..Default::default()
+//!             },
+//!         ],
+//!         ..Default::default()
+//!     };
+//!     
+//!     // Initialize MCP client
+//!     let mut client = McpClient::new(config);
+//!     client.initialize().await?;
+//!     
+//!     // Get tool callbacks for integration with model builder
+//!     let tool_callbacks = client.get_tool_callbacks_with_tools();
+//!     println!("Registered {} MCP tools", tool_callbacks.len());
+//!     
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Advanced Configuration
+//!
 //! ```rust,no_run
 //! use mistralrs_mcp::{McpClientConfig, McpServerConfig, McpServerSource, McpClient};
 //! use std::collections::HashMap;
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     // Configure MCP client with multiple servers
+//!     // Configure MCP client with multiple servers and custom settings
 //!     let config = McpClientConfig {
 //!         servers: vec![
 //!             // HTTP server with Bearer token
@@ -93,7 +131,7 @@
 //!         ],
 //!         auto_register_tools: true,
 //!         tool_timeout_secs: Some(30),
-//!         max_concurrent_calls: Some(10),
+//!         max_concurrent_calls: Some(5),
 //!     };
 //!     
 //!     // Initialize MCP client
@@ -119,6 +157,7 @@ pub use types::McpToolResult;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use uuid::Uuid;
 
 /// Supported MCP server transport sources
 ///
@@ -135,6 +174,7 @@ pub enum McpServerSource {
         /// Base URL of the MCP server (http:// or https://)
         url: String,
         /// Optional timeout in seconds for HTTP requests
+        /// Defaults to no timeout if not specified.
         timeout_secs: Option<u64>,
         /// Optional headers to include in requests (e.g., API keys, custom headers)
         headers: Option<HashMap<String, String>>,
@@ -161,6 +201,7 @@ pub enum McpServerSource {
         /// WebSocket URL (ws:// or wss://)
         url: String,
         /// Optional timeout in seconds for connection establishment
+        /// Defaults to no timeout if not specified.
         timeout_secs: Option<u64>,
         /// Optional headers for the WebSocket handshake
         headers: Option<HashMap<String, String>>,
@@ -184,12 +225,12 @@ pub struct McpClientConfig {
     /// Timeout for individual tool execution in seconds
     ///
     /// Controls how long to wait for a tool call to complete before timing out.
-    /// Defaults to 30 seconds if not specified.
+    /// Defaults to no timeout if not specified.
     pub tool_timeout_secs: Option<u64>,
     /// Maximum number of concurrent tool calls across all MCP servers
     ///
     /// Limits resource usage and prevents overwhelming servers with too many
-    /// simultaneous requests. Defaults to 10 if not specified.
+    /// simultaneous requests. Defaults to 1 if not specified.
     pub max_concurrent_calls: Option<usize>,
 }
 
@@ -198,11 +239,14 @@ pub struct McpClientConfig {
 /// Defines connection parameters, authentication, and tool management
 /// settings for a single MCP server instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct McpServerConfig {
     /// Unique identifier for this server
     ///
     /// Used internally to track connections and route tool calls.
     /// Must be unique across all servers in a single MCP client configuration.
+    /// Defaults to a UUID if not specified.
+    #[serde(default = "generate_uuid")]
     pub id: String,
     /// Human-readable name for this server
     ///
@@ -213,12 +257,16 @@ pub struct McpServerConfig {
     /// Whether this server should be activated
     ///
     /// Disabled servers are ignored during client initialization.
+    /// Defaults to true if not specified.
+    #[serde(default = "default_true")]
     pub enabled: bool,
     /// Optional prefix to add to all tool names from this server
     ///
     /// Helps prevent naming conflicts when multiple servers provide
     /// tools with similar names. For example, with prefix "web",
     /// a tool named "search" becomes "web_search".
+    /// Defaults to a UUID-based prefix if not specified.
+    #[serde(default = "generate_uuid_prefix")]
     pub tool_prefix: Option<String>,
     /// Optional resource URI patterns this server provides
     ///
@@ -255,8 +303,38 @@ impl Default for McpClientConfig {
         Self {
             servers: Vec::new(),
             auto_register_tools: true,
-            tool_timeout_secs: Some(30),
-            max_concurrent_calls: Some(10),
+            tool_timeout_secs: None,
+            max_concurrent_calls: Some(1),
+        }
+    }
+}
+
+fn generate_uuid() -> String {
+    Uuid::new_v4().to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn generate_uuid_prefix() -> Option<String> {
+    Some(format!("mcp_{}", Uuid::new_v4().simple()))
+}
+
+impl Default for McpServerConfig {
+    fn default() -> Self {
+        Self {
+            id: generate_uuid(),
+            name: String::new(),
+            source: McpServerSource::Http {
+                url: String::new(),
+                timeout_secs: None,
+                headers: None,
+            },
+            enabled: true,
+            tool_prefix: generate_uuid_prefix(),
+            resources: None,
+            bearer_token: None,
         }
     }
 }

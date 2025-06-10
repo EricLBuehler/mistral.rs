@@ -24,6 +24,7 @@ futures-util.workspace = true
 http.workspace = true
 pyo3 = { workspace = true, optional = true }
 utoipa = { workspace = true, optional = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
 
 [features]
 pyo3_macros = ["pyo3"]

@@ -18,9 +18,23 @@ use mistralrs::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Create MCP client configuration with example servers
-    // This configuration demonstrates different transport types and authentication methods
-    let mcp_config = McpClientConfig {
+    // Simple MCP client configuration using defaults
+    // Most fields use sensible defaults (enabled=true, UUID for id/prefix, no timeouts)
+    let mcp_config_simple = McpClientConfig {
+        servers: vec![McpServerConfig {
+            name: "Hugging Face MCP Server".to_string(),
+            source: McpServerSource::Http {
+                url: "https://hf.co/mcp".to_string(),
+                ..Default::default()
+            },
+            bearer_token: Some("hf_xxx".to_string()), // Replace with your actual Hugging Face token
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    // Alternative: Full configuration with custom settings
+    let _mcp_config_full = McpClientConfig {
         servers: vec![
             // Example: HTTP-based MCP server with Bearer token authentication
             McpServerConfig {
@@ -93,6 +107,9 @@ async fn main() -> Result<()> {
         // Maximum concurrent tool calls across all servers
         max_concurrent_calls: Some(5),
     };
+
+    // Use the simple configuration for this example
+    let mcp_config = mcp_config_simple;
 
     println!("Building model with MCP client support...");
 

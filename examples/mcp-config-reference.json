@@ -58,7 +58,8 @@
     }
   ],
   
+  "_comment_defaults": "The following are the new defaults. All are optional:",
   "auto_register_tools": true,
-  "tool_timeout_secs": 30,
-  "max_concurrent_calls": 10
+  "tool_timeout_secs": null,
+  "max_concurrent_calls": 1
 }
