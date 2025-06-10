@@ -52,7 +52,11 @@ impl McpTransport for HttpTransport {
             "params": params
         });
 
-        let mut request_builder = self.client.post(&self.base_url).json(&request_body);
+        let mut request_builder = self
+            .client
+            .post(&self.base_url)
+            .json(&request_body)
+            .header("Accept", "application/json, text/event-stream");
 
         // Add custom headers
         for (key, value) in &self.headers {

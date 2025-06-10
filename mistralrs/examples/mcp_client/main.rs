@@ -89,8 +89,7 @@ async fn main() -> Result<()> {
         )
         .add_message(
             TextMessageRole::User,
-            "Hello! Can you help me list the files in the /tmp directory and then \
-             search for information about Rust programming language?",
+            "Hello! Can you help me get a 3D XYZ for graphene?",
         );
 
     println!("\nSending chat request...");
