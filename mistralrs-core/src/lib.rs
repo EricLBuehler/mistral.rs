@@ -82,6 +82,12 @@ pub use device_map::{
 };
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
 pub use mistralrs_audio::AudioInput;
+pub use mistralrs_mcp::{
+    CalledFunction, Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType,
+};
+pub use mistralrs_mcp::{
+    McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
+};
 pub use mistralrs_quant::{IsqType, MULTI_LORA_DELIMITER};
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
 pub use pipeline::{
@@ -112,10 +118,7 @@ use serde::Serialize;
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
-pub use tools::{
-    CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolCallback, ToolCallbacks,
-    ToolChoice, ToolType,
-};
+pub use tools::{ToolCallResponse, ToolCallType, ToolCallbacks, ToolChoice};
 pub use topology::{LayerTopology, Topology};
 pub use utils::debug::initialize_logging;
 pub use utils::memory_usage::MemoryUsage;
@@ -167,6 +170,8 @@ struct RebootState {
     search_embedding_model: Option<BertEmbeddingModel>,
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
+    tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+    mcp_client_config: Option<McpClientConfig>,
 }
 
 #[derive(Debug)]
@@ -206,6 +211,8 @@ pub struct MistralRsBuilder {
     search_embedding_model: Option<BertEmbeddingModel>,
     search_callback: Option<Arc<SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
+    tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+    mcp_client_config: Option<McpClientConfig>,
 }
 
 impl MistralRsBuilder {
@@ -231,6 +238,8 @@ impl MistralRsBuilder {
             search_embedding_model,
             search_callback: None,
             tool_callbacks: HashMap::new(),
+            tool_callbacks_with_tools: HashMap::new(),
+            mcp_client_config: None,
         }
     }
     pub fn with_log(mut self, log: String) -> Self {
@@ -272,14 +281,39 @@ impl MistralRsBuilder {
     pub fn with_tool_callback(
         mut self,
         name: impl Into<String>,
-        tool_callback: Arc<tools::ToolCallback>,
+        tool_callback: Arc<ToolCallback>,
     ) -> Self {
         self.tool_callbacks.insert(name.into(), tool_callback);
         self
     }
 
-    pub fn build(self) -> Arc<MistralRs> {
-        MistralRs::new(self)
+    /// Register a custom callback with its associated Tool definition. The Tool will be
+    /// automatically added to requests when tool callbacks are active.
+    pub fn with_tool_callback_and_tool(
+        mut self,
+        name: impl Into<String>,
+        tool_callback: Arc<ToolCallback>,
+        tool: Tool,
+    ) -> Self {
+        let name = name.into();
+        self.tool_callbacks_with_tools.insert(
+            name,
+            ToolCallbackWithTool {
+                callback: tool_callback,
+                tool,
+            },
+        );
+        self
+    }
+
+    /// Configure MCP client to connect to external MCP servers.
+    pub fn with_mcp_client(mut self, config: McpClientConfig) -> Self {
+        self.mcp_client_config = Some(config);
+        self
+    }
+
+    pub async fn build(self) -> Arc<MistralRs> {
+        MistralRs::new(self).await
     }
 }
 
@@ -293,7 +327,7 @@ impl Drop for MistralRs {
 }
 
 impl MistralRs {
-    fn new(config: MistralRsBuilder) -> Arc<Self> {
+    async fn new(config: MistralRsBuilder) -> Arc<Self> {
         let MistralRsBuilder {
             pipeline,
             method,
@@ -307,6 +341,8 @@ impl MistralRs {
             search_embedding_model,
             search_callback,
             tool_callbacks,
+            mut tool_callbacks_with_tools,
+            mcp_client_config,
         } = config;
 
         let category = pipeline.try_lock().unwrap().category();
@@ -320,6 +356,43 @@ impl MistralRs {
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
 
+        // Initialize MCP client if configured
+        if let Some(config) = &mcp_client_config {
+            let mut mcp_client = McpClient::new(config.clone());
+            let total_servers = config.servers.len();
+
+            match mcp_client.initialize().await {
+                Ok(()) => {
+                    let mcp_callbacks_with_tools = mcp_client.get_tool_callbacks_with_tools();
+                    let tools_count = mcp_callbacks_with_tools.len();
+
+                    // Merge MCP tool callbacks with tools into the new collection
+                    for (name, callback_with_tool) in mcp_callbacks_with_tools {
+                        tool_callbacks_with_tools.insert(name.clone(), callback_with_tool.clone());
+                    }
+
+                    if tools_count == 0 {
+                        warn!(
+                            "MCP client initialized but no tools were registered from {} servers",
+                            total_servers
+                        );
+                    } else {
+                        info!(
+                            "MCP client initialized successfully with {} tools from {} servers",
+                            tools_count, total_servers
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to initialize MCP client with {} configured servers: {}",
+                        total_servers, e
+                    );
+                    warn!("Continuing without MCP functionality. Check your MCP configuration and server availability.");
+                }
+            }
+        }
+
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
             method: method.clone(),
@@ -332,6 +405,8 @@ impl MistralRs {
             search_embedding_model: search_embedding_model.clone(),
             search_callback: search_callback.clone(),
             tool_callbacks: tool_callbacks.clone(),
+            tool_callbacks_with_tools: tool_callbacks_with_tools.clone(),
+            mcp_client_config: mcp_client_config.clone(),
         };
 
         let (tx, rx) = channel(10_000);
@@ -374,6 +449,7 @@ impl MistralRs {
                         search_embedding_model,
                         search_callback.clone(),
                         tool_callbacks.clone(),
+                        tool_callbacks_with_tools.clone(),
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -397,6 +473,7 @@ impl MistralRs {
                         search_embedding_model,
                         search_callback.clone(),
                         tool_callbacks.clone(),
+                        tool_callbacks_with_tools.clone(),
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -510,6 +587,18 @@ impl MistralRs {
             let new_engine_handler = thread::spawn(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
+                    // Initialize MCP client for rebooted engine
+                    let mut tool_callbacks = reboot_state.tool_callbacks.clone();
+                    if let Some(config) = &reboot_state.mcp_client_config {
+                        let mut mcp_client = McpClient::new(config.clone());
+                        if let Ok(()) = mcp_client.initialize().await {
+                            let mcp_callbacks = mcp_client.get_tool_callbacks();
+                            for (name, callback) in mcp_callbacks {
+                                tool_callbacks.insert(name.clone(), callback.clone());
+                            }
+                        }
+                    }
+
                     let engine = Engine::new(
                         rx,
                         reboot_state.pipeline.clone(),
@@ -522,7 +611,8 @@ impl MistralRs {
                         reboot_state.throughput_logging_enabled,
                         reboot_state.search_embedding_model,
                         reboot_state.search_callback.clone(),
-                        reboot_state.tool_callbacks.clone(),
+                        tool_callbacks,
+                        reboot_state.tool_callbacks_with_tools.clone(),
                     )
                     .expect("Engine creation failed");
                     Arc::new(engine).run().await;
@@ -613,6 +703,42 @@ impl MistralRs {
             let time = chrono::offset::Local::now();
             f.write_all(format!("Error response at {time}: {err}\n\n").as_bytes())
                 .expect("Unable to write data");
+        }
+    }
+
+    /// Get the number of tools available (including MCP tools)
+    pub fn get_tools_count(&self) -> usize {
+        self.reboot_state.tool_callbacks_with_tools.len()
+    }
+
+    /// Get the number of MCP tools specifically
+    pub fn get_mcp_tools_count(&self) -> usize {
+        // MCP tools are identified by having the "mcp_" prefix or being part of MCP config
+        if self.reboot_state.mcp_client_config.is_some() {
+            // If MCP is configured, count tools with mcp_ prefix or all tools if we can't distinguish
+            self.reboot_state
+                .tool_callbacks_with_tools
+                .keys()
+                .filter(|name| name.starts_with("mcp_") || !name.contains("_callback"))
+                .count()
+        } else {
+            0
+        }
+    }
+
+    /// Check if MCP client is configured
+    pub fn has_mcp_client(&self) -> bool {
+        self.reboot_state.mcp_client_config.is_some()
+    }
+
+    /// Get information about MCP configuration for status reporting
+    pub fn get_mcp_info(&self) -> (bool, Option<usize>, Option<usize>) {
+        if let Some(config) = &self.reboot_state.mcp_client_config {
+            let tools_count = self.get_mcp_tools_count();
+            let servers_configured = config.servers.len();
+            (true, Some(tools_count), Some(servers_configured))
+        } else {
+            (false, None, None)
         }
     }
 

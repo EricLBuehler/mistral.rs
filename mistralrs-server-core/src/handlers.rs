@@ -18,6 +18,18 @@ use crate::{
   responses((status = 200, description = "Served model info", body = ModelObjects))
 )]
 pub async fn models(State(state): ExtractedMistralRsState) -> Json<ModelObjects> {
+    // Get MCP information if available
+    let (tools_available, mcp_tools_count, mcp_servers_connected) = {
+        let (has_mcp, tools_count, servers_count) = state.get_mcp_info();
+        let total_tools = state.get_tools_count();
+
+        if has_mcp || total_tools > 0 {
+            (Some(total_tools > 0), tools_count, servers_count)
+        } else {
+            (None, None, None)
+        }
+    };
+
     Json(ModelObjects {
         object: "list",
         data: vec![ModelObject {
@@ -25,6 +37,9 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Json<ModelObjects>
             object: "model",
             created: state.get_creation_time(),
             owned_by: "local",
+            tools_available,
+            mcp_tools_count,
+            mcp_servers_connected,
         }],
     })
 }

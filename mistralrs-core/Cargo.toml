@@ -87,6 +87,8 @@ interprocess.workspace = true
 urlencoding.workspace = true
 scraper.workspace = true
 html2text.workspace = true
+tokio-tungstenite.workspace = true
+http.workspace = true
 ordered-float.workspace = true
 hashbrown.workspace = true
 parking_lot.workspace = true
@@ -100,6 +102,8 @@ hound.workspace = true
 apodize.workspace = true
 symphonia.workspace = true
 mistralrs-audio.workspace = true
+rust-mcp-schema.workspace = true
+mistralrs-mcp = { workspace = true, features = ["pyo3_macros", "utoipa"] }
 
 [features]
 pyo3_macros = ["pyo3"]

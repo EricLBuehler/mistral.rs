@@ -1,8 +1,8 @@
 [model]
-model_id = "../hf_models/llama3.1_8b"
+model_id = "meta-llama/Llama-3.1-8B-Instruct"
 
 [speculative]
 gamma = 12
 
 [speculative.draft_model]
-model_id = "../hf_models/llama3.2_1b"
+model_id = "meta-llama/Llama-3.2-1B-Instruct"

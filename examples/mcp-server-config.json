@@ -1,0 +1,56 @@
+{
+  "servers": [
+    {
+      "id": "hf_server",
+      "name": "Hugging Face MCP Server",
+      "source": {
+        "type": "Http",
+        "url": "https://hf.co/mcp",
+        "timeout_secs": 30,
+        "headers": {
+          "User-Agent": "mistral-rs/0.6.0"
+        }
+      },
+      "enabled": false,
+      "tool_prefix": "hf",
+      "resources": null,
+      "bearer_token": "hf_xxx"
+    },
+    {
+      "id": "filesystem",
+      "name": "Filesystem Tools",
+      "source": {
+        "type": "Process",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-filesystem", "."],
+        "work_dir": null,
+        "env": {
+          "MCP_LOG_LEVEL": "info"
+        }
+      },
+      "enabled": true,
+      "tool_prefix": "fs",
+      "resources": ["file://**"],
+      "bearer_token": null
+    },
+    {
+      "id": "websocket_example",
+      "name": "WebSocket Example",
+      "source": {
+        "type": "WebSocket",
+        "url": "wss://api.example.com/mcp",
+        "timeout_secs": 30,
+        "headers": {
+          "Origin": "https://mistral.rs"
+        }
+      },
+      "enabled": false,
+      "tool_prefix": "ws",
+      "resources": null,
+      "bearer_token": "your-websocket-token"
+    }
+  ],
+  "auto_register_tools": true,
+  "tool_timeout_secs": 30,
+  "max_concurrent_calls": 5
+}

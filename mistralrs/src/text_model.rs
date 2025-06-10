@@ -1,6 +1,6 @@
 use candle_core::Device;
 use mistralrs_core::*;
-use mistralrs_core::{SearchCallback, ToolCallback};
+use mistralrs_core::{SearchCallback, Tool, ToolCallback};
 use std::collections::HashMap;
 use std::{
     num::NonZeroUsize,
@@ -10,6 +10,13 @@ use std::{
 };
 
 use crate::{best_device, Model};
+
+/// A tool callback with its associated Tool definition.
+#[derive(Clone)]
+pub struct ToolCallbackWithTool {
+    pub callback: Arc<ToolCallback>,
+    pub tool: Tool,
+}
 
 #[derive(Clone)]
 /// Configure a text model with the various parameters for loading, running, and other inference behaviors.
@@ -30,6 +37,8 @@ pub struct TextModelBuilder {
     pub(crate) search_bert_model: Option<BertEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
     pub(crate) tool_callbacks: HashMap<String, Arc<ToolCallback>>,
+    pub(crate) tool_callbacks_with_tools: HashMap<String, ToolCallbackWithTool>,
+    pub(crate) mcp_client_config: Option<McpClientConfig>,
     pub(crate) device: Option<Device>,
 
     // Model running
@@ -121,6 +130,8 @@ impl TextModelBuilder {
             search_bert_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
+            tool_callbacks_with_tools: HashMap::new(),
+            mcp_client_config: None,
             device: None,
         }
     }
@@ -144,6 +155,27 @@ impl TextModelBuilder {
         callback: Arc<ToolCallback>,
     ) -> Self {
         self.tool_callbacks.insert(name.into(), callback);
+        self
+    }
+
+    /// Register a callback with an associated Tool definition that will be automatically
+    /// added to requests when tool callbacks are active.
+    pub fn with_tool_callback_and_tool(
+        mut self,
+        name: impl Into<String>,
+        callback: Arc<ToolCallback>,
+        tool: Tool,
+    ) -> Self {
+        let name = name.into();
+        self.tool_callbacks_with_tools
+            .insert(name, ToolCallbackWithTool { callback, tool });
+        self
+    }
+
+    /// Configure MCP client to connect to external MCP servers and automatically
+    /// register their tools for use in automatic tool calling.
+    pub fn with_mcp_client(mut self, config: McpClientConfig) -> Self {
+        self.mcp_client_config = Some(config);
         self
     }
 
@@ -392,6 +424,16 @@ impl TextModelBuilder {
         for (name, cb) in &self.tool_callbacks {
             runner = runner.with_tool_callback(name.clone(), cb.clone());
         }
+        for (name, callback_with_tool) in &self.tool_callbacks_with_tools {
+            runner = runner.with_tool_callback_and_tool(
+                name.clone(),
+                callback_with_tool.callback.clone(),
+                callback_with_tool.tool.clone(),
+            );
+        }
+        if let Some(mcp_config) = self.mcp_client_config {
+            runner = runner.with_mcp_client(mcp_config);
+        }
         runner = runner
             .with_no_kv_cache(self.no_kv_cache)
             .with_no_prefix_cache(self.prefix_cache_n.is_none());
@@ -400,7 +442,7 @@ impl TextModelBuilder {
             runner = runner.with_prefix_cache_n(n)
         }
 
-        Ok(Model::new(runner.build()))
+        Ok(Model::new(runner.build().await))
     }
 }
 

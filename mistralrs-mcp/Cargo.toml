@@ -1,0 +1,34 @@
+[package]
+name = "mistralrs-mcp"
+version.workspace = true
+edition.workspace = true
+description = "MCP (Model Context Protocol) client for mistral.rs"
+license.workspace = true
+homepage.workspace = true
+keywords = ["mcp", "model-context-protocol", "tools", "ai", "llm"]
+categories = ["api-bindings", "development-tools"]
+repository.workspace = true
+readme = "README.md"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing.workspace = true
+rust-mcp-schema.workspace = true
+reqwest = { workspace = true, features = ["json", "stream"] }
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+http.workspace = true
+pyo3 = { workspace = true, optional = true }
+utoipa = { workspace = true, optional = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+[features]
+pyo3_macros = ["pyo3"]
+utoipa = ["dep:utoipa"]
+
+[dev-dependencies]
+tokio-test = "0.4"

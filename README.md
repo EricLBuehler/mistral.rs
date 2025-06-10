@@ -14,6 +14,7 @@ Blazingly fast LLM inference.
 **Mistral.rs is a cross-platform, highly-multimodal inference engine that brings you:**
 - All-in-one multimodal workflow: text↔text, text+vision↔text, text+vision+audio↔text, text→speech, text→image
 - APIs: Rust, Python, OpenAI HTTP server, MCP server
+- 🔗 **MCP Client**: Connect to external tools and services automatically (file systems, web search, databases, APIs)
 - Performance: ISQ, PagedAttention, FlashAttention
 
 Please submit requests for new models [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
@@ -29,6 +30,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     - [Rust](mistralrs/examples)
     - [OpenAI-compatible HTTP server](README.md#openai-http-server)
     - [Interactive mode](README.md#interactive-mode)
+    - 🔗 [**MCP Client**](examples/MCP_QUICK_START.md) - Connect to external tools automatically
 
 4) Try the **web chat app** for local in-browser conversation (text, vision, and speech support):
     - Quickstart [here](mistralrs-web-chat/README.md)
@@ -119,6 +121,64 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ```
   </details>
 
+- 🔗 **MCP Client** - Connect to external tools and services automatically: [**Quick Start Guide**](examples/MCP_QUICK_START.md)  
+  <details>
+    <summary>Show examples</summary>
+
+    **1. Create config file (`mcp-config.json`):**
+    ```json
+    {
+      "servers": [{
+        "name": "Filesystem Tools",
+        "source": {
+          "type": "Process",
+          "command": "npx",
+          "args": ["@modelcontextprotocol/server-filesystem", "/tmp", "-y"]
+        }
+      }],
+      "auto_register_tools": true
+    }
+    ```
+
+    **2. Start server with tools:**
+    ```bash
+    ./mistralrs-server --mcp-config mcp-config.json --port 1234 run -m Qwen/Qwen3-4B
+    ```
+    
+    **3. Tools work automatically:**
+    ```bash
+    curl -X POST http://localhost:1234/v1/chat/completions \
+      -d '{"model":"Qwen/Qwen3-4B","messages":[{"role":"user","content":"List files in /tmp and create hello.txt"}]}'
+    ```
+
+    **Python API:**
+    ```python
+    mcp_config = mistralrs.McpClientConfigPy(
+        servers=[mistralrs.McpServerConfigPy(
+            name="Filesystem",
+            source=mistralrs.McpServerSourcePy.Process(
+                command="npx", 
+                args=["@modelcontextprotocol/server-filesystem", "/tmp", "-y"]
+            )
+        )],
+        auto_register_tools=True
+    )
+    
+    runner = mistralrs.Runner(
+        which=mistralrs.Which.Plain(model_id="Qwen/Qwen3-4B"),
+        mcp_client_config=mcp_config
+    )
+    # Tools automatically available!
+    ```
+
+    **Rust API:**
+    ```rust
+    let model = TextModelBuilder::new("Qwen/Qwen3-4B")
+        .with_mcp_client(mcp_config) // Tools automatically available!
+        .build().await?;
+    ```
+  </details>
+
 ## Description
 
 [mistral.rs](https://github.com/EricLBuehler/mistral.rs) is a blazing-fast, cross-platform LLM inference engine with support for text, vision, image generation, and speech.
@@ -130,7 +190,8 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
    - [Rust API](https://ericlbuehler.github.io/mistral.rs/mistralrs/) & [Python API](mistralrs-pyo3/API.md)
    - [Automatic device mapping](docs/DEVICE_MAPPING.md) (multi-GPU, CPU)
    - [Chat templates](docs/CHAT_TOK.md) & tokenizer auto-detection
-   - [MCP protocol](docs/MCP.md) for structured, realtime tool calls
+   - [MCP server](docs/MCP/server.md) for structured, realtime tool calls
+   - ⭐ [MCP client](examples/MCP_QUICK_START.md) to connect to external tools and services automatically
 
 2. **Performance**
    - CPU acceleration (MKL, AVX, [NEON](docs/DEVICE_MAPPING.md#arm-neon), [Accelerate](docs/DEVICE_MAPPING.md#apple-accelerate))
@@ -166,8 +227,9 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 Rust multithreaded/async API for easy integration into any application.
 
 - [Docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/)
-- [Examples](mistralrs/examples/)
+- [Examples](mistralrs/examples/) including [MCP client integration](mistralrs/examples/mcp_client)
 - To use: add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }` to your Cargo.toml
+- **MCP Client**: Connect to external tools automatically - [Quick Start](examples/MCP_QUICK_START.md)
 
 ### Python API
 
@@ -175,28 +237,29 @@ Python API for mistral.rs.
 
 - [Installation including PyPI](mistralrs-pyo3/_README.md)
 - [Docs](mistralrs-pyo3/API.md)
-- [Examples](examples/python)
+- [Examples](examples/python) including [MCP client usage](examples/python/mcp_client.py)
 - [Cookbook](examples/python/cookbook.ipynb)
-
+- **MCP Client**: Full MCP integration - [Quick Start](examples/MCP_QUICK_START.md)
 
 ### HTTP Server
 
 OpenAI API compatible API server
 
-- [API Docs](docs/HTTP.md).
+- [API Docs](docs/HTTP.md)
 - [Launching the server or use the CLI](README.md#run-with-the-cli)
 - [Example](examples/server/chat.py)
 - [Use or extend the server in other axum projects](https://ericlbuehler.github.io/mistral.rs/mistralrs_server_core/)
+- **MCP Client**: Configure via `--mcp-config` flag for automatic tool integration - [Quick Start](examples/MCP_QUICK_START.md)
 
 ### MCP Protocol
 
-Serve the same models over the open [MCP](docs/MCP.md) (Model Control Protocol) in parallel to the HTTP API:
+Serve the same models over the open [MCP](docs/MCP_SERVER.md) (Model Control Protocol) in parallel to the HTTP API:
 
 ```bash
 ./mistralrs-server --mcp-port 4321 plain -m Qwen/Qwen3-4B
 ```
 
-See the [docs](docs/MCP.md) for feature flags, examples and limitations.
+See the [docs](docs/MCP_SERVER.md) for feature flags, examples and limitations.
 
 
 ### Llama Index integration

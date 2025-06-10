@@ -1,0 +1,11 @@
+{
+  "servers": [{
+    "name": "Filesystem Tools",
+    "source": {
+      "type": "Process",
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-filesystem", "."]
+    }
+  }],
+  "auto_register_tools": true
+}

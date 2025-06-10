@@ -341,7 +341,8 @@ struct Args {
     prompt_chunksize: Option<usize>,
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let mut args = Args::parse();
     initialize_logging();
 
@@ -535,7 +536,8 @@ fn main() -> anyhow::Result<()> {
     let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, false, None)
         .with_no_prefix_cache(true)
         .with_disable_eos_stop(true)
-        .build();
+        .build()
+        .await;
 
     info!("Starting warmup run.");
     warmup_run(mistralrs.clone());

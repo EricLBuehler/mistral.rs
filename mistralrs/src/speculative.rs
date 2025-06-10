@@ -107,6 +107,6 @@ impl TextSpeculativeBuilder {
             runner = runner.with_tool_callback(name.clone(), cb.clone());
         }
 
-        Ok(Model::new(runner.build()))
+        Ok(Model::new(runner.build().await))
     }
 }

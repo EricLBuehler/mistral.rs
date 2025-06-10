@@ -113,6 +113,6 @@ impl SpeechModelBuilder {
 
         let runner = MistralRsBuilder::new(pipeline, scheduler_method, false, None);
 
-        Ok(Model::new(runner.build()))
+        Ok(Model::new(runner.build().await))
     }
 }

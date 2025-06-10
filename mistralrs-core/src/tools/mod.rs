@@ -13,13 +13,16 @@ use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
 
 use crate::Pipeline;
+use mistralrs_mcp::CalledFunction;
 
-/// Callback used for custom tool functions. Receives the called function
-/// (name and JSON arguments) and returns the tool output as a string.
-pub type ToolCallback = dyn Fn(&CalledFunction) -> anyhow::Result<String> + Send + Sync;
+// Re-export the types so they're accessible as tools::Type
+pub use mistralrs_mcp::{ToolCallback, ToolCallbackWithTool};
 
 /// Collection of callbacks keyed by tool name.
 pub type ToolCallbacks = HashMap<String, Arc<ToolCallback>>;
+
+/// Collection of callbacks with their tool definitions keyed by tool name.
+pub type ToolCallbacksWithTools = HashMap<String, ToolCallbackWithTool>;
 
 fn contains_tool_call_prefix(prefix: &str) -> bool {
     prefix.contains("<tool_call>")

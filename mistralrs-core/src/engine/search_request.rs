@@ -357,6 +357,12 @@ async fn do_custom_tool(
 
     let result = if let Some(cb) = this.tool_callbacks.get(&tool_calls.function.name) {
         cb(&tool_calls.function).unwrap_or_else(|e| format!("ERROR: {e}"))
+    } else if let Some(callback_with_tool) = this
+        .tool_callbacks_with_tools
+        .get(&tool_calls.function.name)
+    {
+        (callback_with_tool.callback)(&tool_calls.function)
+            .unwrap_or_else(|e| format!("ERROR: {e}"))
     } else {
         format!("ERROR: no tool callback for {}", tool_calls.function.name)
     };
@@ -398,6 +404,20 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
             .get_or_insert_with(Vec::new)
             .extend(search::get_search_tools(opts).unwrap());
     }
+
+    // Add Tool definitions from tool callbacks with tools if they're not already present
+    if !this.tool_callbacks_with_tools.is_empty() {
+        let tools = probe.tools.get_or_insert_with(Vec::new);
+        let existing_tool_names: Vec<String> =
+            tools.iter().map(|t| t.function.name.clone()).collect();
+
+        for (name, callback_with_tool) in &this.tool_callbacks_with_tools {
+            if !existing_tool_names.contains(name) {
+                tools.push(callback_with_tool.tool.clone());
+            }
+        }
+    }
+
     probe.tool_choice = Some(ToolChoice::Auto);
     // Prevent accidental infinite recursion on the probe itself.
     probe.web_search_options = None;
@@ -426,9 +446,51 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
 
             // ----------------------- NON-STREAMING ------------------------
             if !is_streaming {
-                let ResponseOk::Done(done) = receiver.recv().await.unwrap().as_result().unwrap()
-                else {
-                    unreachable!();
+                let done = match receiver.recv().await.unwrap().as_result().unwrap() {
+                    ResponseOk::Done(done) => done,
+                    other => {
+                        match other {
+                            ResponseOk::Chunk(res) => {
+                                user_sender.send(Response::Chunk(res)).await.unwrap()
+                            }
+                            ResponseOk::CompletionChunk(res) => user_sender
+                                .send(Response::CompletionChunk(res))
+                                .await
+                                .unwrap(),
+                            ResponseOk::Done(_) => unreachable!(),
+                            ResponseOk::CompletionDone(res) => user_sender
+                                .send(Response::CompletionDone(res))
+                                .await
+                                .unwrap(),
+                            ResponseOk::ImageGeneration(res) => user_sender
+                                .send(Response::ImageGeneration(res))
+                                .await
+                                .unwrap(),
+                            ResponseOk::Raw {
+                                logits_chunks,
+                                tokens,
+                            } => user_sender
+                                .send(Response::Raw {
+                                    logits_chunks,
+                                    tokens,
+                                })
+                                .await
+                                .unwrap(),
+                            ResponseOk::Speech {
+                                pcm,
+                                rate,
+                                channels,
+                            } => user_sender
+                                .send(Response::Speech {
+                                    pcm,
+                                    rate,
+                                    channels,
+                                })
+                                .await
+                                .unwrap(),
+                        };
+                        return;
+                    }
                 };
 
                 // Forward to the caller once the probe is out of the way.
@@ -502,7 +564,49 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                                 break;
                             }
                         }
-                        _ => unreachable!(),
+                        other => {
+                            match other {
+                                ResponseOk::Chunk(_) => unreachable!(),
+                                ResponseOk::CompletionChunk(res) => user_sender
+                                    .send(Response::CompletionChunk(res))
+                                    .await
+                                    .unwrap(),
+                                ResponseOk::Done(res) => {
+                                    user_sender.send(Response::Done(res)).await.unwrap()
+                                }
+                                ResponseOk::CompletionDone(res) => user_sender
+                                    .send(Response::CompletionDone(res))
+                                    .await
+                                    .unwrap(),
+                                ResponseOk::ImageGeneration(res) => user_sender
+                                    .send(Response::ImageGeneration(res))
+                                    .await
+                                    .unwrap(),
+                                ResponseOk::Raw {
+                                    logits_chunks,
+                                    tokens,
+                                } => user_sender
+                                    .send(Response::Raw {
+                                        logits_chunks,
+                                        tokens,
+                                    })
+                                    .await
+                                    .unwrap(),
+                                ResponseOk::Speech {
+                                    pcm,
+                                    rate,
+                                    channels,
+                                } => user_sender
+                                    .send(Response::Speech {
+                                        pcm,
+                                        rate,
+                                        channels,
+                                    })
+                                    .await
+                                    .unwrap(),
+                            };
+                            return;
+                        }
                     }
                 }
 

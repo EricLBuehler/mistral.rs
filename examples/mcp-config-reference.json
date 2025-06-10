@@ -1,0 +1,64 @@
+{
+  "_comment": "MCP Client Configuration Reference for mistral.rs",
+  
+  "servers": [
+    {
+      "_comment": "HTTP/HTTPS Server Example - Hugging Face MCP",
+      "id": "http_server",
+      "name": "Hugging Face MCP",
+      "source": {
+        "type": "Http",
+        "url": "https://hf.co/mcp",
+        "timeout_secs": 30,
+        "headers": {
+          "User-Agent": "mistral-rs/0.6.0"
+        }
+      },
+      "enabled": false,
+      "tool_prefix": "hf",
+      "resources": null,
+      "bearer_token": "hf_xxx"
+    },
+    {
+      "_comment": "Local Process Server Example - Filesystem (Default)",
+      "id": "process_server",
+      "name": "Filesystem Tools", 
+      "source": {
+        "type": "Process",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-filesystem", "."],
+        "work_dir": null,
+        "env": {
+          "LOG_LEVEL": "info"
+        }
+      },
+      "enabled": true,
+      "tool_prefix": "fs",
+      "resources": ["file://**"],
+      "bearer_token": null
+    },
+    {
+      "_comment": "WebSocket Server Example",
+      "id": "websocket_server",
+      "name": "WebSocket MCP Server",
+      "source": {
+        "type": "WebSocket", 
+        "url": "wss://api.example.com/mcp",
+        "timeout_secs": 30,
+        "headers": {
+          "Origin": "https://mistral.rs"
+        }
+      },
+      "enabled": false,
+      "tool_prefix": "ws",
+      "resources": null,
+      "bearer_token": "your-websocket-token"
+    }
+  ],
+  
+  "_comment_defaults": "Global settings with recommended defaults:",
+  "auto_register_tools": true,
+  "tool_timeout_secs": 30,
+  "max_concurrent_calls": 5,
+  "_comment_note": "To install filesystem server: npx @modelcontextprotocol/server-filesystem . -y"
+}

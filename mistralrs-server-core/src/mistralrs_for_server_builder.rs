@@ -8,8 +8,8 @@ use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
     parse_isq_value, AutoDeviceMapParams, BertEmbeddingModel, DefaultSchedulerMethod,
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder,
-    MemoryGpuConfig, MistralRsBuilder, ModelSelected, PagedAttentionConfig, SchedulerConfig,
-    SearchCallback, TokenSource,
+    McpClientConfig, MemoryGpuConfig, MistralRsBuilder, ModelSelected, PagedAttentionConfig,
+    SchedulerConfig, SearchCallback, TokenSource,
 };
 use tracing::info;
 
@@ -176,6 +176,9 @@ pub struct MistralRsForServerBuilder {
 
     /// Optional override search callback
     search_callback: Option<Arc<SearchCallback>>,
+
+    /// Optional MCP client configuration
+    mcp_client_config: Option<McpClientConfig>,
 }
 
 impl Default for MistralRsForServerBuilder {
@@ -207,6 +210,7 @@ impl Default for MistralRsForServerBuilder {
             enable_search: defaults::ENABLE_SEARCH,
             search_bert_model: defaults::SEARCH_BERT_MODEL,
             search_callback: defaults::SEARCH_CALLBACK,
+            mcp_client_config: None,
         }
     }
 }
@@ -474,6 +478,20 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Sets the MCP client configuration.
+    pub fn with_mcp_config(mut self, mcp_config: McpClientConfig) -> Self {
+        self.mcp_client_config = Some(mcp_config);
+        self
+    }
+
+    /// Sets the MCP client configuration if provided.
+    pub fn with_mcp_config_optional(mut self, mcp_config: Option<McpClientConfig>) -> Self {
+        if let Some(mcp_config) = mcp_config {
+            self = self.with_mcp_config(mcp_config);
+        }
+        self
+    }
+
     /// Builds the configured mistral.rs instance.
     ///
     /// ### Examples
@@ -565,7 +583,7 @@ impl MistralRsForServerBuilder {
 
         let bert_model = get_bert_model(self.enable_search, self.search_bert_model);
 
-        let mistralrs = MistralRsBuilder::new(
+        let mut builder = MistralRsBuilder::new(
             pipeline,
             scheduler_config,
             !self.interactive_mode,
@@ -574,8 +592,14 @@ impl MistralRsForServerBuilder {
         .with_opt_log(self.log)
         .with_truncate_sequence(self.truncate_sequence)
         .with_no_kv_cache(self.no_kv_cache)
-        .with_prefix_cache_n(self.prefix_cache_n)
-        .build();
+        .with_prefix_cache_n(self.prefix_cache_n);
+
+        // Add MCP client configuration if provided
+        if let Some(mcp_config) = self.mcp_client_config {
+            builder = builder.with_mcp_client(mcp_config);
+        }
+
+        let mistralrs = builder.build().await;
 
         Ok(mistralrs)
     }

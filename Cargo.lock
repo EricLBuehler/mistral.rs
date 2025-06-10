@@ -169,6 +169,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0f477b951e452a0b6b4a10b53ccd569042d1d01729b519e02074a9c0958a063"
 
 [[package]]
+name = "async-stream"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
+dependencies = [
+ "async-stream-impl",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.101",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.88"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -256,7 +278,7 @@ dependencies = [
  "sha1",
  "sync_wrapper",
  "tokio",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.26.2",
  "tower",
  "tower-layer",
  "tower-service",
@@ -2839,6 +2861,7 @@ dependencies = [
  "hf-hub",
  "hound",
  "html2text",
+ "http",
  "image",
  "indexmap",
  "indicatif",
@@ -2852,6 +2875,7 @@ dependencies = [
  "minijinja",
  "minijinja-contrib",
  "mistralrs-audio",
+ "mistralrs-mcp",
  "mistralrs-paged-attn",
  "mistralrs-quant",
  "mistralrs-vision",
@@ -2869,6 +2893,7 @@ dependencies = [
  "regex-automata 0.4.9",
  "reqwest",
  "rubato",
+ "rust-mcp-schema 0.1.11",
  "rustc-hash",
  "rustfft",
  "safetensors",
@@ -2886,6 +2911,7 @@ dependencies = [
  "tokenizers",
  "tokio",
  "tokio-rayon",
+ "tokio-tungstenite 0.24.0",
  "toktrie_hf_tokenizers",
  "toml",
  "tqdm",
@@ -2896,6 +2922,27 @@ dependencies = [
  "uuid 1.17.0",
  "variantly",
  "vob",
+]
+
+[[package]]
+name = "mistralrs-mcp"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures-util",
+ "http",
+ "pyo3",
+ "reqwest",
+ "rust-mcp-schema 0.1.11",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-test",
+ "tokio-tungstenite 0.24.0",
+ "tracing",
+ "utoipa",
+ "uuid 1.17.0",
 ]
 
 [[package]]
@@ -2928,6 +2975,7 @@ dependencies = [
  "intel-mkl-src",
  "itertools 0.14.0",
  "mistralrs-core",
+ "mistralrs-mcp",
  "pyo3",
  "pyo3-build-config",
  "reqwest",
@@ -4150,6 +4198,16 @@ dependencies = [
 
 [[package]]
 name = "rust-mcp-schema"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69c8c97bf79c576f8dc582be9f6c9825ed91bd921aac65bd7990992257727e39"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rust-mcp-schema"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c9966340f5104a8d22b6c2db8901f8626a0f737820a385db3ffbb29b1f6ae0f"
@@ -4170,7 +4228,7 @@ dependencies = [
  "futures",
  "hyper",
  "rust-mcp-macros",
- "rust-mcp-schema",
+ "rust-mcp-schema 0.5.2",
  "rust-mcp-transport",
  "serde",
  "serde_json",
@@ -4191,7 +4249,7 @@ dependencies = [
  "bytes",
  "futures",
  "reqwest",
- "rust-mcp-schema",
+ "rust-mcp-schema 0.5.2",
  "serde",
  "serde_json",
  "thiserror 2.0.12",
@@ -5289,6 +5347,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-test"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2468baabc3311435b55dd935f702f42cd1b8abb7e754fb7dfb16bd36aa88f9f7"
+dependencies = [
+ "async-stream",
+ "bytes",
+ "futures-core",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
+name = "tokio-tungstenite"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
+dependencies = [
+ "futures-util",
+ "log",
+ "tokio",
+ "tungstenite 0.24.0",
+]
+
+[[package]]
 name = "tokio-tungstenite"
 version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5297,7 +5380,7 @@ dependencies = [
  "futures-util",
  "log",
  "tokio",
- "tungstenite",
+ "tungstenite 0.26.2",
 ]
 
 [[package]]
@@ -5553,6 +5636,24 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tungstenite"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18e5b8366ee7a95b16d32197d0b2604b43a0be89dc5fac9f8e96ccafbaedda8a"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "data-encoding",
+ "http",
+ "httparse",
+ "log",
+ "rand 0.8.5",
+ "sha1",
+ "thiserror 1.0.69",
+ "utf-8",
+]
+
+[[package]]
+name = "tungstenite"
 version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4793cb5e56680ecbb1d843515b23b6de9a75eb04b66643e256a396d43be33c13"
@@ -5756,6 +5857,7 @@ checksum = "3cf4199d1e5d15ddd86a694e4d0dffa9c323ce759fea589f00fef9d81cc1931d"
 dependencies = [
  "getrandom 0.3.3",
  "js-sys",
+ "serde",
  "wasm-bindgen",
 ]
 

@@ -6,8 +6,8 @@ use mistralrs::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let target = TextModelBuilder::new("../hf_models/llama3.1_8b").with_logging();
-    let draft = TextModelBuilder::new("../hf_models/llama3.2_3b")
+    let target = TextModelBuilder::new("meta-llama/Llama-3.1-8B-Instruct").with_logging();
+    let draft = TextModelBuilder::new("meta-llama/Llama-3.2-1B-Instruct")
         .with_logging()
         .with_isq(IsqType::Q8_0);
     let spec_cfg = SpeculativeConfig { gamma: 16 };

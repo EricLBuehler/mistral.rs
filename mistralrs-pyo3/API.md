@@ -5,6 +5,7 @@ These are API docs for the `mistralrs` package.
 **Table of contents**
 - Full API docs: [here](https://ericlbuehler.github.io/mistral.rs/pyo3/mistralrs.html)
 - Docs for the `Which` enum: [here](#which)
+- MCP Client Configuration: [here](#mcp-client)
 - Example: [here](#example)
 
 ## `Which`
@@ -204,6 +205,109 @@ class Which(Enum):
         dtype: ModelDType = ModelDType.Auto
 ```
 
+## MCP Client
+
+The `mistralrs` Python API now supports Model Context Protocol (MCP) clients, enabling AI assistants to connect to and interact with external tools and resources through standardized server interfaces.
+
+### MCP Server Configuration
+
+Configure MCP servers using `McpServerConfigPy`:
+
+```python
+# HTTP-based MCP server with Bearer token authentication
+http_server = mistralrs.McpServerConfigPy(
+    id="web_search",
+    name="Web Search MCP",
+    source=mistralrs.McpServerSourcePy.Http(
+        url="https://api.example.com/mcp",
+        timeout_secs=30,
+        headers={"X-API-Version": "v1"}  # Optional additional headers
+    ),
+    enabled=True,
+    tool_prefix="web",  # Prefixes tool names to avoid conflicts
+    resources=None,
+    bearer_token="your-api-token"  # Automatically added as Authorization header
+)
+
+# Process-based MCP server for local tools
+process_server = mistralrs.McpServerConfigPy(
+    id="filesystem",
+    name="Filesystem MCP",
+    source=mistralrs.McpServerSourcePy.Process(
+        command="mcp-server-filesystem",
+        args=["--root", "/tmp"],
+        work_dir=None,
+        env={"MCP_LOG_LEVEL": "debug"}  # Optional environment variables
+    ),
+    enabled=True,
+    tool_prefix="fs",
+    resources=["file://**"],  # Resource patterns this client is interested in
+    bearer_token=None  # Process servers typically don't need authentication
+)
+
+# WebSocket-based MCP server for real-time communication
+websocket_server = mistralrs.McpServerConfigPy(
+    id="realtime_data",
+    name="Real-time Data MCP",
+    source=mistralrs.McpServerSourcePy.WebSocket(
+        url="wss://realtime.example.com/mcp",
+        timeout_secs=60,
+        headers=None
+    ),
+    enabled=True,
+    tool_prefix="rt",
+    resources=None,
+    bearer_token="websocket-token"  # WebSocket Bearer token support
+)
+```
+
+### MCP Client Configuration
+
+Configure the MCP client using `McpClientConfigPy`:
+
+```python
+mcp_config = mistralrs.McpClientConfigPy(
+    servers=[http_server, process_server, websocket_server],
+    auto_register_tools=True,  # Automatically discover and register tools
+    tool_timeout_secs=30,      # Timeout for individual tool calls
+    max_concurrent_calls=5     # Maximum concurrent tool calls across all servers
+)
+```
+
+### Integration with Runner
+
+Pass the MCP client configuration to the `Runner`:
+
+```python
+runner = mistralrs.Runner(
+    which=mistralrs.Which.GGUF(
+        tok_model_id="mistralai/Mistral-7B-Instruct-v0.1",
+        quantized_model_id="TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
+        quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",
+    ),
+    mcp_client_config=mcp_config  # MCP tools automatically registered
+)
+```
+
+When `auto_register_tools=True`, the MCP client will:
+1. Connect to all enabled MCP servers
+2. Discover available tools from each server
+3. Register them for automatic tool calling with appropriate prefixes
+4. Make them available during model conversations
+
+### MCP Transport Types
+
+- **HTTP Transport**: Best for public APIs, RESTful services, servers behind load balancers. Supports SSE (Server-Sent Events) and standard HTTP semantics.
+
+- **Process Transport**: Best for local tools, development servers, sandboxed environments. Provides process isolation with no network overhead.
+
+- **WebSocket Transport**: Best for interactive applications, real-time data, low-latency requirements. Supports persistent connections and server-initiated notifications.
+
+### Authentication
+
+- **Bearer Tokens**: Automatically added as `Authorization: Bearer <token>` header for HTTP and WebSocket connections
+- **Custom Headers**: Additional headers can be specified for API keys, versioning, etc.
+- **Process Servers**: Typically don't require authentication as they run locally
 
 ## Example
 ```python
