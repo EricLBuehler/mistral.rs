@@ -36,6 +36,7 @@ use mistralrs_core::{
     CalledFunction, SearchCallback, SearchFunctionParameters, SearchResult, ToolCallback,
     ToolCallbacks,
 };
+use mistralrs_core::mcp_client::{McpClientConfig, McpServerConfig, McpServerSource};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use pyo3::Bound;
@@ -564,6 +565,7 @@ impl Runner {
         search_bert_model = None,
         search_callback = None,
         tool_callbacks = None,
+        mcp_client_config = None,
     ))]
     fn new(
         which: Which,
@@ -590,6 +592,7 @@ impl Runner {
         search_bert_model: Option<String>,
         search_callback: Option<PyObject>,
         tool_callbacks: Option<PyObject>,
+        mcp_client_config: Option<McpClientConfigPy>,
     ) -> PyApiResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -896,6 +899,9 @@ impl Runner {
             for (name, cb) in map {
                 builder = builder.with_tool_callback(name, cb);
             }
+        }
+        if let Some(mcp_config) = mcp_client_config {
+            builder = builder.with_mcp_client(mcp_config.into());
         }
         let rt = Runtime::new().expect("Failed to create Runner::new runtime");
         let mistralrs = rt.block_on(async {
@@ -1465,6 +1471,173 @@ impl Runner {
     }
 }
 
+/// MCP server source configuration for different transport types
+#[pyclass]
+#[derive(Debug, Clone)]
+pub enum McpServerSourcePy {
+    /// HTTP-based MCP server
+    #[pyo3(constructor = (url, timeout_secs, headers))]
+    Http {
+        url: String,
+        timeout_secs: Option<u64>,
+        headers: Option<std::collections::HashMap<String, String>>,
+    },
+    /// Process-based MCP server
+    #[pyo3(constructor = (command, args, work_dir, env))]
+    Process {
+        command: String,
+        args: Vec<String>,
+        work_dir: Option<String>,
+        env: Option<std::collections::HashMap<String, String>>,
+    },
+    /// WebSocket-based MCP server
+    #[pyo3(constructor = (url, timeout_secs, headers))]
+    WebSocket {
+        url: String,
+        timeout_secs: Option<u64>,
+        headers: Option<std::collections::HashMap<String, String>>,
+    },
+}
+
+impl From<McpServerSourcePy> for McpServerSource {
+    fn from(source: McpServerSourcePy) -> Self {
+        match source {
+            McpServerSourcePy::Http {
+                url,
+                timeout_secs,
+                headers,
+            } => McpServerSource::Http {
+                url,
+                timeout_secs,
+                headers,
+            },
+            McpServerSourcePy::Process {
+                command,
+                args,
+                work_dir,
+                env,
+            } => McpServerSource::Process {
+                command,
+                args,
+                work_dir,
+                env,
+            },
+            McpServerSourcePy::WebSocket {
+                url,
+                timeout_secs,
+                headers,
+            } => McpServerSource::WebSocket {
+                url,
+                timeout_secs,
+                headers,
+            },
+        }
+    }
+}
+
+/// Configuration for an individual MCP server
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct McpServerConfigPy {
+    #[pyo3(get, set)]
+    pub id: String,
+    #[pyo3(get, set)]
+    pub name: String,
+    #[pyo3(get, set)]
+    pub source: McpServerSourcePy,
+    #[pyo3(get, set)]
+    pub enabled: bool,
+    #[pyo3(get, set)]
+    pub tool_prefix: Option<String>,
+    #[pyo3(get, set)]
+    pub resources: Option<Vec<String>>,
+    #[pyo3(get, set)]
+    pub bearer_token: Option<String>,
+}
+
+#[pymethods]
+impl McpServerConfigPy {
+    #[new]
+    #[pyo3(signature = (id, name, source, enabled=true, tool_prefix=None, resources=None, bearer_token=None))]
+    pub fn new(
+        id: String,
+        name: String,
+        source: McpServerSourcePy,
+        enabled: bool,
+        tool_prefix: Option<String>,
+        resources: Option<Vec<String>>,
+        bearer_token: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            source,
+            enabled,
+            tool_prefix,
+            resources,
+            bearer_token,
+        }
+    }
+}
+
+impl From<McpServerConfigPy> for McpServerConfig {
+    fn from(config: McpServerConfigPy) -> Self {
+        McpServerConfig {
+            id: config.id,
+            name: config.name,
+            source: config.source.into(),
+            enabled: config.enabled,
+            tool_prefix: config.tool_prefix,
+            resources: config.resources,
+            bearer_token: config.bearer_token,
+        }
+    }
+}
+
+/// Configuration for MCP client integration
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct McpClientConfigPy {
+    #[pyo3(get, set)]
+    pub servers: Vec<McpServerConfigPy>,
+    #[pyo3(get, set)]
+    pub auto_register_tools: bool,
+    #[pyo3(get, set)]
+    pub tool_timeout_secs: Option<u64>,
+    #[pyo3(get, set)]
+    pub max_concurrent_calls: Option<usize>,
+}
+
+#[pymethods]
+impl McpClientConfigPy {
+    #[new]
+    #[pyo3(signature = (servers, auto_register_tools=true, tool_timeout_secs=None, max_concurrent_calls=None))]
+    pub fn new(
+        servers: Vec<McpServerConfigPy>,
+        auto_register_tools: bool,
+        tool_timeout_secs: Option<u64>,
+        max_concurrent_calls: Option<usize>,
+    ) -> Self {
+        Self {
+            servers,
+            auto_register_tools,
+            tool_timeout_secs,
+            max_concurrent_calls,
+        }
+    }
+}
+
+impl From<McpClientConfigPy> for McpClientConfig {
+    fn from(config: McpClientConfigPy) -> Self {
+        McpClientConfig {
+            servers: config.servers.into_iter().map(|s| s.into()).collect(),
+            auto_register_tools: config.auto_register_tools,
+            tool_timeout_secs: config.tool_timeout_secs,
+            max_concurrent_calls: config.max_concurrent_calls,
+        }
+    }
+}
+
 #[pymodule]
 fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     initialize_logging();
@@ -1496,5 +1669,8 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<mistralrs_core::TopLogprob>()?;
     m.add_class::<mistralrs_core::ModelDType>()?;
     m.add_class::<mistralrs_core::ImageGenerationResponseFormat>()?;
+    m.add_class::<McpServerSourcePy>()?;
+    m.add_class::<McpServerConfigPy>()?;
+    m.add_class::<McpClientConfigPy>()?;
     Ok(())
 }

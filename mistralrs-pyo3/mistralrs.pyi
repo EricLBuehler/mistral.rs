@@ -610,3 +610,30 @@ class ImageChoice:
 class ImageGenerationResponse:
     choices: list[ImageChoice]
     created: int
+
+# MCP (Model Context Protocol) Client Types
+
+class McpServerSourcePy(Enum):
+    """MCP server transport source configuration"""
+    Http = "Http"
+    Process = "Process"  
+    WebSocket = "WebSocket"
+
+@dataclass
+class McpServerConfigPy:
+    """Configuration for an individual MCP server"""
+    id: str
+    name: str
+    source: McpServerSourcePy
+    enabled: bool = True
+    tool_prefix: Optional[str] = None
+    resources: Optional[list[str]] = None
+    bearer_token: Optional[str] = None
+
+@dataclass
+class McpClientConfigPy:
+    """Configuration for MCP client integration"""
+    servers: list[McpServerConfigPy]
+    auto_register_tools: bool = True
+    tool_timeout_secs: Optional[int] = None
+    max_concurrent_calls: Optional[int] = None
