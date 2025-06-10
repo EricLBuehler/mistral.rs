@@ -615,13 +615,15 @@ class ImageGenerationResponse:
 
 class McpServerSourcePy(Enum):
     """MCP server transport source configuration"""
+
     Http = "Http"
-    Process = "Process"  
+    Process = "Process"
     WebSocket = "WebSocket"
 
 @dataclass
 class McpServerConfigPy:
     """Configuration for an individual MCP server"""
+
     id: str
     name: str
     source: McpServerSourcePy
@@ -633,6 +635,7 @@ class McpServerConfigPy:
 @dataclass
 class McpClientConfigPy:
     """Configuration for MCP client integration"""
+
     servers: list[McpServerConfigPy]
     auto_register_tools: bool = True
     tool_timeout_secs: Optional[int] = None

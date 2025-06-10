@@ -26,7 +26,7 @@ Create `mcp-config.json` with a **working example** using the filesystem server:
       "source": {
         "type": "Process",
         "command": "npx",
-        "args": ["@modelcontextprotocol/server-filesystem", "/tmp"]
+        "args": ["@modelcontextprotocol/server-filesystem", "/tmp", "-y"]
       }
     }
   ],
@@ -43,7 +43,7 @@ Create `mcp-config.json` with a **working example** using the filesystem server:
       "source": {
         "type": "Process", 
         "command": "npx",
-        "args": ["@modelcontextprotocol/server-brave-search"]
+        "args": ["@modelcontextprotocol/server-brave-search", "-y"]
       },
       "env": {
         "BRAVE_API_KEY": "your-brave-api-key"
@@ -145,7 +145,7 @@ Look for MCP status in the response:
     "source": {
       "type": "Process",
       "command": "npx",
-      "args": ["@modelcontextprotocol/server-filesystem", "/tmp"]
+      "args": ["@modelcontextprotocol/server-filesystem", "/tmp", "-y"]
     }
   }],
   "auto_register_tools": true
@@ -160,7 +160,7 @@ Look for MCP status in the response:
     "source": {
       "type": "Process",
       "command": "npx", 
-      "args": ["@modelcontextprotocol/server-brave-search"]
+      "args": ["@modelcontextprotocol/server-brave-search", "-y"]
     },
     "env": {
       "BRAVE_API_KEY": "your-api-key-here"
@@ -179,7 +179,7 @@ Look for MCP status in the response:
       "source": {
         "type": "Process",
         "command": "npx",
-        "args": ["@modelcontextprotocol/server-filesystem", "/workspace"]
+        "args": ["@modelcontextprotocol/server-filesystem", "/workspace", "-y"]
       },
       "tool_prefix": "fs"
     },
@@ -188,7 +188,7 @@ Look for MCP status in the response:
       "source": {
         "type": "Process",
         "command": "npx",
-        "args": ["@modelcontextprotocol/server-github"]
+        "args": ["@modelcontextprotocol/server-github", "-y"]
       },
       "env": {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "your-github-token"

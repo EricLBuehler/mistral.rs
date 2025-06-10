@@ -133,7 +133,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
         "source": {
           "type": "Process",
           "command": "npx",
-          "args": ["@modelcontextprotocol/server-filesystem", "/tmp"]
+          "args": ["@modelcontextprotocol/server-filesystem", "/tmp", "-y"]
         }
       }],
       "auto_register_tools": true
@@ -158,7 +158,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
             name="Filesystem",
             source=mistralrs.McpServerSourcePy.Process(
                 command="npx", 
-                args=["@modelcontextprotocol/server-filesystem", "/tmp"]
+                args=["@modelcontextprotocol/server-filesystem", "/tmp", "-y"]
             )
         )],
         auto_register_tools=True

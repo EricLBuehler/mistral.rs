@@ -20,33 +20,29 @@ import mistralrs
 async def main():
     # Create MCP client configuration using the Hugging Face MCP server
     # Note: Replace 'hf_xxx' with your actual Hugging Face token
-    
+
     # Simple example using defaults (enabled=True, UUID for id/prefix, no timeouts)
     hf_server_simple = mistralrs.McpServerConfigPy(
         name="Hugging Face MCP Server",
-        source=mistralrs.McpServerSourcePy.Http(
-            url="https://hf.co/mcp"
-        ),
-        bearer_token="hf_xxx"  # Replace with your actual Hugging Face token
+        source=mistralrs.McpServerSourcePy.Http(url="https://hf.co/mcp"),
+        bearer_token="hf_xxx",  # Replace with your actual Hugging Face token
     )
-    
+
     # Alternative: Full configuration with custom settings
     hf_server_full = mistralrs.McpServerConfigPy(
         id="hf_server",
         name="Hugging Face MCP",
         source=mistralrs.McpServerSourcePy.Http(
-            url="https://hf.co/mcp",
-            timeout_secs=30,
-            headers=None
+            url="https://hf.co/mcp", timeout_secs=30, headers=None
         ),
         enabled=True,
         tool_prefix="hf",  # Prefixes tool names to avoid conflicts
         resources=None,
-        bearer_token="hf_xxx"  # Replace with your actual Hugging Face token
+        bearer_token="hf_xxx",  # Replace with your actual Hugging Face token
     )
-    
+
     # Additional examples (commented out for demonstration):
-    
+
     # # Example: Process-based MCP server (local filesystem tools)
     # filesystem_server = mistralrs.McpServerConfigPy(
     #     id="filesystem_server",
@@ -62,7 +58,7 @@ async def main():
     #     resources=["file://**"],
     #     bearer_token=None
     # )
-    
+
     # # Example: WebSocket-based MCP server (real-time data)
     # websocket_server = mistralrs.McpServerConfigPy(
     #     id="websocket_server",
@@ -77,26 +73,24 @@ async def main():
     #     resources=None,
     #     bearer_token="your-websocket-token"
     # )
-    
+
     # Simple MCP client configuration using defaults
     # (auto_register_tools=True, no timeouts, max_concurrent_calls=1)
-    mcp_config_simple = mistralrs.McpClientConfigPy(
-        servers=[hf_server_simple]
-    )
-    
+    mcp_config_simple = mistralrs.McpClientConfigPy(servers=[hf_server_simple])
+
     # Alternative: Full MCP client configuration with custom settings
     mcp_config_full = mistralrs.McpClientConfigPy(
         servers=[hf_server_full],  # Add filesystem_server, websocket_server if enabled
         auto_register_tools=True,
         tool_timeout_secs=30,
-        max_concurrent_calls=5
+        max_concurrent_calls=5,
     )
-    
+
     # Use the simple configuration for this example
     mcp_config = mcp_config_simple
 
     print("Building model with MCP client support...")
-    
+
     # Build the model with MCP client configuration
     runner = mistralrs.Runner(
         which=mistralrs.Which.Plain(
@@ -106,7 +100,7 @@ async def main():
         max_seqs=10,
         no_kv_cache=False,
         throughput_logging_enabled=True,
-        mcp_client_config=mcp_config
+        mcp_client_config=mcp_config,
     )
 
     print("Model built successfully! MCP servers connected and tools registered.")
@@ -132,17 +126,24 @@ async def main():
     )
 
     print("\nSending chat request with MCP tool support...")
-    print("The model will automatically use MCP tools if needed to answer the question.")
-    
+    print(
+        "The model will automatically use MCP tools if needed to answer the question."
+    )
+
     response = await runner.send_chat_completion_request(request)
 
     print(f"\nResponse: {response.choices[0].message.content}")
 
     # Display any tool calls that were made
-    if hasattr(response.choices[0].message, 'tool_calls') and response.choices[0].message.tool_calls:
+    if (
+        hasattr(response.choices[0].message, "tool_calls")
+        and response.choices[0].message.tool_calls
+    ):
         print("\nMCP tool calls made:")
         for tool_call in response.choices[0].message.tool_calls:
-            print(f"- Tool: {tool_call.function.name} | Arguments: {tool_call.function.arguments}")
+            print(
+                f"- Tool: {tool_call.function.name} | Arguments: {tool_call.function.arguments}"
+            )
     else:
         print("\nNo tool calls were made for this request.")
 
@@ -154,7 +155,9 @@ if __name__ == "__main__":
     print("==================================")
     print()
     print("This example demonstrates how mistral.rs can act as an MCP client")
-    print("to connect to external MCP servers (like Hugging Face) and automatically use their tools.")
+    print(
+        "to connect to external MCP servers (like Hugging Face) and automatically use their tools."
+    )
     print()
 
     asyncio.run(main())
