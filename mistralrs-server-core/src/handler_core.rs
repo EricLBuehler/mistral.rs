@@ -87,7 +87,7 @@ pub fn create_response_channel(
 }
 
 /// Sends a request to the model processing pipeline.
-pub async fn send_model_request(state: &SharedMistralRsState, request: Request) -> Result<()> {
+pub async fn send_request(state: &SharedMistralRsState, request: Request) -> Result<()> {
     let sender = state
         .get_sender()
         .context("mistral.rs sender not available.")?;

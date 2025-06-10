@@ -16,7 +16,7 @@ use mistralrs_core::{
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
-    handler_core::{create_response_channel, send_model_request, ErrorToResponse, JsonError},
+    handler_core::{create_response_channel, send_request, ErrorToResponse, JsonError},
     openai::{AudioResponseFormat, SpeechGenerationRequest},
     types::SharedMistralRsState,
 };
@@ -105,7 +105,7 @@ pub async fn speech_generation(
         )));
     }
 
-    if let Err(e) = send_model_request(&state, request).await {
+    if let Err(e) = send_request(&state, request).await {
         return handle_error(state, e.into());
     }
 

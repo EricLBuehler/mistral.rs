@@ -27,7 +27,7 @@ use crate::{
         BaseCompletionResponder,
     },
     handler_core::{
-        base_process_non_streaming_response, create_response_channel, send_model_request,
+        base_process_non_streaming_response, create_response_channel, send_request,
         BaseJsonModelError, ErrorToResponse, JsonError, ModelErrorMessage,
     },
     openai::{
@@ -498,7 +498,7 @@ pub async fn chatcompletions(
         Err(e) => return handle_error(state, e.into()),
     };
 
-    if let Err(e) = send_model_request(&state, request).await {
+    if let Err(e) = send_request(&state, request).await {
         return handle_error(state, e.into());
     }
 

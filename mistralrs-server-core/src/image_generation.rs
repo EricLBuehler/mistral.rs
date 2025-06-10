@@ -16,7 +16,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
     handler_core::{
-        base_process_non_streaming_response, create_response_channel, send_model_request,
+        base_process_non_streaming_response, create_response_channel, send_request,
         ErrorToResponse, JsonError,
     },
     openai::ImageGenerationRequest,
@@ -100,7 +100,7 @@ pub async fn image_generation(
         Err(e) => return handle_error(state, e.into()),
     };
 
-    if let Err(e) = send_model_request(&state, request).await {
+    if let Err(e) = send_request(&state, request).await {
         return handle_error(state, e.into());
     }
 
