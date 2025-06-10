@@ -73,6 +73,8 @@ pub struct McpServerConfig {
     pub tool_prefix: Option<String>,
     /// Resource patterns to subscribe to (optional)
     pub resources: Option<Vec<String>>,
+    /// Optional Bearer token for authentication
+    pub bearer_token: Option<String>,
 }
 
 /// Information about a discovered MCP tool
@@ -194,12 +196,18 @@ impl McpClient {
                 timeout_secs,
                 headers,
             } => {
+                // Merge Bearer token with existing headers if provided
+                let mut merged_headers = headers.clone().unwrap_or_default();
+                if let Some(token) = &config.bearer_token {
+                    merged_headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+                }
+
                 let connection = client::HttpMcpConnection::new(
                     config.id.clone(),
                     config.name.clone(),
                     url.clone(),
                     *timeout_secs,
-                    headers.clone(),
+                    Some(merged_headers),
                 )
                 .await?;
                 Ok(Arc::new(connection))
@@ -226,12 +234,18 @@ impl McpClient {
                 timeout_secs,
                 headers,
             } => {
+                // Merge Bearer token with existing headers if provided
+                let mut merged_headers = headers.clone().unwrap_or_default();
+                if let Some(token) = &config.bearer_token {
+                    merged_headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+                }
+
                 let connection = client::WebSocketMcpConnection::new(
                     config.id.clone(),
                     config.name.clone(),
                     url.clone(),
                     *timeout_secs,
-                    headers.clone(),
+                    Some(merged_headers),
                 )
                 .await?;
                 Ok(Arc::new(connection))
@@ -269,7 +283,9 @@ impl McpClient {
                     // Use tokio::task::spawn_blocking to handle the async-to-sync bridge
                     let rt = tokio::runtime::Handle::current();
                     std::thread::spawn(move || {
-                        rt.block_on(async move { connection.call_tool(&tool_name, arguments).await })
+                        rt.block_on(
+                            async move { connection.call_tool(&tool_name, arguments).await },
+                        )
                     })
                     .join()
                     .map_err(|_| anyhow::anyhow!("Tool call thread panicked"))?

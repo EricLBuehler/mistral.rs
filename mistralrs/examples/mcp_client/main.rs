@@ -1,9 +1,9 @@
 use anyhow::Result;
 use mistralrs::{
-    IsqType, McpClientConfig, McpServerConfig, McpServerSource, PagedAttentionMetaBuilder,
-    TextMessageRole, TextMessages, TextModelBuilder,
+    IsqType, McpClientConfig, McpServerConfig, McpServerSource, MemoryGpuConfig,
+    PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
 };
-use std::collections::HashMap;
+// use std::collections::HashMap; // Uncomment if using manual headers in examples below
 
 /// This example demonstrates how to use mistral.rs as an MCP client to connect
 /// to external MCP servers and automatically register their tools for use in
@@ -13,25 +13,21 @@ async fn main() -> Result<()> {
     // Create MCP client configuration with example servers
     let mcp_config = McpClientConfig {
         servers: vec![
-            // Example HTTP-based MCP server
+            // Example HTTP-based MCP server with Bearer token authentication
             McpServerConfig {
                 id: "example_server".to_string(),
                 name: "Example MCP Server".to_string(),
                 source: McpServerSource::Http {
                     url: "https://hf.co/mcp".to_string(),
                     timeout_secs: Some(30),
-                    headers: Some({
-                        let mut headers = HashMap::new();
-                        headers
-                            .insert("Authorization".to_string(), "Bearer your-token".to_string());
-                        headers
-                    }),
+                    headers: None, // Additional headers can be specified here if needed
                 },
                 enabled: true,
                 tool_prefix: Some("example".to_string()),
                 resources: None,
+                bearer_token: Some("hf_xxx".to_string()), // Bearer token for authentication
             },
-            // // Example process-based MCP server
+            // // Example process-based MCP server (no authentication needed)
             // McpServerConfig {
             //     id: "filesystem_server".to_string(),
             //     name: "Filesystem MCP Server".to_string(),
@@ -44,6 +40,27 @@ async fn main() -> Result<()> {
             //     enabled: true,
             //     tool_prefix: Some("fs".to_string()),
             //     resources: Some(vec!["file://**".to_string()]),
+            //     bearer_token: None, // Process servers typically don't need Bearer tokens
+            // },
+            //
+            // // Example with both Bearer token and additional headers (uncomment HashMap import above)
+            // McpServerConfig {
+            //     id: "authenticated_server".to_string(),
+            //     name: "Authenticated MCP Server".to_string(),
+            //     source: McpServerSource::Http {
+            //         url: "https://api.example.com/mcp".to_string(),
+            //         timeout_secs: Some(60),
+            //         headers: Some({
+            //             let mut headers = HashMap::new();
+            //             headers.insert("X-API-Version".to_string(), "v1".to_string());
+            //             headers.insert("X-Client-ID".to_string(), "mistral-rs".to_string());
+            //             headers
+            //         }),
+            //     },
+            //     enabled: false,
+            //     tool_prefix: Some("auth".to_string()),
+            //     resources: None,
+            //     bearer_token: Some("your-bearer-token".to_string()), // Will be added as Authorization: Bearer <token>
             // },
             // // Example WebSocket-based MCP server (placeholder)
             // McpServerConfig {
@@ -70,7 +87,11 @@ async fn main() -> Result<()> {
     let model = TextModelBuilder::new("../hf_models/qwen3_4b".to_string())
         .with_isq(IsqType::Q8_0)
         .with_logging()
-        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+        .with_paged_attn(|| {
+            PagedAttentionMetaBuilder::default()
+                .with_gpu_memory(MemoryGpuConfig::ContextSize(8192))
+                .build()
+        })?
         .with_mcp_client(mcp_config) // Add MCP client configuration
         .build()
         .await?;
