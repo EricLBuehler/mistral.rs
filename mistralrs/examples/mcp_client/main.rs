@@ -22,21 +22,40 @@ async fn main() -> Result<()> {
     // Most fields use sensible defaults (enabled=true, UUID for id/prefix, no timeouts)
     let mcp_config_simple = McpClientConfig {
         servers: vec![McpServerConfig {
-            name: "Hugging Face MCP Server".to_string(),
-            source: McpServerSource::Http {
-                url: "https://hf.co/mcp".to_string(),
-                ..Default::default()
+            name: "Filesystem Tools".to_string(),
+            source: McpServerSource::Process {
+                command: "npx".to_string(),
+                args: vec![
+                    "@modelcontextprotocol/server-filesystem".to_string(),
+                    ".".to_string(),
+                ],
+                work_dir: None,
+                env: None,
             },
-            bearer_token: Some("hf_xxx".to_string()), // Replace with your actual Hugging Face token
             ..Default::default()
         }],
         ..Default::default()
     };
 
-    // Alternative: Full configuration with custom settings
+    // Alternative: Full configuration with multiple transport types
     let _mcp_config_full = McpClientConfig {
         servers: vec![
-            // Example: HTTP-based MCP server with Bearer token authentication
+            // Example: Process-based MCP server (enabled by default)
+            McpServerConfig {
+                name: "Filesystem Tools".to_string(),
+                source: McpServerSource::Process {
+                    command: "npx".to_string(),
+                    args: vec![
+                        "@modelcontextprotocol/server-filesystem".to_string(),
+                        ".".to_string(),
+                    ],
+                    work_dir: None,
+                    env: None,
+                },
+                tool_prefix: Some("fs".to_string()),
+                ..Default::default()
+            },
+            // Example: HTTP-based MCP server with Bearer token authentication (disabled by default)
             McpServerConfig {
                 id: "hf_server".to_string(),
                 name: "Hugging Face MCP".to_string(),
@@ -45,26 +64,11 @@ async fn main() -> Result<()> {
                     timeout_secs: Some(30),
                     headers: None, // Additional headers can be specified here if needed
                 },
-                enabled: true,
+                enabled: false,                      // Disabled by default
                 tool_prefix: Some("hf".to_string()), // Prefixes tool names to avoid conflicts
                 resources: None,
                 bearer_token: Some("hf_xxx".to_string()), // Replace with your actual Hugging Face token
             },
-            // // Example process-based MCP server (no authentication needed)
-            // McpServerConfig {
-            //     id: "filesystem_server".to_string(),
-            //     name: "Filesystem MCP Server".to_string(),
-            //     source: McpServerSource::Process {
-            //         command: "mcp-server-filesystem".to_string(),
-            //         args: vec!["--root".to_string(), "/tmp".to_string()],
-            //         work_dir: None,
-            //         env: None,
-            //     },
-            //     enabled: true,
-            //     tool_prefix: Some("fs".to_string()),
-            //     resources: Some(vec!["file://**".to_string()]),
-            //     bearer_token: None, // Process servers typically don't need Bearer tokens
-            // },
             //
             // // Example with both Bearer token and additional headers (uncomment HashMap import above)
             // McpServerConfig {
@@ -85,20 +89,20 @@ async fn main() -> Result<()> {
             //     resources: None,
             //     bearer_token: Some("your-bearer-token".to_string()), // Will be added as Authorization: Bearer <token>
             // },
-            // // Example WebSocket-based MCP server
-            // McpServerConfig {
-            //     id: "websocket_server".to_string(),
-            //     name: "WebSocket MCP Server".to_string(),
-            //     source: McpServerSource::WebSocket {
-            //         url: "wss://api.example.com/mcp".to_string(),
-            //         timeout_secs: Some(30),
-            //         headers: None,
-            //     },
-            //     enabled: false, // Disabled for example - change to true to use
-            //     tool_prefix: Some("ws".to_string()),
-            //     resources: None,
-            //     bearer_token: Some("your-websocket-token".to_string()), // WebSocket Bearer token support
-            // },
+            // Example WebSocket-based MCP server (disabled by default)
+            McpServerConfig {
+                id: "websocket_server".to_string(),
+                name: "WebSocket Example".to_string(),
+                source: McpServerSource::WebSocket {
+                    url: "wss://api.example.com/mcp".to_string(),
+                    timeout_secs: Some(30),
+                    headers: None,
+                },
+                enabled: false, // Disabled by default
+                tool_prefix: Some("ws".to_string()),
+                resources: None,
+                bearer_token: Some("your-websocket-token".to_string()), // WebSocket Bearer token support
+            },
         ],
         // Automatically discover and register tools from connected MCP servers
         auto_register_tools: true,
@@ -129,6 +133,9 @@ async fn main() -> Result<()> {
 
     println!("Model built successfully! MCP servers connected and tools registered.");
     println!("MCP tools are now available for automatic tool calling during conversations.");
+    println!(
+        "Note: Install filesystem server with: npx @modelcontextprotocol/server-filesystem . -y"
+    );
 
     // Create a conversation that demonstrates MCP tool usage
     // The system message informs the model about available external tools
@@ -136,14 +143,14 @@ async fn main() -> Result<()> {
         .add_message(
             TextMessageRole::System,
             "You are an AI assistant with access to external tools via MCP servers. \
-             You can search the web, access filesystem operations, and use other tools \
+             You can access filesystem operations and other external services \
              provided by connected MCP servers. Use these tools when appropriate to \
              help answer user questions. Tools are automatically available and you \
              can call them as needed.",
         )
         .add_message(
             TextMessageRole::User,
-            "Hello! Can you help me get the top 10 HF models right now?",
+            "Hello! Can you list the files in the current directory and create a test.txt file?",
         );
 
     println!("\nSending chat request...");

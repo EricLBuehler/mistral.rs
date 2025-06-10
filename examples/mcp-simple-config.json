@@ -1,10 +1,11 @@
 {
   "servers": [{
-    "name": "Hugging Face MCP Server",
+    "name": "Filesystem Tools",
     "source": {
-      "type": "Http",
-      "url": "https://hf.co/mcp"
-    },
-    "bearer_token": "hf_xxx"
-  }]
+      "type": "Process",
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-filesystem", "."]
+    }
+  }],
+  "auto_register_tools": true
 }

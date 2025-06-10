@@ -10,7 +10,7 @@ This example shows how to:
 
 Usage:
 1. First, start the mistral.rs server with MCP config:
-   cargo run --release --bin mistralrs-server -- --port 1234 --mcp-config examples/mcp-test-config.json plain -m Qwen/Qwen3-4B -a qwen3
+   cargo run --release --bin mistralrs-server -- --port 1234 --mcp-config examples/mcp-simple-config.json plain -m Qwen/Qwen3-4B -a qwen3
 
 2. Then run this script:
    python examples/server/mcp_chat.py
@@ -36,11 +36,14 @@ def main():
     )
     print("The server should be started with MCP configuration like:")
     print(
-        "cargo run --release --bin mistralrs-server -- --port 1234 plain -m Qwen/Qwen3-4B -a qwen3 --mcp-config examples/mcp-simple-config.json"
+        "cargo run --release --bin mistralrs-server -- --port 1234 --mcp-config examples/mcp-simple-config.json plain -m Qwen/Qwen3-4B -a qwen3"
     )
     print("or for more advanced configuration:")
     print(
-        "cargo run --release --bin mistralrs-server -- --port 1234 plain -m Qwen/Qwen3-4B -a qwen3 --mcp-config examples/mcp-test-config.json"
+        "cargo run --release --bin mistralrs-server -- --port 1234 --mcp-config examples/mcp-server-config.json plain -m Qwen/Qwen3-4B -a qwen3"
+    )
+    print(
+        "Note: Install filesystem server with: npx @modelcontextprotocol/server-filesystem . -y"
     )
     print()
 
@@ -49,12 +52,12 @@ def main():
         {
             "role": "system",
             "content": "You are an AI assistant with access to external tools via MCP servers. "
-            "You can access Hugging Face tools and other external services. "
+            "You can access filesystem operations and other external services. "
             "Use these tools when appropriate to help answer user questions.",
         },
         {
             "role": "user",
-            "content": "Hello! Can you help me get the top 10 HF models right now?",
+            "content": "Hello! Can you list the files in the current directory and create a test.txt file?",
         },
     ]
 
@@ -92,6 +95,9 @@ def main():
             print(
                 "(This could mean MCP servers aren't configured or the question didn't require tool usage)"
             )
+            print(
+                "Make sure filesystem server is installed: npx @modelcontextprotocol/server-filesystem . -y"
+            )
 
         # Display usage information
         if hasattr(response, "usage") and response.usage:
@@ -110,7 +116,7 @@ def main():
         )
         print("or for advanced configuration:")
         print(
-            "cargo run --release --bin mistralrs-server -- --port 1234 --mcp-config examples/mcp-test-config.json plain -m Qwen/Qwen3-4B -a qwen3"
+            "cargo run --release --bin mistralrs-server -- --port 1234 --mcp-config examples/mcp-server-config.json plain -m Qwen/Qwen3-4B -a qwen3"
         )
         print()
         print("And that the MCP configuration file exists and is properly configured.")

@@ -3,35 +3,33 @@
   
   "servers": [
     {
-      "_comment": "HTTP/HTTPS Server Example",
+      "_comment": "HTTP/HTTPS Server Example - Hugging Face MCP",
       "id": "http_server",
-      "name": "HTTP MCP Server",
+      "name": "Hugging Face MCP",
       "source": {
         "type": "Http",
-        "url": "https://api.example.com/mcp",
+        "url": "https://hf.co/mcp",
         "timeout_secs": 30,
         "headers": {
-          "X-API-Key": "your-api-key",
           "User-Agent": "mistral-rs/0.6.0"
         }
       },
-      "enabled": true,
-      "tool_prefix": "web",
+      "enabled": false,
+      "tool_prefix": "hf",
       "resources": null,
-      "bearer_token": "your-bearer-token"
+      "bearer_token": "hf_xxx"
     },
     {
-      "_comment": "Local Process Server Example",
+      "_comment": "Local Process Server Example - Filesystem (Default)",
       "id": "process_server",
-      "name": "Local Process MCP Server", 
+      "name": "Filesystem Tools", 
       "source": {
         "type": "Process",
-        "command": "mcp-server-filesystem",
-        "args": ["--root", "/workspace", "--readonly"],
-        "work_dir": "/path/to/working/directory",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-filesystem", "."],
+        "work_dir": null,
         "env": {
-          "LOG_LEVEL": "info",
-          "CUSTOM_VAR": "value"
+          "LOG_LEVEL": "info"
         }
       },
       "enabled": true,
@@ -45,8 +43,8 @@
       "name": "WebSocket MCP Server",
       "source": {
         "type": "WebSocket", 
-        "url": "wss://realtime.example.com/mcp",
-        "timeout_secs": 60,
+        "url": "wss://api.example.com/mcp",
+        "timeout_secs": 30,
         "headers": {
           "Origin": "https://mistral.rs"
         }
@@ -54,12 +52,13 @@
       "enabled": false,
       "tool_prefix": "ws",
       "resources": null,
-      "bearer_token": "ws-bearer-token"
+      "bearer_token": "your-websocket-token"
     }
   ],
   
-  "_comment_defaults": "The following are the new defaults. All are optional:",
+  "_comment_defaults": "Global settings with recommended defaults:",
   "auto_register_tools": true,
-  "tool_timeout_secs": null,
-  "max_concurrent_calls": 1
+  "tool_timeout_secs": 30,
+  "max_concurrent_calls": 5,
+  "_comment_note": "To install filesystem server: npx @modelcontextprotocol/server-filesystem . -y"
 }

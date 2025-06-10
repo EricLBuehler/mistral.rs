@@ -11,65 +11,46 @@
           "User-Agent": "mistral-rs/0.6.0"
         }
       },
-      "enabled": true,
+      "enabled": false,
       "tool_prefix": "hf",
       "resources": null,
       "bearer_token": "hf_xxx"
     },
     {
       "id": "filesystem",
-      "name": "Local Filesystem MCP",
+      "name": "Filesystem Tools",
       "source": {
         "type": "Process",
-        "command": "mcp-server-filesystem",
-        "args": ["--root", "/tmp", "--readonly"],
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-filesystem", "."],
         "work_dir": null,
         "env": {
-          "MCP_LOG_LEVEL": "info",
-          "MCP_TIMEOUT": "30"
+          "MCP_LOG_LEVEL": "info"
         }
       },
-      "enabled": false,
+      "enabled": true,
       "tool_prefix": "fs",
       "resources": ["file://**"],
       "bearer_token": null
     },
     {
-      "id": "web_search",
-      "name": "Web Search MCP Server",
-      "source": {
-        "type": "Http",
-        "url": "https://api.search.example.com/mcp",
-        "timeout_secs": 30,
-        "headers": {
-          "X-API-Version": "v1",
-          "User-Agent": "mistral-rs/0.6.0"
-        }
-      },
-      "enabled": false,
-      "tool_prefix": "web",
-      "resources": null,
-      "bearer_token": "your-search-api-token"
-    },
-    {
-      "id": "realtime_data",
-      "name": "Real-time Data MCP",
+      "id": "websocket_example",
+      "name": "WebSocket Example",
       "source": {
         "type": "WebSocket",
-        "url": "wss://data.example.com/mcp",
-        "timeout_secs": 60,
+        "url": "wss://api.example.com/mcp",
+        "timeout_secs": 30,
         "headers": {
-          "Origin": "https://mistral.rs",
-          "Sec-WebSocket-Protocol": "mcp"
+          "Origin": "https://mistral.rs"
         }
       },
       "enabled": false,
-      "tool_prefix": "rt",
+      "tool_prefix": "ws",
       "resources": null,
       "bearer_token": "your-websocket-token"
     }
   ],
   "auto_register_tools": true,
   "tool_timeout_secs": 30,
-  "max_concurrent_calls": 10
+  "max_concurrent_calls": 5
 }

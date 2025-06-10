@@ -21,66 +21,54 @@ async def main():
     # Create MCP client configuration using the Hugging Face MCP server
     # Note: Replace 'hf_xxx' with your actual Hugging Face token
 
-    # Simple example using defaults (enabled=True, UUID for id/prefix, no timeouts)
-    hf_server_simple = mistralrs.McpServerConfigPy(
-        name="Hugging Face MCP Server",
-        source=mistralrs.McpServerSourcePy.Http(url="https://hf.co/mcp"),
-        bearer_token="hf_xxx",  # Replace with your actual Hugging Face token
+    # Process example using defaults (enabled=True, UUID for id/prefix, no timeouts)
+    filesystem_server_simple = mistralrs.McpServerConfigPy(
+        name="Filesystem Tools",
+        source=mistralrs.McpServerSourcePy.Process(
+            command="npx",
+            args=["@modelcontextprotocol/server-filesystem", "."],
+            work_dir=None,
+            env=None,
+        ),
     )
 
-    # Alternative: Full configuration with custom settings
-    hf_server_full = mistralrs.McpServerConfigPy(
+    # Alternative HTTP example: Hugging Face MCP Server (disabled by default)
+    hf_server = mistralrs.McpServerConfigPy(
         id="hf_server",
         name="Hugging Face MCP",
         source=mistralrs.McpServerSourcePy.Http(
             url="https://hf.co/mcp", timeout_secs=30, headers=None
         ),
-        enabled=True,
+        enabled=False,  # Disabled by default
         tool_prefix="hf",  # Prefixes tool names to avoid conflicts
         resources=None,
         bearer_token="hf_xxx",  # Replace with your actual Hugging Face token
     )
 
-    # Additional examples (commented out for demonstration):
-
-    # # Example: Process-based MCP server (local filesystem tools)
-    # filesystem_server = mistralrs.McpServerConfigPy(
-    #     id="filesystem_server",
-    #     name="Filesystem MCP Server",
-    #     source=mistralrs.McpServerSourcePy.Process(
-    #         command="mcp-server-filesystem",
-    #         args=["--root", "/tmp"],
-    #         work_dir=None,
-    #         env=None
-    #     ),
-    #     enabled=False,  # Disabled for this example
-    #     tool_prefix="fs",
-    #     resources=["file://**"],
-    #     bearer_token=None
-    # )
-
-    # # Example: WebSocket-based MCP server (real-time data)
-    # websocket_server = mistralrs.McpServerConfigPy(
-    #     id="websocket_server",
-    #     name="WebSocket MCP Server",
-    #     source=mistralrs.McpServerSourcePy.WebSocket(
-    #         url="wss://api.example.com/mcp",
-    #         timeout_secs=30,
-    #         headers=None
-    #     ),
-    #     enabled=False,  # Disabled for this example
-    #     tool_prefix="ws",
-    #     resources=None,
-    #     bearer_token="your-websocket-token"
-    # )
+    # Alternative WebSocket example (disabled by default)
+    websocket_server = mistralrs.McpServerConfigPy(
+        id="websocket_server",
+        name="WebSocket Example",
+        source=mistralrs.McpServerSourcePy.WebSocket(
+            url="wss://api.example.com/mcp", timeout_secs=30, headers=None
+        ),
+        enabled=False,  # Disabled by default
+        tool_prefix="ws",
+        resources=None,
+        bearer_token="your-websocket-token",
+    )
 
     # Simple MCP client configuration using defaults
     # (auto_register_tools=True, no timeouts, max_concurrent_calls=1)
-    mcp_config_simple = mistralrs.McpClientConfigPy(servers=[hf_server_simple])
+    mcp_config_simple = mistralrs.McpClientConfigPy(servers=[filesystem_server_simple])
 
-    # Alternative: Full MCP client configuration with custom settings
+    # Alternative: Full MCP client configuration with multiple servers
     mcp_config_full = mistralrs.McpClientConfigPy(
-        servers=[hf_server_full],  # Add filesystem_server, websocket_server if enabled
+        servers=[
+            filesystem_server_simple,
+            hf_server,
+            websocket_server,
+        ],  # filesystem enabled, others disabled
         auto_register_tools=True,
         tool_timeout_secs=30,
         max_concurrent_calls=5,
@@ -112,12 +100,12 @@ async def main():
             {
                 "role": "system",
                 "content": "You are an AI assistant with access to external tools via MCP servers. "
-                "You can access Hugging Face tools and other external services. "
+                "You can access filesystem operations and other external services. "
                 "Use these tools when appropriate to help answer user questions.",
             },
             {
                 "role": "user",
-                "content": "Hello! Can you help me get the top 10 HF models right now?",
+                "content": "Hello! Can you list the files in the current directory and create a test.txt file?",
             },
         ],
         max_tokens=1000,
@@ -156,7 +144,10 @@ if __name__ == "__main__":
     print()
     print("This example demonstrates how mistral.rs can act as an MCP client")
     print(
-        "to connect to external MCP servers (like Hugging Face) and automatically use their tools."
+        "to connect to external MCP servers (like filesystem tools) and automatically use their tools."
+    )
+    print(
+        "Note: Install the filesystem server with: npx @modelcontextprotocol/server-filesystem . -y"
     )
     print()
 

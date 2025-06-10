@@ -26,7 +26,7 @@ Create `mcp-config.json` with a **working example** using the filesystem server:
       "source": {
         "type": "Process",
         "command": "npx",
-        "args": ["@modelcontextprotocol/server-filesystem", "/tmp", "-y"]
+        "args": ["@modelcontextprotocol/server-filesystem", "."]
       }
     }
   ],
@@ -34,25 +34,69 @@ Create `mcp-config.json` with a **working example** using the filesystem server:
 }
 ```
 
-**Alternative: Web Search Example**
+> **Note:** To install the filesystem server, run: `npx @modelcontextprotocol/server-filesystem . -y`
+
+**Alternative Transport Examples (commented out by default):**
+
+<details>
+<summary>HTTP Example - Hugging Face MCP Server</summary>
+
 ```json
 {
   "servers": [
     {
-      "name": "Brave Search",
+      "name": "Hugging Face MCP",
       "source": {
-        "type": "Process", 
-        "command": "npx",
-        "args": ["@modelcontextprotocol/server-brave-search", "-y"]
+        "type": "Http",
+        "url": "https://hf.co/mcp",
+        "timeout_secs": 30
       },
-      "env": {
-        "BRAVE_API_KEY": "your-brave-api-key"
+      "bearer_token": "hf_xxx",
+      "tool_prefix": "hf",
+      "enabled": false
+    },
+    {
+      "name": "Filesystem Tools",
+      "source": {
+        "type": "Process",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-filesystem", "."]
       }
     }
   ],
   "auto_register_tools": true
 }
 ```
+</details>
+
+<details>
+<summary>WebSocket Example</summary>
+
+```json
+{
+  "servers": [
+    {
+      "name": "WebSocket Example",
+      "source": {
+        "type": "WebSocket",
+        "url": "wss://api.example.com/mcp",
+        "timeout_secs": 30
+      },
+      "enabled": false
+    },
+    {
+      "name": "Filesystem Tools",
+      "source": {
+        "type": "Process",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-filesystem", "."]
+      }
+    }
+  ],
+  "auto_register_tools": true
+}
+```
+</details>
 
 ### 2. Start Server with MCP Tools
 
@@ -78,19 +122,7 @@ curl -X POST http://localhost:1234/v1/chat/completions \
   -d '{
     "model": "Qwen/Qwen3-4B",
     "messages": [
-      {"role": "user", "content": "List the files in /tmp and create a hello.txt file"}
-    ]
-  }'
-```
-
-```bash  
-# Web search example (if using Brave search config)
-curl -X POST http://localhost:1234/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "Qwen/Qwen3-4B", 
-    "messages": [
-      {"role": "user", "content": "Search for the latest AI news"}
+      {"role": "user", "content": "List the files in the current directory and create a hello.txt file"}
     ]
   }'
 ```
@@ -119,14 +151,28 @@ Look for MCP status in the response:
 
 **✅ `tools_available: true` means MCP tools are working!**
 
+## 🔧 Quick Verification
+
+**Test filesystem server is working:**
+```bash
+# This should return "3" or more (filesystem tools available)
+curl http://localhost:1234/v1/models | jq '.data[0].mcp_tools_count'
+
+# Check if filesystem server process is running
+ps aux | grep server-filesystem
+```
+
 ## 🚀 Popular MCP Servers
 
 | Server | Description | Installation | Use Case |
 |--------|-------------|--------------|----------|
 | **Filesystem** | File operations | `npm i -g @modelcontextprotocol/server-filesystem` | Read/write files |
-| **Brave Search** | Web search | `npm i -g @modelcontextprotocol/server-brave-search` | Search the web |
-| **GitHub** | GitHub API | `npm i -g @modelcontextprotocol/server-github` | Repository access |
+| **Hugging Face** | HF API access | Web service at `https://hf.co/mcp` | Models, datasets, spaces |
 | **Postgres** | Database | `npm i -g @modelcontextprotocol/server-postgres` | SQL queries |
+
+> **Links to more servers:**
+> - [Brave Search](https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search) - Web search capabilities
+> - [GitHub](https://github.com/modelcontextprotocol/servers/tree/main/src/github) - Repository access
 
 ### Transport Types
 | Transport | When to Use | Examples |
@@ -137,7 +183,7 @@ Look for MCP status in the response:
 
 ## 📋 Ready-to-Use Configurations
 
-### Filesystem Server (Recommended for testing)
+### Process Example (Default - Filesystem Server)
 ```json
 {
   "servers": [{
@@ -145,55 +191,61 @@ Look for MCP status in the response:
     "source": {
       "type": "Process",
       "command": "npx",
-      "args": ["@modelcontextprotocol/server-filesystem", "/tmp", "-y"]
+      "args": ["@modelcontextprotocol/server-filesystem", "."]
     }
   }],
   "auto_register_tools": true
 }
 ```
 
-### Web Search Server
-```json
-{
-  "servers": [{
-    "name": "Brave Search",
-    "source": {
-      "type": "Process",
-      "command": "npx", 
-      "args": ["@modelcontextprotocol/server-brave-search", "-y"]
-    },
-    "env": {
-      "BRAVE_API_KEY": "your-api-key-here"
-    }
-  }],
-  "auto_register_tools": true
-}
-```
-
-### Multi-Server Setup
+### HTTP Example (Hugging Face MCP Server)
 ```json
 {
   "servers": [
     {
-      "name": "Filesystem",
+      "name": "Hugging Face MCP",
       "source": {
-        "type": "Process",
-        "command": "npx",
-        "args": ["@modelcontextprotocol/server-filesystem", "/workspace", "-y"]
+        "type": "Http",
+        "url": "https://hf.co/mcp",
+        "timeout_secs": 30
       },
-      "tool_prefix": "fs"
+      "bearer_token": "hf_xxx",
+      "tool_prefix": "hf",
+      "enabled": false
     },
     {
-      "name": "GitHub", 
+      "name": "File Operations",
       "source": {
         "type": "Process",
         "command": "npx",
-        "args": ["@modelcontextprotocol/server-github", "-y"]
+        "args": ["@modelcontextprotocol/server-filesystem", "."]
+      }
+    }
+  ],
+  "auto_register_tools": true
+}
+```
+
+### WebSocket Example
+```json
+{
+  "servers": [
+    {
+      "name": "WebSocket Example",
+      "source": {
+        "type": "WebSocket",
+        "url": "wss://api.example.com/mcp",
+        "timeout_secs": 30
       },
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "your-github-token"
-      },
-      "tool_prefix": "gh"
+      "enabled": false
+    },
+    {
+      "name": "File Operations",
+      "source": {
+        "type": "Process",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-filesystem", "."]
+      }
     }
   ],
   "auto_register_tools": true

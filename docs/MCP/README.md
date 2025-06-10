@@ -4,7 +4,7 @@ mistral.rs includes a built-in MCP client that allows models to connect to exter
 
 ## Quick Start
 
-All examples below use the Hugging Face MCP server. Replace `hf_xxx` with your actual Hugging Face token.
+Examples below show HTTP (Hugging Face), Process (filesystem), and WebSocket transports. Replace `hf_xxx` with your actual Hugging Face token for HTTP examples.
 
 ### Rust API
 
@@ -16,8 +16,24 @@ use mistralrs::{
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Configure HF MCP server
+    // Process example (filesystem server - recommended for getting started)
     let mcp_config = McpClientConfig {
+        servers: vec![McpServerConfig {
+            name: "Filesystem Tools".to_string(),
+            source: McpServerSource::Process {
+                command: "npx".to_string(),
+                args: vec!["@modelcontextprotocol/server-filesystem".to_string(), ".".to_string()],
+                work_dir: None,
+                env: None,
+            },
+            ..Default::default()
+        }],
+        auto_register_tools: true,
+        ..Default::default()
+    };
+
+    // Alternative HTTP example (Hugging Face MCP server)
+    let _mcp_config_http = McpClientConfig {
         servers: vec![McpServerConfig {
             id: "hf_server".to_string(),
             name: "Hugging Face MCP".to_string(),
@@ -26,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
                 timeout_secs: Some(30),
                 headers: None,
             },
-            enabled: true,
+            enabled: false, // Disabled by default
             tool_prefix: Some("hf".to_string()),
             resources: None,
             bearer_token: Some("hf_xxx".to_string()), // Your HF token
@@ -34,6 +50,22 @@ async fn main() -> anyhow::Result<()> {
         auto_register_tools: true,
         tool_timeout_secs: Some(30),
         max_concurrent_calls: Some(5),
+    };
+
+    // Alternative WebSocket example
+    let _mcp_config_websocket = McpClientConfig {
+        servers: vec![McpServerConfig {
+            name: "WebSocket Example".to_string(),
+            source: McpServerSource::WebSocket {
+                url: "wss://api.example.com/mcp".to_string(),
+                timeout_secs: Some(30),
+                headers: None,
+            },
+            enabled: false, // Disabled by default
+            ..Default::default()
+        }],
+        auto_register_tools: true,
+        ..Default::default()
     };
 
     // Build model with MCP support
@@ -46,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
     let messages = TextMessages::new()
         .add_message(
             TextMessageRole::User,
-            "What are the top trending models on Hugging Face?"
+            "List the files in the current directory and create a test.txt file"
         );
 
     let response = model.send_chat_request(messages).await?;
@@ -61,7 +93,18 @@ async fn main() -> anyhow::Result<()> {
 ```python
 import mistralrs
 
-# Configure HF MCP server
+# Process example (filesystem server - recommended for getting started)
+filesystem_server = mistralrs.McpServerConfigPy(
+    name="Filesystem Tools",
+    source=mistralrs.McpServerSourcePy.Process(
+        command="npx",
+        args=["@modelcontextprotocol/server-filesystem", "."],
+        work_dir=None,
+        env=None
+    )
+)
+
+# Alternative HTTP example (Hugging Face MCP server)
 hf_server = mistralrs.McpServerConfigPy(
     id="hf_server",
     name="Hugging Face MCP",
@@ -70,15 +113,26 @@ hf_server = mistralrs.McpServerConfigPy(
         timeout_secs=30,
         headers=None
     ),
-    enabled=True,
+    enabled=False,  # Disabled by default
     tool_prefix="hf",
     resources=None,
     bearer_token="hf_xxx"  # Your HF token
 )
 
-# Create MCP client config
+# Alternative WebSocket example
+websocket_server = mistralrs.McpServerConfigPy(
+    name="WebSocket Example",
+    source=mistralrs.McpServerSourcePy.WebSocket(
+        url="wss://api.example.com/mcp",
+        timeout_secs=30,
+        headers=None
+    ),
+    enabled=False  # Disabled by default
+)
+
+# Create MCP client config using filesystem server (others are disabled)
 mcp_config = mistralrs.McpClientConfigPy(
-    servers=[hf_server],
+    servers=[filesystem_server], # hf_server, websocket_server can be added when enabled
     auto_register_tools=True,
     tool_timeout_secs=30,
     max_concurrent_calls=5
@@ -98,7 +152,7 @@ res = runner.send_chat_completion_request(
     mistralrs.ChatCompletionRequest(
         model="mistral",
         messages=[
-            {"role": "user", "content": "What are the top trending models on Hugging Face?"}
+            {"role": "user", "content": "List the files in the current directory and create a test.txt file"}
         ],
         max_tokens=500,
         temperature=0.1,
@@ -110,23 +164,77 @@ print(res.choices[0].message.content)
 ### HTTP API
 
 1. Create `mcp-config.json`:
+
+**Process Example (Recommended for getting started):**
 ```json
 {
   "servers": [{
-    "id": "hf_server",
-    "name": "Hugging Face MCP Server",
+    "name": "Filesystem Tools",
     "source": {
-      "type": "Http",
-      "url": "https://hf.co/mcp",
-      "timeout_secs": 30
-    },
-    "enabled": true,
-    "tool_prefix": "hf",
-    "bearer_token": "hf_xxx"
+      "type": "Process",
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-filesystem", "."]
+    }
   }],
+  "auto_register_tools": true
+}
+```
+
+> **Note:** To install the filesystem server, run: `npx @modelcontextprotocol/server-filesystem . -y`
+
+**HTTP Example (Hugging Face MCP Server):**
+```json
+{
+  "servers": [
+    {
+      "name": "Hugging Face MCP",
+      "source": {
+        "type": "Http",
+        "url": "https://hf.co/mcp",
+        "timeout_secs": 30
+      },
+      "bearer_token": "hf_xxx",
+      "tool_prefix": "hf",
+      "enabled": false
+    },
+    {
+      "name": "Filesystem Tools",
+      "source": {
+        "type": "Process",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-filesystem", "."]
+      }
+    }
+  ],
   "auto_register_tools": true,
   "tool_timeout_secs": 30,
   "max_concurrent_calls": 5
+}
+```
+
+**WebSocket Example:**
+```json
+{
+  "servers": [
+    {
+      "name": "WebSocket Example",
+      "source": {
+        "type": "WebSocket",
+        "url": "wss://api.example.com/mcp",
+        "timeout_secs": 30
+      },
+      "enabled": false
+    },
+    {
+      "name": "Filesystem Tools",
+      "source": {
+        "type": "Process",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-filesystem", "."]
+      }
+    }
+  ],
+  "auto_register_tools": true
 }
 ```
 
@@ -147,7 +255,7 @@ curl -X POST http://localhost:1234/v1/chat/completions \
   -d '{
     "model": "mistral",
     "messages": [
-      {"role": "user", "content": "What are the top trending models on Hugging Face?"}
+      {"role": "user", "content": "List the files in the current directory and create a test.txt file"}
     ],
     "max_tokens": 500,
     "temperature": 0.1
@@ -173,9 +281,38 @@ curl -X POST http://localhost:1234/v1/chat/completions \
 
 ## Common MCP Servers
 
-- **Hugging Face**: `https://hf.co/mcp` - Access HF models, datasets, and spaces
-- **Filesystem**: `mcp-server-filesystem` - Local file operations
-- **GitHub**: `mcp-server-github` - GitHub API access
-- **Web Search**: Various providers - Web search capabilities
+- **Filesystem**: `@modelcontextprotocol/server-filesystem` - Local file operations (Process)
+- **Hugging Face**: `https://hf.co/mcp` - Access HF models, datasets, and spaces (HTTP)
+- **Postgres**: `@modelcontextprotocol/server-postgres` - Database operations (Process)
+
+**Additional servers (install separately):**
+- [Brave Search](https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search) - Web search capabilities
+- [GitHub](https://github.com/modelcontextprotocol/servers/tree/main/src/github) - GitHub API access
 
 Replace placeholder tokens and URLs with actual values for your use case.
+
+## Troubleshooting
+
+### Common Issues
+
+**"MCP server failed to start" or "npx command not found"**
+- Install Node.js and npm: `curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - && sudo apt-get install -y nodejs`
+- Install the filesystem server: `npx @modelcontextprotocol/server-filesystem . -y`
+
+**"No tools available" or "tools_available: false"**
+- Check server logs for MCP connection errors
+- Verify the MCP config file path is correct
+- Ensure the MCP server process is running: `ps aux | grep mcp`
+
+**"Tool call failed" or timeout errors**
+- Increase `tool_timeout_secs` in your config (default: 30)
+- Check `max_concurrent_calls` setting (start with 1-5)
+- Verify file permissions for filesystem operations
+
+**Authentication errors with HTTP servers**
+- Double-check `bearer_token` values (e.g., HF tokens start with `hf_`)
+- Verify API endpoints are accessible: `curl -H "Authorization: Bearer YOUR_TOKEN" https://hf.co/mcp`
+
+**Need help?**
+- [MCP Server Registry](https://github.com/modelcontextprotocol/servers) - Find more servers
+- [Discord Community](https://discord.gg/SZrecqK8qw) - Get support
