@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["main","parse_token_source"],"mod":["interactive_mode","mcp_server"],"struct":["Args"]};
+window.SIDEBAR_ITEMS = {"fn":["load_mcp_config","main","parse_token_source","validate_mcp_config"],"mod":["interactive_mode","mcp_server"],"struct":["Args"]};

@@ -113,6 +113,6 @@
 <a href=#113 id=113 data-nosnippet>113</a>
 <a href=#114 id=114 data-nosnippet>114</a>        <span class="kw">let </span>runner = MistralRsBuilder::new(pipeline, scheduler_method, <span class="bool-val">false</span>, <span class="prelude-val">None</span>);
 <a href=#115 id=115 data-nosnippet>115</a>
-<a href=#116 id=116 data-nosnippet>116</a>        <span class="prelude-val">Ok</span>(Model::new(runner.build()))
+<a href=#116 id=116 data-nosnippet>116</a>        <span class="prelude-val">Ok</span>(Model::new(runner.build().<span class="kw">await</span>))
 <a href=#117 id=117 data-nosnippet>117</a>    }
 <a href=#118 id=118 data-nosnippet>118</a>}</code></pre></div></section></main></body></html>
