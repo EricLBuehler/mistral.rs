@@ -107,22 +107,22 @@ pub struct McpClient {
 pub trait McpServerConnection: Send + Sync {
     /// Get the server ID
     fn server_id(&self) -> &str;
-    
+
     /// Get the server name
     fn server_name(&self) -> &str;
-    
+
     /// List available tools from this server
     async fn list_tools(&self) -> Result<Vec<McpToolInfo>>;
-    
+
     /// Call a tool on this server
     async fn call_tool(&self, name: &str, arguments: serde_json::Value) -> Result<String>;
-    
+
     /// List available resources from this server
     async fn list_resources(&self) -> Result<Vec<Resource>>;
-    
+
     /// Read a resource from this server
     async fn read_resource(&self, uri: &str) -> Result<String>;
-    
+
     /// Check if the connection is healthy
     async fn ping(&self) -> Result<()>;
 }
@@ -148,7 +148,7 @@ impl McpClient {
             tool_callbacks: HashMap::new(),
         }
     }
-    
+
     /// Initialize connections to all configured servers
     pub async fn initialize(&mut self) -> Result<()> {
         for server_config in &self.config.servers {
@@ -157,38 +157,51 @@ impl McpClient {
                 self.servers.insert(server_config.id.clone(), connection);
             }
         }
-        
+
         if self.config.auto_register_tools {
             self.discover_and_register_tools().await?;
         }
-        
+
         Ok(())
     }
-    
+
     /// Get tool callbacks that can be used with the existing tool calling system
     pub fn get_tool_callbacks(&self) -> &HashMap<String, Arc<ToolCallback>> {
         &self.tool_callbacks
     }
-    
+
     /// Get discovered tools information
     pub fn get_tools(&self) -> &HashMap<String, McpToolInfo> {
         &self.tools
     }
-    
+
     /// Create connection based on server source type
-    async fn create_connection(&self, config: &McpServerConfig) -> Result<Arc<dyn McpServerConnection>> {
+    async fn create_connection(
+        &self,
+        config: &McpServerConfig,
+    ) -> Result<Arc<dyn McpServerConnection>> {
         match &config.source {
-            McpServerSource::Http { url, timeout_secs, headers } => {
+            McpServerSource::Http {
+                url,
+                timeout_secs,
+                headers,
+            } => {
                 let connection = client::HttpMcpConnection::new(
                     config.id.clone(),
                     config.name.clone(),
                     url.clone(),
                     *timeout_secs,
                     headers.clone(),
-                ).await?;
+                )
+                .await?;
                 Ok(Arc::new(connection))
             }
-            McpServerSource::Process { command, args, work_dir, env } => {
+            McpServerSource::Process {
+                command,
+                args,
+                work_dir,
+                env,
+            } => {
                 let connection = client::ProcessMcpConnection::new(
                     config.id.clone(),
                     config.name.clone(),
@@ -196,57 +209,65 @@ impl McpClient {
                     args.clone(),
                     work_dir.clone(),
                     env.clone(),
-                ).await?;
+                )
+                .await?;
                 Ok(Arc::new(connection))
             }
-            McpServerSource::WebSocket { url, timeout_secs, headers } => {
+            McpServerSource::WebSocket {
+                url,
+                timeout_secs,
+                headers,
+            } => {
                 let connection = client::WebSocketMcpConnection::new(
                     config.id.clone(),
                     config.name.clone(),
                     url.clone(),
                     *timeout_secs,
                     headers.clone(),
-                ).await?;
+                )
+                .await?;
                 Ok(Arc::new(connection))
             }
         }
     }
-    
+
     /// Discover tools from all connected servers and register them
     async fn discover_and_register_tools(&mut self) -> Result<()> {
         for (server_id, connection) in &self.servers {
             let tools = connection.list_tools().await?;
-            let server_config = self.config.servers.iter()
+            let server_config = self
+                .config
+                .servers
+                .iter()
                 .find(|s| &s.id == server_id)
                 .ok_or_else(|| anyhow::anyhow!("Server config not found for {}", server_id))?;
-            
+
             for tool in tools {
                 let tool_name = if let Some(prefix) = &server_config.tool_prefix {
                     format!("{}_{}", prefix, tool.name)
                 } else {
                     tool.name.clone()
                 };
-                
+
                 // Create tool callback that calls the MCP server
                 let connection_clone = Arc::clone(connection);
                 let original_tool_name = tool.name.clone();
                 let callback: Arc<ToolCallback> = Arc::new(move |called_function| {
                     let connection = Arc::clone(&connection_clone);
                     let tool_name = original_tool_name.clone();
-                    let arguments: serde_json::Value = serde_json::from_str(&called_function.arguments)?;
-                    
+                    let arguments: serde_json::Value =
+                        serde_json::from_str(&called_function.arguments)?;
+
                     // Use tokio runtime to call async function
                     let rt = tokio::runtime::Handle::current();
-                    rt.block_on(async move {
-                        connection.call_tool(&tool_name, arguments).await
-                    })
+                    rt.block_on(async move { connection.call_tool(&tool_name, arguments).await })
                 });
-                
+
                 self.tool_callbacks.insert(tool_name.clone(), callback);
                 self.tools.insert(tool_name, tool);
             }
         }
-        
+
         Ok(())
     }
 }

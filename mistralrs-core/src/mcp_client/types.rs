@@ -31,14 +31,9 @@ pub enum McpContent {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "image")]
-    Image { 
-        data: String, 
-        mime_type: String 
-    },
+    Image { data: String, mime_type: String },
     #[serde(rename = "resource")]
-    Resource { 
-        resource: McpResourceReference 
-    },
+    Resource { resource: McpResourceReference },
 }
 
 /// Reference to an MCP resource
@@ -88,17 +83,17 @@ impl From<crate::mcp_client::McpToolInfo> for McpToolSchema {
 impl McpToolResult {
     /// Convert MCP tool result to a simple string representation
     pub fn to_string(&self) -> String {
-        self.content.iter()
+        self.content
+            .iter()
             .map(|content| match content {
                 McpContent::Text { text } => text.clone(),
                 McpContent::Image { mime_type, .. } => {
                     format!("[Image: {}]", mime_type)
                 }
-                McpContent::Resource { resource } => {
-                    resource.text.clone().unwrap_or_else(|| {
-                        format!("[Resource: {}]", resource.uri)
-                    })
-                }
+                McpContent::Resource { resource } => resource
+                    .text
+                    .clone()
+                    .unwrap_or_else(|| format!("[Resource: {}]", resource.uri)),
             })
             .collect::<Vec<_>>()
             .join("\n")

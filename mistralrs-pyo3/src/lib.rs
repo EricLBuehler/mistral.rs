@@ -15,7 +15,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 use stream::ChatCompletionStreamer;
-use tokio::sync::mpsc::channel;
+use tokio::{runtime::Runtime, sync::mpsc::channel};
 use util::{PyApiErr, PyApiResult};
 
 use candle_core::{Device, Result};
@@ -897,10 +897,14 @@ impl Runner {
                 builder = builder.with_tool_callback(name, cb);
             }
         }
-        let mistralrs = builder
-            .with_no_kv_cache(no_kv_cache)
-            .with_prefix_cache_n(prefix_cache_n)
-            .build();
+        let rt = Runtime::new().expect("Failed to create Runner::new runtime");
+        let mistralrs = rt.block_on(async {
+            builder
+                .with_no_kv_cache(no_kv_cache)
+                .with_prefix_cache_n(prefix_cache_n)
+                .build()
+                .await
+        });
 
         Ok(Self { runner: mistralrs })
     }

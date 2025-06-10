@@ -282,6 +282,6 @@ impl GgufModelBuilder {
             runner = runner.with_prefix_cache_n(n)
         }
 
-        Ok(Model::new(runner.build()))
+        Ok(Model::new(runner.build().await))
     }
 }

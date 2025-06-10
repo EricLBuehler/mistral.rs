@@ -22,7 +22,8 @@ async fn main() -> Result<()> {
                     timeout_secs: Some(30),
                     headers: Some({
                         let mut headers = HashMap::new();
-                        headers.insert("Authorization".to_string(), "Bearer your-token".to_string());
+                        headers
+                            .insert("Authorization".to_string(), "Bearer your-token".to_string());
                         headers
                     }),
                 },
@@ -30,33 +31,33 @@ async fn main() -> Result<()> {
                 tool_prefix: Some("example".to_string()),
                 resources: None,
             },
-            // Example process-based MCP server
-            McpServerConfig {
-                id: "filesystem_server".to_string(),
-                name: "Filesystem MCP Server".to_string(),
-                source: McpServerSource::Process {
-                    command: "mcp-server-filesystem".to_string(),
-                    args: vec!["--root".to_string(), "/tmp".to_string()],
-                    work_dir: None,
-                    env: None,
-                },
-                enabled: true,
-                tool_prefix: Some("fs".to_string()),
-                resources: Some(vec!["file://**".to_string()]),
-            },
-            // Example WebSocket-based MCP server (placeholder)
-            McpServerConfig {
-                id: "websocket_server".to_string(),
-                name: "WebSocket MCP Server".to_string(),
-                source: McpServerSource::WebSocket {
-                    url: "ws://localhost:9090/mcp".to_string(),
-                    timeout_secs: Some(30),
-                    headers: None,
-                },
-                enabled: false, // Disabled since WebSocket transport is not yet implemented
-                tool_prefix: Some("ws".to_string()),
-                resources: None,
-            },
+            // // Example process-based MCP server
+            // McpServerConfig {
+            //     id: "filesystem_server".to_string(),
+            //     name: "Filesystem MCP Server".to_string(),
+            //     source: McpServerSource::Process {
+            //         command: "mcp-server-filesystem".to_string(),
+            //         args: vec!["--root".to_string(), "/tmp".to_string()],
+            //         work_dir: None,
+            //         env: None,
+            //     },
+            //     enabled: true,
+            //     tool_prefix: Some("fs".to_string()),
+            //     resources: Some(vec!["file://**".to_string()]),
+            // },
+            // // Example WebSocket-based MCP server (placeholder)
+            // McpServerConfig {
+            //     id: "websocket_server".to_string(),
+            //     name: "WebSocket MCP Server".to_string(),
+            //     source: McpServerSource::WebSocket {
+            //         url: "ws://localhost:9090/mcp".to_string(),
+            //         timeout_secs: Some(30),
+            //         headers: None,
+            //     },
+            //     enabled: false, // Disabled since WebSocket transport is not yet implemented
+            //     tool_prefix: Some("ws".to_string()),
+            //     resources: None,
+            // },
         ],
         auto_register_tools: true,
         tool_timeout_secs: Some(30),
@@ -66,7 +67,7 @@ async fn main() -> Result<()> {
     println!("Building model with MCP client support...");
 
     // Build the model with MCP client configuration
-    let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct".to_string())
+    let model = TextModelBuilder::new("../hf_models/qwen3_4b".to_string())
         .with_isq(IsqType::Q8_0)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
@@ -113,7 +114,10 @@ async fn main() -> Result<()> {
     if let Some(tool_calls) = &response.choices[0].message.tool_calls {
         println!("\nTool calls made:");
         for tool_call in tool_calls {
-            println!("- {}: {}", tool_call.function.name, tool_call.function.arguments);
+            println!(
+                "- {}: {}",
+                tool_call.function.name, tool_call.function.arguments
+            );
         }
     }
 

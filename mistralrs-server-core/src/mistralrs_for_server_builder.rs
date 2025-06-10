@@ -575,7 +575,8 @@ impl MistralRsForServerBuilder {
         .with_truncate_sequence(self.truncate_sequence)
         .with_no_kv_cache(self.no_kv_cache)
         .with_prefix_cache_n(self.prefix_cache_n)
-        .build();
+        .build()
+        .await;
 
         Ok(mistralrs)
     }

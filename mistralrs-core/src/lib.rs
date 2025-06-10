@@ -61,6 +61,7 @@ use dummy_paged_attention as paged_attention;
 mod attention;
 mod diffusion_models;
 pub mod distributed;
+pub mod mcp_client;
 mod pipeline;
 mod prefix_cacher;
 mod request;
@@ -75,13 +76,13 @@ mod topology;
 mod utils;
 mod vision_models;
 mod xlora_models;
-pub mod mcp_client;
 
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, LayerDeviceMapper,
 };
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
+pub use mcp_client::{McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo};
 pub use mistralrs_audio::AudioInput;
 pub use mistralrs_quant::{IsqType, MULTI_LORA_DELIMITER};
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
@@ -116,9 +117,6 @@ use toml_selector::{TomlLoaderArgs, TomlSelector};
 pub use tools::{
     CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolCallback, ToolCallbacks,
     ToolChoice, ToolType,
-};
-pub use mcp_client::{
-    McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
 pub use topology::{LayerTopology, Topology};
 pub use utils::debug::initialize_logging;
@@ -291,8 +289,8 @@ impl MistralRsBuilder {
         self
     }
 
-    pub fn build(self) -> Arc<MistralRs> {
-        MistralRs::new(self)
+    pub async fn build(self) -> Arc<MistralRs> {
+        MistralRs::new(self).await
     }
 }
 
@@ -306,7 +304,7 @@ impl Drop for MistralRs {
 }
 
 impl MistralRs {
-    fn new(config: MistralRsBuilder) -> Arc<Self> {
+    async fn new(config: MistralRsBuilder) -> Arc<Self> {
         let MistralRsBuilder {
             pipeline,
             method,
@@ -336,10 +334,9 @@ impl MistralRs {
 
         // Initialize MCP client if configured
         if let Some(config) = &mcp_client_config {
-            let rt = Runtime::new().expect("Failed to create tokio runtime for MCP client");
             let mut mcp_client = mcp_client::McpClient::new(config.clone());
-            
-            match rt.block_on(mcp_client.initialize()) {
+
+            match mcp_client.initialize().await {
                 Ok(()) => {
                     info!("MCP client initialized successfully");
                     // Merge MCP tool callbacks with existing tool callbacks

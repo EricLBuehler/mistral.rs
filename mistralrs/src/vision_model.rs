@@ -336,7 +336,7 @@ impl VisionModelBuilder {
         }
         let runner = runner.with_no_kv_cache(false).with_no_prefix_cache(false);
 
-        Ok(Model::new(runner.build()))
+        Ok(Model::new(runner.build().await))
     }
 }
 
