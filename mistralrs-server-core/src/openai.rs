@@ -534,6 +534,15 @@ pub struct ModelObject {
     pub object: &'static str,
     pub created: u64,
     pub owned_by: &'static str,
+    /// Whether tools are available through MCP or tool callbacks
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools_available: Option<bool>,
+    /// Number of tools available from MCP servers
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_tools_count: Option<usize>,
+    /// Number of connected MCP servers
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_servers_connected: Option<usize>,
 }
 
 /// Collection of available models

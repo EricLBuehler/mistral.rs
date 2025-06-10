@@ -5,7 +5,6 @@ Example demonstrating MCP (Model Context Protocol) client usage with mistral.rs 
 This example shows how to:
 - Configure MCP servers with different transport protocols (HTTP, WebSocket, Process)
 - Set up Bearer token authentication for secure connections
-- Use automatic tool discovery and registration
 - Integrate MCP tools with model tool calling
 
 The MCP client automatically discovers tools from connected servers and makes them
@@ -67,7 +66,6 @@ def main():
     # Create MCP client configuration
     mcp_config = mistralrs.McpClientConfigPy(
         servers=[http_server],  # Add process_server, websocket_server if enabled
-        auto_register_tools=True,  # Automatically discover and register tools from connected MCP servers
         tool_timeout_secs=30,      # Timeout for individual tool calls (30 seconds)
         max_concurrent_calls=5     # Maximum concurrent tool calls across all servers
     )

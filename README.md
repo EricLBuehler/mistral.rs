@@ -14,7 +14,7 @@ Blazingly fast LLM inference.
 **Mistral.rs is a cross-platform, highly-multimodal inference engine that brings you:**
 - All-in-one multimodal workflow: text↔text, text+vision↔text, text+vision+audio↔text, text→speech, text→image
 - APIs: Rust, Python, OpenAI HTTP server, MCP server
-- MCP Client: Connect to external tools and services with Model Context Protocol support
+- MCP Client: Connect to external tools and services with Model Context Protocol support (Rust, Python, HTTP)
 - Performance: ISQ, PagedAttention, FlashAttention
 
 Please submit requests for new models [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
@@ -30,7 +30,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     - [Rust](mistralrs/examples)
     - [OpenAI-compatible HTTP server](README.md#openai-http-server)
     - [Interactive mode](README.md#interactive-mode)
-    - [MCP Client](docs/MCP_CLIENT.md) - Connect to external tools and services
+    - [MCP Client](examples/MCP_QUICK_START.md) - Connect to external tools and services
 
 4) Try the **web chat app** for local in-browser conversation (text, vision, and speech support):
     - Quickstart [here](mistralrs-web-chat/README.md)
@@ -123,36 +123,40 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 - 🔗 **MCP Client** - Connect to external tools and services via Model Context Protocol: [documentation](docs/MCP_CLIENT.md)  
   <details>
-    <summary>Show example</summary>
+    <summary>Show examples</summary>
 
-    ```rust
-    use mistralrs::{TextModelBuilder, McpClientConfig, McpServerConfig, McpServerSource};
+    **HTTP Server with MCP tools:**
+    ```bash
+    # Create mcp-config.json with your MCP servers
+    ./mistralrs-server --mcp-config mcp-config.json --port 1234 run -m microsoft/Phi-3.5-mini-instruct
     
-    let mcp_config = McpClientConfig {
-        servers: vec![
-            McpServerConfig {
-                id: "web_search".to_string(),
-                name: "Web Search API".to_string(),
-                source: McpServerSource::Http {
-                    url: "https://api.example.com/mcp".to_string(),
-                    timeout_secs: Some(30),
-                    headers: None,
-                },
-                enabled: true,
-                tool_prefix: Some("web".to_string()),
-                resources: None,
-                bearer_token: Some("your-api-key".to_string()),
-            },
-        ],
-        auto_register_tools: true,
-        tool_timeout_secs: Some(30),
-        max_concurrent_calls: Some(5),
-    };
+    # Tools automatically available in chat completions!
+    curl -X POST http://localhost:1234/v1/chat/completions \
+      -d '{"model":"phi-3.5","messages":[{"role":"user","content":"Search for AI news"}]}'
+    ```
 
+    **Python API:**
+    ```python
+    from mistralrs import Runner, Which, McpClientConfig, McpServerConfig, McpServerSource
+    
+    mcp_config = McpClientConfig(
+        servers=[McpServerConfig(
+            id="web_search",
+            name="Web Search",
+            source=McpServerSource.Http(url="https://api.example.com/mcp", timeout_secs=30),
+            enabled=True
+        )]
+    )
+    
+    runner = Runner(Which.Plain(model_id="microsoft/Phi-3.5-mini-instruct"), mcp_client_config=mcp_config)
+    # MCP tools automatically integrated!
+    ```
+
+    **Rust API:**
+    ```rust
     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
         .with_mcp_client(mcp_config) // Tools automatically available!
-        .build()
-        .await?;
+        .build().await?;
     ```
   </details>
 
@@ -167,7 +171,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
    - [Rust API](https://ericlbuehler.github.io/mistral.rs/mistralrs/) & [Python API](mistralrs-pyo3/API.md)
    - [Automatic device mapping](docs/DEVICE_MAPPING.md) (multi-GPU, CPU)
    - [Chat templates](docs/CHAT_TOK.md) & tokenizer auto-detection
-   - [MCP server](docs/MCP.md) for structured, realtime tool calls
+   - [MCP server](docs/MCP_SERVER.md) for structured, realtime tool calls
    - [MCP client](docs/MCP_CLIENT.md) to connect to external tools and services
 
 2. **Performance**
@@ -204,8 +208,9 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 Rust multithreaded/async API for easy integration into any application.
 
 - [Docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/)
-- [Examples](mistralrs/examples/)
+- [Examples](mistralrs/examples/) including [MCP client integration](mistralrs/examples/mcp_client)
 - To use: add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }` to your Cargo.toml
+- **MCP Client**: Connect to external MCP servers and automatically integrate tools
 
 ### Python API
 
@@ -213,28 +218,29 @@ Python API for mistral.rs.
 
 - [Installation including PyPI](mistralrs-pyo3/_README.md)
 - [Docs](mistralrs-pyo3/API.md)
-- [Examples](examples/python)
+- [Examples](examples/python) including [MCP client usage](examples/python/mcp_client.py)
 - [Cookbook](examples/python/cookbook.ipynb)
-
+- **MCP Client**: Full MCP integration with Python configuration classes
 
 ### HTTP Server
 
 OpenAI API compatible API server
 
-- [API Docs](docs/HTTP.md).
+- [API Docs](docs/HTTP.md)
 - [Launching the server or use the CLI](README.md#run-with-the-cli)
 - [Example](examples/server/chat.py)
 - [Use or extend the server in other axum projects](https://ericlbuehler.github.io/mistral.rs/mistralrs_server_core/)
+- **MCP Client**: Configure via `--mcp-config` flag for automatic tool integration
 
 ### MCP Protocol
 
-Serve the same models over the open [MCP](docs/MCP.md) (Model Control Protocol) in parallel to the HTTP API:
+Serve the same models over the open [MCP](docs/MCP_SERVER.md) (Model Control Protocol) in parallel to the HTTP API:
 
 ```bash
 ./mistralrs-server --mcp-port 4321 plain -m Qwen/Qwen3-4B
 ```
 
-See the [docs](docs/MCP.md) for feature flags, examples and limitations.
+See the [docs](docs/MCP_SERVER.md) for feature flags, examples and limitations.
 
 
 ### Llama Index integration

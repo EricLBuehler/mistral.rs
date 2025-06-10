@@ -1,19 +1,113 @@
-# MCP Client Support
+# MCP Client - Connect to External Tools
 
-mistral.rs provides comprehensive support for acting as a Model Context Protocol (MCP) client, enabling seamless integration with external MCP servers and automatic registration of their tools for use in AI conversations.
+Connect your mistral.rs models to external tools and services using the Model Context Protocol (MCP). Works with Rust, Python, and HTTP APIs.
 
-## Overview
+## Quick Start Examples
 
-The MCP client feature transforms mistral.rs into a powerful AI assistant that can:
+### HTTP Server with MCP Tools
 
-- **Connect to Multiple Servers**: Simultaneously manage connections to various MCP servers
-- **Automatic Tool Discovery**: Dynamically discover and register tools from connected servers
-- **Seamless Integration**: Tools work naturally with mistral.rs's automatic tool calling system
-- **Multi-Transport Support**: Connect via HTTP/HTTPS, WebSocket, or local processes
-- **Authentication Support**: Built-in Bearer token and custom header authentication
-- **Conflict Resolution**: Configurable tool name prefixes to avoid conflicts
-- **Robust Error Handling**: Graceful handling of server failures and network issues
-- **Real-time Communication**: WebSocket support for low-latency interactive applications
+```bash
+# 1. Create mcp-config.json
+cat > mcp-config.json << 'EOF'
+{
+  "servers": [
+    {
+      "id": "web_search",
+      "name": "Web Search API",
+      "source": {
+        "type": "Http", 
+        "url": "https://api.example.com/mcp",
+        "timeout_secs": 30
+      },
+      "enabled": true,
+      "tool_prefix": "web"
+    }
+  ]
+}
+EOF
+
+# 2. Start server with MCP tools
+mistralrs-server --mcp-config mcp-config.json --port 1234 run -m microsoft/Phi-3.5-mini-instruct
+
+# 3. Use tools automatically in chat
+curl -X POST http://localhost:1234/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"phi-3.5","messages":[{"role":"user","content":"Search for AI news"}]}'
+```
+
+### Python API
+
+```python
+from mistralrs import Runner, Which, McpClientConfig, McpServerConfig, McpServerSource
+
+# Configure MCP servers
+mcp_config = McpClientConfig(
+    servers=[
+        McpServerConfig(
+            id="web_search",
+            name="Web Search",
+            source=McpServerSource.Http(url="https://api.example.com/mcp", timeout_secs=30),
+            enabled=True,
+            tool_prefix="web"
+        )
+    ]
+)
+
+# Create runner with MCP tools
+runner = Runner(
+    Which.Plain(model_id="microsoft/Phi-3.5-mini-instruct"),
+    mcp_client_config=mcp_config
+)
+
+# Tools are automatically available!
+response = runner.send_chat_completion_request({
+    "model": "phi-3.5",
+    "messages": [{"role": "user", "content": "Search for the latest AI developments"}]
+})
+```
+
+### Rust API
+
+```rust
+use mistralrs::{TextModelBuilder, McpClientConfig, McpServerConfig, McpServerSource};
+
+let mcp_config = McpClientConfig {
+    servers: vec![
+        McpServerConfig {
+            id: "web_search".to_string(),
+            name: "Web Search".to_string(),
+            source: McpServerSource::Http {
+                url: "https://api.example.com/mcp".to_string(),
+                timeout_secs: Some(30),
+                headers: None,
+            },
+            enabled: true,
+            tool_prefix: Some("web".to_string()),
+            resources: None,
+            bearer_token: None,
+        },
+    ],
+    tool_timeout_secs: Some(30),
+    max_concurrent_calls: Some(5),
+};
+
+let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+    .with_mcp_client(mcp_config)  // Tools automatically integrated!
+    .build()
+    .await?;
+```
+
+## What is MCP?
+
+The **Model Context Protocol** allows AI models to connect to external tools and data sources. With mistral.rs MCP client support, your models can:
+
+- **Search the web** for real-time information
+- **Access databases** for data retrieval
+- **Control local tools** like file systems or scripts
+- **Connect to APIs** for specialized services
+- **Stream real-time data** via WebSocket connections
+
+**All tools are automatically discovered and made available to your models.**
 
 ## Transport Protocols
 
@@ -133,7 +227,6 @@ let mcp_config = McpClientConfig {
             bearer_token: None, // Process servers don't typically need authentication
         },
     ],
-    auto_register_tools: true,
     tool_timeout_secs: Some(30),
     max_concurrent_calls: Some(10),
 };
@@ -246,7 +339,6 @@ The MCP client provides robust error handling:
 ### McpClientConfig
 
 - `servers`: List of MCP server configurations to connect to
-- `auto_register_tools`: Whether to automatically register discovered tools (default: true)
 - `tool_timeout_secs`: Timeout for individual tool calls in seconds (default: 30)
 - `max_concurrent_calls`: Maximum concurrent tool calls across all servers (default: 10)
 
@@ -304,7 +396,6 @@ async fn main() -> anyhow::Result<()> {
                 bearer_token: Some("your-api-key".to_string()),
             },
         ],
-        auto_register_tools: true,
         tool_timeout_secs: Some(30),
         max_concurrent_calls: Some(5),
     };

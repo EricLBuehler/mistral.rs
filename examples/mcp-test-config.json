@@ -1,0 +1,17 @@
+{
+  "servers": [
+    {
+      "id": "test_server",
+      "name": "Test MCP Server",
+      "source": {
+        "type": "Http",
+        "url": "https://httpbin.org/json",
+        "timeout_secs": 10
+      },
+      "enabled": true,
+      "tool_prefix": "test"
+    }
+  ],
+  "tool_timeout_secs": 30,
+  "max_concurrent_calls": 5
+}

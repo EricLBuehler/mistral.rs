@@ -1,0 +1,64 @@
+{
+  "_comment": "MCP Client Configuration Reference for mistral.rs",
+  
+  "servers": [
+    {
+      "_comment": "HTTP/HTTPS Server Example",
+      "id": "http_server",
+      "name": "HTTP MCP Server",
+      "source": {
+        "type": "Http",
+        "url": "https://api.example.com/mcp",
+        "timeout_secs": 30,
+        "headers": {
+          "X-API-Key": "your-api-key",
+          "User-Agent": "mistral-rs/0.6.0"
+        }
+      },
+      "enabled": true,
+      "tool_prefix": "web",
+      "resources": null,
+      "bearer_token": "your-bearer-token"
+    },
+    {
+      "_comment": "Local Process Server Example",
+      "id": "process_server",
+      "name": "Local Process MCP Server", 
+      "source": {
+        "type": "Process",
+        "command": "mcp-server-filesystem",
+        "args": ["--root", "/workspace", "--readonly"],
+        "work_dir": "/path/to/working/directory",
+        "env": {
+          "LOG_LEVEL": "info",
+          "CUSTOM_VAR": "value"
+        }
+      },
+      "enabled": true,
+      "tool_prefix": "fs",
+      "resources": ["file://**"],
+      "bearer_token": null
+    },
+    {
+      "_comment": "WebSocket Server Example",
+      "id": "websocket_server",
+      "name": "WebSocket MCP Server",
+      "source": {
+        "type": "WebSocket", 
+        "url": "wss://realtime.example.com/mcp",
+        "timeout_secs": 60,
+        "headers": {
+          "Origin": "https://mistral.rs"
+        }
+      },
+      "enabled": false,
+      "tool_prefix": "ws",
+      "resources": null,
+      "bearer_token": "ws-bearer-token"
+    }
+  ],
+  
+  "_comment_global": "Global Settings",
+  "tool_timeout_secs": 30,
+  "max_concurrent_calls": 10
+}

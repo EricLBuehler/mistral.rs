@@ -358,22 +358,36 @@ impl MistralRs {
         // Initialize MCP client if configured
         if let Some(config) = &mcp_client_config {
             let mut mcp_client = mcp_client::McpClient::new(config.clone());
+            let total_servers = config.servers.len();
 
             match mcp_client.initialize().await {
                 Ok(()) => {
-                    info!("MCP client initialized successfully");
-                    // Merge MCP tool callbacks with tools into the new collection
                     let mcp_callbacks_with_tools = mcp_client.get_tool_callbacks_with_tools();
+                    let tools_count = mcp_callbacks_with_tools.len();
+
+                    // Merge MCP tool callbacks with tools into the new collection
                     for (name, callback_with_tool) in mcp_callbacks_with_tools {
                         tool_callbacks_with_tools.insert(name.clone(), callback_with_tool.clone());
                     }
-                    info!(
-                        "Registered {} MCP tools with automatic Tool definitions",
-                        mcp_callbacks_with_tools.len()
-                    );
+
+                    if tools_count == 0 {
+                        warn!(
+                            "MCP client initialized but no tools were registered from {} servers",
+                            total_servers
+                        );
+                    } else {
+                        info!(
+                            "MCP client initialized successfully with {} tools from {} servers",
+                            tools_count, total_servers
+                        );
+                    }
                 }
                 Err(e) => {
-                    warn!("Failed to initialize MCP client: {}", e);
+                    warn!(
+                        "Failed to initialize MCP client with {} configured servers: {}",
+                        total_servers, e
+                    );
+                    warn!("Continuing without MCP functionality. Check your MCP configuration and server availability.");
                 }
             }
         }
@@ -688,6 +702,42 @@ impl MistralRs {
             let time = chrono::offset::Local::now();
             f.write_all(format!("Error response at {time}: {err}\n\n").as_bytes())
                 .expect("Unable to write data");
+        }
+    }
+
+    /// Get the number of tools available (including MCP tools)
+    pub fn get_tools_count(&self) -> usize {
+        self.reboot_state.tool_callbacks_with_tools.len()
+    }
+
+    /// Get the number of MCP tools specifically
+    pub fn get_mcp_tools_count(&self) -> usize {
+        // MCP tools are identified by having the "mcp_" prefix or being part of MCP config
+        if self.reboot_state.mcp_client_config.is_some() {
+            // If MCP is configured, count tools with mcp_ prefix or all tools if we can't distinguish
+            self.reboot_state
+                .tool_callbacks_with_tools
+                .keys()
+                .filter(|name| name.starts_with("mcp_") || !name.contains("_callback"))
+                .count()
+        } else {
+            0
+        }
+    }
+
+    /// Check if MCP client is configured
+    pub fn has_mcp_client(&self) -> bool {
+        self.reboot_state.mcp_client_config.is_some()
+    }
+
+    /// Get information about MCP configuration for status reporting
+    pub fn get_mcp_info(&self) -> (bool, Option<usize>, Option<usize>) {
+        if let Some(config) = &self.reboot_state.mcp_client_config {
+            let tools_count = self.get_mcp_tools_count();
+            let servers_configured = config.servers.len();
+            (true, Some(tools_count), Some(servers_configured))
+        } else {
+            (false, None, None)
         }
     }
 

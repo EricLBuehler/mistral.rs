@@ -1,9 +1,9 @@
 use anyhow::Result;
 use clap::Parser;
-use mistralrs_core::{initialize_logging, ModelSelected, TokenSource};
+use mistralrs_core::{initialize_logging, McpClientConfig, ModelSelected, TokenSource};
 use rust_mcp_sdk::schema::LATEST_PROTOCOL_VERSION;
 use tokio::join;
-use tracing::info;
+use tracing::{error, info};
 
 use mistralrs_server_core::{
     mistralrs_for_server_builder::{defaults, get_bert_model, MistralRsForServerBuilder},
@@ -141,10 +141,119 @@ struct Args {
     /// Port to serve MCP protocol on
     #[arg(long)]
     mcp_port: Option<u16>,
+
+    /// MCP client configuration file path
+    #[arg(long)]
+    mcp_config: Option<String>,
 }
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
+}
+
+/// Load MCP configuration from file path or environment variable
+fn load_mcp_config(mcp_config_path: Option<&str>) -> Result<Option<McpClientConfig>> {
+    let config_path = if let Some(path) = mcp_config_path {
+        Some(path.to_string())
+    } else {
+        // Check environment variable if no CLI arg provided
+        std::env::var("MCP_CONFIG_PATH").ok()
+    };
+
+    if let Some(path) = config_path {
+        match std::fs::read_to_string(&path) {
+            Ok(config_content) => {
+                match serde_json::from_str::<McpClientConfig>(&config_content) {
+                    Ok(config) => {
+                        // Validate configuration
+                        if let Err(e) = validate_mcp_config(&config) {
+                            error!("MCP configuration validation failed: {}", e);
+                            anyhow::bail!("Invalid MCP configuration: {}", e);
+                        }
+
+                        info!("Loaded and validated MCP configuration from {}", path);
+                        info!("Configured {} MCP servers", config.servers.len());
+                        Ok(Some(config))
+                    }
+                    Err(e) => {
+                        error!("Failed to parse MCP configuration: {}", e);
+                        error!("Please check your JSON syntax and ensure it matches the MCP configuration schema");
+                        anyhow::bail!("Invalid MCP configuration format: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to read MCP configuration file {}: {}", path, e);
+                error!("Please ensure the file exists and is readable");
+                anyhow::bail!("Cannot read MCP configuration file: {}", e);
+            }
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+/// Validate MCP configuration for common issues
+fn validate_mcp_config(config: &McpClientConfig) -> Result<()> {
+    use std::collections::HashSet;
+
+    // Check for duplicate server IDs
+    let mut seen_ids = HashSet::new();
+    for server in &config.servers {
+        if !seen_ids.insert(&server.id) {
+            anyhow::bail!("Duplicate server ID: {}", server.id);
+        }
+
+        // Validate server ID format
+        if !server
+            .id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            anyhow::bail!(
+                "Invalid server ID '{}': must contain only alphanumeric, hyphen, underscore",
+                server.id
+            );
+        }
+
+        // Validate URLs for HTTP/WebSocket sources
+        match &server.source {
+            mistralrs_core::McpServerSource::Http { url, .. }
+            | mistralrs_core::McpServerSource::WebSocket { url, .. } => {
+                // Basic URL validation - check for scheme
+                if !url.starts_with("http://")
+                    && !url.starts_with("https://")
+                    && !url.starts_with("ws://")
+                    && !url.starts_with("wss://")
+                {
+                    anyhow::bail!("Invalid URL for server '{}': must start with http://, https://, ws://, or wss://", server.id);
+                }
+                if url.len() < 10 {
+                    anyhow::bail!("Invalid URL for server '{}': URL too short", server.id);
+                }
+            }
+            mistralrs_core::McpServerSource::Process { command, .. } => {
+                if command.is_empty() {
+                    anyhow::bail!("Empty command for server '{}'", server.id);
+                }
+            }
+        }
+    }
+
+    // Validate global settings
+    if let Some(timeout) = config.tool_timeout_secs {
+        if timeout == 0 {
+            anyhow::bail!("tool_timeout_secs must be greater than 0");
+        }
+    }
+
+    if let Some(max_calls) = config.max_concurrent_calls {
+        if max_calls == 0 {
+            anyhow::bail!("max_concurrent_calls must be greater than 0");
+        }
+    }
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -152,6 +261,9 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     initialize_logging();
+
+    // Load MCP configuration if provided
+    let mcp_config = load_mcp_config(args.mcp_config.as_deref())?;
 
     let mistralrs = MistralRsForServerBuilder::new()
         .with_truncate_sequence(args.truncate_sequence)
@@ -176,6 +288,7 @@ async fn main() -> Result<()> {
         .with_paged_ctxt_len_optional(args.paged_ctxt_len)
         .with_paged_attn_block_size_optional(args.paged_attn_block_size)
         .with_prompt_chunksize_optional(args.prompt_chunksize)
+        .with_mcp_config_optional(mcp_config)
         .build()
         .await?;
 
