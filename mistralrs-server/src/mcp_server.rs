@@ -268,6 +268,12 @@ impl HttpMcpHandler {
                 result: Some(serde_json::to_value(&self.server_info).unwrap()),
                 error: None,
             },
+            "ping" => JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id: request.id,
+                result: Some(json!({})),
+                error: None,
+            },
             "tools/list" => {
                 let tools: Vec<Tool> = self.tools.values().map(|t| t.as_tool_record()).collect();
                 let result = ListToolsResult {
