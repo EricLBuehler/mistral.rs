@@ -389,7 +389,7 @@ impl McpServerConnection for ProcessMcpConnection {
 /// # Example Usage
 ///
 /// ```rust,no_run
-/// use mistralrs_core::mcp_client::client::WebSocketMcpConnection;
+/// use mistralrs_core::mcp_client::{client::WebSocketMcpConnection, McpServerConnection};
 /// use std::collections::HashMap;
 ///
 /// #[tokio::main]

@@ -39,7 +39,7 @@
 //! # Example Usage
 //!
 //! ```rust,no_run
-//! use mistralrs_core::mcp_client::{McpClientConfig, McpServerConfig, McpServerSource};
+//! use mistralrs_core::mcp_client::{McpClientConfig, McpServerConfig, McpServerSource, McpClient};
 //! use std::collections::HashMap;
 //!
 //! #[tokio::main]
@@ -108,33 +108,6 @@
 //! }
 //! ```
 //!
-//! # Integration with Model Builders
-//!
-//! The MCP client integrates seamlessly with mistral.rs model builders:
-//!
-//! ```rust,no_run
-//! use mistralrs::{TextModelBuilder, IsqType};
-//! use mistralrs_core::mcp_client::{McpClientConfig, McpServerConfig, McpServerSource};
-//!
-//! #[tokio::main]
-//! async fn main() -> anyhow::Result<()> {
-//!     let mcp_config = McpClientConfig {
-//!         servers: vec![/* your server configs */],
-//!         auto_register_tools: true,
-//!         tool_timeout_secs: Some(30),
-//!         max_concurrent_calls: Some(5),
-//!     };
-//!     
-//!     let model = TextModelBuilder::new("path/to/model".to_string())
-//!         .with_isq(IsqType::Q8_0)
-//!         .with_mcp_client(mcp_config)  // MCP tools automatically registered
-//!         .build()
-//!         .await?;
-//!     
-//!     // MCP tools are now available for automatic tool calling
-//!     Ok(())
-//! }
-//! ```
 
 use anyhow::Result;
 use rust_mcp_schema::Resource;
