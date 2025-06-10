@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 
 /// OpenAI-compatible tool schema for MCP tools
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,10 +80,10 @@ impl From<crate::mcp_client::McpToolInfo> for McpToolSchema {
     }
 }
 
-impl McpToolResult {
-    /// Convert MCP tool result to a simple string representation
-    pub fn to_string(&self) -> String {
-        self.content
+impl Display for McpToolResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let res = self
+            .content
             .iter()
             .map(|content| match content {
                 McpContent::Text { text } => text.clone(),
@@ -96,6 +96,8 @@ impl McpToolResult {
                     .unwrap_or_else(|| format!("[Resource: {}]", resource.uri)),
             })
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+
+        write!(f, "{res}")
     }
 }

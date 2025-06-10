@@ -611,7 +611,7 @@ impl McpTransport for ProcessTransport {
         stdout_reader.read_line(&mut response_line).await?;
         drop(stdout_reader);
 
-        let response_body: Value = serde_json::from_str(&response_line.trim())?;
+        let response_body: Value = serde_json::from_str(response_line.trim())?;
 
         // Check for JSON-RPC errors
         if let Some(error) = response_body.get("error") {
