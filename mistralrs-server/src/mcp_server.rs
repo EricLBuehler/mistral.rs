@@ -121,19 +121,9 @@ impl ChatTool {
             "temperature".to_string(),
             json!({
                 "type": "number",
-                "description": "Sampling temperature between 0 and 1",
+                "description": "Sampling temperature between 0 and 2",
                 "minimum": 0.0,
-                "maximum": 1.0
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
-        );
-        properties.insert(
-            "systemPrompt".to_string(),
-            json!({
-                "type": "string",
-                "description": "Optional system prompt to prepend to the conversation"
+                "maximum": 2.0
             })
             .as_object()
             .unwrap()
