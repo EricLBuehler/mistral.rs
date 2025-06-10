@@ -44,7 +44,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="mistral",
+        model="glm4",
         messages=[
             {"role": "user", "content": "Tell me a story about the Rust type system."}
         ],
