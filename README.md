@@ -12,7 +12,7 @@ Blazingly fast LLM inference.
 </p>
 
 **Mistral.rs is a cross-platform, highly-multimodal inference engine that brings you:**
-- All-in-one multimodal workflow: text↔text, text+vision↔text, text→speech, text→image
+- All-in-one multimodal workflow: text↔text, text+vision↔text, text+vision+audio↔text, text→speech, text→image
 - APIs: Rust, Python, OpenAI HTTP server, MCP server
 - Performance: ISQ, PagedAttention, FlashAttention
 
