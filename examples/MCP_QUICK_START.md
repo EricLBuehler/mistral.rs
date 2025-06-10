@@ -2,6 +2,8 @@
 
 Connect your models to external tools and services using the Model Context Protocol (MCP).
 
+You can find [more details here](../docs/MCP/README.md).
+
 ## Quick Start
 
 ### 1. Create Configuration File
