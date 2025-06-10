@@ -11,7 +11,7 @@ It has grown beyon simply quantization and is used by `mistral.rs` to power:
 
 Currently supported:
 - GGUF: `GgufMatMul`(2-8 bit quantization, with imatrix)
-- Gptq: `GptqLayer`(with CUDA marlin kernel)
+- Gptq/Awq: `GptqAwqLayer`(with CUDA marlin kernel)
 - Hqq: `HqqLayer` (4, 8 bit quantization)
 - FP8: `FP8Linear`(optimized on CUDA)
 - Unquantized (used for ISQ): `UnquantLinear`
