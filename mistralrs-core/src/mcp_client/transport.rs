@@ -45,20 +45,20 @@ impl HttpTransport {
     fn parse_sse_response(sse_text: &str) -> Result<Value> {
         // SSE format: data: <json>\n\n or event: <type>\ndata: <json>\n\n
         let mut json_data = None;
-        
+
         for line in sse_text.lines() {
             let line = line.trim();
-            
+
             // Skip empty lines and comments
             if line.is_empty() || line.starts_with(':') {
                 continue;
             }
-            
+
             // Parse SSE field
             if let Some((field, value)) = line.split_once(':') {
                 let field = field.trim();
                 let value = value.trim();
-                
+
                 match field {
                     "data" => {
                         // Try to parse the JSON data
@@ -78,7 +78,7 @@ impl HttpTransport {
                 }
             }
         }
-        
+
         json_data.ok_or_else(|| anyhow::anyhow!("No valid JSON data found in SSE response"))
     }
 }
@@ -92,7 +92,7 @@ impl McpTransport for HttpTransport {
         } else {
             params
         };
-        
+
         let request_body = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -112,12 +112,14 @@ impl McpTransport for HttpTransport {
         }
 
         let response = request_builder.send().await?;
-        
+
         // Check content type and handle accordingly
-        let content_type = response.headers().get("content-type")
+        let content_type = response
+            .headers()
+            .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-            
+
         let response_body: Value = if content_type.contains("text/event-stream") {
             // Handle Server-Sent Events
             let response_text = response.text().await?;

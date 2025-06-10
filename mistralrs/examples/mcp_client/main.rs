@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
         )
         .add_message(
             TextMessageRole::User,
-            "Hello! Can you help me get a 3D XYZ for graphene?",
+            "Hello! Can you help me get the top 10 HF models right now?",
         );
 
     println!("\nSending chat request...");

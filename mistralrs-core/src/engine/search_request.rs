@@ -426,9 +426,51 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
 
             // ----------------------- NON-STREAMING ------------------------
             if !is_streaming {
-                let ResponseOk::Done(done) = receiver.recv().await.unwrap().as_result().unwrap()
-                else {
-                    unreachable!();
+                let done = match receiver.recv().await.unwrap().as_result().unwrap() {
+                    ResponseOk::Done(done) => done,
+                    other => {
+                        match other {
+                            ResponseOk::Chunk(res) => {
+                                user_sender.send(Response::Chunk(res)).await.unwrap()
+                            }
+                            ResponseOk::CompletionChunk(res) => user_sender
+                                .send(Response::CompletionChunk(res))
+                                .await
+                                .unwrap(),
+                            ResponseOk::Done(_) => unreachable!(),
+                            ResponseOk::CompletionDone(res) => user_sender
+                                .send(Response::CompletionDone(res))
+                                .await
+                                .unwrap(),
+                            ResponseOk::ImageGeneration(res) => user_sender
+                                .send(Response::ImageGeneration(res))
+                                .await
+                                .unwrap(),
+                            ResponseOk::Raw {
+                                logits_chunks,
+                                tokens,
+                            } => user_sender
+                                .send(Response::Raw {
+                                    logits_chunks,
+                                    tokens,
+                                })
+                                .await
+                                .unwrap(),
+                            ResponseOk::Speech {
+                                pcm,
+                                rate,
+                                channels,
+                            } => user_sender
+                                .send(Response::Speech {
+                                    pcm,
+                                    rate,
+                                    channels,
+                                })
+                                .await
+                                .unwrap(),
+                        };
+                        return;
+                    }
                 };
 
                 // Forward to the caller once the probe is out of the way.
@@ -502,7 +544,49 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                                 break;
                             }
                         }
-                        _ => unreachable!(),
+                        other => {
+                            match other {
+                                ResponseOk::Chunk(_) => unreachable!(),
+                                ResponseOk::CompletionChunk(res) => user_sender
+                                    .send(Response::CompletionChunk(res))
+                                    .await
+                                    .unwrap(),
+                                ResponseOk::Done(res) => {
+                                    user_sender.send(Response::Done(res)).await.unwrap()
+                                }
+                                ResponseOk::CompletionDone(res) => user_sender
+                                    .send(Response::CompletionDone(res))
+                                    .await
+                                    .unwrap(),
+                                ResponseOk::ImageGeneration(res) => user_sender
+                                    .send(Response::ImageGeneration(res))
+                                    .await
+                                    .unwrap(),
+                                ResponseOk::Raw {
+                                    logits_chunks,
+                                    tokens,
+                                } => user_sender
+                                    .send(Response::Raw {
+                                        logits_chunks,
+                                        tokens,
+                                    })
+                                    .await
+                                    .unwrap(),
+                                ResponseOk::Speech {
+                                    pcm,
+                                    rate,
+                                    channels,
+                                } => user_sender
+                                    .send(Response::Speech {
+                                        pcm,
+                                        rate,
+                                        channels,
+                                    })
+                                    .await
+                                    .unwrap(),
+                            };
+                            return;
+                        }
                     }
                 }
 
