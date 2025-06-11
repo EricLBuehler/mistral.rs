@@ -356,14 +356,31 @@ async fn do_custom_tool(
     }
 
     let result = if let Some(cb) = this.tool_callbacks.get(&tool_calls.function.name) {
-        cb(&tool_calls.function).unwrap_or_else(|e| format!("ERROR: {e}"))
+        tracing::info!("Called tool `{}`.", tool_calls.function.name);
+        cb(&tool_calls.function).unwrap_or_else(|e| {
+            tracing::error!(
+                "Error when calling tool `{}`: {e}",
+                tool_calls.function.name
+            );
+            format!("ERROR: {e}")
+        })
     } else if let Some(callback_with_tool) = this
         .tool_callbacks_with_tools
         .get(&tool_calls.function.name)
     {
-        (callback_with_tool.callback)(&tool_calls.function)
-            .unwrap_or_else(|e| format!("ERROR: {e}"))
+        tracing::info!("Called tool `{}`.", tool_calls.function.name);
+        (callback_with_tool.callback)(&tool_calls.function).unwrap_or_else(|e| {
+            tracing::error!(
+                "Error when calling tool `{}`: {e}",
+                tool_calls.function.name
+            );
+            format!("ERROR: {e}")
+        })
     } else {
+        tracing::error!(
+            "Attempted to call tool `{}`, but it doesn't exist.",
+            tool_calls.function.name
+        );
         format!("ERROR: no tool callback for {}", tool_calls.function.name)
     };
 
@@ -432,8 +449,6 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
         // `current` is what we actually dispatch each loop.
         // The very first time that is the hidden probe.
         let mut current = probe;
-        // Forward results to the user after the first loop.
-        let mut forward_to_user = false;
 
         loop {
             // Each dispatch gets its own one-shot channel so we can peek at
@@ -493,14 +508,6 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                     }
                 };
 
-                // Forward to the caller once the probe is out of the way.
-                if forward_to_user {
-                    user_sender
-                        .send(Response::Done(done.clone()))
-                        .await
-                        .unwrap();
-                }
-
                 // Did the assistant ask to run a tool?
                 let tc_opt = match &done.choices[0].message.tool_calls {
                     Some(calls) if calls.len() == 1 => Some(&calls[0]),
@@ -509,7 +516,11 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
 
                 // No tool call? We are finished.
                 if tc_opt.is_none() {
-                    break;
+                    user_sender
+                        .send(Response::Done(done.clone()))
+                        .await
+                        .unwrap();
+                    return;
                 }
 
                 // Tool requested → build the next turn.
@@ -530,7 +541,6 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                 visible_req = next_visible.clone();
                 visible_req.response = user_sender.clone();
                 current = visible_req.clone();
-                forward_to_user = true;
             }
             // ------------------------- STREAMING -------------------------
             else {
@@ -636,7 +646,6 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                 visible_req = next_visible.clone();
                 visible_req.response = user_sender.clone();
                 current = visible_req.clone();
-                forward_to_user = true;
             }
         }
     });
