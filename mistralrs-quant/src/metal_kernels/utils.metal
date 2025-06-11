@@ -263,6 +263,15 @@ inline bfloat16_t uint16_to_bfloat16(const uint16_t x) {
   return _MLX_BFloat16(x, _MLX_BFloat16::bits_to_bfloat());
 }
 
+// Resolve ambiguous call to metal::isnan for bfloat16_t by providing an
+// exact‑match overload.  This prevents the compiler from having to choose
+// between the existing float and half overloads when the argument is a
+// bfloat16_t value.
+METAL_FUNC inline bool isnan(bfloat16_t x) {
+  // Delegate to the float overload after an explicit cast.
+  return metal::isnan(static_cast<float>(x));
+}
+
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////
