@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04 AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -45,13 +47,18 @@ RUN set -eux; \
         fi; \
     done
 
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    libomp-dev \
-    ca-certificates \
-    libssl-dev \
-    curl \
-    pkg-config \
-    && rm -rf /var/lib/apt/lists/*
+ARG DEBIAN_FRONTEND=noninteractive
+RUN <<HEREDOC
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        libomp-dev \
+        ca-certificates \
+        libssl-dev \
+        curl \
+        pkg-config
+
+    rm -rf /var/lib/apt/lists/*
+HEREDOC
 
 FROM base
 
