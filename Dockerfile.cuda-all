@@ -17,16 +17,17 @@ WORKDIR /mistralrs
 COPY . .
 
 ARG CUDA_COMPUTE_CAP=80
-ENV CUDA_COMPUTE_CAP=${CUDA_COMPUTE_CAP}
-ARG FEATURES="cuda cudnn"
-ENV RAYON_NUM_THREADS=4
-RUN RUSTFLAGS="-Z threads=4" cargo build --release --workspace --exclude mistralrs-pyo3 --features "${FEATURES}"
+ARG RAYON_NUM_THREADS=4
+ARG RUST_NUM_THREADS=4
+ARG RUSTFLAGS="-Z threads=${RUST_NUM_THREADS}"
+ARG WITH_FEATURES="cuda,cudnn"
+RUN cargo build --release --workspace --exclude mistralrs-pyo3 --features "${WITH_FEATURES}"
 
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS base
-
+ARG RAYON_NUM_THREADS=8
 ENV HUGGINGFACE_HUB_CACHE=/data \
     PORT=80 \
-    RAYON_NUM_THREADS=8 \ 
+    RAYON_NUM_THREADS=${RAYON_NUM_THREADS} \ 
     LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
 # Run the script to create symlinks in /usr/local/cuda/lib64
