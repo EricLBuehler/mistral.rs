@@ -356,14 +356,31 @@ async fn do_custom_tool(
     }
 
     let result = if let Some(cb) = this.tool_callbacks.get(&tool_calls.function.name) {
-        cb(&tool_calls.function).unwrap_or_else(|e| format!("ERROR: {e}"))
+        tracing::info!("Called tool `{}`.", tool_calls.function.name);
+        cb(&tool_calls.function).unwrap_or_else(|e| {
+            tracing::error!(
+                "Error when calling tool `{}`: {e}",
+                tool_calls.function.name
+            );
+            format!("ERROR: {e}")
+        })
     } else if let Some(callback_with_tool) = this
         .tool_callbacks_with_tools
         .get(&tool_calls.function.name)
     {
-        (callback_with_tool.callback)(&tool_calls.function)
-            .unwrap_or_else(|e| format!("ERROR: {e}"))
+        tracing::info!("Called tool `{}`.", tool_calls.function.name);
+        (callback_with_tool.callback)(&tool_calls.function).unwrap_or_else(|e| {
+            tracing::error!(
+                "Error when calling tool `{}`: {e}",
+                tool_calls.function.name
+            );
+            format!("ERROR: {e}")
+        })
     } else {
+        tracing::error!(
+            "Attempted to call tool `{}`, but it doesn't exist.",
+            tool_calls.function.name
+        );
         format!("ERROR: no tool callback for {}", tool_calls.function.name)
     };
 

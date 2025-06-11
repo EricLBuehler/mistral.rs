@@ -119,7 +119,7 @@ async fn main() -> Result<()> {
 
     // Build the model with MCP client configuration
     // The MCP client will automatically connect to configured servers and discover available tools
-    let model = TextModelBuilder::new("../hf_models/qwen3_4b".to_string())
+    let model = TextModelBuilder::new("Qwen/Qwen3-4B".to_string())
         .with_isq(IsqType::Q8_0) // Use 8-bit quantization for efficiency
         .with_logging()
         .with_paged_attn(|| {
