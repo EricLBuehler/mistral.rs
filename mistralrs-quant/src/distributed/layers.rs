@@ -338,6 +338,35 @@ impl ColumnParallelLayer {
 
         Self::new_with_shard(in_dim, out_dim, config, bias, comm, shard, vb)
     }
+
+    pub fn new_merged(
+        in_dim: usize,
+        out_dim: usize,
+        chunks: usize,
+        config: &Option<QuantizedConfig>,
+        bias: bool,
+        comm: &Arc<crate::Comm>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Vec<Arc<dyn QuantMethod>>> {
+        let mut vec_layers = Vec::<Arc<dyn QuantMethod>>::new();
+        for chunk_idx in 0..chunks {
+            let layer = ColumnParallelLayer::new_with_shard(
+                in_dim,
+                out_dim,
+                config,
+                bias,
+                comm,
+                shard(
+                    0,
+                    chunk_idx * comm.world_size() + comm.rank(),
+                    chunks * comm.world_size(),
+                ),
+                vb.clone(),
+            )?;
+            vec_layers.push(layer);
+        }
+        Ok(vec_layers)
+    }
 }
 
 impl QuantMethod for ColumnParallelLayer {

@@ -461,6 +461,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `phi3.5moe`
 - `qwen2`
 - `gemma2`
+- `glm4`
 - `starcoder2`
 - `deepseekv2`
 - `deepseekv3`
@@ -503,6 +504,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - phi3
 - starcoder2
 - qwen2
+- qwen3
 
 **With adapters:**
 - llama
@@ -533,6 +535,7 @@ Please submit more benchmarks via raising an issue!
 |Phi 3 Vision| | |✅|
 |Idefics 2| | |✅|
 |Gemma 2| | |✅|
+|GLM4| | |✅|
 |Starcoder 2| |✅|✅|
 |LLaVa Next| | |✅|
 |LLaVa| | |✅|
@@ -546,7 +549,7 @@ Please submit more benchmarks via raising an issue!
 |Gemma 3| | |✅|
 |Mistral 3| | |✅|
 |Llama 4| | |✅|
-|Qwen 3| | |✅|
+|Qwen 3|✅| |✅|
 |Dia 1.6b| | |✅|
 </details>
 
@@ -579,6 +582,7 @@ Please submit more benchmarks via raising an issue!
 |Phi 3 Vision| | | |
 |Idefics 2| | | |
 |Gemma 2|✅| | |
+|GLM4|✅| | |
 |Starcoder 2|✅| | |
 |LLaVa Next| | | |
 |LLaVa| | | |
