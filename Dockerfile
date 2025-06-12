@@ -1,9 +1,7 @@
+# syntax=docker/dockerfile:1
+
 # Stage 1: Build environment
 FROM rust:latest AS builder
-
-# Update and install dependencies required for building
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
 
 # Set working directory and copy files
 WORKDIR /mistralrs
@@ -19,16 +17,20 @@ FROM debian:bookworm-slim AS runtime
 ENV HUGGINGFACE_HUB_CACHE=/data \
     PORT=80 \
     MKL_ENABLE_INSTRUCTIONS=AVX512_E4 \
-    RAYON_NUM_THREADS=8 \
     LD_LIBRARY_PATH=/usr/local/lib
 
 # Install only essential runtime dependencies and clean up
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libomp-dev \
-    ca-certificates \
-    libssl-dev \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+ARG DEBIAN_FRONTEND=noninteractive
+RUN <<HEREDOC
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        libomp-dev \
+        ca-certificates \
+        libssl-dev \
+        curl
+
+    rm -rf /var/lib/apt/lists/*
+HEREDOC
 
 # Copy the built binaries from the builder stage
 COPY --from=builder /mistralrs/target/release/mistralrs-bench /usr/local/bin/
