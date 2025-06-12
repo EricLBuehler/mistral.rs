@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use mistralrs_server_core::{
-    chat_completion::{create_response_channel, parse_request},
+    chat_completion::parse_request, handler_core::create_response_channel,
     types::SharedMistralRsState,
 };
 
@@ -164,7 +164,7 @@ impl McpTool for ChatTool {
             .await
             .map_err(|e| CallToolError::new(io::Error::other(e.to_string())))?;
 
-        mistralrs_server_core::chat_completion::send_request(state, request)
+        mistralrs_server_core::handler_core::send_request(state, request)
             .await
             .map_err(|e| CallToolError::new(io::Error::other(e.to_string())))?;
 

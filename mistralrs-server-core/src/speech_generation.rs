@@ -1,8 +1,8 @@
-use anyhow::Result;
-use std::{error::Error, sync::Arc};
-use tokio::sync::mpsc::{channel, Sender};
+//! ## Speech generation functionality and route handler.
 
-use crate::openai::{AudioResponseFormat, SpeechGenerationRequest};
+use std::{error::Error, sync::Arc};
+
+use anyhow::Result;
 use axum::{
     body::Bytes,
     extract::{Json, State},
@@ -13,44 +13,23 @@ use mistralrs_core::{
     speech_utils::{self, Sample},
     Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response, SamplingParams,
 };
-use serde::Serialize;
+use tokio::sync::mpsc::{Receiver, Sender};
 
+use crate::{
+    handler_core::{create_response_channel, send_request, ErrorToResponse, JsonError},
+    openai::{AudioResponseFormat, SpeechGenerationRequest},
+    types::SharedMistralRsState,
+};
+
+/// Represents different types of speech generation responses.
 pub enum SpeechGenerationResponder {
     InternalError(Box<dyn Error>),
     ValidationError(Box<dyn Error>),
     RawResponse(axum::response::Response),
 }
 
-trait ErrorToResponse: Serialize {
-    fn to_response(&self, code: StatusCode) -> axum::response::Response {
-        let mut r = Json(self).into_response();
-        *r.status_mut() = code;
-        r
-    }
-}
-
-#[derive(Serialize, Debug)]
-struct JsonError {
-    message: String,
-}
-
-impl JsonError {
-    fn new(message: String) -> Self {
-        Self { message }
-    }
-}
-
-impl std::fmt::Display for JsonError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl std::error::Error for JsonError {}
-
-impl ErrorToResponse for JsonError {}
-
 impl IntoResponse for SpeechGenerationResponder {
+    /// Converts the speech generation responder into an HTTP response.
     fn into_response(self) -> axum::response::Response {
         match self {
             SpeechGenerationResponder::InternalError(e) => {
@@ -64,7 +43,11 @@ impl IntoResponse for SpeechGenerationResponder {
     }
 }
 
-fn parse_request(
+/// Parses and validates a speech generation request.
+///
+/// This function transforms a speech generation request into the
+/// request format used by mistral.rs.
+pub fn parse_request(
     oairequest: SpeechGenerationRequest,
     state: Arc<MistralRs>,
     tx: Sender<Response>,
@@ -93,6 +76,7 @@ fn parse_request(
     Ok((request, oairequest.response_format))
 }
 
+/// Speech generation endpoint handler.
 #[utoipa::path(
     post,
     tag = "Mistral.rs",
@@ -104,15 +88,11 @@ pub async fn speech_generation(
     State(state): State<Arc<MistralRs>>,
     Json(oairequest): Json<SpeechGenerationRequest>,
 ) -> SpeechGenerationResponder {
-    let (tx, mut rx) = channel(10_000);
+    let (tx, mut rx) = create_response_channel(None);
 
     let (request, response_format) = match parse_request(oairequest, state.clone(), tx) {
         Ok(x) => x,
-        Err(e) => {
-            let e = anyhow::Error::msg(e.to_string());
-            MistralRs::maybe_log_error(state, &*e);
-            return SpeechGenerationResponder::InternalError(e.into());
-        }
+        Err(e) => return handle_error(state, e.into()),
     };
 
     // Validate response format here
@@ -125,23 +105,46 @@ pub async fn speech_generation(
         )));
     }
 
-    let sender = state.get_sender().unwrap();
-
-    if let Err(e) = sender.send(request).await {
-        let e = anyhow::Error::msg(e.to_string());
-        MistralRs::maybe_log_error(state, &*e);
-        return SpeechGenerationResponder::InternalError(e.into());
+    if let Err(e) = send_request(&state, request).await {
+        return handle_error(state, e.into());
     }
 
+    process_non_streaming_response(&mut rx, state, response_format).await
+}
+
+/// Helper function to handle speech generation errors and logging them.
+pub fn handle_error(
+    state: SharedMistralRsState,
+    e: Box<dyn std::error::Error + Send + Sync + 'static>,
+) -> SpeechGenerationResponder {
+    let e = anyhow::Error::msg(e.to_string());
+    MistralRs::maybe_log_error(state, &*e);
+    SpeechGenerationResponder::InternalError(e.into())
+}
+
+/// Process non-streaming speech generation responses.
+pub async fn process_non_streaming_response(
+    rx: &mut Receiver<Response>,
+    state: SharedMistralRsState,
+    response_format: AudioResponseFormat,
+) -> SpeechGenerationResponder {
     let response = match rx.recv().await {
         Some(response) => response,
         None => {
             let e = anyhow::Error::msg("No response received from the model.");
-            MistralRs::maybe_log_error(state, &*e);
-            return SpeechGenerationResponder::InternalError(e.into());
+            return handle_error(state, e.into());
         }
     };
 
+    match_responses(state, response, response_format)
+}
+
+/// Matches and processes different types of model responses into appropriate speech generation responses.
+pub fn match_responses(
+    state: SharedMistralRsState,
+    response: Response,
+    response_format: AudioResponseFormat,
+) -> SpeechGenerationResponder {
     match response {
         Response::InternalError(e) => {
             MistralRs::maybe_log_error(state, &*e);
