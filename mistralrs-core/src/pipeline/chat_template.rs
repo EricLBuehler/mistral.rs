@@ -294,7 +294,7 @@ pub fn apply_chat_template_to(
     };
     let mut template = template.replace("[::-1]", "|reverse");
 
-    if template.find("{{ meta }}").is_some() {
+    if template.contains("{{ meta }}") {
         //fix for GLM4 models
         template = template.replace("{%- set meta = message.get(\"metadata\", \"\") %}", "");
         template = template.replace("{{ meta }}", "");
