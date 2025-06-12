@@ -15,6 +15,8 @@ struct PagedAttention {
     context_lens: Tensor,
     alibi_slopes: Option<Tensor>,
     max_context_len: usize,
+
+    k_v_scale: Option<(Tensor, Tensor)>,
 }
 
 impl candle_core::CustomOp1 for PagedAttention {
@@ -27,11 +29,17 @@ impl candle_core::CustomOp1 for PagedAttention {
     }
 
     fn metal_fwd(&self, q: &MetalStorage, q_l: &Layout) -> Result<(MetalStorage, Shape)> {
-        let dtype = q.dtype();
-        let internal_type = match dtype {
+        let ty = match q.dtype() {
             DType::F16 => PagedAttentionDType::F16,
             DType::BF16 => PagedAttentionDType::BF16,
             DType::F32 => PagedAttentionDType::F32,
+            dtype => candle_core::bail!("dtype {dtype:?} is not supported"),
+        };
+        let cache_ty = match self.key_cache.dtype() {
+            DType::F16 => PagedAttentionDType::F16,
+            DType::BF16 => PagedAttentionDType::BF16,
+            DType::F32 => PagedAttentionDType::F32,
+            DType::F8E4M3 => PagedAttentionDType::F8E4M3,
             dtype => candle_core::bail!("dtype {dtype:?} is not supported"),
         };
 
@@ -148,6 +156,31 @@ impl candle_core::CustomOp1 for PagedAttention {
             )
         }
 
+        let k_v_scale = if let Some((k_scale, v_scale)) = &self.k_v_scale {
+            if k_scale.elem_count() != 1 || v_scale.elem_count() != 1 {
+                candle_core::bail!("k_scale and v_scale must be scalars");
+            }
+            if k_scale.dtype() != DType::F32 || v_scale.dtype() != DType::F32 {
+                candle_core::bail!("k_scale and v_scale must be f32");
+            }
+
+            let (k_scale, _) = k_scale.storage_and_layout();
+            let k_scale = match &*k_scale {
+                Storage::Metal(k_scale) => k_scale,
+                _ => candle_core::bail!("k_scale must be a metal tensor"),
+            };
+
+            let (v_scale, _) = v_scale.storage_and_layout();
+            let v_scale = match &*v_scale {
+                Storage::Metal(v_scale) => v_scale,
+                _ => candle_core::bail!("v_scale must be a metal tensor"),
+            };
+
+            Some((k_scale.buffer().clone(), v_scale.buffer().clone()))
+        } else {
+            None
+        };
+
         let q_stride = q_l.stride()[0];
         let kv_block_stride = kc_l.stride()[0];
         let kv_head_stride = kc_l.stride()[1];
@@ -162,14 +195,15 @@ impl candle_core::CustomOp1 for PagedAttention {
         let command_buffer = dev.command_buffer()?;
         command_buffer.set_label("paged-attention");
 
-        let out = dev.new_buffer(elem_count, dtype, "paged-attention-out")?;
+        let out = dev.new_buffer(elem_count, q.dtype(), "paged-attention-out")?;
 
         if use_v1 {
             kernels::call_paged_attention_v1(
                 dev.device(),
                 &command_buffer,
                 &kernels::Kernels::new(),
-                internal_type,
+                ty,
+                cache_ty,
                 q.buffer(),
                 q_l.start_offset() * q.dtype().size_in_bytes(),
                 kc.buffer(),
@@ -180,6 +214,7 @@ impl candle_core::CustomOp1 for PagedAttention {
                 bt_l.start_offset() * bt.dtype().size_in_bytes(),
                 cl.buffer(),
                 cl_l.start_offset() * cl.dtype().size_in_bytes(),
+                k_v_scale,
                 alibi_storage_and_offset,
                 &out,
                 num_kv_heads as i32,
@@ -199,8 +234,11 @@ impl candle_core::CustomOp1 for PagedAttention {
         } else {
             let tmp_out_shape = Shape::from((num_seqs, num_heads, max_num_partitions, head_size));
             let exp_sums_shape = Shape::from((num_seqs, num_heads, max_num_partitions));
-            let tmp_out =
-                dev.new_buffer(tmp_out_shape.elem_count(), dtype, "paged-attention-tmpout")?;
+            let tmp_out = dev.new_buffer(
+                tmp_out_shape.elem_count(),
+                q.dtype(),
+                "paged-attention-tmpout",
+            )?;
             let exp_sums = dev.new_buffer(
                 exp_sums_shape.elem_count(),
                 DType::F32,
@@ -216,7 +254,8 @@ impl candle_core::CustomOp1 for PagedAttention {
                 dev.device(),
                 &command_buffer,
                 &kernels::Kernels::new(),
-                internal_type,
+                ty,
+                cache_ty,
                 &exp_sums,
                 &max_logits,
                 q.buffer(),
@@ -229,6 +268,7 @@ impl candle_core::CustomOp1 for PagedAttention {
                 bt_l.start_offset() * bt.dtype().size_in_bytes(),
                 cl.buffer(),
                 cl_l.start_offset() * cl.dtype().size_in_bytes(),
+                k_v_scale,
                 alibi_storage_and_offset,
                 &tmp_out,
                 &out,
@@ -277,6 +317,7 @@ impl candle_core::CustomOp1 for PagedAttention {
 #[allow(clippy::too_many_arguments)]
 pub fn paged_attention(
     q: &Tensor,
+    k_v_scale: Option<&(Tensor, Tensor)>,
     key_cache: &Tensor,
     value_cache: &Tensor,
     block_tables: &Tensor,
@@ -295,6 +336,7 @@ pub fn paged_attention(
         max_context_len,
         softcapping,
         alibi_slopes: alibi_slopes.cloned(),
+        k_v_scale: k_v_scale.cloned(),
     };
     q.apply_op1(op)
 }
@@ -312,16 +354,22 @@ pub fn paged_attention(
 pub fn reshape_and_cache(
     key: &Tensor,
     value: &Tensor,
+    k_v_scale: Option<&(Tensor, Tensor)>,
     key_cache: &Tensor,
     value_cache: &Tensor,
     slot_mapping: &Tensor,
 ) -> Result<()> {
-    let dtype = key.dtype();
-
-    let internal_type = match dtype {
+    let kv_ty = match key.dtype() {
         DType::F16 => PagedAttentionDType::F16,
         DType::BF16 => PagedAttentionDType::BF16,
         DType::F32 => PagedAttentionDType::F32,
+        dtype => candle_core::bail!("dtype {dtype:?} is not supported"),
+    };
+    let cache_ty = match key_cache.dtype() {
+        DType::F16 => PagedAttentionDType::F16,
+        DType::BF16 => PagedAttentionDType::BF16,
+        DType::F32 => PagedAttentionDType::F32,
+        DType::F8E4M3 => PagedAttentionDType::F8E4M3,
         dtype => candle_core::bail!("dtype {dtype:?} is not supported"),
     };
 
@@ -353,6 +401,31 @@ pub fn reshape_and_cache(
     let s = match &*s {
         Storage::Metal(s) => s,
         _ => candle_core::bail!("slot_mapping must be a metal tensor"),
+    };
+
+    let k_v_scale = if let Some((k_scale, v_scale)) = k_v_scale {
+        if k_scale.elem_count() != 1 || v_scale.elem_count() != 1 {
+            candle_core::bail!("k_scale and v_scale must be scalars");
+        }
+        if k_scale.dtype() != DType::F32 || v_scale.dtype() != DType::F32 {
+            candle_core::bail!("k_scale and v_scale must be f32");
+        }
+
+        let (k_scale, _) = k_scale.storage_and_layout();
+        let k_scale = match &*k_scale {
+            Storage::Metal(k_scale) => k_scale,
+            _ => candle_core::bail!("k_scale must be a metal tensor"),
+        };
+
+        let (v_scale, _) = v_scale.storage_and_layout();
+        let v_scale = match &*v_scale {
+            Storage::Metal(v_scale) => v_scale,
+            _ => candle_core::bail!("v_scale must be a metal tensor"),
+        };
+
+        Some((k_scale.buffer().clone(), v_scale.buffer().clone()))
+    } else {
+        None
     };
 
     let k_rank = k_l.stride().len();
@@ -422,7 +495,8 @@ pub fn reshape_and_cache(
         dev.device(),
         &command_buffer,
         &kernels::Kernels::new(),
-        internal_type,
+        kv_ty,
+        cache_ty,
         k.buffer(),
         k_l.start_offset() * key.dtype().size_in_bytes(),
         v.buffer(),
@@ -433,6 +507,7 @@ pub fn reshape_and_cache(
         vc_l.start_offset() * value_cache.dtype().size_in_bytes(),
         s.buffer(),
         s_l.start_offset() * slot_mapping.dtype().size_in_bytes(),
+        k_v_scale,
         num_tokens as i32,
         num_heads as i32,
         head_size as i32,
