@@ -59,11 +59,6 @@ impl KvScaleCalculator {
                 v_scale,
                 n: _,
             } => {
-                println!(
-                    "k {} v {}",
-                    k_scale.to_scalar::<f32>()?,
-                    v_scale.to_scalar::<f32>()?
-                );
                 *self = Self::Done {
                     k_scale: k_scale.clone(),
                     v_scale: v_scale.clone(),
@@ -75,6 +70,14 @@ impl KvScaleCalculator {
         }
 
         Ok(())
+    }
+
+    fn compute_scale(x: &Tensor) -> Result<Tensor> {
+        let mut absmax = x.abs()?.to_dtype(DType::F32)?;
+        while !absmax.dims().is_empty() {
+            absmax = absmax.max(0)?;
+        }
+        (absmax / 240.)?.to_dtype(DType::F32)
     }
 }
 
@@ -193,23 +196,11 @@ impl PagedAttention {
                 n,
             } = collector.clone()
             {
-                let k_scale = {
-                    let mut absmax = key.abs()?.to_dtype(DType::F32)?;
-                    while !absmax.dims().is_empty() {
-                        absmax = absmax.max(0)?;
-                    }
-                    (absmax / 240.)?.to_dtype(DType::F32)?
-                };
-                let v_scale = {
-                    let mut absmax = value.abs()?.to_dtype(DType::F32)?;
-                    while !absmax.dims().is_empty() {
-                        absmax = absmax.max(0)?;
-                    }
-                    (absmax / 240.)?
-                };
+                let k_scale = KvScaleCalculator::compute_scale(&key)?;
+                let v_scale = KvScaleCalculator::compute_scale(&value)?;
                 collector.collect(&k_scale, &v_scale)?;
 
-                if n == 10 {
+                if n == 100 {
                     collector.finish()?;
                     assert!(matches!(collector, KvScaleCalculator::Done { .. }));
                 }
