@@ -209,7 +209,7 @@ impl PagedAttention {
                 };
                 collector.collect(&k_scale, &v_scale)?;
 
-                if n == 100 {
+                if n == 10 {
                     collector.finish()?;
                     assert!(matches!(collector, KvScaleCalculator::Done { .. }));
                 }
