@@ -1,6 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
-use mistralrs_core::{initialize_logging, McpClientConfig, ModelSelected, TokenSource};
+use mistralrs_core::{
+    initialize_logging, McpClientConfig, ModelSelected, PagedCacheType, TokenSource,
+};
 use rust_mcp_sdk::schema::LATEST_PROTOCOL_VERSION;
 use tokio::join;
 use tracing::{error, info};
@@ -105,6 +107,11 @@ struct Args {
     #[arg(long = "pa-ctxt-len")]
     paged_ctxt_len: Option<usize>,
 
+    /// PagedAttention KV cache type (auto or f8e4m3).
+    /// Defaults to `auto`.
+    #[arg(long = "pa-cache-type", value_parser = parse_cache_type)]
+    cache_type: Option<PagedCacheType>,
+
     /// Block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA, it will default to 32.
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     #[arg(long = "pa-blk-size")]
@@ -148,6 +155,10 @@ struct Args {
 }
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
+    s.parse()
+}
+
+fn parse_cache_type(s: &str) -> Result<PagedCacheType, String> {
     s.parse()
 }
 
@@ -289,6 +300,7 @@ async fn main() -> Result<()> {
         .with_paged_attn_block_size_optional(args.paged_attn_block_size)
         .with_prompt_chunksize_optional(args.prompt_chunksize)
         .with_mcp_config_optional(mcp_config)
+        .with_paged_attn_cache_type(args.cache_type.unwrap_or_default())
         .build()
         .await?;
 

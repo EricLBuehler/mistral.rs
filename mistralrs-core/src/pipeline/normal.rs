@@ -809,6 +809,7 @@ impl Loader for NormalLoader {
                 paged_attn_config.mem_cpu,
                 paged_attn_config.block_size,
                 dtype,
+                paged_attn_config.cache_type,
                 model.config(),
                 &device,
                 &pipeline_mapper

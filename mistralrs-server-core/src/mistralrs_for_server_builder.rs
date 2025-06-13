@@ -9,7 +9,7 @@ use mistralrs_core::{
     parse_isq_value, AutoDeviceMapParams, BertEmbeddingModel, DefaultSchedulerMethod,
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder,
     McpClientConfig, MemoryGpuConfig, MistralRsBuilder, ModelSelected, PagedAttentionConfig,
-    SchedulerConfig, SearchCallback, TokenSource,
+    PagedCacheType, SchedulerConfig, SearchCallback, TokenSource,
 };
 use tracing::info;
 
@@ -20,6 +20,8 @@ pub mod defaults {
     //! These defaults can be used for CLI argument fallbacks, config loading, or general initialization.
 
     use std::sync::Arc;
+
+    use mistralrs_core::PagedCacheType;
 
     pub const DEVICE: Option<candle_core::Device> = None;
     pub const SEED: Option<u64> = None;
@@ -46,6 +48,7 @@ pub mod defaults {
     pub const SEARCH_BERT_MODEL: Option<String> = None;
     pub const TOKEN_SOURCE: mistralrs_core::TokenSource = mistralrs_core::TokenSource::CacheToken;
     pub const SEARCH_CALLBACK: Option<Arc<mistralrs_core::SearchCallback>> = None;
+    pub const PAGED_CACHE_TYPE: PagedCacheType = PagedCacheType::Auto;
 }
 
 /// A builder for creating a mistral.rs instance with configured options for the mistral.rs server.
@@ -179,6 +182,9 @@ pub struct MistralRsForServerBuilder {
 
     /// Optional MCP client configuration
     mcp_client_config: Option<McpClientConfig>,
+
+    /// PagedAttention KV cache type
+    paged_cache_type: PagedCacheType,
 }
 
 impl Default for MistralRsForServerBuilder {
@@ -211,6 +217,7 @@ impl Default for MistralRsForServerBuilder {
             search_bert_model: defaults::SEARCH_BERT_MODEL,
             search_callback: defaults::SEARCH_CALLBACK,
             mcp_client_config: None,
+            paged_cache_type: defaults::PAGED_CACHE_TYPE,
         }
     }
 }
@@ -417,6 +424,12 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Sets the block size for PagedAttention.
+    pub fn with_paged_attn_cache_type(mut self, cache_type: PagedCacheType) -> Self {
+        self.paged_cache_type = cache_type;
+        self
+    }
+
     /// Sets the block size for PagedAttention if provided.
     pub fn with_paged_attn_block_size_optional(
         mut self,
@@ -548,6 +561,7 @@ impl MistralRsForServerBuilder {
             self.paged_attn_gpu_mem,
             self.paged_attn_gpu_mem_usage,
             self.paged_ctxt_len,
+            self.paged_cache_type,
             no_paged_attn,
             max_seq_len,
         )?;
@@ -704,6 +718,7 @@ fn init_cache_config(
     paged_attn_gpu_mem: Option<usize>,
     paged_attn_gpu_mem_usage: Option<f32>,
     paged_ctxt_len: Option<usize>,
+    cache_type: PagedCacheType,
     no_paged_attn: bool,
     max_seq_len: usize,
 ) -> Result<Option<PagedAttentionConfig>> {
@@ -719,21 +734,25 @@ fn init_cache_config(
             block_size,
             512,
             MemoryGpuConfig::ContextSize(max_seq_len),
+            cache_type,
         )?)),
         (block_size, None, None, Some(ctxt), true, false) => Ok(Some(PagedAttentionConfig::new(
             block_size,
             512,
             MemoryGpuConfig::ContextSize(ctxt),
+            cache_type,
         )?)),
         (block_size, None, Some(f), None, true, false) => Ok(Some(PagedAttentionConfig::new(
             block_size,
             512,
             MemoryGpuConfig::Utilization(f),
+            cache_type,
         )?)),
         (block_size, Some(m), None, None, true, false) => Ok(Some(PagedAttentionConfig::new(
             block_size,
             512,
             MemoryGpuConfig::MbAmount(m),
+            cache_type,
         )?)),
         (block_size, Some(_m), Some(f), None, true, false) => {
             info!("Both memory size, and usage were specified, defaulting to the usage value.");
@@ -741,6 +760,7 @@ fn init_cache_config(
                 block_size,
                 512,
                 MemoryGpuConfig::Utilization(f),
+                cache_type,
             )?))
         }
         (block_size, Some(_m), None, Some(ctxt), true, false) => {
@@ -749,6 +769,7 @@ fn init_cache_config(
                 block_size,
                 512,
                 MemoryGpuConfig::ContextSize(ctxt),
+                cache_type,
             )?))
         }
         (block_size, None, Some(f), Some(_ctxt), true, false) => {
@@ -757,6 +778,7 @@ fn init_cache_config(
                 block_size,
                 512,
                 MemoryGpuConfig::Utilization(f),
+                cache_type,
             )?))
         }
         (_, _, _, _, _, _) => Ok(None),

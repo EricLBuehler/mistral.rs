@@ -471,6 +471,7 @@ impl Loader for GGUFLoader {
                 paged_attn_config.mem_cpu,
                 paged_attn_config.block_size,
                 internal_dtype,
+                paged_attn_config.cache_type,
                 model_config,
                 device,
                 &layer_devices,
