@@ -73,6 +73,5 @@ RUN chmod +x /usr/local/bin/mistralrs-web-chat
 # Copy chat templates for users running models which may not include them
 COPY --from=builder /mistralrs/chat_templates /chat_templates
 
-# Expose NCCL as libnccl.so
-RUN ln -s /usr/lib/x86_64-linux-gnu/libnccl.so.2 /usr/lib/x86_64-linux-gnu/libnccl.so
-ENV LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+# Only the `devel` builder image provides symlinks, restore the `libnccl.so` symlink:
+RUN ln -s libnccl.so.2 /usr/lib/x86_64-linux-gnu/libnccl.so
