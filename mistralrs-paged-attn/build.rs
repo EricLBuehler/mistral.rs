@@ -39,8 +39,8 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
                 .output()
             {
                 Ok(out) => {
-                    let output = String::from_utf8(out.stdout)
-                        .expect("Output of nvidia-smi was not utf8.");
+                    let output =
+                        String::from_utf8(out.stdout).expect("Output of nvidia-smi was not utf8.");
                     (output
                         .split('\n')
                         .nth(1)
@@ -52,7 +52,9 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
                 }
                 Err(_) => {
                     // If nvidia-smi fails, assume no FP8 support
-                    println!("cargo:warning=Could not detect CUDA compute capability, disabling FP8");
+                    println!(
+                        "cargo:warning=Could not detect CUDA compute capability, disabling FP8"
+                    );
                     0
                 }
             }
@@ -76,9 +78,17 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
     // Enable FP8 if compute capability >= 8.0 (Ampere and newer)
     if compute_cap >= 800 {
         builder = builder.arg("-DENABLE_FP8");
-        println!("cargo:info=Enabling FP8 support (compute capability: {}.{})", compute_cap / 100, (compute_cap % 100) / 10);
+        println!(
+            "cargo:info=Enabling FP8 support (compute capability: {}.{})",
+            compute_cap / 100,
+            (compute_cap % 100) / 10
+        );
     } else {
-        println!("cargo:info=Disabling FP8 support (compute capability: {}.{} < 8.0)", compute_cap / 100, (compute_cap % 100) / 10);
+        println!(
+            "cargo:info=Disabling FP8 support (compute capability: {}.{} < 8.0)",
+            compute_cap / 100,
+            (compute_cap % 100) / 10
+        );
     }
 
     // https://github.com/EricLBuehler/mistral.rs/issues/286

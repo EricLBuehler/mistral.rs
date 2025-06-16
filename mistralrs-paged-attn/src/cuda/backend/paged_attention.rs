@@ -139,6 +139,7 @@ impl PagedAttention {
             std::ptr::null()
         };
 
+
         let (k_scale_ptr, v_scale_ptr) = if let Some((k_scale, v_scale)) = self.k_v_scale.as_ref() {
             let (ks, ks_l) = k_scale.storage_and_layout();
             let ks = match &*ks {
@@ -147,6 +148,7 @@ impl PagedAttention {
             };
             let ks = ks.as_cuda_slice::<f32>()?;
             let ks = ks.slice(ks_l.start_offset()..);
+
 
             let (vs, vs_l) = v_scale.storage_and_layout();
             let vs = match &*vs {
@@ -458,7 +460,8 @@ fn update_cache<
     let s = s.as_cuda_slice::<i64>()?;
 
     let dev = k.device();
-
+    
+    // For FP8 cache, we need to get as u8 slices instead
     let (kc_ptr, vc_ptr) = if cache_dtype == 3 {
         let kc = kc.as_cuda_slice::<F8E4M3>()?;
         let vc = vc.as_cuda_slice::<F8E4M3>()?;
