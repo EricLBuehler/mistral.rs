@@ -8,6 +8,7 @@ fn main() -> Result<()> {
     use std::fs::OpenOptions;
     use std::io::prelude::*;
     use std::path::PathBuf;
+    use std::process::Command;
 
     const OTHER_CONTENT: &str = r#"
 pub const COPY_BLOCKS_KERNEL: &str =
@@ -26,6 +27,38 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
     println!("cargo:rerun-if-changed=src/cuda/pagedattention.cu");
     println!("cargo:rerun-if-changed=src/cuda/copy_blocks_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/reshape_and_cache_kernel.cu");
+
+    // Detect CUDA compute capability for FP8 support
+    let compute_cap = {
+        if let Ok(var) = std::env::var("CUDA_COMPUTE_CAP") {
+            var.parse::<usize>().unwrap() * 10
+        } else {
+            let mut cmd = Command::new("nvidia-smi");
+            match cmd
+                .args(["--query-gpu=compute_cap", "--format=csv"])
+                .output()
+            {
+                Ok(out) => {
+                    let output = String::from_utf8(out.stdout)
+                        .expect("Output of nvidia-smi was not utf8.");
+                    (output
+                        .split('\n')
+                        .nth(1)
+                        .unwrap()
+                        .trim()
+                        .parse::<f32>()
+                        .unwrap()
+                        * 100.) as usize
+                }
+                Err(_) => {
+                    // If nvidia-smi fails, assume no FP8 support
+                    println!("cargo:warning=Could not detect CUDA compute capability, disabling FP8");
+                    0
+                }
+            }
+        }
+    };
+
     let mut builder = bindgen_cuda::Builder::default()
         .arg("-std=c++17")
         .arg("-O3")
@@ -39,6 +72,14 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
         .arg("--verbose")
         .arg("--compiler-options")
         .arg("-fPIC");
+
+    // Enable FP8 if compute capability >= 8.0 (Ampere and newer)
+    if compute_cap >= 800 {
+        builder = builder.arg("-DENABLE_FP8");
+        println!("cargo:info=Enabling FP8 support (compute capability: {}.{})", compute_cap / 100, (compute_cap % 100) / 10);
+    } else {
+        println!("cargo:info=Disabling FP8 support (compute capability: {}.{} < 8.0)", compute_cap / 100, (compute_cap % 100) / 10);
+    }
 
     // https://github.com/EricLBuehler/mistral.rs/issues/286
     if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
