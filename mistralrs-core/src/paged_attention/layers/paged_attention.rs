@@ -33,7 +33,7 @@ impl KvScaleCalculator {
         })
     }
 
-    fn collect(&mut self, k_scale_new: &Tensor, v_scale_new: &Tensor) -> Result<()> {
+    fn collect(&mut self, k_scale_new: &Tensor, v_scale_new: &Tensor) -> Result<usize> {
         match self {
             Self::InProgress {
                 k_scale,
@@ -43,13 +43,12 @@ impl KvScaleCalculator {
                 *k_scale = k_scale.clone().maximum(k_scale_new)?;
                 *v_scale = v_scale.clone().maximum(v_scale_new)?;
                 *n += 1;
+                return Ok(*n);
             }
             Self::Done { .. } => {
                 candle_core::bail!("KvScaleCalculator::collect requires InProgress scales");
             }
         }
-
-        Ok(())
     }
 
     fn finish(&mut self) -> Result<()> {
@@ -193,12 +192,12 @@ impl PagedAttention {
             if let KvScaleCalculator::InProgress {
                 k_scale,
                 v_scale,
-                n,
+                n: _,
             } = collector.clone()
             {
                 let k_scale = KvScaleCalculator::compute_scale(&key)?;
                 let v_scale = KvScaleCalculator::compute_scale(&value)?;
-                collector.collect(&k_scale, &v_scale)?;
+                let n = collector.collect(&k_scale, &v_scale)?;
 
                 if n == 100 {
                     collector.finish()?;
