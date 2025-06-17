@@ -7,8 +7,6 @@
 #include <type_traits>
 #include "cuda_fp8.h"
 
-#define ENABLE_FP8
-
 namespace vllm {
 #ifndef USE_ROCM
 
