@@ -5,6 +5,7 @@ use candle::cuda_backend::cudarc::driver::DevicePtr;
 use candle::cuda_backend::WrapErr;
 use candle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
 use candle_core as candle;
+use float8::F8E4M3;
 use half::{bf16, f16};
 use std::ffi::c_int;
 
@@ -443,10 +444,9 @@ fn update_cache<
 
     let dev = k.device();
     
-    // For FP8 cache, we need to get as u8 slices instead
     let (kc_ptr, vc_ptr) = if cache_dtype == 3 {
-        let kc = kc.as_cuda_slice::<u8>()?;
-        let vc = vc.as_cuda_slice::<u8>()?;
+        let kc = kc.as_cuda_slice::<F8E4M3>()?;
+        let vc = vc.as_cuda_slice::<F8E4M3>()?;
         let kc = kc.slice(kc_l.start_offset()..);
         let vc = vc.slice(vc_l.start_offset()..);
         (*kc.device_ptr() as *const core::ffi::c_void, *vc.device_ptr() as *const core::ffi::c_void)
