@@ -217,7 +217,7 @@ __device__ void paged_attention_kernel(
 
   // x == THREAD_GROUP_SIZE * VEC_SIZE
   // Each thread group fetches x elements from the key at a time.
-  constexpr int x = 16 / sizeof(scalar_t);
+  constexpr int x = 16 / sizeof(cache_t);
   float qk_max = -FLT_MAX;
 
   // Iterate over the key blocks.
