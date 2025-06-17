@@ -86,10 +86,10 @@ template <typename KV_T, typename CACHE_T>
       key_cache[tgt_key_idx] =
           to_cache<KV_T, CACHE_T>(KV_T((float)key[src_key_idx] / *k_scale));
       value_cache[tgt_value_idx] =
-          to_cache<KV_T, CACHE_T>(KV_T((float)value[src_key_idx] / *v_scale));
+          to_cache<KV_T, CACHE_T>(KV_T((float)value[src_value_idx] / *v_scale));
     } else {
       key_cache[tgt_key_idx] = to_cache<KV_T, CACHE_T>(key[src_key_idx]);
-      value_cache[tgt_value_idx] = to_cache<KV_T, CACHE_T>(value[src_key_idx]);
+      value_cache[tgt_value_idx] = to_cache<KV_T, CACHE_T>(value[src_value_idx]);
     }
   }
 }
