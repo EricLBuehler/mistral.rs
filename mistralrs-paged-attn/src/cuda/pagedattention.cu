@@ -257,18 +257,11 @@ __device__ void paged_attention_kernel(
           k_vecs[j] = *reinterpret_cast<const K_vec *>(
               k_ptr + offset1 * BLOCK_SIZE * x + offset2);
         } else {
-          // Load FP8 values and dequantize
           using Cache_K_vec = typename vllm::Vec<cache_t, VEC_SIZE>::Type;
           Cache_K_vec fp8_k_vec = *reinterpret_cast<const Cache_K_vec *>(
               k_ptr + offset1 * BLOCK_SIZE * x + offset2);
           
-          // Dequantize to scalar_t
-          scalar_t* k_vec_ptr = reinterpret_cast<scalar_t*>(&k_vecs[j]);
-          cache_t* fp8_ptr = reinterpret_cast<cache_t*>(&fp8_k_vec);
-          #pragma unroll
-          for (int k = 0; k < VEC_SIZE; k++) {
-            k_vec_ptr[k] = vllm::fp8::scaled_convert<scalar_t, cache_t, kv_dt>(fp8_ptr[k], *k_scale);
-          }
+          k_vecs[j] = vllm::fp8::scaled_convert<K_vec, Cache_K_vec, kv_dt>(fp8_k_vec, *k_scale);
         }
       }
 
@@ -391,17 +384,10 @@ __device__ void paged_attention_kernel(
         if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kAuto) {
           v_vec = *reinterpret_cast<const V_vec *>(v_ptr + offset);
         } else {
-          // Load FP8 values and dequantize
           using Cache_V_vec = typename vllm::Vec<cache_t, V_VEC_SIZE>::Type;
           Cache_V_vec fp8_v_vec = *reinterpret_cast<const Cache_V_vec *>(v_ptr + offset);
           
-          // Dequantize to scalar_t
-          scalar_t* v_vec_ptr = reinterpret_cast<scalar_t*>(&v_vec);
-          cache_t* fp8_ptr = reinterpret_cast<cache_t*>(&fp8_v_vec);
-          #pragma unroll
-          for (int k = 0; k < V_VEC_SIZE; k++) {
-            v_vec_ptr[k] = vllm::fp8::scaled_convert<scalar_t, cache_t, kv_dt>(fp8_ptr[k], *v_scale);
-          }
+          v_vec = vllm::fp8::scaled_convert<V_vec, Cache_V_vec, kv_dt>(fp8_v_vec, *v_scale);
         }
         if (block_idx == num_context_blocks - 1) {
           // NOTE(woosuk): When v_vec contains the tokens that are out of the
