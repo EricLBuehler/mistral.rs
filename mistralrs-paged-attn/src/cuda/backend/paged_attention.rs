@@ -37,7 +37,7 @@ impl PagedAttention {
             DType::F32 => 2,
             dtype => candle::bail!("dtype {dtype:?} is not supported"),
         };
-        
+
         let cache_dtype = match self.key_cache.dtype() {
             DType::F16 => 0,
             DType::BF16 => 1,
@@ -100,15 +100,29 @@ impl PagedAttention {
 
         // Get cuda slices for all tensors
         let q = q.as_cuda_slice::<T>()?;
-        let kc = kc.as_cuda_slice::<T>()?;
-        let vc = vc.as_cuda_slice::<T>()?;
+        let kc_ptr = if cache_dtype == 3 {
+            *kc.as_cuda_slice::<F8E4M3>()?
+                .slice(kc_l.start_offset()..)
+                .device_ptr() as *const core::ffi::c_void
+        } else {
+            *kc.as_cuda_slice::<T>()?
+                .slice(kc_l.start_offset()..)
+                .device_ptr() as *const core::ffi::c_void
+        };
+        let vc_ptr = if cache_dtype == 3 {
+            *vc.as_cuda_slice::<F8E4M3>()?
+                .slice(kc_l.start_offset()..)
+                .device_ptr() as *const core::ffi::c_void
+        } else {
+            *vc.as_cuda_slice::<T>()?
+                .slice(kc_l.start_offset()..)
+                .device_ptr() as *const core::ffi::c_void
+        };
         let cl = cl.as_cuda_slice::<u32>()?; // Should be i32!
         let bt = bt.as_cuda_slice::<u32>()?; // Should be i32!
 
         // Get cuda views for all tensors
         let q = q.slice(q_l.start_offset()..);
-        let kc = kc.slice(kc_l.start_offset()..);
-        let vc = vc.slice(vc_l.start_offset()..);
         let cl = cl.slice(cl_l.start_offset()..);
         let bt = bt.slice(bt_l.start_offset()..);
 
@@ -124,7 +138,7 @@ impl PagedAttention {
         } else {
             std::ptr::null()
         };
-        
+
         let (k_scale_ptr, v_scale_ptr) = if let Some((k_scale, v_scale)) = self.k_v_scale.as_ref() {
             let (ks, ks_l) = k_scale.storage_and_layout();
             let ks = match &*ks {
@@ -133,7 +147,7 @@ impl PagedAttention {
             };
             let ks = ks.as_cuda_slice::<f32>()?;
             let ks = ks.slice(ks_l.start_offset()..);
-            
+
             let (vs, vs_l) = v_scale.storage_and_layout();
             let vs = match &*vs {
                 Storage::Cuda(vs) => vs,
@@ -141,8 +155,11 @@ impl PagedAttention {
             };
             let vs = vs.as_cuda_slice::<f32>()?;
             let vs = vs.slice(vs_l.start_offset()..);
-            
-            (*ks.device_ptr() as *const f32, *vs.device_ptr() as *const f32)
+
+            (
+                *ks.device_ptr() as *const f32,
+                *vs.device_ptr() as *const f32,
+            )
         } else {
             (std::ptr::null(), std::ptr::null())
         };
@@ -208,8 +225,6 @@ impl PagedAttention {
 
         let out_ptr = *out.device_ptr() as *const core::ffi::c_void;
         let q_ptr = *q.device_ptr() as *const core::ffi::c_void;
-        let kc_ptr = *kc.device_ptr() as *const core::ffi::c_void;
-        let vc_ptr = *vc.device_ptr() as *const core::ffi::c_void;
         let bt_ptr = *bt.device_ptr() as *const core::ffi::c_int;
         let cl_ptr = *cl.device_ptr() as *const core::ffi::c_int;
 
@@ -375,7 +390,7 @@ fn update_cache<
         DType::F32 => 2,
         dtype => candle::bail!("dtype {dtype:?} is not supported"),
     };
-    
+
     let cache_dtype = match key_cache.dtype() {
         DType::F16 => 0,
         DType::BF16 => 1,
@@ -443,26 +458,32 @@ fn update_cache<
     let s = s.as_cuda_slice::<i64>()?;
 
     let dev = k.device();
-    
+
     let (kc_ptr, vc_ptr) = if cache_dtype == 3 {
         let kc = kc.as_cuda_slice::<F8E4M3>()?;
         let vc = vc.as_cuda_slice::<F8E4M3>()?;
         let kc = kc.slice(kc_l.start_offset()..);
         let vc = vc.slice(vc_l.start_offset()..);
-        (*kc.device_ptr() as *const core::ffi::c_void, *vc.device_ptr() as *const core::ffi::c_void)
+        (
+            *kc.device_ptr() as *const core::ffi::c_void,
+            *vc.device_ptr() as *const core::ffi::c_void,
+        )
     } else {
         let kc = kc.as_cuda_slice::<T>()?;
         let vc = vc.as_cuda_slice::<T>()?;
         let kc = kc.slice(kc_l.start_offset()..);
         let vc = vc.slice(vc_l.start_offset()..);
-        (*kc.device_ptr() as *const core::ffi::c_void, *vc.device_ptr() as *const core::ffi::c_void)
+        (
+            *kc.device_ptr() as *const core::ffi::c_void,
+            *vc.device_ptr() as *const core::ffi::c_void,
+        )
     };
 
     // Get cuda views for all tensors
     let k = k.slice(k_l.start_offset()..);
     let v = v.slice(v_l.start_offset()..);
     let s = s.slice(s_l.start_offset()..);
-    
+
     let (k_scale_ptr, v_scale_ptr) = if let Some((k_scale, v_scale)) = k_v_scale {
         let (ks, ks_l) = k_scale.storage_and_layout();
         let ks = match &*ks {
@@ -471,7 +492,7 @@ fn update_cache<
         };
         let ks = ks.as_cuda_slice::<f32>()?;
         let ks = ks.slice(ks_l.start_offset()..);
-        
+
         let (vs, vs_l) = v_scale.storage_and_layout();
         let vs = match &*vs {
             Storage::Cuda(vs) => vs,
@@ -479,8 +500,11 @@ fn update_cache<
         };
         let vs = vs.as_cuda_slice::<f32>()?;
         let vs = vs.slice(vs_l.start_offset()..);
-        
-        (*ks.device_ptr() as *const f32, *vs.device_ptr() as *const f32)
+
+        (
+            *ks.device_ptr() as *const f32,
+            *vs.device_ptr() as *const f32,
+        )
     } else {
         (std::ptr::null(), std::ptr::null())
     };
@@ -565,9 +589,15 @@ pub fn reshape_and_cache(
     slot_mapping: &Tensor,
 ) -> Result<()> {
     match key.dtype() {
-        DType::F16 => update_cache::<f16>(key, value, k_v_scale, key_cache, value_cache, slot_mapping),
-        DType::BF16 => update_cache::<bf16>(key, value, k_v_scale, key_cache, value_cache, slot_mapping),
-        DType::F32 => update_cache::<f32>(key, value, k_v_scale, key_cache, value_cache, slot_mapping),
+        DType::F16 => {
+            update_cache::<f16>(key, value, k_v_scale, key_cache, value_cache, slot_mapping)
+        }
+        DType::BF16 => {
+            update_cache::<bf16>(key, value, k_v_scale, key_cache, value_cache, slot_mapping)
+        }
+        DType::F32 => {
+            update_cache::<f32>(key, value, k_v_scale, key_cache, value_cache, slot_mapping)
+        }
         dt => {
             candle::bail!("reshape_and_cache is only supported for f32, f16 and bf16 ({dt:?})")
         }
