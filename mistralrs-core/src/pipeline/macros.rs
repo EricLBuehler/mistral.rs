@@ -22,22 +22,53 @@ macro_rules! api_dir_list {
                 .collect::<Vec<String>>()
                 .into_iter()
         } else {
-            $api.info()
-                .map(|repo| {
-                    repo.siblings
-                        .iter()
-                        .map(|x| x.rfilename.clone())
-                        .collect::<Vec<String>>()
-                })
-                .unwrap_or_else(|e| {
-                    if $should_panic {
-                        panic!("Could not get directory listing from API: {:?}", e)
-                    } else {
-                        tracing::warn!("Could not get directory listing from API: {:?}", e);
-                        Vec::<String>::new()
-                    }
-                })
-                .into_iter()
+            let sanitized_id = std::path::Path::new($model_id)
+                .display()
+                .to_string()
+                .replace("/", "-");
+            let cache_dir: std::path::PathBuf = std::env::var("HF_HUB_CACHE")
+                .map(std::path::PathBuf::from)
+                .unwrap_or("~/.cache/huggingface/hub/".into());
+            let cache_file = cache_dir.join(format!("{sanitized_id}_repo_list.json"));
+            if std::path::Path::new(&cache_file).exists() {
+                use std::io::Read;
+                // Read from cache
+                let mut file = std::fs::File::open(&cache_file).expect("Could not open cache file");
+                let mut contents = String::new();
+                file.read_to_string(&mut contents)
+                    .expect("Could not read cache file");
+                let cache: $crate::pipeline::FileListCache =
+                    serde_json::from_str(&contents).expect("Could not parse cache JSON");
+                tracing::info!("read from cache file {:?}", cache_file);
+                cache.files.into_iter()
+            } else {
+                $api.info()
+                    .map(|repo| {
+                        let files: Vec<String> = repo
+                            .siblings
+                            .iter()
+                            .map(|x| x.rfilename.clone())
+                            .collect::<Vec<String>>();
+                        // Save to cache
+                        let cache = $crate::pipeline::FileListCache {
+                            files: files.clone(),
+                        };
+                        let json = serde_json::to_string_pretty(&cache)
+                            .expect("Could not serialize cache");
+                        let _ = std::fs::write(&cache_file, json);
+                        tracing::info!("write to cache file {:?}", cache_file);
+                        files
+                    })
+                    .unwrap_or_else(|e| {
+                        if $should_panic {
+                            panic!("Could not get directory listing from API: {:?}", e)
+                        } else {
+                            tracing::warn!("Could not get directory listing from API: {:?}", e);
+                            Vec::<String>::new()
+                        }
+                    })
+                    .into_iter()
+            }
         }
     };
 }
