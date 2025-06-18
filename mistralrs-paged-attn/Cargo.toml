@@ -18,6 +18,13 @@ float8.workspace = true
 metal = { workspace = true, optional = true }
 thiserror.workspace = true
 once_cell.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry-prometheus = { workspace = true, optional = true }
 
 [build-dependencies]
 bindgen_cuda = { workspace = true, optional = true }
@@ -26,3 +33,4 @@ anyhow.workspace = true
 [features]
 cuda = ["dep:bindgen_cuda"]
 metal = ["dep:metal"]
+telemetry = ["dep:opentelemetry-otlp", "dep:opentelemetry-prometheus"]

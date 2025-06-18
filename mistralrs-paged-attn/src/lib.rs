@@ -7,3 +7,5 @@ pub use cuda::*;
 mod metal;
 #[cfg(feature = "metal")]
 pub use metal::*;
+
+pub mod telemetry;

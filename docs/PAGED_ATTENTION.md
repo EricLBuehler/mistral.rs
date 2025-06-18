@@ -6,6 +6,37 @@ Mistral.rs supports PagedAttention ([paper here](https://arxiv.org/abs/2309.0618
 
 Our PagedAttention implementation has 2 inputs: GPU KV cache memory size, and block size. This enables you to have fine-tuned control over the available context length, by configuring the available memory for KV cache. When using a CUDA device, PagedAttention is actiated by default but can be disabled with `no_paged_attn` for Python or `no-paged-attn` for the CLI tools.
 
+## Observability with OpenTelemetry
+
+The PagedAttention implementation includes built-in observability features powered by OpenTelemetry:
+
+### Metrics
+- **Operation counters**: Track the number of paged attention forward calls and cache updates
+- **Performance histograms**: Measure execution time for attention operations
+- **Memory tracking**: Monitor tensor sizes and memory usage
+- **Export options**: Support for OTLP and Prometheus formats
+
+### Structured Logging
+- **JSON-formatted logs**: All tensor operations are logged as structured JSON
+- **Debug insights**: Includes tensor shapes, device information, and computation parameters
+- **Integration ready**: Designed for ingestion into Elasticsearch, OpenSearch, or Meilisearch
+
+### Enabling Telemetry
+
+To enable telemetry features, build with the `telemetry` feature flag:
+
+```bash
+cargo build --release --features cuda,telemetry
+```
+
+Enable debug logging to see structured JSON output:
+
+```bash
+RUST_LOG=paged_attention=debug,paged_attention_metrics=debug cargo run ...
+```
+
+For detailed telemetry documentation, see [mistralrs-paged-attn/TELEMETRY.md](../mistralrs-paged-attn/TELEMETRY.md).
+
 > Note: The default block size if not specified is 32.
 
 > Note: if OOM occurs (this can be caused by a variety of factors including adapter activation, re-ISQ, and others), it is likely because the PagedAttention KV cache has already been allocated. To counter this, either set the KV cache memory to a lower amount or usage percentage (recommended) or disable paged attention entirely for a dynamically allocated cache.
