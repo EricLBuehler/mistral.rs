@@ -360,6 +360,11 @@ impl ForwardInputsResult {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct FileListCache {
+    files: Vec<String>,
+}
+
 #[async_trait::async_trait]
 pub trait Pipeline:
     Send

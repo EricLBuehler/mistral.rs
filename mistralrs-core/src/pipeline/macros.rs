@@ -22,22 +22,65 @@ macro_rules! api_dir_list {
                 .collect::<Vec<String>>()
                 .into_iter()
         } else {
-            $api.info()
-                .map(|repo| {
-                    repo.siblings
-                        .iter()
-                        .map(|x| x.rfilename.clone())
-                        .collect::<Vec<String>>()
-                })
-                .unwrap_or_else(|e| {
-                    if $should_panic {
-                        panic!("Could not get directory listing from API: {:?}", e)
-                    } else {
-                        tracing::warn!("Could not get directory listing from API: {:?}", e);
-                        Vec::<String>::new()
-                    }
-                })
-                .into_iter()
+            let sanitized_id = std::path::Path::new($model_id)
+                .display()
+                .to_string()
+                .replace("/", "-");
+
+            let home_folder = if dirs::home_dir().is_some() {
+                let mut path = dirs::home_dir().unwrap();
+                path.push(".cache/huggingface/hub/");
+                if !path.exists() {
+                    let _ = std::fs::create_dir_all(&path);
+                }
+                path
+            } else {
+                "./".into()
+            };
+
+            let cache_dir: std::path::PathBuf = std::env::var("HF_HUB_CACHE")
+                .map(std::path::PathBuf::from)
+                .unwrap_or(home_folder.into());
+            let cache_file = cache_dir.join(format!("{sanitized_id}_repo_list.json"));
+            if std::path::Path::new(&cache_file).exists() {
+                use std::io::Read;
+                // Read from cache
+                let mut file = std::fs::File::open(&cache_file).expect("Could not open cache file");
+                let mut contents = String::new();
+                file.read_to_string(&mut contents)
+                    .expect("Could not read cache file");
+                let cache: $crate::pipeline::FileListCache =
+                    serde_json::from_str(&contents).expect("Could not parse cache JSON");
+                tracing::info!("Read from cache file {:?}", cache_file);
+                cache.files.into_iter()
+            } else {
+                $api.info()
+                    .map(|repo| {
+                        let files: Vec<String> = repo
+                            .siblings
+                            .iter()
+                            .map(|x| x.rfilename.clone())
+                            .collect::<Vec<String>>();
+                        // Save to cache
+                        let cache = $crate::pipeline::FileListCache {
+                            files: files.clone(),
+                        };
+                        let json = serde_json::to_string_pretty(&cache)
+                            .expect("Could not serialize cache");
+                        let ret = std::fs::write(&cache_file, json);
+                        tracing::info!("Write to cache file {:?}, {:?}", cache_file, ret);
+                        files
+                    })
+                    .unwrap_or_else(|e| {
+                        if $should_panic {
+                            panic!("Could not get directory listing from API: {:?}", e)
+                        } else {
+                            tracing::warn!("Could not get directory listing from API: {:?}", e);
+                            Vec::<String>::new()
+                        }
+                    })
+                    .into_iter()
+            }
         }
     };
 }
@@ -117,10 +160,9 @@ macro_rules! get_paths {
             revision.clone(),
             $this.xlora_order.as_ref(),
         )?;
-        let gen_conf = if $crate::api_dir_list!(api, model_id, false)
-            .collect::<Vec<_>>()
-            .contains(&"generation_config.json".to_string())
-        {
+        let dir_list = $crate::api_dir_list!(api, model_id, false).collect::<Vec<_>>();
+
+        let gen_conf = if dir_list.contains(&"generation_config.json".to_string()) {
             info!("Loading `generation_config.json` at `{}`", $this.model_id);
             Some($crate::api_get_file!(
                 api,
@@ -130,10 +172,7 @@ macro_rules! get_paths {
         } else {
             None
         };
-        let preprocessor_config = if $crate::api_dir_list!(api, model_id, false)
-            .collect::<Vec<_>>()
-            .contains(&"preprocessor_config.json".to_string())
-        {
+        let preprocessor_config = if dir_list.contains(&"preprocessor_config.json".to_string()) {
             info!("Loading `preprocessor_config.json` at `{}`", $this.model_id);
             Some($crate::api_get_file!(
                 api,
@@ -143,10 +182,7 @@ macro_rules! get_paths {
         } else {
             None
         };
-        let processor_config = if $crate::api_dir_list!(api, model_id, false)
-            .collect::<Vec<_>>()
-            .contains(&"processor_config.json".to_string())
-        {
+        let processor_config = if dir_list.contains(&"processor_config.json".to_string()) {
             info!("Loading `processor_config.json` at `{}`", $this.model_id);
             Some($crate::api_get_file!(
                 api,
@@ -167,10 +203,7 @@ macro_rules! get_paths {
                 model_id
             ))
         };
-        let chat_template_json_filename = if $crate::api_dir_list!(api, model_id, false)
-            .collect::<Vec<_>>()
-            .contains(&"chat_template.json".to_string())
-        {
+        let chat_template_json_filename = if dir_list.contains(&"chat_template.json".to_string()) {
             info!("Loading `chat_template.json` at `{}`", $this.model_id);
             Some($crate::api_get_file!(api, "chat_template.json", model_id))
         } else {
