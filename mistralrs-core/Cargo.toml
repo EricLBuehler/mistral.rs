@@ -78,8 +78,6 @@ as-any.workspace = true
 float8.workspace = true
 llguidance.workspace = true
 toktrie_hf_tokenizers.workspace = true
-objc = { workspace = true, optional = true }
-metal = { workspace = true, optional = true }
 candle-flash-attn-v3 = { workspace = true, optional = true }
 safetensors.workspace = true
 serde-big-array.workspace = true
@@ -104,6 +102,10 @@ symphonia.workspace = true
 mistralrs-audio.workspace = true
 rust-mcp-schema.workspace = true
 mistralrs-mcp = { workspace = true, features = ["utoipa"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = { workspace = true, optional = true }
+metal = { workspace = true, optional = true }
 
 [features]
 pyo3_macros = ["pyo3", "mistralrs-mcp/pyo3_macros"]
