@@ -472,7 +472,10 @@ impl MoeMlp {
 
             final_hidden_states = final_hidden_states.index_add(
                 &top_x.contiguous()?,
-                &current_hidden_states.squeeze(0)?.to_dtype(xs.dtype())?,
+                &current_hidden_states
+                    .squeeze(0)?
+                    .to_dtype(xs.dtype())?
+                    .to_device(xs_dev)?,
                 0,
             )?;
         }
