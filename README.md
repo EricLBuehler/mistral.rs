@@ -284,6 +284,8 @@ To enable one or more features, pass them to Cargo. For example:
 cargo build --release --features "cuda flash-attn cudnn"
 ```
 
+> **Note for Linux users:** The `metal` feature is macOS-only and should not be used on Linux. Use `--features "cuda flash-attn cudnn"` for NVIDIA GPUs or `--features mkl` for Intel CPUs instead of `--all-features`.
+
 ## Installation and Build
 
 > Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
