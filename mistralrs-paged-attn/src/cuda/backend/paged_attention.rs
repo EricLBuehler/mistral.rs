@@ -191,7 +191,7 @@ impl PagedAttention {
             candle::bail!(
                 "shape mismatch value_cache {:?}, expected {:?}",
                 vc_l.shape(),
-                (num_blocks, num_heads, head_size / x, block_size, x)
+                (num_blocks, num_kv_heads, head_size / x, block_size, x)
             )
         }
 

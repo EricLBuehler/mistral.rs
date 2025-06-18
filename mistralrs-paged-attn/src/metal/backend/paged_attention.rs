@@ -136,7 +136,7 @@ impl candle_core::CustomOp1 for PagedAttention {
             candle_core::bail!(
                 "shape mismatch value_cache {:?}, expected {:?}",
                 vc_l.shape(),
-                (num_blocks, num_heads, head_size / x, block_size, x)
+                (num_blocks, num_kv_heads, head_size / x, block_size, x)
             )
         }
 
