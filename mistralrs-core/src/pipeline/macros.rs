@@ -26,9 +26,21 @@ macro_rules! api_dir_list {
                 .display()
                 .to_string()
                 .replace("/", "-");
+
+            let home_folder = if dirs::home_dir().is_some() {
+                let mut path = dirs::home_dir().unwrap();
+                path.push(".cache/huggingface/hub/");
+                if !path.exists() {
+                    let _ = std::fs::create_dir_all(&path);
+                }
+                path
+            } else {
+                "./".into()
+            };
+
             let cache_dir: std::path::PathBuf = std::env::var("HF_HUB_CACHE")
                 .map(std::path::PathBuf::from)
-                .unwrap_or("~/.cache/huggingface/hub/".into());
+                .unwrap_or(home_folder.into());
             let cache_file = cache_dir.join(format!("{sanitized_id}_repo_list.json"));
             if std::path::Path::new(&cache_file).exists() {
                 use std::io::Read;
@@ -55,8 +67,8 @@ macro_rules! api_dir_list {
                         };
                         let json = serde_json::to_string_pretty(&cache)
                             .expect("Could not serialize cache");
-                        let _ = std::fs::write(&cache_file, json);
-                        tracing::info!("write to cache file {:?}", cache_file);
+                        let ret = std::fs::write(&cache_file, json);
+                        tracing::info!("write to cache file {:?}, {:?}", cache_file, ret);
                         files
                     })
                     .unwrap_or_else(|e| {
