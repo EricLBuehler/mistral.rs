@@ -16,6 +16,7 @@ pub const COPY_BLOCKS_KERNEL: &str =
 pub const PAGEDATTENTION: &str = include_str!(concat!(env!("OUT_DIR"), "/pagedattention.ptx"));
 pub const RESHAPE_AND_CACHE_KERNEL: &str =
     include_str!(concat!(env!("OUT_DIR"), "/reshape_and_cache_kernel.ptx"));
+pub const USE_FP8: bool = false;
 
 mod backend;
 mod ffi;
@@ -76,20 +77,12 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
         .arg("-fPIC");
 
     // Enable FP8 if compute capability >= 8.0 (Ampere and newer)
-    if compute_cap >= 800 {
+    let mut using_fp8 = if compute_cap >= 800 {
         builder = builder.arg("-DENABLE_FP8");
-        println!(
-            "cargo:info=Enabling FP8 support (compute capability: {}.{})",
-            compute_cap / 100,
-            (compute_cap % 100) / 10
-        );
+        true
     } else {
-        println!(
-            "cargo:info=Disabling FP8 support (compute capability: {}.{} < 8.0)",
-            compute_cap / 100,
-            (compute_cap % 100) / 10
-        );
-    }
+        false
+    };
 
     // https://github.com/EricLBuehler/mistral.rs/issues/286
     if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
@@ -128,8 +121,14 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
         .open("src/cuda/mod.rs")
         .unwrap();
 
+    // Build the new content
+    let mut new_ct = OTHER_CONTENT.trim();
+    if using_fp8 {
+        new_ct = new_ct.replace("USE_FP8: bool = false", "USE_FP8: bool = true");
+    }
+
     // Add the other stuff back
-    if let Err(e) = writeln!(file, "{}", OTHER_CONTENT.trim()) {
+    if let Err(e) = writeln!(file, "{new_ct}") {
         anyhow::bail!("Error while building dependencies: {:?}\n", e)
     }
     Ok(())
