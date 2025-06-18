@@ -447,9 +447,8 @@ impl Phi4MMModel {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
-                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
-                num_kv_heads: (cfg.num_key_value_heads() / mapper.get_comm_for(0)?.world_size())
-                    .max(1),
+                num_attn_heads: cfg.num_attention_heads,
+                num_kv_heads: cfg.num_key_value_heads(),
                 sliding_window: cfg.sliding_window,
                 k_head_dim: cfg.head_dim(),
                 v_head_dim: cfg.head_dim(),
