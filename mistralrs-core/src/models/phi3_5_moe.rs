@@ -436,7 +436,7 @@ impl MoeMlp {
             self.router_jitter_noise,
         )?;
 
-        let mut final_hidden_states = Tensor::zeros((bs * seq, hidden), xs.dtype(), xs.device())?;
+        let mut final_hidden_states = Tensor::zeros((bs * seq, hidden), xs.dtype(), xs_dev)?;
 
         // One hot encode the selected experts to create an expert mask
         // this will be used to easily index which expert to activate
