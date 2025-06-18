@@ -51,7 +51,7 @@ macro_rules! api_dir_list {
                     .expect("Could not read cache file");
                 let cache: $crate::pipeline::FileListCache =
                     serde_json::from_str(&contents).expect("Could not parse cache JSON");
-                tracing::info!("read from cache file {:?}", cache_file);
+                tracing::info!("Read from cache file {:?}", cache_file);
                 cache.files.into_iter()
             } else {
                 $api.info()
@@ -68,7 +68,7 @@ macro_rules! api_dir_list {
                         let json = serde_json::to_string_pretty(&cache)
                             .expect("Could not serialize cache");
                         let ret = std::fs::write(&cache_file, json);
-                        tracing::info!("write to cache file {:?}, {:?}", cache_file, ret);
+                        tracing::info!("Write to cache file {:?}, {:?}", cache_file, ret);
                         files
                     })
                     .unwrap_or_else(|e| {
