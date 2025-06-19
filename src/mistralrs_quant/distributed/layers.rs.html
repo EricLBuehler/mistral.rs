@@ -338,692 +338,721 @@
 <a href=#338 id=338 data-nosnippet>338</a>
 <a href=#339 id=339 data-nosnippet>339</a>        <span class="self">Self</span>::new_with_shard(in_dim, out_dim, config, bias, comm, shard, vb)
 <a href=#340 id=340 data-nosnippet>340</a>    }
-<a href=#341 id=341 data-nosnippet>341</a>}
-<a href=#342 id=342 data-nosnippet>342</a>
-<a href=#343 id=343 data-nosnippet>343</a><span class="kw">impl </span>QuantMethod <span class="kw">for </span>ColumnParallelLayer {
-<a href=#344 id=344 data-nosnippet>344</a>    <span class="kw">fn </span>new(_method: QuantMethodConfig) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt;
-<a href=#345 id=345 data-nosnippet>345</a>    <span class="kw">where
-<a href=#346 id=346 data-nosnippet>346</a>        </span><span class="self">Self</span>: Sized,
-<a href=#347 id=347 data-nosnippet>347</a>    {
-<a href=#348 id=348 data-nosnippet>348</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"ColumnParallelLayer should not be constructed with `QuantMethod::new`"</span>)
-<a href=#349 id=349 data-nosnippet>349</a>    }
-<a href=#350 id=350 data-nosnippet>350</a>
-<a href=#351 id=351 data-nosnippet>351</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#352 id=352 data-nosnippet>352</a>        <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.weight.forward(a)<span class="question-mark">?</span>;
-<a href=#353 id=353 data-nosnippet>353</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="kw-2">&amp;</span><span class="self">self</span>.bias {
-<a href=#354 id=354 data-nosnippet>354</a>            xs = xs.broadcast_add(bias)<span class="question-mark">?</span>;
-<a href=#355 id=355 data-nosnippet>355</a>        }
-<a href=#356 id=356 data-nosnippet>356</a>        <span class="prelude-val">Ok</span>(xs)
-<a href=#357 id=357 data-nosnippet>357</a>    }
-<a href=#358 id=358 data-nosnippet>358</a>
-<a href=#359 id=359 data-nosnippet>359</a>    <span class="kw">fn </span>add_delta_w(<span class="kw-2">&amp;</span><span class="self">self</span>, delta: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-<a href=#360 id=360 data-nosnippet>360</a>        <span class="kw">let </span>weight = <span class="self">self</span>.weight.add_delta_w(delta)<span class="question-mark">?</span>;
-<a href=#361 id=361 data-nosnippet>361</a>        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self </span>{
-<a href=#362 id=362 data-nosnippet>362</a>            weight,
-<a href=#363 id=363 data-nosnippet>363</a>            bias: <span class="self">self</span>.bias.clone(),
-<a href=#364 id=364 data-nosnippet>364</a>        }))
-<a href=#365 id=365 data-nosnippet>365</a>    }
-<a href=#366 id=366 data-nosnippet>366</a>
-<a href=#367 id=367 data-nosnippet>367</a>    <span class="kw">fn </span>dequantize_w(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#368 id=368 data-nosnippet>368</a>        <span class="self">self</span>.weight.dequantize_w()
+<a href=#341 id=341 data-nosnippet>341</a>
+<a href=#342 id=342 data-nosnippet>342</a>    <span class="kw">pub fn </span>new_merged(
+<a href=#343 id=343 data-nosnippet>343</a>        in_dim: usize,
+<a href=#344 id=344 data-nosnippet>344</a>        out_dim: usize,
+<a href=#345 id=345 data-nosnippet>345</a>        chunks: usize,
+<a href=#346 id=346 data-nosnippet>346</a>        config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
+<a href=#347 id=347 data-nosnippet>347</a>        bias: bool,
+<a href=#348 id=348 data-nosnippet>348</a>        comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
+<a href=#349 id=349 data-nosnippet>349</a>        vb: ShardedVarBuilder,
+<a href=#350 id=350 data-nosnippet>350</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;&gt; {
+<a href=#351 id=351 data-nosnippet>351</a>        <span class="kw">let </span><span class="kw-2">mut </span>vec_layers = Vec::&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;::new();
+<a href=#352 id=352 data-nosnippet>352</a>        <span class="kw">for </span>chunk_idx <span class="kw">in </span><span class="number">0</span>..chunks {
+<a href=#353 id=353 data-nosnippet>353</a>            <span class="kw">let </span>layer = ColumnParallelLayer::new_with_shard(
+<a href=#354 id=354 data-nosnippet>354</a>                in_dim,
+<a href=#355 id=355 data-nosnippet>355</a>                out_dim,
+<a href=#356 id=356 data-nosnippet>356</a>                config,
+<a href=#357 id=357 data-nosnippet>357</a>                bias,
+<a href=#358 id=358 data-nosnippet>358</a>                comm,
+<a href=#359 id=359 data-nosnippet>359</a>                shard(
+<a href=#360 id=360 data-nosnippet>360</a>                    <span class="number">0</span>,
+<a href=#361 id=361 data-nosnippet>361</a>                    chunk_idx * comm.world_size() + comm.rank(),
+<a href=#362 id=362 data-nosnippet>362</a>                    chunks * comm.world_size(),
+<a href=#363 id=363 data-nosnippet>363</a>                ),
+<a href=#364 id=364 data-nosnippet>364</a>                vb.clone(),
+<a href=#365 id=365 data-nosnippet>365</a>            )<span class="question-mark">?</span>;
+<a href=#366 id=366 data-nosnippet>366</a>            vec_layers.push(layer);
+<a href=#367 id=367 data-nosnippet>367</a>        }
+<a href=#368 id=368 data-nosnippet>368</a>        <span class="prelude-val">Ok</span>(vec_layers)
 <a href=#369 id=369 data-nosnippet>369</a>    }
-<a href=#370 id=370 data-nosnippet>370</a>
-<a href=#371 id=371 data-nosnippet>371</a>    <span class="kw">fn </span>dtype_and_device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; (candle_core::DType, candle_core::Device) {
-<a href=#372 id=372 data-nosnippet>372</a>        <span class="self">self</span>.weight.dtype_and_device()
-<a href=#373 id=373 data-nosnippet>373</a>    }
-<a href=#374 id=374 data-nosnippet>374</a>
-<a href=#375 id=375 data-nosnippet>375</a>    <span class="kw">fn </span>begin_track_stats(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#376 id=376 data-nosnippet>376</a>        Arc::get_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.weight)
-<a href=#377 id=377 data-nosnippet>377</a>            .context(<span class="string">"Failed to get &amp;mut to weight"</span>)<span class="question-mark">?
-<a href=#378 id=378 data-nosnippet>378</a>            </span>.begin_track_stats()
-<a href=#379 id=379 data-nosnippet>379</a>    }
-<a href=#380 id=380 data-nosnippet>380</a>
-<a href=#381 id=381 data-nosnippet>381</a>    <span class="kw">fn </span>end_track_stats(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#382 id=382 data-nosnippet>382</a>        <span class="self">self</span>.weight.end_track_stats()
-<a href=#383 id=383 data-nosnippet>383</a>    }
-<a href=#384 id=384 data-nosnippet>384</a>
-<a href=#385 id=385 data-nosnippet>385</a>    <span class="kw">fn </span>quantized_act_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;candle_core::DType&gt; {
-<a href=#386 id=386 data-nosnippet>386</a>        <span class="self">self</span>.weight.quantized_act_type()
-<a href=#387 id=387 data-nosnippet>387</a>    }
-<a href=#388 id=388 data-nosnippet>388</a>
-<a href=#389 id=389 data-nosnippet>389</a>    <span class="kw">fn </span>unquant_weight_bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(Tensor, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt; {
-<a href=#390 id=390 data-nosnippet>390</a>        <span class="self">self</span>.weight.unquant_weight_bias()
-<a href=#391 id=391 data-nosnippet>391</a>    }
-<a href=#392 id=392 data-nosnippet>392</a>
-<a href=#393 id=393 data-nosnippet>393</a>    <span class="kw">fn </span>apply_isq(
-<a href=#394 id=394 data-nosnippet>394</a>        <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
-<a href=#395 id=395 data-nosnippet>395</a>        dtype: <span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::IsqType&gt;,
-<a href=#396 id=396 data-nosnippet>396</a>        device: candle_core::Device,
-<a href=#397 id=397 data-nosnippet>397</a>        n_quantized: <span class="kw-2">&amp;</span>std::sync::atomic::AtomicUsize,
-<a href=#398 id=398 data-nosnippet>398</a>        imatrix_weight: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
-<a href=#399 id=399 data-nosnippet>399</a>        guard: QuantizeOntoGuard,
-<a href=#400 id=400 data-nosnippet>400</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-<a href=#401 id=401 data-nosnippet>401</a>        <span class="kw">let </span>weight =
-<a href=#402 id=402 data-nosnippet>402</a>            <span class="self">self</span>.weight
-<a href=#403 id=403 data-nosnippet>403</a>                .clone()
-<a href=#404 id=404 data-nosnippet>404</a>                .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)<span class="question-mark">?</span>;
-<a href=#405 id=405 data-nosnippet>405</a>        <span class="kw">let </span>bias = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.bias {
-<a href=#406 id=406 data-nosnippet>406</a>            <span class="prelude-val">Some</span>(b) =&gt; {
-<a href=#407 id=407 data-nosnippet>407</a>                <span class="kw">let </span>(dtype, device) = weight.dtype_and_device();
-<a href=#408 id=408 data-nosnippet>408</a>                <span class="prelude-val">Some</span>(b.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>)
-<a href=#409 id=409 data-nosnippet>409</a>            }
-<a href=#410 id=410 data-nosnippet>410</a>            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
-<a href=#411 id=411 data-nosnippet>411</a>        };
-<a href=#412 id=412 data-nosnippet>412</a>        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self </span>{ weight, bias }))
-<a href=#413 id=413 data-nosnippet>413</a>    }
-<a href=#414 id=414 data-nosnippet>414</a>
-<a href=#415 id=415 data-nosnippet>415</a>    <span class="kw">fn </span>is_distributed(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DistributedKind&gt; {
-<a href=#416 id=416 data-nosnippet>416</a>        <span class="prelude-val">Some</span>(DistributedKind::ColumnParallel)
-<a href=#417 id=417 data-nosnippet>417</a>    }
-<a href=#418 id=418 data-nosnippet>418</a>}
-<a href=#419 id=419 data-nosnippet>419</a>
-<a href=#420 id=420 data-nosnippet>420</a><span class="kw">impl </span>QuantizedSerde <span class="kw">for </span>ColumnParallelLayer {
-<a href=#421 id=421 data-nosnippet>421</a>    <span class="kw">fn </span>isq_serde_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#422 id=422 data-nosnippet>422</a>        <span class="self">self</span>.weight.isq_serde_supported()
-<a href=#423 id=423 data-nosnippet>423</a>    }
-<a href=#424 id=424 data-nosnippet>424</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
-<a href=#425 id=425 data-nosnippet>425</a>        <span class="self">self</span>.weight.name()
-<a href=#426 id=426 data-nosnippet>426</a>    }
-<a href=#427 id=427 data-nosnippet>427</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;std::borrow::Cow&lt;[u8]&gt;&gt; {
-<a href=#428 id=428 data-nosnippet>428</a>        <span class="self">self</span>.weight.serialize_with_bias(<span class="self">self</span>.bias.clone())
-<a href=#429 id=429 data-nosnippet>429</a>    }
-<a href=#430 id=430 data-nosnippet>430</a>    <span class="kw">fn </span>deserialize(
-<a href=#431 id=431 data-nosnippet>431</a>        data: std::borrow::Cow&lt;[u8]&gt;,
-<a href=#432 id=432 data-nosnippet>432</a>        device: <span class="kw-2">&amp;</span>candle_core::Device,
-<a href=#433 id=433 data-nosnippet>433</a>        _comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
-<a href=#434 id=434 data-nosnippet>434</a>        guard: QuantizeOntoGuard,
-<a href=#435 id=435 data-nosnippet>435</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;
-<a href=#436 id=436 data-nosnippet>436</a>    <span class="kw">where
-<a href=#437 id=437 data-nosnippet>437</a>        </span><span class="self">Self</span>: Sized,
-<a href=#438 id=438 data-nosnippet>438</a>    {
-<a href=#439 id=439 data-nosnippet>439</a>        <span class="comment">// NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
-<a href=#440 id=440 data-nosnippet>440</a>        </span><span class="kw">let </span>isq_type = data[<span class="kw">crate</span>::UQFF_QUANT_TYPE_OFFSET];
-<a href=#441 id=441 data-nosnippet>441</a>        <span class="kw">let </span>(weight, bias) = <span class="kw">match </span>QuantizedSerdeType::try_from(isq_type <span class="kw">as </span>usize)<span class="question-mark">? </span>{
-<a href=#442 id=442 data-nosnippet>442</a>            QuantizedSerdeType::Gguf =&gt; GgufMatMul::deserialize_ext_bias(data, device, guard)<span class="question-mark">?</span>,
-<a href=#443 id=443 data-nosnippet>443</a>            QuantizedSerdeType::Unquant =&gt; {
-<a href=#444 id=444 data-nosnippet>444</a>                UnquantLinear::deserialize_ext_bias(data, device, guard)<span class="question-mark">?
-<a href=#445 id=445 data-nosnippet>445</a>            </span>}
-<a href=#446 id=446 data-nosnippet>446</a>            QuantizedSerdeType::Hqq =&gt; HqqLayer::deserialize_ext_bias(data, device, guard)<span class="question-mark">?</span>,
-<a href=#447 id=447 data-nosnippet>447</a>            QuantizedSerdeType::Fp8 =&gt; FP8Linear::deserialize_ext_bias(data, device, guard)<span class="question-mark">?</span>,
-<a href=#448 id=448 data-nosnippet>448</a>            QuantizedSerdeType::Afq =&gt; AfqLayer::deserialize_ext_bias(data, device, guard)<span class="question-mark">?</span>,
-<a href=#449 id=449 data-nosnippet>449</a>        };
-<a href=#450 id=450 data-nosnippet>450</a>        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self </span>{ weight, bias }))
-<a href=#451 id=451 data-nosnippet>451</a>    }
-<a href=#452 id=452 data-nosnippet>452</a>}
-<a href=#453 id=453 data-nosnippet>453</a>
-<a href=#454 id=454 data-nosnippet>454</a><span class="attr">#[derive(Debug)]
-<a href=#455 id=455 data-nosnippet>455</a></span><span class="doccomment">/// This layer has no parallelization
-<a href=#456 id=456 data-nosnippet>456</a></span><span class="kw">pub struct </span>ReplicatedLayer(Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;);
-<a href=#457 id=457 data-nosnippet>457</a>
-<a href=#458 id=458 data-nosnippet>458</a><span class="kw">impl </span>ReplicatedLayer {
-<a href=#459 id=459 data-nosnippet>459</a>    <span class="kw">pub fn </span>from_linear(lin: Linear) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-<a href=#460 id=460 data-nosnippet>460</a>        <span class="kw">let </span>dev = lin.weight().device().clone();
-<a href=#461 id=461 data-nosnippet>461</a>        <span class="kw">let </span>this_unquant = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))<span class="question-mark">?</span>);
-<a href=#462 id=462 data-nosnippet>462</a>        <span class="kw">let </span>this: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; = apply_immediate_isq_always(this_unquant, <span class="kw-2">&amp;</span>dev)<span class="question-mark">?</span>;
-<a href=#463 id=463 data-nosnippet>463</a>        <span class="prelude-val">Ok</span>(this)
-<a href=#464 id=464 data-nosnippet>464</a>    }
-<a href=#465 id=465 data-nosnippet>465</a>
-<a href=#466 id=466 data-nosnippet>466</a>    <span class="attr">#[allow(clippy::new_ret_no_self)]
-<a href=#467 id=467 data-nosnippet>467</a>    </span><span class="kw">pub fn </span>new(
-<a href=#468 id=468 data-nosnippet>468</a>        in_dim: usize,
-<a href=#469 id=469 data-nosnippet>469</a>        out_dim: usize,
-<a href=#470 id=470 data-nosnippet>470</a>        config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
-<a href=#471 id=471 data-nosnippet>471</a>        bias: bool,
-<a href=#472 id=472 data-nosnippet>472</a>        vb: ShardedVarBuilder,
-<a href=#473 id=473 data-nosnippet>473</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-<a href=#474 id=474 data-nosnippet>474</a>        <span class="kw">let </span>base_vb = vb.clone();
-<a href=#475 id=475 data-nosnippet>475</a>        <span class="kw">let </span>vb = <span class="kw">if </span>should_apply_immediate_isq(<span class="kw-2">&amp;</span>vb) {
-<a href=#476 id=476 data-nosnippet>476</a>            vb.set_device(Device::Cpu)
-<a href=#477 id=477 data-nosnippet>477</a>        } <span class="kw">else </span>{
-<a href=#478 id=478 data-nosnippet>478</a>            vb
-<a href=#479 id=479 data-nosnippet>479</a>        };
-<a href=#480 id=480 data-nosnippet>480</a>
-<a href=#481 id=481 data-nosnippet>481</a>        <span class="kw">let </span>layer = <span class="kw">if let </span><span class="prelude-val">Some</span>(quant_conf) = <span class="kw-2">&amp;</span>config {
-<a href=#482 id=482 data-nosnippet>482</a>            <span class="kw">match </span>quant_conf {
-<a href=#483 id=483 data-nosnippet>483</a>                QuantizedConfig::GptqAwq { .. } =&gt; {
-<a href=#484 id=484 data-nosnippet>484</a>                    gptq_linear(in_dim, out_dim, quant_conf, vb.clone())<span class="question-mark">?
-<a href=#485 id=485 data-nosnippet>485</a>                </span>}
-<a href=#486 id=486 data-nosnippet>486</a>                QuantizedConfig::Fp8 { .. } =&gt; blockwise_fp8_linear_b(
-<a href=#487 id=487 data-nosnippet>487</a>                    in_dim,
-<a href=#488 id=488 data-nosnippet>488</a>                    out_dim,
-<a href=#489 id=489 data-nosnippet>489</a>                    quant_conf,
-<a href=#490 id=490 data-nosnippet>490</a>                    bias,
-<a href=#491 id=491 data-nosnippet>491</a>                    Default::default(),
-<a href=#492 id=492 data-nosnippet>492</a>                    vb.clone(),
-<a href=#493 id=493 data-nosnippet>493</a>                )<span class="question-mark">?</span>,
-<a href=#494 id=494 data-nosnippet>494</a>                QuantizedConfig::Bitsandbytes { .. } =&gt; {
-<a href=#495 id=495 data-nosnippet>495</a>                    Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())<span class="question-mark">?</span>) <span class="kw">as </span>Arc&lt;<span class="kw">_</span>&gt;
-<a href=#496 id=496 data-nosnippet>496</a>                }
-<a href=#497 id=497 data-nosnippet>497</a>                QuantizedConfig::Afq { .. } =&gt; {
-<a href=#498 id=498 data-nosnippet>498</a>                    AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())<span class="question-mark">?
-<a href=#499 id=499 data-nosnippet>499</a>                </span>}
-<a href=#500 id=500 data-nosnippet>500</a>            }
-<a href=#501 id=501 data-nosnippet>501</a>        } <span class="kw">else </span>{
-<a href=#502 id=502 data-nosnippet>502</a>            <span class="comment">// Handle the case where the layer is dummy (no tensors)
-<a href=#503 id=503 data-nosnippet>503</a>            </span><span class="kw">if </span>!vb.contains_tensor(<span class="string">"weight"</span>) {
-<a href=#504 id=504 data-nosnippet>504</a>                <span class="kw">let </span>layer = &lt;DummyLayer <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>;
-<a href=#505 id=505 data-nosnippet>505</a>                Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;
-<a href=#506 id=506 data-nosnippet>506</a>            } <span class="kw">else </span>{
-<a href=#507 id=507 data-nosnippet>507</a>                <span class="kw">let </span>weight = vb.get_with_hints((out_dim, in_dim), <span class="string">"weight"</span>, Default::default())<span class="question-mark">?</span>;
-<a href=#508 id=508 data-nosnippet>508</a>                <span class="kw">let </span>weight = merge_lora_weights(<span class="kw-2">&amp;</span>vb, weight, in_dim, out_dim, Default::default())<span class="question-mark">?</span>;
+<a href=#370 id=370 data-nosnippet>370</a>}
+<a href=#371 id=371 data-nosnippet>371</a>
+<a href=#372 id=372 data-nosnippet>372</a><span class="kw">impl </span>QuantMethod <span class="kw">for </span>ColumnParallelLayer {
+<a href=#373 id=373 data-nosnippet>373</a>    <span class="kw">fn </span>new(_method: QuantMethodConfig) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt;
+<a href=#374 id=374 data-nosnippet>374</a>    <span class="kw">where
+<a href=#375 id=375 data-nosnippet>375</a>        </span><span class="self">Self</span>: Sized,
+<a href=#376 id=376 data-nosnippet>376</a>    {
+<a href=#377 id=377 data-nosnippet>377</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"ColumnParallelLayer should not be constructed with `QuantMethod::new`"</span>)
+<a href=#378 id=378 data-nosnippet>378</a>    }
+<a href=#379 id=379 data-nosnippet>379</a>
+<a href=#380 id=380 data-nosnippet>380</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#381 id=381 data-nosnippet>381</a>        <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.weight.forward(a)<span class="question-mark">?</span>;
+<a href=#382 id=382 data-nosnippet>382</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="kw-2">&amp;</span><span class="self">self</span>.bias {
+<a href=#383 id=383 data-nosnippet>383</a>            xs = xs.broadcast_add(bias)<span class="question-mark">?</span>;
+<a href=#384 id=384 data-nosnippet>384</a>        }
+<a href=#385 id=385 data-nosnippet>385</a>        <span class="prelude-val">Ok</span>(xs)
+<a href=#386 id=386 data-nosnippet>386</a>    }
+<a href=#387 id=387 data-nosnippet>387</a>
+<a href=#388 id=388 data-nosnippet>388</a>    <span class="kw">fn </span>add_delta_w(<span class="kw-2">&amp;</span><span class="self">self</span>, delta: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+<a href=#389 id=389 data-nosnippet>389</a>        <span class="kw">let </span>weight = <span class="self">self</span>.weight.add_delta_w(delta)<span class="question-mark">?</span>;
+<a href=#390 id=390 data-nosnippet>390</a>        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self </span>{
+<a href=#391 id=391 data-nosnippet>391</a>            weight,
+<a href=#392 id=392 data-nosnippet>392</a>            bias: <span class="self">self</span>.bias.clone(),
+<a href=#393 id=393 data-nosnippet>393</a>        }))
+<a href=#394 id=394 data-nosnippet>394</a>    }
+<a href=#395 id=395 data-nosnippet>395</a>
+<a href=#396 id=396 data-nosnippet>396</a>    <span class="kw">fn </span>dequantize_w(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#397 id=397 data-nosnippet>397</a>        <span class="self">self</span>.weight.dequantize_w()
+<a href=#398 id=398 data-nosnippet>398</a>    }
+<a href=#399 id=399 data-nosnippet>399</a>
+<a href=#400 id=400 data-nosnippet>400</a>    <span class="kw">fn </span>dtype_and_device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; (candle_core::DType, candle_core::Device) {
+<a href=#401 id=401 data-nosnippet>401</a>        <span class="self">self</span>.weight.dtype_and_device()
+<a href=#402 id=402 data-nosnippet>402</a>    }
+<a href=#403 id=403 data-nosnippet>403</a>
+<a href=#404 id=404 data-nosnippet>404</a>    <span class="kw">fn </span>begin_track_stats(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#405 id=405 data-nosnippet>405</a>        Arc::get_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.weight)
+<a href=#406 id=406 data-nosnippet>406</a>            .context(<span class="string">"Failed to get &amp;mut to weight"</span>)<span class="question-mark">?
+<a href=#407 id=407 data-nosnippet>407</a>            </span>.begin_track_stats()
+<a href=#408 id=408 data-nosnippet>408</a>    }
+<a href=#409 id=409 data-nosnippet>409</a>
+<a href=#410 id=410 data-nosnippet>410</a>    <span class="kw">fn </span>end_track_stats(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#411 id=411 data-nosnippet>411</a>        <span class="self">self</span>.weight.end_track_stats()
+<a href=#412 id=412 data-nosnippet>412</a>    }
+<a href=#413 id=413 data-nosnippet>413</a>
+<a href=#414 id=414 data-nosnippet>414</a>    <span class="kw">fn </span>quantized_act_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;candle_core::DType&gt; {
+<a href=#415 id=415 data-nosnippet>415</a>        <span class="self">self</span>.weight.quantized_act_type()
+<a href=#416 id=416 data-nosnippet>416</a>    }
+<a href=#417 id=417 data-nosnippet>417</a>
+<a href=#418 id=418 data-nosnippet>418</a>    <span class="kw">fn </span>unquant_weight_bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(Tensor, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt; {
+<a href=#419 id=419 data-nosnippet>419</a>        <span class="self">self</span>.weight.unquant_weight_bias()
+<a href=#420 id=420 data-nosnippet>420</a>    }
+<a href=#421 id=421 data-nosnippet>421</a>
+<a href=#422 id=422 data-nosnippet>422</a>    <span class="kw">fn </span>apply_isq(
+<a href=#423 id=423 data-nosnippet>423</a>        <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
+<a href=#424 id=424 data-nosnippet>424</a>        dtype: <span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::IsqType&gt;,
+<a href=#425 id=425 data-nosnippet>425</a>        device: candle_core::Device,
+<a href=#426 id=426 data-nosnippet>426</a>        n_quantized: <span class="kw-2">&amp;</span>std::sync::atomic::AtomicUsize,
+<a href=#427 id=427 data-nosnippet>427</a>        imatrix_weight: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
+<a href=#428 id=428 data-nosnippet>428</a>        guard: QuantizeOntoGuard,
+<a href=#429 id=429 data-nosnippet>429</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+<a href=#430 id=430 data-nosnippet>430</a>        <span class="kw">let </span>weight =
+<a href=#431 id=431 data-nosnippet>431</a>            <span class="self">self</span>.weight
+<a href=#432 id=432 data-nosnippet>432</a>                .clone()
+<a href=#433 id=433 data-nosnippet>433</a>                .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)<span class="question-mark">?</span>;
+<a href=#434 id=434 data-nosnippet>434</a>        <span class="kw">let </span>bias = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.bias {
+<a href=#435 id=435 data-nosnippet>435</a>            <span class="prelude-val">Some</span>(b) =&gt; {
+<a href=#436 id=436 data-nosnippet>436</a>                <span class="kw">let </span>(dtype, device) = weight.dtype_and_device();
+<a href=#437 id=437 data-nosnippet>437</a>                <span class="prelude-val">Some</span>(b.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>)
+<a href=#438 id=438 data-nosnippet>438</a>            }
+<a href=#439 id=439 data-nosnippet>439</a>            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
+<a href=#440 id=440 data-nosnippet>440</a>        };
+<a href=#441 id=441 data-nosnippet>441</a>        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self </span>{ weight, bias }))
+<a href=#442 id=442 data-nosnippet>442</a>    }
+<a href=#443 id=443 data-nosnippet>443</a>
+<a href=#444 id=444 data-nosnippet>444</a>    <span class="kw">fn </span>is_distributed(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DistributedKind&gt; {
+<a href=#445 id=445 data-nosnippet>445</a>        <span class="prelude-val">Some</span>(DistributedKind::ColumnParallel)
+<a href=#446 id=446 data-nosnippet>446</a>    }
+<a href=#447 id=447 data-nosnippet>447</a>}
+<a href=#448 id=448 data-nosnippet>448</a>
+<a href=#449 id=449 data-nosnippet>449</a><span class="kw">impl </span>QuantizedSerde <span class="kw">for </span>ColumnParallelLayer {
+<a href=#450 id=450 data-nosnippet>450</a>    <span class="kw">fn </span>isq_serde_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#451 id=451 data-nosnippet>451</a>        <span class="self">self</span>.weight.isq_serde_supported()
+<a href=#452 id=452 data-nosnippet>452</a>    }
+<a href=#453 id=453 data-nosnippet>453</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
+<a href=#454 id=454 data-nosnippet>454</a>        <span class="self">self</span>.weight.name()
+<a href=#455 id=455 data-nosnippet>455</a>    }
+<a href=#456 id=456 data-nosnippet>456</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;std::borrow::Cow&lt;[u8]&gt;&gt; {
+<a href=#457 id=457 data-nosnippet>457</a>        <span class="self">self</span>.weight.serialize_with_bias(<span class="self">self</span>.bias.clone())
+<a href=#458 id=458 data-nosnippet>458</a>    }
+<a href=#459 id=459 data-nosnippet>459</a>    <span class="kw">fn </span>deserialize(
+<a href=#460 id=460 data-nosnippet>460</a>        data: std::borrow::Cow&lt;[u8]&gt;,
+<a href=#461 id=461 data-nosnippet>461</a>        device: <span class="kw-2">&amp;</span>candle_core::Device,
+<a href=#462 id=462 data-nosnippet>462</a>        _comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
+<a href=#463 id=463 data-nosnippet>463</a>        guard: QuantizeOntoGuard,
+<a href=#464 id=464 data-nosnippet>464</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;
+<a href=#465 id=465 data-nosnippet>465</a>    <span class="kw">where
+<a href=#466 id=466 data-nosnippet>466</a>        </span><span class="self">Self</span>: Sized,
+<a href=#467 id=467 data-nosnippet>467</a>    {
+<a href=#468 id=468 data-nosnippet>468</a>        <span class="comment">// NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+<a href=#469 id=469 data-nosnippet>469</a>        </span><span class="kw">let </span>isq_type = data[<span class="kw">crate</span>::UQFF_QUANT_TYPE_OFFSET];
+<a href=#470 id=470 data-nosnippet>470</a>        <span class="kw">let </span>(weight, bias) = <span class="kw">match </span>QuantizedSerdeType::try_from(isq_type <span class="kw">as </span>usize)<span class="question-mark">? </span>{
+<a href=#471 id=471 data-nosnippet>471</a>            QuantizedSerdeType::Gguf =&gt; GgufMatMul::deserialize_ext_bias(data, device, guard)<span class="question-mark">?</span>,
+<a href=#472 id=472 data-nosnippet>472</a>            QuantizedSerdeType::Unquant =&gt; {
+<a href=#473 id=473 data-nosnippet>473</a>                UnquantLinear::deserialize_ext_bias(data, device, guard)<span class="question-mark">?
+<a href=#474 id=474 data-nosnippet>474</a>            </span>}
+<a href=#475 id=475 data-nosnippet>475</a>            QuantizedSerdeType::Hqq =&gt; HqqLayer::deserialize_ext_bias(data, device, guard)<span class="question-mark">?</span>,
+<a href=#476 id=476 data-nosnippet>476</a>            QuantizedSerdeType::Fp8 =&gt; FP8Linear::deserialize_ext_bias(data, device, guard)<span class="question-mark">?</span>,
+<a href=#477 id=477 data-nosnippet>477</a>            QuantizedSerdeType::Afq =&gt; AfqLayer::deserialize_ext_bias(data, device, guard)<span class="question-mark">?</span>,
+<a href=#478 id=478 data-nosnippet>478</a>        };
+<a href=#479 id=479 data-nosnippet>479</a>        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self </span>{ weight, bias }))
+<a href=#480 id=480 data-nosnippet>480</a>    }
+<a href=#481 id=481 data-nosnippet>481</a>}
+<a href=#482 id=482 data-nosnippet>482</a>
+<a href=#483 id=483 data-nosnippet>483</a><span class="attr">#[derive(Debug)]
+<a href=#484 id=484 data-nosnippet>484</a></span><span class="doccomment">/// This layer has no parallelization
+<a href=#485 id=485 data-nosnippet>485</a></span><span class="kw">pub struct </span>ReplicatedLayer(Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;);
+<a href=#486 id=486 data-nosnippet>486</a>
+<a href=#487 id=487 data-nosnippet>487</a><span class="kw">impl </span>ReplicatedLayer {
+<a href=#488 id=488 data-nosnippet>488</a>    <span class="kw">pub fn </span>from_linear(lin: Linear) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+<a href=#489 id=489 data-nosnippet>489</a>        <span class="kw">let </span>dev = lin.weight().device().clone();
+<a href=#490 id=490 data-nosnippet>490</a>        <span class="kw">let </span>this_unquant = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))<span class="question-mark">?</span>);
+<a href=#491 id=491 data-nosnippet>491</a>        <span class="kw">let </span>this: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; = apply_immediate_isq_always(this_unquant, <span class="kw-2">&amp;</span>dev)<span class="question-mark">?</span>;
+<a href=#492 id=492 data-nosnippet>492</a>        <span class="prelude-val">Ok</span>(this)
+<a href=#493 id=493 data-nosnippet>493</a>    }
+<a href=#494 id=494 data-nosnippet>494</a>
+<a href=#495 id=495 data-nosnippet>495</a>    <span class="attr">#[allow(clippy::new_ret_no_self)]
+<a href=#496 id=496 data-nosnippet>496</a>    </span><span class="kw">pub fn </span>new(
+<a href=#497 id=497 data-nosnippet>497</a>        in_dim: usize,
+<a href=#498 id=498 data-nosnippet>498</a>        out_dim: usize,
+<a href=#499 id=499 data-nosnippet>499</a>        config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
+<a href=#500 id=500 data-nosnippet>500</a>        bias: bool,
+<a href=#501 id=501 data-nosnippet>501</a>        vb: ShardedVarBuilder,
+<a href=#502 id=502 data-nosnippet>502</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+<a href=#503 id=503 data-nosnippet>503</a>        <span class="kw">let </span>base_vb = vb.clone();
+<a href=#504 id=504 data-nosnippet>504</a>        <span class="kw">let </span>vb = <span class="kw">if </span>should_apply_immediate_isq(<span class="kw-2">&amp;</span>vb) {
+<a href=#505 id=505 data-nosnippet>505</a>            vb.set_device(Device::Cpu)
+<a href=#506 id=506 data-nosnippet>506</a>        } <span class="kw">else </span>{
+<a href=#507 id=507 data-nosnippet>507</a>            vb
+<a href=#508 id=508 data-nosnippet>508</a>        };
 <a href=#509 id=509 data-nosnippet>509</a>
-<a href=#510 id=510 data-nosnippet>510</a>                <span class="kw">let </span>bias = <span class="kw">if </span>bias {
-<a href=#511 id=511 data-nosnippet>511</a>                    <span class="prelude-val">Some</span>(vb.get_with_hints((out_dim,), <span class="string">"bias"</span>, Default::default())<span class="question-mark">?</span>)
-<a href=#512 id=512 data-nosnippet>512</a>                } <span class="kw">else </span>{
-<a href=#513 id=513 data-nosnippet>513</a>                    <span class="prelude-val">None
-<a href=#514 id=514 data-nosnippet>514</a>                </span>};
-<a href=#515 id=515 data-nosnippet>515</a>                <span class="kw">let </span>layer = &lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Unquantized(
-<a href=#516 id=516 data-nosnippet>516</a>                    Linear::new(weight, bias),
-<a href=#517 id=517 data-nosnippet>517</a>                ))<span class="question-mark">?</span>;
-<a href=#518 id=518 data-nosnippet>518</a>                Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;
-<a href=#519 id=519 data-nosnippet>519</a>            }
-<a href=#520 id=520 data-nosnippet>520</a>        };
-<a href=#521 id=521 data-nosnippet>521</a>
-<a href=#522 id=522 data-nosnippet>522</a>        <span class="kw">let </span>this_unquant = Arc::new(<span class="self">Self</span>(layer));
-<a href=#523 id=523 data-nosnippet>523</a>        <span class="kw">let </span>this: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; = apply_immediate_isq(this_unquant, base_vb)<span class="question-mark">?</span>;
-<a href=#524 id=524 data-nosnippet>524</a>        <span class="prelude-val">Ok</span>(this)
-<a href=#525 id=525 data-nosnippet>525</a>    }
-<a href=#526 id=526 data-nosnippet>526</a>}
-<a href=#527 id=527 data-nosnippet>527</a>
-<a href=#528 id=528 data-nosnippet>528</a><span class="kw">impl </span>QuantMethod <span class="kw">for </span>ReplicatedLayer {
-<a href=#529 id=529 data-nosnippet>529</a>    <span class="kw">fn </span>new(_method: QuantMethodConfig) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt;
-<a href=#530 id=530 data-nosnippet>530</a>    <span class="kw">where
-<a href=#531 id=531 data-nosnippet>531</a>        </span><span class="self">Self</span>: Sized,
-<a href=#532 id=532 data-nosnippet>532</a>    {
-<a href=#533 id=533 data-nosnippet>533</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"ReplicatedLayer should not be constructed with `QuantMethod::new`"</span>)
-<a href=#534 id=534 data-nosnippet>534</a>    }
-<a href=#535 id=535 data-nosnippet>535</a>
-<a href=#536 id=536 data-nosnippet>536</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#537 id=537 data-nosnippet>537</a>        <span class="self">self</span>.<span class="number">0</span>.forward(a)
-<a href=#538 id=538 data-nosnippet>538</a>    }
-<a href=#539 id=539 data-nosnippet>539</a>
-<a href=#540 id=540 data-nosnippet>540</a>    <span class="kw">fn </span>add_delta_w(<span class="kw-2">&amp;</span><span class="self">self</span>, delta: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-<a href=#541 id=541 data-nosnippet>541</a>        <span class="self">self</span>.<span class="number">0</span>.add_delta_w(delta)
-<a href=#542 id=542 data-nosnippet>542</a>    }
-<a href=#543 id=543 data-nosnippet>543</a>
-<a href=#544 id=544 data-nosnippet>544</a>    <span class="kw">fn </span>dequantize_w(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#545 id=545 data-nosnippet>545</a>        <span class="self">self</span>.<span class="number">0</span>.dequantize_w()
-<a href=#546 id=546 data-nosnippet>546</a>    }
-<a href=#547 id=547 data-nosnippet>547</a>
-<a href=#548 id=548 data-nosnippet>548</a>    <span class="kw">fn </span>dtype_and_device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; (candle_core::DType, candle_core::Device) {
-<a href=#549 id=549 data-nosnippet>549</a>        <span class="self">self</span>.<span class="number">0</span>.dtype_and_device()
-<a href=#550 id=550 data-nosnippet>550</a>    }
-<a href=#551 id=551 data-nosnippet>551</a>
-<a href=#552 id=552 data-nosnippet>552</a>    <span class="kw">fn </span>begin_track_stats(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#553 id=553 data-nosnippet>553</a>        Arc::get_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.<span class="number">0</span>)
-<a href=#554 id=554 data-nosnippet>554</a>            .context(<span class="string">"Failed to get &amp;mut to weight"</span>)<span class="question-mark">?
-<a href=#555 id=555 data-nosnippet>555</a>            </span>.begin_track_stats()
-<a href=#556 id=556 data-nosnippet>556</a>    }
-<a href=#557 id=557 data-nosnippet>557</a>
-<a href=#558 id=558 data-nosnippet>558</a>    <span class="kw">fn </span>end_track_stats(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#559 id=559 data-nosnippet>559</a>        <span class="self">self</span>.<span class="number">0</span>.end_track_stats()
-<a href=#560 id=560 data-nosnippet>560</a>    }
-<a href=#561 id=561 data-nosnippet>561</a>
-<a href=#562 id=562 data-nosnippet>562</a>    <span class="kw">fn </span>quantized_act_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;candle_core::DType&gt; {
-<a href=#563 id=563 data-nosnippet>563</a>        <span class="self">self</span>.<span class="number">0</span>.quantized_act_type()
-<a href=#564 id=564 data-nosnippet>564</a>    }
-<a href=#565 id=565 data-nosnippet>565</a>
-<a href=#566 id=566 data-nosnippet>566</a>    <span class="kw">fn </span>unquant_weight_bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(Tensor, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt; {
-<a href=#567 id=567 data-nosnippet>567</a>        <span class="self">self</span>.<span class="number">0</span>.unquant_weight_bias()
-<a href=#568 id=568 data-nosnippet>568</a>    }
-<a href=#569 id=569 data-nosnippet>569</a>
-<a href=#570 id=570 data-nosnippet>570</a>    <span class="kw">fn </span>apply_isq(
-<a href=#571 id=571 data-nosnippet>571</a>        <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
-<a href=#572 id=572 data-nosnippet>572</a>        dtype: <span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::IsqType&gt;,
-<a href=#573 id=573 data-nosnippet>573</a>        device: candle_core::Device,
-<a href=#574 id=574 data-nosnippet>574</a>        n_quantized: <span class="kw-2">&amp;</span>std::sync::atomic::AtomicUsize,
-<a href=#575 id=575 data-nosnippet>575</a>        imatrix_weight: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
-<a href=#576 id=576 data-nosnippet>576</a>        guard: QuantizeOntoGuard,
-<a href=#577 id=577 data-nosnippet>577</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-<a href=#578 id=578 data-nosnippet>578</a>        <span class="self">self</span>.<span class="number">0
-<a href=#579 id=579 data-nosnippet>579</a>            </span>.clone()
-<a href=#580 id=580 data-nosnippet>580</a>            .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)
-<a href=#581 id=581 data-nosnippet>581</a>    }
-<a href=#582 id=582 data-nosnippet>582</a>
-<a href=#583 id=583 data-nosnippet>583</a>    <span class="kw">fn </span>is_distributed(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DistributedKind&gt; {
-<a href=#584 id=584 data-nosnippet>584</a>        <span class="prelude-val">Some</span>(DistributedKind::Replicated)
+<a href=#510 id=510 data-nosnippet>510</a>        <span class="kw">let </span>layer = <span class="kw">if let </span><span class="prelude-val">Some</span>(quant_conf) = <span class="kw-2">&amp;</span>config {
+<a href=#511 id=511 data-nosnippet>511</a>            <span class="kw">match </span>quant_conf {
+<a href=#512 id=512 data-nosnippet>512</a>                QuantizedConfig::GptqAwq { .. } =&gt; {
+<a href=#513 id=513 data-nosnippet>513</a>                    gptq_linear(in_dim, out_dim, quant_conf, vb.clone())<span class="question-mark">?
+<a href=#514 id=514 data-nosnippet>514</a>                </span>}
+<a href=#515 id=515 data-nosnippet>515</a>                QuantizedConfig::Fp8 { .. } =&gt; blockwise_fp8_linear_b(
+<a href=#516 id=516 data-nosnippet>516</a>                    in_dim,
+<a href=#517 id=517 data-nosnippet>517</a>                    out_dim,
+<a href=#518 id=518 data-nosnippet>518</a>                    quant_conf,
+<a href=#519 id=519 data-nosnippet>519</a>                    bias,
+<a href=#520 id=520 data-nosnippet>520</a>                    Default::default(),
+<a href=#521 id=521 data-nosnippet>521</a>                    vb.clone(),
+<a href=#522 id=522 data-nosnippet>522</a>                )<span class="question-mark">?</span>,
+<a href=#523 id=523 data-nosnippet>523</a>                QuantizedConfig::Bitsandbytes { .. } =&gt; {
+<a href=#524 id=524 data-nosnippet>524</a>                    Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())<span class="question-mark">?</span>) <span class="kw">as </span>Arc&lt;<span class="kw">_</span>&gt;
+<a href=#525 id=525 data-nosnippet>525</a>                }
+<a href=#526 id=526 data-nosnippet>526</a>                QuantizedConfig::Afq { .. } =&gt; {
+<a href=#527 id=527 data-nosnippet>527</a>                    AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())<span class="question-mark">?
+<a href=#528 id=528 data-nosnippet>528</a>                </span>}
+<a href=#529 id=529 data-nosnippet>529</a>            }
+<a href=#530 id=530 data-nosnippet>530</a>        } <span class="kw">else </span>{
+<a href=#531 id=531 data-nosnippet>531</a>            <span class="comment">// Handle the case where the layer is dummy (no tensors)
+<a href=#532 id=532 data-nosnippet>532</a>            </span><span class="kw">if </span>!vb.contains_tensor(<span class="string">"weight"</span>) {
+<a href=#533 id=533 data-nosnippet>533</a>                <span class="kw">let </span>layer = &lt;DummyLayer <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>;
+<a href=#534 id=534 data-nosnippet>534</a>                Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;
+<a href=#535 id=535 data-nosnippet>535</a>            } <span class="kw">else </span>{
+<a href=#536 id=536 data-nosnippet>536</a>                <span class="kw">let </span>weight = vb.get_with_hints((out_dim, in_dim), <span class="string">"weight"</span>, Default::default())<span class="question-mark">?</span>;
+<a href=#537 id=537 data-nosnippet>537</a>                <span class="kw">let </span>weight = merge_lora_weights(<span class="kw-2">&amp;</span>vb, weight, in_dim, out_dim, Default::default())<span class="question-mark">?</span>;
+<a href=#538 id=538 data-nosnippet>538</a>
+<a href=#539 id=539 data-nosnippet>539</a>                <span class="kw">let </span>bias = <span class="kw">if </span>bias {
+<a href=#540 id=540 data-nosnippet>540</a>                    <span class="prelude-val">Some</span>(vb.get_with_hints((out_dim,), <span class="string">"bias"</span>, Default::default())<span class="question-mark">?</span>)
+<a href=#541 id=541 data-nosnippet>541</a>                } <span class="kw">else </span>{
+<a href=#542 id=542 data-nosnippet>542</a>                    <span class="prelude-val">None
+<a href=#543 id=543 data-nosnippet>543</a>                </span>};
+<a href=#544 id=544 data-nosnippet>544</a>                <span class="kw">let </span>layer = &lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Unquantized(
+<a href=#545 id=545 data-nosnippet>545</a>                    Linear::new(weight, bias),
+<a href=#546 id=546 data-nosnippet>546</a>                ))<span class="question-mark">?</span>;
+<a href=#547 id=547 data-nosnippet>547</a>                Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;
+<a href=#548 id=548 data-nosnippet>548</a>            }
+<a href=#549 id=549 data-nosnippet>549</a>        };
+<a href=#550 id=550 data-nosnippet>550</a>
+<a href=#551 id=551 data-nosnippet>551</a>        <span class="kw">let </span>this_unquant = Arc::new(<span class="self">Self</span>(layer));
+<a href=#552 id=552 data-nosnippet>552</a>        <span class="kw">let </span>this: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; = apply_immediate_isq(this_unquant, base_vb)<span class="question-mark">?</span>;
+<a href=#553 id=553 data-nosnippet>553</a>        <span class="prelude-val">Ok</span>(this)
+<a href=#554 id=554 data-nosnippet>554</a>    }
+<a href=#555 id=555 data-nosnippet>555</a>}
+<a href=#556 id=556 data-nosnippet>556</a>
+<a href=#557 id=557 data-nosnippet>557</a><span class="kw">impl </span>QuantMethod <span class="kw">for </span>ReplicatedLayer {
+<a href=#558 id=558 data-nosnippet>558</a>    <span class="kw">fn </span>new(_method: QuantMethodConfig) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt;
+<a href=#559 id=559 data-nosnippet>559</a>    <span class="kw">where
+<a href=#560 id=560 data-nosnippet>560</a>        </span><span class="self">Self</span>: Sized,
+<a href=#561 id=561 data-nosnippet>561</a>    {
+<a href=#562 id=562 data-nosnippet>562</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"ReplicatedLayer should not be constructed with `QuantMethod::new`"</span>)
+<a href=#563 id=563 data-nosnippet>563</a>    }
+<a href=#564 id=564 data-nosnippet>564</a>
+<a href=#565 id=565 data-nosnippet>565</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#566 id=566 data-nosnippet>566</a>        <span class="self">self</span>.<span class="number">0</span>.forward(a)
+<a href=#567 id=567 data-nosnippet>567</a>    }
+<a href=#568 id=568 data-nosnippet>568</a>
+<a href=#569 id=569 data-nosnippet>569</a>    <span class="kw">fn </span>add_delta_w(<span class="kw-2">&amp;</span><span class="self">self</span>, delta: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+<a href=#570 id=570 data-nosnippet>570</a>        <span class="self">self</span>.<span class="number">0</span>.add_delta_w(delta)
+<a href=#571 id=571 data-nosnippet>571</a>    }
+<a href=#572 id=572 data-nosnippet>572</a>
+<a href=#573 id=573 data-nosnippet>573</a>    <span class="kw">fn </span>dequantize_w(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#574 id=574 data-nosnippet>574</a>        <span class="self">self</span>.<span class="number">0</span>.dequantize_w()
+<a href=#575 id=575 data-nosnippet>575</a>    }
+<a href=#576 id=576 data-nosnippet>576</a>
+<a href=#577 id=577 data-nosnippet>577</a>    <span class="kw">fn </span>dtype_and_device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; (candle_core::DType, candle_core::Device) {
+<a href=#578 id=578 data-nosnippet>578</a>        <span class="self">self</span>.<span class="number">0</span>.dtype_and_device()
+<a href=#579 id=579 data-nosnippet>579</a>    }
+<a href=#580 id=580 data-nosnippet>580</a>
+<a href=#581 id=581 data-nosnippet>581</a>    <span class="kw">fn </span>begin_track_stats(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#582 id=582 data-nosnippet>582</a>        Arc::get_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.<span class="number">0</span>)
+<a href=#583 id=583 data-nosnippet>583</a>            .context(<span class="string">"Failed to get &amp;mut to weight"</span>)<span class="question-mark">?
+<a href=#584 id=584 data-nosnippet>584</a>            </span>.begin_track_stats()
 <a href=#585 id=585 data-nosnippet>585</a>    }
-<a href=#586 id=586 data-nosnippet>586</a>}
-<a href=#587 id=587 data-nosnippet>587</a>
-<a href=#588 id=588 data-nosnippet>588</a><span class="kw">impl </span>QuantizedSerde <span class="kw">for </span>ReplicatedLayer {
-<a href=#589 id=589 data-nosnippet>589</a>    <span class="kw">fn </span>isq_serde_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#590 id=590 data-nosnippet>590</a>        <span class="self">self</span>.<span class="number">0</span>.isq_serde_supported()
-<a href=#591 id=591 data-nosnippet>591</a>    }
-<a href=#592 id=592 data-nosnippet>592</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
-<a href=#593 id=593 data-nosnippet>593</a>        <span class="self">self</span>.<span class="number">0</span>.name()
-<a href=#594 id=594 data-nosnippet>594</a>    }
-<a href=#595 id=595 data-nosnippet>595</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;std::borrow::Cow&lt;[u8]&gt;&gt; {
-<a href=#596 id=596 data-nosnippet>596</a>        <span class="self">self</span>.<span class="number">0</span>.serialize()
+<a href=#586 id=586 data-nosnippet>586</a>
+<a href=#587 id=587 data-nosnippet>587</a>    <span class="kw">fn </span>end_track_stats(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#588 id=588 data-nosnippet>588</a>        <span class="self">self</span>.<span class="number">0</span>.end_track_stats()
+<a href=#589 id=589 data-nosnippet>589</a>    }
+<a href=#590 id=590 data-nosnippet>590</a>
+<a href=#591 id=591 data-nosnippet>591</a>    <span class="kw">fn </span>quantized_act_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;candle_core::DType&gt; {
+<a href=#592 id=592 data-nosnippet>592</a>        <span class="self">self</span>.<span class="number">0</span>.quantized_act_type()
+<a href=#593 id=593 data-nosnippet>593</a>    }
+<a href=#594 id=594 data-nosnippet>594</a>
+<a href=#595 id=595 data-nosnippet>595</a>    <span class="kw">fn </span>unquant_weight_bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(Tensor, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt; {
+<a href=#596 id=596 data-nosnippet>596</a>        <span class="self">self</span>.<span class="number">0</span>.unquant_weight_bias()
 <a href=#597 id=597 data-nosnippet>597</a>    }
-<a href=#598 id=598 data-nosnippet>598</a>    <span class="kw">fn </span>deserialize(
-<a href=#599 id=599 data-nosnippet>599</a>        data: std::borrow::Cow&lt;[u8]&gt;,
-<a href=#600 id=600 data-nosnippet>600</a>        device: <span class="kw-2">&amp;</span>candle_core::Device,
-<a href=#601 id=601 data-nosnippet>601</a>        comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
-<a href=#602 id=602 data-nosnippet>602</a>        guard: QuantizeOntoGuard,
-<a href=#603 id=603 data-nosnippet>603</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;
-<a href=#604 id=604 data-nosnippet>604</a>    <span class="kw">where
-<a href=#605 id=605 data-nosnippet>605</a>        </span><span class="self">Self</span>: Sized,
-<a href=#606 id=606 data-nosnippet>606</a>    {
-<a href=#607 id=607 data-nosnippet>607</a>        <span class="comment">// NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
-<a href=#608 id=608 data-nosnippet>608</a>        </span><span class="kw">let </span>isq_type = data[<span class="kw">crate</span>::UQFF_QUANT_TYPE_OFFSET];
-<a href=#609 id=609 data-nosnippet>609</a>        <span class="kw">let </span>deserialized = <span class="kw">match </span>QuantizedSerdeType::try_from(isq_type <span class="kw">as </span>usize)<span class="question-mark">? </span>{
-<a href=#610 id=610 data-nosnippet>610</a>            QuantizedSerdeType::Gguf =&gt; GgufMatMul::deserialize(data, device, comm, guard)<span class="question-mark">?</span>,
-<a href=#611 id=611 data-nosnippet>611</a>            QuantizedSerdeType::Unquant =&gt; UnquantLinear::deserialize(data, device, comm, guard)<span class="question-mark">?</span>,
-<a href=#612 id=612 data-nosnippet>612</a>            QuantizedSerdeType::Hqq =&gt; HqqLayer::deserialize(data, device, comm, guard)<span class="question-mark">?</span>,
-<a href=#613 id=613 data-nosnippet>613</a>            QuantizedSerdeType::Fp8 =&gt; FP8Linear::deserialize(data, device, comm, guard)<span class="question-mark">?</span>,
-<a href=#614 id=614 data-nosnippet>614</a>            QuantizedSerdeType::Afq =&gt; AfqLayer::deserialize(data, device, comm, guard)<span class="question-mark">?</span>,
-<a href=#615 id=615 data-nosnippet>615</a>        };
-<a href=#616 id=616 data-nosnippet>616</a>        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self</span>(deserialized)))
-<a href=#617 id=617 data-nosnippet>617</a>    }
-<a href=#618 id=618 data-nosnippet>618</a>}
-<a href=#619 id=619 data-nosnippet>619</a>
-<a href=#620 id=620 data-nosnippet>620</a><span class="attr">#[derive(Debug)]
-<a href=#621 id=621 data-nosnippet>621</a></span><span class="kw">pub struct </span>PackedExperts {
-<a href=#622 id=622 data-nosnippet>622</a>    <span class="kw">pub </span>gate_proj: Vec&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;,
-<a href=#623 id=623 data-nosnippet>623</a>    <span class="kw">pub </span>up_proj: Vec&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;,
-<a href=#624 id=624 data-nosnippet>624</a>    <span class="kw">pub </span>down_proj: Vec&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;,
-<a href=#625 id=625 data-nosnippet>625</a>}
-<a href=#626 id=626 data-nosnippet>626</a>
-<a href=#627 id=627 data-nosnippet>627</a><span class="kw">impl </span>PackedExperts {
-<a href=#628 id=628 data-nosnippet>628</a>    <span class="doccomment">/// Note: we only support AFQ and unquantized here because they are the only ones that support indexed.
-<a href=#629 id=629 data-nosnippet>629</a>    </span><span class="attr">#[allow(clippy::too_many_arguments)]
-<a href=#630 id=630 data-nosnippet>630</a>    </span><span class="kw">pub fn </span>new(
-<a href=#631 id=631 data-nosnippet>631</a>        num_local_experts: usize,
-<a href=#632 id=632 data-nosnippet>632</a>        hidden_size: usize,
-<a href=#633 id=633 data-nosnippet>633</a>        intermediate_size: usize,
-<a href=#634 id=634 data-nosnippet>634</a>        config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
-<a href=#635 id=635 data-nosnippet>635</a>        bias: bool,
-<a href=#636 id=636 data-nosnippet>636</a>        comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
-<a href=#637 id=637 data-nosnippet>637</a>        vb: ShardedVarBuilder,
-<a href=#638 id=638 data-nosnippet>638</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#639 id=639 data-nosnippet>639</a>        <span class="kw">if </span>bias {
-<a href=#640 id=640 data-nosnippet>640</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"PackedExperts does not support bias."</span>);
-<a href=#641 id=641 data-nosnippet>641</a>        }
-<a href=#642 id=642 data-nosnippet>642</a>
-<a href=#643 id=643 data-nosnippet>643</a>        <span class="kw">let </span>(gate_proj, up_proj, down_proj) = <span class="kw">if let </span><span class="prelude-val">Some</span>(quant_conf) = <span class="kw-2">&amp;</span>config {
-<a href=#644 id=644 data-nosnippet>644</a>            <span class="comment">// GPTQ and BNB do not support tensor parallelism
-<a href=#645 id=645 data-nosnippet>645</a>            </span><span class="kw">if </span>comm.world_size() != <span class="number">1 </span>{
-<a href=#646 id=646 data-nosnippet>646</a>                <span class="macro">candle_core::bail!</span>(
-<a href=#647 id=647 data-nosnippet>647</a>                    <span class="string">"PackedExperts with quantization config does not support distributed (world size {}). Use ISQ."</span>,
-<a href=#648 id=648 data-nosnippet>648</a>                    comm.world_size()
-<a href=#649 id=649 data-nosnippet>649</a>                );
-<a href=#650 id=650 data-nosnippet>650</a>            }
-<a href=#651 id=651 data-nosnippet>651</a>
-<a href=#652 id=652 data-nosnippet>652</a>            <span class="kw">match </span>quant_conf {
-<a href=#653 id=653 data-nosnippet>653</a>                QuantizedConfig::Afq { .. } =&gt; {
-<a href=#654 id=654 data-nosnippet>654</a>                    <span class="kw">if </span>!vb.contains_tensor(<span class="string">"gate_up_proj"</span>)
-<a href=#655 id=655 data-nosnippet>655</a>                        || !vb.contains_tensor(<span class="string">"gate_up_proj.weight"</span>)
-<a href=#656 id=656 data-nosnippet>656</a>                    {
-<a href=#657 id=657 data-nosnippet>657</a>                        <span class="macro">candle_core::bail!</span>(<span class="string">"PackedExperts with AFQ quantization config does not support `gate_up_proj` format."</span>);
-<a href=#658 id=658 data-nosnippet>658</a>                    }
-<a href=#659 id=659 data-nosnippet>659</a>
-<a href=#660 id=660 data-nosnippet>660</a>                    <span class="kw">let </span>base_vb = vb.clone();
-<a href=#661 id=661 data-nosnippet>661</a>
-<a href=#662 id=662 data-nosnippet>662</a>                    <span class="kw">let </span>vb_gate_proj = <span class="kw">if </span>should_apply_immediate_isq(<span class="kw-2">&amp;</span>vb) {
-<a href=#663 id=663 data-nosnippet>663</a>                        vb.pp(<span class="string">"gate_proj"</span>).set_device(Device::Cpu)
-<a href=#664 id=664 data-nosnippet>664</a>                    } <span class="kw">else </span>{
-<a href=#665 id=665 data-nosnippet>665</a>                        vb.pp(<span class="string">"gate_proj"</span>)
-<a href=#666 id=666 data-nosnippet>666</a>                    };
-<a href=#667 id=667 data-nosnippet>667</a>                    <span class="kw">let </span>vb_up_proj = <span class="kw">if </span>should_apply_immediate_isq(<span class="kw-2">&amp;</span>vb) {
-<a href=#668 id=668 data-nosnippet>668</a>                        vb.pp(<span class="string">"up_proj"</span>).set_device(Device::Cpu)
-<a href=#669 id=669 data-nosnippet>669</a>                    } <span class="kw">else </span>{
-<a href=#670 id=670 data-nosnippet>670</a>                        vb.pp(<span class="string">"up_proj"</span>)
-<a href=#671 id=671 data-nosnippet>671</a>                    };
-<a href=#672 id=672 data-nosnippet>672</a>                    <span class="kw">let </span>vb_down_proj = <span class="kw">if </span>should_apply_immediate_isq(<span class="kw-2">&amp;</span>vb) {
-<a href=#673 id=673 data-nosnippet>673</a>                        vb.pp(<span class="string">"down_proj"</span>).set_device(Device::Cpu)
-<a href=#674 id=674 data-nosnippet>674</a>                    } <span class="kw">else </span>{
-<a href=#675 id=675 data-nosnippet>675</a>                        vb.pp(<span class="string">"down_proj"</span>)
-<a href=#676 id=676 data-nosnippet>676</a>                    };
-<a href=#677 id=677 data-nosnippet>677</a>                    <span class="kw">let </span><span class="kw-2">mut </span>gate_proj = AfqLayer::afq_packed_linear_b(
-<a href=#678 id=678 data-nosnippet>678</a>                        num_local_experts,
-<a href=#679 id=679 data-nosnippet>679</a>                        hidden_size,
-<a href=#680 id=680 data-nosnippet>680</a>                        intermediate_size,
-<a href=#681 id=681 data-nosnippet>681</a>                        quant_conf,
-<a href=#682 id=682 data-nosnippet>682</a>                        bias,
-<a href=#683 id=683 data-nosnippet>683</a>                        vb_gate_proj,
-<a href=#684 id=684 data-nosnippet>684</a>                    )<span class="question-mark">?</span>;
-<a href=#685 id=685 data-nosnippet>685</a>                    <span class="kw">let </span><span class="kw-2">mut </span>up_proj = AfqLayer::afq_packed_linear_b(
-<a href=#686 id=686 data-nosnippet>686</a>                        num_local_experts,
-<a href=#687 id=687 data-nosnippet>687</a>                        hidden_size,
-<a href=#688 id=688 data-nosnippet>688</a>                        intermediate_size,
-<a href=#689 id=689 data-nosnippet>689</a>                        quant_conf,
-<a href=#690 id=690 data-nosnippet>690</a>                        bias,
-<a href=#691 id=691 data-nosnippet>691</a>                        vb_up_proj,
-<a href=#692 id=692 data-nosnippet>692</a>                    )<span class="question-mark">?</span>;
-<a href=#693 id=693 data-nosnippet>693</a>                    <span class="kw">let </span><span class="kw-2">mut </span>down_proj = AfqLayer::afq_packed_linear_b(
-<a href=#694 id=694 data-nosnippet>694</a>                        num_local_experts,
-<a href=#695 id=695 data-nosnippet>695</a>                        intermediate_size,
-<a href=#696 id=696 data-nosnippet>696</a>                        hidden_size,
-<a href=#697 id=697 data-nosnippet>697</a>                        quant_conf,
-<a href=#698 id=698 data-nosnippet>698</a>                        bias,
-<a href=#699 id=699 data-nosnippet>699</a>                        vb_down_proj,
-<a href=#700 id=700 data-nosnippet>700</a>                    )<span class="question-mark">?</span>;
-<a href=#701 id=701 data-nosnippet>701</a>
-<a href=#702 id=702 data-nosnippet>702</a>                    gate_proj = apply_immediate_isq(gate_proj, base_vb.pp(<span class="string">"gate_proj"</span>))<span class="question-mark">?</span>;
-<a href=#703 id=703 data-nosnippet>703</a>                    up_proj = apply_immediate_isq(up_proj, base_vb.pp(<span class="string">"up_proj"</span>))<span class="question-mark">?</span>;
-<a href=#704 id=704 data-nosnippet>704</a>                    down_proj = apply_immediate_isq(down_proj, base_vb.pp(<span class="string">"down_proj"</span>))<span class="question-mark">?</span>;
-<a href=#705 id=705 data-nosnippet>705</a>
-<a href=#706 id=706 data-nosnippet>706</a>                    (<span class="macro">vec!</span>[gate_proj], <span class="macro">vec!</span>[up_proj], <span class="macro">vec!</span>[down_proj])
-<a href=#707 id=707 data-nosnippet>707</a>                }
-<a href=#708 id=708 data-nosnippet>708</a>                <span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(
-<a href=#709 id=709 data-nosnippet>709</a>                    <span class="string">"PackedExperts with quantization config only allows AFQ quantization"
-<a href=#710 id=710 data-nosnippet>710</a>                </span>),
-<a href=#711 id=711 data-nosnippet>711</a>            }
-<a href=#712 id=712 data-nosnippet>712</a>        } <span class="kw">else if </span>!vb.contains_tensor(<span class="string">"gate_up_proj"</span>) {
-<a href=#713 id=713 data-nosnippet>713</a>            <span class="comment">// Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
-<a href=#714 id=714 data-nosnippet>714</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>gs: Vec&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; = Vec::new();
-<a href=#715 id=715 data-nosnippet>715</a>            <span class="kw">let </span><span class="kw-2">mut </span>us: Vec&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; = Vec::new();
-<a href=#716 id=716 data-nosnippet>716</a>            <span class="kw">let </span><span class="kw-2">mut </span>ds: Vec&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; = Vec::new();
-<a href=#717 id=717 data-nosnippet>717</a>            <span class="kw">for _ in </span><span class="number">0</span>..num_local_experts {
-<a href=#718 id=718 data-nosnippet>718</a>                gs.push(Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>));
-<a href=#719 id=719 data-nosnippet>719</a>                us.push(Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>));
-<a href=#720 id=720 data-nosnippet>720</a>                ds.push(Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>));
-<a href=#721 id=721 data-nosnippet>721</a>            }
-<a href=#722 id=722 data-nosnippet>722</a>            (gs, us, ds)
-<a href=#723 id=723 data-nosnippet>723</a>        } <span class="kw">else </span>{
-<a href=#724 id=724 data-nosnippet>724</a>            <span class="comment">// Parallelized like:
-<a href=#725 id=725 data-nosnippet>725</a>            // Each gpu holds all experts.
-<a href=#726 id=726 data-nosnippet>726</a>            // Gate/Up proj is parallelized on dim 2 (column)
-<a href=#727 id=727 data-nosnippet>727</a>            // Down proj is parallelized on dim 1 (row)
-<a href=#728 id=728 data-nosnippet>728</a>            // All reduce at the end.
-<a href=#729 id=729 data-nosnippet>729</a>
-<a href=#730 id=730 data-nosnippet>730</a>            // Handle the case where the layer is dummy (no tensors)
-<a href=#731 id=731 data-nosnippet>731</a>            </span><span class="kw">let </span>gate_up_block_size = intermediate_size / comm.world_size();
-<a href=#732 id=732 data-nosnippet>732</a>            <span class="kw">let </span>gate_up_start = gate_up_block_size * comm.rank();
-<a href=#733 id=733 data-nosnippet>733</a>
-<a href=#734 id=734 data-nosnippet>734</a>            <span class="comment">// Gate is right before Up in the gate_up
-<a href=#735 id=735 data-nosnippet>735</a>            </span><span class="kw">let </span>shard_gate = Shard::Offset {
-<a href=#736 id=736 data-nosnippet>736</a>                dim: <span class="number">2</span>,
-<a href=#737 id=737 data-nosnippet>737</a>                offset: gate_up_start,
-<a href=#738 id=738 data-nosnippet>738</a>                len: gate_up_block_size,
-<a href=#739 id=739 data-nosnippet>739</a>            };
-<a href=#740 id=740 data-nosnippet>740</a>            <span class="kw">let </span>shard_up = Shard::Offset {
-<a href=#741 id=741 data-nosnippet>741</a>                dim: <span class="number">2</span>,
-<a href=#742 id=742 data-nosnippet>742</a>                offset: intermediate_size + gate_up_start,
-<a href=#743 id=743 data-nosnippet>743</a>                len: gate_up_block_size,
-<a href=#744 id=744 data-nosnippet>744</a>            };
-<a href=#745 id=745 data-nosnippet>745</a>            <span class="kw">let </span>shard_down = Shard::Simple {
-<a href=#746 id=746 data-nosnippet>746</a>                dim: <span class="number">1</span>,
-<a href=#747 id=747 data-nosnippet>747</a>                rank: comm.rank(),
-<a href=#748 id=748 data-nosnippet>748</a>                world_size: comm.world_size(),
-<a href=#749 id=749 data-nosnippet>749</a>            };
-<a href=#750 id=750 data-nosnippet>750</a>
-<a href=#751 id=751 data-nosnippet>751</a>            <span class="kw">let </span>vb_gate_up_proj = <span class="kw">if </span>should_apply_immediate_isq(<span class="kw-2">&amp;</span>vb) {
-<a href=#752 id=752 data-nosnippet>752</a>                vb.pp(<span class="string">"gate_up_proj"</span>).set_device(Device::Cpu)
-<a href=#753 id=753 data-nosnippet>753</a>            } <span class="kw">else </span>{
-<a href=#754 id=754 data-nosnippet>754</a>                vb.pp(<span class="string">"gate_up_proj"</span>)
-<a href=#755 id=755 data-nosnippet>755</a>            };
-<a href=#756 id=756 data-nosnippet>756</a>            <span class="kw">let </span>vb_down_proj = <span class="kw">if </span>should_apply_immediate_isq(<span class="kw-2">&amp;</span>vb) {
-<a href=#757 id=757 data-nosnippet>757</a>                vb.pp(<span class="string">"down_proj"</span>).set_device(Device::Cpu)
-<a href=#758 id=758 data-nosnippet>758</a>            } <span class="kw">else </span>{
-<a href=#759 id=759 data-nosnippet>759</a>                vb.pp(<span class="string">"down_proj"</span>)
-<a href=#760 id=760 data-nosnippet>760</a>            };
-<a href=#761 id=761 data-nosnippet>761</a>
-<a href=#762 id=762 data-nosnippet>762</a>            <span class="kw">let </span>gate_proj = vb
-<a href=#763 id=763 data-nosnippet>763</a>                .get_with_hints(
-<a href=#764 id=764 data-nosnippet>764</a>                    (num_local_experts, hidden_size, intermediate_size * <span class="number">2</span>),
-<a href=#765 id=765 data-nosnippet>765</a>                    <span class="string">"gate_up_proj"</span>,
-<a href=#766 id=766 data-nosnippet>766</a>                    shard_gate,
-<a href=#767 id=767 data-nosnippet>767</a>                )<span class="question-mark">?
-<a href=#768 id=768 data-nosnippet>768</a>                </span>.t()<span class="question-mark">?
-<a href=#769 id=769 data-nosnippet>769</a>                </span>.contiguous()<span class="question-mark">?</span>;
-<a href=#770 id=770 data-nosnippet>770</a>            <span class="kw">let </span>up_proj = vb
-<a href=#771 id=771 data-nosnippet>771</a>                .get_with_hints(
-<a href=#772 id=772 data-nosnippet>772</a>                    (num_local_experts, hidden_size, intermediate_size * <span class="number">2</span>),
-<a href=#773 id=773 data-nosnippet>773</a>                    <span class="string">"gate_up_proj"</span>,
-<a href=#774 id=774 data-nosnippet>774</a>                    shard_up,
-<a href=#775 id=775 data-nosnippet>775</a>                )<span class="question-mark">?
-<a href=#776 id=776 data-nosnippet>776</a>                </span>.t()<span class="question-mark">?
-<a href=#777 id=777 data-nosnippet>777</a>                </span>.contiguous()<span class="question-mark">?</span>;
-<a href=#778 id=778 data-nosnippet>778</a>            <span class="kw">let </span>down_proj = vb
-<a href=#779 id=779 data-nosnippet>779</a>                .get_with_hints(
-<a href=#780 id=780 data-nosnippet>780</a>                    (num_local_experts, intermediate_size, hidden_size),
-<a href=#781 id=781 data-nosnippet>781</a>                    <span class="string">"down_proj"</span>,
-<a href=#782 id=782 data-nosnippet>782</a>                    shard_down,
-<a href=#783 id=783 data-nosnippet>783</a>                )<span class="question-mark">?
-<a href=#784 id=784 data-nosnippet>784</a>                </span>.t()<span class="question-mark">?
-<a href=#785 id=785 data-nosnippet>785</a>                </span>.contiguous()<span class="question-mark">?</span>;
-<a href=#786 id=786 data-nosnippet>786</a>
-<a href=#787 id=787 data-nosnippet>787</a>            <span class="kw">let </span>gc = gate_proj.chunk(num_local_experts, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#788 id=788 data-nosnippet>788</a>            <span class="kw">let </span>uc = up_proj.chunk(num_local_experts, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#789 id=789 data-nosnippet>789</a>            <span class="kw">let </span>dc = down_proj.chunk(num_local_experts, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#790 id=790 data-nosnippet>790</a>            drop((gate_proj, up_proj, down_proj));
-<a href=#791 id=791 data-nosnippet>791</a>
-<a href=#792 id=792 data-nosnippet>792</a>            <span class="kw">let </span><span class="kw-2">mut </span>gs = Vec::new();
-<a href=#793 id=793 data-nosnippet>793</a>            <span class="kw">let </span><span class="kw-2">mut </span>us = Vec::new();
-<a href=#794 id=794 data-nosnippet>794</a>            <span class="kw">let </span><span class="kw-2">mut </span>ds = Vec::new();
-<a href=#795 id=795 data-nosnippet>795</a>            <span class="kw">for </span>((<span class="kw-2">mut </span>gate_proj, <span class="kw-2">mut </span>up_proj), <span class="kw-2">mut </span>down_proj) <span class="kw">in
-<a href=#796 id=796 data-nosnippet>796</a>                </span>gc.into_iter().zip(uc.into_iter()).zip(dc.into_iter())
-<a href=#797 id=797 data-nosnippet>797</a>            {
-<a href=#798 id=798 data-nosnippet>798</a>                gate_proj = gate_proj.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#799 id=799 data-nosnippet>799</a>                up_proj = up_proj.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#800 id=800 data-nosnippet>800</a>                down_proj = down_proj.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#801 id=801 data-nosnippet>801</a>                <span class="kw">let </span>gate_proj = merge_lora_weights(
-<a href=#802 id=802 data-nosnippet>802</a>                    <span class="kw-2">&amp;</span>vb,
-<a href=#803 id=803 data-nosnippet>803</a>                    gate_proj,
-<a href=#804 id=804 data-nosnippet>804</a>                    hidden_size,
-<a href=#805 id=805 data-nosnippet>805</a>                    intermediate_size * <span class="number">2</span>,
-<a href=#806 id=806 data-nosnippet>806</a>                    shard_gate,
-<a href=#807 id=807 data-nosnippet>807</a>                )<span class="question-mark">?</span>;
-<a href=#808 id=808 data-nosnippet>808</a>                <span class="kw">let </span>up_proj =
-<a href=#809 id=809 data-nosnippet>809</a>                    merge_lora_weights(<span class="kw-2">&amp;</span>vb, up_proj, hidden_size, intermediate_size * <span class="number">2</span>, shard_up)<span class="question-mark">?</span>;
-<a href=#810 id=810 data-nosnippet>810</a>                <span class="kw">let </span>down_proj =
-<a href=#811 id=811 data-nosnippet>811</a>                    merge_lora_weights(<span class="kw-2">&amp;</span>vb, down_proj, intermediate_size, hidden_size, shard_down)<span class="question-mark">?</span>;
-<a href=#812 id=812 data-nosnippet>812</a>
-<a href=#813 id=813 data-nosnippet>813</a>                <span class="kw">let </span><span class="kw-2">mut </span>gate_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
-<a href=#814 id=814 data-nosnippet>814</a>                    Arc::new(&lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(
-<a href=#815 id=815 data-nosnippet>815</a>                        QuantMethodConfig::Unquantized(Linear::new(gate_proj, <span class="prelude-val">None</span>)),
-<a href=#816 id=816 data-nosnippet>816</a>                    )<span class="question-mark">?</span>);
-<a href=#817 id=817 data-nosnippet>817</a>                gate_proj = apply_immediate_isq(gate_proj, vb_gate_up_proj.clone())<span class="question-mark">?</span>;
-<a href=#818 id=818 data-nosnippet>818</a>                <span class="kw">let </span><span class="kw-2">mut </span>up_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
-<a href=#819 id=819 data-nosnippet>819</a>                    Arc::new(&lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(
-<a href=#820 id=820 data-nosnippet>820</a>                        QuantMethodConfig::Unquantized(Linear::new(up_proj, <span class="prelude-val">None</span>)),
-<a href=#821 id=821 data-nosnippet>821</a>                    )<span class="question-mark">?</span>);
-<a href=#822 id=822 data-nosnippet>822</a>                up_proj = apply_immediate_isq(up_proj, vb_gate_up_proj.clone())<span class="question-mark">?</span>;
-<a href=#823 id=823 data-nosnippet>823</a>                <span class="kw">let </span><span class="kw-2">mut </span>down_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
-<a href=#824 id=824 data-nosnippet>824</a>                    Arc::new(&lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(
-<a href=#825 id=825 data-nosnippet>825</a>                        QuantMethodConfig::Unquantized(Linear::new(down_proj, <span class="prelude-val">None</span>)),
-<a href=#826 id=826 data-nosnippet>826</a>                    )<span class="question-mark">?</span>);
-<a href=#827 id=827 data-nosnippet>827</a>                down_proj = apply_immediate_isq(down_proj, vb_down_proj.clone())<span class="question-mark">?</span>;
-<a href=#828 id=828 data-nosnippet>828</a>                gs.push(gate_proj);
-<a href=#829 id=829 data-nosnippet>829</a>                us.push(up_proj);
-<a href=#830 id=830 data-nosnippet>830</a>                ds.push(down_proj);
-<a href=#831 id=831 data-nosnippet>831</a>            }
-<a href=#832 id=832 data-nosnippet>832</a>            (gs, us, ds)
-<a href=#833 id=833 data-nosnippet>833</a>        };
-<a href=#834 id=834 data-nosnippet>834</a>
-<a href=#835 id=835 data-nosnippet>835</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-<a href=#836 id=836 data-nosnippet>836</a>            gate_proj,
-<a href=#837 id=837 data-nosnippet>837</a>            up_proj,
-<a href=#838 id=838 data-nosnippet>838</a>            down_proj,
-<a href=#839 id=839 data-nosnippet>839</a>        })
-<a href=#840 id=840 data-nosnippet>840</a>    }
-<a href=#841 id=841 data-nosnippet>841</a>}
-<a href=#842 id=842 data-nosnippet>842</a>
-<a href=#843 id=843 data-nosnippet>843</a><span class="kw">pub struct </span>FusedExperts {
-<a href=#844 id=844 data-nosnippet>844</a>    <span class="kw">pub </span>fused_gate_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-<a href=#845 id=845 data-nosnippet>845</a>    <span class="kw">pub </span>fused_up_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-<a href=#846 id=846 data-nosnippet>846</a>    <span class="kw">pub </span>fused_down_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-<a href=#847 id=847 data-nosnippet>847</a>}
-<a href=#848 id=848 data-nosnippet>848</a>
-<a href=#849 id=849 data-nosnippet>849</a><span class="kw">impl </span>FusedExperts {
-<a href=#850 id=850 data-nosnippet>850</a>    <span class="kw">pub fn </span>new(
-<a href=#851 id=851 data-nosnippet>851</a>        hidden_size: usize,
-<a href=#852 id=852 data-nosnippet>852</a>        moe_intermediate_size: usize,
-<a href=#853 id=853 data-nosnippet>853</a>        num_experts: usize,
-<a href=#854 id=854 data-nosnippet>854</a>        quantization_config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
-<a href=#855 id=855 data-nosnippet>855</a>        vb: ShardedVarBuilder,
-<a href=#856 id=856 data-nosnippet>856</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#857 id=857 data-nosnippet>857</a>        <span class="kw">if </span>!vb.device().is_metal() {
-<a href=#858 id=858 data-nosnippet>858</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"FastMoeMlp requires Metal."</span>);
-<a href=#859 id=859 data-nosnippet>859</a>        }
-<a href=#860 id=860 data-nosnippet>860</a>
-<a href=#861 id=861 data-nosnippet>861</a>        <span class="kw">let </span>(fused_gate_proj, fused_up_proj, fused_down_proj) =
-<a href=#862 id=862 data-nosnippet>862</a>            <span class="kw">if </span><span class="macro">matches!</span>(<span class="kw-2">&amp;</span>quantization_config, <span class="prelude-val">Some</span>(QuantizedConfig::Afq { .. })) {
-<a href=#863 id=863 data-nosnippet>863</a>                <span class="kw">let </span>quantization_config = quantization_config.as_ref().unwrap();
-<a href=#864 id=864 data-nosnippet>864</a>
-<a href=#865 id=865 data-nosnippet>865</a>                <span class="kw">let </span>fused_gate_proj = AfqLayer::afq_packed_linear_b(
-<a href=#866 id=866 data-nosnippet>866</a>                    num_experts,
-<a href=#867 id=867 data-nosnippet>867</a>                    hidden_size,
-<a href=#868 id=868 data-nosnippet>868</a>                    moe_intermediate_size,
-<a href=#869 id=869 data-nosnippet>869</a>                    quantization_config,
-<a href=#870 id=870 data-nosnippet>870</a>                    <span class="bool-val">false</span>,
-<a href=#871 id=871 data-nosnippet>871</a>                    vb.pp(<span class="string">"switch_mlp.gate_proj"</span>),
-<a href=#872 id=872 data-nosnippet>872</a>                )<span class="question-mark">?</span>;
-<a href=#873 id=873 data-nosnippet>873</a>                <span class="kw">let </span>fused_up_proj = AfqLayer::afq_packed_linear_b(
-<a href=#874 id=874 data-nosnippet>874</a>                    num_experts,
-<a href=#875 id=875 data-nosnippet>875</a>                    hidden_size,
-<a href=#876 id=876 data-nosnippet>876</a>                    moe_intermediate_size,
-<a href=#877 id=877 data-nosnippet>877</a>                    quantization_config,
-<a href=#878 id=878 data-nosnippet>878</a>                    <span class="bool-val">false</span>,
-<a href=#879 id=879 data-nosnippet>879</a>                    vb.pp(<span class="string">"switch_mlp.up_proj"</span>),
-<a href=#880 id=880 data-nosnippet>880</a>                )<span class="question-mark">?</span>;
-<a href=#881 id=881 data-nosnippet>881</a>                <span class="kw">let </span>fused_down_proj = AfqLayer::afq_packed_linear_b(
-<a href=#882 id=882 data-nosnippet>882</a>                    num_experts,
-<a href=#883 id=883 data-nosnippet>883</a>                    moe_intermediate_size,
-<a href=#884 id=884 data-nosnippet>884</a>                    hidden_size,
-<a href=#885 id=885 data-nosnippet>885</a>                    quantization_config,
-<a href=#886 id=886 data-nosnippet>886</a>                    <span class="bool-val">false</span>,
-<a href=#887 id=887 data-nosnippet>887</a>                    vb.pp(<span class="string">"switch_mlp.down_proj"</span>),
-<a href=#888 id=888 data-nosnippet>888</a>                )<span class="question-mark">?</span>;
+<a href=#598 id=598 data-nosnippet>598</a>
+<a href=#599 id=599 data-nosnippet>599</a>    <span class="kw">fn </span>apply_isq(
+<a href=#600 id=600 data-nosnippet>600</a>        <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
+<a href=#601 id=601 data-nosnippet>601</a>        dtype: <span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::IsqType&gt;,
+<a href=#602 id=602 data-nosnippet>602</a>        device: candle_core::Device,
+<a href=#603 id=603 data-nosnippet>603</a>        n_quantized: <span class="kw-2">&amp;</span>std::sync::atomic::AtomicUsize,
+<a href=#604 id=604 data-nosnippet>604</a>        imatrix_weight: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
+<a href=#605 id=605 data-nosnippet>605</a>        guard: QuantizeOntoGuard,
+<a href=#606 id=606 data-nosnippet>606</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+<a href=#607 id=607 data-nosnippet>607</a>        <span class="self">self</span>.<span class="number">0
+<a href=#608 id=608 data-nosnippet>608</a>            </span>.clone()
+<a href=#609 id=609 data-nosnippet>609</a>            .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)
+<a href=#610 id=610 data-nosnippet>610</a>    }
+<a href=#611 id=611 data-nosnippet>611</a>
+<a href=#612 id=612 data-nosnippet>612</a>    <span class="kw">fn </span>is_distributed(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DistributedKind&gt; {
+<a href=#613 id=613 data-nosnippet>613</a>        <span class="prelude-val">Some</span>(DistributedKind::Replicated)
+<a href=#614 id=614 data-nosnippet>614</a>    }
+<a href=#615 id=615 data-nosnippet>615</a>}
+<a href=#616 id=616 data-nosnippet>616</a>
+<a href=#617 id=617 data-nosnippet>617</a><span class="kw">impl </span>QuantizedSerde <span class="kw">for </span>ReplicatedLayer {
+<a href=#618 id=618 data-nosnippet>618</a>    <span class="kw">fn </span>isq_serde_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#619 id=619 data-nosnippet>619</a>        <span class="self">self</span>.<span class="number">0</span>.isq_serde_supported()
+<a href=#620 id=620 data-nosnippet>620</a>    }
+<a href=#621 id=621 data-nosnippet>621</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
+<a href=#622 id=622 data-nosnippet>622</a>        <span class="self">self</span>.<span class="number">0</span>.name()
+<a href=#623 id=623 data-nosnippet>623</a>    }
+<a href=#624 id=624 data-nosnippet>624</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;std::borrow::Cow&lt;[u8]&gt;&gt; {
+<a href=#625 id=625 data-nosnippet>625</a>        <span class="self">self</span>.<span class="number">0</span>.serialize()
+<a href=#626 id=626 data-nosnippet>626</a>    }
+<a href=#627 id=627 data-nosnippet>627</a>    <span class="kw">fn </span>deserialize(
+<a href=#628 id=628 data-nosnippet>628</a>        data: std::borrow::Cow&lt;[u8]&gt;,
+<a href=#629 id=629 data-nosnippet>629</a>        device: <span class="kw-2">&amp;</span>candle_core::Device,
+<a href=#630 id=630 data-nosnippet>630</a>        comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
+<a href=#631 id=631 data-nosnippet>631</a>        guard: QuantizeOntoGuard,
+<a href=#632 id=632 data-nosnippet>632</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;
+<a href=#633 id=633 data-nosnippet>633</a>    <span class="kw">where
+<a href=#634 id=634 data-nosnippet>634</a>        </span><span class="self">Self</span>: Sized,
+<a href=#635 id=635 data-nosnippet>635</a>    {
+<a href=#636 id=636 data-nosnippet>636</a>        <span class="comment">// NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+<a href=#637 id=637 data-nosnippet>637</a>        </span><span class="kw">let </span>isq_type = data[<span class="kw">crate</span>::UQFF_QUANT_TYPE_OFFSET];
+<a href=#638 id=638 data-nosnippet>638</a>        <span class="kw">let </span>deserialized = <span class="kw">match </span>QuantizedSerdeType::try_from(isq_type <span class="kw">as </span>usize)<span class="question-mark">? </span>{
+<a href=#639 id=639 data-nosnippet>639</a>            QuantizedSerdeType::Gguf =&gt; GgufMatMul::deserialize(data, device, comm, guard)<span class="question-mark">?</span>,
+<a href=#640 id=640 data-nosnippet>640</a>            QuantizedSerdeType::Unquant =&gt; UnquantLinear::deserialize(data, device, comm, guard)<span class="question-mark">?</span>,
+<a href=#641 id=641 data-nosnippet>641</a>            QuantizedSerdeType::Hqq =&gt; HqqLayer::deserialize(data, device, comm, guard)<span class="question-mark">?</span>,
+<a href=#642 id=642 data-nosnippet>642</a>            QuantizedSerdeType::Fp8 =&gt; FP8Linear::deserialize(data, device, comm, guard)<span class="question-mark">?</span>,
+<a href=#643 id=643 data-nosnippet>643</a>            QuantizedSerdeType::Afq =&gt; AfqLayer::deserialize(data, device, comm, guard)<span class="question-mark">?</span>,
+<a href=#644 id=644 data-nosnippet>644</a>        };
+<a href=#645 id=645 data-nosnippet>645</a>        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self</span>(deserialized)))
+<a href=#646 id=646 data-nosnippet>646</a>    }
+<a href=#647 id=647 data-nosnippet>647</a>}
+<a href=#648 id=648 data-nosnippet>648</a>
+<a href=#649 id=649 data-nosnippet>649</a><span class="attr">#[derive(Debug)]
+<a href=#650 id=650 data-nosnippet>650</a></span><span class="kw">pub struct </span>PackedExperts {
+<a href=#651 id=651 data-nosnippet>651</a>    <span class="kw">pub </span>gate_proj: Vec&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;,
+<a href=#652 id=652 data-nosnippet>652</a>    <span class="kw">pub </span>up_proj: Vec&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;,
+<a href=#653 id=653 data-nosnippet>653</a>    <span class="kw">pub </span>down_proj: Vec&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;,
+<a href=#654 id=654 data-nosnippet>654</a>}
+<a href=#655 id=655 data-nosnippet>655</a>
+<a href=#656 id=656 data-nosnippet>656</a><span class="kw">impl </span>PackedExperts {
+<a href=#657 id=657 data-nosnippet>657</a>    <span class="doccomment">/// Note: we only support AFQ and unquantized here because they are the only ones that support indexed.
+<a href=#658 id=658 data-nosnippet>658</a>    </span><span class="attr">#[allow(clippy::too_many_arguments)]
+<a href=#659 id=659 data-nosnippet>659</a>    </span><span class="kw">pub fn </span>new(
+<a href=#660 id=660 data-nosnippet>660</a>        num_local_experts: usize,
+<a href=#661 id=661 data-nosnippet>661</a>        hidden_size: usize,
+<a href=#662 id=662 data-nosnippet>662</a>        intermediate_size: usize,
+<a href=#663 id=663 data-nosnippet>663</a>        config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
+<a href=#664 id=664 data-nosnippet>664</a>        bias: bool,
+<a href=#665 id=665 data-nosnippet>665</a>        comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
+<a href=#666 id=666 data-nosnippet>666</a>        vb: ShardedVarBuilder,
+<a href=#667 id=667 data-nosnippet>667</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#668 id=668 data-nosnippet>668</a>        <span class="kw">if </span>bias {
+<a href=#669 id=669 data-nosnippet>669</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"PackedExperts does not support bias."</span>);
+<a href=#670 id=670 data-nosnippet>670</a>        }
+<a href=#671 id=671 data-nosnippet>671</a>
+<a href=#672 id=672 data-nosnippet>672</a>        <span class="kw">let </span>(gate_proj, up_proj, down_proj) = <span class="kw">if let </span><span class="prelude-val">Some</span>(quant_conf) = <span class="kw-2">&amp;</span>config {
+<a href=#673 id=673 data-nosnippet>673</a>            <span class="comment">// GPTQ and BNB do not support tensor parallelism
+<a href=#674 id=674 data-nosnippet>674</a>            </span><span class="kw">if </span>comm.world_size() != <span class="number">1 </span>{
+<a href=#675 id=675 data-nosnippet>675</a>                <span class="macro">candle_core::bail!</span>(
+<a href=#676 id=676 data-nosnippet>676</a>                    <span class="string">"PackedExperts with quantization config does not support distributed (world size {}). Use ISQ."</span>,
+<a href=#677 id=677 data-nosnippet>677</a>                    comm.world_size()
+<a href=#678 id=678 data-nosnippet>678</a>                );
+<a href=#679 id=679 data-nosnippet>679</a>            }
+<a href=#680 id=680 data-nosnippet>680</a>
+<a href=#681 id=681 data-nosnippet>681</a>            <span class="kw">match </span>quant_conf {
+<a href=#682 id=682 data-nosnippet>682</a>                QuantizedConfig::Afq { .. } =&gt; {
+<a href=#683 id=683 data-nosnippet>683</a>                    <span class="kw">if </span>!vb.contains_tensor(<span class="string">"gate_up_proj"</span>)
+<a href=#684 id=684 data-nosnippet>684</a>                        || !vb.contains_tensor(<span class="string">"gate_up_proj.weight"</span>)
+<a href=#685 id=685 data-nosnippet>685</a>                    {
+<a href=#686 id=686 data-nosnippet>686</a>                        <span class="macro">candle_core::bail!</span>(<span class="string">"PackedExperts with AFQ quantization config does not support `gate_up_proj` format."</span>);
+<a href=#687 id=687 data-nosnippet>687</a>                    }
+<a href=#688 id=688 data-nosnippet>688</a>
+<a href=#689 id=689 data-nosnippet>689</a>                    <span class="kw">let </span>base_vb = vb.clone();
+<a href=#690 id=690 data-nosnippet>690</a>
+<a href=#691 id=691 data-nosnippet>691</a>                    <span class="kw">let </span>vb_gate_proj = <span class="kw">if </span>should_apply_immediate_isq(<span class="kw-2">&amp;</span>vb) {
+<a href=#692 id=692 data-nosnippet>692</a>                        vb.pp(<span class="string">"gate_proj"</span>).set_device(Device::Cpu)
+<a href=#693 id=693 data-nosnippet>693</a>                    } <span class="kw">else </span>{
+<a href=#694 id=694 data-nosnippet>694</a>                        vb.pp(<span class="string">"gate_proj"</span>)
+<a href=#695 id=695 data-nosnippet>695</a>                    };
+<a href=#696 id=696 data-nosnippet>696</a>                    <span class="kw">let </span>vb_up_proj = <span class="kw">if </span>should_apply_immediate_isq(<span class="kw-2">&amp;</span>vb) {
+<a href=#697 id=697 data-nosnippet>697</a>                        vb.pp(<span class="string">"up_proj"</span>).set_device(Device::Cpu)
+<a href=#698 id=698 data-nosnippet>698</a>                    } <span class="kw">else </span>{
+<a href=#699 id=699 data-nosnippet>699</a>                        vb.pp(<span class="string">"up_proj"</span>)
+<a href=#700 id=700 data-nosnippet>700</a>                    };
+<a href=#701 id=701 data-nosnippet>701</a>                    <span class="kw">let </span>vb_down_proj = <span class="kw">if </span>should_apply_immediate_isq(<span class="kw-2">&amp;</span>vb) {
+<a href=#702 id=702 data-nosnippet>702</a>                        vb.pp(<span class="string">"down_proj"</span>).set_device(Device::Cpu)
+<a href=#703 id=703 data-nosnippet>703</a>                    } <span class="kw">else </span>{
+<a href=#704 id=704 data-nosnippet>704</a>                        vb.pp(<span class="string">"down_proj"</span>)
+<a href=#705 id=705 data-nosnippet>705</a>                    };
+<a href=#706 id=706 data-nosnippet>706</a>                    <span class="kw">let </span><span class="kw-2">mut </span>gate_proj = AfqLayer::afq_packed_linear_b(
+<a href=#707 id=707 data-nosnippet>707</a>                        num_local_experts,
+<a href=#708 id=708 data-nosnippet>708</a>                        hidden_size,
+<a href=#709 id=709 data-nosnippet>709</a>                        intermediate_size,
+<a href=#710 id=710 data-nosnippet>710</a>                        quant_conf,
+<a href=#711 id=711 data-nosnippet>711</a>                        bias,
+<a href=#712 id=712 data-nosnippet>712</a>                        vb_gate_proj,
+<a href=#713 id=713 data-nosnippet>713</a>                    )<span class="question-mark">?</span>;
+<a href=#714 id=714 data-nosnippet>714</a>                    <span class="kw">let </span><span class="kw-2">mut </span>up_proj = AfqLayer::afq_packed_linear_b(
+<a href=#715 id=715 data-nosnippet>715</a>                        num_local_experts,
+<a href=#716 id=716 data-nosnippet>716</a>                        hidden_size,
+<a href=#717 id=717 data-nosnippet>717</a>                        intermediate_size,
+<a href=#718 id=718 data-nosnippet>718</a>                        quant_conf,
+<a href=#719 id=719 data-nosnippet>719</a>                        bias,
+<a href=#720 id=720 data-nosnippet>720</a>                        vb_up_proj,
+<a href=#721 id=721 data-nosnippet>721</a>                    )<span class="question-mark">?</span>;
+<a href=#722 id=722 data-nosnippet>722</a>                    <span class="kw">let </span><span class="kw-2">mut </span>down_proj = AfqLayer::afq_packed_linear_b(
+<a href=#723 id=723 data-nosnippet>723</a>                        num_local_experts,
+<a href=#724 id=724 data-nosnippet>724</a>                        intermediate_size,
+<a href=#725 id=725 data-nosnippet>725</a>                        hidden_size,
+<a href=#726 id=726 data-nosnippet>726</a>                        quant_conf,
+<a href=#727 id=727 data-nosnippet>727</a>                        bias,
+<a href=#728 id=728 data-nosnippet>728</a>                        vb_down_proj,
+<a href=#729 id=729 data-nosnippet>729</a>                    )<span class="question-mark">?</span>;
+<a href=#730 id=730 data-nosnippet>730</a>
+<a href=#731 id=731 data-nosnippet>731</a>                    gate_proj = apply_immediate_isq(gate_proj, base_vb.pp(<span class="string">"gate_proj"</span>))<span class="question-mark">?</span>;
+<a href=#732 id=732 data-nosnippet>732</a>                    up_proj = apply_immediate_isq(up_proj, base_vb.pp(<span class="string">"up_proj"</span>))<span class="question-mark">?</span>;
+<a href=#733 id=733 data-nosnippet>733</a>                    down_proj = apply_immediate_isq(down_proj, base_vb.pp(<span class="string">"down_proj"</span>))<span class="question-mark">?</span>;
+<a href=#734 id=734 data-nosnippet>734</a>
+<a href=#735 id=735 data-nosnippet>735</a>                    (<span class="macro">vec!</span>[gate_proj], <span class="macro">vec!</span>[up_proj], <span class="macro">vec!</span>[down_proj])
+<a href=#736 id=736 data-nosnippet>736</a>                }
+<a href=#737 id=737 data-nosnippet>737</a>                <span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(
+<a href=#738 id=738 data-nosnippet>738</a>                    <span class="string">"PackedExperts with quantization config only allows AFQ quantization"
+<a href=#739 id=739 data-nosnippet>739</a>                </span>),
+<a href=#740 id=740 data-nosnippet>740</a>            }
+<a href=#741 id=741 data-nosnippet>741</a>        } <span class="kw">else if </span>!vb.contains_tensor(<span class="string">"gate_up_proj"</span>) {
+<a href=#742 id=742 data-nosnippet>742</a>            <span class="comment">// Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
+<a href=#743 id=743 data-nosnippet>743</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>gs: Vec&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; = Vec::new();
+<a href=#744 id=744 data-nosnippet>744</a>            <span class="kw">let </span><span class="kw-2">mut </span>us: Vec&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; = Vec::new();
+<a href=#745 id=745 data-nosnippet>745</a>            <span class="kw">let </span><span class="kw-2">mut </span>ds: Vec&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; = Vec::new();
+<a href=#746 id=746 data-nosnippet>746</a>            <span class="kw">for _ in </span><span class="number">0</span>..num_local_experts {
+<a href=#747 id=747 data-nosnippet>747</a>                gs.push(Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>));
+<a href=#748 id=748 data-nosnippet>748</a>                us.push(Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>));
+<a href=#749 id=749 data-nosnippet>749</a>                ds.push(Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>));
+<a href=#750 id=750 data-nosnippet>750</a>            }
+<a href=#751 id=751 data-nosnippet>751</a>            (gs, us, ds)
+<a href=#752 id=752 data-nosnippet>752</a>        } <span class="kw">else </span>{
+<a href=#753 id=753 data-nosnippet>753</a>            <span class="comment">// Parallelized like:
+<a href=#754 id=754 data-nosnippet>754</a>            // Each gpu holds all experts.
+<a href=#755 id=755 data-nosnippet>755</a>            // Gate/Up proj is parallelized on dim 2 (column)
+<a href=#756 id=756 data-nosnippet>756</a>            // Down proj is parallelized on dim 1 (row)
+<a href=#757 id=757 data-nosnippet>757</a>            // All reduce at the end.
+<a href=#758 id=758 data-nosnippet>758</a>
+<a href=#759 id=759 data-nosnippet>759</a>            // Handle the case where the layer is dummy (no tensors)
+<a href=#760 id=760 data-nosnippet>760</a>            </span><span class="kw">let </span>gate_up_block_size = intermediate_size / comm.world_size();
+<a href=#761 id=761 data-nosnippet>761</a>            <span class="kw">let </span>gate_up_start = gate_up_block_size * comm.rank();
+<a href=#762 id=762 data-nosnippet>762</a>
+<a href=#763 id=763 data-nosnippet>763</a>            <span class="comment">// Gate is right before Up in the gate_up
+<a href=#764 id=764 data-nosnippet>764</a>            </span><span class="kw">let </span>shard_gate = Shard::Offset {
+<a href=#765 id=765 data-nosnippet>765</a>                dim: <span class="number">2</span>,
+<a href=#766 id=766 data-nosnippet>766</a>                offset: gate_up_start,
+<a href=#767 id=767 data-nosnippet>767</a>                len: gate_up_block_size,
+<a href=#768 id=768 data-nosnippet>768</a>            };
+<a href=#769 id=769 data-nosnippet>769</a>            <span class="kw">let </span>shard_up = Shard::Offset {
+<a href=#770 id=770 data-nosnippet>770</a>                dim: <span class="number">2</span>,
+<a href=#771 id=771 data-nosnippet>771</a>                offset: intermediate_size + gate_up_start,
+<a href=#772 id=772 data-nosnippet>772</a>                len: gate_up_block_size,
+<a href=#773 id=773 data-nosnippet>773</a>            };
+<a href=#774 id=774 data-nosnippet>774</a>            <span class="kw">let </span>shard_down = Shard::Simple {
+<a href=#775 id=775 data-nosnippet>775</a>                dim: <span class="number">1</span>,
+<a href=#776 id=776 data-nosnippet>776</a>                rank: comm.rank(),
+<a href=#777 id=777 data-nosnippet>777</a>                world_size: comm.world_size(),
+<a href=#778 id=778 data-nosnippet>778</a>            };
+<a href=#779 id=779 data-nosnippet>779</a>
+<a href=#780 id=780 data-nosnippet>780</a>            <span class="kw">let </span>vb_gate_up_proj = <span class="kw">if </span>should_apply_immediate_isq(<span class="kw-2">&amp;</span>vb) {
+<a href=#781 id=781 data-nosnippet>781</a>                vb.pp(<span class="string">"gate_up_proj"</span>).set_device(Device::Cpu)
+<a href=#782 id=782 data-nosnippet>782</a>            } <span class="kw">else </span>{
+<a href=#783 id=783 data-nosnippet>783</a>                vb.pp(<span class="string">"gate_up_proj"</span>)
+<a href=#784 id=784 data-nosnippet>784</a>            };
+<a href=#785 id=785 data-nosnippet>785</a>            <span class="kw">let </span>vb_down_proj = <span class="kw">if </span>should_apply_immediate_isq(<span class="kw-2">&amp;</span>vb) {
+<a href=#786 id=786 data-nosnippet>786</a>                vb.pp(<span class="string">"down_proj"</span>).set_device(Device::Cpu)
+<a href=#787 id=787 data-nosnippet>787</a>            } <span class="kw">else </span>{
+<a href=#788 id=788 data-nosnippet>788</a>                vb.pp(<span class="string">"down_proj"</span>)
+<a href=#789 id=789 data-nosnippet>789</a>            };
+<a href=#790 id=790 data-nosnippet>790</a>
+<a href=#791 id=791 data-nosnippet>791</a>            <span class="kw">let </span>gate_proj = vb
+<a href=#792 id=792 data-nosnippet>792</a>                .get_with_hints(
+<a href=#793 id=793 data-nosnippet>793</a>                    (num_local_experts, hidden_size, intermediate_size * <span class="number">2</span>),
+<a href=#794 id=794 data-nosnippet>794</a>                    <span class="string">"gate_up_proj"</span>,
+<a href=#795 id=795 data-nosnippet>795</a>                    shard_gate,
+<a href=#796 id=796 data-nosnippet>796</a>                )<span class="question-mark">?
+<a href=#797 id=797 data-nosnippet>797</a>                </span>.t()<span class="question-mark">?
+<a href=#798 id=798 data-nosnippet>798</a>                </span>.contiguous()<span class="question-mark">?</span>;
+<a href=#799 id=799 data-nosnippet>799</a>            <span class="kw">let </span>up_proj = vb
+<a href=#800 id=800 data-nosnippet>800</a>                .get_with_hints(
+<a href=#801 id=801 data-nosnippet>801</a>                    (num_local_experts, hidden_size, intermediate_size * <span class="number">2</span>),
+<a href=#802 id=802 data-nosnippet>802</a>                    <span class="string">"gate_up_proj"</span>,
+<a href=#803 id=803 data-nosnippet>803</a>                    shard_up,
+<a href=#804 id=804 data-nosnippet>804</a>                )<span class="question-mark">?
+<a href=#805 id=805 data-nosnippet>805</a>                </span>.t()<span class="question-mark">?
+<a href=#806 id=806 data-nosnippet>806</a>                </span>.contiguous()<span class="question-mark">?</span>;
+<a href=#807 id=807 data-nosnippet>807</a>            <span class="kw">let </span>down_proj = vb
+<a href=#808 id=808 data-nosnippet>808</a>                .get_with_hints(
+<a href=#809 id=809 data-nosnippet>809</a>                    (num_local_experts, intermediate_size, hidden_size),
+<a href=#810 id=810 data-nosnippet>810</a>                    <span class="string">"down_proj"</span>,
+<a href=#811 id=811 data-nosnippet>811</a>                    shard_down,
+<a href=#812 id=812 data-nosnippet>812</a>                )<span class="question-mark">?
+<a href=#813 id=813 data-nosnippet>813</a>                </span>.t()<span class="question-mark">?
+<a href=#814 id=814 data-nosnippet>814</a>                </span>.contiguous()<span class="question-mark">?</span>;
+<a href=#815 id=815 data-nosnippet>815</a>
+<a href=#816 id=816 data-nosnippet>816</a>            <span class="kw">let </span>gc = gate_proj.chunk(num_local_experts, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#817 id=817 data-nosnippet>817</a>            <span class="kw">let </span>uc = up_proj.chunk(num_local_experts, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#818 id=818 data-nosnippet>818</a>            <span class="kw">let </span>dc = down_proj.chunk(num_local_experts, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#819 id=819 data-nosnippet>819</a>            drop((gate_proj, up_proj, down_proj));
+<a href=#820 id=820 data-nosnippet>820</a>
+<a href=#821 id=821 data-nosnippet>821</a>            <span class="kw">let </span><span class="kw-2">mut </span>gs = Vec::new();
+<a href=#822 id=822 data-nosnippet>822</a>            <span class="kw">let </span><span class="kw-2">mut </span>us = Vec::new();
+<a href=#823 id=823 data-nosnippet>823</a>            <span class="kw">let </span><span class="kw-2">mut </span>ds = Vec::new();
+<a href=#824 id=824 data-nosnippet>824</a>            <span class="kw">for </span>((<span class="kw-2">mut </span>gate_proj, <span class="kw-2">mut </span>up_proj), <span class="kw-2">mut </span>down_proj) <span class="kw">in
+<a href=#825 id=825 data-nosnippet>825</a>                </span>gc.into_iter().zip(uc.into_iter()).zip(dc.into_iter())
+<a href=#826 id=826 data-nosnippet>826</a>            {
+<a href=#827 id=827 data-nosnippet>827</a>                gate_proj = gate_proj.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#828 id=828 data-nosnippet>828</a>                up_proj = up_proj.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#829 id=829 data-nosnippet>829</a>                down_proj = down_proj.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#830 id=830 data-nosnippet>830</a>                <span class="kw">let </span>gate_proj = merge_lora_weights(
+<a href=#831 id=831 data-nosnippet>831</a>                    <span class="kw-2">&amp;</span>vb,
+<a href=#832 id=832 data-nosnippet>832</a>                    gate_proj,
+<a href=#833 id=833 data-nosnippet>833</a>                    hidden_size,
+<a href=#834 id=834 data-nosnippet>834</a>                    intermediate_size * <span class="number">2</span>,
+<a href=#835 id=835 data-nosnippet>835</a>                    shard_gate,
+<a href=#836 id=836 data-nosnippet>836</a>                )<span class="question-mark">?</span>;
+<a href=#837 id=837 data-nosnippet>837</a>                <span class="kw">let </span>up_proj =
+<a href=#838 id=838 data-nosnippet>838</a>                    merge_lora_weights(<span class="kw-2">&amp;</span>vb, up_proj, hidden_size, intermediate_size * <span class="number">2</span>, shard_up)<span class="question-mark">?</span>;
+<a href=#839 id=839 data-nosnippet>839</a>                <span class="kw">let </span>down_proj =
+<a href=#840 id=840 data-nosnippet>840</a>                    merge_lora_weights(<span class="kw-2">&amp;</span>vb, down_proj, intermediate_size, hidden_size, shard_down)<span class="question-mark">?</span>;
+<a href=#841 id=841 data-nosnippet>841</a>
+<a href=#842 id=842 data-nosnippet>842</a>                <span class="kw">let </span><span class="kw-2">mut </span>gate_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
+<a href=#843 id=843 data-nosnippet>843</a>                    Arc::new(&lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(
+<a href=#844 id=844 data-nosnippet>844</a>                        QuantMethodConfig::Unquantized(Linear::new(gate_proj, <span class="prelude-val">None</span>)),
+<a href=#845 id=845 data-nosnippet>845</a>                    )<span class="question-mark">?</span>);
+<a href=#846 id=846 data-nosnippet>846</a>                gate_proj = apply_immediate_isq(gate_proj, vb_gate_up_proj.clone())<span class="question-mark">?</span>;
+<a href=#847 id=847 data-nosnippet>847</a>                <span class="kw">let </span><span class="kw-2">mut </span>up_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
+<a href=#848 id=848 data-nosnippet>848</a>                    Arc::new(&lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(
+<a href=#849 id=849 data-nosnippet>849</a>                        QuantMethodConfig::Unquantized(Linear::new(up_proj, <span class="prelude-val">None</span>)),
+<a href=#850 id=850 data-nosnippet>850</a>                    )<span class="question-mark">?</span>);
+<a href=#851 id=851 data-nosnippet>851</a>                up_proj = apply_immediate_isq(up_proj, vb_gate_up_proj.clone())<span class="question-mark">?</span>;
+<a href=#852 id=852 data-nosnippet>852</a>                <span class="kw">let </span><span class="kw-2">mut </span>down_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
+<a href=#853 id=853 data-nosnippet>853</a>                    Arc::new(&lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(
+<a href=#854 id=854 data-nosnippet>854</a>                        QuantMethodConfig::Unquantized(Linear::new(down_proj, <span class="prelude-val">None</span>)),
+<a href=#855 id=855 data-nosnippet>855</a>                    )<span class="question-mark">?</span>);
+<a href=#856 id=856 data-nosnippet>856</a>                down_proj = apply_immediate_isq(down_proj, vb_down_proj.clone())<span class="question-mark">?</span>;
+<a href=#857 id=857 data-nosnippet>857</a>                gs.push(gate_proj);
+<a href=#858 id=858 data-nosnippet>858</a>                us.push(up_proj);
+<a href=#859 id=859 data-nosnippet>859</a>                ds.push(down_proj);
+<a href=#860 id=860 data-nosnippet>860</a>            }
+<a href=#861 id=861 data-nosnippet>861</a>            (gs, us, ds)
+<a href=#862 id=862 data-nosnippet>862</a>        };
+<a href=#863 id=863 data-nosnippet>863</a>
+<a href=#864 id=864 data-nosnippet>864</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+<a href=#865 id=865 data-nosnippet>865</a>            gate_proj,
+<a href=#866 id=866 data-nosnippet>866</a>            up_proj,
+<a href=#867 id=867 data-nosnippet>867</a>            down_proj,
+<a href=#868 id=868 data-nosnippet>868</a>        })
+<a href=#869 id=869 data-nosnippet>869</a>    }
+<a href=#870 id=870 data-nosnippet>870</a>}
+<a href=#871 id=871 data-nosnippet>871</a>
+<a href=#872 id=872 data-nosnippet>872</a><span class="kw">pub struct </span>FusedExperts {
+<a href=#873 id=873 data-nosnippet>873</a>    <span class="kw">pub </span>fused_gate_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+<a href=#874 id=874 data-nosnippet>874</a>    <span class="kw">pub </span>fused_up_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+<a href=#875 id=875 data-nosnippet>875</a>    <span class="kw">pub </span>fused_down_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+<a href=#876 id=876 data-nosnippet>876</a>}
+<a href=#877 id=877 data-nosnippet>877</a>
+<a href=#878 id=878 data-nosnippet>878</a><span class="kw">impl </span>FusedExperts {
+<a href=#879 id=879 data-nosnippet>879</a>    <span class="kw">pub fn </span>new(
+<a href=#880 id=880 data-nosnippet>880</a>        hidden_size: usize,
+<a href=#881 id=881 data-nosnippet>881</a>        moe_intermediate_size: usize,
+<a href=#882 id=882 data-nosnippet>882</a>        num_experts: usize,
+<a href=#883 id=883 data-nosnippet>883</a>        quantization_config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
+<a href=#884 id=884 data-nosnippet>884</a>        vb: ShardedVarBuilder,
+<a href=#885 id=885 data-nosnippet>885</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#886 id=886 data-nosnippet>886</a>        <span class="kw">if </span>!vb.device().is_metal() {
+<a href=#887 id=887 data-nosnippet>887</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"FastMoeMlp requires Metal."</span>);
+<a href=#888 id=888 data-nosnippet>888</a>        }
 <a href=#889 id=889 data-nosnippet>889</a>
-<a href=#890 id=890 data-nosnippet>890</a>                (fused_gate_proj, fused_up_proj, fused_down_proj)
-<a href=#891 id=891 data-nosnippet>891</a>            } <span class="kw">else if </span><span class="macro">matches!</span>(<span class="kw-2">&amp;</span>quantization_config, <span class="prelude-val">Some</span>(QuantizedConfig::Fp8 { .. })) {
-<a href=#892 id=892 data-nosnippet>892</a>                <span class="kw">let </span>experts_vb = vb.pp(<span class="string">"experts"</span>);
-<a href=#893 id=893 data-nosnippet>893</a>                <span class="kw">let </span><span class="kw-2">mut </span>gate_proj_vec = Vec::new();
-<a href=#894 id=894 data-nosnippet>894</a>                <span class="kw">let </span><span class="kw-2">mut </span>up_proj_vec = Vec::new();
-<a href=#895 id=895 data-nosnippet>895</a>                <span class="kw">let </span><span class="kw-2">mut </span>down_proj_vec = Vec::new();
-<a href=#896 id=896 data-nosnippet>896</a>                <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..num_experts {
-<a href=#897 id=897 data-nosnippet>897</a>                    <span class="kw">let </span>vb = experts_vb.pp(i);
-<a href=#898 id=898 data-nosnippet>898</a>
-<a href=#899 id=899 data-nosnippet>899</a>                    <span class="kw">let </span>gate_proj = <span class="kw">crate</span>::linear_no_bias(
-<a href=#900 id=900 data-nosnippet>900</a>                        hidden_size,
-<a href=#901 id=901 data-nosnippet>901</a>                        moe_intermediate_size,
-<a href=#902 id=902 data-nosnippet>902</a>                        quantization_config,
-<a href=#903 id=903 data-nosnippet>903</a>                        vb.pp(<span class="string">"gate_proj.weight"</span>),
-<a href=#904 id=904 data-nosnippet>904</a>                    )<span class="question-mark">?</span>;
-<a href=#905 id=905 data-nosnippet>905</a>                    <span class="kw">let </span>up_proj = <span class="kw">crate</span>::linear_no_bias(
-<a href=#906 id=906 data-nosnippet>906</a>                        hidden_size,
-<a href=#907 id=907 data-nosnippet>907</a>                        moe_intermediate_size,
-<a href=#908 id=908 data-nosnippet>908</a>                        quantization_config,
-<a href=#909 id=909 data-nosnippet>909</a>                        vb.pp(<span class="string">"up_proj.weight"</span>),
-<a href=#910 id=910 data-nosnippet>910</a>                    )<span class="question-mark">?</span>;
-<a href=#911 id=911 data-nosnippet>911</a>                    <span class="kw">let </span>down_proj = <span class="kw">crate</span>::linear_no_bias(
-<a href=#912 id=912 data-nosnippet>912</a>                        moe_intermediate_size,
-<a href=#913 id=913 data-nosnippet>913</a>                        hidden_size,
-<a href=#914 id=914 data-nosnippet>914</a>                        quantization_config,
-<a href=#915 id=915 data-nosnippet>915</a>                        vb.pp(<span class="string">"down_proj.weight"</span>),
-<a href=#916 id=916 data-nosnippet>916</a>                    )<span class="question-mark">?</span>;
-<a href=#917 id=917 data-nosnippet>917</a>
-<a href=#918 id=918 data-nosnippet>918</a>                    gate_proj_vec.push(gate_proj.dequantize_w()<span class="question-mark">?</span>);
-<a href=#919 id=919 data-nosnippet>919</a>                    up_proj_vec.push(up_proj.dequantize_w()<span class="question-mark">?</span>);
-<a href=#920 id=920 data-nosnippet>920</a>                    down_proj_vec.push(down_proj.dequantize_w()<span class="question-mark">?</span>);
-<a href=#921 id=921 data-nosnippet>921</a>                }
-<a href=#922 id=922 data-nosnippet>922</a>
-<a href=#923 id=923 data-nosnippet>923</a>                <span class="kw">let </span><span class="kw-2">mut </span>gate_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
-<a href=#924 id=924 data-nosnippet>924</a>                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-<a href=#925 id=925 data-nosnippet>925</a>                        Linear::new(Tensor::stack(<span class="kw-2">&amp;</span>gate_proj_vec, <span class="number">0</span>)<span class="question-mark">?</span>, <span class="prelude-val">None</span>),
-<a href=#926 id=926 data-nosnippet>926</a>                    ))<span class="question-mark">?</span>);
-<a href=#927 id=927 data-nosnippet>927</a>                <span class="kw">let </span><span class="kw-2">mut </span>up_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
-<a href=#928 id=928 data-nosnippet>928</a>                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-<a href=#929 id=929 data-nosnippet>929</a>                        Linear::new(Tensor::stack(<span class="kw-2">&amp;</span>up_proj_vec, <span class="number">0</span>)<span class="question-mark">?</span>, <span class="prelude-val">None</span>),
-<a href=#930 id=930 data-nosnippet>930</a>                    ))<span class="question-mark">?</span>);
-<a href=#931 id=931 data-nosnippet>931</a>                <span class="kw">let </span><span class="kw-2">mut </span>down_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
-<a href=#932 id=932 data-nosnippet>932</a>                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-<a href=#933 id=933 data-nosnippet>933</a>                        Linear::new(Tensor::stack(<span class="kw-2">&amp;</span>down_proj_vec, <span class="number">0</span>)<span class="question-mark">?</span>, <span class="prelude-val">None</span>),
-<a href=#934 id=934 data-nosnippet>934</a>                    ))<span class="question-mark">?</span>);
-<a href=#935 id=935 data-nosnippet>935</a>                gate_proj = apply_immediate_isq(gate_proj, vb.pp(<span class="string">"gate_proj"</span>))<span class="question-mark">?</span>;
-<a href=#936 id=936 data-nosnippet>936</a>                up_proj = apply_immediate_isq(up_proj, vb.pp(<span class="string">"up_proj"</span>))<span class="question-mark">?</span>;
-<a href=#937 id=937 data-nosnippet>937</a>                down_proj = apply_immediate_isq(down_proj, vb.pp(<span class="string">"down_proj"</span>))<span class="question-mark">?</span>;
-<a href=#938 id=938 data-nosnippet>938</a>
-<a href=#939 id=939 data-nosnippet>939</a>                (gate_proj, up_proj, down_proj)
-<a href=#940 id=940 data-nosnippet>940</a>            } <span class="kw">else </span>{
-<a href=#941 id=941 data-nosnippet>941</a>                <span class="kw">let </span>experts_vb = vb.pp(<span class="string">"experts"</span>);
-<a href=#942 id=942 data-nosnippet>942</a>                <span class="kw">let </span><span class="kw-2">mut </span>gate_proj_vec = Vec::new();
-<a href=#943 id=943 data-nosnippet>943</a>                <span class="kw">let </span><span class="kw-2">mut </span>up_proj_vec = Vec::new();
-<a href=#944 id=944 data-nosnippet>944</a>                <span class="kw">let </span><span class="kw-2">mut </span>down_proj_vec = Vec::new();
-<a href=#945 id=945 data-nosnippet>945</a>                <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..num_experts {
-<a href=#946 id=946 data-nosnippet>946</a>                    <span class="kw">let </span>vb = experts_vb.pp(i);
-<a href=#947 id=947 data-nosnippet>947</a>                    <span class="kw">let </span>gate_proj =
-<a href=#948 id=948 data-nosnippet>948</a>                        vb.get((moe_intermediate_size, hidden_size), <span class="string">"gate_proj.weight"</span>)<span class="question-mark">?</span>;
-<a href=#949 id=949 data-nosnippet>949</a>                    <span class="kw">let </span>up_proj = vb.get((moe_intermediate_size, hidden_size), <span class="string">"up_proj.weight"</span>)<span class="question-mark">?</span>;
-<a href=#950 id=950 data-nosnippet>950</a>                    <span class="kw">let </span>down_proj =
-<a href=#951 id=951 data-nosnippet>951</a>                        vb.get((hidden_size, moe_intermediate_size), <span class="string">"down_proj.weight"</span>)<span class="question-mark">?</span>;
-<a href=#952 id=952 data-nosnippet>952</a>
-<a href=#953 id=953 data-nosnippet>953</a>                    gate_proj_vec.push(gate_proj);
-<a href=#954 id=954 data-nosnippet>954</a>                    up_proj_vec.push(up_proj);
-<a href=#955 id=955 data-nosnippet>955</a>                    down_proj_vec.push(down_proj);
-<a href=#956 id=956 data-nosnippet>956</a>                }
-<a href=#957 id=957 data-nosnippet>957</a>
-<a href=#958 id=958 data-nosnippet>958</a>                <span class="kw">let </span><span class="kw-2">mut </span>gate_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
-<a href=#959 id=959 data-nosnippet>959</a>                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-<a href=#960 id=960 data-nosnippet>960</a>                        Linear::new(Tensor::stack(<span class="kw-2">&amp;</span>gate_proj_vec, <span class="number">0</span>)<span class="question-mark">?</span>, <span class="prelude-val">None</span>),
-<a href=#961 id=961 data-nosnippet>961</a>                    ))<span class="question-mark">?</span>);
-<a href=#962 id=962 data-nosnippet>962</a>                <span class="kw">let </span><span class="kw-2">mut </span>up_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
-<a href=#963 id=963 data-nosnippet>963</a>                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-<a href=#964 id=964 data-nosnippet>964</a>                        Linear::new(Tensor::stack(<span class="kw-2">&amp;</span>up_proj_vec, <span class="number">0</span>)<span class="question-mark">?</span>, <span class="prelude-val">None</span>),
-<a href=#965 id=965 data-nosnippet>965</a>                    ))<span class="question-mark">?</span>);
-<a href=#966 id=966 data-nosnippet>966</a>                <span class="kw">let </span><span class="kw-2">mut </span>down_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
-<a href=#967 id=967 data-nosnippet>967</a>                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-<a href=#968 id=968 data-nosnippet>968</a>                        Linear::new(Tensor::stack(<span class="kw-2">&amp;</span>down_proj_vec, <span class="number">0</span>)<span class="question-mark">?</span>, <span class="prelude-val">None</span>),
-<a href=#969 id=969 data-nosnippet>969</a>                    ))<span class="question-mark">?</span>);
-<a href=#970 id=970 data-nosnippet>970</a>                gate_proj = apply_immediate_isq(gate_proj, vb.pp(<span class="string">"gate_proj"</span>))<span class="question-mark">?</span>;
-<a href=#971 id=971 data-nosnippet>971</a>                up_proj = apply_immediate_isq(up_proj, vb.pp(<span class="string">"up_proj"</span>))<span class="question-mark">?</span>;
-<a href=#972 id=972 data-nosnippet>972</a>                down_proj = apply_immediate_isq(down_proj, vb.pp(<span class="string">"down_proj"</span>))<span class="question-mark">?</span>;
-<a href=#973 id=973 data-nosnippet>973</a>
-<a href=#974 id=974 data-nosnippet>974</a>                (gate_proj, up_proj, down_proj)
-<a href=#975 id=975 data-nosnippet>975</a>            };
-<a href=#976 id=976 data-nosnippet>976</a>
-<a href=#977 id=977 data-nosnippet>977</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-<a href=#978 id=978 data-nosnippet>978</a>            fused_gate_proj,
-<a href=#979 id=979 data-nosnippet>979</a>            fused_up_proj,
-<a href=#980 id=980 data-nosnippet>980</a>            fused_down_proj,
-<a href=#981 id=981 data-nosnippet>981</a>        })
-<a href=#982 id=982 data-nosnippet>982</a>    }
-<a href=#983 id=983 data-nosnippet>983</a>}
-<a href=#984 id=984 data-nosnippet>984</a>
-<a href=#985 id=985 data-nosnippet>985</a><span class="doccomment">/// Compute the appropriate KV shard. This handles KV head replication. Be sure to use `compute_n_kv_groups` in tandem.
-<a href=#986 id=986 data-nosnippet>986</a></span><span class="kw">pub fn </span>compute_kv_shard(total_num_kv_heads: usize, head_dim: usize, comm: <span class="kw-2">&amp;</span>Comm) -&gt; Shard {
-<a href=#987 id=987 data-nosnippet>987</a>    <span class="kw">if </span>comm.world_size() == <span class="number">1 </span>{
-<a href=#988 id=988 data-nosnippet>988</a>        <span class="kw">return </span>Shard::default();
-<a href=#989 id=989 data-nosnippet>989</a>    }
-<a href=#990 id=990 data-nosnippet>990</a>
-<a href=#991 id=991 data-nosnippet>991</a>    <span class="comment">// Tensor parallelism case
-<a href=#992 id=992 data-nosnippet>992</a>
-<a href=#993 id=993 data-nosnippet>993</a>    // We may need to replicate the kv heads
-<a href=#994 id=994 data-nosnippet>994</a>    </span><span class="kw">let </span>kv_replicate = <span class="kw">if </span>comm.world_size() &gt; total_num_kv_heads {
-<a href=#995 id=995 data-nosnippet>995</a>        comm.world_size() / total_num_kv_heads
-<a href=#996 id=996 data-nosnippet>996</a>    } <span class="kw">else </span>{
-<a href=#997 id=997 data-nosnippet>997</a>        <span class="kw">return </span>Shard::Simple {
-<a href=#998 id=998 data-nosnippet>998</a>            dim: <span class="number">0</span>,
-<a href=#999 id=999 data-nosnippet>999</a>            rank: comm.rank(),
-<a href=#1000 id=1000 data-nosnippet>1000</a>            world_size: comm.world_size(),
-<a href=#1001 id=1001 data-nosnippet>1001</a>        };
-<a href=#1002 id=1002 data-nosnippet>1002</a>    };
-<a href=#1003 id=1003 data-nosnippet>1003</a>
-<a href=#1004 id=1004 data-nosnippet>1004</a>    <span class="kw">let </span>num_kv_heads = (total_num_kv_heads / comm.world_size()).max(<span class="number">1</span>);
-<a href=#1005 id=1005 data-nosnippet>1005</a>    <span class="kw">let </span>kv_shard_id = (comm.rank() / kv_replicate) * num_kv_heads;
-<a href=#1006 id=1006 data-nosnippet>1006</a>    Shard::Offset {
-<a href=#1007 id=1007 data-nosnippet>1007</a>        dim: <span class="number">0</span>,
-<a href=#1008 id=1008 data-nosnippet>1008</a>        offset: kv_shard_id * head_dim,
-<a href=#1009 id=1009 data-nosnippet>1009</a>        len: head_dim,
-<a href=#1010 id=1010 data-nosnippet>1010</a>    }
-<a href=#1011 id=1011 data-nosnippet>1011</a>}
-<a href=#1012 id=1012 data-nosnippet>1012</a>
-<a href=#1013 id=1013 data-nosnippet>1013</a><span class="doccomment">/// Compute the number of KV groups, taking into account KV head replication.
-<a href=#1014 id=1014 data-nosnippet>1014</a></span><span class="kw">pub fn </span>compute_n_kv_groups(
-<a href=#1015 id=1015 data-nosnippet>1015</a>    total_num_kv_heads: usize,
-<a href=#1016 id=1016 data-nosnippet>1016</a>    num_attention_heads: usize,
-<a href=#1017 id=1017 data-nosnippet>1017</a>    comm: <span class="kw-2">&amp;</span>Comm,
-<a href=#1018 id=1018 data-nosnippet>1018</a>) -&gt; usize {
-<a href=#1019 id=1019 data-nosnippet>1019</a>    <span class="kw">let </span>kv_replicate = <span class="kw">if </span>comm.world_size() &gt; total_num_kv_heads {
-<a href=#1020 id=1020 data-nosnippet>1020</a>        comm.world_size() / total_num_kv_heads
-<a href=#1021 id=1021 data-nosnippet>1021</a>    } <span class="kw">else </span>{
-<a href=#1022 id=1022 data-nosnippet>1022</a>        <span class="number">1
-<a href=#1023 id=1023 data-nosnippet>1023</a>    </span>};
-<a href=#1024 id=1024 data-nosnippet>1024</a>    <span class="kw">if </span>kv_replicate != <span class="number">0 </span>{
-<a href=#1025 id=1025 data-nosnippet>1025</a>        (num_attention_heads / total_num_kv_heads) / kv_replicate
-<a href=#1026 id=1026 data-nosnippet>1026</a>    } <span class="kw">else </span>{
-<a href=#1027 id=1027 data-nosnippet>1027</a>        num_attention_heads / total_num_kv_heads
-<a href=#1028 id=1028 data-nosnippet>1028</a>    }
-<a href=#1029 id=1029 data-nosnippet>1029</a>}</code></pre></div></section></main></body></html>
+<a href=#890 id=890 data-nosnippet>890</a>        <span class="kw">let </span>(fused_gate_proj, fused_up_proj, fused_down_proj) =
+<a href=#891 id=891 data-nosnippet>891</a>            <span class="kw">if </span><span class="macro">matches!</span>(<span class="kw-2">&amp;</span>quantization_config, <span class="prelude-val">Some</span>(QuantizedConfig::Afq { .. })) {
+<a href=#892 id=892 data-nosnippet>892</a>                <span class="kw">let </span>quantization_config = quantization_config.as_ref().unwrap();
+<a href=#893 id=893 data-nosnippet>893</a>
+<a href=#894 id=894 data-nosnippet>894</a>                <span class="kw">let </span>fused_gate_proj = AfqLayer::afq_packed_linear_b(
+<a href=#895 id=895 data-nosnippet>895</a>                    num_experts,
+<a href=#896 id=896 data-nosnippet>896</a>                    hidden_size,
+<a href=#897 id=897 data-nosnippet>897</a>                    moe_intermediate_size,
+<a href=#898 id=898 data-nosnippet>898</a>                    quantization_config,
+<a href=#899 id=899 data-nosnippet>899</a>                    <span class="bool-val">false</span>,
+<a href=#900 id=900 data-nosnippet>900</a>                    vb.pp(<span class="string">"switch_mlp.gate_proj"</span>),
+<a href=#901 id=901 data-nosnippet>901</a>                )<span class="question-mark">?</span>;
+<a href=#902 id=902 data-nosnippet>902</a>                <span class="kw">let </span>fused_up_proj = AfqLayer::afq_packed_linear_b(
+<a href=#903 id=903 data-nosnippet>903</a>                    num_experts,
+<a href=#904 id=904 data-nosnippet>904</a>                    hidden_size,
+<a href=#905 id=905 data-nosnippet>905</a>                    moe_intermediate_size,
+<a href=#906 id=906 data-nosnippet>906</a>                    quantization_config,
+<a href=#907 id=907 data-nosnippet>907</a>                    <span class="bool-val">false</span>,
+<a href=#908 id=908 data-nosnippet>908</a>                    vb.pp(<span class="string">"switch_mlp.up_proj"</span>),
+<a href=#909 id=909 data-nosnippet>909</a>                )<span class="question-mark">?</span>;
+<a href=#910 id=910 data-nosnippet>910</a>                <span class="kw">let </span>fused_down_proj = AfqLayer::afq_packed_linear_b(
+<a href=#911 id=911 data-nosnippet>911</a>                    num_experts,
+<a href=#912 id=912 data-nosnippet>912</a>                    moe_intermediate_size,
+<a href=#913 id=913 data-nosnippet>913</a>                    hidden_size,
+<a href=#914 id=914 data-nosnippet>914</a>                    quantization_config,
+<a href=#915 id=915 data-nosnippet>915</a>                    <span class="bool-val">false</span>,
+<a href=#916 id=916 data-nosnippet>916</a>                    vb.pp(<span class="string">"switch_mlp.down_proj"</span>),
+<a href=#917 id=917 data-nosnippet>917</a>                )<span class="question-mark">?</span>;
+<a href=#918 id=918 data-nosnippet>918</a>
+<a href=#919 id=919 data-nosnippet>919</a>                (fused_gate_proj, fused_up_proj, fused_down_proj)
+<a href=#920 id=920 data-nosnippet>920</a>            } <span class="kw">else if </span><span class="macro">matches!</span>(<span class="kw-2">&amp;</span>quantization_config, <span class="prelude-val">Some</span>(QuantizedConfig::Fp8 { .. })) {
+<a href=#921 id=921 data-nosnippet>921</a>                <span class="kw">let </span>experts_vb = vb.pp(<span class="string">"experts"</span>);
+<a href=#922 id=922 data-nosnippet>922</a>                <span class="kw">let </span><span class="kw-2">mut </span>gate_proj_vec = Vec::new();
+<a href=#923 id=923 data-nosnippet>923</a>                <span class="kw">let </span><span class="kw-2">mut </span>up_proj_vec = Vec::new();
+<a href=#924 id=924 data-nosnippet>924</a>                <span class="kw">let </span><span class="kw-2">mut </span>down_proj_vec = Vec::new();
+<a href=#925 id=925 data-nosnippet>925</a>                <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..num_experts {
+<a href=#926 id=926 data-nosnippet>926</a>                    <span class="kw">let </span>vb = experts_vb.pp(i);
+<a href=#927 id=927 data-nosnippet>927</a>
+<a href=#928 id=928 data-nosnippet>928</a>                    <span class="kw">let </span>gate_proj = <span class="kw">crate</span>::linear_no_bias(
+<a href=#929 id=929 data-nosnippet>929</a>                        hidden_size,
+<a href=#930 id=930 data-nosnippet>930</a>                        moe_intermediate_size,
+<a href=#931 id=931 data-nosnippet>931</a>                        quantization_config,
+<a href=#932 id=932 data-nosnippet>932</a>                        vb.pp(<span class="string">"gate_proj.weight"</span>),
+<a href=#933 id=933 data-nosnippet>933</a>                    )<span class="question-mark">?</span>;
+<a href=#934 id=934 data-nosnippet>934</a>                    <span class="kw">let </span>up_proj = <span class="kw">crate</span>::linear_no_bias(
+<a href=#935 id=935 data-nosnippet>935</a>                        hidden_size,
+<a href=#936 id=936 data-nosnippet>936</a>                        moe_intermediate_size,
+<a href=#937 id=937 data-nosnippet>937</a>                        quantization_config,
+<a href=#938 id=938 data-nosnippet>938</a>                        vb.pp(<span class="string">"up_proj.weight"</span>),
+<a href=#939 id=939 data-nosnippet>939</a>                    )<span class="question-mark">?</span>;
+<a href=#940 id=940 data-nosnippet>940</a>                    <span class="kw">let </span>down_proj = <span class="kw">crate</span>::linear_no_bias(
+<a href=#941 id=941 data-nosnippet>941</a>                        moe_intermediate_size,
+<a href=#942 id=942 data-nosnippet>942</a>                        hidden_size,
+<a href=#943 id=943 data-nosnippet>943</a>                        quantization_config,
+<a href=#944 id=944 data-nosnippet>944</a>                        vb.pp(<span class="string">"down_proj.weight"</span>),
+<a href=#945 id=945 data-nosnippet>945</a>                    )<span class="question-mark">?</span>;
+<a href=#946 id=946 data-nosnippet>946</a>
+<a href=#947 id=947 data-nosnippet>947</a>                    gate_proj_vec.push(gate_proj.dequantize_w()<span class="question-mark">?</span>);
+<a href=#948 id=948 data-nosnippet>948</a>                    up_proj_vec.push(up_proj.dequantize_w()<span class="question-mark">?</span>);
+<a href=#949 id=949 data-nosnippet>949</a>                    down_proj_vec.push(down_proj.dequantize_w()<span class="question-mark">?</span>);
+<a href=#950 id=950 data-nosnippet>950</a>                }
+<a href=#951 id=951 data-nosnippet>951</a>
+<a href=#952 id=952 data-nosnippet>952</a>                <span class="kw">let </span><span class="kw-2">mut </span>gate_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
+<a href=#953 id=953 data-nosnippet>953</a>                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+<a href=#954 id=954 data-nosnippet>954</a>                        Linear::new(Tensor::stack(<span class="kw-2">&amp;</span>gate_proj_vec, <span class="number">0</span>)<span class="question-mark">?</span>, <span class="prelude-val">None</span>),
+<a href=#955 id=955 data-nosnippet>955</a>                    ))<span class="question-mark">?</span>);
+<a href=#956 id=956 data-nosnippet>956</a>                <span class="kw">let </span><span class="kw-2">mut </span>up_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
+<a href=#957 id=957 data-nosnippet>957</a>                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+<a href=#958 id=958 data-nosnippet>958</a>                        Linear::new(Tensor::stack(<span class="kw-2">&amp;</span>up_proj_vec, <span class="number">0</span>)<span class="question-mark">?</span>, <span class="prelude-val">None</span>),
+<a href=#959 id=959 data-nosnippet>959</a>                    ))<span class="question-mark">?</span>);
+<a href=#960 id=960 data-nosnippet>960</a>                <span class="kw">let </span><span class="kw-2">mut </span>down_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
+<a href=#961 id=961 data-nosnippet>961</a>                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+<a href=#962 id=962 data-nosnippet>962</a>                        Linear::new(Tensor::stack(<span class="kw-2">&amp;</span>down_proj_vec, <span class="number">0</span>)<span class="question-mark">?</span>, <span class="prelude-val">None</span>),
+<a href=#963 id=963 data-nosnippet>963</a>                    ))<span class="question-mark">?</span>);
+<a href=#964 id=964 data-nosnippet>964</a>                gate_proj = apply_immediate_isq(gate_proj, vb.pp(<span class="string">"gate_proj"</span>))<span class="question-mark">?</span>;
+<a href=#965 id=965 data-nosnippet>965</a>                up_proj = apply_immediate_isq(up_proj, vb.pp(<span class="string">"up_proj"</span>))<span class="question-mark">?</span>;
+<a href=#966 id=966 data-nosnippet>966</a>                down_proj = apply_immediate_isq(down_proj, vb.pp(<span class="string">"down_proj"</span>))<span class="question-mark">?</span>;
+<a href=#967 id=967 data-nosnippet>967</a>
+<a href=#968 id=968 data-nosnippet>968</a>                (gate_proj, up_proj, down_proj)
+<a href=#969 id=969 data-nosnippet>969</a>            } <span class="kw">else </span>{
+<a href=#970 id=970 data-nosnippet>970</a>                <span class="kw">let </span>experts_vb = vb.pp(<span class="string">"experts"</span>);
+<a href=#971 id=971 data-nosnippet>971</a>                <span class="kw">let </span><span class="kw-2">mut </span>gate_proj_vec = Vec::new();
+<a href=#972 id=972 data-nosnippet>972</a>                <span class="kw">let </span><span class="kw-2">mut </span>up_proj_vec = Vec::new();
+<a href=#973 id=973 data-nosnippet>973</a>                <span class="kw">let </span><span class="kw-2">mut </span>down_proj_vec = Vec::new();
+<a href=#974 id=974 data-nosnippet>974</a>                <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..num_experts {
+<a href=#975 id=975 data-nosnippet>975</a>                    <span class="kw">let </span>vb = experts_vb.pp(i);
+<a href=#976 id=976 data-nosnippet>976</a>                    <span class="kw">let </span>gate_proj =
+<a href=#977 id=977 data-nosnippet>977</a>                        vb.get((moe_intermediate_size, hidden_size), <span class="string">"gate_proj.weight"</span>)<span class="question-mark">?</span>;
+<a href=#978 id=978 data-nosnippet>978</a>                    <span class="kw">let </span>up_proj = vb.get((moe_intermediate_size, hidden_size), <span class="string">"up_proj.weight"</span>)<span class="question-mark">?</span>;
+<a href=#979 id=979 data-nosnippet>979</a>                    <span class="kw">let </span>down_proj =
+<a href=#980 id=980 data-nosnippet>980</a>                        vb.get((hidden_size, moe_intermediate_size), <span class="string">"down_proj.weight"</span>)<span class="question-mark">?</span>;
+<a href=#981 id=981 data-nosnippet>981</a>
+<a href=#982 id=982 data-nosnippet>982</a>                    gate_proj_vec.push(gate_proj);
+<a href=#983 id=983 data-nosnippet>983</a>                    up_proj_vec.push(up_proj);
+<a href=#984 id=984 data-nosnippet>984</a>                    down_proj_vec.push(down_proj);
+<a href=#985 id=985 data-nosnippet>985</a>                }
+<a href=#986 id=986 data-nosnippet>986</a>
+<a href=#987 id=987 data-nosnippet>987</a>                <span class="kw">let </span><span class="kw-2">mut </span>gate_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
+<a href=#988 id=988 data-nosnippet>988</a>                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+<a href=#989 id=989 data-nosnippet>989</a>                        Linear::new(Tensor::stack(<span class="kw-2">&amp;</span>gate_proj_vec, <span class="number">0</span>)<span class="question-mark">?</span>, <span class="prelude-val">None</span>),
+<a href=#990 id=990 data-nosnippet>990</a>                    ))<span class="question-mark">?</span>);
+<a href=#991 id=991 data-nosnippet>991</a>                <span class="kw">let </span><span class="kw-2">mut </span>up_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
+<a href=#992 id=992 data-nosnippet>992</a>                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+<a href=#993 id=993 data-nosnippet>993</a>                        Linear::new(Tensor::stack(<span class="kw-2">&amp;</span>up_proj_vec, <span class="number">0</span>)<span class="question-mark">?</span>, <span class="prelude-val">None</span>),
+<a href=#994 id=994 data-nosnippet>994</a>                    ))<span class="question-mark">?</span>);
+<a href=#995 id=995 data-nosnippet>995</a>                <span class="kw">let </span><span class="kw-2">mut </span>down_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; =
+<a href=#996 id=996 data-nosnippet>996</a>                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+<a href=#997 id=997 data-nosnippet>997</a>                        Linear::new(Tensor::stack(<span class="kw-2">&amp;</span>down_proj_vec, <span class="number">0</span>)<span class="question-mark">?</span>, <span class="prelude-val">None</span>),
+<a href=#998 id=998 data-nosnippet>998</a>                    ))<span class="question-mark">?</span>);
+<a href=#999 id=999 data-nosnippet>999</a>                gate_proj = apply_immediate_isq(gate_proj, vb.pp(<span class="string">"gate_proj"</span>))<span class="question-mark">?</span>;
+<a href=#1000 id=1000 data-nosnippet>1000</a>                up_proj = apply_immediate_isq(up_proj, vb.pp(<span class="string">"up_proj"</span>))<span class="question-mark">?</span>;
+<a href=#1001 id=1001 data-nosnippet>1001</a>                down_proj = apply_immediate_isq(down_proj, vb.pp(<span class="string">"down_proj"</span>))<span class="question-mark">?</span>;
+<a href=#1002 id=1002 data-nosnippet>1002</a>
+<a href=#1003 id=1003 data-nosnippet>1003</a>                (gate_proj, up_proj, down_proj)
+<a href=#1004 id=1004 data-nosnippet>1004</a>            };
+<a href=#1005 id=1005 data-nosnippet>1005</a>
+<a href=#1006 id=1006 data-nosnippet>1006</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+<a href=#1007 id=1007 data-nosnippet>1007</a>            fused_gate_proj,
+<a href=#1008 id=1008 data-nosnippet>1008</a>            fused_up_proj,
+<a href=#1009 id=1009 data-nosnippet>1009</a>            fused_down_proj,
+<a href=#1010 id=1010 data-nosnippet>1010</a>        })
+<a href=#1011 id=1011 data-nosnippet>1011</a>    }
+<a href=#1012 id=1012 data-nosnippet>1012</a>}
+<a href=#1013 id=1013 data-nosnippet>1013</a>
+<a href=#1014 id=1014 data-nosnippet>1014</a><span class="doccomment">/// Compute the appropriate KV shard. This handles KV head replication. Be sure to use `compute_n_kv_groups` in tandem.
+<a href=#1015 id=1015 data-nosnippet>1015</a></span><span class="kw">pub fn </span>compute_kv_shard(total_num_kv_heads: usize, head_dim: usize, comm: <span class="kw-2">&amp;</span>Comm) -&gt; Shard {
+<a href=#1016 id=1016 data-nosnippet>1016</a>    <span class="kw">if </span>comm.world_size() == <span class="number">1 </span>{
+<a href=#1017 id=1017 data-nosnippet>1017</a>        <span class="kw">return </span>Shard::default();
+<a href=#1018 id=1018 data-nosnippet>1018</a>    }
+<a href=#1019 id=1019 data-nosnippet>1019</a>
+<a href=#1020 id=1020 data-nosnippet>1020</a>    <span class="comment">// Tensor parallelism case
+<a href=#1021 id=1021 data-nosnippet>1021</a>
+<a href=#1022 id=1022 data-nosnippet>1022</a>    // We may need to replicate the kv heads
+<a href=#1023 id=1023 data-nosnippet>1023</a>    </span><span class="kw">let </span>kv_replicate = <span class="kw">if </span>comm.world_size() &gt; total_num_kv_heads {
+<a href=#1024 id=1024 data-nosnippet>1024</a>        comm.world_size() / total_num_kv_heads
+<a href=#1025 id=1025 data-nosnippet>1025</a>    } <span class="kw">else </span>{
+<a href=#1026 id=1026 data-nosnippet>1026</a>        <span class="kw">return </span>Shard::Simple {
+<a href=#1027 id=1027 data-nosnippet>1027</a>            dim: <span class="number">0</span>,
+<a href=#1028 id=1028 data-nosnippet>1028</a>            rank: comm.rank(),
+<a href=#1029 id=1029 data-nosnippet>1029</a>            world_size: comm.world_size(),
+<a href=#1030 id=1030 data-nosnippet>1030</a>        };
+<a href=#1031 id=1031 data-nosnippet>1031</a>    };
+<a href=#1032 id=1032 data-nosnippet>1032</a>
+<a href=#1033 id=1033 data-nosnippet>1033</a>    <span class="kw">let </span>num_kv_heads = (total_num_kv_heads / comm.world_size()).max(<span class="number">1</span>);
+<a href=#1034 id=1034 data-nosnippet>1034</a>    <span class="kw">let </span>kv_shard_id = (comm.rank() / kv_replicate) * num_kv_heads;
+<a href=#1035 id=1035 data-nosnippet>1035</a>    Shard::Offset {
+<a href=#1036 id=1036 data-nosnippet>1036</a>        dim: <span class="number">0</span>,
+<a href=#1037 id=1037 data-nosnippet>1037</a>        offset: kv_shard_id * head_dim,
+<a href=#1038 id=1038 data-nosnippet>1038</a>        len: head_dim,
+<a href=#1039 id=1039 data-nosnippet>1039</a>    }
+<a href=#1040 id=1040 data-nosnippet>1040</a>}
+<a href=#1041 id=1041 data-nosnippet>1041</a>
+<a href=#1042 id=1042 data-nosnippet>1042</a><span class="doccomment">/// Compute the number of KV groups, taking into account KV head replication.
+<a href=#1043 id=1043 data-nosnippet>1043</a></span><span class="kw">pub fn </span>compute_n_kv_groups(
+<a href=#1044 id=1044 data-nosnippet>1044</a>    total_num_kv_heads: usize,
+<a href=#1045 id=1045 data-nosnippet>1045</a>    num_attention_heads: usize,
+<a href=#1046 id=1046 data-nosnippet>1046</a>    comm: <span class="kw-2">&amp;</span>Comm,
+<a href=#1047 id=1047 data-nosnippet>1047</a>) -&gt; usize {
+<a href=#1048 id=1048 data-nosnippet>1048</a>    <span class="kw">let </span>kv_replicate = <span class="kw">if </span>comm.world_size() &gt; total_num_kv_heads {
+<a href=#1049 id=1049 data-nosnippet>1049</a>        comm.world_size() / total_num_kv_heads
+<a href=#1050 id=1050 data-nosnippet>1050</a>    } <span class="kw">else </span>{
+<a href=#1051 id=1051 data-nosnippet>1051</a>        <span class="number">1
+<a href=#1052 id=1052 data-nosnippet>1052</a>    </span>};
+<a href=#1053 id=1053 data-nosnippet>1053</a>    <span class="kw">if </span>kv_replicate != <span class="number">0 </span>{
+<a href=#1054 id=1054 data-nosnippet>1054</a>        (num_attention_heads / total_num_kv_heads) / kv_replicate
+<a href=#1055 id=1055 data-nosnippet>1055</a>    } <span class="kw">else </span>{
+<a href=#1056 id=1056 data-nosnippet>1056</a>        num_attention_heads / total_num_kv_heads
+<a href=#1057 id=1057 data-nosnippet>1057</a>    }
+<a href=#1058 id=1058 data-nosnippet>1058</a>}</code></pre></div></section></main></body></html>

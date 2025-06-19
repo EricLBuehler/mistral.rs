@@ -292,37 +292,43 @@
 <a href=#292 id=292 data-nosnippet>292</a>            template
 <a href=#293 id=293 data-nosnippet>293</a>        }
 <a href=#294 id=294 data-nosnippet>294</a>    };
-<a href=#295 id=295 data-nosnippet>295</a>    <span class="kw">let </span>template = template.replace(<span class="string">"[::-1]"</span>, <span class="string">"|reverse"</span>);
+<a href=#295 id=295 data-nosnippet>295</a>    <span class="kw">let </span><span class="kw-2">mut </span>template = template.replace(<span class="string">"[::-1]"</span>, <span class="string">"|reverse"</span>);
 <a href=#296 id=296 data-nosnippet>296</a>
-<a href=#297 id=297 data-nosnippet>297</a>    env.add_template(<span class="string">"chat_template"</span>, <span class="kw-2">&amp;</span>template)<span class="question-mark">?</span>;
-<a href=#298 id=298 data-nosnippet>298</a>    env.add_function(<span class="string">"raise_exception"</span>, raise_exception);
-<a href=#299 id=299 data-nosnippet>299</a>    env.add_filter(<span class="string">"tojson"</span>, tojson);
-<a href=#300 id=300 data-nosnippet>300</a>    env.add_function(<span class="string">"strftime_now"</span>, strftime_now);
-<a href=#301 id=301 data-nosnippet>301</a>    <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
+<a href=#297 id=297 data-nosnippet>297</a>    <span class="kw">if </span>template.contains(<span class="string">"{{ meta }}"</span>) {
+<a href=#298 id=298 data-nosnippet>298</a>        <span class="comment">//fix for GLM4 models
+<a href=#299 id=299 data-nosnippet>299</a>        </span>template = template.replace(<span class="string">"{%- set meta = message.get(\"metadata\", \"\") %}"</span>, <span class="string">""</span>);
+<a href=#300 id=300 data-nosnippet>300</a>        template = template.replace(<span class="string">"{{ meta }}"</span>, <span class="string">""</span>);
+<a href=#301 id=301 data-nosnippet>301</a>    }
 <a href=#302 id=302 data-nosnippet>302</a>
-<a href=#303 id=303 data-nosnippet>303</a>    <span class="kw">let </span>date = chrono::Utc::now();
-<a href=#304 id=304 data-nosnippet>304</a>    <span class="kw">let </span>date_string = date.format(<span class="string">"%d, %B, %Y"</span>).to_string();
-<a href=#305 id=305 data-nosnippet>305</a>
-<a href=#306 id=306 data-nosnippet>306</a>    <span class="kw">if </span>tools.is_empty() {
-<a href=#307 id=307 data-nosnippet>307</a>        <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
-<a href=#308 id=308 data-nosnippet>308</a>            messages =&gt; new_messages,
-<a href=#309 id=309 data-nosnippet>309</a>            add_generation_prompt =&gt; add_generation_prompt,
-<a href=#310 id=310 data-nosnippet>310</a>            bos_token =&gt; bos_tok,
-<a href=#311 id=311 data-nosnippet>311</a>            eos_token =&gt; eos_tok,
-<a href=#312 id=312 data-nosnippet>312</a>            unk_token =&gt; unk_tok,
-<a href=#313 id=313 data-nosnippet>313</a>            date_string =&gt; date_string,
-<a href=#314 id=314 data-nosnippet>314</a>            enable_thinking =&gt; enable_thinking,
-<a href=#315 id=315 data-nosnippet>315</a>        })<span class="question-mark">?</span>)
-<a href=#316 id=316 data-nosnippet>316</a>    } <span class="kw">else </span>{
-<a href=#317 id=317 data-nosnippet>317</a>        <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
-<a href=#318 id=318 data-nosnippet>318</a>            messages =&gt; new_messages,
-<a href=#319 id=319 data-nosnippet>319</a>            add_generation_prompt =&gt; add_generation_prompt,
-<a href=#320 id=320 data-nosnippet>320</a>            bos_token =&gt; bos_tok,
-<a href=#321 id=321 data-nosnippet>321</a>            eos_token =&gt; eos_tok,
-<a href=#322 id=322 data-nosnippet>322</a>            unk_token =&gt; unk_tok,
-<a href=#323 id=323 data-nosnippet>323</a>            tools =&gt; tools,
-<a href=#324 id=324 data-nosnippet>324</a>            date_string =&gt; date_string,
-<a href=#325 id=325 data-nosnippet>325</a>            enable_thinking =&gt; enable_thinking,
-<a href=#326 id=326 data-nosnippet>326</a>        })<span class="question-mark">?</span>)
-<a href=#327 id=327 data-nosnippet>327</a>    }
-<a href=#328 id=328 data-nosnippet>328</a>}</code></pre></div></section></main></body></html>
+<a href=#303 id=303 data-nosnippet>303</a>    env.add_template(<span class="string">"chat_template"</span>, <span class="kw-2">&amp;</span>template)<span class="question-mark">?</span>;
+<a href=#304 id=304 data-nosnippet>304</a>    env.add_function(<span class="string">"raise_exception"</span>, raise_exception);
+<a href=#305 id=305 data-nosnippet>305</a>    env.add_filter(<span class="string">"tojson"</span>, tojson);
+<a href=#306 id=306 data-nosnippet>306</a>    env.add_function(<span class="string">"strftime_now"</span>, strftime_now);
+<a href=#307 id=307 data-nosnippet>307</a>    <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
+<a href=#308 id=308 data-nosnippet>308</a>
+<a href=#309 id=309 data-nosnippet>309</a>    <span class="kw">let </span>date = chrono::Utc::now();
+<a href=#310 id=310 data-nosnippet>310</a>    <span class="kw">let </span>date_string = date.format(<span class="string">"%d, %B, %Y"</span>).to_string();
+<a href=#311 id=311 data-nosnippet>311</a>
+<a href=#312 id=312 data-nosnippet>312</a>    <span class="kw">if </span>tools.is_empty() {
+<a href=#313 id=313 data-nosnippet>313</a>        <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
+<a href=#314 id=314 data-nosnippet>314</a>            messages =&gt; new_messages,
+<a href=#315 id=315 data-nosnippet>315</a>            add_generation_prompt =&gt; add_generation_prompt,
+<a href=#316 id=316 data-nosnippet>316</a>            bos_token =&gt; bos_tok,
+<a href=#317 id=317 data-nosnippet>317</a>            eos_token =&gt; eos_tok,
+<a href=#318 id=318 data-nosnippet>318</a>            unk_token =&gt; unk_tok,
+<a href=#319 id=319 data-nosnippet>319</a>            date_string =&gt; date_string,
+<a href=#320 id=320 data-nosnippet>320</a>            enable_thinking =&gt; enable_thinking,
+<a href=#321 id=321 data-nosnippet>321</a>        })<span class="question-mark">?</span>)
+<a href=#322 id=322 data-nosnippet>322</a>    } <span class="kw">else </span>{
+<a href=#323 id=323 data-nosnippet>323</a>        <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
+<a href=#324 id=324 data-nosnippet>324</a>            messages =&gt; new_messages,
+<a href=#325 id=325 data-nosnippet>325</a>            add_generation_prompt =&gt; add_generation_prompt,
+<a href=#326 id=326 data-nosnippet>326</a>            bos_token =&gt; bos_tok,
+<a href=#327 id=327 data-nosnippet>327</a>            eos_token =&gt; eos_tok,
+<a href=#328 id=328 data-nosnippet>328</a>            unk_token =&gt; unk_tok,
+<a href=#329 id=329 data-nosnippet>329</a>            tools =&gt; tools,
+<a href=#330 id=330 data-nosnippet>330</a>            date_string =&gt; date_string,
+<a href=#331 id=331 data-nosnippet>331</a>            enable_thinking =&gt; enable_thinking,
+<a href=#332 id=332 data-nosnippet>332</a>        })<span class="question-mark">?</span>)
+<a href=#333 id=333 data-nosnippet>333</a>    }
+<a href=#334 id=334 data-nosnippet>334</a>}</code></pre></div></section></main></body></html>
