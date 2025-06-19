@@ -299,51 +299,52 @@
 <a href=#299 id=299 data-nosnippet>299</a>    models::quantized_phi2::ModelWeights <span class="kw">as </span>QPhi,
 <a href=#300 id=300 data-nosnippet>300</a>    models::quantized_phi3::ModelWeights <span class="kw">as </span>QPhi3,
 <a href=#301 id=301 data-nosnippet>301</a>    models::quantized_qwen::ModelWeights <span class="kw">as </span>QQwen,
-<a href=#302 id=302 data-nosnippet>302</a>    models::quantized_starcoder2::ModelWeights <span class="kw">as </span>QStarcoder2,
-<a href=#303 id=303 data-nosnippet>303</a>    xlora_models::{XLoraQLlama, XLoraQPhi3},
-<a href=#304 id=304 data-nosnippet>304</a>};
-<a href=#305 id=305 data-nosnippet>305</a><span class="kw">use </span>akin::akin;
-<a href=#306 id=306 data-nosnippet>306</a>
-<a href=#307 id=307 data-nosnippet>307</a><span class="kw">impl </span>TryFrom&lt;ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGML&gt;&gt; <span class="kw">for </span>QLlama {
-<a href=#308 id=308 data-nosnippet>308</a>    <span class="kw">type </span>Error = candle_core::Error;
-<a href=#309 id=309 data-nosnippet>309</a>
-<a href=#310 id=310 data-nosnippet>310</a>    <span class="kw">fn </span>try_from(params: ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGML&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Error&gt; {
-<a href=#311 id=311 data-nosnippet>311</a>        <span class="kw">let </span>config = params.expect_quantized(<span class="string">"`Config` should be GGML Quantized"</span>);
-<a href=#312 id=312 data-nosnippet>312</a>        config.try_into_model()
-<a href=#313 id=313 data-nosnippet>313</a>    }
-<a href=#314 id=314 data-nosnippet>314</a>}
-<a href=#315 id=315 data-nosnippet>315</a>
-<a href=#316 id=316 data-nosnippet>316</a><span class="kw">impl </span>TryFrom&lt;ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGML&gt;&gt; <span class="kw">for </span>XLoraQLlama {
-<a href=#317 id=317 data-nosnippet>317</a>    <span class="kw">type </span>Error = candle_core::Error;
-<a href=#318 id=318 data-nosnippet>318</a>
-<a href=#319 id=319 data-nosnippet>319</a>    <span class="kw">fn </span>try_from(params: ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGML&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Error&gt; {
-<a href=#320 id=320 data-nosnippet>320</a>        <span class="kw">let </span>config = params.expect_adapted(<span class="string">"`Config` should be GGML Quantized with an Adapter"</span>);
-<a href=#321 id=321 data-nosnippet>321</a>        config.try_into_model()
-<a href=#322 id=322 data-nosnippet>322</a>    }
-<a href=#323 id=323 data-nosnippet>323</a>}
-<a href=#324 id=324 data-nosnippet>324</a>
-<a href=#325 id=325 data-nosnippet>325</a><span class="macro">akin!</span> {
-<a href=#326 id=326 data-nosnippet>326</a>    <span class="kw">let </span><span class="kw-2">&amp;</span>models_gguf = [QLlama, QPhi, QPhi3, QStarcoder2, QQwen];
-<a href=#327 id=327 data-nosnippet>327</a>
-<a href=#328 id=328 data-nosnippet>328</a>    <span class="kw">impl</span>&lt;R: std::io::Seek + std::io::Read&gt; TryFrom&lt;ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>, R&gt;&gt;&gt; <span class="kw">for </span><span class="kw-2">*</span>models_gguf {
-<a href=#329 id=329 data-nosnippet>329</a>        <span class="kw">type </span>Error = candle_core::Error;
-<a href=#330 id=330 data-nosnippet>330</a>
-<a href=#331 id=331 data-nosnippet>331</a>        <span class="kw">fn </span>try_from(params: ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>, R&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Error&gt; {
-<a href=#332 id=332 data-nosnippet>332</a>            <span class="kw">let </span>config = params.expect_quantized(<span class="string">"`Config` should be GGUF Quantized"</span>);
-<a href=#333 id=333 data-nosnippet>333</a>            config.try_into_model()
-<a href=#334 id=334 data-nosnippet>334</a>        }
-<a href=#335 id=335 data-nosnippet>335</a>    }
-<a href=#336 id=336 data-nosnippet>336</a>}
-<a href=#337 id=337 data-nosnippet>337</a>
-<a href=#338 id=338 data-nosnippet>338</a><span class="macro">akin!</span> {
-<a href=#339 id=339 data-nosnippet>339</a>    <span class="kw">let </span><span class="kw-2">&amp;</span>models_gguf_a = [XLoraQLlama, XLoraQPhi3];
-<a href=#340 id=340 data-nosnippet>340</a>
-<a href=#341 id=341 data-nosnippet>341</a>    <span class="kw">impl</span>&lt;R: std::io::Seek + std::io::Read&gt; TryFrom&lt;ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>, R&gt;&gt;&gt; <span class="kw">for </span><span class="kw-2">*</span>models_gguf_a {
-<a href=#342 id=342 data-nosnippet>342</a>        <span class="kw">type </span>Error = candle_core::Error;
-<a href=#343 id=343 data-nosnippet>343</a>
-<a href=#344 id=344 data-nosnippet>344</a>        <span class="kw">fn </span>try_from(params: ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>, R&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Error&gt; {
-<a href=#345 id=345 data-nosnippet>345</a>            <span class="kw">let </span>config = params.expect_adapted(<span class="string">"`Config` should be GGUF Quantized with an Adapter"</span>);
-<a href=#346 id=346 data-nosnippet>346</a>            config.try_into_model()
-<a href=#347 id=347 data-nosnippet>347</a>        }
-<a href=#348 id=348 data-nosnippet>348</a>    }
-<a href=#349 id=349 data-nosnippet>349</a>}</code></pre></div></section></main></body></html>
+<a href=#302 id=302 data-nosnippet>302</a>    models::quantized_qwen3::ModelWeights <span class="kw">as </span>QQwen3,
+<a href=#303 id=303 data-nosnippet>303</a>    models::quantized_starcoder2::ModelWeights <span class="kw">as </span>QStarcoder2,
+<a href=#304 id=304 data-nosnippet>304</a>    xlora_models::{XLoraQLlama, XLoraQPhi3},
+<a href=#305 id=305 data-nosnippet>305</a>};
+<a href=#306 id=306 data-nosnippet>306</a><span class="kw">use </span>akin::akin;
+<a href=#307 id=307 data-nosnippet>307</a>
+<a href=#308 id=308 data-nosnippet>308</a><span class="kw">impl </span>TryFrom&lt;ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGML&gt;&gt; <span class="kw">for </span>QLlama {
+<a href=#309 id=309 data-nosnippet>309</a>    <span class="kw">type </span>Error = candle_core::Error;
+<a href=#310 id=310 data-nosnippet>310</a>
+<a href=#311 id=311 data-nosnippet>311</a>    <span class="kw">fn </span>try_from(params: ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGML&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Error&gt; {
+<a href=#312 id=312 data-nosnippet>312</a>        <span class="kw">let </span>config = params.expect_quantized(<span class="string">"`Config` should be GGML Quantized"</span>);
+<a href=#313 id=313 data-nosnippet>313</a>        config.try_into_model()
+<a href=#314 id=314 data-nosnippet>314</a>    }
+<a href=#315 id=315 data-nosnippet>315</a>}
+<a href=#316 id=316 data-nosnippet>316</a>
+<a href=#317 id=317 data-nosnippet>317</a><span class="kw">impl </span>TryFrom&lt;ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGML&gt;&gt; <span class="kw">for </span>XLoraQLlama {
+<a href=#318 id=318 data-nosnippet>318</a>    <span class="kw">type </span>Error = candle_core::Error;
+<a href=#319 id=319 data-nosnippet>319</a>
+<a href=#320 id=320 data-nosnippet>320</a>    <span class="kw">fn </span>try_from(params: ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGML&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Error&gt; {
+<a href=#321 id=321 data-nosnippet>321</a>        <span class="kw">let </span>config = params.expect_adapted(<span class="string">"`Config` should be GGML Quantized with an Adapter"</span>);
+<a href=#322 id=322 data-nosnippet>322</a>        config.try_into_model()
+<a href=#323 id=323 data-nosnippet>323</a>    }
+<a href=#324 id=324 data-nosnippet>324</a>}
+<a href=#325 id=325 data-nosnippet>325</a>
+<a href=#326 id=326 data-nosnippet>326</a><span class="macro">akin!</span> {
+<a href=#327 id=327 data-nosnippet>327</a>    <span class="kw">let </span><span class="kw-2">&amp;</span>models_gguf = [QLlama, QPhi, QPhi3, QStarcoder2, QQwen, QQwen3];
+<a href=#328 id=328 data-nosnippet>328</a>
+<a href=#329 id=329 data-nosnippet>329</a>    <span class="kw">impl</span>&lt;R: std::io::Seek + std::io::Read&gt; TryFrom&lt;ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>, R&gt;&gt;&gt; <span class="kw">for </span><span class="kw-2">*</span>models_gguf {
+<a href=#330 id=330 data-nosnippet>330</a>        <span class="kw">type </span>Error = candle_core::Error;
+<a href=#331 id=331 data-nosnippet>331</a>
+<a href=#332 id=332 data-nosnippet>332</a>        <span class="kw">fn </span>try_from(params: ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>, R&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Error&gt; {
+<a href=#333 id=333 data-nosnippet>333</a>            <span class="kw">let </span>config = params.expect_quantized(<span class="string">"`Config` should be GGUF Quantized"</span>);
+<a href=#334 id=334 data-nosnippet>334</a>            config.try_into_model()
+<a href=#335 id=335 data-nosnippet>335</a>        }
+<a href=#336 id=336 data-nosnippet>336</a>    }
+<a href=#337 id=337 data-nosnippet>337</a>}
+<a href=#338 id=338 data-nosnippet>338</a>
+<a href=#339 id=339 data-nosnippet>339</a><span class="macro">akin!</span> {
+<a href=#340 id=340 data-nosnippet>340</a>    <span class="kw">let </span><span class="kw-2">&amp;</span>models_gguf_a = [XLoraQLlama, XLoraQPhi3];
+<a href=#341 id=341 data-nosnippet>341</a>
+<a href=#342 id=342 data-nosnippet>342</a>    <span class="kw">impl</span>&lt;R: std::io::Seek + std::io::Read&gt; TryFrom&lt;ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>, R&gt;&gt;&gt; <span class="kw">for </span><span class="kw-2">*</span>models_gguf_a {
+<a href=#343 id=343 data-nosnippet>343</a>        <span class="kw">type </span>Error = candle_core::Error;
+<a href=#344 id=344 data-nosnippet>344</a>
+<a href=#345 id=345 data-nosnippet>345</a>        <span class="kw">fn </span>try_from(params: ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>, R&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Error&gt; {
+<a href=#346 id=346 data-nosnippet>346</a>            <span class="kw">let </span>config = params.expect_adapted(<span class="string">"`Config` should be GGUF Quantized with an Adapter"</span>);
+<a href=#347 id=347 data-nosnippet>347</a>            config.try_into_model()
+<a href=#348 id=348 data-nosnippet>348</a>        }
+<a href=#349 id=349 data-nosnippet>349</a>    }
+<a href=#350 id=350 data-nosnippet>350</a>}</code></pre></div></section></main></body></html>
