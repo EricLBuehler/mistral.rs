@@ -8,6 +8,7 @@ Mistral.rs provides a TCP-based ring backend for distributed tensor-parallel inf
   cargo build --release --features ring
   ```
 - Ensure the specified TCP ports are open and reachable between processes.
+- The `world_size` must be a power of 2 (2, 4, 8, 16, etc.) for correct operation.
 
 ## Configuration
 Create one JSON configuration file per process with the following fields:
@@ -20,7 +21,7 @@ Create one JSON configuration file per process with the following fields:
 | `right_port`  | integer  | Port on which the right neighbor is listening (used to connect outgoing to the right). |
 | `right_ip`    | string   | Optional. IP address of the right neighbor (defaults to `0.0.0.0`).                     |
 | `rank`        | integer  | Rank of this process in `[0..world_size)`.                                            |
-| `world_size`  | integer  | Total number of processes in the ring.                                                |
+| `world_size`  | integer  | Total number of processes in the ring. **Must be a power of 2** (e.g., 2, 4, 8, 16, etc.). |
 
 
 
