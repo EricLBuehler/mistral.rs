@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["get_global_tp_size_from_devices","use_nccl"],"mod":["layers","socket"],"struct":["AllGather","Comm","Id","RingConfig","SumAllReduce"],"trait":["BarrierLike"]};
+window.SIDEBAR_ITEMS = {"enum":["Comm","Id"],"fn":["get_global_tp_size_from_devices","use_nccl"],"mod":["layers","socket"],"struct":["AllGather","RingConfig","SumAllReduce"],"trait":["BarrierLike"]};
