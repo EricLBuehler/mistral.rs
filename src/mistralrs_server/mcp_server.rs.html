@@ -8,7 +8,7 @@
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>tokio::net::TcpListener;
 <a href=#9 id=9 data-nosnippet>9</a>
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>mistralrs_server_core::{
-<a href=#11 id=11 data-nosnippet>11</a>    chat_completion::{create_response_channel, parse_request},
+<a href=#11 id=11 data-nosnippet>11</a>    chat_completion::parse_request, handler_core::create_response_channel,
 <a href=#12 id=12 data-nosnippet>12</a>    types::SharedMistralRsState,
 <a href=#13 id=13 data-nosnippet>13</a>};
 <a href=#14 id=14 data-nosnippet>14</a>
@@ -164,7 +164,7 @@
 <a href=#164 id=164 data-nosnippet>164</a>            .<span class="kw">await
 <a href=#165 id=165 data-nosnippet>165</a>            </span>.map_err(|e| CallToolError::new(io::Error::other(e.to_string())))<span class="question-mark">?</span>;
 <a href=#166 id=166 data-nosnippet>166</a>
-<a href=#167 id=167 data-nosnippet>167</a>        mistralrs_server_core::chat_completion::send_request(state, request)
+<a href=#167 id=167 data-nosnippet>167</a>        mistralrs_server_core::handler_core::send_request(state, request)
 <a href=#168 id=168 data-nosnippet>168</a>            .<span class="kw">await
 <a href=#169 id=169 data-nosnippet>169</a>            </span>.map_err(|e| CallToolError::new(io::Error::other(e.to_string())))<span class="question-mark">?</span>;
 <a href=#170 id=170 data-nosnippet>170</a>

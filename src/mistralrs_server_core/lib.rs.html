@@ -10,26 +10,26 @@
 <a href=#10 id=10 data-nosnippet>10</a>//! 2. Hook into the mistral.rs server lifecycle.
 <a href=#11 id=11 data-nosnippet>11</a>//!
 <a href=#12 id=12 data-nosnippet>12</a>//! ### Example
-<a href=#13 id=13 data-nosnippet>13</a>//! ```ignore
+<a href=#13 id=13 data-nosnippet>13</a>//! ```no_run
 <a href=#14 id=14 data-nosnippet>14</a>//! use std::sync::Arc;
 <a href=#15 id=15 data-nosnippet>15</a>//!
 <a href=#16 id=16 data-nosnippet>16</a>//! use axum::{
-<a href=#17 id=17 data-nosnippet>17</a>//!     Json, Router,
-<a href=#18 id=18 data-nosnippet>18</a>//!     extract::State,
-<a href=#19 id=19 data-nosnippet>19</a>//!     routing::{get, post},
+<a href=#17 id=17 data-nosnippet>17</a>//!     extract::State,
+<a href=#18 id=18 data-nosnippet>18</a>//!     routing::{get, post},
+<a href=#19 id=19 data-nosnippet>19</a>//!     Json, Router,
 <a href=#20 id=20 data-nosnippet>20</a>//! };
 <a href=#21 id=21 data-nosnippet>21</a>//! use utoipa::OpenApi;
 <a href=#22 id=22 data-nosnippet>22</a>//! use utoipa_swagger_ui::SwaggerUi;
 <a href=#23 id=23 data-nosnippet>23</a>//!
-<a href=#24 id=24 data-nosnippet>24</a>//! use mistralrs::{
-<a href=#25 id=25 data-nosnippet>25</a>//!    AutoDeviceMapParams, ChatCompletionChunkResponse, ModelDType, ModelSelected, initialize_logging,
+<a href=#24 id=24 data-nosnippet>24</a>//! use mistralrs_core::{
+<a href=#25 id=25 data-nosnippet>25</a>//!     initialize_logging, AutoDeviceMapParams, ChatCompletionChunkResponse, ModelDType, ModelSelected,
 <a href=#26 id=26 data-nosnippet>26</a>//! };
 <a href=#27 id=27 data-nosnippet>27</a>//! use mistralrs_server_core::{
 <a href=#28 id=28 data-nosnippet>28</a>//!     chat_completion::{
-<a href=#29 id=29 data-nosnippet>29</a>//!         ChatCompletionResponder, OnChunkCallback, OnDoneCallback, create_chat_streamer,
-<a href=#30 id=30 data-nosnippet>30</a>//!         create_response_channel, handle_chat_completion_error, parse_request,
-<a href=#31 id=31 data-nosnippet>31</a>//!         process_non_streaming_chat_response, send_request,
-<a href=#32 id=32 data-nosnippet>32</a>//!     },
+<a href=#29 id=29 data-nosnippet>29</a>//!         create_streamer, handle_error, parse_request, process_non_streaming_response,
+<a href=#30 id=30 data-nosnippet>30</a>//!         ChatCompletionOnChunkCallback, ChatCompletionOnDoneCallback, ChatCompletionResponder,
+<a href=#31 id=31 data-nosnippet>31</a>//!     },
+<a href=#32 id=32 data-nosnippet>32</a>//!     handler_core::{create_response_channel, send_request},
 <a href=#33 id=33 data-nosnippet>33</a>//!     mistralrs_for_server_builder::MistralRsForServerBuilder,
 <a href=#34 id=34 data-nosnippet>34</a>//!     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
 <a href=#35 id=35 data-nosnippet>35</a>//!     openai::ChatCompletionRequest,
@@ -60,7 +60,7 @@
 <a href=#60 id=60 data-nosnippet>60</a>//! #[tokio::main]
 <a href=#61 id=61 data-nosnippet>61</a>//! async fn main() {
 <a href=#62 id=62 data-nosnippet>62</a>//!     initialize_logging();
-<a href=#63 id=63 data-nosnippet>63</a>//!     
+<a href=#63 id=63 data-nosnippet>63</a>//!
 <a href=#64 id=64 data-nosnippet>64</a>//!     let plain_model_id = String::from("meta-llama/Llama-3.2-1B-Instruct");
 <a href=#65 id=65 data-nosnippet>65</a>//!     let tokenizer_json = None;
 <a href=#66 id=66 data-nosnippet>66</a>//!     let arch = None;
@@ -145,11 +145,11 @@
 <a href=#145 id=145 data-nosnippet>145</a>//! }
 <a href=#146 id=146 data-nosnippet>146</a>//!
 <a href=#147 id=147 data-nosnippet>147</a>//! #[utoipa::path(
-<a href=#148 id=148 data-nosnippet>148</a>//!   post,
-<a href=#149 id=149 data-nosnippet>149</a>//!   tag = "Custom",
-<a href=#150 id=150 data-nosnippet>150</a>//!   path = "/chat",
-<a href=#151 id=151 data-nosnippet>151</a>//!   request_body = ChatCompletionRequest,
-<a href=#152 id=152 data-nosnippet>152</a>//!   responses((status = 200, description = "Chat completions"))
+<a href=#148 id=148 data-nosnippet>148</a>//!     post,
+<a href=#149 id=149 data-nosnippet>149</a>//!     tag = "Custom",
+<a href=#150 id=150 data-nosnippet>150</a>//!     path = "/chat",
+<a href=#151 id=151 data-nosnippet>151</a>//!     request_body = ChatCompletionRequest,
+<a href=#152 id=152 data-nosnippet>152</a>//!     responses((status = 200, description = "Chat completions"))
 <a href=#153 id=153 data-nosnippet>153</a>//! )]
 <a href=#154 id=154 data-nosnippet>154</a>//! pub async fn custom_chat(
 <a href=#155 id=155 data-nosnippet>155</a>//!     State(state): State&lt;Arc&lt;AppState&gt;&gt;,
@@ -158,70 +158,74 @@
 <a href=#158 id=158 data-nosnippet>158</a>//!     let mistralrs_state = state.mistralrs_state.clone();
 <a href=#159 id=159 data-nosnippet>159</a>//!     let (tx, mut rx) = create_response_channel(None);
 <a href=#160 id=160 data-nosnippet>160</a>//!
-<a href=#161 id=161 data-nosnippet>161</a>//!     let (request, is_streaming) = match parse_request(oai_request, mistralrs_state.clone(), tx).await
-<a href=#162 id=162 data-nosnippet>162</a>//!     {
-<a href=#163 id=163 data-nosnippet>163</a>//!         Ok(x) =&gt; x,
-<a href=#164 id=164 data-nosnippet>164</a>//!         Err(e) =&gt; return handle_chat_completion_error(mistralrs_state, e.into()),
-<a href=#165 id=165 data-nosnippet>165</a>//!     };
+<a href=#161 id=161 data-nosnippet>161</a>//!     let (request, is_streaming) =
+<a href=#162 id=162 data-nosnippet>162</a>//!         match parse_request(oai_request, mistralrs_state.clone(), tx).await {
+<a href=#163 id=163 data-nosnippet>163</a>//!             Ok(x) =&gt; x,
+<a href=#164 id=164 data-nosnippet>164</a>//!             Err(e) =&gt; return handle_error(mistralrs_state, e.into()),
+<a href=#165 id=165 data-nosnippet>165</a>//!         };
 <a href=#166 id=166 data-nosnippet>166</a>//!
 <a href=#167 id=167 data-nosnippet>167</a>//!     dbg!(request.clone());
 <a href=#168 id=168 data-nosnippet>168</a>//!
 <a href=#169 id=169 data-nosnippet>169</a>//!     if let Err(e) = send_request(&amp;mistralrs_state, request).await {
-<a href=#170 id=170 data-nosnippet>170</a>//!         return handle_chat_completion_error(mistralrs_state, e.into());
+<a href=#170 id=170 data-nosnippet>170</a>//!         return handle_error(mistralrs_state, e.into());
 <a href=#171 id=171 data-nosnippet>171</a>//!     }
 <a href=#172 id=172 data-nosnippet>172</a>//!
 <a href=#173 id=173 data-nosnippet>173</a>//!     if is_streaming {
 <a href=#174 id=174 data-nosnippet>174</a>//!         let db_fn = state.db_create;
 <a href=#175 id=175 data-nosnippet>175</a>//!
-<a href=#176 id=176 data-nosnippet>176</a>//!         let on_chunk: OnChunkCallback = Box::new(move |mut chunk: ChatCompletionChunkResponse| {
-<a href=#177 id=177 data-nosnippet>177</a>//!             dbg!(&amp;chunk);
-<a href=#178 id=178 data-nosnippet>178</a>//!
-<a href=#179 id=179 data-nosnippet>179</a>//!             if let Some(original_content) = &amp;chunk.choices[0].delta.content {
-<a href=#180 id=180 data-nosnippet>180</a>//!                 chunk.choices[0].delta.content = Some(format!("CHANGED! {}", original_content));
-<a href=#181 id=181 data-nosnippet>181</a>//!             }
-<a href=#182 id=182 data-nosnippet>182</a>//!
-<a href=#183 id=183 data-nosnippet>183</a>//!             chunk.clone()
-<a href=#184 id=184 data-nosnippet>184</a>//!         });
-<a href=#185 id=185 data-nosnippet>185</a>//!
-<a href=#186 id=186 data-nosnippet>186</a>//!         let on_done: OnDoneCallback = Box::new(move |chunks: &amp;[ChatCompletionChunkResponse]| {
-<a href=#187 id=187 data-nosnippet>187</a>//!             dbg!(chunks);
-<a href=#188 id=188 data-nosnippet>188</a>//!             (db_fn)();
-<a href=#189 id=189 data-nosnippet>189</a>//!         });
-<a href=#190 id=190 data-nosnippet>190</a>//!
-<a href=#191 id=191 data-nosnippet>191</a>//!         let streamer =
-<a href=#192 id=192 data-nosnippet>192</a>//!             create_chat_streamer(rx, mistralrs_state.clone(), Some(on_chunk), Some(on_done));
-<a href=#193 id=193 data-nosnippet>193</a>//!
-<a href=#194 id=194 data-nosnippet>194</a>//!         ChatCompletionResponder::Sse(streamer)
-<a href=#195 id=195 data-nosnippet>195</a>//!     } else {
-<a href=#196 id=196 data-nosnippet>196</a>//!         let response = process_non_streaming_chat_response(&amp;mut rx, mistralrs_state.clone()).await;
-<a href=#197 id=197 data-nosnippet>197</a>//!
-<a href=#198 id=198 data-nosnippet>198</a>//!         match &amp;response {
-<a href=#199 id=199 data-nosnippet>199</a>//!             ChatCompletionResponder::Json(json_response) =&gt; {
-<a href=#200 id=200 data-nosnippet>200</a>//!                 dbg!(json_response);
-<a href=#201 id=201 data-nosnippet>201</a>//!                 (state.db_create)();
-<a href=#202 id=202 data-nosnippet>202</a>//!             }
-<a href=#203 id=203 data-nosnippet>203</a>//!             _ =&gt; {
-<a href=#204 id=204 data-nosnippet>204</a>//!                 //
-<a href=#205 id=205 data-nosnippet>205</a>//!             }
-<a href=#206 id=206 data-nosnippet>206</a>//!         }
-<a href=#207 id=207 data-nosnippet>207</a>//!
-<a href=#208 id=208 data-nosnippet>208</a>//!         response
-<a href=#209 id=209 data-nosnippet>209</a>//!     }
-<a href=#210 id=210 data-nosnippet>210</a>//! }
-<a href=#211 id=211 data-nosnippet>211</a>//!
-<a href=#212 id=212 data-nosnippet>212</a>//! pub fn mock_db_call() {
-<a href=#213 id=213 data-nosnippet>213</a>//!     println!("Saving to DB");
-<a href=#214 id=214 data-nosnippet>214</a>//! }
-<a href=#215 id=215 data-nosnippet>215</a>//! ```
-<a href=#216 id=216 data-nosnippet>216</a>
-<a href=#217 id=217 data-nosnippet>217</a></span><span class="kw">pub mod </span>chat_completion;
-<a href=#218 id=218 data-nosnippet>218</a><span class="kw">mod </span>completions;
-<a href=#219 id=219 data-nosnippet>219</a><span class="kw">mod </span>handlers;
-<a href=#220 id=220 data-nosnippet>220</a><span class="kw">mod </span>image_generation;
-<a href=#221 id=221 data-nosnippet>221</a><span class="kw">pub mod </span>mistralrs_for_server_builder;
-<a href=#222 id=222 data-nosnippet>222</a><span class="kw">pub mod </span>mistralrs_server_router_builder;
-<a href=#223 id=223 data-nosnippet>223</a><span class="kw">pub mod </span>openai;
-<a href=#224 id=224 data-nosnippet>224</a><span class="kw">pub mod </span>openapi_doc;
-<a href=#225 id=225 data-nosnippet>225</a><span class="kw">mod </span>speech_generation;
-<a href=#226 id=226 data-nosnippet>226</a><span class="kw">pub mod </span>types;
-<a href=#227 id=227 data-nosnippet>227</a><span class="kw">pub mod </span>util;</code></pre></div></section></main></body></html>
+<a href=#176 id=176 data-nosnippet>176</a>//!         let on_chunk: ChatCompletionOnChunkCallback =
+<a href=#177 id=177 data-nosnippet>177</a>//!             Box::new(move |mut chunk: ChatCompletionChunkResponse| {
+<a href=#178 id=178 data-nosnippet>178</a>//!                 dbg!(&amp;chunk);
+<a href=#179 id=179 data-nosnippet>179</a>//!
+<a href=#180 id=180 data-nosnippet>180</a>//!                 if let Some(original_content) = &amp;chunk.choices[0].delta.content {
+<a href=#181 id=181 data-nosnippet>181</a>//!                     chunk.choices[0].delta.content = Some(format!("CHANGED! {}", original_content));
+<a href=#182 id=182 data-nosnippet>182</a>//!                 }
+<a href=#183 id=183 data-nosnippet>183</a>//!
+<a href=#184 id=184 data-nosnippet>184</a>//!                 chunk.clone()
+<a href=#185 id=185 data-nosnippet>185</a>//!             });
+<a href=#186 id=186 data-nosnippet>186</a>//!
+<a href=#187 id=187 data-nosnippet>187</a>//!         let on_done: ChatCompletionOnDoneCallback =
+<a href=#188 id=188 data-nosnippet>188</a>//!             Box::new(move |chunks: &amp;[ChatCompletionChunkResponse]| {
+<a href=#189 id=189 data-nosnippet>189</a>//!                 dbg!(chunks);
+<a href=#190 id=190 data-nosnippet>190</a>//!                 (db_fn)();
+<a href=#191 id=191 data-nosnippet>191</a>//!             });
+<a href=#192 id=192 data-nosnippet>192</a>//!
+<a href=#193 id=193 data-nosnippet>193</a>//!         let streamer = create_streamer(rx, mistralrs_state.clone(), Some(on_chunk), Some(on_done));
+<a href=#194 id=194 data-nosnippet>194</a>//!
+<a href=#195 id=195 data-nosnippet>195</a>//!         ChatCompletionResponder::Sse(streamer)
+<a href=#196 id=196 data-nosnippet>196</a>//!     } else {
+<a href=#197 id=197 data-nosnippet>197</a>//!         let response = process_non_streaming_response(&amp;mut rx, mistralrs_state.clone()).await;
+<a href=#198 id=198 data-nosnippet>198</a>//!
+<a href=#199 id=199 data-nosnippet>199</a>//!         match &amp;response {
+<a href=#200 id=200 data-nosnippet>200</a>//!             ChatCompletionResponder::Json(json_response) =&gt; {
+<a href=#201 id=201 data-nosnippet>201</a>//!                 dbg!(json_response);
+<a href=#202 id=202 data-nosnippet>202</a>//!                 (state.db_create)();
+<a href=#203 id=203 data-nosnippet>203</a>//!             }
+<a href=#204 id=204 data-nosnippet>204</a>//!             _ =&gt; {
+<a href=#205 id=205 data-nosnippet>205</a>//!                 //
+<a href=#206 id=206 data-nosnippet>206</a>//!             }
+<a href=#207 id=207 data-nosnippet>207</a>//!         }
+<a href=#208 id=208 data-nosnippet>208</a>//!
+<a href=#209 id=209 data-nosnippet>209</a>//!         response
+<a href=#210 id=210 data-nosnippet>210</a>//!     }
+<a href=#211 id=211 data-nosnippet>211</a>//! }
+<a href=#212 id=212 data-nosnippet>212</a>//!
+<a href=#213 id=213 data-nosnippet>213</a>//! pub fn mock_db_call() {
+<a href=#214 id=214 data-nosnippet>214</a>//!     println!("Saving to DB");
+<a href=#215 id=215 data-nosnippet>215</a>//! }
+<a href=#216 id=216 data-nosnippet>216</a>//! ```
+<a href=#217 id=217 data-nosnippet>217</a>
+<a href=#218 id=218 data-nosnippet>218</a></span><span class="kw">pub mod </span>chat_completion;
+<a href=#219 id=219 data-nosnippet>219</a><span class="kw">mod </span>completion_core;
+<a href=#220 id=220 data-nosnippet>220</a><span class="kw">pub mod </span>completions;
+<a href=#221 id=221 data-nosnippet>221</a><span class="kw">pub mod </span>handler_core;
+<a href=#222 id=222 data-nosnippet>222</a><span class="kw">mod </span>handlers;
+<a href=#223 id=223 data-nosnippet>223</a><span class="kw">pub mod </span>image_generation;
+<a href=#224 id=224 data-nosnippet>224</a><span class="kw">pub mod </span>mistralrs_for_server_builder;
+<a href=#225 id=225 data-nosnippet>225</a><span class="kw">pub mod </span>mistralrs_server_router_builder;
+<a href=#226 id=226 data-nosnippet>226</a><span class="kw">pub mod </span>openai;
+<a href=#227 id=227 data-nosnippet>227</a><span class="kw">pub mod </span>openapi_doc;
+<a href=#228 id=228 data-nosnippet>228</a><span class="kw">pub mod </span>speech_generation;
+<a href=#229 id=229 data-nosnippet>229</a><span class="kw">pub mod </span>streaming;
+<a href=#230 id=230 data-nosnippet>230</a><span class="kw">pub mod </span>types;
+<a href=#231 id=231 data-nosnippet>231</a><span class="kw">pub mod </span>util;</code></pre></div></section></main></body></html>

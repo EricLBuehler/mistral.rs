@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"type":["ExtractedMistralRsState","SharedMistralRsState"]};
+window.SIDEBAR_ITEMS = {"type":["ExtractedMistralRsState","OnChunkCallback","OnDoneCallback","SharedMistralRsState"]};

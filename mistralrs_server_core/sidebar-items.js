@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["chat_completion","mistralrs_for_server_builder","mistralrs_server_router_builder","openai","openapi_doc","types","util"]};
+window.SIDEBAR_ITEMS = {"mod":["chat_completion","completions","handler_core","image_generation","mistralrs_for_server_builder","mistralrs_server_router_builder","openai","openapi_doc","speech_generation","streaming","types","util"]};
