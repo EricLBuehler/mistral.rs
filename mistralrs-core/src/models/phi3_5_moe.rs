@@ -471,7 +471,7 @@ impl MoeMlp {
             let current_hidden_states = exp_out.broadcast_mul(&current_routing_weights)?;
 
             final_hidden_states = final_hidden_states.index_add(
-                &top_x.contiguous()?,
+                &top_x.contiguous()?.to_device(xs_dev)?,
                 &current_hidden_states
                     .squeeze(0)?
                     .to_dtype(xs.dtype())?
