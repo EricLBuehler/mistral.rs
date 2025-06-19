@@ -137,7 +137,7 @@ pub fn calculate_cache_config(
     // Users can raise this limit with `sudo sysctl -w iogpu.wired_limit_mb=<desired_mb>`.
     let mem_gpu = if matches!(device, Device::Metal(_)) {
         // Total system RAM in MB
-        let system_ram_mb = MemoryUsage.get_total_memory(device)? as usize / SIZE_IN_MB;
+        let system_ram_mb = MemoryUsage.get_total_memory(&Device::Cpu)? as usize / SIZE_IN_MB;
 
         let metal_cap_mb = std::process::Command::new("sysctl")
             .arg("-n")
