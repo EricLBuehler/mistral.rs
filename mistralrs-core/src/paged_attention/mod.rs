@@ -151,8 +151,8 @@ pub fn calculate_cache_config(
         // https://techobsessed.net/2023/12/increasing-ram-available-to-gpu-on-apple-silicon-macs-for-running-large-language-models
         // If it is 0 or not specified, apply default
         let default_cap = match system_ram_mb {
-            x if x <= 36 * SIZE_IN_MB => (system_ram_mb * 2) / 3,
-            x if x > 36 * SIZE_IN_MB => (system_ram_mb * 3) / 4,
+            x if x <= 36 * 1024 => (system_ram_mb * 2) / 3,
+            x if x > 36 * 1024 => (system_ram_mb * 3) / 4,
             x => anyhow::bail!("Invalid system ram mb value {x}."),
         };
 
