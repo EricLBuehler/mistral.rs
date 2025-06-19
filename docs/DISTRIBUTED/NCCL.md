@@ -8,6 +8,8 @@ Tensor Parallelism (TP) is automatically used to accelerate distributed inferenc
 
 TP splits the model into shards and benefits from fast single-node interconnects like NVLink. Both `normal` and `vision` models support tensor parallelism.
 
+**Important**: The world size (total number of GPUs) must be a power of 2 (e.g., 1, 2, 4, 8, 16, 32, etc.). This is a requirement for optimal performance and correct operation of the distributed algorithms.
+
 > Note: In mistral.rs, if NCCL is enabled, then automatic device mapping *will not* be used.
 
 **Important**: To build for NCCL, be sure to add the `nccl` feature flag (for example: `--features nccl,cuda`).
@@ -33,7 +35,7 @@ MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=2 MISTRALRS_WORKER_SERV
 Multi-node support in mistral.rs divides the nodes into two groups: a "head" node, and multiple "worker" nodes. Head node choice is arbitrary.
 For example, if a system has 8 nodes, there will be 1 "head" node, and 7 "worker" nodes. 
 
-To enable multi-node, set the `MISTRALRS_MN_GLOBAL_WORLD_SIZE=<number>` environment variable to the total number of GPUs in all nodes, including "head" and "worker"s.
+To enable multi-node, set the `MISTRALRS_MN_GLOBAL_WORLD_SIZE=<number>` environment variable to the total number of GPUs in all nodes, including "head" and "worker"s. **Note**: This number must be a power of 2.
 
 It is recommended to use server mode with mistral.rs when in multi-node. **Currently, you must send requests to every node!**
 
