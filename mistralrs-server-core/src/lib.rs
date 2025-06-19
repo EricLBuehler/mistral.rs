@@ -10,26 +10,26 @@
 //! 2. Hook into the mistral.rs server lifecycle.
 //!
 //! ### Example
-//! ```ignore
+//! ```no_run
 //! use std::sync::Arc;
 //!
 //! use axum::{
-//!     Json, Router,
 //!     extract::State,
 //!     routing::{get, post},
+//!     Json, Router,
 //! };
 //! use utoipa::OpenApi;
 //! use utoipa_swagger_ui::SwaggerUi;
 //!
-//! use mistralrs::{
-//!    AutoDeviceMapParams, ChatCompletionChunkResponse, ModelDType, ModelSelected, initialize_logging,
+//! use mistralrs_core::{
+//!     initialize_logging, AutoDeviceMapParams, ChatCompletionChunkResponse, ModelDType, ModelSelected,
 //! };
 //! use mistralrs_server_core::{
 //!     chat_completion::{
-//!         ChatCompletionResponder, OnChunkCallback, OnDoneCallback, create_chat_streamer,
-//!         create_response_channel, handle_chat_completion_error, parse_request,
-//!         process_non_streaming_chat_response, send_request,
+//!         create_streamer, handle_error, parse_request, process_non_streaming_response,
+//!         ChatCompletionOnChunkCallback, ChatCompletionOnDoneCallback, ChatCompletionResponder,
 //!     },
+//!     handler_core::{create_response_channel, send_request},
 //!     mistralrs_for_server_builder::MistralRsForServerBuilder,
 //!     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
 //!     openai::ChatCompletionRequest,
@@ -60,7 +60,7 @@
 //! #[tokio::main]
 //! async fn main() {
 //!     initialize_logging();
-//!     
+//!
 //!     let plain_model_id = String::from("meta-llama/Llama-3.2-1B-Instruct");
 //!     let tokenizer_json = None;
 //!     let arch = None;
@@ -145,11 +145,11 @@
 //! }
 //!
 //! #[utoipa::path(
-//!   post,
-//!   tag = "Custom",
-//!   path = "/chat",
-//!   request_body = ChatCompletionRequest,
-//!   responses((status = 200, description = "Chat completions"))
+//!     post,
+//!     tag = "Custom",
+//!     path = "/chat",
+//!     request_body = ChatCompletionRequest,
+//!     responses((status = 200, description = "Chat completions"))
 //! )]
 //! pub async fn custom_chat(
 //!     State(state): State<Arc<AppState>>,
@@ -158,42 +158,43 @@
 //!     let mistralrs_state = state.mistralrs_state.clone();
 //!     let (tx, mut rx) = create_response_channel(None);
 //!
-//!     let (request, is_streaming) = match parse_request(oai_request, mistralrs_state.clone(), tx).await
-//!     {
-//!         Ok(x) => x,
-//!         Err(e) => return handle_chat_completion_error(mistralrs_state, e.into()),
-//!     };
+//!     let (request, is_streaming) =
+//!         match parse_request(oai_request, mistralrs_state.clone(), tx).await {
+//!             Ok(x) => x,
+//!             Err(e) => return handle_error(mistralrs_state, e.into()),
+//!         };
 //!
 //!     dbg!(request.clone());
 //!
 //!     if let Err(e) = send_request(&mistralrs_state, request).await {
-//!         return handle_chat_completion_error(mistralrs_state, e.into());
+//!         return handle_error(mistralrs_state, e.into());
 //!     }
 //!
 //!     if is_streaming {
 //!         let db_fn = state.db_create;
 //!
-//!         let on_chunk: OnChunkCallback = Box::new(move |mut chunk: ChatCompletionChunkResponse| {
-//!             dbg!(&chunk);
+//!         let on_chunk: ChatCompletionOnChunkCallback =
+//!             Box::new(move |mut chunk: ChatCompletionChunkResponse| {
+//!                 dbg!(&chunk);
 //!
-//!             if let Some(original_content) = &chunk.choices[0].delta.content {
-//!                 chunk.choices[0].delta.content = Some(format!("CHANGED! {}", original_content));
-//!             }
+//!                 if let Some(original_content) = &chunk.choices[0].delta.content {
+//!                     chunk.choices[0].delta.content = Some(format!("CHANGED! {}", original_content));
+//!                 }
 //!
-//!             chunk.clone()
-//!         });
+//!                 chunk.clone()
+//!             });
 //!
-//!         let on_done: OnDoneCallback = Box::new(move |chunks: &[ChatCompletionChunkResponse]| {
-//!             dbg!(chunks);
-//!             (db_fn)();
-//!         });
+//!         let on_done: ChatCompletionOnDoneCallback =
+//!             Box::new(move |chunks: &[ChatCompletionChunkResponse]| {
+//!                 dbg!(chunks);
+//!                 (db_fn)();
+//!             });
 //!
-//!         let streamer =
-//!             create_chat_streamer(rx, mistralrs_state.clone(), Some(on_chunk), Some(on_done));
+//!         let streamer = create_streamer(rx, mistralrs_state.clone(), Some(on_chunk), Some(on_done));
 //!
 //!         ChatCompletionResponder::Sse(streamer)
 //!     } else {
-//!         let response = process_non_streaming_chat_response(&mut rx, mistralrs_state.clone()).await;
+//!         let response = process_non_streaming_response(&mut rx, mistralrs_state.clone()).await;
 //!
 //!         match &response {
 //!             ChatCompletionResponder::Json(json_response) => {
@@ -215,13 +216,16 @@
 //! ```
 
 pub mod chat_completion;
-mod completions;
+mod completion_core;
+pub mod completions;
+pub mod handler_core;
 mod handlers;
-mod image_generation;
+pub mod image_generation;
 pub mod mistralrs_for_server_builder;
 pub mod mistralrs_server_router_builder;
 pub mod openai;
 pub mod openapi_doc;
-mod speech_generation;
+pub mod speech_generation;
+pub mod streaming;
 pub mod types;
 pub mod util;
