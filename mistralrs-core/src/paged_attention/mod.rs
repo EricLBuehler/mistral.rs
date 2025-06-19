@@ -133,14 +133,45 @@ pub fn calculate_cache_config(
     //     ctxt_to_blocks!(config.max_seq_len(), dtype_size, block_size, config) / SIZE_IN_MB;
     // let mem_gpu = min_mem_gpu.min(mem_for_toks);
 
-    // Cap Metal GPU memory at 75% of system RAM for performance
+    // Cap Metal GPU memory to the wired (non‑paged) allocation limit reported by the kernel (`iogpu.wired_limit_mb`).
+    // Users can raise this limit with `sudo sysctl -w iogpu.wired_limit_mb=<desired_mb>`.
     let mem_gpu = if matches!(device, Device::Metal(_)) {
-        let system_ram_mb = MemoryUsage.get_total_memory(device)? as f32 / SIZE_IN_MB as f32;
-        let metal_cap_mb = (system_ram_mb * 0.75) as usize;
+        // Total system RAM in MB
+        let system_ram_mb = MemoryUsage.get_total_memory(device)? as usize / SIZE_IN_MB;
+
+        // Try to read the wired‑limit exposed by macOS; fall back to 75 % of RAM when unavailable.
+        let metal_cap_mb = std::process::Command::new("sysctl")
+            .arg("-n")
+            .arg("iogpu.wired_limit_mb")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().parse::<usize>().ok());
+
+        // https://techobsessed.net/2023/12/increasing-ram-available-to-gpu-on-apple-silicon-macs-for-running-large-language-models
+        // If it is 0 or not specified, apply default
+        let default_cap = match system_ram_mb {
+            x if x <= 36 * SIZE_IN_MB => (system_ram_mb * 2) / 3,
+            x if x > 36 * SIZE_IN_MB => (system_ram_mb * 3) / 4,
+            x => anyhow::bail!("Invalid system ram mb value {x}."),
+        };
+
+        let metal_cap_mb = match metal_cap_mb {
+            Some(x) if x == 0 => default_cap,
+            Some(x) => x,
+            None => default_cap,
+        };
+
+        info!("Metal GPU wired limit is {metal_cap_mb} MB.");
 
         if min_mem_gpu > metal_cap_mb {
             if !silent {
-                warn!("Capping Metal GPU memory allocation from {} MB to {} MB (75% of system RAM) for performance.", min_mem_gpu, metal_cap_mb);
+                warn!(
+                    "Capping Metal GPU memory allocation from {} MB to {} MB (limited by iogpu.wired_limit_mb). \
+To raise this cap run: `sudo sysctl -w iogpu.wired_limit_mb=<desired_mb>`.",
+                    min_mem_gpu,
+                    metal_cap_mb
+                );
             }
             metal_cap_mb
         } else {
