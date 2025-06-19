@@ -139,7 +139,6 @@ pub fn calculate_cache_config(
         // Total system RAM in MB
         let system_ram_mb = MemoryUsage.get_total_memory(device)? as usize / SIZE_IN_MB;
 
-        // Try to read the wired‑limit exposed by macOS; fall back to 75 % of RAM when unavailable.
         let metal_cap_mb = std::process::Command::new("sysctl")
             .arg("-n")
             .arg("iogpu.wired_limit_mb")
