@@ -104,6 +104,7 @@ class Architecture(Enum):
     DeepseekV2 = "deepseekv2"
     DeepseekV3 = "deepseekv3"
     Qwen3 = "qwen3"
+    GLM4 = "glm4"
     Qwen3Moe = "qwen3moe"
 
 @dataclass

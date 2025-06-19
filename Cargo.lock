@@ -2529,8 +2529,7 @@ checksum = "241eaef5fd12c88705a01fc1066c48c4b36e0dd4377dcdc7ec3942cea7a69956"
 [[package]]
 name = "llguidance"
 version = "0.7.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b36091de5db3301cf2a2a16fec023b69dce306d2fdc9ba6a8a1fe9b404d6ad37"
+source = "git+https://github.com/guidance-ai/llguidance.git?rev=2ce5ab8#2ce5ab8196f16dd8beba5a3d874eb1ab74e0268c"
 dependencies = [
  "anyhow",
  "derivre",
@@ -5399,8 +5398,7 @@ dependencies = [
 [[package]]
 name = "toktrie"
 version = "0.7.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24abc046cdf691cae38efcc45a52e68e03ab26954157c6c15e2e7c9f6e46fef4"
+source = "git+https://github.com/guidance-ai/llguidance.git?rev=2ce5ab8#2ce5ab8196f16dd8beba5a3d874eb1ab74e0268c"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -5412,8 +5410,7 @@ dependencies = [
 [[package]]
 name = "toktrie_hf_tokenizers"
 version = "0.7.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "200f5b166ecb572393f0fdacabc7904a6f5f9bc2766e784e4d2b0c7a80e2bed9"
+source = "git+https://github.com/guidance-ai/llguidance.git?rev=2ce5ab8#2ce5ab8196f16dd8beba5a3d874eb1ab74e0268c"
 dependencies = [
  "anyhow",
  "log",
