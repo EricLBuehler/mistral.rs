@@ -441,7 +441,7 @@ mod nccl_ops {
 
     use candle_core::{
         backend::BackendStorage, cuda::cudarc, cuda_backend::WrapErr, CpuStorage, CustomOp1, DType,
-        Device, Layout, Result, Shape, Tensor,
+        Layout, Result, Shape, Tensor,
     };
 
     #[derive(Clone, Debug)]
@@ -481,7 +481,7 @@ mod nccl_ops {
             let elem_count = l.shape().elem_count();
             let dev = s.device().clone();
 
-            match &**self.comm {
+            match self.comm.as_ref() {
                 super::Comm::Nccl(nccl_comm) => {
                     let dst = match s.dtype() {
                         DType::BF16 => {
@@ -579,7 +579,7 @@ mod nccl_ops {
             let elem_count = out_shape.elem_count();
             let dev = s.device().clone();
 
-            match &**self.comm {
+            match self.comm.as_ref() {
                 super::Comm::Nccl(nccl_comm) => {
                     let dst = match s.dtype() {
                         DType::BF16 => {
