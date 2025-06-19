@@ -22,7 +22,7 @@ pub use scheduler::{
 };
 
 use crate::MemoryUsage;
-use tracing::info;
+use tracing::{info, warn};
 
 pub const DEFAULT_PAGED_ATTENTION_BLOCK_SIZE: usize = 32;
 
@@ -132,7 +132,23 @@ pub fn calculate_cache_config(
     // let mem_for_toks =
     //     ctxt_to_blocks!(config.max_seq_len(), dtype_size, block_size, config) / SIZE_IN_MB;
     // let mem_gpu = min_mem_gpu.min(mem_for_toks);
-    let mem_gpu = min_mem_gpu;
+
+    // Cap Metal GPU memory at 75% of system RAM for performance
+    let mem_gpu = if matches!(device, Device::Metal(_)) {
+        let system_ram_mb = MemoryUsage.get_total_memory(device)? as f32 / SIZE_IN_MB as f32;
+        let metal_cap_mb = (system_ram_mb * 0.75) as usize;
+
+        if min_mem_gpu > metal_cap_mb {
+            if !silent {
+                warn!("Capping Metal GPU memory allocation from {} MB to {} MB (75% of system RAM) for performance.", min_mem_gpu, metal_cap_mb);
+            }
+            metal_cap_mb
+        } else {
+            min_mem_gpu
+        }
+    } else {
+        min_mem_gpu
+    };
 
     let num_gpu_blocks = mb_to_blocks!(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
     let num_cpu_blocks = mb_to_blocks!(mem_cpu * SIZE_IN_MB, dtype_size, block_size, config);
