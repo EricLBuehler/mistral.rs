@@ -489,10 +489,9 @@ impl Loader for GGUFLoader {
             (None, None)
         };
 
-        let gen_conf: Option<GenerationConfig> = paths.get_gen_conf_filename().map(|f| {
-            serde_json::from_str(&fs::read_to_string(f).unwrap())
-                .expect("bos_token_id/eos_token_id missing in generation_config.json")
-        });
+        let gen_conf: Option<GenerationConfig> = paths
+            .get_gen_conf_filename()
+            .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
         let chat_template_explicit = paths
             .get_chat_template_explicit()
             .as_ref()
