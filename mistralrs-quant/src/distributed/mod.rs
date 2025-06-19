@@ -1,7 +1,6 @@
 use std::{fmt::Debug, fs::File, sync::Barrier};
 
 use candle_core::Result;
-pub use ops::{AllGather, Comm, Id, SumAllReduce};
 pub mod layers;
 pub mod socket;
 
@@ -81,69 +80,377 @@ pub fn use_nccl() -> bool {
         && (cfg!(feature = "nccl") && cfg!(feature = "cuda"))
 }
 
+// Unified Comm enum
+#[derive(Debug)]
+pub enum Comm {
+    #[cfg(all(feature = "cuda", feature = "nccl"))]
+    Nccl(nccl::NcclComm),
+    #[cfg(feature = "ring")]
+    Ring(ring::RingComm),
+    Dummy(dummy::DummyComm),
+}
+
+impl Comm {
+    pub fn from_device(
+        id: Id,
+        dev: &candle_core::Device,
+        rank: usize,
+        world_size: usize,
+    ) -> Result<Self> {
+        #[cfg(all(feature = "cuda", feature = "nccl"))]
+        if use_nccl() {
+            return Ok(Self::Nccl(nccl::NcclComm::from_device(
+                id, dev, rank, world_size,
+            )?));
+        }
+
+        #[cfg(feature = "ring")]
+        {
+            return Ok(Self::Ring(ring::RingComm::from_device(
+                id, dev, rank, world_size,
+            )?));
+        }
+
+        #[allow(unreachable_code)]
+        Ok(Self::Dummy(dummy::DummyComm::from_device(
+            id, dev, rank, world_size,
+        )?))
+    }
+
+    pub fn rank(&self) -> usize {
+        match self {
+            #[cfg(all(feature = "cuda", feature = "nccl"))]
+            Self::Nccl(comm) => comm.rank(),
+            #[cfg(feature = "ring")]
+            Self::Ring(comm) => comm.rank(),
+            Self::Dummy(comm) => comm.rank(),
+        }
+    }
+
+    pub fn world_size(&self) -> usize {
+        match self {
+            #[cfg(all(feature = "cuda", feature = "nccl"))]
+            Self::Nccl(comm) => comm.world_size(),
+            #[cfg(feature = "ring")]
+            Self::Ring(comm) => comm.world_size(),
+            Self::Dummy(comm) => comm.world_size(),
+        }
+    }
+}
+
+// Unified Id enum
+#[derive(Debug, Clone, Copy)]
+pub enum Id {
+    #[cfg(all(feature = "cuda", feature = "nccl"))]
+    Nccl(cudarc::nccl::Id),
+    Dummy,
+}
+
+impl Id {
+    pub fn new() -> Self {
+        #[cfg(all(feature = "cuda", feature = "nccl"))]
+        if use_nccl() {
+            let id = cudarc::nccl::Id::new().expect("Failed to create `Id`.");
+            return Self::Nccl(id);
+        }
+        Self::Dummy
+    }
+
+    pub fn uninit(_internal: [::core::ffi::c_char; 128usize]) -> Self {
+        #[cfg(all(feature = "cuda", feature = "nccl"))]
+        if use_nccl() {
+            return Self::Nccl(cudarc::nccl::Id::uninit(_internal));
+        }
+        Self::Dummy
+    }
+
+    pub fn internal(&self) -> &[::core::ffi::c_char; 128usize] {
+        match self {
+            #[cfg(all(feature = "cuda", feature = "nccl"))]
+            Self::Nccl(id) => id.internal(),
+            Self::Dummy => {
+                static ZEROED_ID: [::core::ffi::c_char; 128] = [0; 128];
+                &ZEROED_ID
+            }
+        }
+    }
+}
+
+impl Default for Id {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(all(feature = "cuda", feature = "nccl"))]
-mod ops {
-    use std::{fmt::Debug, ops::Deref, sync::Arc};
+use candle_core::cuda::cudarc;
+
+// NCCL backend implementation
+#[cfg(all(feature = "cuda", feature = "nccl"))]
+mod nccl {
+    use candle_core::{cuda::cudarc, Device, Result};
+
+    #[derive(Debug)]
+    pub struct NcclComm {
+        comm: cudarc::nccl::Comm,
+    }
+
+    impl NcclComm {
+        pub fn from_device(
+            id: super::Id,
+            dev: &Device,
+            rank: usize,
+            world_size: usize,
+        ) -> Result<Self> {
+            if !super::use_nccl() {
+                candle_core::bail!("NCCL is disabled but NCCL Comm was requested");
+            }
+            if !world_size.is_power_of_two() {
+                candle_core::bail!(
+                    "NCCL backend requires world_size to be a power of 2, got {}",
+                    world_size
+                );
+            }
+            let device = dev.as_cuda_device()?.cuda_device();
+            assert_eq!(rank, device.ordinal());
+            let nccl_id = match id {
+                super::Id::Nccl(id) => id,
+                _ => panic!("Expected NCCL Id variant"),
+            };
+            Ok(Self {
+                comm: cudarc::nccl::Comm::from_rank(device, rank, world_size, nccl_id)
+                    .map_err(|e| e.0)
+                    .expect("Failed to create `Comm`, error code"),
+            })
+        }
+
+        pub fn rank(&self) -> usize {
+            self.comm.rank()
+        }
+
+        pub fn world_size(&self) -> usize {
+            self.comm.world_size()
+        }
+
+        pub fn inner(&self) -> &cudarc::nccl::Comm {
+            &self.comm
+        }
+    }
+
+    /// This is actually not safe: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/threadsafety.html
+    unsafe impl Sync for NcclComm {}
+    unsafe impl Send for NcclComm {}
+}
+
+// Ring backend implementation
+#[cfg(feature = "ring")]
+mod ring {
+    use super::RingConfig;
+    use candle_core::{Device, Result};
+
+    #[derive(Debug)]
+    pub struct RingComm {
+        config: RingConfig,
+    }
+
+    impl RingComm {
+        pub fn from_device(
+            _id: super::Id,
+            _dev: &Device,
+            _rank: usize,
+            _world_size: usize,
+        ) -> Result<Self> {
+            let config = RingConfig::load();
+            // Validate ring configuration
+            if config.world_size < 2 {
+                candle_core::bail!(
+                    "Ring backend requires world_size >= 2, got {}",
+                    config.world_size
+                );
+            }
+            if config.rank >= config.world_size {
+                candle_core::bail!(
+                    "Ring backend invalid config: rank {} >= world_size {}",
+                    config.rank,
+                    config.world_size
+                );
+            }
+            if !config.world_size.is_power_of_two() {
+                candle_core::bail!(
+                    "Ring backend requires world_size to be a power of 2, got {}",
+                    config.world_size
+                );
+            }
+            Ok(Self { config })
+        }
+
+        pub fn rank(&self) -> usize {
+            self.config.rank
+        }
+
+        pub fn world_size(&self) -> usize {
+            self.config.world_size
+        }
+
+        pub fn config(&self) -> &RingConfig {
+            &self.config
+        }
+    }
+}
+
+// Dummy backend implementation
+mod dummy {
+    use candle_core::{Device, Result};
+
+    #[derive(Debug)]
+    pub struct DummyComm;
+
+    impl DummyComm {
+        pub fn from_device(
+            _id: super::Id,
+            _dev: &Device,
+            _rank: usize,
+            _world_size: usize,
+        ) -> Result<Self> {
+            Ok(Self)
+        }
+
+        pub fn rank(&self) -> usize {
+            0
+        }
+
+        pub fn world_size(&self) -> usize {
+            1
+        }
+    }
+}
+
+// Unified operations that work with the Comm enum
+#[derive(Clone, Debug)]
+pub struct SumAllReduce {
+    #[cfg(all(feature = "cuda", feature = "nccl"))]
+    nccl: Option<nccl_ops::SumAllReduce>,
+    #[cfg(feature = "ring")]
+    ring: Option<ring_ops::SumAllReduce>,
+    dummy: Option<dummy_ops::SumAllReduce>,
+}
+
+impl SumAllReduce {
+    pub fn new(comm: &std::sync::Arc<Comm>) -> Self {
+        match &**comm {
+            #[cfg(all(feature = "cuda", feature = "nccl"))]
+            Comm::Nccl(_) => Self {
+                #[cfg(all(feature = "cuda", feature = "nccl"))]
+                nccl: Some(nccl_ops::SumAllReduce::new(comm)),
+                #[cfg(feature = "ring")]
+                ring: None,
+                dummy: None,
+            },
+            #[cfg(feature = "ring")]
+            Comm::Ring(_) => Self {
+                #[cfg(all(feature = "cuda", feature = "nccl"))]
+                nccl: None,
+                #[cfg(feature = "ring")]
+                ring: Some(ring_ops::SumAllReduce::new(comm)),
+                dummy: None,
+            },
+            Comm::Dummy(_) => Self {
+                #[cfg(all(feature = "cuda", feature = "nccl"))]
+                nccl: None,
+                #[cfg(feature = "ring")]
+                ring: None,
+                dummy: Some(dummy_ops::SumAllReduce::new(comm)),
+            },
+        }
+    }
+
+    pub fn sum_all_reduce(&self, xs: &candle_core::Tensor) -> Result<candle_core::Tensor> {
+        #[cfg(all(feature = "cuda", feature = "nccl"))]
+        if let Some(ref nccl) = self.nccl {
+            return nccl.sum_all_reduce(xs);
+        }
+        #[cfg(feature = "ring")]
+        if let Some(ref ring) = self.ring {
+            return ring.sum_all_reduce(xs);
+        }
+        if let Some(ref dummy) = self.dummy {
+            return dummy.sum_all_reduce(xs);
+        }
+        candle_core::bail!("No valid SumAllReduce implementation available")
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AllGather {
+    #[cfg(all(feature = "cuda", feature = "nccl"))]
+    nccl: Option<nccl_ops::AllGather>,
+    #[cfg(feature = "ring")]
+    ring: Option<ring_ops::AllGather>,
+    dummy: Option<dummy_ops::AllGather>,
+}
+
+impl AllGather {
+    pub fn new(comm: &std::sync::Arc<Comm>, dim: usize) -> Self {
+        match &**comm {
+            #[cfg(all(feature = "cuda", feature = "nccl"))]
+            Comm::Nccl(_) => Self {
+                #[cfg(all(feature = "cuda", feature = "nccl"))]
+                nccl: Some(nccl_ops::AllGather::new(comm, dim)),
+                #[cfg(feature = "ring")]
+                ring: None,
+                dummy: None,
+            },
+            #[cfg(feature = "ring")]
+            Comm::Ring(_) => Self {
+                #[cfg(all(feature = "cuda", feature = "nccl"))]
+                nccl: None,
+                #[cfg(feature = "ring")]
+                ring: Some(ring_ops::AllGather::new(comm, dim)),
+                dummy: None,
+            },
+            Comm::Dummy(_) => Self {
+                #[cfg(all(feature = "cuda", feature = "nccl"))]
+                nccl: None,
+                #[cfg(feature = "ring")]
+                ring: None,
+                dummy: Some(dummy_ops::AllGather::new(comm, dim)),
+            },
+        }
+    }
+
+    pub fn all_gather(&self, xs: &candle_core::Tensor) -> Result<candle_core::Tensor> {
+        #[cfg(all(feature = "cuda", feature = "nccl"))]
+        if let Some(ref nccl) = self.nccl {
+            return nccl.all_gather(xs);
+        }
+        #[cfg(feature = "ring")]
+        if let Some(ref ring) = self.ring {
+            return ring.all_gather(xs);
+        }
+        if let Some(ref dummy) = self.dummy {
+            return dummy.all_gather(xs);
+        }
+        candle_core::bail!("No valid AllGather implementation available")
+    }
+}
+
+// Implementation modules for each backend
+#[cfg(all(feature = "cuda", feature = "nccl"))]
+mod nccl_ops {
+    use std::{fmt::Debug, sync::Arc};
 
     use candle_core::{
         backend::BackendStorage, cuda::cudarc, cuda_backend::WrapErr, CpuStorage, CustomOp1, DType,
         Device, Layout, Result, Shape, Tensor,
     };
 
-    #[derive(Debug, Clone, Copy)]
-    pub struct Id(cudarc::nccl::Id);
-
-    impl Id {
-        pub fn new() -> Self {
-            let id = cudarc::nccl::Id::new().expect("Failed to create `Id`.");
-            Self(id)
-        }
-
-        pub fn uninit(internal: [::core::ffi::c_char; 128usize]) -> Self {
-            Self(cudarc::nccl::Id::uninit(internal))
-        }
-
-        pub fn internal(&self) -> &[::core::ffi::c_char; 128usize] {
-            self.0.internal()
-        }
-    }
-
-    #[derive(Debug)]
-    pub struct Comm {
-        comm: cudarc::nccl::Comm,
-    }
-
-    impl Comm {
-        pub fn from_device(id: Id, dev: &Device, rank: usize, world_size: usize) -> Result<Self> {
-            let device = dev.as_cuda_device()?.cuda_device();
-            assert_eq!(rank, device.ordinal());
-            Ok(Self {
-                comm: cudarc::nccl::Comm::from_rank(device, rank, world_size, id.0)
-                    .map_err(|e| e.0)
-                    .expect("Failed to create `Comm`, error code"),
-            })
-        }
-    }
-
-    /// This is actually not safe: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/threadsafety.html
-    unsafe impl Sync for Comm {}
-    unsafe impl Send for Comm {}
-
-    impl Deref for Comm {
-        type Target = cudarc::nccl::Comm;
-
-        fn deref(&self) -> &Self::Target {
-            &self.comm
-        }
-    }
-
     #[derive(Clone, Debug)]
     pub struct SumAllReduce {
-        comm: Arc<Comm>,
+        comm: Arc<super::Comm>,
     }
 
     impl SumAllReduce {
-        pub fn new(comm: &Arc<Comm>) -> Self {
+        pub fn new(comm: &Arc<super::Comm>) -> Self {
             Self { comm: comm.clone() }
         }
     }
@@ -173,62 +480,68 @@ mod ops {
 
             let elem_count = l.shape().elem_count();
             let dev = s.device().clone();
-            let dst = match s.dtype() {
-                DType::BF16 => {
-                    let s = s.as_cuda_slice::<bf16>()?;
-                    let s = match l.contiguous_offsets() {
-                        Some((0, l)) if l == s.len() => s,
-                        Some(_) | None => candle_core::bail!("input has to be contiguous"),
+
+            match &**self.comm {
+                super::Comm::Nccl(nccl_comm) => {
+                    let dst = match s.dtype() {
+                        DType::BF16 => {
+                            let s = s.as_cuda_slice::<bf16>()?;
+                            let s = match l.contiguous_offsets() {
+                                Some((0, l)) if l == s.len() => s,
+                                Some(_) | None => candle_core::bail!("input has to be contiguous"),
+                            };
+                            assert_eq!(dev.ordinal(), nccl_comm.rank());
+                            assert!(elem_count > 0);
+                            let mut dst = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
+                            nccl_comm
+                                .inner()
+                                .all_reduce(s, &mut dst, &ReduceOp::Sum)
+                                .map_err(candle_core::Error::debug)?;
+                            candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                        }
+                        DType::F16 => {
+                            let s = s.as_cuda_slice::<f16>()?;
+                            let s = match l.contiguous_offsets() {
+                                Some((0, l)) if l == s.len() => s,
+                                Some(_) | None => candle_core::bail!("input has to be contiguous"),
+                            };
+                            let mut dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
+                            nccl_comm
+                                .inner()
+                                .all_reduce(s, &mut dst, &ReduceOp::Sum)
+                                .map_err(candle_core::Error::debug)?;
+                            candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                        }
+                        DType::F32 => {
+                            let s = s.as_cuda_slice::<f32>()?;
+                            let s = match l.contiguous_offsets() {
+                                Some((0, l)) if l == s.len() => s,
+                                Some(_) | None => candle_core::bail!("input has to be contiguous"),
+                            };
+                            let mut dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
+                            nccl_comm
+                                .inner()
+                                .all_reduce(s, &mut dst, &ReduceOp::Sum)
+                                .map_err(candle_core::Error::debug)?;
+                            candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                        }
+                        dtype => candle_core::bail!("unsupported dtype {dtype:?}"),
                     };
-                    assert_eq!(dev.ordinal(), self.comm.rank());
-                    assert!(elem_count > 0);
-                    let mut dst = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
-                    self.comm
-                        .comm
-                        .all_reduce(s, &mut dst, &ReduceOp::Sum)
-                        .map_err(candle_core::Error::debug)?;
-                    candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                    Ok((dst, l.shape().clone()))
                 }
-                DType::F16 => {
-                    let s = s.as_cuda_slice::<f16>()?;
-                    let s = match l.contiguous_offsets() {
-                        Some((0, l)) if l == s.len() => s,
-                        Some(_) | None => candle_core::bail!("input has to be contiguous"),
-                    };
-                    let mut dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
-                    self.comm
-                        .comm
-                        .all_reduce(s, &mut dst, &ReduceOp::Sum)
-                        .map_err(candle_core::Error::debug)?;
-                    candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
-                }
-                DType::F32 => {
-                    let s = s.as_cuda_slice::<f32>()?;
-                    let s = match l.contiguous_offsets() {
-                        Some((0, l)) if l == s.len() => s,
-                        Some(_) | None => candle_core::bail!("input has to be contiguous"),
-                    };
-                    let mut dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
-                    self.comm
-                        .comm
-                        .all_reduce(s, &mut dst, &ReduceOp::Sum)
-                        .map_err(candle_core::Error::debug)?;
-                    candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
-                }
-                dtype => candle_core::bail!("unsupported dtype {dtype:?}"),
-            };
-            Ok((dst, l.shape().clone()))
+                _ => candle_core::bail!("SumAllReduce requires NCCL backend"),
+            }
         }
     }
 
     #[derive(Clone, Debug)]
     pub struct AllGather {
-        comm: Arc<Comm>,
+        comm: Arc<super::Comm>,
         dim: usize,
     }
 
     impl AllGather {
-        pub fn new(comm: &Arc<Comm>, dim: usize) -> Self {
+        pub fn new(comm: &Arc<super::Comm>, dim: usize) -> Self {
             Self {
                 comm: comm.clone(),
                 dim,
@@ -265,60 +578,66 @@ mod ops {
 
             let elem_count = out_shape.elem_count();
             let dev = s.device().clone();
-            let dst = match s.dtype() {
-                DType::BF16 => {
-                    let s = s.as_cuda_slice::<bf16>()?;
-                    let s = match l.contiguous_offsets() {
-                        Some((0, l)) if l == s.len() => s,
-                        Some(_) | None => candle_core::bail!("input has to be contiguous"),
+
+            match &**self.comm {
+                super::Comm::Nccl(nccl_comm) => {
+                    let dst = match s.dtype() {
+                        DType::BF16 => {
+                            let s = s.as_cuda_slice::<bf16>()?;
+                            let s = match l.contiguous_offsets() {
+                                Some((0, l)) if l == s.len() => s,
+                                Some(_) | None => candle_core::bail!("input has to be contiguous"),
+                            };
+                            assert_eq!(dev.ordinal(), nccl_comm.rank());
+                            assert!(elem_count > 0);
+                            let mut dst = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
+                            nccl_comm
+                                .inner()
+                                .all_gather(s, &mut dst)
+                                .map_err(candle_core::Error::debug)?;
+                            candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                        }
+                        DType::F16 => {
+                            let s = s.as_cuda_slice::<f16>()?;
+                            let s = match l.contiguous_offsets() {
+                                Some((0, l)) if l == s.len() => s,
+                                Some(_) | None => candle_core::bail!("input has to be contiguous"),
+                            };
+                            let mut dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
+                            nccl_comm
+                                .inner()
+                                .all_gather(s, &mut dst)
+                                .map_err(candle_core::Error::debug)?;
+                            candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                        }
+                        DType::F32 => {
+                            let s = s.as_cuda_slice::<f32>()?;
+                            let s = match l.contiguous_offsets() {
+                                Some((0, l)) if l == s.len() => s,
+                                Some(_) | None => candle_core::bail!("input has to be contiguous"),
+                            };
+                            let mut dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
+                            nccl_comm
+                                .inner()
+                                .all_gather(s, &mut dst)
+                                .map_err(candle_core::Error::debug)?;
+                            candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                        }
+                        dtype => candle_core::bail!("unsupported dtype {dtype:?}"),
                     };
-                    assert_eq!(dev.ordinal(), self.comm.rank());
-                    assert!(elem_count > 0);
-                    let mut dst = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
-                    self.comm
-                        .comm
-                        .all_gather(s, &mut dst)
-                        .map_err(candle_core::Error::debug)?;
-                    candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                    Ok((dst, out_shape))
                 }
-                DType::F16 => {
-                    let s = s.as_cuda_slice::<f16>()?;
-                    let s = match l.contiguous_offsets() {
-                        Some((0, l)) if l == s.len() => s,
-                        Some(_) | None => candle_core::bail!("input has to be contiguous"),
-                    };
-                    let mut dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
-                    self.comm
-                        .comm
-                        .all_gather(s, &mut dst)
-                        .map_err(candle_core::Error::debug)?;
-                    candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
-                }
-                DType::F32 => {
-                    let s = s.as_cuda_slice::<f32>()?;
-                    let s = match l.contiguous_offsets() {
-                        Some((0, l)) if l == s.len() => s,
-                        Some(_) | None => candle_core::bail!("input has to be contiguous"),
-                    };
-                    let mut dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
-                    self.comm
-                        .comm
-                        .all_gather(s, &mut dst)
-                        .map_err(candle_core::Error::debug)?;
-                    candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
-                }
-                dtype => candle_core::bail!("unsupported dtype {dtype:?}"),
-            };
-            Ok((dst, out_shape))
+                _ => candle_core::bail!("AllGather requires NCCL backend"),
+            }
         }
     }
 }
 
+// Ring operations
 #[cfg(feature = "ring")]
-mod ops {
+mod ring_ops {
     use std::{
         collections::HashMap,
-        fmt::Debug,
         sync::{Arc, Mutex, OnceLock},
         time::{Duration, Instant},
     };
@@ -375,69 +694,6 @@ mod ops {
             .clone()
     }
 
-    #[derive(Debug, Clone, Copy)]
-    pub struct Id;
-
-    impl Default for Id {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
-    impl Id {
-        pub fn new() -> Self {
-            Self
-        }
-
-        pub fn uninit(_internal: [::core::ffi::c_char; 128usize]) -> Self {
-            Self
-        }
-
-        pub fn internal(&self) -> &[::core::ffi::c_char; 128usize] {
-            static ZEROED_ID: [::core::ffi::c_char; 128] = [0; 128];
-            &ZEROED_ID
-        }
-    }
-
-    #[derive(Debug)]
-    pub struct Comm {
-        config: RingConfig,
-    }
-
-    impl Comm {
-        pub fn from_device(
-            _id: Id,
-            _dev: &Device,
-            _rank: usize,
-            _world_size: usize,
-        ) -> Result<Self> {
-            let config = RingConfig::load();
-            // Validate ring configuration
-            if config.world_size < 2 {
-                candle_core::bail!(
-                    "Ring backend requires world_size >= 2, got {}",
-                    config.world_size
-                );
-            }
-            if config.rank >= config.world_size {
-                candle_core::bail!(
-                    "Ring backend invalid config: rank {} >= world_size {}",
-                    config.rank,
-                    config.world_size
-                );
-            }
-            Ok(Self { config })
-        }
-
-        pub fn rank(&self) -> usize {
-            self.config.rank
-        }
-
-        pub fn world_size(&self) -> usize {
-            self.config.world_size
-        }
-    }
-
     #[derive(Clone, Debug)]
     pub struct SumAllReduce {
         left: SharedTcpStream,
@@ -446,12 +702,17 @@ mod ops {
     }
 
     impl SumAllReduce {
-        pub fn new(comm: &Arc<Comm>) -> Self {
-            let (left, right) = get_ring_streams(&comm.config);
-            Self {
-                left,
-                right,
-                buffers: Arc::new(Mutex::new(HashMap::new())),
+        pub fn new(comm: &Arc<super::Comm>) -> Self {
+            match &**comm {
+                super::Comm::Ring(ring_comm) => {
+                    let (left, right) = get_ring_streams(ring_comm.config());
+                    Self {
+                        left,
+                        right,
+                        buffers: Arc::new(Mutex::new(HashMap::new())),
+                    }
+                }
+                _ => panic!("SumAllReduce requires Ring backend"),
             }
         }
 
@@ -462,7 +723,6 @@ mod ops {
             device: &Device,
         ) -> Result<Tensor> {
             let nbytes = x.len() * std::mem::size_of_val(x);
-            // dbg!(nbytes);
 
             // --- ping‑pong to overlap latency ---------------------------------------
             // Clone the Arc references
@@ -488,10 +748,10 @@ mod ops {
                 candle_core::Error::msg(format!("Failed to lock left stream mutex: {:?}", e))
             })?;
 
-            // For the typical tensor size we see (~ 6 KiB) a single
+            // For the typical tensor size we see (~ 6 KiB) a single
             // write/read pair is faster than chunking because the extra
             // system‑call and loop overhead dominates.  Only fall back to the
-            // chunked “ping‑pong” pipeline for larger transfers.
+            // chunked "ping‑pong" pipeline for larger transfers.
             if nbytes <= 8 * 1024 {
                 // --- fast path: one shot ------------------------------------
                 right_guard
@@ -503,7 +763,7 @@ mod ops {
                     .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))?;
             } else {
                 // --- slow path: chunked ping‑pong ---------------------------
-                const CHUNK_SIZE: usize = 64 * 1024; // 64 KiB
+                const CHUNK_SIZE: usize = 64 * 1024; // 64 KiB
                 let mut offset = 0;
 
                 while offset < nbytes {
@@ -525,7 +785,6 @@ mod ops {
 
             drop(left_guard);
             drop(right_guard);
-            // drop(buffers_guard);
 
             // -------------------------------------------------------------------------
             // Interpret the received bytes as a slice of T and add element‑wise into x
@@ -534,9 +793,7 @@ mod ops {
 
             Tensor::from_slice(received, dims, device)
         }
-    }
 
-    impl SumAllReduce {
         pub fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor> {
             let storage = xs.storage_and_layout().0;
             let cpu_storage = match &*storage {
@@ -567,15 +824,20 @@ mod ops {
     }
 
     impl AllGather {
-        pub fn new(comm: &Arc<Comm>, dim: usize) -> Self {
-            let (left, right) = get_ring_streams(&comm.config);
-            Self {
-                left,
-                right,
-                buffers: Arc::new(Mutex::new(HashMap::new())),
-                dim,
-                world_size: comm.world_size(),
-                rank: comm.rank(),
+        pub fn new(comm: &Arc<super::Comm>, dim: usize) -> Self {
+            match &**comm {
+                super::Comm::Ring(ring_comm) => {
+                    let (left, right) = get_ring_streams(ring_comm.config());
+                    Self {
+                        left,
+                        right,
+                        buffers: Arc::new(Mutex::new(HashMap::new())),
+                        dim,
+                        world_size: ring_comm.world_size(),
+                        rank: ring_comm.rank(),
+                    }
+                }
+                _ => panic!("AllGather requires Ring backend"),
             }
         }
 
@@ -599,7 +861,7 @@ mod ops {
             // Prepare output buffer that will hold slices from every rank.
             let mut out: Vec<T> = vec![T::default(); elem_cnt * self.world_size];
 
-            // Copy this rank’s slice into its final slot.
+            // Copy this rank's slice into its final slot.
             let start = self.rank * elem_cnt;
             out[start..start + elem_cnt].copy_from_slice(x);
 
@@ -672,68 +934,19 @@ mod ops {
     }
 }
 
-#[cfg(not(any(all(feature = "cuda", feature = "nccl"), feature = "ring")))]
-mod ops {
+// Dummy operations
+mod dummy_ops {
+    use candle_core::{Result, Tensor};
     use std::sync::Arc;
-
-    use candle_core::{Device, Result, Tensor};
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Id;
-
-    impl Default for Id {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
-    impl Id {
-        pub fn new() -> Self {
-            Self
-        }
-
-        pub fn uninit(_internal: [::core::ffi::c_char; 128usize]) -> Self {
-            Self
-        }
-
-        pub fn internal(&self) -> &[::core::ffi::c_char; 128usize] {
-            static ZEROED_ID: [::core::ffi::c_char; 128] = [0; 128];
-            &ZEROED_ID
-        }
-    }
-
-    #[derive(Debug)]
-    pub struct Comm;
-
-    impl Comm {
-        pub fn from_device(
-            _id: Id,
-            _dev: &Device,
-            _rank: usize,
-            _world_size: usize,
-        ) -> Result<Self> {
-            Ok(Self)
-        }
-
-        pub fn rank(&self) -> usize {
-            0
-        }
-
-        pub fn world_size(&self) -> usize {
-            1
-        }
-    }
 
     #[derive(Clone, Debug)]
     pub struct SumAllReduce;
 
     impl SumAllReduce {
-        pub fn new(_comm: &Arc<Comm>) -> Self {
+        pub fn new(_comm: &Arc<super::Comm>) -> Self {
             Self
         }
-    }
 
-    impl SumAllReduce {
         pub fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor> {
             Ok(xs.clone())
         }
@@ -743,12 +956,10 @@ mod ops {
     pub struct AllGather;
 
     impl AllGather {
-        pub fn new(_comm: &Arc<Comm>, _dim: usize) -> Self {
+        pub fn new(_comm: &Arc<super::Comm>, _dim: usize) -> Self {
             Self
         }
-    }
 
-    impl AllGather {
         pub fn all_gather(&self, xs: &Tensor) -> Result<Tensor> {
             Ok(xs.clone())
         }
