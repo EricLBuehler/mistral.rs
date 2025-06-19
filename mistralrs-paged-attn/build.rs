@@ -122,10 +122,11 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
         .unwrap();
 
     // Build the new content
-    let mut new_ct = OTHER_CONTENT.trim();
-    if using_fp8 {
-        new_ct = new_ct.replace("USE_FP8: bool = false", "USE_FP8: bool = true");
-    }
+    let mut new_ct = if using_fp8 {
+        &OTHER_CONTENT.trim().replace("USE_FP8: bool = false", "USE_FP8: bool = true")
+    } else {
+        OTHER_CONTENT.trim()
+    };
 
     // Add the other stuff back
     if let Err(e) = writeln!(file, "{new_ct}") {
