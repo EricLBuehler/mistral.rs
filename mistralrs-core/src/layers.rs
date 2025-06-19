@@ -2185,6 +2185,42 @@ impl Mlp {
         })
     }
 
+    pub fn new_merged(
+        vb: ShardedVarBuilder,
+        hidden_size: usize,
+        intermediate_size: usize,
+        chunks: usize,
+        quantization_config: &Option<QuantizedConfig>,
+        hidden_act: Activation,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        assert!(chunks == 2, "Only gate_up_proj merge is supported!");
+        let gate_up_projs = ColumnParallelLayer::new_merged(
+            hidden_size,
+            intermediate_size * 2,
+            2,
+            quantization_config,
+            false,
+            comm,
+            vb.pp("gate_up_proj"),
+        )?;
+
+        Ok(Self {
+            gate: gate_up_projs[0].to_owned(),
+            up: gate_up_projs[1].to_owned(),
+            down: RowParallelLayer::new(
+                intermediate_size,
+                hidden_size,
+                quantization_config,
+                false,
+                comm,
+                vb.pp("down_proj"),
+            )?,
+            act: hidden_act,
+            params: vec![hidden_size, intermediate_size],
+        })
+    }
+
     pub fn replicate(
         params: &[usize],
         vb: ShardedVarBuilder,
