@@ -5,6 +5,7 @@ use either::Either;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use minijinja::{context, value::Kwargs, Environment, Error, ErrorKind, Value};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use tracing::info;
@@ -293,6 +294,15 @@ pub fn apply_chat_template_to(
         }
     };
     let mut template = template.replace("[::-1]", "|reverse");
+    // Convert Python‑style descending ranges `range(..., -1, -1)` to a forward
+    // range followed by Jinja’s `|reverse` filter so it works even when
+    // negative‑step ranges aren’t supported.
+    let re = Regex::new(r"range\((?P<expr>[^,]+),\s*-1,\s*-1\)").unwrap();
+    template = re
+        .replace_all(&template, |caps: &regex::Captures| {
+            format!("range({})|reverse", &caps["expr"])
+        })
+        .into_owned();
 
     if template.contains("{{ meta }}") {
         //fix for GLM4 models

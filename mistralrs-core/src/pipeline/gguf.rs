@@ -39,6 +39,7 @@ use crate::{
     models::quantized_phi2::ModelWeights as QPhi,
     models::quantized_phi3::ModelWeights as QPhi3,
     models::quantized_qwen::ModelWeights as QQwen,
+    models::quantized_qwen3::ModelWeights as QQwen3,
     models::quantized_starcoder2::ModelWeights as QStarcoder2,
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
@@ -67,6 +68,7 @@ enum Model {
     Phi3(QPhi3),
     Starcoder2(QStarcoder2),
     Qwen(QQwen),
+    Qwen3(QQwen3),
 }
 
 pub struct GGUFPipeline {
@@ -448,9 +450,8 @@ impl Loader for GGUFLoader {
                 GGUFArchitecture::Starcoder2 => {
                     Model::Starcoder2(QStarcoder2::try_from(model_config)?)
                 }
-                GGUFArchitecture::Qwen2 | GGUFArchitecture::Qwen3 => {
-                    Model::Qwen(QQwen::try_from(model_config)?)
-                }
+                GGUFArchitecture::Qwen2 => Model::Qwen(QQwen::try_from(model_config)?),
+                GGUFArchitecture::Qwen3 => Model::Qwen3(QQwen3::try_from(model_config)?),
                 a => bail!("Unsupported architecture `{a:?}` for GGUF"),
             },
             ModelKind::GgufAdapter { adapter, .. } => match arch {
@@ -513,6 +514,7 @@ impl Loader for GGUFLoader {
             Model::XLoraPhi3(ref p) => p.max_seq_len,
             Model::Starcoder2(ref p) => p.max_seq_len,
             Model::Qwen(ref p) => p.max_seq_len,
+            Model::Qwen3(ref p) => p.max_seq_len,
         };
         let llg_factory = build_llg_factory(tokenizer.clone())?;
         let num_hidden_layers = match model {
@@ -523,6 +525,7 @@ impl Loader for GGUFLoader {
             Model::XLoraPhi3(ref model) => model.cache.full().lock().len(),
             Model::Starcoder2(ref model) => model.cache.normal().0.len(),
             Model::Qwen(ref model) => model.cache.normal().0.len(),
+            Model::Qwen3(ref model) => model.cache.normal().0.len(),
         };
 
         if chat_template.bos_token.is_none() && bos.is_some() {
@@ -649,6 +652,7 @@ impl CacheManagerMixin for GGUFPipeline {
             Model::XLoraPhi3(ref model) => &model.cache,
             Model::Starcoder2(ref model) => &model.cache,
             Model::Qwen(ref model) => &model.cache,
+            Model::Qwen3(ref model) => &model.cache,
         }
     }
 }
@@ -663,6 +667,7 @@ impl MetadataMixin for GGUFPipeline {
             Model::XLoraPhi3(ref model) => model.device.clone(),
             Model::Starcoder2(ref model) => model.device.clone(),
             Model::Qwen(ref model) => model.device.clone(),
+            Model::Qwen3(ref model) => model.device.clone(),
         }
     }
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
@@ -752,6 +757,9 @@ impl Pipeline for GGUFPipeline {
                 model.forward(&input_ids, &seqlen_offsets, paged_attn_meta)?
             }
             Model::Qwen(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
+            }
+            Model::Qwen3(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
         };
