@@ -490,10 +490,6 @@ impl SmolLm3 {
         })
     }
 
-    pub fn get_input_embeddings(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.wte.forward(input_ids)
-    }
-
     pub fn forward(
         &self,
         input_ids: &Tensor,
