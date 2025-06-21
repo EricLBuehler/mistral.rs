@@ -1,5 +1,6 @@
 use crate::cuda::ffi;
 use crate::cuda::ffi::{paged_attention_v1, paged_attention_v2};
+use crate::telemetry::{self, PagedAttentionMetrics, CacheUpdateMetrics};
 use candle::backend::BackendStorage;
 use candle::cuda_backend::cudarc::driver::DevicePtr;
 use candle::cuda_backend::WrapErr;
@@ -7,6 +8,8 @@ use candle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Ten
 use candle_core as candle;
 use half::{bf16, f16};
 use std::ffi::c_int;
+use std::time::Instant;
+use tracing::instrument;
 
 struct PagedAttention {
     softmax_scale: f32,
@@ -21,6 +24,7 @@ struct PagedAttention {
 }
 
 impl PagedAttention {
+    #[instrument(skip(self, q, q_l), level = "debug")]
     fn cuda_fwd_t<
         T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
     >(
@@ -171,6 +175,25 @@ impl PagedAttention {
         let use_v1 = (max_num_partitions == 1 || num_seqs * num_heads > 512)
             && partition_size % block_size == 0;
 
+        // Record telemetry metrics
+        let metrics = PagedAttentionMetrics {
+            num_sequences: num_seqs,
+            num_heads,
+            head_size,
+            num_blocks,
+            block_size,
+            max_context_len: self.max_context_len,
+            softmax_scale: self.softmax_scale,
+            softcapping: self.softcapping,
+            use_v1,
+        };
+        telemetry::record_paged_attention_call(&metrics);
+
+        // Record tensor sizes
+        telemetry::record_tensor_size("query", q_l.shape().elem_count() * std::mem::size_of::<T>() as u64);
+        telemetry::record_tensor_size("key_cache", kc_l.shape().elem_count() * std::mem::size_of::<T>() as u64);
+        telemetry::record_tensor_size("value_cache", vc_l.shape().elem_count() * std::mem::size_of::<T>() as u64);
+
         let elem_count = out_shape.elem_count();
         let out = unsafe { dev.alloc::<T>(elem_count) }.w()?;
 
@@ -181,6 +204,8 @@ impl PagedAttention {
         let bt_ptr = *bt.device_ptr() as *const core::ffi::c_int;
         let cl_ptr = *cl.device_ptr() as *const core::ffi::c_int;
 
+        let start = Instant::now();
+        
         if use_v1 {
             unsafe {
                 paged_attention_v1(
@@ -247,6 +272,9 @@ impl PagedAttention {
                 )
             }
         }
+
+        let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+        telemetry::record_paged_attention_duration(duration_ms, use_v1);
 
         let out = CudaStorage::wrap_cuda_slice(out, dev.clone());
         Ok((out, out_shape))
@@ -317,6 +345,7 @@ pub fn paged_attention(
     q.apply_op1(op)
 }
 
+#[instrument(skip_all, level = "debug")]
 fn update_cache<
     T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
 >(
@@ -443,6 +472,17 @@ fn update_cache<
     let vc_ptr = *vc.device_ptr() as *const core::ffi::c_void;
     let s_ptr = *s.device_ptr() as *const core::ffi::c_long;
 
+    // Record cache update metrics
+    let metrics = CacheUpdateMetrics {
+        num_tokens,
+        num_heads,
+        head_size,
+        block_size,
+    };
+    telemetry::record_cache_update(&metrics);
+
+    let start = Instant::now();
+
     unsafe {
         ffi::reshape_and_cache(
             k_ptr,
@@ -461,6 +501,10 @@ fn update_cache<
             internal_type,
         )
     }
+
+    let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+    telemetry::record_cache_update_duration(duration_ms);
+
     Ok(())
 }
 

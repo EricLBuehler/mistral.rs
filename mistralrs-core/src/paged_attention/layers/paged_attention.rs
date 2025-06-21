@@ -1,4 +1,6 @@
 use candle_core::{Device, Result, Tensor};
+use serde_json::json;
+use tracing::{debug, instrument};
 
 use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
@@ -25,6 +27,7 @@ impl PagedAttention {
 
     #[allow(clippy::too_many_arguments)]
     #[allow(unused_variables)]
+    #[instrument(skip_all, level = "debug")]
     /// query: shape = [batch_size, seq_len, num_heads * head_size]
     /// key: shape = [batch_size, seq_len, num_kv_heads * head_size]
     /// value: shape = [batch_size, num_kv_heads * head_size]
@@ -78,6 +81,25 @@ impl PagedAttention {
         let (batch_size, attention_heads, seq_len, head_size) = query.shape().dims4()?;
         let (_, key_value_heads, _, _) = key.shape().dims4()?;
 
+        // Log tensor shapes and metadata as JSON
+        debug!(
+            target: "paged_attention",
+            "{}",
+            json!({
+                "operation": "forward",
+                "query_shape": query.shape().dims(),
+                "key_shape": key.shape().dims(),
+                "value_shape": value.shape().dims(),
+                "batch_size": batch_size,
+                "attention_heads": attention_heads,
+                "key_value_heads": key_value_heads,
+                "seq_len": seq_len,
+                "head_size": head_size,
+                "max_context_len": input_metadata.max_context_len,
+                "device": format!("{:?}", query.device()),
+            })
+        );
+
         #[allow(clippy::cast_possible_truncation)]
         let att = match attention_mask {
             None => None,
@@ -90,6 +112,19 @@ impl PagedAttention {
                 sdpa_params,
             )?),
         };
+
+        // Log cache dimensions if available
+        if let (Some(kc), Some(vc)) = (key_cache.as_ref(), value_cache.as_ref()) {
+            debug!(
+                target: "paged_attention_cache",
+                "{}",
+                json!({
+                    "operation": "cache_dims",
+                    "key_cache_shape": kc.shape().dims(),
+                    "value_cache_shape": vc.shape().dims(),
+                })
+            );
+        }
 
         // paged-attn expects [batch_size, num_tokens, num_heads, head_size]
         let (query, key, value) = if seq_len > 1 {
@@ -117,6 +152,17 @@ impl PagedAttention {
         // value_cache: &mut Tensor, // [num_blocks, num_heads, head_size, block_size] 48,32,128,16
         // slot_mapping: Tensor,     // [num_tokens]
         if key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
+            debug!(
+                target: "paged_attention_reshape",
+                "{}",
+                json!({
+                    "operation": "reshape_and_cache",
+                    "slot_mapping_shape": slot_mapping.shape().dims(),
+                    "key_shape": key.shape().dims(),
+                    "value_shape": value.shape().dims(),
+                })
+            );
+
             reshape_and_cache(
                 &key,
                 &value,
@@ -145,6 +191,21 @@ impl PagedAttention {
         //  input_metadata: metadata for paged attention.
         //
         //  alibi_slopes: shape = [num_heads]
+        // Log paged attention call parameters
+        debug!(
+            target: "paged_attention_call",
+            "{}",
+            json!({
+                "operation": "paged_attention",
+                "query_shape": query.shape().dims(),
+                "block_tables_shape": block_tables.shape().dims(),
+                "context_lens_shape": context_lens.shape().dims(),
+                "max_context_len": input_metadata.max_context_len.unwrap(),
+                "softmax_scale": sdpa_params.softmax_scale,
+                "softcap": sdpa_params.softcap.unwrap_or(1.0f32),
+            })
+        );
+
         #[allow(clippy::cast_possible_truncation)]
         paged_attention(
             &query,
