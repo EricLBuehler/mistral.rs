@@ -94,7 +94,7 @@ allowing others to implement and extend the server implementation.</p>
     <span class="kw">let </span>shared_mistralrs = MistralRsForServerBuilder::new()
         .with_model(model)
         .with_in_situ_quant(<span class="string">"8"</span>.to_string())
-        .with_paged_attn(<span class="bool-val">true</span>)
+        .set_paged_attn(<span class="prelude-val">Some</span>(<span class="bool-val">true</span>))
         .build()
         .<span class="kw">await
         </span>.unwrap();
