@@ -76,6 +76,24 @@ fn main() -> Result<(), String> {
                 ),
             );
         }
+
+        if blockwise_fp8_ffi_ct
+            .contains("pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = true;")
+        {
+            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
+                "pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = true;",
+                &format!(
+                    "pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = {cc_is_over_800};"
+                ),
+            );
+        } else {
+            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
+                "pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = false;",
+                &format!(
+                    "pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = {cc_is_over_800};"
+                ),
+            );
+        }
         std::fs::write(BLOCKWISE_FP8_FFI_PATH, blockwise_fp8_ffi_ct).unwrap();
         // ========
 
@@ -90,9 +108,11 @@ fn main() -> Result<(), String> {
         if cc_over_800 {
             lib_files.push("kernels/marlin/marlin_kernel.cu");
             lib_files.push("kernels/blockwise_fp8/blockwise_fp8.cu");
+            lib_files.push("kernels/blockwise_fp8/blockwise_fp8_gemm.cu");
         } else {
             lib_files.push("kernels/marlin/dummy_marlin_kernel.cu");
             lib_files.push("kernels/blockwise_fp8/blockwise_fp8_dummy.cu");
+            lib_files.push("kernels/blockwise_fp8/blockwise_fp8_gemm_dummy.cu");
         }
         for lib_file in lib_files.iter() {
             println!("cargo:rerun-if-changed={lib_file}");
