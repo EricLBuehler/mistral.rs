@@ -11,7 +11,7 @@ use mistralrs_core::{
     McpClientConfig, MemoryGpuConfig, MistralRsBuilder, ModelSelected, PagedAttentionConfig,
     SchedulerConfig, SearchCallback, TokenSource,
 };
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::types::{LoadedPipeline, SharedMistralRsState};
 
@@ -38,8 +38,10 @@ pub mod defaults {
     pub const PAGED_ATTN_GPU_MEM_USAGE: Option<f32> = None;
     pub const PAGED_CTXT_LEN: Option<usize> = None;
     pub const PAGED_ATTN_BLOCK_SIZE: Option<usize> = None;
-    pub const NO_PAGED_ATTN: bool = false;
-    pub const PAGED_ATTN: bool = false;
+    pub const PAGED_ATTN: Option<bool> = None;
+    pub const PAGED_ATTN_CPU: bool = false;
+    pub const PAGED_ATTN_CUDA: bool = true;
+    pub const PAGED_ATTN_METAL: bool = false;
     pub const PROMPT_CHUNKSIZE: Option<usize> = None;
     pub const CPU: bool = false;
     pub const ENABLE_SEARCH: bool = false;
@@ -66,7 +68,6 @@ pub mod defaults {
 ///        .with_token_source(args.token_source)
 ///        .with_interactive_mode(args.interactive_mode)
 ///        .with_prefix_cache_n(args.prefix_cache_n)
-///        .with_no_paged_attn(args.no_paged_attn)
 ///        .with_paged_attn(args.paged_attn)
 ///        .with_cpu(args.cpu)
 ///        .with_enable_search(args.enable_search)
@@ -156,11 +157,8 @@ pub struct MistralRsForServerBuilder {
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     paged_attn_block_size: Option<usize>,
 
-    /// Disable PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
-    no_paged_attn: bool,
-
-    /// Enable PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
-    paged_attn: bool,
+    /// Enables or disables PagedAttention. By default, PagedAttention will be enabled for CUDA and disabled for Metal (and is not supported for CPU). Use this to override the default behavior.
+    paged_attn: Option<bool>,
 
     /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     prompt_chunksize: Option<usize>,
@@ -203,7 +201,6 @@ impl Default for MistralRsForServerBuilder {
             paged_attn_gpu_mem_usage: defaults::PAGED_ATTN_GPU_MEM_USAGE,
             paged_ctxt_len: defaults::PAGED_CTXT_LEN,
             paged_attn_block_size: defaults::PAGED_ATTN_BLOCK_SIZE,
-            no_paged_attn: defaults::NO_PAGED_ATTN,
             paged_attn: defaults::PAGED_ATTN,
             prompt_chunksize: defaults::PROMPT_CHUNKSIZE,
             cpu: defaults::CPU,
@@ -366,6 +363,20 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Sets PagedAttention.
+    ///
+    /// Unlike other `with_PROP` or `with_PROP_optional` methods, this method
+    /// sets the value to whatever `Option<bool>` is passed in as `None`, `Some(true)`
+    /// and `Some(false)` have different implications.
+    ///
+    /// `None`: default behavior for target device (e.g. enable for CUDA, disable for Metal)
+    /// `Some(true)`: enable (if supported by target device)
+    /// `Some(false)`: disable
+    pub fn set_paged_attn(mut self, paged_attn: Option<bool>) -> Self {
+        self.paged_attn = paged_attn;
+        self
+    }
+
     /// Sets the GPU memory allocation for PagedAttention KV cache.
     pub fn with_paged_attn_gpu_mem(mut self, paged_attn_gpu_mem: usize) -> Self {
         self.paged_attn_gpu_mem = Some(paged_attn_gpu_mem);
@@ -425,18 +436,6 @@ impl MistralRsForServerBuilder {
         if let Some(paged_attn_block_size) = paged_attn_block_size {
             self = self.with_paged_attn_block_size(paged_attn_block_size);
         }
-        self
-    }
-
-    /// Sets whether to disable PagedAttention on CUDA devices.
-    pub fn with_no_paged_attn(mut self, no_paged_attn: bool) -> Self {
-        self.no_paged_attn = no_paged_attn;
-        self
-    }
-
-    /// Sets whether to enable PagedAttention.
-    pub fn with_paged_attn(mut self, paged_attn: bool) -> Self {
-        self.paged_attn = paged_attn;
         self
     }
 
@@ -502,16 +501,11 @@ impl MistralRsForServerBuilder {
     /// let shared_mistralrs = MistralRsForServerBuilder::new()
     ///     .with_model(model)
     ///     .with_in_situ_quant("8".to_string())
-    ///     .with_paged_attn(true)
+    ///     .set_paged_attn(Some(true))
     ///     .build()
     ///     .await?;
     /// ```
     pub async fn build(mut self) -> Result<SharedMistralRsState> {
-        // This was originally with the device config
-        if self.cpu {
-            self.no_paged_attn = true;
-        }
-
         let model = self.model.context("Model was None")?;
 
         let tgt_non_granular_index = get_tgt_non_granular_index(&model);
@@ -539,7 +533,7 @@ impl MistralRsForServerBuilder {
         };
 
         let mapper = init_mapper(&self.num_device_layers, &auto_device_map_params);
-        let no_paged_attn = configure_no_paged_attn(&device, self.no_paged_attn, self.paged_attn);
+        let paged_attn = configure_paged_attn(&device, self.paged_attn);
 
         // Allocate 0.5 GB of CPU memory just as a placeholder.
         // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
@@ -548,7 +542,7 @@ impl MistralRsForServerBuilder {
             self.paged_attn_gpu_mem,
             self.paged_attn_gpu_mem_usage,
             self.paged_ctxt_len,
-            no_paged_attn,
+            !paged_attn,
             max_seq_len,
         )?;
 
@@ -687,14 +681,20 @@ fn mistralrs_instance_info(loader: &dyn Loader) {
     info!("Model kind is: {}", loader.get_kind().to_string());
 }
 
-/// Determines whether paged attention should be disabled based on device type and preferences.
-fn configure_no_paged_attn(device: &Device, no_paged_attn: bool, paged_attn: bool) -> bool {
-    if device.is_cuda() || mistralrs_core::distributed::use_nccl() {
-        no_paged_attn
+/// Determines whether paged attention should be enabled based on device type and preferences.
+fn configure_paged_attn(device: &Device, paged_attn: Option<bool>) -> bool {
+    if device.is_cpu() {
+        if paged_attn == Some(true) {
+            warn!("Paged attention is not supported on CPU.");
+        }
+
+        defaults::PAGED_ATTN_CPU
+    } else if device.is_cuda() || mistralrs_core::distributed::use_nccl() {
+        paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA)
     } else if device.is_metal() {
-        !paged_attn
+        paged_attn.unwrap_or(defaults::PAGED_ATTN_METAL)
     } else {
-        true
+        false
     }
 }
 
@@ -785,6 +785,24 @@ async fn init_scheduler_config(
         SchedulerConfig::DefaultScheduler {
             method: DefaultSchedulerMethod::Fixed(args_max_seqs.try_into().unwrap()),
         }
+    }
+}
+
+/// Configures PagedAttention based on two flags.
+///
+/// This function resolves the tri-state PagedAttention configuration from
+/// the mutually exclusive `paged_attn` and `no_paged_attn` flags.
+pub fn configure_paged_attn_from_flags(
+    paged_attn: bool,
+    no_paged_attn: bool,
+) -> Result<Option<bool>> {
+    match (paged_attn, no_paged_attn) {
+        (true, true) => {
+            anyhow::bail!("Error: `--paged-attn` and `--no-paged-attn` cannot be used together.");
+        }
+        (true, false) => Ok(Some(true)),
+        (false, true) => Ok(Some(false)),
+        (false, false) => Ok(None),
     }
 }
 
