@@ -194,6 +194,9 @@ pub fn get_device_layers(
                 cfg.mem_cpu,
                 Some(cfg.block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE)),
                 dtype,
+                paged_attn_config
+                    .map(|cfg| cfg.cache_type)
+                    .unwrap_or_default(),
                 &*model_cfg,
                 &devices[0],
                 &devices.iter().map(|d| Some(d.clone())).collect::<Vec<_>>(),

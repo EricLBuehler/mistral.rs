@@ -20,6 +20,9 @@ extern "C" {
         stream: CUstream,
 
         dtype: u32,
+        cache_dtype: u32,
+        k_scale: *const f32,
+        v_scale: *const f32,
     );
 
     pub fn paged_attention_v1(
@@ -46,6 +49,9 @@ extern "C" {
         stream: CUstream,
 
         dtype: u32,
+        cache_dtype: u32,
+        k_scale: *const f32,
+        v_scale: *const f32,
     );
 
     pub fn paged_attention_v2(
@@ -75,5 +81,8 @@ extern "C" {
         stream: CUstream,
 
         dtype: u32,
+        cache_dtype: u32,
+        k_scale: *const f32,
+        v_scale: *const f32,
     );
 }
