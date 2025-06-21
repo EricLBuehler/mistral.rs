@@ -469,6 +469,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `deepseekv3`
 - `qwen3`
 - `qwen3moe`
+- `smollm3`
 
 </details>
 
@@ -552,6 +553,7 @@ Please submit more benchmarks via raising an issue!
 |Mistral 3| | |✅|
 |Llama 4| | |✅|
 |Qwen 3|✅| |✅|
+|SmolLM3| | |✅|
 |Dia 1.6b| | |✅|
 </details>
 
@@ -598,6 +600,7 @@ Please submit more benchmarks via raising an issue!
 |Mistral 3| | | |
 |Llama 4| | | |
 |Qwen 3| | | |
+|SmolLM3|✅| | |
 </details>
 
 <details>
@@ -631,6 +634,7 @@ Please submit more benchmarks via raising an issue!
 |Mistral 3|✅|
 |Llama 4| |
 |Qwen 3| |
+|SmolLM3|✅|
 </details>
 
 ### Using derivative and adapter models

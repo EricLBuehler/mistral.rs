@@ -28,6 +28,9 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Phi3_5MoE`
 - `DeepseekV2`
 - `DeepseekV3`
+- `Qwen3`
+- `Qwen3Moe`
+- `SmolLm3`
 
 ### ISQ Organization
 - `Default`
