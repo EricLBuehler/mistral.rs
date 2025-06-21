@@ -169,6 +169,7 @@ rubato = "0.16.2"
 rustfft = "6.3.0"
 hound = "3.5.1"
 apodize = "1.0.0"
+tiktoken-rs = "0.7.0"
 
 mistralrs-core = { path = "mistralrs-core" }
 mistralrs-paged-attn = { path = "mistralrs-paged-attn" }
