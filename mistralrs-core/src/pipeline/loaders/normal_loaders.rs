@@ -3691,12 +3691,12 @@ impl DeviceMappedModelLoader for SmolLm3Loader {
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg: crate::models::llama::Config = serde_json::from_str(config)?;
+        let cfg: crate::models::smollm3::Config = serde_json::from_str(config)?;
 
         Ok(cfg.num_hidden_layers)
     }
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg: crate::models::llama::Config = serde_json::from_str(config)?;
+        let cfg: crate::models::smollm3::Config = serde_json::from_str(config)?;
 
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
