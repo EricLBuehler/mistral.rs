@@ -100,7 +100,13 @@ impl Sdpa {
         let v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)?;
 
         if mask.is_some_and(|x| x.rank() == 2) || mistralrs_quant::distributed::use_nccl() {
-            return naive_sdpa(q, &k, &v, mask, sdpa_params);
+            return naive_sdpa(
+                &q.contiguous()?,
+                &k.contiguous()?,
+                &v.contiguous()?,
+                mask,
+                sdpa_params,
+            );
         }
 
         // TODO: bench?

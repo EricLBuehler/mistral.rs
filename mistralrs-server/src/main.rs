@@ -8,7 +8,9 @@ use tokio::join;
 use tracing::{error, info};
 
 use mistralrs_server_core::{
-    mistralrs_for_server_builder::{defaults, get_bert_model, MistralRsForServerBuilder},
+    mistralrs_for_server_builder::{
+        configure_paged_attn_from_flags, defaults, get_bert_model, MistralRsForServerBuilder,
+    },
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
 };
 
@@ -118,11 +120,19 @@ struct Args {
     paged_attn_block_size: Option<usize>,
 
     /// Disable PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
-    #[arg(long = "no-paged-attn", default_value_t = defaults::NO_PAGED_ATTN)]
+    #[arg(
+        long = "no-paged-attn",
+        default_value_t = false,
+        conflicts_with = "paged_attn"
+    )]
     no_paged_attn: bool,
 
     /// Enable PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
-    #[arg(long = "paged-attn", default_value_t = defaults::PAGED_ATTN)]
+    #[arg(
+        long = "paged-attn",
+        default_value_t = false,
+        conflicts_with_all = ["no_paged_attn", "cpu"]
+    )]
     paged_attn: bool,
 
     /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
@@ -276,6 +286,8 @@ async fn main() -> Result<()> {
     // Load MCP configuration if provided
     let mcp_config = load_mcp_config(args.mcp_config.as_deref())?;
 
+    let paged_attn = configure_paged_attn_from_flags(args.paged_attn, args.no_paged_attn)?;
+
     let mistralrs = MistralRsForServerBuilder::new()
         .with_truncate_sequence(args.truncate_sequence)
         .with_model(args.model)
@@ -284,8 +296,7 @@ async fn main() -> Result<()> {
         .with_token_source(args.token_source)
         .with_interactive_mode(args.interactive_mode)
         .with_prefix_cache_n(args.prefix_cache_n)
-        .with_no_paged_attn(args.no_paged_attn)
-        .with_paged_attn(args.paged_attn)
+        .set_paged_attn(paged_attn)
         .with_cpu(args.cpu)
         .with_enable_search(args.enable_search)
         .with_seed_optional(args.seed)
