@@ -36,15 +36,6 @@ ENV HUGGINGFACE_HUB_CACHE=/data \
     PORT=80 \
     LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
-# Run the script to create symlinks in /usr/local/cuda/lib64
-RUN set -eux; \
-    for lib in $(ls /usr/local/cuda/lib64); do \
-        base=$(echo $lib | sed -r 's/(.+)\.so\..+/\1.so/'); \
-        if [ "$lib" != "$base" ]; then \
-            ln -sf "/usr/local/cuda/lib64/$lib" "/usr/local/cuda/lib64/$base"; \
-        fi; \
-    done
-
 ARG DEBIAN_FRONTEND=noninteractive
 RUN <<HEREDOC
     apt-get update
