@@ -140,6 +140,10 @@ impl PagedAttention {
         };
 
         let (k_scale_ptr, v_scale_ptr) = if let Some((k_scale, v_scale)) = self.k_v_scale.as_ref() {
+            if !crate::cuda::USE_FP8 {
+                candle::bail!("FP8 is not supported on this system.");
+            }
+
             let (ks, ks_l) = k_scale.storage_and_layout();
             let ks = match &*ks {
                 Storage::Cuda(ks) => ks,
@@ -461,6 +465,10 @@ fn update_cache<
 
     // For FP8 cache, we need to get as u8 slices instead
     let (kc_ptr, vc_ptr) = if cache_dtype == 3 {
+        if !crate::cuda::USE_FP8 {
+            candle::bail!("FP8 is not supported on this system.");
+        }
+
         let kc = kc.as_cuda_slice::<F8E4M3>()?;
         let vc = vc.as_cuda_slice::<F8E4M3>()?;
         let kc = kc.slice(kc_l.start_offset()..);

@@ -123,7 +123,9 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
 
     // Build the new content
     let mut new_ct = if using_fp8 {
-        &OTHER_CONTENT.trim().replace("USE_FP8: bool = false", "USE_FP8: bool = true")
+        &OTHER_CONTENT
+            .trim()
+            .replace("USE_FP8: bool = false", "USE_FP8: bool = true")
     } else {
         OTHER_CONTENT.trim()
     };
