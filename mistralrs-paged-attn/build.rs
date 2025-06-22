@@ -77,7 +77,7 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
         .arg("-fPIC");
 
     // Enable FP8 if compute capability >= 8.0 (Ampere and newer)
-    let mut using_fp8 = if compute_cap >= 800 {
+    let using_fp8 = if compute_cap >= 800 {
         builder = builder.arg("-DENABLE_FP8");
         true
     } else {
@@ -122,7 +122,7 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
         .unwrap();
 
     // Build the new content
-    let mut new_ct = if using_fp8 {
+    let new_ct = if using_fp8 {
         &OTHER_CONTENT
             .trim()
             .replace("USE_FP8: bool = false", "USE_FP8: bool = true")
