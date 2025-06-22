@@ -33,8 +33,7 @@ RUN cargo build --release --workspace --exclude mistralrs-pyo3 --features "${WIT
 
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS base
 ENV HUGGINGFACE_HUB_CACHE=/data \
-    PORT=80 \
-    LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+    PORT=80
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN <<HEREDOC
