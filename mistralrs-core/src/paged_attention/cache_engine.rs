@@ -3,7 +3,9 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{
+    from_storage_no_op, DType, Device, MetalStorage, Result, Shape, Storage, Tensor,
+};
 use mistralrs_paged_attn::{copy_blocks, swap_blocks};
 
 use super::config::ModelConfigLike;
@@ -70,30 +72,88 @@ impl CacheEngine {
             .take(model_config.num_layers())
             .map(|x| x.as_ref().unwrap_or(device))
         {
-            let key_blocks = unsafe {
-                Tensor::empty(
-                    (
-                        cache_config.num_gpu_blocks,
-                        key_block_shape.0,
-                        key_block_shape.1,
-                        key_block_shape.2,
-                        key_block_shape.3,
-                    ),
-                    dtype,
-                    device,
-                )?
+            let key_blocks = if let Device::Metal(dev) = &device {
+                #[cfg(feature = "metal")]
+                {
+                    let elem_count = cache_config.num_gpu_blocks
+                        * key_block_shape.0
+                        * key_block_shape.1
+                        * key_block_shape.2
+                        * key_block_shape.3;
+                    let buffer = dev.new_buffer_private(elem_count, dtype, "k_cache")?;
+                    let storage =
+                        Storage::Metal(MetalStorage::new(buffer, dev.clone(), elem_count, dtype));
+                    from_storage_no_op(
+                        storage,
+                        Shape::from_dims(&[
+                            cache_config.num_gpu_blocks,
+                            key_block_shape.0,
+                            key_block_shape.1,
+                            key_block_shape.2,
+                            key_block_shape.3,
+                        ]),
+                        false,
+                    )
+                }
+
+                #[cfg(not(feature = "metal"))]
+                {
+                    unreachable!()
+                }
+            } else {
+                unsafe {
+                    Tensor::empty(
+                        (
+                            cache_config.num_gpu_blocks,
+                            key_block_shape.0,
+                            key_block_shape.1,
+                            key_block_shape.2,
+                            key_block_shape.3,
+                        ),
+                        dtype,
+                        device,
+                    )?
+                }
             };
-            let value_blocks = unsafe {
-                Tensor::empty(
-                    (
-                        cache_config.num_gpu_blocks,
-                        value_block_shape.0,
-                        value_block_shape.1,
-                        value_block_shape.2,
-                    ),
-                    dtype,
-                    device,
-                )?
+            let value_blocks = if let Device::Metal(dev) = &device {
+                #[cfg(feature = "metal")]
+                {
+                    let elem_count = cache_config.num_gpu_blocks
+                        * value_block_shape.0
+                        * value_block_shape.1
+                        * value_block_shape.2;
+                    let buffer = dev.new_buffer_private(elem_count, dtype, "v_cache")?;
+                    let storage =
+                        Storage::Metal(MetalStorage::new(buffer, dev.clone(), elem_count, dtype));
+                    from_storage_no_op(
+                        storage,
+                        Shape::from_dims(&[
+                            cache_config.num_gpu_blocks,
+                            value_block_shape.0,
+                            value_block_shape.1,
+                            value_block_shape.2,
+                        ]),
+                        false,
+                    )
+                }
+
+                #[cfg(not(feature = "metal"))]
+                {
+                    unreachable!()
+                }
+            } else {
+                unsafe {
+                    Tensor::empty(
+                        (
+                            cache_config.num_gpu_blocks,
+                            value_block_shape.0,
+                            value_block_shape.1,
+                            value_block_shape.2,
+                        ),
+                        dtype,
+                        device,
+                    )?
+                }
             };
             gpu_cache.push((key_blocks, value_blocks));
         }
