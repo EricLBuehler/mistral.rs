@@ -46,7 +46,7 @@ messages = [
 # First question, thinking mode is enabled by default
 # ------------------------------------------------------------------
 completion = client.chat.completions.create(
-    model="qwen3",
+    model="ignore",
     messages=messages,
     max_tokens=1024,
     frequency_penalty=1.0,
@@ -69,7 +69,7 @@ messages = [
 # Second question, disable thinking mode with extra body or /no_think
 # ------------------------------------------------------------------
 completion = client.chat.completions.create(
-    model="qwen3",
+    model="ignore",
     messages=messages,
     max_tokens=1024,
     frequency_penalty=1.0,
@@ -96,7 +96,7 @@ messages = [
 # Third question, reenable thinking mode with extra body or /think
 # ------------------------------------------------------------------
 completion = client.chat.completions.create(
-    model="qwen3",
+    model="ignore",
     messages=messages,
     max_tokens=1024,
     frequency_penalty=1.0,

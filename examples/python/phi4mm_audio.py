@@ -16,7 +16,7 @@ AUDIO_URL = "https://upload.wikimedia.org/wikipedia/commons/4/42/Bird_singing.og
 
 response = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="phi4mm",
+        model="ignore",
         messages=[
             {
                 "role": "user",

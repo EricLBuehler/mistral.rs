@@ -30,7 +30,7 @@ messages = [
 # ------------------------------------------------------------------
 completion = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="qwen3",
+        model="ignore",
         messages=messages,
         max_tokens=1024,
         frequency_penalty=1.0,
@@ -55,7 +55,7 @@ messages = [
 # ------------------------------------------------------------------
 completion = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="qwen3",
+        model="ignore",
         messages=messages,
         max_tokens=1024,
         frequency_penalty=1.0,
@@ -82,7 +82,7 @@ messages = [
 # ------------------------------------------------------------------
 completion = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="qwen3",
+        model="ignore",
         messages=messages,
         max_tokens=1024,
         frequency_penalty=1.0,

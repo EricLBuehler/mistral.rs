@@ -9,7 +9,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="idefics3",
+        model="ignore",
         messages=[
             {
                 "role": "user",
