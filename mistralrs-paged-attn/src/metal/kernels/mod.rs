@@ -193,6 +193,18 @@ pub enum PagedAttentionDType {
     F16 = 0,
     BF16 = 1,
     F32 = 2,
+    F8E4M3 = 3,
+}
+
+impl PagedAttentionDType {
+    fn to_repr(&self) -> &'static str {
+        match self {
+            PagedAttentionDType::F32 => "float",
+            PagedAttentionDType::BF16 => "bfloat16_t",
+            PagedAttentionDType::F16 => "half",
+            PagedAttentionDType::F8E4M3 => "uchar",
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -200,7 +212,8 @@ pub fn call_reshape_and_cache(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
-    ty: PagedAttentionDType,
+    kv_ty: PagedAttentionDType,
+    cache_ty: PagedAttentionDType,
     key: &Buffer,
     key_offset: usize,
     value: &Buffer,
@@ -211,6 +224,7 @@ pub fn call_reshape_and_cache(
     value_cache_offset: usize,
     slot_mapping: &Buffer,
     slot_mapping_offset: usize,
+    k_v_scale: Option<(Buffer, Buffer)>,
     num_tokens: i32,
     num_heads: i32,
     head_size: i32,
@@ -219,31 +233,60 @@ pub fn call_reshape_and_cache(
     key_stride: i32,
     value_stride: i32,
 ) -> Result<(), MetalKernelError> {
-    let name = match ty {
-        PagedAttentionDType::F32 => "reshape_and_cache_float",
-        PagedAttentionDType::BF16 => "reshape_and_cache_bfloat16_t",
-        PagedAttentionDType::F16 => "reshape_and_cache_half",
-    };
-    let pipeline = kernels.load_pipeline(device, name.to_string())?;
+    let name = format!(
+        "reshape_and_cache_kv_{}_cache_{}",
+        kv_ty.to_repr(),
+        cache_ty.to_repr()
+    );
+
+    let constants = Some(ConstantValues::new(vec![(
+        10,
+        Value::Bool(/* use_fp8_scales */ k_v_scale.is_some()),
+    )]));
+
+    let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(
-        encoder,
-        (
-            (key, key_offset),
-            (value, value_offset),
-            (key_cache, key_cache_offset),
-            (value_cache, value_cache_offset),
-            (slot_mapping, slot_mapping_offset),
-            key_stride,
-            value_stride,
-            num_heads,
-            head_size,
-            block_size,
-            x
-        )
+    encoder.set_buffer(0, Some(key), key_offset as NSUInteger);
+    encoder.set_buffer(1, Some(value), value_offset as NSUInteger);
+    encoder.set_buffer(2, Some(key_cache), key_cache_offset as NSUInteger);
+    encoder.set_buffer(3, Some(value_cache), value_cache_offset as NSUInteger);
+    encoder.set_buffer(4, Some(slot_mapping), slot_mapping_offset as NSUInteger);
+    if let Some((k_scale, v_scale)) = k_v_scale {
+        encoder.set_buffer(5, Some(&k_scale), 0 as NSUInteger);
+        encoder.set_buffer(6, Some(&v_scale), 0 as NSUInteger);
+    }
+    encoder.set_bytes(
+        7,
+        core::mem::size_of_val(&key_stride) as u64,
+        &key_stride as *const _ as *const c_void,
+    );
+    encoder.set_bytes(
+        8,
+        core::mem::size_of_val(&value_stride) as u64,
+        &value_stride as *const _ as *const c_void,
+    );
+    encoder.set_bytes(
+        9,
+        core::mem::size_of_val(&num_heads) as u64,
+        &num_heads as *const _ as *const c_void,
+    );
+    encoder.set_bytes(
+        10,
+        core::mem::size_of_val(&head_size) as u64,
+        &head_size as *const _ as *const c_void,
+    );
+    encoder.set_bytes(
+        11,
+        core::mem::size_of_val(&block_size) as u64,
+        &block_size as *const _ as *const c_void,
+    );
+    encoder.set_bytes(
+        12,
+        core::mem::size_of_val(&x) as u64,
+        &x as *const _ as *const c_void,
     );
 
     let thread_groups_count = MTLSize {
@@ -316,6 +359,7 @@ pub fn call_paged_attention_v1(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     ty: PagedAttentionDType,
+    cache_ty: PagedAttentionDType,
     q: &Buffer,
     q_offset: usize,
     k_cache: &Buffer,
@@ -326,6 +370,7 @@ pub fn call_paged_attention_v1(
     block_tables_offset: usize,
     context_lens: &Buffer,
     context_lens_offset: usize,
+    k_v_scale: Option<(Buffer, Buffer)>,
     alibi_storage_and_offset: Option<(MetalStorage, usize)>,
     output: &Buffer,
     num_kv_heads: i32,
@@ -344,27 +389,19 @@ pub fn call_paged_attention_v1(
     const NUM_THREADS: u64 = 256;
     const NUM_SIMD_LANES: u64 = 32;
 
-    let name = match ty {
-        PagedAttentionDType::F32 => "paged_attention_float",
-        PagedAttentionDType::BF16 => "paged_attention_bfloat16_t",
-        PagedAttentionDType::F16 => "paged_attention_half",
-    };
-    let mut name = name.to_string();
-    name.push_str(&format!("_hs{head_size}"));
-    name.push_str(&format!("_bs{block_size}"));
-    name.push_str(&format!("_nt{NUM_THREADS}"));
-    name.push_str(&format!("_nsl{}", NUM_SIMD_LANES));
     // v1 has no partition
-    name.push_str(&format!("_ps{}", 0));
+    let name = format!(
+        "paged_attention_{}_cache_{}_hs{head_size}_bs{block_size}_nt{NUM_THREADS}_nsl{NUM_SIMD_LANES}_ps0",
+        ty.to_repr(), cache_ty.to_repr()
+    );
 
-    // v1 has no partition.
-    // Handle alibi
     let constants = Some(ConstantValues::new(vec![
         (10, Value::Bool(/* use_partitioning */ false)),
         (
             20,
             Value::Bool(/* use_alibi */ alibi_storage_and_offset.is_some()),
         ),
+        (30, Value::Bool(/* use_fp8_scales */ k_v_scale.is_some())),
     ]));
 
     let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
@@ -385,43 +422,47 @@ pub fn call_paged_attention_v1(
     encoder.set_buffer(3, Some(q), q_offset as NSUInteger);
     encoder.set_buffer(4, Some(k_cache), k_cache_offset as NSUInteger);
     encoder.set_buffer(5, Some(v_cache), v_cache_offset as NSUInteger);
+    if let Some((k_scale, v_scale)) = &k_v_scale {
+        encoder.set_buffer(6, Some(k_scale), 0 as NSUInteger);
+        encoder.set_buffer(7, Some(v_scale), 0 as NSUInteger);
+    }
     encoder.set_bytes(
-        6,
+        8,
         core::mem::size_of_val(&num_kv_heads) as u64,
         &num_kv_heads as *const _ as *const c_void,
     );
     encoder.set_bytes(
-        7,
+        9,
         core::mem::size_of_val(&scale) as u64,
         &scale as *const _ as *const c_void,
     );
     encoder.set_bytes(
-        8,
+        10,
         core::mem::size_of_val(&softcapping) as u64,
         &softcapping as *const _ as *const c_void,
     );
-    encoder.set_buffer(9, Some(block_tables), block_tables_offset as NSUInteger);
-    encoder.set_buffer(10, Some(context_lens), context_lens_offset as NSUInteger);
+    encoder.set_buffer(11, Some(block_tables), block_tables_offset as NSUInteger);
+    encoder.set_buffer(12, Some(context_lens), context_lens_offset as NSUInteger);
     encoder.set_bytes(
-        11,
+        13,
         core::mem::size_of_val(&max_num_blocks_per_seq) as u64,
         &max_num_blocks_per_seq as *const _ as *const c_void,
     );
     if let Some((alibi, alibi_offset)) = alibi_storage_and_offset {
-        encoder.set_buffer(12, Some(alibi.buffer()), alibi_offset as NSUInteger);
+        encoder.set_buffer(14, Some(alibi.buffer()), alibi_offset as NSUInteger);
     }
     encoder.set_bytes(
-        13,
+        15,
         core::mem::size_of_val(&q_stride) as u64,
         &q_stride as *const _ as *const c_void,
     );
     encoder.set_bytes(
-        14,
+        16,
         core::mem::size_of_val(&kv_block_stride) as u64,
         &kv_block_stride as *const _ as *const c_void,
     );
     encoder.set_bytes(
-        15,
+        17,
         core::mem::size_of_val(&kv_head_stride) as u64,
         &kv_head_stride as *const _ as *const c_void,
     );
@@ -446,6 +487,7 @@ pub fn call_paged_attention_v2(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     ty: PagedAttentionDType,
+    cache_ty: PagedAttentionDType,
     exp_sums: &Buffer,
     max_logits: &Buffer,
     q: &Buffer,
@@ -458,6 +500,7 @@ pub fn call_paged_attention_v2(
     block_tables_offset: usize,
     context_lens: &Buffer,
     context_lens_offset: usize,
+    k_v_scale: Option<(Buffer, Buffer)>,
     alibi_storage_and_offset: Option<(MetalStorage, usize)>,
     tmp_out: &Buffer,
     output: &Buffer,
@@ -480,18 +523,11 @@ pub fn call_paged_attention_v2(
 
     // Initial paged attention kernel
     {
-        let name = match ty {
-            PagedAttentionDType::F32 => "paged_attention_float",
-            PagedAttentionDType::BF16 => "paged_attention_bfloat16_t",
-            PagedAttentionDType::F16 => "paged_attention_half",
-        };
-        let mut name = name.to_string();
-        name.push_str(&format!("_hs{head_size}"));
-        name.push_str(&format!("_bs{block_size}"));
-        name.push_str(&format!("_nt{NUM_THREADS}"));
-        name.push_str(&format!("_nsl{}", NUM_SIMD_LANES));
         // v2 has partition.
-        name.push_str(&format!("_ps{}", PARTITION_SIZE));
+        let name = format!(
+            "paged_attention_{}_cache_{}_hs{head_size}_bs{block_size}_nt{NUM_THREADS}_nsl{NUM_SIMD_LANES}_ps{PARTITION_SIZE}",
+            ty.to_repr(), cache_ty.to_repr()
+        );
 
         // v2 has partition.
         // Handle alibi
@@ -501,6 +537,7 @@ pub fn call_paged_attention_v2(
                 20,
                 Value::Bool(/* use_alibi */ alibi_storage_and_offset.is_some()),
             ),
+            (30, Value::Bool(/* use_fp8_scales */ k_v_scale.is_some())),
         ]));
 
         let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
@@ -525,43 +562,47 @@ pub fn call_paged_attention_v2(
         encoder.set_buffer(3, Some(q), q_offset as NSUInteger);
         encoder.set_buffer(4, Some(k_cache), k_cache_offset as NSUInteger);
         encoder.set_buffer(5, Some(v_cache), v_cache_offset as NSUInteger);
+        if let Some((k_scale, v_scale)) = &k_v_scale {
+            encoder.set_buffer(6, Some(k_scale), 0 as NSUInteger);
+            encoder.set_buffer(7, Some(v_scale), 0 as NSUInteger);
+        }
         encoder.set_bytes(
-            6,
+            8,
             core::mem::size_of_val(&num_kv_heads) as u64,
             &num_kv_heads as *const _ as *const c_void,
         );
         encoder.set_bytes(
-            7,
+            9,
             core::mem::size_of_val(&scale) as u64,
             &scale as *const _ as *const c_void,
         );
         encoder.set_bytes(
-            8,
+            10,
             core::mem::size_of_val(&softcapping) as u64,
             &softcapping as *const _ as *const c_void,
         );
-        encoder.set_buffer(9, Some(block_tables), block_tables_offset as NSUInteger);
-        encoder.set_buffer(10, Some(context_lens), context_lens_offset as NSUInteger);
+        encoder.set_buffer(11, Some(block_tables), block_tables_offset as NSUInteger);
+        encoder.set_buffer(12, Some(context_lens), context_lens_offset as NSUInteger);
         encoder.set_bytes(
-            11,
+            13,
             core::mem::size_of_val(&max_num_blocks_per_seq) as u64,
             &max_num_blocks_per_seq as *const _ as *const c_void,
         );
         if let Some((alibi, alibi_offset)) = alibi_storage_and_offset {
-            encoder.set_buffer(12, Some(alibi.buffer()), alibi_offset as NSUInteger);
+            encoder.set_buffer(14, Some(alibi.buffer()), alibi_offset as NSUInteger);
         }
         encoder.set_bytes(
-            13,
+            15,
             core::mem::size_of_val(&q_stride) as u64,
             &q_stride as *const _ as *const c_void,
         );
         encoder.set_bytes(
-            14,
+            16,
             core::mem::size_of_val(&kv_block_stride) as u64,
             &kv_block_stride as *const _ as *const c_void,
         );
         encoder.set_bytes(
-            15,
+            17,
             core::mem::size_of_val(&kv_head_stride) as u64,
             &kv_head_stride as *const _ as *const c_void,
         );
@@ -585,6 +626,12 @@ pub fn call_paged_attention_v2(
             PagedAttentionDType::F32 => "paged_attention_v2_reduce_float",
             PagedAttentionDType::BF16 => "paged_attention_v2_reduce_bfloat16_t",
             PagedAttentionDType::F16 => "paged_attention_v2_reduce_half",
+            PagedAttentionDType::F8E4M3 => {
+                return Err(MetalKernelError::DTypeMismatch {
+                    expected: vec![DType::F32, DType::F16, DType::BF16],
+                    got: DType::F8E4M3,
+                })
+            }
         };
         let mut name = name.to_string();
         name.push_str(&format!("_hs{head_size}"));

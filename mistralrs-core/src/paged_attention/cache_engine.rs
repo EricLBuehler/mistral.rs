@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    str::FromStr,
     sync::{Arc, Mutex, MutexGuard},
 };
 
@@ -7,14 +8,46 @@ use candle_core::{
     from_storage_no_op, DType, Device, MetalStorage, Result, Shape, Storage, Tensor,
 };
 use mistralrs_paged_attn::{copy_blocks, swap_blocks};
+use serde::{Deserialize, Serialize};
 
 use super::config::ModelConfigLike;
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
+pub enum PagedCacheType {
+    #[default]
+    Auto,
+    F8E4M3,
+}
+
+impl PagedCacheType {
+    pub fn to_dtype(&self, act_dtype: DType) -> DType {
+        match self {
+            PagedCacheType::F8E4M3 => DType::F8E4M3,
+            PagedCacheType::Auto => act_dtype,
+        }
+    }
+}
+
+impl FromStr for PagedCacheType {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "auto" => Ok(Self::Auto),
+            "f8e4m3" => Ok(Self::F8E4M3),
+            other => Err(format!(
+                "Unexpected `PagedCacheType`, got `{other}` but expected `auto` and `f8e4m3`."
+            )),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct CacheConfig {
     pub block_size: usize,
     pub num_gpu_blocks: usize,
     pub num_cpu_blocks: usize,
+    pub cache_type: PagedCacheType,
 }
 
 pub type KVCache = (Tensor, Tensor);
@@ -33,6 +66,7 @@ impl CacheEngine {
         device: &Device,
         layer_devices: Vec<Option<Device>>,
     ) -> Result<Self> {
+        let dtype = cache_config.cache_type.to_dtype(dtype);
         Ok(Self {
             gpu_cache: Arc::new(Mutex::new(Self::allocate_gpu_cache(
                 model_config,

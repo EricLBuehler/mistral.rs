@@ -205,6 +205,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
    - [GGML & GGUF support](docs/QUANTS.md): 2–8 bit
    - [GPTQ](docs/QUANTS.md), [AWQ](scripts/convert_awq_marlin.py), [AFQ](docs/QUANTS.md#afq), [HQQ](docs/QUANTS.md#hqq), [FP8](docs/QUANTS.md), [BNB](https://github.com/TimDettmers/bitsandbytes) (int8/fp4/nf4)
    - ⭐ Auto-select the fastest quant method
+   - [KV cache quantization](docs/PAGED_ATTENTION.md#kv-cache-quantization)
 
 4. **Flexibility**
    - [LoRA](docs/ADAPTER_MODELS.md) & [X-LoRA](docs/ADAPTER_MODELS.md) adapters with weight merging

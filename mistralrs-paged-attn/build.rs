@@ -8,6 +8,7 @@ fn main() -> Result<()> {
     use std::fs::OpenOptions;
     use std::io::prelude::*;
     use std::path::PathBuf;
+    use std::process::Command;
 
     const OTHER_CONTENT: &str = r#"
 pub const COPY_BLOCKS_KERNEL: &str =
@@ -15,6 +16,7 @@ pub const COPY_BLOCKS_KERNEL: &str =
 pub const PAGEDATTENTION: &str = include_str!(concat!(env!("OUT_DIR"), "/pagedattention.ptx"));
 pub const RESHAPE_AND_CACHE_KERNEL: &str =
     include_str!(concat!(env!("OUT_DIR"), "/reshape_and_cache_kernel.ptx"));
+pub const USE_FP8: bool = false;
 
 mod backend;
 mod ffi;
@@ -26,6 +28,40 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
     println!("cargo:rerun-if-changed=src/cuda/pagedattention.cu");
     println!("cargo:rerun-if-changed=src/cuda/copy_blocks_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/reshape_and_cache_kernel.cu");
+
+    // Detect CUDA compute capability for FP8 support
+    let compute_cap = {
+        if let Ok(var) = std::env::var("CUDA_COMPUTE_CAP") {
+            var.parse::<usize>().unwrap() * 10
+        } else {
+            let mut cmd = Command::new("nvidia-smi");
+            match cmd
+                .args(["--query-gpu=compute_cap", "--format=csv"])
+                .output()
+            {
+                Ok(out) => {
+                    let output =
+                        String::from_utf8(out.stdout).expect("Output of nvidia-smi was not utf8.");
+                    (output
+                        .split('\n')
+                        .nth(1)
+                        .unwrap()
+                        .trim()
+                        .parse::<f32>()
+                        .unwrap()
+                        * 100.) as usize
+                }
+                Err(_) => {
+                    // If nvidia-smi fails, assume no FP8 support
+                    println!(
+                        "cargo:warning=Could not detect CUDA compute capability, disabling FP8"
+                    );
+                    0
+                }
+            }
+        }
+    };
+
     let mut builder = bindgen_cuda::Builder::default()
         .arg("-std=c++17")
         .arg("-O3")
@@ -39,6 +75,14 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
         .arg("--verbose")
         .arg("--compiler-options")
         .arg("-fPIC");
+
+    // Enable FP8 if compute capability >= 8.0 (Ampere and newer)
+    let using_fp8 = if compute_cap >= 800 {
+        builder = builder.arg("-DENABLE_FP8");
+        true
+    } else {
+        false
+    };
 
     // https://github.com/EricLBuehler/mistral.rs/issues/286
     if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
@@ -77,8 +121,17 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
         .open("src/cuda/mod.rs")
         .unwrap();
 
+    // Build the new content
+    let new_ct = if using_fp8 {
+        &OTHER_CONTENT
+            .trim()
+            .replace("USE_FP8: bool = false", "USE_FP8: bool = true")
+    } else {
+        OTHER_CONTENT.trim()
+    };
+
     // Add the other stuff back
-    if let Err(e) = writeln!(file, "{}", OTHER_CONTENT.trim()) {
+    if let Err(e) = writeln!(file, "{new_ct}") {
         anyhow::bail!("Error while building dependencies: {:?}\n", e)
     }
     Ok(())
@@ -95,6 +148,7 @@ fn main() -> Result<(), String> {
         println!("cargo::rerun-if-changed=src/metal/kernels/{src}.metal");
     }
     println!("cargo::rerun-if-changed=src/metal/kernels/utils.metal");
+    println!("cargo::rerun-if-changed=src/metal/kernels/float8.metal");
     println!("cargo::rerun-if-changed=build.rs");
 
     enum Platform {
@@ -133,6 +187,7 @@ fn main() -> Result<(), String> {
             compile_air_cmd.arg(sources.join(format!("{metal_file}.metal")));
         }
         compile_air_cmd.arg(sources.join("utils.metal"));
+        compile_air_cmd.arg(sources.join("float8.metal"));
         compile_air_cmd
             .spawn()
             .expect("Failed to compile air")
@@ -177,6 +232,7 @@ fn main() -> Result<(), String> {
             compile_metallib_cmd.arg(out_dir.join(format!("{metal_file}.air")));
         }
         compile_metallib_cmd.arg(out_dir.join("utils.air"));
+        compile_metallib_cmd.arg(out_dir.join("float8.air"));
 
         let mut child = compile_metallib_cmd
             .spawn()

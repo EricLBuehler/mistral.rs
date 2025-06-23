@@ -6,6 +6,16 @@ Mistral.rs supports PagedAttention ([paper here](https://arxiv.org/abs/2309.0618
 
 Our PagedAttention implementation has 2 inputs: GPU KV cache memory size, and block size. This enables you to have fine-tuned control over the available context length, by configuring the available memory for KV cache. When using a CUDA device, PagedAttention is actiated by default but can be disabled with `no_paged_attn` for Python or `no-paged-attn` for the CLI tools.
 
+## KV Cache Quantization
+
+PagedAttention now supports KV cache quantization to reduce memory usage and potentially improve performance. The KV cache can be quantized to FP8 (F8E4M3 format) instead of using the model's native dtype, significantly reducing memory requirements while maintaining model quality.
+
+**Available cache types:**
+- `auto` (default): Uses the model's native dtype for KV cache
+- `f8e4m3`: Quantizes KV cache to 8-bit floating point (E4M3 format)
+
+When using FP8 quantization, the memory usage for KV cache is approximately halved compared to FP16, allowing for longer context lengths with the same GPU memory allocation.
+
 > Note: The default block size if not specified is 32.
 
 > Note: if OOM occurs (this can be caused by a variety of factors including adapter activation, re-ISQ, and others), it is likely because the PagedAttention KV cache has already been allocated. To counter this, either set the KV cache memory to a lower amount or usage percentage (recommended) or disable paged attention entirely for a dynamically allocated cache.
@@ -40,12 +50,19 @@ the prefill phase.
 
 Add the `--pa-gpu-mem`/`--pa-gpu-mem-usage` and `--pa-blk-size` parameters before the model kind selector. The GPU memory is in MBs and the block size means the number of tokens per block. These parameters may be passed on any supported model type.
 
+To enable KV cache quantization, use the `--pa-cache-type` parameter with either `auto` (default) or `f8e4m3`.
+
 ```
 cargo run --release --features cuda -- -i --pa-gpu-mem 8192 --pa-blk-size 32 --isq Q4K plain -m microsoft/Phi-3-mini-128k-instruct
 ```
 
 ```
 cargo run --release --features cuda -- -i --pa-gpu-mem-usage .95 --pa-blk-size 32 gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
+```
+
+Example with FP8 KV cache quantization:
+```
+cargo run --release --features metal -- -i --pa-gpu-mem 4096 --pa-blk-size 32 --pa-cache-type f8e4m3 plain -m microsoft/Phi-3-mini-128k-instruct
 ```
 
 ## Using the Rust API
@@ -94,6 +111,33 @@ async fn main() -> Result<()> {
 }
 ```
 
+Example with FP8 KV cache quantization:
+```rust
+use anyhow::Result;
+use mistralrs::{
+    IsqType, MemoryGpuConfig, PagedAttentionMetaBuilder, PagedCacheType, 
+    TextMessageRole, TextMessages, TextModelBuilder,
+};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+        .with_isq(IsqType::Q8_0)
+        .with_logging()
+        .with_paged_attn(|| {
+            PagedAttentionMetaBuilder::default()
+                .with_block_size(32)
+                .with_gpu_memory(MemoryGpuConfig::ContextSize(1024))
+                .with_cache_type(PagedCacheType::F8E4M3)
+                .build()
+        })?
+        .build()
+        .await?;
+
+    // ... rest of the code remains the same
+}
+```
+
 ## Using the Python API
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
@@ -121,4 +165,21 @@ res = runner.send_chat_completion_request(
 )
 print(res.choices[0].message.content)
 print(res.usage)
+```
+
+Example with FP8 KV cache quantization:
+```py
+from mistralrs import Runner, Which, ChatCompletionRequest, Architecture, PagedCacheType
+
+runner = Runner(
+    which=Which.Plain(
+        model_id="mistralai/Mistral-7B-Instruct-v0.1",
+        arch=Architecture.Mistral,
+    ),
+    pa_gpu_mem = 4096,
+    pa_blk_size = 32,
+    pa_cache_type = PagedCacheType.F8E4M3,
+)
+
+# ... rest of the code remains the same
 ```

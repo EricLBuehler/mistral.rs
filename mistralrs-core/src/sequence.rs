@@ -868,7 +868,7 @@ impl Sequence {
 
     pub fn set_state(&self, state: SequenceState) {
         if matches!(state, SequenceState::Error) {
-            get_mut_group!(self).n_choices -= 1;
+            get_mut_group!(self).n_choices = get_mut_group!(self).n_choices.saturating_sub(1);
         }
         *self.state.write().unwrap() = state;
     }
