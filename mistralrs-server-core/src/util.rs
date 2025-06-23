@@ -2,6 +2,8 @@
 
 use image::DynamicImage;
 use mistralrs_core::AudioInput;
+use mistralrs_core::MistralRs;
+use std::sync::Arc;
 use tokio::{
     fs::{self, File},
     io::AsyncReadExt,
@@ -119,6 +121,43 @@ pub async fn parse_audio_url(url_unparsed: &str) -> Result<AudioInput, anyhow::E
     };
 
     AudioInput::from_bytes(&bytes)
+}
+
+/// Validates that the requested model matches the loaded model.
+///
+/// This function checks if the model parameter from an OpenAI API request
+/// matches the model name that was actually loaded by the server.
+///
+/// The special model name "ignore" can be used to bypass this validation,
+/// which is useful for clients that require a model parameter but don't
+/// need to specify a particular model.
+///
+/// ### Arguments
+///
+/// * `requested_model` - The model name from the API request
+/// * `state` - The MistralRs state containing the loaded model info
+///
+/// ### Returns
+///
+/// Returns `Ok(())` if the models match or if "ignore" is specified, otherwise returns an error.
+pub fn validate_model_name(
+    requested_model: &str,
+    state: Arc<MistralRs>,
+) -> Result<(), anyhow::Error> {
+    // Allow "ignore" as a special case to bypass validation
+    if requested_model == "ignore" {
+        return Ok(());
+    }
+
+    let loaded_model = state.get_id();
+    if requested_model != loaded_model {
+        anyhow::bail!(
+            "Requested model '{}' does not match loaded model '{}'. Only the loaded model is available. Use 'ignore' to bypass this validation.",
+            requested_model,
+            loaded_model
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
