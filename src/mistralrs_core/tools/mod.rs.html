@@ -203,72 +203,75 @@
 <a href=#203 id=203 data-nosnippet>203</a>        <span class="kw">if let </span><span class="prelude-val">Ok</span>(deser) = serde_json::from_str::&lt;CalledFunctionParameters&gt;(<span class="kw-2">&amp;</span>message) {
 <a href=#204 id=204 data-nosnippet>204</a>            <span class="kw">let </span>id = <span class="macro">format!</span>(<span class="string">"call-{}"</span>, Uuid::new_v4());
 <a href=#205 id=205 data-nosnippet>205</a>            <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[ToolCallResponse {
-<a href=#206 id=206 data-nosnippet>206</a>                id,
-<a href=#207 id=207 data-nosnippet>207</a>                tp: ToolCallType::Function,
-<a href=#208 id=208 data-nosnippet>208</a>                function: CalledFunction {
-<a href=#209 id=209 data-nosnippet>209</a>                    name: deser.name,
-<a href=#210 id=210 data-nosnippet>210</a>                    arguments: serde_json::to_string(<span class="kw-2">&amp;</span>deser.parameters)<span class="question-mark">?</span>,
-<a href=#211 id=211 data-nosnippet>211</a>                },
-<a href=#212 id=212 data-nosnippet>212</a>            }])
-<a href=#213 id=213 data-nosnippet>213</a>        } <span class="kw">else if let </span><span class="prelude-val">Ok</span>(deser) = serde_json::from_str::&lt;Vec&lt;CalledFunctionParameters&gt;&gt;(<span class="kw-2">&amp;</span>message) {
-<a href=#214 id=214 data-nosnippet>214</a>            <span class="prelude-val">Ok</span>(deser
-<a href=#215 id=215 data-nosnippet>215</a>                .into_iter()
-<a href=#216 id=216 data-nosnippet>216</a>                .map(|deser| {
-<a href=#217 id=217 data-nosnippet>217</a>                    <span class="kw">let </span>id = <span class="macro">format!</span>(<span class="string">"call-{}"</span>, Uuid::new_v4());
-<a href=#218 id=218 data-nosnippet>218</a>                    <span class="prelude-val">Ok</span>(ToolCallResponse {
-<a href=#219 id=219 data-nosnippet>219</a>                        id,
-<a href=#220 id=220 data-nosnippet>220</a>                        tp: ToolCallType::Function,
-<a href=#221 id=221 data-nosnippet>221</a>                        function: CalledFunction {
-<a href=#222 id=222 data-nosnippet>222</a>                            name: deser.name,
-<a href=#223 id=223 data-nosnippet>223</a>                            arguments: serde_json::to_string(<span class="kw-2">&amp;</span>deser.parameters)<span class="question-mark">?</span>,
-<a href=#224 id=224 data-nosnippet>224</a>                        },
-<a href=#225 id=225 data-nosnippet>225</a>                    })
-<a href=#226 id=226 data-nosnippet>226</a>                })
-<a href=#227 id=227 data-nosnippet>227</a>                .collect::&lt;anyhow::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>)
-<a href=#228 id=228 data-nosnippet>228</a>        } <span class="kw">else </span>{
-<a href=#229 id=229 data-nosnippet>229</a>            <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.tool_choice, ToolChoice::Tool(<span class="kw">_</span>)) {
-<a href=#230 id=230 data-nosnippet>230</a>                <span class="macro">anyhow::bail!</span>(<span class="string">"Tool choice was required but no tools were called."</span>)
-<a href=#231 id=231 data-nosnippet>231</a>            }
-<a href=#232 id=232 data-nosnippet>232</a>            <span class="prelude-val">Ok</span>(Vec::new())
-<a href=#233 id=233 data-nosnippet>233</a>        }
-<a href=#234 id=234 data-nosnippet>234</a>    }
-<a href=#235 id=235 data-nosnippet>235</a>}
-<a href=#236 id=236 data-nosnippet>236</a>
-<a href=#237 id=237 data-nosnippet>237</a><span class="doccomment">/// Checks if the given prefix could be the start of, or the entire JSON serialization of a given type, `T`.
-<a href=#238 id=238 data-nosnippet>238</a>///
-<a href=#239 id=239 data-nosnippet>239</a>/// Returns a tuple of `(could_be_tool, is_entire_tool)`.
-<a href=#240 id=240 data-nosnippet>240</a></span><span class="kw">fn </span>could_be_json&lt;T&gt;(text_prefix: <span class="kw-2">&amp;</span>str) -&gt; (bool, bool)
-<a href=#241 id=241 data-nosnippet>241</a><span class="kw">where
-<a href=#242 id=242 data-nosnippet>242</a>    </span>T: serde::de::DeserializeOwned,
-<a href=#243 id=243 data-nosnippet>243</a>{
-<a href=#244 id=244 data-nosnippet>244</a>    <span class="kw">if </span>text_prefix.is_empty() {
-<a href=#245 id=245 data-nosnippet>245</a>        <span class="kw">return </span>(<span class="bool-val">false</span>, <span class="bool-val">false</span>);
-<a href=#246 id=246 data-nosnippet>246</a>    }
-<a href=#247 id=247 data-nosnippet>247</a>    <span class="kw">match </span>serde_json::from_str::&lt;T&gt;(text_prefix) {
-<a href=#248 id=248 data-nosnippet>248</a>        <span class="prelude-val">Ok</span>(<span class="kw">_</span>) =&gt; (<span class="bool-val">false</span>, <span class="bool-val">true</span>),
-<a href=#249 id=249 data-nosnippet>249</a>        <span class="comment">// EOF show that JSON parsing was successful up to the end of the entire string.
-<a href=#250 id=250 data-nosnippet>250</a>        </span><span class="prelude-val">Err</span>(e) <span class="kw">if </span>e.is_eof() =&gt; (<span class="bool-val">true</span>, <span class="bool-val">false</span>),
-<a href=#251 id=251 data-nosnippet>251</a>        <span class="kw">_ </span>=&gt; (<span class="bool-val">false</span>, <span class="bool-val">false</span>),
-<a href=#252 id=252 data-nosnippet>252</a>    }
-<a href=#253 id=253 data-nosnippet>253</a>}
-<a href=#254 id=254 data-nosnippet>254</a>
-<a href=#255 id=255 data-nosnippet>255</a><span class="doccomment">/// Takes raw UTf8 text and parses any possible tool calls from it.
-<a href=#256 id=256 data-nosnippet>256</a></span><span class="kw">pub fn </span>parse_text_tools&lt;<span class="lifetime">'a</span>&gt;(
-<a href=#257 id=257 data-nosnippet>257</a>    pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
-<a href=#258 id=258 data-nosnippet>258</a>    raw_text: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>str,
-<a href=#259 id=259 data-nosnippet>259</a>    matcher: <span class="prelude-ty">Option</span>&lt;Arc&lt;ToolCallingMatcher&gt;&gt;,
-<a href=#260 id=260 data-nosnippet>260</a>) -&gt; anyhow::Result&lt;(<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'a </span>str&gt;, Vec&lt;ToolCallResponse&gt;)&gt; {
-<a href=#261 id=261 data-nosnippet>261</a>    <span class="kw">let </span><span class="kw-2">mut </span>tool_calls = Vec::new();
-<a href=#262 id=262 data-nosnippet>262</a>    <span class="kw">let </span><span class="kw-2">mut </span>text_new = <span class="prelude-val">Some</span>(raw_text);
-<a href=#263 id=263 data-nosnippet>263</a>
-<a href=#264 id=264 data-nosnippet>264</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>matcher) = matcher {
-<a href=#265 id=265 data-nosnippet>265</a>        <span class="kw">let </span>calls = matcher
-<a href=#266 id=266 data-nosnippet>266</a>            .get_call(pipeline, raw_text)
-<a href=#267 id=267 data-nosnippet>267</a>            .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
-<a href=#268 id=268 data-nosnippet>268</a>        <span class="kw">if </span>!calls.is_empty() {
-<a href=#269 id=269 data-nosnippet>269</a>            text_new = <span class="prelude-val">None</span>;
-<a href=#270 id=270 data-nosnippet>270</a>            tool_calls = calls;
-<a href=#271 id=271 data-nosnippet>271</a>        }
-<a href=#272 id=272 data-nosnippet>272</a>    };
-<a href=#273 id=273 data-nosnippet>273</a>    <span class="prelude-val">Ok</span>((text_new, tool_calls))
-<a href=#274 id=274 data-nosnippet>274</a>}</code></pre></div></section></main></body></html>
+<a href=#206 id=206 data-nosnippet>206</a>                index: <span class="number">0</span>,
+<a href=#207 id=207 data-nosnippet>207</a>                id,
+<a href=#208 id=208 data-nosnippet>208</a>                tp: ToolCallType::Function,
+<a href=#209 id=209 data-nosnippet>209</a>                function: CalledFunction {
+<a href=#210 id=210 data-nosnippet>210</a>                    name: deser.name,
+<a href=#211 id=211 data-nosnippet>211</a>                    arguments: serde_json::to_string(<span class="kw-2">&amp;</span>deser.parameters)<span class="question-mark">?</span>,
+<a href=#212 id=212 data-nosnippet>212</a>                },
+<a href=#213 id=213 data-nosnippet>213</a>            }])
+<a href=#214 id=214 data-nosnippet>214</a>        } <span class="kw">else if let </span><span class="prelude-val">Ok</span>(deser) = serde_json::from_str::&lt;Vec&lt;CalledFunctionParameters&gt;&gt;(<span class="kw-2">&amp;</span>message) {
+<a href=#215 id=215 data-nosnippet>215</a>            <span class="prelude-val">Ok</span>(deser
+<a href=#216 id=216 data-nosnippet>216</a>                .into_iter()
+<a href=#217 id=217 data-nosnippet>217</a>                .enumerate()
+<a href=#218 id=218 data-nosnippet>218</a>                .map(|(idx, deser)| {
+<a href=#219 id=219 data-nosnippet>219</a>                    <span class="kw">let </span>id = <span class="macro">format!</span>(<span class="string">"call-{}"</span>, Uuid::new_v4());
+<a href=#220 id=220 data-nosnippet>220</a>                    <span class="prelude-val">Ok</span>(ToolCallResponse {
+<a href=#221 id=221 data-nosnippet>221</a>                        index: idx,
+<a href=#222 id=222 data-nosnippet>222</a>                        id,
+<a href=#223 id=223 data-nosnippet>223</a>                        tp: ToolCallType::Function,
+<a href=#224 id=224 data-nosnippet>224</a>                        function: CalledFunction {
+<a href=#225 id=225 data-nosnippet>225</a>                            name: deser.name,
+<a href=#226 id=226 data-nosnippet>226</a>                            arguments: serde_json::to_string(<span class="kw-2">&amp;</span>deser.parameters)<span class="question-mark">?</span>,
+<a href=#227 id=227 data-nosnippet>227</a>                        },
+<a href=#228 id=228 data-nosnippet>228</a>                    })
+<a href=#229 id=229 data-nosnippet>229</a>                })
+<a href=#230 id=230 data-nosnippet>230</a>                .collect::&lt;anyhow::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>)
+<a href=#231 id=231 data-nosnippet>231</a>        } <span class="kw">else </span>{
+<a href=#232 id=232 data-nosnippet>232</a>            <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.tool_choice, ToolChoice::Tool(<span class="kw">_</span>)) {
+<a href=#233 id=233 data-nosnippet>233</a>                <span class="macro">anyhow::bail!</span>(<span class="string">"Tool choice was required but no tools were called."</span>)
+<a href=#234 id=234 data-nosnippet>234</a>            }
+<a href=#235 id=235 data-nosnippet>235</a>            <span class="prelude-val">Ok</span>(Vec::new())
+<a href=#236 id=236 data-nosnippet>236</a>        }
+<a href=#237 id=237 data-nosnippet>237</a>    }
+<a href=#238 id=238 data-nosnippet>238</a>}
+<a href=#239 id=239 data-nosnippet>239</a>
+<a href=#240 id=240 data-nosnippet>240</a><span class="doccomment">/// Checks if the given prefix could be the start of, or the entire JSON serialization of a given type, `T`.
+<a href=#241 id=241 data-nosnippet>241</a>///
+<a href=#242 id=242 data-nosnippet>242</a>/// Returns a tuple of `(could_be_tool, is_entire_tool)`.
+<a href=#243 id=243 data-nosnippet>243</a></span><span class="kw">fn </span>could_be_json&lt;T&gt;(text_prefix: <span class="kw-2">&amp;</span>str) -&gt; (bool, bool)
+<a href=#244 id=244 data-nosnippet>244</a><span class="kw">where
+<a href=#245 id=245 data-nosnippet>245</a>    </span>T: serde::de::DeserializeOwned,
+<a href=#246 id=246 data-nosnippet>246</a>{
+<a href=#247 id=247 data-nosnippet>247</a>    <span class="kw">if </span>text_prefix.is_empty() {
+<a href=#248 id=248 data-nosnippet>248</a>        <span class="kw">return </span>(<span class="bool-val">false</span>, <span class="bool-val">false</span>);
+<a href=#249 id=249 data-nosnippet>249</a>    }
+<a href=#250 id=250 data-nosnippet>250</a>    <span class="kw">match </span>serde_json::from_str::&lt;T&gt;(text_prefix) {
+<a href=#251 id=251 data-nosnippet>251</a>        <span class="prelude-val">Ok</span>(<span class="kw">_</span>) =&gt; (<span class="bool-val">false</span>, <span class="bool-val">true</span>),
+<a href=#252 id=252 data-nosnippet>252</a>        <span class="comment">// EOF show that JSON parsing was successful up to the end of the entire string.
+<a href=#253 id=253 data-nosnippet>253</a>        </span><span class="prelude-val">Err</span>(e) <span class="kw">if </span>e.is_eof() =&gt; (<span class="bool-val">true</span>, <span class="bool-val">false</span>),
+<a href=#254 id=254 data-nosnippet>254</a>        <span class="kw">_ </span>=&gt; (<span class="bool-val">false</span>, <span class="bool-val">false</span>),
+<a href=#255 id=255 data-nosnippet>255</a>    }
+<a href=#256 id=256 data-nosnippet>256</a>}
+<a href=#257 id=257 data-nosnippet>257</a>
+<a href=#258 id=258 data-nosnippet>258</a><span class="doccomment">/// Takes raw UTf8 text and parses any possible tool calls from it.
+<a href=#259 id=259 data-nosnippet>259</a></span><span class="kw">pub fn </span>parse_text_tools&lt;<span class="lifetime">'a</span>&gt;(
+<a href=#260 id=260 data-nosnippet>260</a>    pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
+<a href=#261 id=261 data-nosnippet>261</a>    raw_text: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>str,
+<a href=#262 id=262 data-nosnippet>262</a>    matcher: <span class="prelude-ty">Option</span>&lt;Arc&lt;ToolCallingMatcher&gt;&gt;,
+<a href=#263 id=263 data-nosnippet>263</a>) -&gt; anyhow::Result&lt;(<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'a </span>str&gt;, Vec&lt;ToolCallResponse&gt;)&gt; {
+<a href=#264 id=264 data-nosnippet>264</a>    <span class="kw">let </span><span class="kw-2">mut </span>tool_calls = Vec::new();
+<a href=#265 id=265 data-nosnippet>265</a>    <span class="kw">let </span><span class="kw-2">mut </span>text_new = <span class="prelude-val">Some</span>(raw_text);
+<a href=#266 id=266 data-nosnippet>266</a>
+<a href=#267 id=267 data-nosnippet>267</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>matcher) = matcher {
+<a href=#268 id=268 data-nosnippet>268</a>        <span class="kw">let </span>calls = matcher
+<a href=#269 id=269 data-nosnippet>269</a>            .get_call(pipeline, raw_text)
+<a href=#270 id=270 data-nosnippet>270</a>            .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+<a href=#271 id=271 data-nosnippet>271</a>        <span class="kw">if </span>!calls.is_empty() {
+<a href=#272 id=272 data-nosnippet>272</a>            text_new = <span class="prelude-val">None</span>;
+<a href=#273 id=273 data-nosnippet>273</a>            tool_calls = calls;
+<a href=#274 id=274 data-nosnippet>274</a>        }
+<a href=#275 id=275 data-nosnippet>275</a>    };
+<a href=#276 id=276 data-nosnippet>276</a>    <span class="prelude-val">Ok</span>((text_new, tool_calls))
+<a href=#277 id=277 data-nosnippet>277</a>}</code></pre></div></section></main></body></html>
