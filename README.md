@@ -194,8 +194,8 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
    - ⭐ [MCP client](examples/MCP_QUICK_START.md) to connect to external tools and services automatically
 
 2. **Performance**
-   - CPU acceleration (MKL, AVX, [NEON](docs/DEVICE_MAPPING.md#arm-neon), [Accelerate](docs/DEVICE_MAPPING.md#apple-accelerate))
-   - GPU acceleration ([CUDA](docs/HTTP.md#cuda-support) with [FlashAttention](docs/FLASH_ATTENTION.md) & [cuDNN](docs/HTTP.md#cudnn-support), [Metal](docs/HTTP.md#apple-silicon-support))
+   - CPU acceleration (MKL, AVX, NEON, Accelerate)
+   - GPU acceleration (CUDA with [FlashAttention](docs/FLASH_ATTENTION.md) & cuDNN, Metal)
    - Automatic [tensor parallelism](docs/DISTRIBUTED/DISTRIBUTED.md) for splitting models across multiple devices
      - CUDA-specialized [NCCL](docs/DISTRIBUTED/NCCL.md)
      - Heterogeneous, flexible [Ring backend](docs/DISTRIBUTED/RING.md)
@@ -203,7 +203,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 3. **Quantization**
    - [In-place quantization (ISQ)](docs/ISQ.md) of Hugging Face models
    - [GGML & GGUF support](docs/QUANTS.md): 2–8 bit
-   - [GPTQ](docs/QUANTS.md), [AWQ](scripts/convert_awq_marlin.py), [AFQ](docs/QUANTS.md#afq), [HQQ](docs/QUANTS.md#hqq), [FP8](docs/QUANTS.md), [BNB](https://github.com/TimDettmers/bitsandbytes) (int8/fp4/nf4)
+   - [GPTQ](docs/QUANTS.md), [AWQ](scripts/convert_awq_marlin.py), [AFQ](docs/QUANTS.md), [HQQ](docs/QUANTS.md), [FP8](docs/QUANTS.md), [BNB](https://github.com/TimDettmers/bitsandbytes) (int8/fp4/nf4)
    - ⭐ Auto-select the fastest quant method
    - [KV cache quantization](docs/PAGED_ATTENTION.md#kv-cache-quantization)
 
@@ -219,7 +219,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
    - Prefix caching (including multimodal)
    - Customizable quantization with [topology](docs/TOPOLOGY.md) & [UQFF format](docs/UQFF.md)
    - Speculative decoding across models
-   - ⭐ Agentic [web search integration](docs/TOOL_CALLING.md#agentic-web-search)
+   - ⭐ Agentic [web search integration](docs/WEB_SEARCH.md)
 
 ## APIs and Integrations
 
@@ -247,20 +247,20 @@ Python API for mistral.rs.
 OpenAI API compatible API server
 
 - [API Docs](docs/HTTP.md)
-- [Launching the server or use the CLI](README.md#run-with-the-cli)
+- [Launching the server or use the CLI](README.md#using-the-cli)
 - [Example](examples/server/chat.py)
 - [Use or extend the server in other axum projects](https://ericlbuehler.github.io/mistral.rs/mistralrs_server_core/)
 - **MCP Client**: Configure via `--mcp-config` flag for automatic tool integration - [Quick Start](examples/MCP_QUICK_START.md)
 
 ### MCP Protocol
 
-Serve the same models over the open [MCP](docs/MCP_SERVER.md) (Model Control Protocol) in parallel to the HTTP API:
+Serve the same models over the open [MCP](docs/mcp/server.md) (Model Context Protocol) in parallel to the HTTP API:
 
 ```bash
 ./mistralrs-server --mcp-port 4321 plain -m Qwen/Qwen3-4B
 ```
 
-See the [docs](docs/MCP_SERVER.md) for feature flags, examples and limitations.
+See the [docs](docs/mcp/server.md) for feature flags, examples and limitations.
 
 
 ### Llama Index integration

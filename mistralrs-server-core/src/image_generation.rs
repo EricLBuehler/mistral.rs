@@ -21,6 +21,7 @@ use crate::{
     },
     openai::ImageGenerationRequest,
     types::{ExtractedMistralRsState, SharedMistralRsState},
+    util::validate_model_name,
 };
 
 /// Represents different types of image generation responses.
@@ -56,6 +57,9 @@ pub fn parse_request(
 ) -> Result<Request> {
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
+
+    // Validate that the requested model matches the loaded model
+    validate_model_name(&oairequest.model, state.clone())?;
 
     Ok(Request::Normal(Box::new(NormalRequest {
         id: state.next_request_id(),

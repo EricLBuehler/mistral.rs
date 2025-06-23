@@ -36,7 +36,7 @@ use crate::{
     },
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
-    util::{parse_audio_url, parse_image_url},
+    util::{parse_audio_url, parse_image_url, validate_model_name},
 };
 
 /// A callback function that processes streaming response chunks before they are sent to the client.
@@ -201,6 +201,9 @@ pub async fn parse_request(
 ) -> Result<(Request, bool)> {
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
+
+    // Validate that the requested model matches the loaded model
+    validate_model_name(&oairequest.model, state.clone())?;
 
     let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
 

@@ -6,6 +6,8 @@ use tokio::{
     fs::{self, File},
     io::AsyncReadExt,
 };
+use std::sync::Arc;
+use mistralrs_core::MistralRs;
 
 /// Parses and loads an image from a URL, file path, or data URL.
 ///
@@ -119,6 +121,40 @@ pub async fn parse_audio_url(url_unparsed: &str) -> Result<AudioInput, anyhow::E
     };
 
     AudioInput::from_bytes(&bytes)
+}
+
+/// Validates that the requested model matches the loaded model.
+///
+/// This function checks if the model parameter from an OpenAI API request
+/// matches the model name that was actually loaded by the server.
+///
+/// ### Arguments
+///
+/// * `requested_model` - The model name from the API request
+/// * `state` - The MistralRs state containing the loaded model info
+///
+/// ### Returns
+///
+/// Returns `Ok(())` if the models match, otherwise returns an error.
+///
+/// ### Examples
+///
+/// ```ignore
+/// use mistralrs_server_core::util::validate_model_name;
+///
+/// // This will succeed if the requested model matches the loaded one
+/// validate_model_name("mistral-7b", &state)?;
+/// ```
+pub fn validate_model_name(requested_model: &str, state: Arc<MistralRs>) -> Result<(), anyhow::Error> {
+    let loaded_model = state.get_id();
+    if requested_model != loaded_model {
+        anyhow::bail!(
+            "Requested model '{}' does not match loaded model '{}'. Only the loaded model is available.",
+            requested_model,
+            loaded_model
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
