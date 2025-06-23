@@ -868,7 +868,7 @@
 <a href=#868 id=868 data-nosnippet>868</a>
 <a href=#869 id=869 data-nosnippet>869</a>    <span class="kw">pub fn </span>set_state(<span class="kw-2">&amp;</span><span class="self">self</span>, state: SequenceState) {
 <a href=#870 id=870 data-nosnippet>870</a>        <span class="kw">if </span><span class="macro">matches!</span>(state, SequenceState::Error) {
-<a href=#871 id=871 data-nosnippet>871</a>            <span class="macro">get_mut_group!</span>(<span class="self">self</span>).n_choices -= <span class="number">1</span>;
+<a href=#871 id=871 data-nosnippet>871</a>            <span class="macro">get_mut_group!</span>(<span class="self">self</span>).n_choices = <span class="macro">get_mut_group!</span>(<span class="self">self</span>).n_choices.saturating_sub(<span class="number">1</span>);
 <a href=#872 id=872 data-nosnippet>872</a>        }
 <a href=#873 id=873 data-nosnippet>873</a>        <span class="kw-2">*</span><span class="self">self</span>.state.write().unwrap() = state;
 <a href=#874 id=874 data-nosnippet>874</a>    }
