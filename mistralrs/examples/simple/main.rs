@@ -1,12 +1,20 @@
 use anyhow::Result;
+use clap::Parser;
 use mistralrs::{
     IsqType, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, TextMessages,
     TextModelBuilder,
 };
 
+#[derive(Parser)]
+struct Args {
+    #[clap(long, default_value = "microsoft/Phi-3.5-mini-instruct")]
+    model_id: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+    let args = Args::parse();
+    let model = TextModelBuilder::new(&args.model_id)
         .with_isq(IsqType::Q8_0)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
@@ -31,7 +39,6 @@ async fn main() -> Result<()> {
         response.usage.avg_compl_tok_per_sec
     );
 
-    // Next example: Return some logprobs with the `RequestBuilder`, which enables higher configurability.
     let request = RequestBuilder::new().return_logprobs(true).add_message(
         TextMessageRole::User,
         "Please write a mathematical equation where a few numbers are added.",

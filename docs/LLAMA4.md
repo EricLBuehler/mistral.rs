@@ -24,7 +24,7 @@ The Python and HTTP APIs support sending images as:
 The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
 ## HTTP server
-You can find this example [here](../examples/server/llama4.py).
+You can find this example [here](../examples/server/vision_chat.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -116,7 +116,7 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/llama4/main.rs).
+You can find this example [here](../mistralrs/examples/vision_chat/main.rs).
 
 This is a minimal example of running the Llama 4 model with a dummy image.
 
@@ -162,7 +162,7 @@ async fn main() -> Result<()> {
 ```
 
 ## Python
-You can find this example [here](../examples/python/llama4.py).
+You can find this example [here](../examples/python/vision_chat.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
