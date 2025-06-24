@@ -1,0 +1,73 @@
+[
+  {
+    "model_id": "llama3-3b-instruct",
+    "model": {
+      "Plain": {
+        "model_id": "meta-llama/Llama-3.2-3B-Instruct"
+      }
+    },
+    "in_situ_quant": "4"
+  },
+  {
+    "model_id": "qwen3-4b",
+    "model": {
+      "Plain": {
+        "model_id": "Qwen/Qwen3-4B"
+      }
+    },
+    "num_device_layers": ["8"],
+    "in_situ_quant": "4"
+  },
+  {
+    "model_id": "qwen2-vl",
+    "model": {
+      "VisionPlain": {
+        "model_id": "Qwen/Qwen2-VL-2B-Instruct"
+      }
+    }
+  },
+  {
+    "model_id": "gemma3-4b-vision",
+    "model": {
+      "VisionPlain": {
+        "model_id": "google/gemma-3-4b-it"
+      }
+    }
+  },
+  {
+    "model_id": "phi3-vision",
+    "model": {
+      "VisionPlain": {
+        "model_id": "microsoft/Phi-3-vision-128k-instruct"
+      }
+    }
+  },
+  {
+    "model_id": "llama-gguf-q4",
+    "model": {
+      "Gguf": {
+        "tok_model_id": null,
+        "quantized_model_id": "TheBloke/Llama-2-7b-Chat-GGUF",
+        "quantized_filename": "llama-2-7b-chat.Q4_K_M.gguf"
+      }
+    }
+  },
+  {
+    "model_id": "deepseek-coder",
+    "model": {
+      "Plain": {
+        "model_id": "deepseek-ai/deepseek-coder-1.3b-instruct"
+      }
+    },
+    "chat_template": "{%- if messages[0]['role'] == 'system' -%}{{ messages[0]['content'] }}\n{%- endif -%}{%- for message in messages -%}{%- if message['role'] == 'user' -%}### Instruction:\n{{ message['content'] }}\n\n### Response:\n{%- elif message['role'] == 'assistant' -%}{{ message['content'] }}\n{%- endif -%}{%- endfor -%}"
+  },
+  {
+    "model_id": "flux-schnell",
+    "model": {
+      "DiffusionPlain": {
+        "model_id": "black-forest-labs/FLUX.1-schnell",
+        "dtype": "bf16"
+      }
+    }
+  }
+]

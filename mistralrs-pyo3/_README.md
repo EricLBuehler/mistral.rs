@@ -12,7 +12,7 @@ runner = Runner(
     which=Which.Plain(
         model_id="microsoft/Phi-3.5-mini-instruct",
     ),
-    in_situ_quant="Q4K",
+    in_situ_quant="4",
 )
 
 res = runner.send_chat_completion_request(

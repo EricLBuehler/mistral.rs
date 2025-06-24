@@ -14,6 +14,57 @@ use mistralrs_core::{
 use tracing::{info, warn};
 
 use crate::types::{LoadedPipeline, SharedMistralRsState};
+use std::collections::HashMap;
+
+/// Configuration for a single model in a multi-model setup
+#[derive(Clone, serde::Deserialize)]
+pub struct ModelConfig {
+    /// Model identifier (used in API requests)
+    pub model_id: String,
+    /// Model selector
+    pub model: ModelSelected,
+    /// Model-specific chat template
+    pub chat_template: Option<String>,
+    /// Model-specific JINJA template
+    pub jinja_explicit: Option<String>,
+    /// Model-specific device layers
+    pub num_device_layers: Option<Vec<String>>,
+    /// Model-specific in-situ quantization
+    pub in_situ_quant: Option<String>,
+}
+
+impl ModelConfig {
+    pub fn new(model_id: String, model: ModelSelected) -> Self {
+        Self {
+            model_id,
+            model,
+            chat_template: None,
+            jinja_explicit: None,
+            num_device_layers: None,
+            in_situ_quant: None,
+        }
+    }
+
+    pub fn with_chat_template(mut self, chat_template: String) -> Self {
+        self.chat_template = Some(chat_template);
+        self
+    }
+
+    pub fn with_jinja_explicit(mut self, jinja_explicit: String) -> Self {
+        self.jinja_explicit = Some(jinja_explicit);
+        self
+    }
+
+    pub fn with_num_device_layers(mut self, num_device_layers: Vec<String>) -> Self {
+        self.num_device_layers = Some(num_device_layers);
+        self
+    }
+
+    pub fn with_in_situ_quant(mut self, in_situ_quant: String) -> Self {
+        self.in_situ_quant = Some(in_situ_quant);
+        self
+    }
+}
 
 pub mod defaults {
     //! Provides the default values used for the mistral.rs instance for server.
@@ -103,8 +154,14 @@ pub struct MistralRsForServerBuilder {
     /// If `max_tokens` is not specified in the request, space for 10 tokens will be reserved instead.
     truncate_sequence: bool,
 
-    /// Model selector
+    /// Model selector (for single-model mode, deprecated in favor of models)
     model: Option<ModelSelected>,
+
+    /// Multiple model configurations (for multi-model mode)
+    models: Vec<ModelConfig>,
+
+    /// Default model ID to use when none is specified in requests
+    default_model_id: Option<String>,
 
     /// Maximum running sequences at any time. If the `tgt_non_granular_index` flag is set for X-LoRA models, this will be set to 1.
     max_seqs: usize,
@@ -194,6 +251,8 @@ impl Default for MistralRsForServerBuilder {
             log: defaults::LOG,
             truncate_sequence: defaults::TRUNCATE_SEQUENCE,
             model: defaults::MODEL,
+            models: Vec::new(),
+            default_model_id: None,
             max_seqs: defaults::MAX_SEQS,
             no_kv_cache: defaults::NO_KV_CACHE,
             chat_template: defaults::CHAT_TEMPLATE,
@@ -278,6 +337,36 @@ impl MistralRsForServerBuilder {
     /// Sets the model to be used.
     pub fn with_model(mut self, model: ModelSelected) -> Self {
         self.model = Some(model);
+        self
+    }
+
+    /// Add a model to the multi-model configuration.
+    pub fn with_model_config(mut self, model_config: ModelConfig) -> Self {
+        self.models.push(model_config);
+        self
+    }
+
+    /// Add multiple models to the multi-model configuration.
+    pub fn with_model_configs(mut self, model_configs: Vec<ModelConfig>) -> Self {
+        self.models.extend(model_configs);
+        self
+    }
+
+    /// Set the default model ID to use when none is specified in requests.
+    pub fn with_default_model_id(mut self, default_model_id: String) -> Self {
+        self.default_model_id = Some(default_model_id);
+        self
+    }
+
+    /// Add a model configuration.
+    pub fn add_model_config(mut self, config: ModelConfig) -> Self {
+        self.models.push(config);
+        self
+    }
+
+    /// Add a model with just an ID and ModelSelected (convenience method).
+    pub fn add_model(mut self, model_id: String, model: ModelSelected) -> Self {
+        self.models.push(ModelConfig::new(model_id, model));
         self
     }
 
@@ -518,7 +607,17 @@ impl MistralRsForServerBuilder {
     ///     .build()
     ///     .await?;
     /// ```
-    pub async fn build(mut self) -> Result<SharedMistralRsState> {
+    pub async fn build(self) -> Result<SharedMistralRsState> {
+        // Determine if we're in single-model or multi-model mode
+        if !self.models.is_empty() {
+            self.build_multi_model().await
+        } else {
+            self.build_single_model().await
+        }
+    }
+
+    /// Build a single-model instance (legacy mode)
+    async fn build_single_model(mut self) -> Result<SharedMistralRsState> {
         let model = self.model.context("Model was None")?;
 
         let tgt_non_granular_index = get_tgt_non_granular_index(&model);
@@ -609,6 +708,249 @@ impl MistralRsForServerBuilder {
 
         let mistralrs = builder.build().await;
 
+        Ok(mistralrs)
+    }
+
+    /// Build a multi-model instance
+    pub async fn build_multi_model(mut self) -> Result<SharedMistralRsState> {
+        if self.models.is_empty() {
+            anyhow::bail!("No models configured for multi-model mode");
+        }
+
+        // Use the first model as the base configuration
+        let first_model = &self.models[0];
+        let model = first_model.model.clone();
+
+        let tgt_non_granular_index = get_tgt_non_granular_index(&model);
+        let dtype = get_model_dtype(&model)?;
+        let auto_device_map_params = get_auto_device_map_params(&model)?;
+
+        if tgt_non_granular_index.is_some() {
+            self.max_seqs = 1;
+        }
+
+        let prompt_chunksize = match self.prompt_chunksize {
+            Some(0) => {
+                anyhow::bail!("`prompt_chunksize` must be a strictly positive integer, got 0.",)
+            }
+            Some(x) => Some(NonZeroUsize::new(x).unwrap()),
+            None => None,
+        };
+
+        let max_seq_len = auto_device_map_params.max_seq_len();
+
+        let device = if let Some(device) = self.device {
+            device
+        } else {
+            init_device(self.cpu, self.seed)?
+        };
+
+        // Create the first model's pipeline
+        let loader: Box<dyn Loader> = LoaderBuilder::new(model)
+            .with_no_kv_cache(self.no_kv_cache)
+            .with_chat_template(
+                first_model
+                    .chat_template
+                    .clone()
+                    .or(self.chat_template.clone()),
+            )
+            .with_prompt_chunksize(prompt_chunksize)
+            .with_jinja_explicit(
+                first_model
+                    .jinja_explicit
+                    .clone()
+                    .or(self.jinja_explicit.clone()),
+            )
+            .build()?;
+
+        mistralrs_instance_info(&*loader);
+
+        let mapper = init_mapper(
+            &first_model
+                .num_device_layers
+                .clone()
+                .or(self.num_device_layers.clone()),
+            &auto_device_map_params,
+        );
+        let paged_attn = configure_paged_attn(&device, self.paged_attn);
+
+        let cache_config = init_cache_config(
+            self.paged_attn_block_size,
+            self.paged_attn_gpu_mem,
+            self.paged_attn_gpu_mem_usage,
+            self.paged_ctxt_len,
+            self.paged_cache_type,
+            !paged_attn,
+            max_seq_len,
+        )?;
+
+        let isq = first_model
+            .in_situ_quant
+            .as_ref()
+            .or(self.in_situ_quant.as_ref())
+            .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
+
+        let mut pipeline_names = Vec::new();
+
+        let pipeline: LoadedPipeline = loader.load_model_from_hf(
+            None,
+            self.token_source.clone(),
+            &dtype,
+            &device,
+            false,
+            mapper,
+            isq,
+            cache_config,
+        )?;
+        let first_pipeline_name = pipeline.lock().await.name();
+        info!(
+            "First model loaded: `{first_pipeline_name}` (from config key: {})",
+            first_model.model_id
+        );
+        pipeline_names.push(first_pipeline_name);
+
+        let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
+        let bert_model = get_bert_model(self.enable_search, self.search_bert_model);
+
+        // Create the first MistralRs instance with the first model
+        let mut builder = MistralRsBuilder::new(
+            pipeline,
+            scheduler_config.clone(),
+            !self.interactive_mode,
+            bert_model.clone(),
+        )
+        .with_opt_log(self.log.clone())
+        .with_truncate_sequence(self.truncate_sequence)
+        .with_no_kv_cache(self.no_kv_cache)
+        .with_prefix_cache_n(self.prefix_cache_n);
+
+        // Add MCP client configuration if provided
+        if let Some(mcp_config) = self.mcp_client_config.clone() {
+            builder = builder.with_mcp_client(mcp_config);
+        }
+
+        let mistralrs = builder.build().await;
+
+        // Load additional models
+        for model_config in self.models.iter().skip(1) {
+            info!(
+                "Loading additional model from config key: {}",
+                model_config.model_id
+            );
+
+            let model = model_config.model.clone();
+            let dtype = get_model_dtype(&model)?;
+            let auto_device_map_params = get_auto_device_map_params(&model)?;
+
+            let loader: Box<dyn Loader> = LoaderBuilder::new(model)
+                .with_no_kv_cache(self.no_kv_cache)
+                .with_chat_template(
+                    model_config
+                        .chat_template
+                        .clone()
+                        .or(self.chat_template.clone()),
+                )
+                .with_prompt_chunksize(prompt_chunksize)
+                .with_jinja_explicit(
+                    model_config
+                        .jinja_explicit
+                        .clone()
+                        .or(self.jinja_explicit.clone()),
+                )
+                .build()?;
+
+            let mapper = init_mapper(
+                &model_config
+                    .num_device_layers
+                    .clone()
+                    .or(self.num_device_layers.clone()),
+                &auto_device_map_params,
+            );
+
+            let isq = model_config
+                .in_situ_quant
+                .as_ref()
+                .or(self.in_situ_quant.as_ref())
+                .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
+
+            let pipeline: LoadedPipeline = loader.load_model_from_hf(
+                None,
+                self.token_source.clone(),
+                &dtype,
+                &device,
+                false,
+                mapper,
+                isq,
+                cache_config,
+            )?;
+
+            // Use the pipeline's name() as the model ID
+            let pipeline_name = pipeline.lock().await.name();
+
+            // Check for model ID conflicts
+            if pipeline_names.contains(&pipeline_name) {
+                anyhow::bail!(
+                    "Model ID conflict: '{}' is already registered. Models from config keys '{}' and previous models have the same pipeline identifier.",
+                    pipeline_name,
+                    model_config.model_id
+                );
+            }
+
+            // Add the model to the MistralRs instance
+            let engine_config = mistralrs_core::EngineConfig {
+                truncate_sequence: self.truncate_sequence,
+                no_kv_cache: self.no_kv_cache,
+                no_prefix_cache: false,
+                prefix_cache_n: self.prefix_cache_n,
+                disable_eos_stop: false,
+                throughput_logging_enabled: !self.interactive_mode,
+                search_embedding_model: bert_model.clone(),
+                search_callback: self.search_callback.clone(),
+                tool_callbacks: HashMap::new(),
+                tool_callbacks_with_tools: HashMap::new(),
+            };
+
+            let mut add_model_config = mistralrs_core::AddModelConfig::new(engine_config);
+            if let Some(mcp_config) = self.mcp_client_config.clone() {
+                add_model_config = add_model_config.with_mcp_config(mcp_config);
+            }
+
+            mistralrs
+                .add_model(
+                    pipeline_name.clone(),
+                    pipeline,
+                    scheduler_config.clone(),
+                    add_model_config,
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to add model {}: {}", pipeline_name, e))?;
+
+            info!(
+                "Model `{pipeline_name}` registered successfully (from config key: {})",
+                model_config.model_id
+            );
+            pipeline_names.push(pipeline_name);
+        }
+
+        // Set the default model if specified
+        if let Some(ref default_model_id) = self.default_model_id {
+            mistralrs
+                .set_default_model_id(default_model_id)
+                .map_err(|e| anyhow::anyhow!("Failed to set default model: {}", e))?;
+        }
+
+        // Log all models loaded
+        info!("All models loaded: `{}`", pipeline_names.join("`, `"));
+
+        // Log default model
+        if let Some(ref default_id) = self.default_model_id {
+            info!("Default model: {}", default_id);
+        } else {
+            info!(
+                "Default model: {} (first model, from config key: {})",
+                pipeline_names[0], self.models[0].model_id
+            );
+        }
         Ok(mistralrs)
     }
 }

@@ -53,7 +53,7 @@ Add the `--pa-gpu-mem`/`--pa-gpu-mem-usage` and `--pa-blk-size` parameters befor
 To enable KV cache quantization, use the `--pa-cache-type` parameter with either `auto` (default) or `f8e4m3`.
 
 ```
-cargo run --release --features cuda -- -i --pa-gpu-mem 8192 --pa-blk-size 32 --isq Q4K plain -m microsoft/Phi-3-mini-128k-instruct
+cargo run --release --features cuda -- -i --pa-gpu-mem 8192 --pa-blk-size 32 --isq 4 plain -m microsoft/Phi-3-mini-128k-instruct
 ```
 
 ```

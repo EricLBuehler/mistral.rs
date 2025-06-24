@@ -18,7 +18,7 @@ To use this, simply specify the calibration data file in the various APIs as det
 
 ## With the CLI
 ```
-./mistralrs-server -i --isq Q4K plain -m meta-llama/Llama-3.2-3B-Instruct --calibration-file calibration_data/calibration_datav3_small.txt
+./mistralrs-server -i --isq 4 plain -m meta-llama/Llama-3.2-3B-Instruct --calibration-file calibration_data/calibration_datav3_small.txt
 ```
 
 ## With the Rust API
@@ -43,6 +43,6 @@ runner = Runner(
         model_id="meta-llama/Llama-3.2-3B-Instruct",
         calibration_file="calibration_data/calibration_datav3_small.txt"
     ),
-    in_situ_quant="Q4K",
+    in_situ_quant="4",
 )
 ```

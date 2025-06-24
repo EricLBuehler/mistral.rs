@@ -17,7 +17,7 @@ The Mistral Small 3.1 model itself does not come with the correct JINJA chat tem
 tool calling with Mistral Small 3.1, and you can use it by specifying the `jinja_explicit` parameter in the various APIs. For example:
 
 ```bash
-./mistralrs-server --port 1234 --isq q4k --jinja-explicit chat_templates/mistral_small_tool_call.jinja vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503  
+./mistralrs-server --port 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503  
 ```
 
 
@@ -166,7 +166,7 @@ runner = Runner(
         model_id="mistralai/Mistral-Small-3.1-24B-Instruct-2503",
         arch=VisionArchitecture.Mistral3,
     ),
-    in_situ_quant="Q4K"
+    in_situ_quant="4"
 )
 
 res = runner.send_chat_completion_request(

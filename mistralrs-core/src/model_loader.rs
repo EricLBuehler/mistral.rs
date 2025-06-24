@@ -86,6 +86,9 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
             tgt_non_granular_index,
             ..
         } => *tgt_non_granular_index,
+        ModelSelected::MultiModel { .. } => {
+            panic!("MultiModel variant should not be used in model loading functions")
+        }
     }
 }
 
@@ -110,6 +113,9 @@ pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
                     .unwrap_or_else(|_| panic!("Could not load toml selector file at {file}")),
             )?;
             Ok(get_toml_selected_model_dtype(&selector))
+        }
+        ModelSelected::MultiModel { .. } => {
+            anyhow::bail!("MultiModel variant should not be used in model loading functions")
         }
     }
 }
@@ -209,6 +215,9 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
                     .unwrap_or_else(|_| panic!("Could not load toml selector file at {file}")),
             )?;
             get_toml_selected_model_device_map_params(&selector)
+        }
+        ModelSelected::MultiModel { .. } => {
+            anyhow::bail!("MultiModel variant should not be used in model loading functions")
         }
     }
 }
@@ -644,6 +653,9 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             )?,
         )
         .build(),
+        ModelSelected::MultiModel { .. } => {
+            anyhow::bail!("MultiModel variant should not be used in model loading functions")
+        }
     };
     Ok(loader)
 }

@@ -152,6 +152,7 @@ pub struct NormalRequest {
     pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
     pub return_raw_logits: bool,
     pub web_search_options: Option<WebSearchOptions>,
+    pub model_id: Option<String>,
 }
 
 impl NormalRequest {
@@ -177,6 +178,7 @@ impl NormalRequest {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            model_id: None,
         }
     }
 }

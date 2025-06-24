@@ -6,20 +6,20 @@ The DeepSeek V2 is a mixture of expert (MoE) model featuring ["Multi-head Latent
 - 64 routed experts (Lite model), 160 routed experts (full model)
 
 ```
-./mistralrs-server --isq Q4K -i plain -m deepseek-ai/DeepSeek-V2-Lite
+./mistralrs-server --isq 4 -i plain -m deepseek-ai/DeepSeek-V2-Lite
 ```
 
 > [!NOTE]
 > This model supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
 
 ```
-./mistralrs-server --isq Q4K -i plain -m deepseek-ai/DeepSeek-V2-Lite --organization moqe
+./mistralrs-server --isq 4 -i plain -m deepseek-ai/DeepSeek-V2-Lite --organization moqe
 ```
 
 ## HTTP API
 
 ```
-./mistralrs-server --isq Q4K --port 1234 plain -m deepseek-ai/DeepSeek-V2-Lite
+./mistralrs-server --isq 4 --port 1234 plain -m deepseek-ai/DeepSeek-V2-Lite
 ```
 
 ```py

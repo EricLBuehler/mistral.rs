@@ -6,9 +6,9 @@
 #include "cuda_compat.h"
 
 #ifdef USE_ROCM
-  #include "quantization/fp8/amd/quant_utils.cuh"
+#include "quantization/fp8/amd/quant_utils.cuh"
 #else
-  #include "quantization/fp8/nvidia/quant_utils.cuh"
+#include "quantization/fp8/nvidia/quant_utils.cuh"
 #endif
 
 #include <algorithm>
@@ -32,14 +32,14 @@ template <typename scalar_t, typename cache_t, vllm::Fp8KVCacheDataType kv_dt>
 __global__ void reshape_and_cache_kernel(
     const scalar_t *__restrict__ key,   // [num_tokens, num_heads, head_size]
     const scalar_t *__restrict__ value, // [num_tokens, num_heads, head_size]
-    cache_t *__restrict__ key_cache,   // [num_blocks, num_heads, head_size/x,
+    cache_t *__restrict__ key_cache,    // [num_blocks, num_heads, head_size/x,
                                         // block_size, x]
-    cache_t *__restrict__ value_cache, // [num_blocks, num_heads, head_size,
+    cache_t *__restrict__ value_cache,  // [num_blocks, num_heads, head_size,
                                         // block_size]
     const int64_t *__restrict__ slot_mapping, // [num_tokens]
     const int key_stride, const int value_stride, const int num_heads,
     const int head_size, const int block_size, const int x,
-    const float* k_scale, const float* v_scale) {
+    const float *k_scale, const float *v_scale) {
   const int64_t token_idx = blockIdx.x;
   const int64_t slot_idx = slot_mapping[token_idx];
   if (slot_idx < 0) {
@@ -75,24 +75,24 @@ __global__ void reshape_and_cache_kernel(
       value_cache[tgt_value_idx] = tgt_value;
     } else {
       key_cache[tgt_key_idx] =
-          vllm::fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_key, *k_scale);
+          vllm::fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_key,
+                                                              *k_scale);
       value_cache[tgt_value_idx] =
-          vllm::fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_value, *v_scale);
+          vllm::fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_value,
+                                                              *v_scale);
     }
   }
 }
 
-#define CALL_RESHAPE_AND_CACHE(KV_T, CACHE_T, KV_DTYPE)               \
-  vllm::reshape_and_cache_kernel<KV_T, CACHE_T, KV_DTYPE>             \
-      <<<grid, block, 0, stream>>>(                                   \
-          reinterpret_cast<KV_T*>(key),                               \
-          reinterpret_cast<KV_T*>(value),                             \
-          reinterpret_cast<CACHE_T*>(key_cache),                      \
-          reinterpret_cast<CACHE_T*>(value_cache),                    \
-          slot_mapping, key_stride, value_stride,                     \
-          num_heads, head_size, block_size, x,                        \
-          reinterpret_cast<const float*>(k_scale),                    \
-          reinterpret_cast<const float*>(v_scale));
+#define CALL_RESHAPE_AND_CACHE(KV_T, CACHE_T, KV_DTYPE)                        \
+  vllm::reshape_and_cache_kernel<KV_T, CACHE_T, KV_DTYPE>                      \
+      <<<grid, block, 0, stream>>>(                                            \
+          reinterpret_cast<KV_T *>(key), reinterpret_cast<KV_T *>(value),      \
+          reinterpret_cast<CACHE_T *>(key_cache),                              \
+          reinterpret_cast<CACHE_T *>(value_cache), slot_mapping, key_stride,  \
+          value_stride, num_heads, head_size, block_size, x,                   \
+          reinterpret_cast<const float *>(k_scale),                            \
+          reinterpret_cast<const float *>(v_scale));
 
 } // namespace vllm
 
@@ -107,28 +107,32 @@ extern "C" void reshape_and_cache(
     int32_t block_size, int32_t x, int32_t key_stride, int32_t value_stride,
     cudaStream_t stream,
 
-    uint32_t dtype, // 0 => f16; 1 => bf16; 2 => f32
+    uint32_t dtype,       // 0 => f16; 1 => bf16; 2 => f32
     uint32_t cache_dtype, // 0 => f16; 1 => bf16; 2 => f32; 3 => fp8_e4m3
-    float* k_scale, float* v_scale
-) {
+    float *k_scale, float *v_scale) {
   dim3 grid(num_tokens);
   dim3 block(std::min(num_heads * head_size, 512));
 
   if (cache_dtype == 3) {
     // FP8 E4M3 cache
     if (dtype == 0) {
-      CALL_RESHAPE_AND_CACHE(uint16_t, uint8_t, vllm::Fp8KVCacheDataType::kFp8E4M3);
+      CALL_RESHAPE_AND_CACHE(uint16_t, uint8_t,
+                             vllm::Fp8KVCacheDataType::kFp8E4M3);
     } else if (dtype == 1) {
-      CALL_RESHAPE_AND_CACHE(__nv_bfloat16, uint8_t, vllm::Fp8KVCacheDataType::kFp8E4M3);
+      CALL_RESHAPE_AND_CACHE(__nv_bfloat16, uint8_t,
+                             vllm::Fp8KVCacheDataType::kFp8E4M3);
     } else if (dtype == 2) {
-      CALL_RESHAPE_AND_CACHE(float, uint8_t, vllm::Fp8KVCacheDataType::kFp8E4M3);
+      CALL_RESHAPE_AND_CACHE(float, uint8_t,
+                             vllm::Fp8KVCacheDataType::kFp8E4M3);
     }
   } else {
     // Non-FP8 cache
     if (dtype == 0) {
-      CALL_RESHAPE_AND_CACHE(uint16_t, uint16_t, vllm::Fp8KVCacheDataType::kAuto);
+      CALL_RESHAPE_AND_CACHE(uint16_t, uint16_t,
+                             vllm::Fp8KVCacheDataType::kAuto);
     } else if (dtype == 1) {
-      CALL_RESHAPE_AND_CACHE(__nv_bfloat16, __nv_bfloat16, vllm::Fp8KVCacheDataType::kAuto);
+      CALL_RESHAPE_AND_CACHE(__nv_bfloat16, __nv_bfloat16,
+                             vllm::Fp8KVCacheDataType::kAuto);
     } else if (dtype == 2) {
       CALL_RESHAPE_AND_CACHE(float, float, vllm::Fp8KVCacheDataType::kAuto);
     }

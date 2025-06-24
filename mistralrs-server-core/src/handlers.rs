@@ -18,29 +18,47 @@ use crate::{
   responses((status = 200, description = "Served model info", body = ModelObjects))
 )]
 pub async fn models(State(state): ExtractedMistralRsState) -> Json<ModelObjects> {
-    // Get MCP information if available
-    let (tools_available, mcp_tools_count, mcp_servers_connected) = {
-        let (has_mcp, tools_count, servers_count) = state.get_mcp_info();
-        let total_tools = state.get_tools_count();
+    // Get all available models
+    let available_models = state.list_models().unwrap_or_default();
+    let mut model_objects = Vec::new();
 
-        if has_mcp || total_tools > 0 {
-            (Some(total_tools > 0), tools_count, servers_count)
-        } else {
-            (None, None, None)
-        }
-    };
+    // Add "default" as a special model option
+    model_objects.push(ModelObject {
+        id: "default".to_string(),
+        object: "model",
+        created: state.get_creation_time(),
+        owned_by: "local",
+        tools_available: None,
+        mcp_tools_count: None,
+        mcp_servers_connected: None,
+    });
 
-    Json(ModelObjects {
-        object: "list",
-        data: vec![ModelObject {
-            id: state.get_id(),
+    for model_id in available_models {
+        // Get model-specific information
+        let tools_count = state.get_tools_count(Some(&model_id)).unwrap_or(0);
+        let has_mcp = state.has_mcp_client(Some(&model_id)).unwrap_or(false);
+
+        let (tools_available, mcp_tools_count, mcp_servers_connected) =
+            if has_mcp || tools_count > 0 {
+                (Some(tools_count > 0), Some(tools_count), Some(1)) // Simplified MCP info
+            } else {
+                (None, None, None)
+            };
+
+        model_objects.push(ModelObject {
+            id: model_id,
             object: "model",
             created: state.get_creation_time(),
             owned_by: "local",
             tools_available,
             mcp_tools_count,
             mcp_servers_connected,
-        }],
+        });
+    }
+
+    Json(ModelObjects {
+        object: "list",
+        data: model_objects,
     })
 }
 
@@ -74,6 +92,6 @@ pub async fn re_isq(
     let repr = format!("Re ISQ: {:?}", request.ggml_type);
     MistralRs::maybe_log_request(state.clone(), repr.clone());
     let request = Request::ReIsq(parse_isq_value(&request.ggml_type, None)?);
-    state.get_sender().unwrap().send(request).await.unwrap();
+    state.get_sender(None).unwrap().send(request).await.unwrap();
     Ok(repr)
 }

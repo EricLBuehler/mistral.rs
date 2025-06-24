@@ -207,7 +207,7 @@ pub struct HttpMcpHandler {
 
 impl HttpMcpHandler {
     pub fn new(state: SharedMistralRsState) -> Self {
-        let modalities = &state.config().modalities;
+        let modalities = &state.config(None).unwrap().modalities;
 
         let mut tools: HashMap<String, Arc<dyn McpTool>> = HashMap::new();
         if modalities.input.contains(&SupportedModality::Text)
