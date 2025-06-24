@@ -361,22 +361,27 @@ impl MistralRs {
         reboot_state: RebootState,
     ) -> Result<EngineInstance, String> {
         let (tx, rx) = channel(10_000);
-        
+
         let category = pipeline.try_lock().unwrap().category();
         let kind = pipeline.try_lock().unwrap().get_metadata().kind.clone();
         let device = pipeline.try_lock().unwrap().device();
-        let modalities = pipeline.try_lock().unwrap().get_metadata().modalities.clone();
-        
+        let modalities = pipeline
+            .try_lock()
+            .unwrap()
+            .get_metadata()
+            .modalities
+            .clone();
+
         info!("Pipeline input modalities are {:?}", &modalities.input);
         info!("Pipeline output modalities are {:?}", &modalities.output);
-        
+
         let config = MistralRsConfig {
             kind,
             device,
             category: category.clone(),
             modalities,
         };
-        
+
         let engine_handler = thread::spawn(move || {
             #[cfg(feature = "metal")]
             objc::rc::autoreleasepool(move || {
@@ -426,7 +431,7 @@ impl MistralRs {
                 })
             }
         });
-        
+
         Ok(EngineInstance {
             sender: tx,
             engine_handler,
@@ -439,7 +444,7 @@ impl MistralRs {
             category,
         })
     }
-    
+
     async fn new(config: MistralRsBuilder) -> Arc<Self> {
         let MistralRsBuilder {
             pipeline,
@@ -537,11 +542,12 @@ impl MistralRs {
             tool_callbacks,
             tool_callbacks_with_tools,
             reboot_state,
-        ).expect("Failed to create engine instance");
+        )
+        .expect("Failed to create engine instance");
 
         let id = pipeline.try_lock().unwrap().name();
         let engine_id = model_id.unwrap_or_else(|| id.clone());
-        
+
         if distributed::is_daemon() {
             let request_sender = engine_instance.sender.clone();
 
@@ -564,7 +570,10 @@ impl MistralRs {
         // Do a dummy run
         if !distributed::is_daemon()
             && is_multi_threaded
-            && matches!(engine_instance.category, ModelCategory::Text | ModelCategory::Vision { .. })
+            && matches!(
+                engine_instance.category,
+                ModelCategory::Text | ModelCategory::Vision { .. }
+            )
         {
             let clone_sender = engine_instance.sender.clone();
             tokio::task::block_in_place(|| {
@@ -611,7 +620,7 @@ impl MistralRs {
         // Create engines map with the first engine
         let mut engines = HashMap::new();
         engines.insert(engine_id.clone(), engine_instance);
-        
+
         Arc::new(Self {
             engines: RwLock::new(engines),
             default_engine_id: RwLock::new(Some(engine_id)),
@@ -631,13 +640,13 @@ impl MistralRs {
             tracing::warn!("Couldn't get write lock on engines during reboot attempt");
             MistralRsError::EnginePoisoned
         })?;
-        
+
         if let Some(engine_instance) = engines.get(model_id) {
             if !engine_instance.engine_handler.is_finished() {
                 tracing::info!("Engine {} already running, returning ok", model_id);
                 return Ok(());
             }
-            
+
             let reboot_state = engine_instance.reboot_state.clone();
             let new_engine_instance = Self::create_engine_instance(
                 reboot_state.pipeline.clone(),
@@ -653,11 +662,12 @@ impl MistralRs {
                 reboot_state.tool_callbacks.clone(),
                 reboot_state.tool_callbacks_with_tools.clone(),
                 reboot_state,
-            ).map_err(|e| {
+            )
+            .map_err(|e| {
                 tracing::error!("Failed to create new engine instance: {}", e);
                 MistralRsError::EnginePoisoned
             })?;
-            
+
             engines.insert(model_id.to_string(), new_engine_instance);
             tracing::info!("Successfully rebooted engine {}", model_id);
             Ok(())
@@ -671,7 +681,7 @@ impl MistralRs {
             tracing::warn!("Couldn't get read lock on engines!");
             MistralRsError::EnginePoisoned
         })?;
-        
+
         if let Some(engine_instance) = engines.get(model_id) {
             Ok(engine_instance.engine_handler.is_finished())
         } else {
@@ -684,17 +694,26 @@ impl MistralRs {
         let resolved_model_id = match model_id {
             Some(id) => id.to_string(),
             None => {
-                let default_lock = self.default_engine_id.read().map_err(|_| MistralRsError::SenderPoisoned)?;
-                default_lock.as_ref().ok_or(MistralRsError::EnginePoisoned)?.clone()
+                let default_lock = self
+                    .default_engine_id
+                    .read()
+                    .map_err(|_| MistralRsError::SenderPoisoned)?;
+                default_lock
+                    .as_ref()
+                    .ok_or(MistralRsError::EnginePoisoned)?
+                    .clone()
             }
         };
-        
+
         if self.engine_dead(&resolved_model_id)? {
             tracing::warn!("Engine {} is dead, rebooting", resolved_model_id);
             self.reboot_engine(&resolved_model_id)?
         }
-        
-        let engines = self.engines.read().map_err(|_| MistralRsError::SenderPoisoned)?;
+
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::SenderPoisoned)?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.sender.clone())
         } else {
@@ -711,16 +730,28 @@ impl MistralRs {
     }
 
     /// Get model category for a specific model. If model_id is None, uses default engine.
-    pub fn get_model_category(&self, model_id: Option<&str>) -> Result<ModelCategory, MistralRsError> {
+    pub fn get_model_category(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<ModelCategory, MistralRsError> {
         let resolved_model_id = match model_id {
             Some(id) => id.to_string(),
             None => {
-                let default_lock = self.default_engine_id.read().map_err(|_| MistralRsError::SenderPoisoned)?;
-                default_lock.as_ref().ok_or(MistralRsError::EnginePoisoned)?.clone()
+                let default_lock = self
+                    .default_engine_id
+                    .read()
+                    .map_err(|_| MistralRsError::SenderPoisoned)?;
+                default_lock
+                    .as_ref()
+                    .ok_or(MistralRsError::EnginePoisoned)?
+                    .clone()
             }
         };
-        
-        let engines = self.engines.read().map_err(|_| MistralRsError::SenderPoisoned)?;
+
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::SenderPoisoned)?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.category.clone())
         } else {
@@ -792,12 +823,18 @@ impl MistralRs {
             reboot_state,
         )?;
 
-        let mut engines = self.engines.write().map_err(|_| "Failed to acquire write lock on engines")?;
+        let mut engines = self
+            .engines
+            .write()
+            .map_err(|_| "Failed to acquire write lock on engines")?;
         engines.insert(model_id.clone(), engine_instance);
 
         // If this is the first model, set it as default
         if engines.len() == 1 {
-            let mut default_lock = self.default_engine_id.write().map_err(|_| "Failed to acquire write lock on default_engine_id")?;
+            let mut default_lock = self
+                .default_engine_id
+                .write()
+                .map_err(|_| "Failed to acquire write lock on default_engine_id")?;
             *default_lock = Some(model_id.clone());
         }
 
@@ -807,8 +844,11 @@ impl MistralRs {
 
     /// Remove a model engine from the MistralRs instance
     pub fn remove_model(&self, model_id: &str) -> Result<(), String> {
-        let mut engines = self.engines.write().map_err(|_| "Failed to acquire write lock on engines")?;
-        
+        let mut engines = self
+            .engines
+            .write()
+            .map_err(|_| "Failed to acquire write lock on engines")?;
+
         if engines.len() <= 1 {
             return Err("Cannot remove the last model from MistralRs".to_string());
         }
@@ -816,16 +856,19 @@ impl MistralRs {
         if let Some(engine_instance) = engines.remove(model_id) {
             // Send terminate signal to the engine
             let _ = engine_instance.sender.blocking_send(Request::Terminate);
-            
+
             // If this was the default engine, set a new default
-            let mut default_lock = self.default_engine_id.write().map_err(|_| "Failed to acquire write lock on default_engine_id")?;
+            let mut default_lock = self
+                .default_engine_id
+                .write()
+                .map_err(|_| "Failed to acquire write lock on default_engine_id")?;
             if let Some(ref default_id) = *default_lock {
                 if default_id == model_id {
                     // Set the first available engine as the new default
                     *default_lock = engines.keys().next().map(|k| k.clone());
                 }
             }
-            
+
             info!("Removed model {} from MistralRs instance", model_id);
             Ok(())
         } else {
@@ -835,27 +878,39 @@ impl MistralRs {
 
     /// List all available model IDs
     pub fn list_models(&self) -> Result<Vec<String>, String> {
-        let engines = self.engines.read().map_err(|_| "Failed to acquire read lock on engines")?;
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| "Failed to acquire read lock on engines")?;
         Ok(engines.keys().cloned().collect())
     }
 
     /// Get the current default model ID
     pub fn get_default_model_id(&self) -> Result<Option<String>, String> {
-        let default_lock = self.default_engine_id.read().map_err(|_| "Failed to acquire read lock on default_engine_id")?;
+        let default_lock = self
+            .default_engine_id
+            .read()
+            .map_err(|_| "Failed to acquire read lock on default_engine_id")?;
         Ok(default_lock.clone())
     }
 
     /// Set the default model ID
     pub fn set_default_model_id(&self, model_id: &str) -> Result<(), String> {
-        let engines = self.engines.read().map_err(|_| "Failed to acquire read lock on engines")?;
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| "Failed to acquire read lock on engines")?;
         if !engines.contains_key(model_id) {
             return Err(format!("Model {} not found", model_id));
         }
         drop(engines);
 
-        let mut default_lock = self.default_engine_id.write().map_err(|_| "Failed to acquire write lock on default_engine_id")?;
+        let mut default_lock = self
+            .default_engine_id
+            .write()
+            .map_err(|_| "Failed to acquire write lock on default_engine_id")?;
         *default_lock = Some(model_id.to_string());
-        
+
         info!("Set default model to {}", model_id);
         Ok(())
     }
@@ -863,14 +918,14 @@ impl MistralRs {
     /// Dispatch a request to the appropriate engine based on the model_id in the request
     pub fn send_request(&self, mut request: Request) -> Result<(), MistralRsError> {
         let model_id = match &mut request {
-            Request::Normal(normal_req) => {
-                normal_req.model_id.clone()
-            },
+            Request::Normal(normal_req) => normal_req.model_id.clone(),
             _ => None, // Other request types don't specify model_id
         };
 
         let sender = self.get_sender(model_id.as_deref())?;
-        sender.blocking_send(request).map_err(|_| MistralRsError::SenderPoisoned)
+        sender
+            .blocking_send(request)
+            .map_err(|_| MistralRsError::SenderPoisoned)
     }
 
     pub fn maybe_log_request(this: Arc<Self>, repr: String) {
@@ -918,12 +973,21 @@ impl MistralRs {
         let resolved_model_id = match model_id {
             Some(id) => id.to_string(),
             None => {
-                let default_lock = self.default_engine_id.read().map_err(|_| "Failed to acquire read lock")?;
-                default_lock.as_ref().ok_or("No default engine set")?.clone()
+                let default_lock = self
+                    .default_engine_id
+                    .read()
+                    .map_err(|_| "Failed to acquire read lock")?;
+                default_lock
+                    .as_ref()
+                    .ok_or("No default engine set")?
+                    .clone()
             }
         };
-        
-        let engines = self.engines.read().map_err(|_| "Failed to acquire read lock on engines")?;
+
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| "Failed to acquire read lock on engines")?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.reboot_state.tool_callbacks_with_tools.len())
         } else {
@@ -936,12 +1000,21 @@ impl MistralRs {
         let resolved_model_id = match model_id {
             Some(id) => id.to_string(),
             None => {
-                let default_lock = self.default_engine_id.read().map_err(|_| "Failed to acquire read lock")?;
-                default_lock.as_ref().ok_or("No default engine set")?.clone()
+                let default_lock = self
+                    .default_engine_id
+                    .read()
+                    .map_err(|_| "Failed to acquire read lock")?;
+                default_lock
+                    .as_ref()
+                    .ok_or("No default engine set")?
+                    .clone()
             }
         };
-        
-        let engines = self.engines.read().map_err(|_| "Failed to acquire read lock on engines")?;
+
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| "Failed to acquire read lock on engines")?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.reboot_state.mcp_client_config.is_some())
         } else {
@@ -954,12 +1027,21 @@ impl MistralRs {
         let resolved_model_id = match model_id {
             Some(id) => id.to_string(),
             None => {
-                let default_lock = self.default_engine_id.read().map_err(|_| "Failed to acquire read lock")?;
-                default_lock.as_ref().ok_or("No default engine set")?.clone()
+                let default_lock = self
+                    .default_engine_id
+                    .read()
+                    .map_err(|_| "Failed to acquire read lock")?;
+                default_lock
+                    .as_ref()
+                    .ok_or("No default engine set")?
+                    .clone()
             }
         };
-        
-        let engines = self.engines.read().map_err(|_| "Failed to acquire read lock on engines")?;
+
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| "Failed to acquire read lock on engines")?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.config.clone())
         } else {

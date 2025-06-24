@@ -44,22 +44,22 @@ impl ModelConfig {
             in_situ_quant: None,
         }
     }
-    
+
     pub fn with_chat_template(mut self, chat_template: String) -> Self {
         self.chat_template = Some(chat_template);
         self
     }
-    
+
     pub fn with_jinja_explicit(mut self, jinja_explicit: String) -> Self {
         self.jinja_explicit = Some(jinja_explicit);
         self
     }
-    
+
     pub fn with_num_device_layers(mut self, num_device_layers: Vec<String>) -> Self {
         self.num_device_layers = Some(num_device_layers);
         self
     }
-    
+
     pub fn with_in_situ_quant(mut self, in_situ_quant: String) -> Self {
         self.in_situ_quant = Some(in_situ_quant);
         self
@@ -156,10 +156,10 @@ pub struct MistralRsForServerBuilder {
 
     /// Model selector (for single-model mode, deprecated in favor of models)
     model: Option<ModelSelected>,
-    
+
     /// Multiple model configurations (for multi-model mode)
     models: Vec<ModelConfig>,
-    
+
     /// Default model ID to use when none is specified in requests
     default_model_id: Option<String>,
 
@@ -720,7 +720,7 @@ impl MistralRsForServerBuilder {
         // Use the first model as the base configuration
         let first_model = &self.models[0];
         let model = first_model.model.clone();
-        
+
         let tgt_non_granular_index = get_tgt_non_granular_index(&model);
         let dtype = get_model_dtype(&model)?;
         let auto_device_map_params = get_auto_device_map_params(&model)?;
@@ -748,14 +748,30 @@ impl MistralRsForServerBuilder {
         // Create the first model's pipeline
         let loader: Box<dyn Loader> = LoaderBuilder::new(model)
             .with_no_kv_cache(self.no_kv_cache)
-            .with_chat_template(first_model.chat_template.clone().or(self.chat_template.clone()))
+            .with_chat_template(
+                first_model
+                    .chat_template
+                    .clone()
+                    .or(self.chat_template.clone()),
+            )
             .with_prompt_chunksize(prompt_chunksize)
-            .with_jinja_explicit(first_model.jinja_explicit.clone().or(self.jinja_explicit.clone()))
+            .with_jinja_explicit(
+                first_model
+                    .jinja_explicit
+                    .clone()
+                    .or(self.jinja_explicit.clone()),
+            )
             .build()?;
 
         mistralrs_instance_info(&*loader);
 
-        let mapper = init_mapper(&first_model.num_device_layers.clone().or(self.num_device_layers.clone()), &auto_device_map_params);
+        let mapper = init_mapper(
+            &first_model
+                .num_device_layers
+                .clone()
+                .or(self.num_device_layers.clone()),
+            &auto_device_map_params,
+        );
         let paged_attn = configure_paged_attn(&device, self.paged_attn);
 
         let cache_config = init_cache_config(
@@ -768,7 +784,9 @@ impl MistralRsForServerBuilder {
             max_seq_len,
         )?;
 
-        let isq = first_model.in_situ_quant.as_ref()
+        let isq = first_model
+            .in_situ_quant
+            .as_ref()
             .or(self.in_situ_quant.as_ref())
             .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
 
@@ -810,21 +828,39 @@ impl MistralRsForServerBuilder {
         // Load additional models
         for model_config in self.models.iter().skip(1) {
             info!("Loading additional model: {}", model_config.model_id);
-            
+
             let model = model_config.model.clone();
             let dtype = get_model_dtype(&model)?;
             let auto_device_map_params = get_auto_device_map_params(&model)?;
-            
+
             let loader: Box<dyn Loader> = LoaderBuilder::new(model)
                 .with_no_kv_cache(self.no_kv_cache)
-                .with_chat_template(model_config.chat_template.clone().or(self.chat_template.clone()))
+                .with_chat_template(
+                    model_config
+                        .chat_template
+                        .clone()
+                        .or(self.chat_template.clone()),
+                )
                 .with_prompt_chunksize(prompt_chunksize)
-                .with_jinja_explicit(model_config.jinja_explicit.clone().or(self.jinja_explicit.clone()))
+                .with_jinja_explicit(
+                    model_config
+                        .jinja_explicit
+                        .clone()
+                        .or(self.jinja_explicit.clone()),
+                )
                 .build()?;
 
-            let mapper = init_mapper(&model_config.num_device_layers.clone().or(self.num_device_layers.clone()), &auto_device_map_params);
-            
-            let isq = model_config.in_situ_quant.as_ref()
+            let mapper = init_mapper(
+                &model_config
+                    .num_device_layers
+                    .clone()
+                    .or(self.num_device_layers.clone()),
+                &auto_device_map_params,
+            );
+
+            let isq = model_config
+                .in_situ_quant
+                .as_ref()
                 .or(self.in_situ_quant.as_ref())
                 .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
 
@@ -840,33 +876,42 @@ impl MistralRsForServerBuilder {
             )?;
 
             // Add the model to the MistralRs instance
-            mistralrs.add_model(
-                model_config.model_id.clone(),
-                pipeline,
-                scheduler_config.clone(),
-                Some(self.truncate_sequence),
-                Some(self.no_kv_cache),
-                Some(false), // no_prefix_cache
-                Some(self.prefix_cache_n),
-                Some(false), // disable_eos_stop
-                !self.interactive_mode, // throughput_logging_enabled
-                bert_model.clone(),
-                self.search_callback.clone(),
-                HashMap::new(), // tool_callbacks
-                HashMap::new(), // tool_callbacks_with_tools
-                self.mcp_client_config.clone(),
-            ).await.map_err(|e| anyhow::anyhow!("Failed to add model {}: {}", model_config.model_id, e))?;
-            
+            mistralrs
+                .add_model(
+                    model_config.model_id.clone(),
+                    pipeline,
+                    scheduler_config.clone(),
+                    Some(self.truncate_sequence),
+                    Some(self.no_kv_cache),
+                    Some(false), // no_prefix_cache
+                    Some(self.prefix_cache_n),
+                    Some(false),            // disable_eos_stop
+                    !self.interactive_mode, // throughput_logging_enabled
+                    bert_model.clone(),
+                    self.search_callback.clone(),
+                    HashMap::new(), // tool_callbacks
+                    HashMap::new(), // tool_callbacks_with_tools
+                    self.mcp_client_config.clone(),
+                )
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to add model {}: {}", model_config.model_id, e)
+                })?;
+
             info!("Model {} loaded successfully", model_config.model_id);
         }
 
         // Set the default model if specified
         if let Some(default_model_id) = self.default_model_id {
-            mistralrs.set_default_model_id(&default_model_id)
+            mistralrs
+                .set_default_model_id(&default_model_id)
                 .map_err(|e| anyhow::anyhow!("Failed to set default model: {}", e))?;
         }
 
-        info!("Multi-model setup completed with {} models", self.models.len());
+        info!(
+            "Multi-model setup completed with {} models",
+            self.models.len()
+        );
         Ok(mistralrs)
     }
 }

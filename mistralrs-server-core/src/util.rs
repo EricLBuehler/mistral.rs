@@ -149,9 +149,10 @@ pub fn validate_model_name(
         return Ok(());
     }
 
-    let available_models = state.list_models()
+    let available_models = state
+        .list_models()
         .map_err(|e| anyhow::anyhow!("Failed to get available models: {}", e))?;
-    
+
     if available_models.is_empty() {
         anyhow::bail!("No models are currently loaded.");
     }

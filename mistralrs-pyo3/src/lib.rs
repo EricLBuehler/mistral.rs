@@ -87,6 +87,7 @@ pub struct SpeechGenerationResponse {
 }
 
 #[pyclass]
+#[derive(Clone)]
 /// An object wrapping the underlying Rust system to handle requests and process conversations.
 struct Runner {
     runner: Arc<MistralRs>,
@@ -936,9 +937,11 @@ impl Runner {
     }
 
     /// Send an OpenAI API compatible request, returning the result.
+    #[pyo3(signature = (request, model_id = None))]
     fn send_chat_completion_request(
         &mut self,
         request: Py<ChatCompletionRequest>,
+        model_id: Option<String>,
     ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
         let (tx, mut rx) = channel(10_000);
         Python::with_gil(|py| {
@@ -1216,10 +1219,11 @@ impl Runner {
                 logits_processors: None,
                 return_raw_logits: false,
                 web_search_options: request.web_search_options.clone(),
+                model_id: model_id.clone(),
             }));
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
-            let sender = self.runner.get_sender()?;
+            let sender = self.runner.get_sender(model_id.as_deref())?;
             sender.blocking_send(model_request).unwrap();
 
             if request.stream {
@@ -1246,9 +1250,11 @@ impl Runner {
     }
 
     /// Send an OpenAI API compatible request, returning the result.
+    #[pyo3(signature = (request, model_id = None))]
     fn send_completion_request(
         &mut self,
         request: Py<CompletionRequest>,
+        model_id: Option<String>,
     ) -> PyApiResult<CompletionResponse> {
         let (tx, mut rx) = channel(10_000);
         Python::with_gil(|py| {
@@ -1323,10 +1329,11 @@ impl Runner {
                 logits_processors: None,
                 return_raw_logits: false,
                 web_search_options: None,
+                model_id: model_id.clone(),
             }));
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
-            let sender = self.runner.get_sender()?;
+            let sender = self.runner.get_sender(model_id.as_deref())?;
             sender.blocking_send(model_request).unwrap();
             let response = rx.blocking_recv().unwrap();
 
@@ -1381,9 +1388,10 @@ impl Runner {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            model_id: None,
         }));
 
-        let sender = self.runner.get_sender()?;
+        let sender = self.runner.get_sender(None)?;
         sender.blocking_send(request).unwrap();
 
         let ResponseOk::ImageGeneration(response) = rx
@@ -1418,9 +1426,10 @@ impl Runner {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            model_id: None,
         }));
 
-        let sender = self.runner.get_sender()?;
+        let sender = self.runner.get_sender(None)?;
         sender.blocking_send(request).unwrap();
 
         let ResponseOk::Speech {
@@ -1446,7 +1455,10 @@ impl Runner {
     /// then nothing will happen.
     fn send_re_isq(&self, dtype: String) -> PyApiResult<()> {
         let request = _Request::ReIsq(parse_isq_value(&dtype, None)?);
-        self.runner.get_sender()?.blocking_send(request).unwrap();
+        self.runner
+            .get_sender(None)?
+            .blocking_send(request)
+            .unwrap();
         Ok(())
     }
 
@@ -1467,7 +1479,10 @@ impl Runner {
             enable_thinking,
         });
 
-        self.runner.get_sender()?.blocking_send(request).unwrap();
+        self.runner
+            .get_sender(None)?
+            .blocking_send(request)
+            .unwrap();
 
         rx.blocking_recv()
             .context("Channel was erroneously closed!")?
@@ -1483,11 +1498,159 @@ impl Runner {
             response: tx,
         });
 
-        self.runner.get_sender()?.blocking_send(request).unwrap();
+        self.runner
+            .get_sender(None)?
+            .blocking_send(request)
+            .unwrap();
 
         rx.blocking_recv()
             .context("Channel was erroneously closed!")?
             .map_err(PyApiErr::from)
+    }
+
+    /// List all available model IDs in multi-model mode.
+    fn list_models(&self) -> PyApiResult<Vec<String>> {
+        self.runner.list_models().map_err(PyApiErr::from)
+    }
+
+    /// Get the default model ID in multi-model mode.
+    fn get_default_model_id(&self) -> PyApiResult<Option<String>> {
+        self.runner.get_default_model_id().map_err(PyApiErr::from)
+    }
+
+    /// Set the default model ID in multi-model mode.
+    fn set_default_model_id(&self, model_id: String) -> PyApiResult<()> {
+        self.runner
+            .set_default_model_id(&model_id)
+            .map_err(PyApiErr::from)
+    }
+
+    /// Remove a model by ID in multi-model mode.
+    fn remove_model(&self, model_id: String) -> PyApiResult<()> {
+        self.runner.remove_model(&model_id).map_err(PyApiErr::from)
+    }
+}
+
+#[pyclass]
+/// A multi-model runner that provides a cleaner interface for managing multiple models.
+/// This wraps the existing Runner and provides model-specific methods.
+struct MultiModelRunner {
+    runner: Runner,
+}
+
+#[pymethods]
+impl MultiModelRunner {
+    #[new]
+    /// Create a new MultiModelRunner from an existing Runner.
+    /// The Runner should have been created with multiple models loaded.
+    fn new(runner: Runner) -> Self {
+        Self { runner }
+    }
+
+    /// Send a chat completion request to a specific model.
+    #[pyo3(signature = (request, model_id))]
+    fn send_chat_completion_request_to_model(
+        &mut self,
+        request: Py<ChatCompletionRequest>,
+        model_id: String,
+    ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
+        self.runner
+            .send_chat_completion_request(request, Some(model_id))
+    }
+
+    /// Send a completion request to a specific model.
+    #[pyo3(signature = (request, model_id))]
+    fn send_completion_request_to_model(
+        &mut self,
+        request: Py<CompletionRequest>,
+        model_id: String,
+    ) -> PyApiResult<CompletionResponse> {
+        self.runner.send_completion_request(request, Some(model_id))
+    }
+
+    /// List all available model IDs.
+    fn list_models(&self) -> PyApiResult<Vec<String>> {
+        self.runner.list_models()
+    }
+
+    /// Get the default model ID.
+    fn get_default_model_id(&self) -> PyApiResult<Option<String>> {
+        self.runner.get_default_model_id()
+    }
+
+    /// Set the default model ID.
+    fn set_default_model_id(&self, model_id: String) -> PyApiResult<()> {
+        self.runner.set_default_model_id(model_id)
+    }
+
+    /// Remove a model by ID.
+    fn remove_model(&self, model_id: String) -> PyApiResult<()> {
+        self.runner.remove_model(model_id)
+    }
+
+    /// Send a chat completion request to the default model.
+    fn send_chat_completion_request(
+        &mut self,
+        request: Py<ChatCompletionRequest>,
+    ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
+        self.runner.send_chat_completion_request(request, None)
+    }
+
+    /// Send a completion request to the default model.
+    fn send_completion_request(
+        &mut self,
+        request: Py<CompletionRequest>,
+    ) -> PyApiResult<CompletionResponse> {
+        self.runner.send_completion_request(request, None)
+    }
+
+    /// Generate an image using the default model.
+    #[pyo3(signature = (
+        prompt,
+        response_format,
+        height = 720,
+        width = 1280,
+    ))]
+    fn generate_image(
+        &self,
+        prompt: String,
+        response_format: ImageGenerationResponseFormat,
+        height: usize,
+        width: usize,
+    ) -> PyApiResult<ImageGenerationResponse> {
+        self.runner
+            .generate_image(prompt, response_format, height, width)
+    }
+
+    /// Generate audio using the default model.
+    fn generate_audio(&self, prompt: String) -> PyApiResult<SpeechGenerationResponse> {
+        self.runner.generate_audio(prompt)
+    }
+
+    /// Send a request to re-ISQ the default model.
+    fn send_re_isq(&self, dtype: String) -> PyApiResult<()> {
+        self.runner.send_re_isq(dtype)
+    }
+
+    /// Tokenize some text using the default model.
+    fn tokenize_text(
+        &self,
+        text: String,
+        add_special_tokens: bool,
+        enable_thinking: Option<bool>,
+    ) -> PyApiResult<Vec<u32>> {
+        self.runner
+            .tokenize_text(text, add_special_tokens, enable_thinking)
+    }
+
+    /// Detokenize some tokens using the default model.
+    fn detokenize_text(&self, tokens: Vec<u32>, skip_special_tokens: bool) -> PyApiResult<String> {
+        self.runner.detokenize_text(tokens, skip_special_tokens)
+    }
+
+    /// Get a copy of the underlying Runner instance.
+    fn inner(&self) -> Runner {
+        self.runner.clone()
     }
 }
 
@@ -1663,6 +1826,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     initialize_logging();
 
     m.add_class::<Runner>()?;
+    m.add_class::<MultiModelRunner>()?;
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<CompletionRequest>()?;

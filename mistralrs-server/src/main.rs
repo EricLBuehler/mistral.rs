@@ -292,16 +292,21 @@ fn validate_mcp_config(config: &McpClientConfig) -> Result<()> {
 
 /// Load multi-model configuration from file
 fn load_multi_model_config(config_path: &str) -> Result<Vec<ModelConfig>> {
-    let config_content = std::fs::read_to_string(config_path)
-        .map_err(|e| anyhow::anyhow!("Failed to read multi-model config file {}: {}", config_path, e))?;
-    
+    let config_content = std::fs::read_to_string(config_path).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to read multi-model config file {}: {}",
+            config_path,
+            e
+        )
+    })?;
+
     let configs: Vec<ModelConfig> = serde_json::from_str(&config_content)
         .map_err(|e| anyhow::anyhow!("Failed to parse multi-model config: {}", e))?;
-    
+
     if configs.is_empty() {
         anyhow::bail!("Multi-model configuration file is empty");
     }
-    
+
     // Validate model IDs are unique
     let mut seen_ids = std::collections::HashSet::new();
     for config in &configs {
@@ -309,8 +314,11 @@ fn load_multi_model_config(config_path: &str) -> Result<Vec<ModelConfig>> {
             anyhow::bail!("Duplicate model ID in config: {}", config.model_id);
         }
     }
-    
-    info!("Loaded multi-model configuration with {} models", configs.len());
+
+    info!(
+        "Loaded multi-model configuration with {} models",
+        configs.len()
+    );
     Ok(configs)
 }
 
@@ -327,11 +335,11 @@ async fn main() -> Result<()> {
     if args.multi_model && args.model.is_some() {
         anyhow::bail!("Cannot specify both --multi-model and a model subcommand. Use either single-model mode (with model subcommand) or multi-model mode (with --multi-model).");
     }
-    
+
     if !args.multi_model && args.model.is_none() {
         anyhow::bail!("Must specify either a model subcommand for single-model mode or --multi-model for multi-model mode.");
     }
-    
+
     if args.multi_model && args.multi_model_config.is_none() {
         anyhow::bail!("Multi-model mode requires --multi-model-config to be specified.");
     }
@@ -341,7 +349,7 @@ async fn main() -> Result<()> {
     let mistralrs = if args.multi_model {
         // Multi-model mode
         let model_configs = load_multi_model_config(args.multi_model_config.as_ref().unwrap())?;
-        
+
         let mut builder = MistralRsForServerBuilder::new()
             .with_truncate_sequence(args.truncate_sequence)
             .with_max_seqs(args.max_seqs)

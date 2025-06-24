@@ -80,12 +80,16 @@ pub async fn interactive_mode(
     enable_thinking: Option<bool>,
 ) {
     match mistralrs.get_model_category(None) {
-        Ok(ModelCategory::Text) => text_interactive_mode(mistralrs, do_search, enable_thinking).await,
+        Ok(ModelCategory::Text) => {
+            text_interactive_mode(mistralrs, do_search, enable_thinking).await
+        }
         Ok(ModelCategory::Vision { .. }) => {
             vision_interactive_mode(mistralrs, do_search, enable_thinking).await
         }
         Ok(ModelCategory::Diffusion) => diffusion_interactive_mode(mistralrs, do_search).await,
-        Ok(ModelCategory::Audio) => audio_interactive_mode(mistralrs, do_search, enable_thinking).await,
+        Ok(ModelCategory::Audio) => {
+            audio_interactive_mode(mistralrs, do_search, enable_thinking).await
+        }
         Ok(ModelCategory::Speech) => speech_interactive_mode(mistralrs, do_search).await,
         Err(e) => eprintln!("Error getting model category: {}", e),
     }

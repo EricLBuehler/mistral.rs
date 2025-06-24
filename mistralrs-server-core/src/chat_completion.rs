@@ -477,7 +477,11 @@ pub async fn parse_request(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: oairequest.web_search_options,
-            model_id: if oairequest.model == "ignore" { None } else { Some(oairequest.model.clone()) },
+            model_id: if oairequest.model == "ignore" {
+                None
+            } else {
+                Some(oairequest.model.clone())
+            },
         })),
         is_streaming,
     ))
@@ -498,7 +502,11 @@ pub async fn chatcompletions(
     let (tx, mut rx) = create_response_channel(None);
 
     // Extract model_id for routing before parsing
-    let model_id = if oairequest.model == "ignore" { None } else { Some(oairequest.model.clone()) };
+    let model_id = if oairequest.model == "ignore" {
+        None
+    } else {
+        Some(oairequest.model.clone())
+    };
 
     let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx).await {
         Ok(x) => x,

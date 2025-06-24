@@ -67,7 +67,7 @@ fn run_bench(
         n_choices: 1,
         dry_params: Some(DrySamplingParams::default()),
     };
-    let sender = mistralrs.get_sender().unwrap();
+    let sender = mistralrs.get_sender(None).unwrap();
     let (tx, mut rx) = channel(10_000);
 
     let req = Request::Normal(Box::new(NormalRequest {
@@ -84,6 +84,7 @@ fn run_bench(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
+        model_id: None,
     }));
 
     let mut usages = Vec::new();
@@ -235,7 +236,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         n_choices: 1,
         dry_params: Some(DrySamplingParams::default()),
     };
-    let sender = mistralrs.get_sender().unwrap();
+    let sender = mistralrs.get_sender(None).unwrap();
     let (tx, mut rx) = channel(10_000);
 
     let req = Request::Normal(Box::new(NormalRequest {
@@ -256,6 +257,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
+        model_id: None,
     }));
 
     if sender.blocking_send(req.clone()).is_err() {

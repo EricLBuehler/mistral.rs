@@ -91,7 +91,11 @@ pub async fn send_request(state: &SharedMistralRsState, request: Request) -> Res
     send_request_with_model(state, request, None).await
 }
 
-pub async fn send_request_with_model(state: &SharedMistralRsState, request: Request, model_id: Option<&str>) -> Result<()> {
+pub async fn send_request_with_model(
+    state: &SharedMistralRsState,
+    request: Request,
+    model_id: Option<&str>,
+) -> Result<()> {
     let sender = state
         .get_sender(model_id)
         .context("mistral.rs sender not available.")?;

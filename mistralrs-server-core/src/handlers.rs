@@ -26,12 +26,13 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Json<ModelObjects>
         // Get model-specific information
         let tools_count = state.get_tools_count(Some(&model_id)).unwrap_or(0);
         let has_mcp = state.has_mcp_client(Some(&model_id)).unwrap_or(false);
-        
-        let (tools_available, mcp_tools_count, mcp_servers_connected) = if has_mcp || tools_count > 0 {
-            (Some(tools_count > 0), Some(tools_count), Some(1)) // Simplified MCP info
-        } else {
-            (None, None, None)
-        };
+
+        let (tools_available, mcp_tools_count, mcp_servers_connected) =
+            if has_mcp || tools_count > 0 {
+                (Some(tools_count > 0), Some(tools_count), Some(1)) // Simplified MCP info
+            } else {
+                (None, None, None)
+            };
 
         model_objects.push(ModelObject {
             id: model_id,
