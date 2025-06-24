@@ -1,0 +1,20 @@
+[
+  {
+    "model_id": "llama3-8b",
+    "model": {
+      "Plain": {
+        "model_id": "../hf_models/llama3.1_8b"
+      }
+    },
+    "in_situ_quant": "4"
+  },
+  {
+    "model_id": "qwen3-4b",
+    "model": {
+      "Plain": {
+        "model_id": "../hf_models/qwen3_4b"
+      }
+    },
+    "in_situ_quant": "4"
+  }
+]
