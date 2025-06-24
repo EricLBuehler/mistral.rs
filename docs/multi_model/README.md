@@ -13,7 +13,7 @@ mistralrs-server --port 1234 plain -m meta-llama/Llama-3.2-3B-Instruct
 ### Multi-Model Mode
 ```bash
 # Load multiple models from configuration file
-mistralrs-server --port 1234 multi-model --config config.json --default-model-id "meta-llama/Llama-3.2-3B-Instruct"
+mistralrs-server --port 1234 multi-model --config config.json --default-model-id meta-llama/Llama-3.2-3B-Instruct
 ```
 
 ## Configuration File Format

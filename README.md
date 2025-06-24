@@ -442,14 +442,14 @@ You can find documentation about the server itself [here](docs/HTTP.md).
 Serve multiple models simultaneously from a single server instance. Perfect for comparing models, A/B testing, or serving different models for different use cases.
 
 ```bash
-./mistralrs-server --port 1234 multi-model --config example-multi-model-config.json --default-model-id llama3-3b
+./mistralrs-server --port 1234 multi-model --config example-multi-model-config.json --default-model-id meta-llama/Llama-3.2-3B-Instruct
 ```
 
 Select models in your requests using the `model` parameter:
 ```bash
 curl http://localhost:1234/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "llama3-3b", "messages": [{"role": "user", "content": "Hello!"}]}'
+  -d '{"model": "meta-llama/Llama-3.2-3B-Instruct", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
 📖 **[Complete multi-model documentation →](docs/multi_model/README.md)**
