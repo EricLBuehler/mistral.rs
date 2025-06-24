@@ -27,7 +27,7 @@ use crate::{
         BaseCompletionResponder,
     },
     handler_core::{
-        base_process_non_streaming_response, create_response_channel, send_request,
+        base_process_non_streaming_response, create_response_channel, send_request, send_request_with_model,
         BaseJsonModelError, ErrorToResponse, JsonError, ModelErrorMessage,
     },
     openai::{
@@ -477,6 +477,7 @@ pub async fn parse_request(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: oairequest.web_search_options,
+            model_id: if oairequest.model == "ignore" { None } else { Some(oairequest.model.clone()) },
         })),
         is_streaming,
     ))
@@ -496,12 +497,15 @@ pub async fn chatcompletions(
 ) -> ChatCompletionResponder {
     let (tx, mut rx) = create_response_channel(None);
 
+    // Extract model_id for routing before parsing
+    let model_id = if oairequest.model == "ignore" { None } else { Some(oairequest.model.as_str()) };
+
     let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx).await {
         Ok(x) => x,
         Err(e) => return handle_error(state, e.into()),
     };
 
-    if let Err(e) = send_request(&state, request).await {
+    if let Err(e) = send_request_with_model(&state, request, model_id).await {
         return handle_error(state, e.into());
     }
 

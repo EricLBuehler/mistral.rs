@@ -123,10 +123,10 @@ pub async fn parse_audio_url(url_unparsed: &str) -> Result<AudioInput, anyhow::E
     AudioInput::from_bytes(&bytes)
 }
 
-/// Validates that the requested model matches the loaded model.
+/// Validates that the requested model matches one of the loaded models.
 ///
 /// This function checks if the model parameter from an OpenAI API request
-/// matches the model name that was actually loaded by the server.
+/// matches one of the models that are currently loaded by the server.
 ///
 /// The special model name "ignore" can be used to bypass this validation,
 /// which is useful for clients that require a model parameter but don't
@@ -135,11 +135,11 @@ pub async fn parse_audio_url(url_unparsed: &str) -> Result<AudioInput, anyhow::E
 /// ### Arguments
 ///
 /// * `requested_model` - The model name from the API request
-/// * `state` - The MistralRs state containing the loaded model info
+/// * `state` - The MistralRs state containing the loaded models info
 ///
 /// ### Returns
 ///
-/// Returns `Ok(())` if the models match or if "ignore" is specified, otherwise returns an error.
+/// Returns `Ok(())` if the model is available or if "ignore" is specified, otherwise returns an error.
 pub fn validate_model_name(
     requested_model: &str,
     state: Arc<MistralRs>,
@@ -149,12 +149,18 @@ pub fn validate_model_name(
         return Ok(());
     }
 
-    let loaded_model = state.get_id();
-    if requested_model != loaded_model {
+    let available_models = state.list_models()
+        .map_err(|e| anyhow::anyhow!("Failed to get available models: {}", e))?;
+    
+    if available_models.is_empty() {
+        anyhow::bail!("No models are currently loaded.");
+    }
+
+    if !available_models.contains(&requested_model.to_string()) {
         anyhow::bail!(
-            "Requested model '{}' does not match loaded model '{}'. Only the loaded model is available. Use 'ignore' to bypass this validation.",
+            "Requested model '{}' is not available. Available models: {}. Use 'ignore' to bypass this validation.",
             requested_model,
-            loaded_model
+            available_models.join(", ")
         );
     }
     Ok(())

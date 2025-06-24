@@ -133,6 +133,7 @@ pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
 pub static GLOBAL_HF_CACHE: OnceLock<Cache> = OnceLock::new();
 static ENGINE_ID: AtomicUsize = AtomicUsize::new(0);
 
+#[derive(Clone)]
 pub struct MistralRsConfig {
     pub kind: ModelKind,
     pub device: Device,
@@ -140,21 +141,27 @@ pub struct MistralRsConfig {
     pub modalities: Modalities,
 }
 
-/// The MistralRs struct handles sending requests to the engine.
+/// Internal structure to hold per-engine state
+struct EngineInstance {
+    sender: Sender<Request>,
+    engine_handler: JoinHandle<()>,
+    reboot_state: RebootState,
+    config: MistralRsConfig,
+    creation_time: u64,
+    category: ModelCategory,
+}
+
+/// The MistralRs struct handles sending requests to multiple engines.
 /// It is the core multi-threaded component of mistral.rs, and uses `mpsc`
 /// `Sender` and `Receiver` primitives to send and receive requests to the
-/// engine.
+/// appropriate engine based on model ID.
 pub struct MistralRs {
-    sender: RwLock<Sender<Request>>,
+    engines: RwLock<HashMap<String, EngineInstance>>,
+    default_engine_id: RwLock<Option<String>>,
     log: Option<String>,
     id: String,
     creation_time: u64,
     next_request_id: Mutex<RefCell<usize>>,
-    reboot_state: RebootState,
-    engine_handler: RwLock<JoinHandle<()>>,
-    engine_id: usize,
-    category: ModelCategory,
-    config: MistralRsConfig,
 }
 
 #[derive(Clone)]
@@ -213,6 +220,7 @@ pub struct MistralRsBuilder {
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
     mcp_client_config: Option<McpClientConfig>,
+    model_id: Option<String>,
 }
 
 impl MistralRsBuilder {
@@ -240,6 +248,7 @@ impl MistralRsBuilder {
             tool_callbacks: HashMap::new(),
             tool_callbacks_with_tools: HashMap::new(),
             mcp_client_config: None,
+            model_id: None,
         }
     }
     pub fn with_log(mut self, log: String) -> Self {
@@ -312,6 +321,12 @@ impl MistralRsBuilder {
         self
     }
 
+    /// Set a custom model ID for this engine. If not set, will use the pipeline name.
+    pub fn with_model_id(mut self, model_id: String) -> Self {
+        self.model_id = Some(model_id);
+        self
+    }
+
     pub async fn build(self) -> Arc<MistralRs> {
         MistralRs::new(self).await
     }
@@ -319,14 +334,112 @@ impl MistralRsBuilder {
 
 impl Drop for MistralRs {
     fn drop(&mut self) {
-        ENGINE_INSTRUCTIONS
-            .lock()
-            .expect("`ENGINE_INSTRUCTIONS` was poisoned")
-            .insert(self.engine_id, Some(EngineInstruction::Terminate));
+        // Terminate all engines
+        if let Ok(engines) = self.engines.read() {
+            for (_, engine) in engines.iter() {
+                let _ = engine.sender.blocking_send(Request::Terminate);
+            }
+        }
     }
 }
 
 impl MistralRs {
+    /// Create an engine instance with the given configuration
+    fn create_engine_instance(
+        pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
+        method: SchedulerConfig,
+        truncate_sequence: bool,
+        no_kv_cache: bool,
+        no_prefix_cache: bool,
+        prefix_cache_n: usize,
+        disable_eos_stop: bool,
+        throughput_logging_enabled: bool,
+        search_embedding_model: Option<BertEmbeddingModel>,
+        search_callback: Option<Arc<SearchCallback>>,
+        tool_callbacks: tools::ToolCallbacks,
+        tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+        reboot_state: RebootState,
+    ) -> Result<EngineInstance, String> {
+        let (tx, rx) = channel(10_000);
+        
+        let category = pipeline.try_lock().unwrap().category();
+        let kind = pipeline.try_lock().unwrap().get_metadata().kind.clone();
+        let device = pipeline.try_lock().unwrap().device();
+        let modalities = pipeline.try_lock().unwrap().get_metadata().modalities.clone();
+        
+        info!("Pipeline input modalities are {:?}", &modalities.input);
+        info!("Pipeline output modalities are {:?}", &modalities.output);
+        
+        let config = MistralRsConfig {
+            kind,
+            device,
+            category: category.clone(),
+            modalities,
+        };
+        
+        let engine_handler = thread::spawn(move || {
+            #[cfg(feature = "metal")]
+            objc::rc::autoreleasepool(move || {
+                let rt = Runtime::new().unwrap();
+                rt.block_on(async move {
+                    let engine = Engine::new(
+                        rx,
+                        pipeline,
+                        method,
+                        truncate_sequence,
+                        no_kv_cache,
+                        no_prefix_cache,
+                        prefix_cache_n,
+                        disable_eos_stop,
+                        throughput_logging_enabled,
+                        search_embedding_model,
+                        search_callback.clone(),
+                        tool_callbacks.clone(),
+                        tool_callbacks_with_tools.clone(),
+                    )
+                    .expect("Engine creation failed.");
+                    Arc::new(engine).run().await;
+                })
+            });
+
+            #[cfg(not(feature = "metal"))]
+            {
+                let rt = Runtime::new().unwrap();
+                rt.block_on(async move {
+                    let engine = Engine::new(
+                        rx,
+                        pipeline,
+                        method,
+                        truncate_sequence,
+                        no_kv_cache,
+                        no_prefix_cache,
+                        prefix_cache_n,
+                        disable_eos_stop,
+                        throughput_logging_enabled,
+                        search_embedding_model,
+                        search_callback.clone(),
+                        tool_callbacks.clone(),
+                        tool_callbacks_with_tools.clone(),
+                    )
+                    .expect("Engine creation failed.");
+                    Arc::new(engine).run().await;
+                })
+            }
+        });
+        
+        Ok(EngineInstance {
+            sender: tx,
+            engine_handler,
+            reboot_state,
+            config,
+            creation_time: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Time travel has occurred!")
+                .as_secs(),
+            category,
+        })
+    }
+    
     async fn new(config: MistralRsBuilder) -> Arc<Self> {
         let MistralRsBuilder {
             pipeline,
@@ -343,9 +456,9 @@ impl MistralRs {
             tool_callbacks,
             mut tool_callbacks_with_tools,
             mcp_client_config,
+            model_id,
         } = config;
 
-        let category = pipeline.try_lock().unwrap().category();
         mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
             get_mut_arcmutex!(pipeline).device(),
         );
@@ -409,82 +522,28 @@ impl MistralRs {
             mcp_client_config: mcp_client_config.clone(),
         };
 
-        let (tx, rx) = channel(10_000);
+        // Create the engine instance
+        let engine_instance = Self::create_engine_instance(
+            pipeline.clone(),
+            method,
+            truncate_sequence,
+            no_kv_cache,
+            no_prefix_cache,
+            prefix_cache_n,
+            disable_eos_stop,
+            throughput_logging_enabled,
+            search_embedding_model,
+            search_callback,
+            tool_callbacks,
+            tool_callbacks_with_tools,
+            reboot_state,
+        ).expect("Failed to create engine instance");
 
-        let sender = RwLock::new(tx);
         let id = pipeline.try_lock().unwrap().name();
-
-        let kind = pipeline.try_lock().unwrap().get_metadata().kind.clone();
-        let device = pipeline.try_lock().unwrap().device();
-        let modalities = pipeline
-            .try_lock()
-            .unwrap()
-            .get_metadata()
-            .modalities
-            .clone();
-        info!("Pipeline input modalities are {:?}", &modalities.input);
-        info!("Pipeline output modalities are {:?}", &modalities.output);
-        let config = MistralRsConfig {
-            kind,
-            device,
-            category: category.clone(),
-            modalities,
-        };
-
-        let engine_handler = thread::spawn(move || {
-            #[cfg(feature = "metal")]
-            objc::rc::autoreleasepool(move || {
-                let rt = Runtime::new().unwrap();
-                rt.block_on(async move {
-                    let engine = Engine::new(
-                        rx,
-                        pipeline,
-                        method,
-                        truncate_sequence,
-                        no_kv_cache,
-                        no_prefix_cache,
-                        prefix_cache_n,
-                        disable_eos_stop,
-                        throughput_logging_enabled,
-                        search_embedding_model,
-                        search_callback.clone(),
-                        tool_callbacks.clone(),
-                        tool_callbacks_with_tools.clone(),
-                    )
-                    .expect("Engine creation failed.");
-                    Arc::new(engine).run().await;
-                })
-            });
-
-            #[cfg(not(feature = "metal"))]
-            {
-                let rt = Runtime::new().unwrap();
-                rt.block_on(async move {
-                    let engine = Engine::new(
-                        rx,
-                        pipeline,
-                        method,
-                        truncate_sequence,
-                        no_kv_cache,
-                        no_prefix_cache,
-                        prefix_cache_n,
-                        disable_eos_stop,
-                        throughput_logging_enabled,
-                        search_embedding_model,
-                        search_callback.clone(),
-                        tool_callbacks.clone(),
-                        tool_callbacks_with_tools.clone(),
-                    )
-                    .expect("Engine creation failed.");
-                    Arc::new(engine).run().await;
-                })
-            }
-        });
-
-        let engine_id = ENGINE_ID.fetch_add(1, atomic::Ordering::SeqCst);
-
+        let engine_id = model_id.unwrap_or_else(|| id.clone());
+        
         if distributed::is_daemon() {
-            let request_sender = sender.write().unwrap().clone();
+            let request_sender = engine_instance.sender.clone();
 
             if cfg!(feature = "ring") {
                 // Ring daemon replicator
@@ -505,9 +564,9 @@ impl MistralRs {
         // Do a dummy run
         if !distributed::is_daemon()
             && is_multi_threaded
-            && matches!(category, ModelCategory::Text | ModelCategory::Vision { .. })
+            && matches!(engine_instance.category, ModelCategory::Text | ModelCategory::Vision { .. })
         {
-            let clone_sender = sender.read().unwrap().clone();
+            let clone_sender = engine_instance.sender.clone();
             tokio::task::block_in_place(|| {
                 let (tx, mut rx) = channel(1);
                 let req = Request::Normal(Box::new(NormalRequest {
@@ -531,6 +590,7 @@ impl MistralRs {
                     logits_processors: None,
                     return_raw_logits: false,
                     web_search_options: None,
+                    model_id: None,
                 }));
                 info!("Beginning dummy run.");
                 let start = Instant::now();
@@ -548,9 +608,13 @@ impl MistralRs {
             });
         }
 
+        // Create engines map with the first engine
+        let mut engines = HashMap::new();
+        engines.insert(engine_id.clone(), engine_instance);
+        
         Arc::new(Self {
-            engine_id,
-            sender,
+            engines: RwLock::new(engines),
+            default_engine_id: RwLock::new(Some(engine_id)),
             log,
             id,
             creation_time: SystemTime::now()
@@ -558,91 +622,83 @@ impl MistralRs {
                 .expect("Time travel has occurred!")
                 .as_secs(),
             next_request_id: Mutex::new(RefCell::new(1)),
-            reboot_state,
-            engine_handler: RwLock::new(engine_handler),
-            category,
-            config,
         })
     }
 
-    /// attempts to reboot the engine, if the sender (only way to communicate with
-    /// the engine) is closed
-    fn reboot_engine(&self) -> Result<(), MistralRsError> {
-        let (new_sender, rx) = channel(10_000);
-        let reboot_state = self.reboot_state.clone();
-        let mut sender_lock = self.sender.write().map_err(|_| {
-            tracing::warn!("Couldn't get write lock on the sender during reboot attempt");
-            MistralRsError::SenderPoisoned
-        })?;
-        let mut engine_lock = self.engine_handler.write().map_err(|_| {
-            tracing::warn!("Couldn't get write lock on the engine during reboot attempt");
+    /// Attempts to reboot a specific engine by model_id
+    fn reboot_engine(&self, model_id: &str) -> Result<(), MistralRsError> {
+        let mut engines = self.engines.write().map_err(|_| {
+            tracing::warn!("Couldn't get write lock on engines during reboot attempt");
             MistralRsError::EnginePoisoned
         })?;
-
-        if !engine_lock.is_finished() {
-            tracing::info!("Engine already running, returning ok");
+        
+        if let Some(engine_instance) = engines.get(model_id) {
+            if !engine_instance.engine_handler.is_finished() {
+                tracing::info!("Engine {} already running, returning ok", model_id);
+                return Ok(());
+            }
+            
+            let reboot_state = engine_instance.reboot_state.clone();
+            let new_engine_instance = Self::create_engine_instance(
+                reboot_state.pipeline.clone(),
+                reboot_state.method.clone(),
+                reboot_state.truncate_sequence,
+                reboot_state.no_kv_cache,
+                reboot_state.no_prefix_cache,
+                reboot_state.prefix_cache_n,
+                reboot_state.disable_eos_stop,
+                reboot_state.throughput_logging_enabled,
+                reboot_state.search_embedding_model.clone(),
+                reboot_state.search_callback.clone(),
+                reboot_state.tool_callbacks.clone(),
+                reboot_state.tool_callbacks_with_tools.clone(),
+                reboot_state,
+            ).map_err(|e| {
+                tracing::error!("Failed to create new engine instance: {}", e);
+                MistralRsError::EnginePoisoned
+            })?;
+            
+            engines.insert(model_id.to_string(), new_engine_instance);
+            tracing::info!("Successfully rebooted engine {}", model_id);
             Ok(())
         } else {
-            // critical section. A panic here could lead to poisoned locks
-            let new_engine_handler = thread::spawn(move || {
-                let rt = Runtime::new().unwrap();
-                rt.block_on(async move {
-                    // Initialize MCP client for rebooted engine
-                    let mut tool_callbacks = reboot_state.tool_callbacks.clone();
-                    if let Some(config) = &reboot_state.mcp_client_config {
-                        let mut mcp_client = McpClient::new(config.clone());
-                        if let Ok(()) = mcp_client.initialize().await {
-                            let mcp_callbacks = mcp_client.get_tool_callbacks();
-                            for (name, callback) in mcp_callbacks {
-                                tool_callbacks.insert(name.clone(), callback.clone());
-                            }
-                        }
-                    }
-
-                    let engine = Engine::new(
-                        rx,
-                        reboot_state.pipeline.clone(),
-                        reboot_state.method,
-                        reboot_state.truncate_sequence,
-                        reboot_state.no_kv_cache,
-                        reboot_state.no_prefix_cache,
-                        reboot_state.prefix_cache_n,
-                        reboot_state.disable_eos_stop,
-                        reboot_state.throughput_logging_enabled,
-                        reboot_state.search_embedding_model,
-                        reboot_state.search_callback.clone(),
-                        tool_callbacks,
-                        reboot_state.tool_callbacks_with_tools.clone(),
-                    )
-                    .expect("Engine creation failed");
-                    Arc::new(engine).run().await;
-                });
-            });
-            *sender_lock = new_sender;
-            *engine_lock = new_engine_handler;
-            tracing::info!("Successfully rebooted engine and updated sender + engine handler");
-            Ok(())
+            Err(MistralRsError::EnginePoisoned)
         }
     }
 
-    fn engine_dead(&self) -> Result<bool, MistralRsError> {
-        match self.engine_handler.read() {
-            Ok(handler) => Ok(handler.is_finished()),
-            Err(_) => {
-                tracing::warn!("Couldn't get read lock on engine!");
-                Err(MistralRsError::EnginePoisoned)
+    fn engine_dead(&self, model_id: &str) -> Result<bool, MistralRsError> {
+        let engines = self.engines.read().map_err(|_| {
+            tracing::warn!("Couldn't get read lock on engines!");
+            MistralRsError::EnginePoisoned
+        })?;
+        
+        if let Some(engine_instance) = engines.get(model_id) {
+            Ok(engine_instance.engine_handler.is_finished())
+        } else {
+            Err(MistralRsError::EnginePoisoned)
+        }
+    }
+
+    /// Get sender for a specific model. If model_id is None, uses default engine.
+    pub fn get_sender(&self, model_id: Option<&str>) -> Result<Sender<Request>, MistralRsError> {
+        let resolved_model_id = match model_id {
+            Some(id) => id.to_string(),
+            None => {
+                let default_lock = self.default_engine_id.read().map_err(|_| MistralRsError::SenderPoisoned)?;
+                default_lock.as_ref().ok_or(MistralRsError::EnginePoisoned)?.clone()
             }
+        };
+        
+        if self.engine_dead(&resolved_model_id)? {
+            tracing::warn!("Engine {} is dead, rebooting", resolved_model_id);
+            self.reboot_engine(&resolved_model_id)?
         }
-    }
-
-    pub fn get_sender(&self) -> Result<Sender<Request>, MistralRsError> {
-        if self.engine_dead()? {
-            tracing::warn!("Engine is dead, rebooting");
-            self.reboot_engine()?
-        }
-        match self.sender.read() {
-            Ok(sender) => Ok(sender.clone()),
-            Err(_) => Err(MistralRsError::SenderPoisoned),
+        
+        let engines = self.engines.read().map_err(|_| MistralRsError::SenderPoisoned)?;
+        if let Some(engine_instance) = engines.get(&resolved_model_id) {
+            Ok(engine_instance.sender.clone())
+        } else {
+            Err(MistralRsError::EnginePoisoned)
         }
     }
 
@@ -654,8 +710,22 @@ impl MistralRs {
         self.creation_time
     }
 
-    pub fn get_model_category(&self) -> ModelCategory {
-        self.category.clone()
+    /// Get model category for a specific model. If model_id is None, uses default engine.
+    pub fn get_model_category(&self, model_id: Option<&str>) -> Result<ModelCategory, MistralRsError> {
+        let resolved_model_id = match model_id {
+            Some(id) => id.to_string(),
+            None => {
+                let default_lock = self.default_engine_id.read().map_err(|_| MistralRsError::SenderPoisoned)?;
+                default_lock.as_ref().ok_or(MistralRsError::EnginePoisoned)?.clone()
+            }
+        };
+        
+        let engines = self.engines.read().map_err(|_| MistralRsError::SenderPoisoned)?;
+        if let Some(engine_instance) = engines.get(&resolved_model_id) {
+            Ok(engine_instance.category.clone())
+        } else {
+            Err(MistralRsError::EnginePoisoned)
+        }
     }
 
     pub fn next_request_id(&self) -> usize {
@@ -664,6 +734,143 @@ impl MistralRs {
         let last_v = *last;
         *last += 1;
         last_v
+    }
+
+    /// Add a new model engine to the MistralRs instance
+    pub async fn add_model(
+        &self,
+        model_id: String,
+        pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
+        method: SchedulerConfig,
+        truncate_sequence: Option<bool>,
+        no_kv_cache: Option<bool>,
+        no_prefix_cache: Option<bool>,
+        prefix_cache_n: Option<usize>,
+        disable_eos_stop: Option<bool>,
+        throughput_logging_enabled: bool,
+        search_embedding_model: Option<BertEmbeddingModel>,
+        search_callback: Option<Arc<SearchCallback>>,
+        tool_callbacks: tools::ToolCallbacks,
+        tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+        mcp_client_config: Option<McpClientConfig>,
+    ) -> Result<(), String> {
+        let truncate_sequence = truncate_sequence.unwrap_or(false);
+        let no_kv_cache = no_kv_cache.unwrap_or(false);
+        let no_prefix_cache = no_prefix_cache.unwrap_or(false);
+        let prefix_cache_n = prefix_cache_n.unwrap_or(16);
+        let disable_eos_stop = disable_eos_stop.unwrap_or(false);
+
+        let reboot_state = RebootState {
+            pipeline: pipeline.clone(),
+            method: method.clone(),
+            truncate_sequence,
+            no_kv_cache,
+            no_prefix_cache,
+            prefix_cache_n,
+            disable_eos_stop,
+            throughput_logging_enabled,
+            search_embedding_model: search_embedding_model.clone(),
+            search_callback: search_callback.clone(),
+            tool_callbacks: tool_callbacks.clone(),
+            tool_callbacks_with_tools: tool_callbacks_with_tools.clone(),
+            mcp_client_config: mcp_client_config.clone(),
+        };
+
+        let engine_instance = Self::create_engine_instance(
+            pipeline,
+            method,
+            truncate_sequence,
+            no_kv_cache,
+            no_prefix_cache,
+            prefix_cache_n,
+            disable_eos_stop,
+            throughput_logging_enabled,
+            search_embedding_model,
+            search_callback,
+            tool_callbacks,
+            tool_callbacks_with_tools,
+            reboot_state,
+        )?;
+
+        let mut engines = self.engines.write().map_err(|_| "Failed to acquire write lock on engines")?;
+        engines.insert(model_id.clone(), engine_instance);
+
+        // If this is the first model, set it as default
+        if engines.len() == 1 {
+            let mut default_lock = self.default_engine_id.write().map_err(|_| "Failed to acquire write lock on default_engine_id")?;
+            *default_lock = Some(model_id.clone());
+        }
+
+        info!("Added model {} to MistralRs instance", model_id);
+        Ok(())
+    }
+
+    /// Remove a model engine from the MistralRs instance
+    pub fn remove_model(&self, model_id: &str) -> Result<(), String> {
+        let mut engines = self.engines.write().map_err(|_| "Failed to acquire write lock on engines")?;
+        
+        if engines.len() <= 1 {
+            return Err("Cannot remove the last model from MistralRs".to_string());
+        }
+
+        if let Some(engine_instance) = engines.remove(model_id) {
+            // Send terminate signal to the engine
+            let _ = engine_instance.sender.blocking_send(Request::Terminate);
+            
+            // If this was the default engine, set a new default
+            let mut default_lock = self.default_engine_id.write().map_err(|_| "Failed to acquire write lock on default_engine_id")?;
+            if let Some(ref default_id) = *default_lock {
+                if default_id == model_id {
+                    // Set the first available engine as the new default
+                    *default_lock = engines.keys().next().map(|k| k.clone());
+                }
+            }
+            
+            info!("Removed model {} from MistralRs instance", model_id);
+            Ok(())
+        } else {
+            Err(format!("Model {} not found", model_id))
+        }
+    }
+
+    /// List all available model IDs
+    pub fn list_models(&self) -> Result<Vec<String>, String> {
+        let engines = self.engines.read().map_err(|_| "Failed to acquire read lock on engines")?;
+        Ok(engines.keys().cloned().collect())
+    }
+
+    /// Get the current default model ID
+    pub fn get_default_model_id(&self) -> Result<Option<String>, String> {
+        let default_lock = self.default_engine_id.read().map_err(|_| "Failed to acquire read lock on default_engine_id")?;
+        Ok(default_lock.clone())
+    }
+
+    /// Set the default model ID
+    pub fn set_default_model_id(&self, model_id: &str) -> Result<(), String> {
+        let engines = self.engines.read().map_err(|_| "Failed to acquire read lock on engines")?;
+        if !engines.contains_key(model_id) {
+            return Err(format!("Model {} not found", model_id));
+        }
+        drop(engines);
+
+        let mut default_lock = self.default_engine_id.write().map_err(|_| "Failed to acquire write lock on default_engine_id")?;
+        *default_lock = Some(model_id.to_string());
+        
+        info!("Set default model to {}", model_id);
+        Ok(())
+    }
+
+    /// Dispatch a request to the appropriate engine based on the model_id in the request
+    pub fn send_request(&self, mut request: Request) -> Result<(), MistralRsError> {
+        let model_id = match &mut request {
+            Request::Normal(normal_req) => {
+                normal_req.model_id.clone()
+            },
+            _ => None, // Other request types don't specify model_id
+        };
+
+        let sender = self.get_sender(model_id.as_deref())?;
+        sender.blocking_send(request).map_err(|_| MistralRsError::SenderPoisoned)
     }
 
     pub fn maybe_log_request(this: Arc<Self>, repr: String) {
@@ -706,43 +913,57 @@ impl MistralRs {
         }
     }
 
-    /// Get the number of tools available (including MCP tools)
-    pub fn get_tools_count(&self) -> usize {
-        self.reboot_state.tool_callbacks_with_tools.len()
-    }
-
-    /// Get the number of MCP tools specifically
-    pub fn get_mcp_tools_count(&self) -> usize {
-        // MCP tools are identified by having the "mcp_" prefix or being part of MCP config
-        if self.reboot_state.mcp_client_config.is_some() {
-            // If MCP is configured, count tools with mcp_ prefix or all tools if we can't distinguish
-            self.reboot_state
-                .tool_callbacks_with_tools
-                .keys()
-                .filter(|name| name.starts_with("mcp_") || !name.contains("_callback"))
-                .count()
+    /// Get the number of tools available for a specific model (including MCP tools)
+    pub fn get_tools_count(&self, model_id: Option<&str>) -> Result<usize, String> {
+        let resolved_model_id = match model_id {
+            Some(id) => id.to_string(),
+            None => {
+                let default_lock = self.default_engine_id.read().map_err(|_| "Failed to acquire read lock")?;
+                default_lock.as_ref().ok_or("No default engine set")?.clone()
+            }
+        };
+        
+        let engines = self.engines.read().map_err(|_| "Failed to acquire read lock on engines")?;
+        if let Some(engine_instance) = engines.get(&resolved_model_id) {
+            Ok(engine_instance.reboot_state.tool_callbacks_with_tools.len())
         } else {
-            0
+            Err(format!("Model {} not found", resolved_model_id))
         }
     }
 
-    /// Check if MCP client is configured
-    pub fn has_mcp_client(&self) -> bool {
-        self.reboot_state.mcp_client_config.is_some()
-    }
-
-    /// Get information about MCP configuration for status reporting
-    pub fn get_mcp_info(&self) -> (bool, Option<usize>, Option<usize>) {
-        if let Some(config) = &self.reboot_state.mcp_client_config {
-            let tools_count = self.get_mcp_tools_count();
-            let servers_configured = config.servers.len();
-            (true, Some(tools_count), Some(servers_configured))
+    /// Check if MCP client is configured for a specific model
+    pub fn has_mcp_client(&self, model_id: Option<&str>) -> Result<bool, String> {
+        let resolved_model_id = match model_id {
+            Some(id) => id.to_string(),
+            None => {
+                let default_lock = self.default_engine_id.read().map_err(|_| "Failed to acquire read lock")?;
+                default_lock.as_ref().ok_or("No default engine set")?.clone()
+            }
+        };
+        
+        let engines = self.engines.read().map_err(|_| "Failed to acquire read lock on engines")?;
+        if let Some(engine_instance) = engines.get(&resolved_model_id) {
+            Ok(engine_instance.reboot_state.mcp_client_config.is_some())
         } else {
-            (false, None, None)
+            Err(format!("Model {} not found", resolved_model_id))
         }
     }
 
-    pub fn config(&self) -> &MistralRsConfig {
-        &self.config
+    /// Get config for a specific model
+    pub fn config(&self, model_id: Option<&str>) -> Result<MistralRsConfig, String> {
+        let resolved_model_id = match model_id {
+            Some(id) => id.to_string(),
+            None => {
+                let default_lock = self.default_engine_id.read().map_err(|_| "Failed to acquire read lock")?;
+                default_lock.as_ref().ok_or("No default engine set")?.clone()
+            }
+        };
+        
+        let engines = self.engines.read().map_err(|_| "Failed to acquire read lock on engines")?;
+        if let Some(engine_instance) = engines.get(&resolved_model_id) {
+            Ok(engine_instance.config.clone())
+        } else {
+            Err(format!("Model {} not found", resolved_model_id))
+        }
     }
 }
