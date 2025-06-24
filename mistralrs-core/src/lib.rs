@@ -846,7 +846,7 @@ impl MistralRs {
             if let Some(ref default_id) = *default_lock {
                 if default_id == model_id {
                     // Set the first available engine as the new default
-                    *default_lock = engines.keys().next().map(|k| k.clone());
+                    *default_lock = engines.keys().next().cloned();
                 }
             }
 

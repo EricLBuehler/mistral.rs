@@ -800,7 +800,7 @@ impl MistralRsForServerBuilder {
             false,
             mapper,
             isq,
-            cache_config.clone(),
+            cache_config,
         )?;
         let first_pipeline_name = pipeline.lock().await.name();
         info!(
@@ -881,7 +881,7 @@ impl MistralRsForServerBuilder {
                 false,
                 mapper,
                 isq,
-                cache_config.clone(),
+                cache_config,
             )?;
 
             // Use the pipeline's name() as the model ID
