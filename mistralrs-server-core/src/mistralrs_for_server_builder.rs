@@ -897,22 +897,30 @@ impl MistralRsForServerBuilder {
             }
 
             // Add the model to the MistralRs instance
+            let engine_config = mistralrs_core::EngineConfig {
+                truncate_sequence: self.truncate_sequence,
+                no_kv_cache: self.no_kv_cache,
+                no_prefix_cache: false,
+                prefix_cache_n: self.prefix_cache_n,
+                disable_eos_stop: false,
+                throughput_logging_enabled: !self.interactive_mode,
+                search_embedding_model: bert_model.clone(),
+                search_callback: self.search_callback.clone(),
+                tool_callbacks: HashMap::new(),
+                tool_callbacks_with_tools: HashMap::new(),
+            };
+
+            let mut add_model_config = mistralrs_core::AddModelConfig::new(engine_config);
+            if let Some(mcp_config) = self.mcp_client_config.clone() {
+                add_model_config = add_model_config.with_mcp_config(mcp_config);
+            }
+
             mistralrs
                 .add_model(
                     pipeline_name.clone(),
                     pipeline,
                     scheduler_config.clone(),
-                    Some(self.truncate_sequence),
-                    Some(self.no_kv_cache),
-                    Some(false), // no_prefix_cache
-                    Some(self.prefix_cache_n),
-                    Some(false),            // disable_eos_stop
-                    !self.interactive_mode, // throughput_logging_enabled
-                    bert_model.clone(),
-                    self.search_callback.clone(),
-                    HashMap::new(), // tool_callbacks
-                    HashMap::new(), // tool_callbacks_with_tools
-                    self.mcp_client_config.clone(),
+                    add_model_config,
                 )
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to add model {}: {}", pipeline_name, e))?;

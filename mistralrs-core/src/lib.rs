@@ -129,6 +129,59 @@ pub use llguidance;
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
 pub static GLOBAL_HF_CACHE: OnceLock<Cache> = OnceLock::new();
 
+/// Configuration for creating an engine instance
+#[derive(Clone)]
+pub struct EngineConfig {
+    pub truncate_sequence: bool,
+    pub no_kv_cache: bool,
+    pub no_prefix_cache: bool,
+    pub prefix_cache_n: usize,
+    pub disable_eos_stop: bool,
+    pub throughput_logging_enabled: bool,
+    pub search_embedding_model: Option<BertEmbeddingModel>,
+    pub search_callback: Option<Arc<SearchCallback>>,
+    pub tool_callbacks: tools::ToolCallbacks,
+    pub tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            truncate_sequence: false,
+            no_kv_cache: false,
+            no_prefix_cache: false,
+            prefix_cache_n: 16,
+            disable_eos_stop: false,
+            throughput_logging_enabled: true,
+            search_embedding_model: None,
+            search_callback: None,
+            tool_callbacks: HashMap::new(),
+            tool_callbacks_with_tools: HashMap::new(),
+        }
+    }
+}
+
+/// Configuration for adding a model to MistralRs
+#[derive(Clone)]
+pub struct AddModelConfig {
+    pub engine_config: EngineConfig,
+    pub mcp_client_config: Option<McpClientConfig>,
+}
+
+impl AddModelConfig {
+    pub fn new(engine_config: EngineConfig) -> Self {
+        Self {
+            engine_config,
+            mcp_client_config: None,
+        }
+    }
+
+    pub fn with_mcp_config(mut self, mcp_config: McpClientConfig) -> Self {
+        self.mcp_client_config = Some(mcp_config);
+        self
+    }
+}
+
 #[derive(Clone)]
 pub struct MistralRsConfig {
     pub kind: ModelKind,
@@ -336,16 +389,7 @@ impl MistralRs {
     fn create_engine_instance(
         pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         method: SchedulerConfig,
-        truncate_sequence: bool,
-        no_kv_cache: bool,
-        no_prefix_cache: bool,
-        prefix_cache_n: usize,
-        disable_eos_stop: bool,
-        throughput_logging_enabled: bool,
-        search_embedding_model: Option<BertEmbeddingModel>,
-        search_callback: Option<Arc<SearchCallback>>,
-        tool_callbacks: tools::ToolCallbacks,
-        tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+        config: EngineConfig,
         reboot_state: RebootState,
     ) -> Result<EngineInstance, String> {
         let (tx, rx) = channel(10_000);
@@ -363,7 +407,7 @@ impl MistralRs {
         info!("Pipeline input modalities are {:?}", &modalities.input);
         info!("Pipeline output modalities are {:?}", &modalities.output);
 
-        let config = MistralRsConfig {
+        let mistralrs_config = MistralRsConfig {
             kind,
             device,
             category: category.clone(),
@@ -379,16 +423,16 @@ impl MistralRs {
                         rx,
                         pipeline,
                         method,
-                        truncate_sequence,
-                        no_kv_cache,
-                        no_prefix_cache,
-                        prefix_cache_n,
-                        disable_eos_stop,
-                        throughput_logging_enabled,
-                        search_embedding_model,
-                        search_callback.clone(),
-                        tool_callbacks.clone(),
-                        tool_callbacks_with_tools.clone(),
+                        config.truncate_sequence,
+                        config.no_kv_cache,
+                        config.no_prefix_cache,
+                        config.prefix_cache_n,
+                        config.disable_eos_stop,
+                        config.throughput_logging_enabled,
+                        config.search_embedding_model,
+                        config.search_callback.clone(),
+                        config.tool_callbacks.clone(),
+                        config.tool_callbacks_with_tools.clone(),
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -403,16 +447,16 @@ impl MistralRs {
                         rx,
                         pipeline,
                         method,
-                        truncate_sequence,
-                        no_kv_cache,
-                        no_prefix_cache,
-                        prefix_cache_n,
-                        disable_eos_stop,
-                        throughput_logging_enabled,
-                        search_embedding_model,
-                        search_callback.clone(),
-                        tool_callbacks.clone(),
-                        tool_callbacks_with_tools.clone(),
+                        config.truncate_sequence,
+                        config.no_kv_cache,
+                        config.no_prefix_cache,
+                        config.prefix_cache_n,
+                        config.disable_eos_stop,
+                        config.throughput_logging_enabled,
+                        config.search_embedding_model,
+                        config.search_callback.clone(),
+                        config.tool_callbacks.clone(),
+                        config.tool_callbacks_with_tools.clone(),
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -424,7 +468,7 @@ impl MistralRs {
             sender: tx,
             engine_handler,
             reboot_state,
-            config,
+            config: mistralrs_config,
             category,
         })
     }
@@ -510,10 +554,8 @@ impl MistralRs {
             mcp_client_config: mcp_client_config.clone(),
         };
 
-        // Create the engine instance
-        let engine_instance = Self::create_engine_instance(
-            pipeline.clone(),
-            method,
+        // Create the engine configuration
+        let engine_config = EngineConfig {
             truncate_sequence,
             no_kv_cache,
             no_prefix_cache,
@@ -524,9 +566,12 @@ impl MistralRs {
             search_callback,
             tool_callbacks,
             tool_callbacks_with_tools,
-            reboot_state,
-        )
-        .expect("Failed to create engine instance");
+        };
+
+        // Create the engine instance
+        let engine_instance =
+            Self::create_engine_instance(pipeline.clone(), method, engine_config, reboot_state)
+                .expect("Failed to create engine instance");
 
         let id = pipeline.try_lock().unwrap().name();
 
@@ -630,19 +675,22 @@ impl MistralRs {
             }
 
             let reboot_state = engine_instance.reboot_state.clone();
+            let engine_config = EngineConfig {
+                truncate_sequence: reboot_state.truncate_sequence,
+                no_kv_cache: reboot_state.no_kv_cache,
+                no_prefix_cache: reboot_state.no_prefix_cache,
+                prefix_cache_n: reboot_state.prefix_cache_n,
+                disable_eos_stop: reboot_state.disable_eos_stop,
+                throughput_logging_enabled: reboot_state.throughput_logging_enabled,
+                search_embedding_model: reboot_state.search_embedding_model.clone(),
+                search_callback: reboot_state.search_callback.clone(),
+                tool_callbacks: reboot_state.tool_callbacks.clone(),
+                tool_callbacks_with_tools: reboot_state.tool_callbacks_with_tools.clone(),
+            };
             let new_engine_instance = Self::create_engine_instance(
                 reboot_state.pipeline.clone(),
                 reboot_state.method.clone(),
-                reboot_state.truncate_sequence,
-                reboot_state.no_kv_cache,
-                reboot_state.no_prefix_cache,
-                reboot_state.prefix_cache_n,
-                reboot_state.disable_eos_stop,
-                reboot_state.throughput_logging_enabled,
-                reboot_state.search_embedding_model.clone(),
-                reboot_state.search_callback.clone(),
-                reboot_state.tool_callbacks.clone(),
-                reboot_state.tool_callbacks_with_tools.clone(),
+                engine_config,
                 reboot_state,
             )
             .map_err(|e| {
@@ -755,55 +803,26 @@ impl MistralRs {
         model_id: String,
         pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         method: SchedulerConfig,
-        truncate_sequence: Option<bool>,
-        no_kv_cache: Option<bool>,
-        no_prefix_cache: Option<bool>,
-        prefix_cache_n: Option<usize>,
-        disable_eos_stop: Option<bool>,
-        throughput_logging_enabled: bool,
-        search_embedding_model: Option<BertEmbeddingModel>,
-        search_callback: Option<Arc<SearchCallback>>,
-        tool_callbacks: tools::ToolCallbacks,
-        tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
-        mcp_client_config: Option<McpClientConfig>,
+        config: AddModelConfig,
     ) -> Result<(), String> {
-        let truncate_sequence = truncate_sequence.unwrap_or(false);
-        let no_kv_cache = no_kv_cache.unwrap_or(false);
-        let no_prefix_cache = no_prefix_cache.unwrap_or(false);
-        let prefix_cache_n = prefix_cache_n.unwrap_or(16);
-        let disable_eos_stop = disable_eos_stop.unwrap_or(false);
-
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
             method: method.clone(),
-            truncate_sequence,
-            no_kv_cache,
-            no_prefix_cache,
-            prefix_cache_n,
-            disable_eos_stop,
-            throughput_logging_enabled,
-            search_embedding_model: search_embedding_model.clone(),
-            search_callback: search_callback.clone(),
-            tool_callbacks: tool_callbacks.clone(),
-            tool_callbacks_with_tools: tool_callbacks_with_tools.clone(),
-            mcp_client_config: mcp_client_config.clone(),
+            truncate_sequence: config.engine_config.truncate_sequence,
+            no_kv_cache: config.engine_config.no_kv_cache,
+            no_prefix_cache: config.engine_config.no_prefix_cache,
+            prefix_cache_n: config.engine_config.prefix_cache_n,
+            disable_eos_stop: config.engine_config.disable_eos_stop,
+            throughput_logging_enabled: config.engine_config.throughput_logging_enabled,
+            search_embedding_model: config.engine_config.search_embedding_model.clone(),
+            search_callback: config.engine_config.search_callback.clone(),
+            tool_callbacks: config.engine_config.tool_callbacks.clone(),
+            tool_callbacks_with_tools: config.engine_config.tool_callbacks_with_tools.clone(),
+            mcp_client_config: config.mcp_client_config.clone(),
         };
 
-        let engine_instance = Self::create_engine_instance(
-            pipeline,
-            method,
-            truncate_sequence,
-            no_kv_cache,
-            no_prefix_cache,
-            prefix_cache_n,
-            disable_eos_stop,
-            throughput_logging_enabled,
-            search_embedding_model,
-            search_callback,
-            tool_callbacks,
-            tool_callbacks_with_tools,
-            reboot_state,
-        )?;
+        let engine_instance =
+            Self::create_engine_instance(pipeline, method, config.engine_config, reboot_state)?;
 
         let mut engines = self
             .engines

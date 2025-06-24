@@ -51,35 +51,10 @@ impl MultiModel {
         model_id: String,
         pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         method: SchedulerConfig,
-        truncate_sequence: Option<bool>,
-        no_kv_cache: Option<bool>,
-        no_prefix_cache: Option<bool>,
-        prefix_cache_n: Option<usize>,
-        disable_eos_stop: Option<bool>,
-        throughput_logging_enabled: bool,
-        search_embedding_model: Option<BertEmbeddingModel>,
-        search_callback: Option<Arc<SearchCallback>>,
-        tool_callbacks: std::collections::HashMap<String, Arc<ToolCallback>>,
-        tool_callbacks_with_tools: std::collections::HashMap<String, ToolCallbackWithTool>,
-        mcp_client_config: Option<McpClientConfig>,
+        config: mistralrs_core::AddModelConfig,
     ) -> Result<(), String> {
         self.runner
-            .add_model(
-                model_id,
-                pipeline,
-                method,
-                truncate_sequence,
-                no_kv_cache,
-                no_prefix_cache,
-                prefix_cache_n,
-                disable_eos_stop,
-                throughput_logging_enabled,
-                search_embedding_model,
-                search_callback,
-                tool_callbacks,
-                tool_callbacks_with_tools,
-                mcp_client_config,
-            )
+            .add_model(model_id, pipeline, method, config)
             .await
     }
 
