@@ -790,6 +790,8 @@ impl MistralRsForServerBuilder {
             .or(self.in_situ_quant.as_ref())
             .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
 
+        let mut pipeline_names = Vec::new();
+
         let pipeline: LoadedPipeline = loader.load_model_from_hf(
             None,
             self.token_source.clone(),
@@ -800,7 +802,12 @@ impl MistralRsForServerBuilder {
             isq,
             cache_config.clone(),
         )?;
-        info!("First model loaded: {}", first_model.model_id);
+        let first_pipeline_name = pipeline.lock().await.name();
+        info!(
+            "First model loaded: `{first_pipeline_name}` (from config key: {})",
+            first_model.model_id
+        );
+        pipeline_names.push(first_pipeline_name);
 
         let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
         let bert_model = get_bert_model(self.enable_search, self.search_bert_model);
@@ -815,8 +822,7 @@ impl MistralRsForServerBuilder {
         .with_opt_log(self.log.clone())
         .with_truncate_sequence(self.truncate_sequence)
         .with_no_kv_cache(self.no_kv_cache)
-        .with_prefix_cache_n(self.prefix_cache_n)
-        .with_model_id(first_model.model_id.clone());
+        .with_prefix_cache_n(self.prefix_cache_n);
 
         // Add MCP client configuration if provided
         if let Some(mcp_config) = self.mcp_client_config.clone() {
@@ -827,7 +833,10 @@ impl MistralRsForServerBuilder {
 
         // Load additional models
         for model_config in self.models.iter().skip(1) {
-            info!("Loading additional model: {}", model_config.model_id);
+            info!(
+                "Loading additional model from config key: {}",
+                model_config.model_id
+            );
 
             let model = model_config.model.clone();
             let dtype = get_model_dtype(&model)?;
@@ -875,10 +884,13 @@ impl MistralRsForServerBuilder {
                 cache_config.clone(),
             )?;
 
+            // Use the pipeline's name() as the model ID
+            let pipeline_name = pipeline.lock().await.name();
+
             // Add the model to the MistralRs instance
             mistralrs
                 .add_model(
-                    model_config.model_id.clone(),
+                    pipeline_name.clone(),
                     pipeline,
                     scheduler_config.clone(),
                     Some(self.truncate_sequence),
@@ -894,11 +906,13 @@ impl MistralRsForServerBuilder {
                     self.mcp_client_config.clone(),
                 )
                 .await
-                .map_err(|e| {
-                    anyhow::anyhow!("Failed to add model {}: {}", model_config.model_id, e)
-                })?;
+                .map_err(|e| anyhow::anyhow!("Failed to add model {}: {}", pipeline_name, e))?;
 
-            info!("Model {} loaded successfully", model_config.model_id);
+            info!(
+                "Model `{pipeline_name}` registered successfully (from config key: {})",
+                model_config.model_id
+            );
+            pipeline_names.push(pipeline_name);
         }
 
         // Set the default model if specified
@@ -909,8 +923,7 @@ impl MistralRsForServerBuilder {
         }
 
         // Log all models loaded
-        let model_ids: Vec<String> = self.models.iter().map(|m| m.model_id.clone()).collect();
-        info!("All models loaded: {}", model_ids.join(", "));
+        info!("All models loaded: `{}`", pipeline_names.join("`, `"));
 
         // Log default model
         if let Some(ref default_id) = self.default_model_id {

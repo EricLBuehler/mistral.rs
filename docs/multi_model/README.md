@@ -13,7 +13,7 @@ mistralrs-server --port 1234 plain -m meta-llama/Llama-3.2-3B-Instruct
 ### Multi-Model Mode
 ```bash
 # Load multiple models from configuration file
-mistralrs-server --port 1234 multi-model --config config.json --default-model-id llama3-3b
+mistralrs-server --port 1234 multi-model --config config.json --default-model-id "meta-llama/Llama-3.2-3B-Instruct"
 ```
 
 ## Configuration File Format
@@ -38,7 +38,8 @@ Create a JSON file with model configurations as object keys:
 
 ### Configuration Structure
 
-- **Object keys** (e.g., `"llama3-3b"`, `"qwen3-4b"`): API identifiers used in requests
+- **Object keys** (e.g., `"llama3-3b"`, `"qwen3-4b"`): Organizational labels (for human readability)
+- **Actual API identifiers**: Derived automatically from the model path (e.g., `"meta-llama/Llama-3.2-3B-Instruct"`)
 - **Model specification**: The model type and configuration (same format as CLI subcommands)
 - **Optional fields**:
   - `chat_template`: Custom chat template
@@ -46,11 +47,11 @@ Create a JSON file with model configurations as object keys:
   - `num_device_layers`: Device layer configuration  
   - `in_situ_quant`: In-situ quantization setting
 
-**Key advantages of this format:**
-- ✅ No duplicate `model_id` fields
-- ✅ Clear mapping between API names and configurations
-- ✅ More intuitive and less error-prone
-- ✅ Automatic validation of unique model names
+**How API identifiers work:**
+- ✅ Object keys are **organizational only** (for config readability)
+- ✅ **Real API identifiers** are derived from `model_id` field inside the model spec
+- ✅ Use the full model path in API requests (e.g., `"meta-llama/Llama-3.2-3B-Instruct"`)
+- ✅ No naming conflicts - each model has its canonical identifier
 
 ## API Usage
 
@@ -62,7 +63,7 @@ Use the `model` field in your requests to specify which model to use:
 curl http://localhost:1234/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "llama3-3b",
+    "model": "meta-llama/Llama-3.2-3B-Instruct",
     "messages": [
       {"role": "user", "content": "Hello!"}
     ]
@@ -83,13 +84,13 @@ Returns:
   "object": "list",
   "data": [
     {
-      "id": "llama3-3b",
+      "id": "meta-llama/Llama-3.2-3B-Instruct",
       "object": "model",
       "created": 1234567890,
       "owned_by": "local"
     },
     {
-      "id": "qwen3-4b", 
+      "id": "Qwen/Qwen3-4B", 
       "object": "model",
       "created": 1234567890,
       "owned_by": "local"

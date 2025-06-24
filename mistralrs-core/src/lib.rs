@@ -215,7 +215,6 @@ pub struct MistralRsBuilder {
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
     mcp_client_config: Option<McpClientConfig>,
-    model_id: Option<String>,
 }
 
 impl MistralRsBuilder {
@@ -243,7 +242,6 @@ impl MistralRsBuilder {
             tool_callbacks: HashMap::new(),
             tool_callbacks_with_tools: HashMap::new(),
             mcp_client_config: None,
-            model_id: None,
         }
     }
     pub fn with_log(mut self, log: String) -> Self {
@@ -316,12 +314,6 @@ impl MistralRsBuilder {
         self
     }
 
-    /// Set a custom model ID for this engine. If not set, will use the pipeline name.
-    pub fn with_model_id(mut self, model_id: String) -> Self {
-        self.model_id = Some(model_id);
-        self
-    }
-
     pub async fn build(self) -> Arc<MistralRs> {
         MistralRs::new(self).await
     }
@@ -332,7 +324,8 @@ impl Drop for MistralRs {
         // Terminate all engines
         if let Ok(engines) = self.engines.read() {
             for (_, engine) in engines.iter() {
-                let _ = engine.sender.blocking_send(Request::Terminate);
+                // Use try_send instead of blocking_send to avoid runtime panics
+                let _ = engine.sender.try_send(Request::Terminate);
             }
         }
     }
@@ -452,7 +445,6 @@ impl MistralRs {
             tool_callbacks,
             mut tool_callbacks_with_tools,
             mcp_client_config,
-            model_id,
         } = config;
 
         mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
@@ -537,7 +529,6 @@ impl MistralRs {
         .expect("Failed to create engine instance");
 
         let id = pipeline.try_lock().unwrap().name();
-        let engine_id = model_id.unwrap_or_else(|| id.clone());
 
         if distributed::is_daemon() {
             let request_sender = engine_instance.sender.clone();
@@ -610,11 +601,11 @@ impl MistralRs {
 
         // Create engines map with the first engine
         let mut engines = HashMap::new();
-        engines.insert(engine_id.clone(), engine_instance);
+        engines.insert(id.clone(), engine_instance);
 
         Arc::new(Self {
             engines: RwLock::new(engines),
-            default_engine_id: RwLock::new(Some(engine_id)),
+            default_engine_id: RwLock::new(Some(id.clone())),
             log,
             id,
             creation_time: SystemTime::now()
