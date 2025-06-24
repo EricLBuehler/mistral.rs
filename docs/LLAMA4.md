@@ -66,7 +66,7 @@ The image exudes a sense of serenity and majesty, capturing the beauty of nature
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --release --features ... -- --port 1234 --isq q4k vision-plain -m meta-llama/Llama-4-Scout-17B-16E-Instruct
+cargo run --release --features ... -- --port 1234 --isq 4 vision-plain -m meta-llama/Llama-4-Scout-17B-16E-Instruct
 ```
 
 2) Send a request
@@ -176,7 +176,7 @@ runner = Runner(
         model_id="meta-llama/Llama-4-Scout-17B-16E-Instruct",
         arch=VisionArchitecture.Llama4,
     ),
-    in_situ_quant="Q4K",
+    in_situ_quant="4",
 )
 
 res = runner.send_chat_completion_request(

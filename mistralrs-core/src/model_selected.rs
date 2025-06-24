@@ -655,4 +655,16 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
     },
+
+    /// Select multi-model mode with configuration file
+    #[command(name = "multi-model")]
+    MultiModel {
+        /// Multi-model configuration file path (JSON format)
+        #[arg(short, long)]
+        config: String,
+
+        /// Default model ID to use when no model is specified in requests
+        #[arg(short, long)]
+        default_model_id: Option<String>,
+    },
 }

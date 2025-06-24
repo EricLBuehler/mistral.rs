@@ -37,7 +37,7 @@ Mistral.rs supports interactive mode for vision models! It is an easy way to int
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --features ... --release -- -i --isq Q4K vision-plain -m HuggingFaceM4/Idefics3-8B-Llama3
+cargo run --features ... --release -- -i --isq 4 vision-plain -m HuggingFaceM4/Idefics3-8B-Llama3
 ```
 
 2) Ask a question
@@ -109,7 +109,7 @@ On closer inspection near one side of this grandeur scene stands tall trees with
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m HuggingFaceM4/Idefics3-8B-Llama3
+cargo run --release --features ... -- --port 1234 --isq 4 vision-plain -m HuggingFaceM4/Idefics3-8B-Llama3
 ```
 
 2) Send a request

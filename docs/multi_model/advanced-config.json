@@ -1,0 +1,40 @@
+[
+  {
+    "model_id": "llama3-3b-text",
+    "model": {
+      "Plain": {
+        "model_id": "meta-llama/Llama-3.2-3B-Instruct"
+      }
+    },
+    "in_situ_quant": "Q8"
+  },
+  {
+    "model_id": "gemma3-4b-vision",
+    "model": {
+      "VisionPlain": {
+        "model_id": "google/gemma-3-4b-it"
+      }
+    },
+    "in_situ_quant": "Q4K"
+  },
+  {
+    "model_id": "qwen3-4b-fast",
+    "model": {
+      "Plain": {
+        "model_id": "Qwen/Qwen3-4B"
+      }
+    },
+    "in_situ_quant": "Q4K",
+    "num_device_layers": ["8"]
+  },
+  {
+    "model_id": "llama3-gguf",
+    "model": {
+      "Gguf": {
+        "tok_model_id": "meta-llama/Llama-3.2-3B-Instruct",
+        "quantized_model_id": "bartowski/Llama-3.2-3B-Instruct-GGUF",
+        "quantized_filename": "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+      }
+    }
+  }
+]

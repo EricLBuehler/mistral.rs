@@ -437,6 +437,23 @@ You can launch an HTTP server by replacing `-i` with `--port <port>`. For instan
 
 You can find documentation about the server itself [here](docs/HTTP.md).
 
+### Multi-model support
+
+Serve multiple models simultaneously from a single server instance. Perfect for comparing models, A/B testing, or serving different models for different use cases.
+
+```bash
+./mistralrs-server --port 1234 multi-model --config example-multi-model-config.json --default-model-id llama3-3b
+```
+
+Select models in your requests using the `model` parameter:
+```bash
+curl http://localhost:1234/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "llama3-3b", "messages": [{"role": "user", "content": "Hello!"}]}'
+```
+
+📖 **[Complete multi-model documentation →](docs/multi_model/README.md)**
+
 ### Structured selection with a `.toml` file
 
 We provide a method to select models with a `.toml` file. The keys are the same as the command line, with `no_kv_cache` and `tokenizer_json` being "global" keys.

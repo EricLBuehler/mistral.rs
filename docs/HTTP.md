@@ -144,5 +144,5 @@ Reapply ISQ to the model if possible. Pass the names as a JSON object with the k
 
 Example with `curl`:
 ```bash
-curl http://localhost:<port>/re_isq -H "Content-Type: application/json" -H "Authorization: Bearer EMPTY" -d '{"ggml_type":"Q4K"}'
+curl http://localhost:<port>/re_isq -H "Content-Type: application/json" -H "Authorization: Bearer EMPTY" -d '{"ggml_type":"4"}'
 ```
