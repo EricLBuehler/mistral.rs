@@ -18,4 +18,24 @@ curl http://localhost:1234/v1/chat/completions \
   -d '{"model": "llama3-3b", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
+### New Configuration Format
+
+The configuration format has been simplified to use object keys as model names:
+
+```json
+{
+  "llama3-3b": {
+    "Plain": {
+      "model_id": "meta-llama/Llama-3.2-3B-Instruct"
+    },
+    "in_situ_quant": "Q4K"
+  },
+  "qwen3-4b": {
+    "Plain": {
+      "model_id": "Qwen/Qwen3-4B"
+    }
+  }
+}
+```
+
 See [docs/multi_model/README.md](docs/multi_model/README.md) for complete documentation.

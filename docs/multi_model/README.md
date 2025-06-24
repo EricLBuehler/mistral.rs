@@ -18,40 +18,39 @@ mistralrs-server --port 1234 multi-model --config config.json --default-model-id
 
 ## Configuration File Format
 
-Create a JSON file with an array of model configurations:
+Create a JSON file with model configurations as object keys:
 
 ```json
-[
-  {
-    "model_id": "llama3-3b",
-    "model": {
-      "Plain": {
-        "model_id": "meta-llama/Llama-3.2-3B-Instruct"
-      }
+{
+  "llama3-3b": {
+    "Plain": {
+      "model_id": "meta-llama/Llama-3.2-3B-Instruct"
     }
   },
-  {
-    "model_id": "qwen3-4b",
-    "model": {
-      "Plain": {
-        "model_id": "Qwen/Qwen3-4B"
-      }
+  "qwen3-4b": {
+    "Plain": {
+      "model_id": "Qwen/Qwen3-4B"
     },
-    "in_situ_quant": "4"
+    "in_situ_quant": "Q4K"
   }
-]
+}
 ```
 
-### Configuration Fields
+### Configuration Structure
 
-- **model_id**: Unique identifier for the model (used in API requests)
-- **model**: The model specification (same format as CLI subcommands)
-- **chat_template**: Optional custom chat template
-- **jinja_explicit**: Optional JINJA template file
-- **num_device_layers**: Optional device layer configuration  
-- **in_situ_quant**: Optional in-situ quantization setting
+- **Object keys** (e.g., `"llama3-3b"`, `"qwen3-4b"`): API identifiers used in requests
+- **Model specification**: The model type and configuration (same format as CLI subcommands)
+- **Optional fields**:
+  - `chat_template`: Custom chat template
+  - `jinja_explicit`: JINJA template file
+  - `num_device_layers`: Device layer configuration  
+  - `in_situ_quant`: In-situ quantization setting
 
-**Note**: All fields within the `model` object have sensible defaults and can be omitted. Only `model_id` is required for most model types. The configuration supports the full range of CLI options but with automatic defaults.
+**Key advantages of this format:**
+- ✅ No duplicate `model_id` fields
+- ✅ Clear mapping between API names and configurations
+- ✅ More intuitive and less error-prone
+- ✅ Automatic validation of unique model names
 
 ## API Usage
 
@@ -120,63 +119,48 @@ mistralrs-server [OPTIONS] --multi-model --multi-model-config <CONFIG> [--defaul
 
 ### Example 1: Text Models
 ```json
-[
-  {
-    "model_id": "llama3-3b",
-    "model": {
-      "Plain": {
-        "model_id": "meta-llama/Llama-3.2-3B-Instruct"
-      }
+{
+  "llama3-3b": {
+    "Plain": {
+      "model_id": "meta-llama/Llama-3.2-3B-Instruct"
     }
   },
-  {
-    "model_id": "qwen3-4b", 
-    "model": {
-      "Plain": {
-        "model_id": "Qwen/Qwen3-4B"
-      }
+  "qwen3-4b": {
+    "Plain": {
+      "model_id": "Qwen/Qwen3-4B"
     },
-    "in_situ_quant": "4"
+    "in_situ_quant": "Q4K"
   }
-]
+}
 ```
 
 ### Example 2: Mixed Model Types
 ```json
-[
-  {
-    "model_id": "text-model",
-    "model": {
-      "Plain": {
-        "model_id": "meta-llama/Llama-3.2-3B-Instruct"
-      }
+{
+  "text-model": {
+    "Plain": {
+      "model_id": "meta-llama/Llama-3.2-3B-Instruct"
     }
   },
-  {
-    "model_id": "vision-model",
-    "model": {
-      "VisionPlain": {
-        "model_id": "google/gemma-3-4b-it"
-      }
+  "vision-model": {
+    "VisionPlain": {
+      "model_id": "google/gemma-3-4b-it"
     }
   }
-]
+}
 ```
 
 ### Example 3: GGUF Models
 ```json
-[
-  {
-    "model_id": "llama-gguf",
-    "model": {
-      "Gguf": {
-        "tok_model_id": "meta-llama/Llama-3.2-3B-Instruct",
-        "quantized_model_id": "bartowski/Llama-3.2-3B-Instruct-GGUF",
-        "quantized_filename": "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-      }
+{
+  "llama-gguf": {
+    "Gguf": {
+      "tok_model_id": "meta-llama/Llama-3.2-3B-Instruct",
+      "quantized_model_id": "bartowski/Llama-3.2-3B-Instruct-GGUF",
+      "quantized_filename": "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
     }
   }
-]
+}
 ```
 
 ## Notes

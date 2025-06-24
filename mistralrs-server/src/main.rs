@@ -4,6 +4,7 @@ use mistralrs_core::{
     initialize_logging, McpClientConfig, ModelSelected, PagedCacheType, TokenSource,
 };
 use rust_mcp_sdk::schema::LATEST_PROTOCOL_VERSION;
+use std::collections::HashMap;
 use tokio::join;
 use tracing::{error, info};
 
@@ -278,6 +279,22 @@ fn validate_mcp_config(config: &McpClientConfig) -> Result<()> {
     Ok(())
 }
 
+/// Configuration for a single model in a multi-model setup (parsing format)
+#[derive(Clone, serde::Deserialize)]
+struct ModelConfigParsed {
+    /// Model selector
+    #[serde(flatten)]
+    model: ModelSelected,
+    /// Model-specific chat template
+    chat_template: Option<String>,
+    /// Model-specific JINJA template
+    jinja_explicit: Option<String>,
+    /// Model-specific device layers
+    num_device_layers: Option<Vec<String>>,
+    /// Model-specific in-situ quantization
+    in_situ_quant: Option<String>,
+}
+
 /// Load multi-model configuration from file
 fn load_multi_model_config(config_path: &str) -> Result<Vec<ModelConfig>> {
     let config_content = std::fs::read_to_string(config_path).map_err(|e| {
@@ -288,19 +305,24 @@ fn load_multi_model_config(config_path: &str) -> Result<Vec<ModelConfig>> {
         )
     })?;
 
-    let configs: Vec<ModelConfig> = serde_json::from_str(&config_content)
+    let configs_parsed: HashMap<String, ModelConfigParsed> = serde_json::from_str(&config_content)
         .map_err(|e| anyhow::anyhow!("Failed to parse multi-model config: {}", e))?;
 
-    if configs.is_empty() {
+    if configs_parsed.is_empty() {
         anyhow::bail!("Multi-model configuration file is empty");
     }
 
-    // Validate model IDs are unique
-    let mut seen_ids = std::collections::HashSet::new();
-    for config in &configs {
-        if !seen_ids.insert(&config.model_id) {
-            anyhow::bail!("Duplicate model ID in config: {}", config.model_id);
-        }
+    let mut configs = Vec::new();
+    for (model_id, parsed_config) in configs_parsed {
+        let config = ModelConfig {
+            model_id,
+            model: parsed_config.model,
+            chat_template: parsed_config.chat_template,
+            jinja_explicit: parsed_config.jinja_explicit,
+            num_device_layers: parsed_config.num_device_layers,
+            in_situ_quant: parsed_config.in_situ_quant,
+        };
+        configs.push(config);
     }
 
     info!(
@@ -322,7 +344,10 @@ async fn main() -> Result<()> {
     let paged_attn = configure_paged_attn_from_flags(args.paged_attn, args.no_paged_attn)?;
 
     let mistralrs = match args.model {
-        ModelSelected::MultiModel { config, default_model_id } => {
+        ModelSelected::MultiModel {
+            config,
+            default_model_id,
+        } => {
             // Multi-model mode
             let model_configs = load_multi_model_config(&config)?;
 
