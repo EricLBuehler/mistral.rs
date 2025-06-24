@@ -829,7 +829,6 @@ impl MistralRs {
             *default_lock = Some(model_id.clone());
         }
 
-        info!("Added model {} to MistralRs instance", model_id);
         Ok(())
     }
 
@@ -860,7 +859,6 @@ impl MistralRs {
                 }
             }
 
-            info!("Removed model {} from MistralRs instance", model_id);
             Ok(())
         } else {
             Err(format!("Model {} not found", model_id))
@@ -902,7 +900,6 @@ impl MistralRs {
             .map_err(|_| "Failed to acquire write lock on default_engine_id")?;
         *default_lock = Some(model_id.to_string());
 
-        info!("Set default model to {}", model_id);
         Ok(())
     }
 

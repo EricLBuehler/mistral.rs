@@ -902,16 +902,22 @@ impl MistralRsForServerBuilder {
         }
 
         // Set the default model if specified
-        if let Some(default_model_id) = self.default_model_id {
+        if let Some(ref default_model_id) = self.default_model_id {
             mistralrs
-                .set_default_model_id(&default_model_id)
+                .set_default_model_id(default_model_id)
                 .map_err(|e| anyhow::anyhow!("Failed to set default model: {}", e))?;
         }
 
-        info!(
-            "Multi-model setup completed with {} models",
-            self.models.len()
-        );
+        // Log all models loaded
+        let model_ids: Vec<String> = self.models.iter().map(|m| m.model_id.clone()).collect();
+        info!("All models loaded: {}", model_ids.join(", "));
+
+        // Log default model
+        if let Some(ref default_id) = self.default_model_id {
+            info!("Default model: {}", default_id);
+        } else {
+            info!("Default model: {} (first model)", self.models[0].model_id);
+        }
         Ok(mistralrs)
     }
 }
