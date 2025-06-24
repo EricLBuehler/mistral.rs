@@ -10,6 +10,7 @@ use tracing::{error, info};
 use mistralrs_server_core::{
     mistralrs_for_server_builder::{
         configure_paged_attn_from_flags, defaults, get_bert_model, MistralRsForServerBuilder,
+        ModelConfig,
     },
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
 };
@@ -43,9 +44,21 @@ struct Args {
     #[clap(long, short, action)]
     truncate_sequence: bool,
 
-    /// Model selector
+    /// Model selector (used for single-model mode)
     #[clap(subcommand)]
-    model: ModelSelected,
+    model: Option<ModelSelected>,
+
+    /// Enable multi-model mode
+    #[arg(long)]
+    multi_model: bool,
+
+    /// Multi-model configuration file path (JSON format)
+    #[arg(long)]
+    multi_model_config: Option<String>,
+
+    /// Default model ID to use when no model is specified in requests (multi-model mode only)
+    #[arg(long)]
+    default_model_id: Option<String>,
 
     /// Maximum running sequences at any time. If the `tgt_non_granular_index` flag is set for X-LoRA models, this will be set to 1.
     #[arg(long, default_value_t = defaults::MAX_SEQS)]
@@ -277,6 +290,30 @@ fn validate_mcp_config(config: &McpClientConfig) -> Result<()> {
     Ok(())
 }
 
+/// Load multi-model configuration from file
+fn load_multi_model_config(config_path: &str) -> Result<Vec<ModelConfig>> {
+    let config_content = std::fs::read_to_string(config_path)
+        .map_err(|e| anyhow::anyhow!("Failed to read multi-model config file {}: {}", config_path, e))?;
+    
+    let configs: Vec<ModelConfig> = serde_json::from_str(&config_content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse multi-model config: {}", e))?;
+    
+    if configs.is_empty() {
+        anyhow::bail!("Multi-model configuration file is empty");
+    }
+    
+    // Validate model IDs are unique
+    let mut seen_ids = std::collections::HashSet::new();
+    for config in &configs {
+        if !seen_ids.insert(&config.model_id) {
+            anyhow::bail!("Duplicate model ID in config: {}", config.model_id);
+        }
+    }
+    
+    info!("Loaded multi-model configuration with {} models", configs.len());
+    Ok(configs)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -286,34 +323,81 @@ async fn main() -> Result<()> {
     // Load MCP configuration if provided
     let mcp_config = load_mcp_config(args.mcp_config.as_deref())?;
 
+    // Validate configuration
+    if args.multi_model && args.model.is_some() {
+        anyhow::bail!("Cannot specify both --multi-model and a model subcommand. Use either single-model mode (with model subcommand) or multi-model mode (with --multi-model).");
+    }
+    
+    if !args.multi_model && args.model.is_none() {
+        anyhow::bail!("Must specify either a model subcommand for single-model mode or --multi-model for multi-model mode.");
+    }
+    
+    if args.multi_model && args.multi_model_config.is_none() {
+        anyhow::bail!("Multi-model mode requires --multi-model-config to be specified.");
+    }
+
     let paged_attn = configure_paged_attn_from_flags(args.paged_attn, args.no_paged_attn)?;
 
-    let mistralrs = MistralRsForServerBuilder::new()
-        .with_truncate_sequence(args.truncate_sequence)
-        .with_model(args.model)
-        .with_max_seqs(args.max_seqs)
-        .with_no_kv_cache(args.no_kv_cache)
-        .with_token_source(args.token_source)
-        .with_interactive_mode(args.interactive_mode)
-        .with_prefix_cache_n(args.prefix_cache_n)
-        .set_paged_attn(paged_attn)
-        .with_cpu(args.cpu)
-        .with_enable_search(args.enable_search)
-        .with_seed_optional(args.seed)
-        .with_log_optional(args.log)
-        .with_chat_template_optional(args.chat_template)
-        .with_jinja_explicit_optional(args.jinja_explicit)
-        .with_num_device_layers_optional(args.num_device_layers)
-        .with_in_situ_quant_optional(args.in_situ_quant)
-        .with_paged_attn_gpu_mem_optional(args.paged_attn_gpu_mem)
-        .with_paged_attn_gpu_mem_usage_optional(args.paged_attn_gpu_mem_usage)
-        .with_paged_ctxt_len_optional(args.paged_ctxt_len)
-        .with_paged_attn_block_size_optional(args.paged_attn_block_size)
-        .with_prompt_chunksize_optional(args.prompt_chunksize)
-        .with_mcp_config_optional(mcp_config)
-        .with_paged_attn_cache_type(args.cache_type.unwrap_or_default())
-        .build()
-        .await?;
+    let mistralrs = if args.multi_model {
+        // Multi-model mode
+        let model_configs = load_multi_model_config(args.multi_model_config.as_ref().unwrap())?;
+        
+        let mut builder = MistralRsForServerBuilder::new()
+            .with_truncate_sequence(args.truncate_sequence)
+            .with_max_seqs(args.max_seqs)
+            .with_no_kv_cache(args.no_kv_cache)
+            .with_token_source(args.token_source)
+            .with_interactive_mode(args.interactive_mode)
+            .with_prefix_cache_n(args.prefix_cache_n)
+            .set_paged_attn(paged_attn)
+            .with_cpu(args.cpu)
+            .with_enable_search(args.enable_search)
+            .with_seed_optional(args.seed)
+            .with_log_optional(args.log)
+            .with_prompt_chunksize_optional(args.prompt_chunksize)
+            .with_mcp_config_optional(mcp_config)
+            .with_paged_attn_cache_type(args.cache_type.unwrap_or_default());
+
+        // Add models to builder
+        for config in model_configs {
+            builder = builder.add_model_config(config);
+        }
+
+        // Set default model if specified
+        if let Some(default_id) = args.default_model_id {
+            builder = builder.with_default_model_id(default_id);
+        }
+
+        builder.build_multi_model().await?
+    } else {
+        // Single-model mode
+        MistralRsForServerBuilder::new()
+            .with_truncate_sequence(args.truncate_sequence)
+            .with_model(args.model.unwrap())
+            .with_max_seqs(args.max_seqs)
+            .with_no_kv_cache(args.no_kv_cache)
+            .with_token_source(args.token_source)
+            .with_interactive_mode(args.interactive_mode)
+            .with_prefix_cache_n(args.prefix_cache_n)
+            .set_paged_attn(paged_attn)
+            .with_cpu(args.cpu)
+            .with_enable_search(args.enable_search)
+            .with_seed_optional(args.seed)
+            .with_log_optional(args.log)
+            .with_chat_template_optional(args.chat_template)
+            .with_jinja_explicit_optional(args.jinja_explicit)
+            .with_num_device_layers_optional(args.num_device_layers)
+            .with_in_situ_quant_optional(args.in_situ_quant)
+            .with_paged_attn_gpu_mem_optional(args.paged_attn_gpu_mem)
+            .with_paged_attn_gpu_mem_usage_optional(args.paged_attn_gpu_mem_usage)
+            .with_paged_ctxt_len_optional(args.paged_ctxt_len)
+            .with_paged_attn_block_size_optional(args.paged_attn_block_size)
+            .with_prompt_chunksize_optional(args.prompt_chunksize)
+            .with_mcp_config_optional(mcp_config)
+            .with_paged_attn_cache_type(args.cache_type.unwrap_or_default())
+            .build()
+            .await?
+    };
 
     // TODO: refactor this
     let bert_model = get_bert_model(args.enable_search, args.search_bert_model);
