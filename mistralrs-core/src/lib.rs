@@ -18,10 +18,7 @@ use std::{
     error::Error,
     fs::OpenOptions,
     io::Write,
-    sync::{
-        atomic::{self, AtomicBool, AtomicUsize},
-        Arc, Mutex, RwLock,
-    },
+    sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
     thread::{self, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -131,7 +128,6 @@ pub use llguidance;
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
 pub static GLOBAL_HF_CACHE: OnceLock<Cache> = OnceLock::new();
-static ENGINE_ID: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone)]
 pub struct MistralRsConfig {
@@ -147,7 +143,6 @@ struct EngineInstance {
     engine_handler: JoinHandle<()>,
     reboot_state: RebootState,
     config: MistralRsConfig,
-    creation_time: u64,
     category: ModelCategory,
 }
 
@@ -437,10 +432,6 @@ impl MistralRs {
             engine_handler,
             reboot_state,
             config,
-            creation_time: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("Time travel has occurred!")
-                .as_secs(),
             category,
         })
     }

@@ -1412,7 +1412,11 @@ impl Runner {
         prompt,
         model_id = None,
     ))]
-    fn generate_audio(&self, prompt: String, model_id: Option<String>) -> PyApiResult<SpeechGenerationResponse> {
+    fn generate_audio(
+        &self,
+        prompt: String,
+        model_id: Option<String>,
+    ) -> PyApiResult<SpeechGenerationResponse> {
         let (tx, mut rx) = channel(1);
 
         let request = _Request::Normal(Box::new(NormalRequest {
@@ -1497,7 +1501,12 @@ impl Runner {
 
     /// Detokenize some tokens, returning text.
     #[pyo3(signature = (tokens, skip_special_tokens, model_id = None))]
-    fn detokenize_text(&self, tokens: Vec<u32>, skip_special_tokens: bool, model_id: Option<String>) -> PyApiResult<String> {
+    fn detokenize_text(
+        &self,
+        tokens: Vec<u32>,
+        skip_special_tokens: bool,
+        model_id: Option<String>,
+    ) -> PyApiResult<String> {
         let (tx, mut rx) = channel(1);
         let request = _Request::Detokenize(DetokenizationRequest {
             tokens,
@@ -2053,7 +2062,11 @@ impl MultiModelRunner {
 
     /// Generate audio using the default model.
     #[pyo3(signature = (prompt, model_id = None))]
-    fn generate_audio(&self, prompt: String, model_id: Option<String>) -> PyApiResult<SpeechGenerationResponse> {
+    fn generate_audio(
+        &self,
+        prompt: String,
+        model_id: Option<String>,
+    ) -> PyApiResult<SpeechGenerationResponse> {
         self.runner.generate_audio(prompt, model_id)
     }
 
@@ -2078,8 +2091,14 @@ impl MultiModelRunner {
 
     /// Detokenize some tokens using the default model.
     #[pyo3(signature = (tokens, skip_special_tokens, model_id = None))]
-    fn detokenize_text(&self, tokens: Vec<u32>, skip_special_tokens: bool, model_id: Option<String>) -> PyApiResult<String> {
-        self.runner.detokenize_text(tokens, skip_special_tokens, model_id)
+    fn detokenize_text(
+        &self,
+        tokens: Vec<u32>,
+        skip_special_tokens: bool,
+        model_id: Option<String>,
+    ) -> PyApiResult<String> {
+        self.runner
+            .detokenize_text(tokens, skip_special_tokens, model_id)
     }
 
     /// Get a copy of the underlying Runner instance.
