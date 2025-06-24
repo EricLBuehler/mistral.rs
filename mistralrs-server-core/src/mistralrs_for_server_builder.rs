@@ -887,6 +887,15 @@ impl MistralRsForServerBuilder {
             // Use the pipeline's name() as the model ID
             let pipeline_name = pipeline.lock().await.name();
 
+            // Check for model ID conflicts
+            if pipeline_names.contains(&pipeline_name) {
+                anyhow::bail!(
+                    "Model ID conflict: '{}' is already registered. Models from config keys '{}' and previous models have the same pipeline identifier.",
+                    pipeline_name,
+                    model_config.model_id
+                );
+            }
+
             // Add the model to the MistralRs instance
             mistralrs
                 .add_model(
@@ -929,7 +938,10 @@ impl MistralRsForServerBuilder {
         if let Some(ref default_id) = self.default_model_id {
             info!("Default model: {}", default_id);
         } else {
-            info!("Default model: {} (first model)", self.models[0].model_id);
+            info!(
+                "Default model: {} (first model, from config key: {})",
+                pipeline_names[0], self.models[0].model_id
+            );
         }
         Ok(mistralrs)
     }

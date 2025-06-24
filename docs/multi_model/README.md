@@ -155,7 +155,7 @@ mistralrs-server [OPTIONS] --multi-model --multi-model-config <CONFIG> [--defaul
 ```json
 {
   "llama-gguf": {
-    "Gguf": {
+    "GGUF": {
       "tok_model_id": "meta-llama/Llama-3.2-3B-Instruct",
       "quantized_model_id": "bartowski/Llama-3.2-3B-Instruct-GGUF",
       "quantized_filename": "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
