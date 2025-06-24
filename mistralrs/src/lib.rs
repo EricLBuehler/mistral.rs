@@ -103,7 +103,7 @@
 //!
 //! ```rust,no_run
 //! use mistralrs::{TextModelBuilder, IsqType};
-//! use mistralrs_core::mcp_client::{McpClientConfig, McpServerConfig, McpServerSource};
+//! use mistralrs_core::{McpClientConfig, McpServerConfig, McpServerSource};
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
