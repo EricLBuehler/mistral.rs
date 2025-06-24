@@ -128,9 +128,9 @@ pub async fn parse_audio_url(url_unparsed: &str) -> Result<AudioInput, anyhow::E
 /// This function checks if the model parameter from an OpenAI API request
 /// matches one of the models that are currently loaded by the server.
 ///
-/// The special model name "ignore" can be used to bypass this validation,
-/// which is useful for clients that require a model parameter but don't
-/// need to specify a particular model.
+/// The special model name "default" can be used to bypass this validation,
+/// which is useful for clients that require a model parameter but want
+/// to use the default model.
 ///
 /// ### Arguments
 ///
@@ -139,13 +139,13 @@ pub async fn parse_audio_url(url_unparsed: &str) -> Result<AudioInput, anyhow::E
 ///
 /// ### Returns
 ///
-/// Returns `Ok(())` if the model is available or if "ignore" is specified, otherwise returns an error.
+/// Returns `Ok(())` if the model is available or if "default" is specified, otherwise returns an error.
 pub fn validate_model_name(
     requested_model: &str,
     state: Arc<MistralRs>,
 ) -> Result<(), anyhow::Error> {
-    // Allow "ignore" as a special case to bypass validation
-    if requested_model == "ignore" {
+    // Allow "default" as a special case to bypass validation
+    if requested_model == "default" {
         return Ok(());
     }
 
@@ -159,7 +159,7 @@ pub fn validate_model_name(
 
     if !available_models.contains(&requested_model.to_string()) {
         anyhow::bail!(
-            "Requested model '{}' is not available. Available models: {}. Use 'ignore' to bypass this validation.",
+            "Requested model '{}' is not available. Available models: {}. Use 'default' to use the default model.",
             requested_model,
             available_models.join(", ")
         );

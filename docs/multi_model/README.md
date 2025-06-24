@@ -70,7 +70,25 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-If no model is specified, the default model (set with `--default-model-id`) will be used.
+#### Default Model Behavior
+
+- **Explicit model**: Use the full pipeline name (e.g., `"meta-llama/Llama-3.2-3B-Instruct"`)
+- **Default model**: Use `"default"` to explicitly request the default model
+- **Auto-fallback**: If the `model` field is omitted entirely, the default model will be used
+
+```bash
+# Use default model explicitly
+curl http://localhost:1234/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+The default model is either:
+1. The model specified with `--default-model-id` when starting the server
+2. The first model loaded (if no default is explicitly set)
 
 ### List Available Models
 
@@ -83,6 +101,12 @@ Returns:
 {
   "object": "list",
   "data": [
+    {
+      "id": "default",
+      "object": "model",
+      "created": 1234567890,
+      "owned_by": "local"
+    },
     {
       "id": "meta-llama/Llama-3.2-3B-Instruct",
       "object": "model",
@@ -98,6 +122,8 @@ Returns:
   ]
 }
 ```
+
+**Note**: The `"default"` model is always listed first and represents the server's default model.
 
 ## CLI Arguments
 

@@ -22,6 +22,17 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Json<ModelObjects>
     let available_models = state.list_models().unwrap_or_default();
     let mut model_objects = Vec::new();
 
+    // Add "default" as a special model option
+    model_objects.push(ModelObject {
+        id: "default".to_string(),
+        object: "model",
+        created: state.get_creation_time(),
+        owned_by: "local",
+        tools_available: None,
+        mcp_tools_count: None,
+        mcp_servers_connected: None,
+    });
+
     for model_id in available_models {
         // Get model-specific information
         let tools_count = state.get_tools_count(Some(&model_id)).unwrap_or(0);

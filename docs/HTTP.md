@@ -23,14 +23,14 @@ Mistral.rs validates that the `model` parameter in API requests matches the mode
 **Behavior:**
 - If the `model` parameter matches the loaded model name, the request proceeds normally
 - If the `model` parameter doesn't match, the request fails with an error message indicating the mismatch
-- The special model name `"ignore"` can be used to bypass this validation entirely
+- The special model name `"default"` can be used to bypass this validation entirely
 
 **Examples:**
 - ✅ Request with `"model": "meta-llama/Llama-3.2-3B-Instruct"` when `meta-llama/Llama-3.2-3B-Instruct` is loaded → **succeeds**
 - ❌ Request with `"model": "gpt-4"` when `mistral-7b-instruct` is loaded → **fails**
-- ✅ Request with `"model": "ignore"` regardless of loaded model → **always succeeds**
+- ✅ Request with `"model": "default"` regardless of loaded model → **always succeeds**
 
-**Usage:** Use `"ignore"` in the model field when you need to satisfy API clients that require a model parameter but don't need to specify a particular model. This is demonstrated in all the examples below.
+**Usage:** Use `"default"` in the model field when you need to satisfy API clients that require a model parameter but don't need to specify a particular model. This is demonstrated in all the examples below.
 
 ## `POST`: `/v1/chat/completions`
 Process an OpenAI compatible request, returning an OpenAI compatible response when finished. Please find the official OpenAI API documentation [here](https://platform.openai.com/docs/api-reference/chat). To control the interval keep-alive messages are sent, set the `KEEP_ALIVE_INTERVAL` environment variable to the desired time in ms.
