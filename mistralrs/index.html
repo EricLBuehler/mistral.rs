@@ -94,7 +94,7 @@
 <p>The MCP client integrates seamlessly with mistral.rs model builders:</p>
 
 <div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>mistralrs::{TextModelBuilder, IsqType};
-<span class="kw">use </span>mistralrs_core::mcp_client::{McpClientConfig, McpServerConfig, McpServerSource};
+<span class="kw">use </span>mistralrs_core::{McpClientConfig, McpServerConfig, McpServerSource};
 
 <span class="attr">#[tokio::main]
 </span><span class="kw">async fn </span>main() -&gt; anyhow::Result&lt;()&gt; {
