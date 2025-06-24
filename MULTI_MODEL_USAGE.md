@@ -10,12 +10,12 @@
 
 ```bash
 # Multi-model server
-mistralrs-server --port 1234 multi-model --config config.json --default-model-id llama3-3b
+mistralrs-server --port 1234 multi-model --config config.json --default-model-id meta-llama/Llama-3.2-3B-Instruct
 
 # Send requests to specific models
 curl http://localhost:1234/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "llama3-3b", "messages": [{"role": "user", "content": "Hello!"}]}'
+  -d '{"model": "meta-llama/Llama-3.2-3B-Instruct", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
 ### New Configuration Format

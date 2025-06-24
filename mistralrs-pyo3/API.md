@@ -232,13 +232,13 @@ runner = mistralrs.MultiModelRunner(
             )
         }
     ],
-    default_model_id="llama3-3b"
+    default_model_id="meta-llama/Llama-3.2-3B-Instruct"
 )
 
 # Send requests to specific models
 response_llama = runner.send_chat_completion_request(
     mistralrs.ChatCompletionRequest(
-        model="llama3-3b",  # Specify which model to use
+        model="meta-llama/Llama-3.2-3B-Instruct",  # Specify which model to use
         messages=[{"role": "user", "content": "Hello from Llama!"}],
         max_tokens=100
     )
@@ -246,7 +246,7 @@ response_llama = runner.send_chat_completion_request(
 
 response_qwen = runner.send_chat_completion_request(
     mistralrs.ChatCompletionRequest(
-        model="qwen3-4b",  # Use a different model
+        model="Qwen/Qwen3-4B",  # Use a different model
         messages=[{"role": "user", "content": "Hello from Qwen!"}],
         max_tokens=100
     )
@@ -262,10 +262,10 @@ print(f"Available models: {models}")
 
 # Get/set default model
 default_model = runner.get_default_model_id()
-runner.set_default_model_id("qwen3-4b")
+runner.set_default_model_id("Qwen/Qwen3-4B")
 
 # Remove a model
-runner.remove_model("llama3-3b")
+runner.remove_model("meta-llama/Llama-3.2-3B-Instruct")
 ```
 
 ### Server Configuration
