@@ -918,11 +918,11 @@ impl MistralRs {
     /// Dispatch a request to the appropriate engine based on the model_id in the request
     pub fn send_request(&self, mut request: Request) -> Result<(), MistralRsError> {
         let model_id = match &mut request {
-            Request::Normal(normal_req) => normal_req.model_id.clone(),
+            Request::Normal(normal_req) => normal_req.model_id.as_deref(),
             _ => None, // Other request types don't specify model_id
         };
 
-        let sender = self.get_sender(model_id.as_deref())?;
+        let sender = self.get_sender(model_id)?;
         sender
             .blocking_send(request)
             .map_err(|_| MistralRsError::SenderPoisoned)
