@@ -56,25 +56,35 @@
 <a href=#56 id=56 data-nosnippet>56</a>        <span class="kw">if </span>!regex.is_match(<span class="kw-2">&amp;</span>vb.prefix()) {
 <a href=#57 id=57 data-nosnippet>57</a>            <span class="kw">continue</span>;
 <a href=#58 id=58 data-nosnippet>58</a>        }
-<a href=#59 id=59 data-nosnippet>59</a>        <span class="kw">let </span>weights = weights.set_prefix(vb.prefix());
-<a href=#60 id=60 data-nosnippet>60</a>
-<a href=#61 id=61 data-nosnippet>61</a>        <span class="kw">let </span>a = weights.get_with_hints((config.rank, in_dim), <span class="string">"lora_A.weight"</span>, shard)<span class="question-mark">?</span>;
-<a href=#62 id=62 data-nosnippet>62</a>        <span class="kw">let </span>b = weights.get_with_hints((out_dim, config.rank), <span class="string">"lora_B.weight"</span>, shard)<span class="question-mark">?</span>;
-<a href=#63 id=63 data-nosnippet>63</a>        <span class="kw">let </span>scale = <span class="kw">if </span>config.rank &gt; <span class="number">0 </span>{
-<a href=#64 id=64 data-nosnippet>64</a>            config.alpha / config.rank <span class="kw">as </span>f64
-<a href=#65 id=65 data-nosnippet>65</a>        } <span class="kw">else </span>{
-<a href=#66 id=66 data-nosnippet>66</a>            <span class="number">1.0
-<a href=#67 id=67 data-nosnippet>67</a>        </span>};
-<a href=#68 id=68 data-nosnippet>68</a>
-<a href=#69 id=69 data-nosnippet>69</a>        <span class="kw">let </span>ab = <span class="kw">if </span>a.device().is_cpu() {
-<a href=#70 id=70 data-nosnippet>70</a>            b.to_dtype(DType::F32)<span class="question-mark">?</span>.matmul(<span class="kw-2">&amp;</span>a.to_dtype(DType::F32)<span class="question-mark">?</span>)<span class="question-mark">?
-<a href=#71 id=71 data-nosnippet>71</a>        </span>} <span class="kw">else </span>{
-<a href=#72 id=72 data-nosnippet>72</a>            b.matmul(<span class="kw-2">&amp;</span>a)<span class="question-mark">?
-<a href=#73 id=73 data-nosnippet>73</a>        </span>};
-<a href=#74 id=74 data-nosnippet>74</a>
-<a href=#75 id=75 data-nosnippet>75</a>        <span class="kw">let </span>delta_weight = (ab * scale)<span class="question-mark">?</span>;
-<a href=#76 id=76 data-nosnippet>76</a>        weight = (weight + delta_weight.to_dtype(a.dtype())<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-<a href=#77 id=77 data-nosnippet>77</a>    }
+<a href=#59 id=59 data-nosnippet>59</a>
+<a href=#60 id=60 data-nosnippet>60</a>        <span class="comment">// Handle base_model.model things from peft
+<a href=#61 id=61 data-nosnippet>61</a>        </span><span class="kw">let </span>weights = <span class="kw">if </span>weights
+<a href=#62 id=62 data-nosnippet>62</a>            .pp(<span class="string">"base_model.model"</span>)
+<a href=#63 id=63 data-nosnippet>63</a>            .pp(vb.prefix())
+<a href=#64 id=64 data-nosnippet>64</a>            .contains_tensor(<span class="string">"lora_A.weight"</span>)
+<a href=#65 id=65 data-nosnippet>65</a>        {
+<a href=#66 id=66 data-nosnippet>66</a>            weights.pp(<span class="string">"base_model.model"</span>).pp(vb.prefix())
+<a href=#67 id=67 data-nosnippet>67</a>        } <span class="kw">else </span>{
+<a href=#68 id=68 data-nosnippet>68</a>            weights.pp(vb.prefix())
+<a href=#69 id=69 data-nosnippet>69</a>        };
+<a href=#70 id=70 data-nosnippet>70</a>
+<a href=#71 id=71 data-nosnippet>71</a>        <span class="kw">let </span>a = weights.get_with_hints((config.rank, in_dim), <span class="string">"lora_A.weight"</span>, shard)<span class="question-mark">?</span>;
+<a href=#72 id=72 data-nosnippet>72</a>        <span class="kw">let </span>b = weights.get_with_hints((out_dim, config.rank), <span class="string">"lora_B.weight"</span>, shard)<span class="question-mark">?</span>;
+<a href=#73 id=73 data-nosnippet>73</a>        <span class="kw">let </span>scale = <span class="kw">if </span>config.rank &gt; <span class="number">0 </span>{
+<a href=#74 id=74 data-nosnippet>74</a>            config.alpha / config.rank <span class="kw">as </span>f64
+<a href=#75 id=75 data-nosnippet>75</a>        } <span class="kw">else </span>{
+<a href=#76 id=76 data-nosnippet>76</a>            <span class="number">1.0
+<a href=#77 id=77 data-nosnippet>77</a>        </span>};
 <a href=#78 id=78 data-nosnippet>78</a>
-<a href=#79 id=79 data-nosnippet>79</a>    <span class="prelude-val">Ok</span>(weight)
-<a href=#80 id=80 data-nosnippet>80</a>}</code></pre></div></section></main></body></html>
+<a href=#79 id=79 data-nosnippet>79</a>        <span class="kw">let </span>ab = <span class="kw">if </span>a.device().is_cpu() {
+<a href=#80 id=80 data-nosnippet>80</a>            b.to_dtype(DType::F32)<span class="question-mark">?</span>.matmul(<span class="kw-2">&amp;</span>a.to_dtype(DType::F32)<span class="question-mark">?</span>)<span class="question-mark">?
+<a href=#81 id=81 data-nosnippet>81</a>        </span>} <span class="kw">else </span>{
+<a href=#82 id=82 data-nosnippet>82</a>            b.matmul(<span class="kw-2">&amp;</span>a)<span class="question-mark">?
+<a href=#83 id=83 data-nosnippet>83</a>        </span>};
+<a href=#84 id=84 data-nosnippet>84</a>
+<a href=#85 id=85 data-nosnippet>85</a>        <span class="kw">let </span>delta_weight = (ab * scale)<span class="question-mark">?</span>;
+<a href=#86 id=86 data-nosnippet>86</a>        weight = (weight + delta_weight.to_dtype(a.dtype())<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+<a href=#87 id=87 data-nosnippet>87</a>    }
+<a href=#88 id=88 data-nosnippet>88</a>
+<a href=#89 id=89 data-nosnippet>89</a>    <span class="prelude-val">Ok</span>(weight)
+<a href=#90 id=90 data-nosnippet>90</a>}</code></pre></div></section></main></body></html>
