@@ -29,7 +29,7 @@
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span><span class="kw">crate</span>::utils::progress::NiceProgressBar;
 <a href=#31 id=31 data-nosnippet>31</a>
-<a href=#32 id=32 data-nosnippet>32</a><span class="kw">pub const </span>MAX_SEQ_LEN: usize = <span class="number">4096</span>;
+<a href=#32 id=32 data-nosnippet>32</a><span class="kw">pub const </span>DEFAULT_MAX_SEQ_LEN: usize = <span class="number">4096</span>;
 <a href=#33 id=33 data-nosnippet>33</a>
 <a href=#34 id=34 data-nosnippet>34</a><span class="attr">#[derive(Clone)]
 <a href=#35 id=35 data-nosnippet>35</a></span><span class="kw">struct </span>Mlp {
@@ -214,7 +214,7 @@
 <a href=#214 id=214 data-nosnippet>214</a>            max_seq_len: c
 <a href=#215 id=215 data-nosnippet>215</a>                .get_value::&lt;u64&gt;(<span class="string">"context_length"</span>)
 <a href=#216 id=216 data-nosnippet>216</a>                .ok()
-<a href=#217 id=217 data-nosnippet>217</a>                .unwrap_or(MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize,
+<a href=#217 id=217 data-nosnippet>217</a>                .unwrap_or(DEFAULT_MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize,
 <a href=#218 id=218 data-nosnippet>218</a>        };
 <a href=#219 id=219 data-nosnippet>219</a>
 <a href=#220 id=220 data-nosnippet>220</a>        <span class="prelude-val">Ok</span>(props)

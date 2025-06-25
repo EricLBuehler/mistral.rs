@@ -711,25 +711,22 @@
 <a href=#711 id=711 data-nosnippet>711</a>                get_device_for_tensor.clone(),
 <a href=#712 id=712 data-nosnippet>712</a>            )<span class="question-mark">?</span>;
 <a href=#713 id=713 data-nosnippet>713</a>
-<a href=#714 id=714 data-nosnippet>714</a>            mistralrs_quant::APPLIED_LORAS
-<a href=#715 id=715 data-nosnippet>715</a>                .lock()
-<a href=#716 id=716 data-nosnippet>716</a>                .unwrap()
-<a href=#717 id=717 data-nosnippet>717</a>                .push(mistralrs_quant::LoraAdapter {
-<a href=#718 id=718 data-nosnippet>718</a>                    config: lora_config.clone(),
-<a href=#719 id=719 data-nosnippet>719</a>                    weights: lora_vb,
-<a href=#720 id=720 data-nosnippet>720</a>                });
-<a href=#721 id=721 data-nosnippet>721</a>        }
-<a href=#722 id=722 data-nosnippet>722</a>
-<a href=#723 id=723 data-nosnippet>723</a>        <span class="macro-nonterminal">$loader</span>.load(
-<a href=#724 id=724 data-nosnippet>724</a>            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$config</span>,
-<a href=#725 id=725 data-nosnippet>725</a>            vb,
-<a href=#726 id=726 data-nosnippet>726</a>            <span class="macro-nonterminal">$crate::pipeline::NormalLoadingMetadata </span>{
-<a href=#727 id=727 data-nosnippet>727</a>                mapper: <span class="macro-nonterminal">$mapper</span>,
-<a href=#728 id=728 data-nosnippet>728</a>                loading_isq: <span class="macro-nonterminal">$loading_isq</span>,
-<a href=#729 id=729 data-nosnippet>729</a>                real_device: <span class="macro-nonterminal">$real_device</span>,
-<a href=#730 id=730 data-nosnippet>730</a>                multi_progress: <span class="macro-nonterminal">$multi_progress</span>,
-<a href=#731 id=731 data-nosnippet>731</a>            },
-<a href=#732 id=732 data-nosnippet>732</a>            <span class="macro-nonterminal">$attention_mechanism</span>,
-<a href=#733 id=733 data-nosnippet>733</a>        )<span class="question-mark">?
-<a href=#734 id=734 data-nosnippet>734</a>    </span>}};
-<a href=#735 id=735 data-nosnippet>735</a>}</code></pre></div></section></main></body></html>
+<a href=#714 id=714 data-nosnippet>714</a>            mistralrs_quant::push_applied_lora(mistralrs_quant::LoraAdapter {
+<a href=#715 id=715 data-nosnippet>715</a>                config: lora_config.clone(),
+<a href=#716 id=716 data-nosnippet>716</a>                weights: lora_vb,
+<a href=#717 id=717 data-nosnippet>717</a>            });
+<a href=#718 id=718 data-nosnippet>718</a>        }
+<a href=#719 id=719 data-nosnippet>719</a>
+<a href=#720 id=720 data-nosnippet>720</a>        <span class="macro-nonterminal">$loader</span>.load(
+<a href=#721 id=721 data-nosnippet>721</a>            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$config</span>,
+<a href=#722 id=722 data-nosnippet>722</a>            vb,
+<a href=#723 id=723 data-nosnippet>723</a>            <span class="macro-nonterminal">$crate::pipeline::NormalLoadingMetadata </span>{
+<a href=#724 id=724 data-nosnippet>724</a>                mapper: <span class="macro-nonterminal">$mapper</span>,
+<a href=#725 id=725 data-nosnippet>725</a>                loading_isq: <span class="macro-nonterminal">$loading_isq</span>,
+<a href=#726 id=726 data-nosnippet>726</a>                real_device: <span class="macro-nonterminal">$real_device</span>,
+<a href=#727 id=727 data-nosnippet>727</a>                multi_progress: <span class="macro-nonterminal">$multi_progress</span>,
+<a href=#728 id=728 data-nosnippet>728</a>            },
+<a href=#729 id=729 data-nosnippet>729</a>            <span class="macro-nonterminal">$attention_mechanism</span>,
+<a href=#730 id=730 data-nosnippet>730</a>        )<span class="question-mark">?
+<a href=#731 id=731 data-nosnippet>731</a>    </span>}};
+<a href=#732 id=732 data-nosnippet>732</a>}</code></pre></div></section></main></body></html>

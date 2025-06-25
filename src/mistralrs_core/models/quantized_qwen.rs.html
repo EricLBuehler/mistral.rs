@@ -19,7 +19,7 @@
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span><span class="kw">crate</span>::utils::gguf_metadata::ContentMetadata;
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span><span class="kw">crate</span>::utils::progress::NiceProgressBar;
-<a href=#22 id=22 data-nosnippet>22</a><span class="kw">const </span>MAX_SEQ_LEN: u32 = <span class="number">4096</span>;
+<a href=#22 id=22 data-nosnippet>22</a><span class="kw">const </span>DEFAULT_MAX_SEQ_LEN: u32 = <span class="number">4096</span>;
 <a href=#23 id=23 data-nosnippet>23</a>
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">struct </span>Mlp {
 <a href=#25 id=25 data-nosnippet>25</a>    feed_forward_w1: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
@@ -219,7 +219,7 @@
 <a href=#219 id=219 data-nosnippet>219</a>            max_seq_len: c
 <a href=#220 id=220 data-nosnippet>220</a>                .get_value::&lt;u64&gt;(<span class="string">"context_length"</span>)
 <a href=#221 id=221 data-nosnippet>221</a>                .ok()
-<a href=#222 id=222 data-nosnippet>222</a>                .unwrap_or(MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize,
+<a href=#222 id=222 data-nosnippet>222</a>                .unwrap_or(DEFAULT_MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize,
 <a href=#223 id=223 data-nosnippet>223</a>            rope_freq_base: c.get_value(<span class="string">"rope.freq_base"</span>).ok().unwrap_or(<span class="number">10_000_f32</span>),
 <a href=#224 id=224 data-nosnippet>224</a>            key_length: c
 <a href=#225 id=225 data-nosnippet>225</a>                .get_value::&lt;u32&gt;(<span class="string">"attention.key_length"</span>)
