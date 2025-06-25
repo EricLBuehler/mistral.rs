@@ -4,5 +4,5 @@ use crate::{lora::InstantiatedLoraAdapter, QuantMethod};
 
 pub struct RuntimeLoraLayer {
     base: Arc<dyn QuantMethod>,
-    adapters: Vec<InstantiatedLoraAdapter>
+    adapters: Vec<InstantiatedLoraAdapter>,
 }

@@ -1,7 +1,7 @@
 use candle_core::{DType, Result, Tensor};
 use regex::Regex;
 
-use crate::{LoraAdapter, Shard, ShardedVarBuilder, APPLIED_LORAS};
+use crate::{get_applied_loras, LoraAdapter, Shard, ShardedVarBuilder};
 
 pub fn merge_lora_weights(
     vb: &ShardedVarBuilder,
@@ -10,7 +10,8 @@ pub fn merge_lora_weights(
     out_dim: usize,
     shard: Shard,
 ) -> Result<Tensor> {
-    for LoraAdapter { config, weights } in &*APPLIED_LORAS.lock().expect("No loras initialized.") {
+    let applied_loras = get_applied_loras();
+    for LoraAdapter { config, weights } in applied_loras {
         let target_modules = config
             .target_modules
             .iter()

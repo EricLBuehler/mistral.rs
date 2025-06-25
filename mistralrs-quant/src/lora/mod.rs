@@ -1,6 +1,6 @@
 mod merged_lora;
-mod static_lora;
 mod runtime_lora;
+mod static_lora;
 
 use std::{cell::RefCell, collections::HashSet};
 
@@ -9,7 +9,7 @@ pub use merged_lora::merge_lora_weights;
 use serde::{Deserialize, Serialize};
 pub use static_lora::{linear_no_bias_static_lora, StaticLoraConfig};
 
-use crate::{Shard, ShardedVarBuilder};
+use crate::ShardedVarBuilder;
 
 thread_local! {
     static ENGINE_APPLIED_LORAS: RefCell<Vec<LoraAdapter>> = const { RefCell::new(Vec::new()) };
