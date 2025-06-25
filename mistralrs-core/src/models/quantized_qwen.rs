@@ -19,7 +19,7 @@ use crate::pipeline::{extract_logits, EitherCache, KvCache, NormalCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
-const MAX_SEQ_LEN: u32 = 4096;
+const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
 
 struct Mlp {
     feed_forward_w1: Arc<dyn QuantMethod>,
@@ -219,7 +219,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             max_seq_len: c
                 .get_value::<u64>("context_length")
                 .ok()
-                .unwrap_or(MAX_SEQ_LEN as u64) as usize,
+                .unwrap_or(DEFAULT_MAX_SEQ_LEN as u64) as usize,
             rope_freq_base: c.get_value("rope.freq_base").ok().unwrap_or(10_000_f32),
             key_length: c
                 .get_value::<u32>("attention.key_length")

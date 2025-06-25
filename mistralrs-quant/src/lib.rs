@@ -53,8 +53,8 @@ pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::{CollectedImatrixData, ImatrixLayerStats};
 pub use lora::{
-    linear_no_bias_static_lora, LoraAdapter, LoraConfig, StaticLoraConfig, APPLIED_LORAS,
-    MULTI_LORA_DELIMITER,
+    clear_applied_loras, get_applied_loras, linear_no_bias_static_lora, push_applied_lora,
+    LoraAdapter, LoraConfig, StaticLoraConfig, MULTI_LORA_DELIMITER,
 };
 pub use unquantized::UnquantLinear;
 pub use utils::isq::apply_immediate_isq;
@@ -70,19 +70,28 @@ pub struct ImmediateIsqParams {
     pub predicates: Vec<Regex>,
 }
 
-static IMMEDIATE_ISQ: Mutex<Option<ImmediateIsqParams>> = Mutex::new(None);
+thread_local! {
+    static ENGINE_IMMEDIATE_ISQ: std::cell::RefCell<Option<ImmediateIsqParams>> = const { std::cell::RefCell::new(None) } ;
+}
 
 pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>) {
-    let mut guard = IMMEDIATE_ISQ.lock().expect("IMMEDIATE_ISQ mutex poisoned");
-    *guard = Some(ImmediateIsqParams {
-        guard: QuantizeOntoGuard::new(),
-        ty: isq,
-        predicates,
+    ENGINE_IMMEDIATE_ISQ.with(|cell| {
+        *cell.borrow_mut() = Some(ImmediateIsqParams {
+            guard: QuantizeOntoGuard::new(),
+            ty: isq,
+            predicates,
+        });
     });
 }
 
 pub fn get_immediate_isq() -> Option<ImmediateIsqParams> {
-    IMMEDIATE_ISQ.lock().ok().and_then(|guard| guard.clone())
+    ENGINE_IMMEDIATE_ISQ.with(|cell| cell.borrow().clone())
+}
+
+pub fn clear_immediate_isq() {
+    ENGINE_IMMEDIATE_ISQ.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
 }
 
 pub fn should_apply_immediate_isq(vb: &ShardedVarBuilder) -> bool {

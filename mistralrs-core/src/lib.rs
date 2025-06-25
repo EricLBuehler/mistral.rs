@@ -2,6 +2,7 @@
 use candle_core::Device;
 use engine::Engine;
 pub use engine::{
+    get_engine_terminate_flag, reset_engine_terminate_flag, should_terminate_engine_sequences,
     BertEmbeddingModel, EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
 };
 use hf_hub::Cache;

@@ -52,38 +52,36 @@ pub enum F8MatmulOutType {
     BF16,
 }
 
-static INIT: Once = Once::new();
-static mut CUBLASLT: Option<CublasLtWrapper> = None;
-
 pub fn maybe_init_cublas_lt_wrapper(device: Device) {
-    unsafe {
-        INIT.call_once(|| {
-            #[cfg(not(feature = "cuda"))]
-            {
-                CUBLASLT = None;
-            }
+    static INIT: Once = Once::new();
 
-            #[cfg(feature = "cuda")]
-            {
-                // Check if we can call the driver
-                // Then check if we can create a device
-                // Then check that the device is CUDA
-                use candle_core::cuda_backend::cudarc::driver;
-                CUBLASLT = match device {
-                    Device::Cuda(_) => Some(CublasLtWrapper {
+    INIT.call_once(|| {
+        #[cfg(feature = "cuda")]
+        {
+            match device {
+                Device::Cuda(_) => {
+                    let wrapper = Box::new(CublasLtWrapper {
                         cublaslt: CublasLt::new(&device).unwrap(),
-                    }),
-                    _ => None,
+                    });
+                    let wrapper_ptr = Box::leak(wrapper) as &'static CublasLtWrapper;
+
+                    // Set the controller handle
+                    let mut handle_lock = CUBLASLT_CONTROLLER.handle.lock().unwrap();
+                    *handle_lock = Some(wrapper_ptr);
+                }
+                _ => {
+                    let mut handle_lock = CUBLASLT_CONTROLLER.handle.lock().unwrap();
+                    *handle_lock = None;
                 }
             }
-            #[allow(static_mut_refs)]
-            let cublaslt: Option<&'static CublasLtWrapper> = CUBLASLT.as_ref();
+        }
 
-            // Set the controller handle
+        #[cfg(not(feature = "cuda"))]
+        {
             let mut handle_lock = CUBLASLT_CONTROLLER.handle.lock().unwrap();
-            *handle_lock = cublaslt;
-        });
-    }
+            *handle_lock = None;
+        }
+    });
 }
 
 #[derive(Debug, Clone)]
