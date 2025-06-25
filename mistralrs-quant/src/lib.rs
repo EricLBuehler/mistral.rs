@@ -63,6 +63,8 @@ pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_Q
 use candle_nn::{Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::lora::maybe_wrap_runtime_lora;
+
 #[derive(Clone, Debug)]
 pub struct ImmediateIsqParams {
     pub guard: QuantizeOntoGuard,
@@ -757,7 +759,13 @@ pub fn linear_no_bias(
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, None),
             ))?;
-            Arc::new(layer) as Arc<dyn QuantMethod>
+            maybe_wrap_runtime_lora(
+                Arc::new(layer) as Arc<dyn QuantMethod>,
+                &vb,
+                in_dim,
+                out_dim,
+                Default::default(),
+            )?
         }
     };
     apply_immediate_isq(layer, base_vb)
@@ -802,7 +810,13 @@ pub fn linear(
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, Some(bias)),
             ))?;
-            Arc::new(layer) as Arc<dyn QuantMethod>
+            maybe_wrap_runtime_lora(
+                Arc::new(layer) as Arc<dyn QuantMethod>,
+                &vb,
+                in_dim,
+                out_dim,
+                Default::default(),
+            )?
         }
     };
     apply_immediate_isq(layer, base_vb)

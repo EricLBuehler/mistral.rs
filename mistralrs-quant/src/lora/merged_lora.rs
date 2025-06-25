@@ -46,7 +46,7 @@ pub fn merge_lora_weights(
         };
 
         let adapter = load_adapter(in_dim, out_dim, None, weights, shard, &config)?;
-        let delta_weight = get_adapter_delta(adapter)?;
+        let delta_weight = get_adapter_delta(&adapter)?;
 
         weight = (weight + delta_weight)?;
     }

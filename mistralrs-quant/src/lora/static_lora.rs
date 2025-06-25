@@ -61,7 +61,7 @@ pub fn linear_no_bias_static_lora(
                     Default::default(),
                     &lora_cfg,
                 )?;
-                let delta_weight = get_adapter_delta(adapter)?;
+                let delta_weight = get_adapter_delta(&adapter)?;
 
                 weight = (weight + delta_weight)?;
             }

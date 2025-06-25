@@ -79,6 +79,7 @@ pub struct LoraAdapter {
     pub weights: ShardedVarBuilder,
 }
 
+#[derive(Clone, Debug)]
 pub struct InstantiatedLoraAdapter {
     pub a: Tensor,
     pub b: Tensor,
@@ -120,7 +121,7 @@ pub(crate) fn load_adapter<C: LoraConfigLike>(
 }
 
 pub(crate) fn get_adapter_delta(
-    InstantiatedLoraAdapter { a, b, scale }: InstantiatedLoraAdapter,
+    InstantiatedLoraAdapter { a, b, scale }: &InstantiatedLoraAdapter,
 ) -> Result<Tensor> {
     let ab = if a.device().is_cpu() {
         b.to_dtype(DType::F32)?.matmul(&a.to_dtype(DType::F32)?)?
@@ -128,5 +129,5 @@ pub(crate) fn get_adapter_delta(
         b.matmul(&a)?
     };
 
-    (ab * scale)?.to_dtype(a.dtype())
+    (ab * *scale)?.to_dtype(a.dtype())
 }
