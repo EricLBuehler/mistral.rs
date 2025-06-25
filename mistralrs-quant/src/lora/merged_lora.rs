@@ -1,7 +1,11 @@
-use candle_core::{DType, Result, Tensor};
+use candle_core::{Result, Tensor};
 use regex::Regex;
 
-use crate::{get_applied_loras, LoraAdapter, Shard, ShardedVarBuilder};
+use crate::{
+    get_applied_loras,
+    lora::{get_adapter_delta, load_adapter},
+    LoraAdapter, Shard, ShardedVarBuilder,
+};
 
 pub fn merge_lora_weights(
     vb: &ShardedVarBuilder,
@@ -34,22 +38,10 @@ pub fn merge_lora_weights(
             weights.pp(vb.prefix())
         };
 
-        let a = weights.get_with_hints((config.rank, in_dim), "lora_A.weight", shard)?;
-        let b = weights.get_with_hints((out_dim, config.rank), "lora_B.weight", shard)?;
-        let scale = if config.rank > 0 {
-            config.alpha / config.rank as f64
-        } else {
-            1.0
-        };
+        let adapter = load_adapter(in_dim, out_dim, None, weights, shard, &config)?;
+        let delta_weight = get_adapter_delta(adapter)?;
 
-        let ab = if a.device().is_cpu() {
-            b.to_dtype(DType::F32)?.matmul(&a.to_dtype(DType::F32)?)?
-        } else {
-            b.matmul(&a)?
-        };
-
-        let delta_weight = (ab * scale)?;
-        weight = (weight + delta_weight.to_dtype(a.dtype())?)?;
+        weight = (weight + delta_weight)?;
     }
 
     Ok(weight)
