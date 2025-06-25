@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::HashMap,
     sync::{atomic::AtomicUsize, Arc, Mutex},
 };
@@ -35,8 +36,25 @@ const MAX_Q_GEMM_ROWS: i32 = 50;
 const MAX_ALT_GEMM_ROWS: i32 = 8;
 const BLOCK_M_SIZE_MAX: i32 = 8;
 
-lazy_static! {
-    static ref TMP_DQS: Mutex<HashMap<usize, CudaSlice<f16>>> = Mutex::new(HashMap::new());
+thread_local! {
+    static ENGINE_TMP_DQS: RefCell<HashMap<usize, CudaSlice<f16>>> = RefCell::new(HashMap::new());
+}
+
+/// Get a temporary dequantization buffer for the current engine thread
+fn get_tmp_dq_buffer(len: usize) -> Option<*mut f16> {
+    ENGINE_TMP_DQS.with(|buffers| {
+        buffers
+            .borrow()
+            .get(&len)
+            .map(|slice| *slice.device_ptr() as *mut f16)
+    })
+}
+
+/// Insert a temporary dequantization buffer for the current engine thread
+fn insert_tmp_dq_buffer(len: usize, buffer: CudaSlice<f16>) {
+    ENGINE_TMP_DQS.with(|buffers| {
+        buffers.borrow_mut().insert(len, buffer);
+    });
 }
 
 #[derive(Debug)]
@@ -91,7 +109,8 @@ impl GptqLayer {
         let c_ptr = *c.device_ptr() as *mut f16;
 
         let len = (self.q_weight.dims()[0] * 32 / self.bits as usize) * self.q_weight.dims()[1];
-        let temp_dq_ptr = *TMP_DQS.try_lock().unwrap().get(&len).unwrap().device_ptr() as *mut f16;
+        let temp_dq_ptr =
+            get_tmp_dq_buffer(len).expect("Temporary dequantization buffer not found");
 
         let use_reconstruct = if use_exllama {
             (self.bits == 8 && m > MAX_Q_GEMM_ROWS_8BIT) || (self.bits != 8 && m > MAX_Q_GEMM_ROWS)
@@ -240,10 +259,9 @@ impl QuantMethod for GptqLayer {
                     let dev = get_cuda_device(&q_weight)?;
                     let len = (q_weight.dims()[0] * 32 / bits as usize) * q_weight.dims()[1];
                     // SAFETY: used in the kernel as a tmp space, just preallocating it here.
-                    if let std::collections::hash_map::Entry::Vacant(e) =
-                        TMP_DQS.lock().unwrap().entry(len)
-                    {
-                        e.insert(unsafe { dev.alloc::<f16>(len).w()? });
+                    if get_tmp_dq_buffer(len).is_none() {
+                        let buffer = unsafe { dev.alloc::<f16>(len).w()? };
+                        insert_tmp_dq_buffer(len, buffer);
                     }
                 }
                 Ok(Self {

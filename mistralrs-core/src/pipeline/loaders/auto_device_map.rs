@@ -99,6 +99,7 @@ impl Display for AutoDeviceMapParams {
 }
 
 impl AutoDeviceMapParams {
+    // Default max sequence length for memory estimation when not specified
     pub const DEFAULT_MAX_SEQ_LEN: usize = 4 * 1024;
     pub const DEFAULT_MAX_BATCH_SIZE: usize = 1;
     pub const DEFAULT_MAX_NUM_IMAGES: usize = 1;

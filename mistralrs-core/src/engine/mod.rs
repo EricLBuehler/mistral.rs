@@ -63,7 +63,49 @@ pub enum BertEmbeddingModel {
 
 const SEED: u64 = 0;
 /// Terminate all sequences on the next scheduling step. Be sure to reset this.
+/// This is a global flag for terminating all engines at once (e.g., Ctrl+C).
 pub static TERMINATE_ALL_NEXT_STEP: AtomicBool = AtomicBool::new(false);
+
+/// Engine-specific termination flags, per Engine thread ID.
+static ENGINE_TERMINATE_FLAGS: Lazy<
+    std::sync::Mutex<HashMap<std::thread::ThreadId, Arc<AtomicBool>>>,
+> = Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// Get or create a termination flag for the current engine thread.
+pub fn get_engine_terminate_flag() -> Arc<AtomicBool> {
+    let thread_id = std::thread::current().id();
+    let mut flags = ENGINE_TERMINATE_FLAGS.lock().unwrap();
+    flags
+        .entry(thread_id)
+        .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+        .clone()
+}
+
+/// Check if the current engine should terminate sequences.
+pub fn should_terminate_engine_sequences() -> bool {
+    // Check global flag first
+    if TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
+        return true;
+    }
+    // Then check engine-specific flag
+    let thread_id = std::thread::current().id();
+    if let Ok(flags) = ENGINE_TERMINATE_FLAGS.lock() {
+        if let Some(flag) = flags.get(&thread_id) {
+            return flag.load(Ordering::SeqCst);
+        }
+    }
+    false
+}
+
+/// Reset termination flags for the current engine.
+pub fn reset_engine_terminate_flag() {
+    let thread_id = std::thread::current().id();
+    if let Ok(flags) = ENGINE_TERMINATE_FLAGS.lock() {
+        if let Some(flag) = flags.get(&thread_id) {
+            flag.store(false, Ordering::SeqCst);
+        }
+    }
+}
 
 /// Engine instructions, per Engine (MistralRs) ID.
 pub static ENGINE_INSTRUCTIONS: Lazy<std::sync::Mutex<HashMap<usize, Option<EngineInstruction>>>> =
