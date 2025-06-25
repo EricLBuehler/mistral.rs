@@ -56,7 +56,17 @@ pub(crate) fn merge_lora_weights(
         if !regex.is_match(&vb.prefix()) {
             continue;
         }
-        let weights = weights.set_prefix(vb.prefix());
+
+        // Handle base_model.model things from peft
+        let weights = if weights
+            .pp("base_model.model")
+            .pp(vb.prefix())
+            .contains_tensor("lora_A.weight")
+        {
+            weights.pp("base_model.model").pp(vb.prefix())
+        } else {
+            weights.pp(vb.prefix())
+        };
 
         let a = weights.get_with_hints((config.rank, in_dim), "lora_A.weight", shard)?;
         let b = weights.get_with_hints((out_dim, config.rank), "lora_B.weight", shard)?;
