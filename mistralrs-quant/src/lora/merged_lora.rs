@@ -1,24 +1,7 @@
-use std::collections::HashSet;
-
 use candle_core::{DType, Result, Tensor};
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 
-use crate::{Shard, ShardedVarBuilder, APPLIED_LORAS};
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct LoraConfig {
-    #[serde(rename = "r")]
-    pub rank: usize,
-    #[serde(rename = "lora_alpha")]
-    pub alpha: f64,
-    pub target_modules: HashSet<String>,
-}
-
-pub struct LoraAdapter {
-    pub config: LoraConfig,
-    pub weights: ShardedVarBuilder,
-}
+use crate::{LoraAdapter, Shard, ShardedVarBuilder, APPLIED_LORAS};
 
 pub fn merge_lora_weights(
     vb: &ShardedVarBuilder,
