@@ -3,7 +3,7 @@ use regex::Regex;
 
 use crate::{
     get_applied_loras,
-    lora::{get_adapter_delta, load_adapter},
+    lora::{get_adapter_delta, load_adapter, AppliedLoraKind},
     LoraAdapter, Shard, ShardedVarBuilder,
 };
 
@@ -14,8 +14,15 @@ pub fn merge_lora_weights(
     out_dim: usize,
     shard: Shard,
 ) -> Result<Tensor> {
-    let applied_loras = get_applied_loras();
-    for LoraAdapter { config, weights } in applied_loras {
+    let Some(applied_loras) = get_applied_loras() else {
+        return Ok(weight);
+    };
+
+    if !matches!(applied_loras.kind, AppliedLoraKind::Merged) {
+        return Ok(weight);
+    }
+
+    for LoraAdapter { config, weights } in applied_loras.adapters {
         let target_modules = config
             .target_modules
             .iter()

@@ -4,18 +4,48 @@ use crate::{Shard, ShardedVarBuilder};
 use candle_core::{DType, Result, Tensor};
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone)]
+pub enum AppliedLoraKind {
+    Merged,
+    Runtime,
+}
+
+#[derive(Clone)]
+pub struct AppliedLoras {
+    pub(crate) adapters: Vec<LoraAdapter>,
+    pub(crate) kind: AppliedLoraKind,
+}
+
 thread_local! {
-    static ENGINE_APPLIED_LORAS: RefCell<Vec<LoraAdapter>> = const { RefCell::new(Vec::new()) };
+    static ENGINE_APPLIED_LORAS: RefCell<Option<AppliedLoras>> = const { RefCell::new(None) };
 }
 
 /// Get the LoRA adapters for the current engine thread
-pub fn get_applied_loras() -> Vec<LoraAdapter> {
+pub fn get_applied_loras() -> Option<AppliedLoras> {
     ENGINE_APPLIED_LORAS.with(|loras| loras.borrow().clone())
 }
 
 /// Push a LoRA adapter for the current engine thread
+pub fn init_applied_lora(kind: AppliedLoraKind) {
+    ENGINE_APPLIED_LORAS.with(|loras| {
+        let mut loras = loras.borrow_mut();
+        if loras.is_none() {
+            *loras = Some(AppliedLoras {
+                adapters: vec![],
+                kind: kind.clone(),
+            });
+        }
+    });
+}
+
+/// Push a LoRA adapter for the current engine thread
 pub fn push_applied_lora(adapter: LoraAdapter) {
-    ENGINE_APPLIED_LORAS.with(|loras| loras.borrow_mut().push(adapter));
+    ENGINE_APPLIED_LORAS.with(|loras| {
+        loras
+            .borrow_mut()
+            .as_mut()
+            .map(|x| x.adapters.push(adapter))
+    });
 }
 
 pub const MULTI_LORA_DELIMITER: &str = ";";

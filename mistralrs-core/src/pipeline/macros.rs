@@ -694,6 +694,8 @@ macro_rules! lora_model_loader {
             get_device_for_tensor.clone(),
         )?;
 
+        mistralrs_quant::init_applied_lora(mistralrs_quant::AppliedLoraKind::Merged);
+
         for $crate::pipeline::LoraAdapterPaths {
             adapter_path,
             lora_config,
