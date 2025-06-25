@@ -711,13 +711,10 @@ macro_rules! lora_model_loader {
                 get_device_for_tensor.clone(),
             )?;
 
-            mistralrs_quant::APPLIED_LORAS
-                .lock()
-                .unwrap()
-                .push(mistralrs_quant::LoraAdapter {
-                    config: lora_config.clone(),
-                    weights: lora_vb,
-                });
+            mistralrs_quant::push_applied_lora(mistralrs_quant::LoraAdapter {
+                config: lora_config.clone(),
+                weights: lora_vb,
+            });
         }
 
         $loader.load(
