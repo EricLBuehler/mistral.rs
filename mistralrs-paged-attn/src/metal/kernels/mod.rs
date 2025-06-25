@@ -34,6 +34,8 @@ pub enum MetalKernelError {
     FailedToCreatePipeline(String),
     #[error("dtype mismatch, got {got:?}, expected {expected:?}")]
     DTypeMismatch { expected: Vec<DType>, got: DType },
+    #[error("Failed to compile Metal shader: {0}")]
+    CompilationError(String),
 }
 
 impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
@@ -70,13 +72,47 @@ impl Kernels {
             Ok(lib.clone())
         } else {
             let source_data = KERNELS;
-            let lib = device.new_library_with_data(source_data).map_err(|e| {
-                MetalKernelError::LoadLibraryError(format!(
-                    "Metal requires macosx > 13.0 or higher, cannot load candle metal library: {e}"
-                ))
-            })?;
+            // Check if the precompiled library is empty (which indicates runtime compilation is needed)
+            let lib = if source_data.is_empty() {
+                // Runtime compilation path
+                self.compile_kernels_at_runtime(device)?
+            } else {
+                // Precompiled path
+                device.new_library_with_data(source_data).map_err(|e| {
+                    MetalKernelError::LoadLibraryError(format!(
+                        "Metal requires macosx > 13.0 or higher, cannot load candle metal library: {e}"
+                    ))
+                })?
+            };
             Ok(LIBRARY.get_or_init(|| lib).clone())
         }
+    }
+
+    fn compile_kernels_at_runtime(&self, device: &Device) -> Result<Library, MetalKernelError> {
+        const METAL_SOURCES: &[(&str, &str)] = &[
+            ("copy_blocks", include_str!("copy_blocks.metal")),
+            ("pagedattention", include_str!("pagedattention.metal")),
+            ("reshape_and_cache", include_str!("reshape_and_cache.metal")),
+            ("utils", include_str!("utils.metal")),
+            ("float8", include_str!("float8.metal")),
+        ];
+
+        // Concatenate all sources
+        let mut full_source = String::new();
+        for (_, source) in METAL_SOURCES {
+            full_source.push_str(source);
+            full_source.push('\n');
+        }
+
+        // Compile the source code
+        let compile_options = metal::CompileOptions::new();
+        device
+            .new_library_with_source(&full_source, &compile_options)
+            .map_err(|e| {
+                MetalKernelError::CompilationError(format!(
+                    "Failed to compile Metal kernels at runtime: {e}"
+                ))
+            })
     }
 
     fn load_function(
