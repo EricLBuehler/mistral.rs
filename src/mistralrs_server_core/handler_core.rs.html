@@ -88,31 +88,39 @@
 <a href=#88 id=88 data-nosnippet>88</a>
 <a href=#89 id=89 data-nosnippet>89</a><span class="doccomment">/// Sends a request to the model processing pipeline.
 <a href=#90 id=90 data-nosnippet>90</a></span><span class="kw">pub async fn </span>send_request(state: <span class="kw-2">&amp;</span>SharedMistralRsState, request: Request) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#91 id=91 data-nosnippet>91</a>    <span class="kw">let </span>sender = state
-<a href=#92 id=92 data-nosnippet>92</a>        .get_sender()
-<a href=#93 id=93 data-nosnippet>93</a>        .context(<span class="string">"mistral.rs sender not available."</span>)<span class="question-mark">?</span>;
-<a href=#94 id=94 data-nosnippet>94</a>
-<a href=#95 id=95 data-nosnippet>95</a>    sender
-<a href=#96 id=96 data-nosnippet>96</a>        .send(request)
-<a href=#97 id=97 data-nosnippet>97</a>        .<span class="kw">await
-<a href=#98 id=98 data-nosnippet>98</a>        </span>.context(<span class="string">"Failed to send request to model pipeline"</span>)
-<a href=#99 id=99 data-nosnippet>99</a>}
-<a href=#100 id=100 data-nosnippet>100</a>
-<a href=#101 id=101 data-nosnippet>101</a><span class="doccomment">/// Generic function to process non-streaming responses.
-<a href=#102 id=102 data-nosnippet>102</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>base_process_non_streaming_response&lt;R&gt;(
-<a href=#103 id=103 data-nosnippet>103</a>    rx: <span class="kw-2">&amp;mut </span>Receiver&lt;Response&gt;,
-<a href=#104 id=104 data-nosnippet>104</a>    state: SharedMistralRsState,
-<a href=#105 id=105 data-nosnippet>105</a>    match_fn: <span class="kw">fn</span>(SharedMistralRsState, Response) -&gt; R,
-<a href=#106 id=106 data-nosnippet>106</a>    error_handler: <span class="kw">fn</span>(
-<a href=#107 id=107 data-nosnippet>107</a>        SharedMistralRsState,
-<a href=#108 id=108 data-nosnippet>108</a>        Box&lt;<span class="kw">dyn </span>std::error::Error + Send + Sync + <span class="lifetime">'static</span>&gt;,
-<a href=#109 id=109 data-nosnippet>109</a>    ) -&gt; R,
-<a href=#110 id=110 data-nosnippet>110</a>) -&gt; R {
-<a href=#111 id=111 data-nosnippet>111</a>    <span class="kw">match </span>rx.recv().<span class="kw">await </span>{
-<a href=#112 id=112 data-nosnippet>112</a>        <span class="prelude-val">Some</span>(response) =&gt; match_fn(state, response),
-<a href=#113 id=113 data-nosnippet>113</a>        <span class="prelude-val">None </span>=&gt; {
-<a href=#114 id=114 data-nosnippet>114</a>            <span class="kw">let </span>error = anyhow::Error::msg(<span class="string">"No response received from the model."</span>);
-<a href=#115 id=115 data-nosnippet>115</a>            error_handler(state, error.into())
-<a href=#116 id=116 data-nosnippet>116</a>        }
-<a href=#117 id=117 data-nosnippet>117</a>    }
-<a href=#118 id=118 data-nosnippet>118</a>}</code></pre></div></section></main></body></html>
+<a href=#91 id=91 data-nosnippet>91</a>    send_request_with_model(state, request, <span class="prelude-val">None</span>).<span class="kw">await
+<a href=#92 id=92 data-nosnippet>92</a></span>}
+<a href=#93 id=93 data-nosnippet>93</a>
+<a href=#94 id=94 data-nosnippet>94</a><span class="kw">pub async fn </span>send_request_with_model(
+<a href=#95 id=95 data-nosnippet>95</a>    state: <span class="kw-2">&amp;</span>SharedMistralRsState,
+<a href=#96 id=96 data-nosnippet>96</a>    request: Request,
+<a href=#97 id=97 data-nosnippet>97</a>    model_id: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>str&gt;,
+<a href=#98 id=98 data-nosnippet>98</a>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#99 id=99 data-nosnippet>99</a>    <span class="kw">let </span>sender = state
+<a href=#100 id=100 data-nosnippet>100</a>        .get_sender(model_id)
+<a href=#101 id=101 data-nosnippet>101</a>        .context(<span class="string">"mistral.rs sender not available."</span>)<span class="question-mark">?</span>;
+<a href=#102 id=102 data-nosnippet>102</a>
+<a href=#103 id=103 data-nosnippet>103</a>    sender
+<a href=#104 id=104 data-nosnippet>104</a>        .send(request)
+<a href=#105 id=105 data-nosnippet>105</a>        .<span class="kw">await
+<a href=#106 id=106 data-nosnippet>106</a>        </span>.context(<span class="string">"Failed to send request to model pipeline"</span>)
+<a href=#107 id=107 data-nosnippet>107</a>}
+<a href=#108 id=108 data-nosnippet>108</a>
+<a href=#109 id=109 data-nosnippet>109</a><span class="doccomment">/// Generic function to process non-streaming responses.
+<a href=#110 id=110 data-nosnippet>110</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>base_process_non_streaming_response&lt;R&gt;(
+<a href=#111 id=111 data-nosnippet>111</a>    rx: <span class="kw-2">&amp;mut </span>Receiver&lt;Response&gt;,
+<a href=#112 id=112 data-nosnippet>112</a>    state: SharedMistralRsState,
+<a href=#113 id=113 data-nosnippet>113</a>    match_fn: <span class="kw">fn</span>(SharedMistralRsState, Response) -&gt; R,
+<a href=#114 id=114 data-nosnippet>114</a>    error_handler: <span class="kw">fn</span>(
+<a href=#115 id=115 data-nosnippet>115</a>        SharedMistralRsState,
+<a href=#116 id=116 data-nosnippet>116</a>        Box&lt;<span class="kw">dyn </span>std::error::Error + Send + Sync + <span class="lifetime">'static</span>&gt;,
+<a href=#117 id=117 data-nosnippet>117</a>    ) -&gt; R,
+<a href=#118 id=118 data-nosnippet>118</a>) -&gt; R {
+<a href=#119 id=119 data-nosnippet>119</a>    <span class="kw">match </span>rx.recv().<span class="kw">await </span>{
+<a href=#120 id=120 data-nosnippet>120</a>        <span class="prelude-val">Some</span>(response) =&gt; match_fn(state, response),
+<a href=#121 id=121 data-nosnippet>121</a>        <span class="prelude-val">None </span>=&gt; {
+<a href=#122 id=122 data-nosnippet>122</a>            <span class="kw">let </span>error = anyhow::Error::msg(<span class="string">"No response received from the model."</span>);
+<a href=#123 id=123 data-nosnippet>123</a>            error_handler(state, error.into())
+<a href=#124 id=124 data-nosnippet>124</a>        }
+<a href=#125 id=125 data-nosnippet>125</a>    }
+<a href=#126 id=126 data-nosnippet>126</a>}</code></pre></div></section></main></body></html>

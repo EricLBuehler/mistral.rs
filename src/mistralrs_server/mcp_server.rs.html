@@ -207,7 +207,7 @@
 <a href=#207 id=207 data-nosnippet>207</a>
 <a href=#208 id=208 data-nosnippet>208</a><span class="kw">impl </span>HttpMcpHandler {
 <a href=#209 id=209 data-nosnippet>209</a>    <span class="kw">pub fn </span>new(state: SharedMistralRsState) -&gt; <span class="self">Self </span>{
-<a href=#210 id=210 data-nosnippet>210</a>        <span class="kw">let </span>modalities = <span class="kw-2">&amp;</span>state.config().modalities;
+<a href=#210 id=210 data-nosnippet>210</a>        <span class="kw">let </span>modalities = <span class="kw-2">&amp;</span>state.config(<span class="prelude-val">None</span>).unwrap().modalities;
 <a href=#211 id=211 data-nosnippet>211</a>
 <a href=#212 id=212 data-nosnippet>212</a>        <span class="kw">let </span><span class="kw-2">mut </span>tools: HashMap&lt;String, Arc&lt;<span class="kw">dyn </span>McpTool&gt;&gt; = HashMap::new();
 <a href=#213 id=213 data-nosnippet>213</a>        <span class="kw">if </span>modalities.input.contains(<span class="kw-2">&amp;</span>SupportedModality::Text)

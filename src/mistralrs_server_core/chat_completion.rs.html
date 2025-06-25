@@ -27,7 +27,7 @@
 <a href=#27 id=27 data-nosnippet>27</a>        BaseCompletionResponder,
 <a href=#28 id=28 data-nosnippet>28</a>    },
 <a href=#29 id=29 data-nosnippet>29</a>    handler_core::{
-<a href=#30 id=30 data-nosnippet>30</a>        base_process_non_streaming_response, create_response_channel, send_request,
+<a href=#30 id=30 data-nosnippet>30</a>        base_process_non_streaming_response, create_response_channel, send_request_with_model,
 <a href=#31 id=31 data-nosnippet>31</a>        BaseJsonModelError, ErrorToResponse, JsonError, ModelErrorMessage,
 <a href=#32 id=32 data-nosnippet>32</a>    },
 <a href=#33 id=33 data-nosnippet>33</a>    openai::{
@@ -477,94 +477,106 @@
 <a href=#477 id=477 data-nosnippet>477</a>            logits_processors: <span class="prelude-val">None</span>,
 <a href=#478 id=478 data-nosnippet>478</a>            return_raw_logits: <span class="bool-val">false</span>,
 <a href=#479 id=479 data-nosnippet>479</a>            web_search_options: oairequest.web_search_options,
-<a href=#480 id=480 data-nosnippet>480</a>        })),
-<a href=#481 id=481 data-nosnippet>481</a>        is_streaming,
-<a href=#482 id=482 data-nosnippet>482</a>    ))
-<a href=#483 id=483 data-nosnippet>483</a>}
-<a href=#484 id=484 data-nosnippet>484</a>
-<a href=#485 id=485 data-nosnippet>485</a><span class="doccomment">/// OpenAI-compatible chat completions endpoint handler.
-<a href=#486 id=486 data-nosnippet>486</a></span><span class="attr">#[utoipa::path(
-<a href=#487 id=487 data-nosnippet>487</a>    post,
-<a href=#488 id=488 data-nosnippet>488</a>    tag = <span class="string">"Mistral.rs"</span>,
-<a href=#489 id=489 data-nosnippet>489</a>    path = <span class="string">"/v1/chat/completions"</span>,
-<a href=#490 id=490 data-nosnippet>490</a>    request_body = ChatCompletionRequest,
-<a href=#491 id=491 data-nosnippet>491</a>    responses((status = <span class="number">200</span>, description = <span class="string">"Chat completions"</span>))
-<a href=#492 id=492 data-nosnippet>492</a>)]
-<a href=#493 id=493 data-nosnippet>493</a></span><span class="kw">pub async fn </span>chatcompletions(
-<a href=#494 id=494 data-nosnippet>494</a>    State(state): ExtractedMistralRsState,
-<a href=#495 id=495 data-nosnippet>495</a>    Json(oairequest): Json&lt;ChatCompletionRequest&gt;,
-<a href=#496 id=496 data-nosnippet>496</a>) -&gt; ChatCompletionResponder {
-<a href=#497 id=497 data-nosnippet>497</a>    <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = create_response_channel(<span class="prelude-val">None</span>);
-<a href=#498 id=498 data-nosnippet>498</a>
-<a href=#499 id=499 data-nosnippet>499</a>    <span class="kw">let </span>(request, is_streaming) = <span class="kw">match </span>parse_request(oairequest, state.clone(), tx).<span class="kw">await </span>{
-<a href=#500 id=500 data-nosnippet>500</a>        <span class="prelude-val">Ok</span>(x) =&gt; x,
-<a href=#501 id=501 data-nosnippet>501</a>        <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span>handle_error(state, e.into()),
-<a href=#502 id=502 data-nosnippet>502</a>    };
+<a href=#480 id=480 data-nosnippet>480</a>            model_id: <span class="kw">if </span>oairequest.model == <span class="string">"default" </span>{
+<a href=#481 id=481 data-nosnippet>481</a>                <span class="prelude-val">None
+<a href=#482 id=482 data-nosnippet>482</a>            </span>} <span class="kw">else </span>{
+<a href=#483 id=483 data-nosnippet>483</a>                <span class="prelude-val">Some</span>(oairequest.model.clone())
+<a href=#484 id=484 data-nosnippet>484</a>            },
+<a href=#485 id=485 data-nosnippet>485</a>        })),
+<a href=#486 id=486 data-nosnippet>486</a>        is_streaming,
+<a href=#487 id=487 data-nosnippet>487</a>    ))
+<a href=#488 id=488 data-nosnippet>488</a>}
+<a href=#489 id=489 data-nosnippet>489</a>
+<a href=#490 id=490 data-nosnippet>490</a><span class="doccomment">/// OpenAI-compatible chat completions endpoint handler.
+<a href=#491 id=491 data-nosnippet>491</a></span><span class="attr">#[utoipa::path(
+<a href=#492 id=492 data-nosnippet>492</a>    post,
+<a href=#493 id=493 data-nosnippet>493</a>    tag = <span class="string">"Mistral.rs"</span>,
+<a href=#494 id=494 data-nosnippet>494</a>    path = <span class="string">"/v1/chat/completions"</span>,
+<a href=#495 id=495 data-nosnippet>495</a>    request_body = ChatCompletionRequest,
+<a href=#496 id=496 data-nosnippet>496</a>    responses((status = <span class="number">200</span>, description = <span class="string">"Chat completions"</span>))
+<a href=#497 id=497 data-nosnippet>497</a>)]
+<a href=#498 id=498 data-nosnippet>498</a></span><span class="kw">pub async fn </span>chatcompletions(
+<a href=#499 id=499 data-nosnippet>499</a>    State(state): ExtractedMistralRsState,
+<a href=#500 id=500 data-nosnippet>500</a>    Json(oairequest): Json&lt;ChatCompletionRequest&gt;,
+<a href=#501 id=501 data-nosnippet>501</a>) -&gt; ChatCompletionResponder {
+<a href=#502 id=502 data-nosnippet>502</a>    <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = create_response_channel(<span class="prelude-val">None</span>);
 <a href=#503 id=503 data-nosnippet>503</a>
-<a href=#504 id=504 data-nosnippet>504</a>    <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = send_request(<span class="kw-2">&amp;</span>state, request).<span class="kw">await </span>{
-<a href=#505 id=505 data-nosnippet>505</a>        <span class="kw">return </span>handle_error(state, e.into());
-<a href=#506 id=506 data-nosnippet>506</a>    }
-<a href=#507 id=507 data-nosnippet>507</a>
-<a href=#508 id=508 data-nosnippet>508</a>    <span class="kw">if </span>is_streaming {
-<a href=#509 id=509 data-nosnippet>509</a>        ChatCompletionResponder::Sse(create_streamer(rx, state, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>))
-<a href=#510 id=510 data-nosnippet>510</a>    } <span class="kw">else </span>{
-<a href=#511 id=511 data-nosnippet>511</a>        process_non_streaming_response(<span class="kw-2">&amp;mut </span>rx, state).<span class="kw">await
-<a href=#512 id=512 data-nosnippet>512</a>    </span>}
-<a href=#513 id=513 data-nosnippet>513</a>}
-<a href=#514 id=514 data-nosnippet>514</a>
-<a href=#515 id=515 data-nosnippet>515</a><span class="doccomment">/// Handle route / generation errors and logging them.
-<a href=#516 id=516 data-nosnippet>516</a></span><span class="kw">pub fn </span>handle_error(
-<a href=#517 id=517 data-nosnippet>517</a>    state: SharedMistralRsState,
-<a href=#518 id=518 data-nosnippet>518</a>    e: Box&lt;<span class="kw">dyn </span>std::error::Error + Send + Sync + <span class="lifetime">'static</span>&gt;,
-<a href=#519 id=519 data-nosnippet>519</a>) -&gt; ChatCompletionResponder {
-<a href=#520 id=520 data-nosnippet>520</a>    handle_completion_error(state, e)
-<a href=#521 id=521 data-nosnippet>521</a>}
-<a href=#522 id=522 data-nosnippet>522</a>
-<a href=#523 id=523 data-nosnippet>523</a><span class="doccomment">/// Creates a SSE streamer for chat completions with optional callbacks.
-<a href=#524 id=524 data-nosnippet>524</a></span><span class="kw">pub fn </span>create_streamer(
-<a href=#525 id=525 data-nosnippet>525</a>    rx: Receiver&lt;Response&gt;,
-<a href=#526 id=526 data-nosnippet>526</a>    state: SharedMistralRsState,
-<a href=#527 id=527 data-nosnippet>527</a>    on_chunk: <span class="prelude-ty">Option</span>&lt;ChatCompletionOnChunkCallback&gt;,
-<a href=#528 id=528 data-nosnippet>528</a>    on_done: <span class="prelude-ty">Option</span>&lt;ChatCompletionOnDoneCallback&gt;,
-<a href=#529 id=529 data-nosnippet>529</a>) -&gt; Sse&lt;ChatCompletionStreamer&gt; {
-<a href=#530 id=530 data-nosnippet>530</a>    <span class="kw">let </span>streamer = base_create_streamer(rx, state, on_chunk, on_done);
-<a href=#531 id=531 data-nosnippet>531</a>    <span class="kw">let </span>keep_alive_interval = get_keep_alive_interval();
-<a href=#532 id=532 data-nosnippet>532</a>
-<a href=#533 id=533 data-nosnippet>533</a>    Sse::new(streamer)
-<a href=#534 id=534 data-nosnippet>534</a>        .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval)))
-<a href=#535 id=535 data-nosnippet>535</a>}
-<a href=#536 id=536 data-nosnippet>536</a>
-<a href=#537 id=537 data-nosnippet>537</a><span class="doccomment">/// Process non-streaming chat completion responses.
-<a href=#538 id=538 data-nosnippet>538</a></span><span class="kw">pub async fn </span>process_non_streaming_response(
-<a href=#539 id=539 data-nosnippet>539</a>    rx: <span class="kw-2">&amp;mut </span>Receiver&lt;Response&gt;,
-<a href=#540 id=540 data-nosnippet>540</a>    state: SharedMistralRsState,
-<a href=#541 id=541 data-nosnippet>541</a>) -&gt; ChatCompletionResponder {
-<a href=#542 id=542 data-nosnippet>542</a>    base_process_non_streaming_response(rx, state, match_responses, handle_error).<span class="kw">await
-<a href=#543 id=543 data-nosnippet>543</a></span>}
+<a href=#504 id=504 data-nosnippet>504</a>    <span class="comment">// Extract model_id for routing before parsing
+<a href=#505 id=505 data-nosnippet>505</a>    </span><span class="kw">let </span>model_id = <span class="kw">if </span>oairequest.model == <span class="string">"default" </span>{
+<a href=#506 id=506 data-nosnippet>506</a>        <span class="prelude-val">None
+<a href=#507 id=507 data-nosnippet>507</a>    </span>} <span class="kw">else </span>{
+<a href=#508 id=508 data-nosnippet>508</a>        <span class="prelude-val">Some</span>(oairequest.model.clone())
+<a href=#509 id=509 data-nosnippet>509</a>    };
+<a href=#510 id=510 data-nosnippet>510</a>
+<a href=#511 id=511 data-nosnippet>511</a>    <span class="kw">let </span>(request, is_streaming) = <span class="kw">match </span>parse_request(oairequest, state.clone(), tx).<span class="kw">await </span>{
+<a href=#512 id=512 data-nosnippet>512</a>        <span class="prelude-val">Ok</span>(x) =&gt; x,
+<a href=#513 id=513 data-nosnippet>513</a>        <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span>handle_error(state, e.into()),
+<a href=#514 id=514 data-nosnippet>514</a>    };
+<a href=#515 id=515 data-nosnippet>515</a>
+<a href=#516 id=516 data-nosnippet>516</a>    <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = send_request_with_model(<span class="kw-2">&amp;</span>state, request, model_id.as_deref()).<span class="kw">await </span>{
+<a href=#517 id=517 data-nosnippet>517</a>        <span class="kw">return </span>handle_error(state, e.into());
+<a href=#518 id=518 data-nosnippet>518</a>    }
+<a href=#519 id=519 data-nosnippet>519</a>
+<a href=#520 id=520 data-nosnippet>520</a>    <span class="kw">if </span>is_streaming {
+<a href=#521 id=521 data-nosnippet>521</a>        ChatCompletionResponder::Sse(create_streamer(rx, state, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>))
+<a href=#522 id=522 data-nosnippet>522</a>    } <span class="kw">else </span>{
+<a href=#523 id=523 data-nosnippet>523</a>        process_non_streaming_response(<span class="kw-2">&amp;mut </span>rx, state).<span class="kw">await
+<a href=#524 id=524 data-nosnippet>524</a>    </span>}
+<a href=#525 id=525 data-nosnippet>525</a>}
+<a href=#526 id=526 data-nosnippet>526</a>
+<a href=#527 id=527 data-nosnippet>527</a><span class="doccomment">/// Handle route / generation errors and logging them.
+<a href=#528 id=528 data-nosnippet>528</a></span><span class="kw">pub fn </span>handle_error(
+<a href=#529 id=529 data-nosnippet>529</a>    state: SharedMistralRsState,
+<a href=#530 id=530 data-nosnippet>530</a>    e: Box&lt;<span class="kw">dyn </span>std::error::Error + Send + Sync + <span class="lifetime">'static</span>&gt;,
+<a href=#531 id=531 data-nosnippet>531</a>) -&gt; ChatCompletionResponder {
+<a href=#532 id=532 data-nosnippet>532</a>    handle_completion_error(state, e)
+<a href=#533 id=533 data-nosnippet>533</a>}
+<a href=#534 id=534 data-nosnippet>534</a>
+<a href=#535 id=535 data-nosnippet>535</a><span class="doccomment">/// Creates a SSE streamer for chat completions with optional callbacks.
+<a href=#536 id=536 data-nosnippet>536</a></span><span class="kw">pub fn </span>create_streamer(
+<a href=#537 id=537 data-nosnippet>537</a>    rx: Receiver&lt;Response&gt;,
+<a href=#538 id=538 data-nosnippet>538</a>    state: SharedMistralRsState,
+<a href=#539 id=539 data-nosnippet>539</a>    on_chunk: <span class="prelude-ty">Option</span>&lt;ChatCompletionOnChunkCallback&gt;,
+<a href=#540 id=540 data-nosnippet>540</a>    on_done: <span class="prelude-ty">Option</span>&lt;ChatCompletionOnDoneCallback&gt;,
+<a href=#541 id=541 data-nosnippet>541</a>) -&gt; Sse&lt;ChatCompletionStreamer&gt; {
+<a href=#542 id=542 data-nosnippet>542</a>    <span class="kw">let </span>streamer = base_create_streamer(rx, state, on_chunk, on_done);
+<a href=#543 id=543 data-nosnippet>543</a>    <span class="kw">let </span>keep_alive_interval = get_keep_alive_interval();
 <a href=#544 id=544 data-nosnippet>544</a>
-<a href=#545 id=545 data-nosnippet>545</a><span class="doccomment">/// Matches and processes different types of model responses into appropriate chat completion responses.
-<a href=#546 id=546 data-nosnippet>546</a></span><span class="kw">pub fn </span>match_responses(state: SharedMistralRsState, response: Response) -&gt; ChatCompletionResponder {
-<a href=#547 id=547 data-nosnippet>547</a>    <span class="kw">match </span>response {
-<a href=#548 id=548 data-nosnippet>548</a>        Response::InternalError(e) =&gt; {
-<a href=#549 id=549 data-nosnippet>549</a>            MistralRs::maybe_log_error(state, <span class="kw-2">&amp;*</span>e);
-<a href=#550 id=550 data-nosnippet>550</a>            ChatCompletionResponder::InternalError(e)
-<a href=#551 id=551 data-nosnippet>551</a>        }
-<a href=#552 id=552 data-nosnippet>552</a>        Response::ModelError(msg, response) =&gt; {
-<a href=#553 id=553 data-nosnippet>553</a>            MistralRs::maybe_log_error(state.clone(), <span class="kw-2">&amp;</span>ModelErrorMessage(msg.to_string()));
-<a href=#554 id=554 data-nosnippet>554</a>            MistralRs::maybe_log_response(state, <span class="kw-2">&amp;</span>response);
-<a href=#555 id=555 data-nosnippet>555</a>            ChatCompletionResponder::ModelError(msg, response)
-<a href=#556 id=556 data-nosnippet>556</a>        }
-<a href=#557 id=557 data-nosnippet>557</a>        Response::ValidationError(e) =&gt; ChatCompletionResponder::ValidationError(e),
-<a href=#558 id=558 data-nosnippet>558</a>        Response::Done(response) =&gt; {
-<a href=#559 id=559 data-nosnippet>559</a>            MistralRs::maybe_log_response(state, <span class="kw-2">&amp;</span>response);
-<a href=#560 id=560 data-nosnippet>560</a>            ChatCompletionResponder::Json(response)
-<a href=#561 id=561 data-nosnippet>561</a>        }
-<a href=#562 id=562 data-nosnippet>562</a>        Response::Chunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#563 id=563 data-nosnippet>563</a>        Response::CompletionDone(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#564 id=564 data-nosnippet>564</a>        Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#565 id=565 data-nosnippet>565</a>        Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#566 id=566 data-nosnippet>566</a>        Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#567 id=567 data-nosnippet>567</a>        Response::Speech { .. } =&gt; <span class="macro">unreachable!</span>(),
-<a href=#568 id=568 data-nosnippet>568</a>        Response::Raw { .. } =&gt; <span class="macro">unreachable!</span>(),
-<a href=#569 id=569 data-nosnippet>569</a>    }
-<a href=#570 id=570 data-nosnippet>570</a>}</code></pre></div></section></main></body></html>
+<a href=#545 id=545 data-nosnippet>545</a>    Sse::new(streamer)
+<a href=#546 id=546 data-nosnippet>546</a>        .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval)))
+<a href=#547 id=547 data-nosnippet>547</a>}
+<a href=#548 id=548 data-nosnippet>548</a>
+<a href=#549 id=549 data-nosnippet>549</a><span class="doccomment">/// Process non-streaming chat completion responses.
+<a href=#550 id=550 data-nosnippet>550</a></span><span class="kw">pub async fn </span>process_non_streaming_response(
+<a href=#551 id=551 data-nosnippet>551</a>    rx: <span class="kw-2">&amp;mut </span>Receiver&lt;Response&gt;,
+<a href=#552 id=552 data-nosnippet>552</a>    state: SharedMistralRsState,
+<a href=#553 id=553 data-nosnippet>553</a>) -&gt; ChatCompletionResponder {
+<a href=#554 id=554 data-nosnippet>554</a>    base_process_non_streaming_response(rx, state, match_responses, handle_error).<span class="kw">await
+<a href=#555 id=555 data-nosnippet>555</a></span>}
+<a href=#556 id=556 data-nosnippet>556</a>
+<a href=#557 id=557 data-nosnippet>557</a><span class="doccomment">/// Matches and processes different types of model responses into appropriate chat completion responses.
+<a href=#558 id=558 data-nosnippet>558</a></span><span class="kw">pub fn </span>match_responses(state: SharedMistralRsState, response: Response) -&gt; ChatCompletionResponder {
+<a href=#559 id=559 data-nosnippet>559</a>    <span class="kw">match </span>response {
+<a href=#560 id=560 data-nosnippet>560</a>        Response::InternalError(e) =&gt; {
+<a href=#561 id=561 data-nosnippet>561</a>            MistralRs::maybe_log_error(state, <span class="kw-2">&amp;*</span>e);
+<a href=#562 id=562 data-nosnippet>562</a>            ChatCompletionResponder::InternalError(e)
+<a href=#563 id=563 data-nosnippet>563</a>        }
+<a href=#564 id=564 data-nosnippet>564</a>        Response::ModelError(msg, response) =&gt; {
+<a href=#565 id=565 data-nosnippet>565</a>            MistralRs::maybe_log_error(state.clone(), <span class="kw-2">&amp;</span>ModelErrorMessage(msg.to_string()));
+<a href=#566 id=566 data-nosnippet>566</a>            MistralRs::maybe_log_response(state, <span class="kw-2">&amp;</span>response);
+<a href=#567 id=567 data-nosnippet>567</a>            ChatCompletionResponder::ModelError(msg, response)
+<a href=#568 id=568 data-nosnippet>568</a>        }
+<a href=#569 id=569 data-nosnippet>569</a>        Response::ValidationError(e) =&gt; ChatCompletionResponder::ValidationError(e),
+<a href=#570 id=570 data-nosnippet>570</a>        Response::Done(response) =&gt; {
+<a href=#571 id=571 data-nosnippet>571</a>            MistralRs::maybe_log_response(state, <span class="kw-2">&amp;</span>response);
+<a href=#572 id=572 data-nosnippet>572</a>            ChatCompletionResponder::Json(response)
+<a href=#573 id=573 data-nosnippet>573</a>        }
+<a href=#574 id=574 data-nosnippet>574</a>        Response::Chunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#575 id=575 data-nosnippet>575</a>        Response::CompletionDone(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#576 id=576 data-nosnippet>576</a>        Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#577 id=577 data-nosnippet>577</a>        Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#578 id=578 data-nosnippet>578</a>        Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#579 id=579 data-nosnippet>579</a>        Response::Speech { .. } =&gt; <span class="macro">unreachable!</span>(),
+<a href=#580 id=580 data-nosnippet>580</a>        Response::Raw { .. } =&gt; <span class="macro">unreachable!</span>(),
+<a href=#581 id=581 data-nosnippet>581</a>    }
+<a href=#582 id=582 data-nosnippet>582</a>}</code></pre></div></section></main></body></html>
