@@ -22,7 +22,12 @@ pub fn merge_lora_weights(
         return Ok(weight);
     }
 
-    for LoraAdapter { config, weights } in applied_loras.adapters {
+    for LoraAdapter {
+        config,
+        weights,
+        adapter_id: _,
+    } in applied_loras.adapters
+    {
         let target_modules = config
             .target_modules
             .iter()

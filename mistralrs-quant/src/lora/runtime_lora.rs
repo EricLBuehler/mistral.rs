@@ -1,10 +1,10 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{Context, Result, Tensor};
 use regex::Regex;
 
 use crate::{
-    get_applied_loras,
+    get_activated_ids, get_applied_loras,
     lora::{get_adapter_delta, load_adapter, InstantiatedLoraAdapter},
     AppliedLoraKind, LoraAdapter, QuantMethod, QuantizedSerde, Shard, ShardedVarBuilder,
 };
@@ -12,12 +12,24 @@ use crate::{
 #[derive(Debug)]
 pub struct RuntimeLoraLayer {
     base: Arc<dyn QuantMethod>,
-    adapters: Vec<InstantiatedLoraAdapter>,
+    adapters: HashMap<String, InstantiatedLoraAdapter>,
 }
 
 impl RuntimeLoraLayer {
+    fn activated_adapters(&self) -> impl Iterator<Item = &InstantiatedLoraAdapter> {
+        let activated_ids = get_activated_ids();
+
+        self.adapters.iter().filter_map(move |(key, value)| {
+            if activated_ids.contains(key) {
+                Some(value)
+            } else {
+                None
+            }
+        })
+    }
+
     fn apply_lora(&self, mut result: Tensor) -> Result<Tensor> {
-        for adapter in &self.adapters {
+        for adapter in self.activated_adapters() {
             let lora_out = result.matmul(&adapter.a.t()?)?.matmul(&adapter.b.t()?)?;
             let scaled_lora = (lora_out * adapter.scale as f64)?;
             result = (result + scaled_lora)?;
@@ -27,7 +39,7 @@ impl RuntimeLoraLayer {
     }
 
     fn apply_delta_weight(&self, mut weight: Tensor) -> Result<Tensor> {
-        for adapter in &self.adapters {
+        for adapter in self.activated_adapters() {
             weight = get_adapter_delta(adapter)?;
         }
 
@@ -184,9 +196,14 @@ pub fn maybe_wrap_runtime_lora(
         return Ok(base);
     }
 
-    let mut adapters = Vec::new();
+    let mut adapters = HashMap::new();
 
-    for LoraAdapter { config, weights } in applied_loras.adapters {
+    for LoraAdapter {
+        config,
+        weights,
+        adapter_id,
+    } in applied_loras.adapters
+    {
         let target_modules = config
             .target_modules
             .iter()
@@ -211,7 +228,7 @@ pub fn maybe_wrap_runtime_lora(
 
         let adapter = load_adapter(in_dim, out_dim, None, weights, shard, &config)?;
 
-        adapters.push(adapter);
+        adapters.insert(adapter_id, adapter);
     }
 
     Ok(Arc::new(RuntimeLoraLayer { base, adapters }))

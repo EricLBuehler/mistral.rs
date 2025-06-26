@@ -53,8 +53,9 @@ pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::{CollectedImatrixData, ImatrixLayerStats};
 pub use lora::{
-    get_applied_loras, init_applied_lora, linear_no_bias_static_lora, push_applied_lora,
-    AppliedLoraKind, LoraAdapter, LoraConfig, StaticLoraConfig, MULTI_LORA_DELIMITER,
+    get_activated_ids, get_applied_loras, init_applied_lora, linear_no_bias_static_lora,
+    push_applied_lora, set_activated_ids, AppliedLoraKind, LoraAdapter, LoraConfig,
+    StaticLoraConfig, MULTI_LORA_DELIMITER,
 };
 pub use unquantized::UnquantLinear;
 pub use utils::isq::apply_immediate_isq;

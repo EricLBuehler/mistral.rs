@@ -699,6 +699,7 @@ macro_rules! lora_model_loader {
         for $crate::pipeline::LoraAdapterPaths {
             adapter_path,
             lora_config,
+            adapter_id,
         } in lora_adapter_paths
         {
             let lora_vb = from_mmaped_safetensors(
@@ -716,6 +717,7 @@ macro_rules! lora_model_loader {
             mistralrs_quant::push_applied_lora(mistralrs_quant::LoraAdapter {
                 config: lora_config.clone(),
                 weights: lora_vb,
+                adapter_id: adapter_id.to_string(),
             });
         }
 

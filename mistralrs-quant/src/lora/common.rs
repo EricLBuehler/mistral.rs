@@ -14,6 +14,7 @@ pub enum AppliedLoraKind {
 pub struct AppliedLoras {
     pub(crate) adapters: Vec<LoraAdapter>,
     pub(crate) kind: AppliedLoraKind,
+    pub(crate) activated_ids: Vec<String>,
 }
 
 thread_local! {
@@ -33,6 +34,7 @@ pub fn init_applied_lora(kind: AppliedLoraKind) {
             *loras = Some(AppliedLoras {
                 adapters: vec![],
                 kind: kind.clone(),
+                activated_ids: vec![],
             });
         }
     });
@@ -46,6 +48,23 @@ pub fn push_applied_lora(adapter: LoraAdapter) {
             .as_mut()
             .map(|x| x.adapters.push(adapter))
     });
+}
+
+/// Set the activated adapter IDs
+pub fn set_activated_ids(activated_ids: Vec<String>) {
+    ENGINE_APPLIED_LORAS.with(|loras| {
+        loras
+            .borrow_mut()
+            .as_mut()
+            .map(|x| x.activated_ids = activated_ids)
+    });
+}
+
+/// Get the activated adapter IDs
+pub fn get_activated_ids() -> Vec<String> {
+    ENGINE_APPLIED_LORAS
+        .with(|loras| loras.borrow_mut().as_mut().map(|x| x.activated_ids.clone()))
+        .unwrap_or(vec![])
 }
 
 pub const MULTI_LORA_DELIMITER: &str = ";";
@@ -77,6 +96,7 @@ impl LoraConfigLike for LoraConfig {
 pub struct LoraAdapter {
     pub config: LoraConfig,
     pub weights: ShardedVarBuilder,
+    pub adapter_id: String,
 }
 
 #[derive(Clone, Debug)]
