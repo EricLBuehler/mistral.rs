@@ -24,6 +24,7 @@ pub(crate) mod minicpmo;
 pub(crate) mod phi4;
 pub(crate) use phi4::inputs_processor;
 pub(crate) mod gemma3;
+pub(crate) mod gemma3n;
 pub(crate) mod llama4;
 pub(crate) mod mistral3;
 pub(crate) mod siglip;
