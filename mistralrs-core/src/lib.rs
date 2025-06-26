@@ -247,7 +247,7 @@ impl std::error::Error for MistralRsError {}
 #[cfg(feature = "pyo3_macros")]
 impl From<MistralRsError> for pyo3::PyErr {
     fn from(value: MistralRsError) -> Self {
-        PyValueError::new_err(format!("{:?}", value))
+        PyValueError::new_err(format!("{value:?}"))
     }
 }
 
@@ -872,7 +872,7 @@ impl MistralRs {
 
             Ok(())
         } else {
-            Err(format!("Model {} not found", model_id))
+            Err(format!("Model {model_id} not found"))
         }
     }
 
@@ -901,7 +901,7 @@ impl MistralRs {
             .read()
             .map_err(|_| "Failed to acquire read lock on engines")?;
         if !engines.contains_key(model_id) {
-            return Err(format!("Model {} not found", model_id));
+            return Err(format!("Model {model_id} not found"));
         }
         drop(engines);
 
@@ -990,7 +990,7 @@ impl MistralRs {
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.reboot_state.tool_callbacks_with_tools.len())
         } else {
-            Err(format!("Model {} not found", resolved_model_id))
+            Err(format!("Model {resolved_model_id} not found"))
         }
     }
 
@@ -1017,7 +1017,7 @@ impl MistralRs {
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.reboot_state.mcp_client_config.is_some())
         } else {
-            Err(format!("Model {} not found", resolved_model_id))
+            Err(format!("Model {resolved_model_id} not found"))
         }
     }
 
@@ -1044,7 +1044,7 @@ impl MistralRs {
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.config.clone())
         } else {
-            Err(format!("Model {} not found", resolved_model_id))
+            Err(format!("Model {resolved_model_id} not found"))
         }
     }
 }

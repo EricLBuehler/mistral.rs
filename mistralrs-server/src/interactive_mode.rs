@@ -91,7 +91,7 @@ pub async fn interactive_mode(
             audio_interactive_mode(mistralrs, do_search, enable_thinking).await
         }
         Ok(ModelCategory::Speech) => speech_interactive_mode(mistralrs, do_search).await,
-        Err(e) => eprintln!("Error getting model category: {}", e),
+        Err(e) => eprintln!("Error getting model category: {e}"),
     }
 }
 

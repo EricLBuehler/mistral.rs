@@ -112,7 +112,7 @@ pub fn ring_daemon_replicator(request_sender: Sender<Request>) {
         let rt = Runtime::new().unwrap();
         rt.block_on(async move {
             loop {
-                if let Ok(stream) = TcpStream::connect(format!("{}:{}", master_ip, master_port)) {
+                if let Ok(stream) = TcpStream::connect(format!("{master_ip}:{master_port}")) {
                     let mut reader = BufReader::new(stream);
                     let mut buf = String::new();
                     reader.read_line(&mut buf).unwrap();

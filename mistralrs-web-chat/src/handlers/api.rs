@@ -421,7 +421,7 @@ pub async fn new_chat(
     *id_guard += 1;
     drop(id_guard);
 
-    let chat_id = format!("chat_{}", id);
+    let chat_id = format!("chat_{id}");
     let path = format!("{}/{}.json", app.chats_dir, chat_id);
 
     let kind = if let Some(m) = app.models.get(&req.model) {
@@ -594,7 +594,7 @@ pub async fn generate_speech(
                 .into_response();
         }
         // Return URL for client download
-        let url = format!("/speech/{}", filename);
+        let url = format!("/speech/{filename}");
         (StatusCode::OK, Json(json!({ "url": url }))).into_response()
     } else {
         (

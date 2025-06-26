@@ -419,8 +419,7 @@ impl Phi4MMInputsProcessor {
             8000
         } else if fs < 8000 {
             return Err(candle_core::Error::Msg(format!(
-                "Unsupported sample rate: {}",
-                fs
+                "Unsupported sample rate: {fs}"
             )));
         } else {
             return Ok((wav.to_vec(), fs)); // No resampling needed
@@ -448,12 +447,12 @@ impl Phi4MMInputsProcessor {
                 wav.len(),
                 1, // mono
             )
-            .map_err(|e| candle_core::Error::Msg(format!("Resampler creation failed: {}", e)))?;
+            .map_err(|e| candle_core::Error::Msg(format!("Resampler creation failed: {e}")))?;
 
             let input = vec![wav.to_vec()];
             let output = resampler
                 .process(&input, None)
-                .map_err(|e| candle_core::Error::Msg(format!("Resampling failed: {}", e)))?;
+                .map_err(|e| candle_core::Error::Msg(format!("Resampling failed: {e}")))?;
 
             return Ok((output[0].clone(), 16000));
         }
@@ -476,12 +475,12 @@ impl Phi4MMInputsProcessor {
             wav.len(),
             1, // mono
         )
-        .map_err(|e| candle_core::Error::Msg(format!("Resampler creation failed: {}", e)))?;
+        .map_err(|e| candle_core::Error::Msg(format!("Resampler creation failed: {e}")))?;
 
         let input = vec![wav.to_vec()];
         let output = resampler
             .process(&input, None)
-            .map_err(|e| candle_core::Error::Msg(format!("Resampling failed: {}", e)))?;
+            .map_err(|e| candle_core::Error::Msg(format!("Resampling failed: {e}")))?;
 
         Ok((output[0].clone(), target_fs))
     }
@@ -494,8 +493,7 @@ impl Phi4MMInputsProcessor {
             (512, 400, 160)
         } else {
             return Err(candle_core::Error::Msg(format!(
-                "Unsupported sample rate: {}",
-                fs
+                "Unsupported sample rate: {fs}"
             )));
         };
 

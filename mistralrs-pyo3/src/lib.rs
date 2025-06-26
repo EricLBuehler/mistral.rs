@@ -996,7 +996,7 @@ impl Runner {
                                     }
                                     let content = match &image_messages[0]["text"] {
                                         Either::Left(left) => left.to_string(),
-                                        Either::Right(right) => format!("{:?}", right),
+                                        Either::Right(right) => format!("{right:?}"),
                                     };
                                     let mut message_map: IndexMap<
                                         String,
@@ -1605,7 +1605,7 @@ impl Runner {
                                     }
                                     let content = match &image_messages[0]["text"] {
                                         Either::Left(left) => left.to_string(),
-                                        Either::Right(right) => format!("{:?}", right),
+                                        Either::Right(right) => format!("{right:?}"),
                                     };
                                     let mut message_map: IndexMap<
                                         String,

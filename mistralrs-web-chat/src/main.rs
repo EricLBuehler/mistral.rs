@@ -193,7 +193,7 @@ async fn main() -> Result<()> {
 
     let addr: SocketAddr = ([0, 0, 0, 0], cli.port.unwrap_or(8080)).into();
     let listener = TcpListener::bind(addr).await?;
-    println!("🔌 listening on http://{}", addr);
+    println!("🔌 listening on http://{addr}");
     axum::serve(listener, app).await?;
     Ok(())
 }

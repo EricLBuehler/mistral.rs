@@ -152,7 +152,7 @@ pub fn get_search_tools(web_search_options: &WebSearchOptions) -> Result<Vec<Too
         Tool {
             tp: ToolType::Function,
             function: Function {
-                description: Some(format!("{}{}", description, location_details)),
+                description: Some(format!("{description}{location_details}")),
                 name: SEARCH_TOOL_NAME.to_string(),
                 parameters: Some(parameters),
             },
@@ -192,7 +192,7 @@ pub fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<SearchRe
     let client = reqwest::blocking::Client::new();
 
     let encoded_query = urlencoding::encode(&params.query);
-    let url = format!("https://html.duckduckgo.com/html/?q={}", encoded_query);
+    let url = format!("https://html.duckduckgo.com/html/?q={encoded_query}");
 
     let user_agent = format!("mistralrs/{APP_VERSION} ({OS}; {ARCH}; {FAMILY})");
     let response = client.get(&url).header("User-Agent", &user_agent).send()?;
@@ -234,7 +234,7 @@ pub fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<SearchRe
                 return None;
             }
             if !url.starts_with("http") {
-                url = format!("https://{}", url);
+                url = format!("https://{url}");
             }
             Some((title, description, url))
         })

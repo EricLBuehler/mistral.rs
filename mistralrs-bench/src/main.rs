@@ -21,10 +21,10 @@ enum TestName {
 impl Display for TestName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = match self {
-            TestName::Prompt(n) => format!("pp {}", n),
-            TestName::Gen(n) => format!("tg {}", n),
+            TestName::Prompt(n) => format!("pp {n}"),
+            TestName::Gen(n) => format!("tg {n}"),
         };
-        write!(f, "{}", name)
+        write!(f, "{name}")
     }
 }
 
