@@ -299,7 +299,7 @@ impl HttpMcpHandler {
                             result: None,
                             error: Some(JsonRpcError {
                                 code: errors::INTERNAL_ERROR,
-                                message: format!("Tool execution error: {}", e),
+                                message: format!("Tool execution error: {e}"),
                                 data: None,
                             }),
                         },
@@ -310,7 +310,7 @@ impl HttpMcpHandler {
                         result: None,
                         error: Some(JsonRpcError {
                             code: errors::METHOD_NOT_FOUND,
-                            message: format!("Unknown tool: {}", tool_name),
+                            message: format!("Unknown tool: {tool_name}"),
                             data: None,
                         }),
                     },
@@ -351,7 +351,7 @@ pub async fn create_http_mcp_server(
         .route("/mcp", post(handle_jsonrpc))
         .with_state(handler);
 
-    let addr = format!("{}:{}", host, port);
+    let addr = format!("{host}:{port}");
     let listener = TcpListener::bind(&addr).await?;
 
     axum::serve(listener, app).await?;

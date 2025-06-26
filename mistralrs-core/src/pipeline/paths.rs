@@ -130,8 +130,7 @@ pub fn get_xlora_paths(
             let xlora_config = xlora_config.map(Some).unwrap_or_else(|| {
                 if let Some(last_err) = last_err {
                     panic!(
-                        "Unable to derserialize any configs. Last error: {}",
-                        last_err
+                        "Unable to derserialize any configs. Last error: {last_err}"
                     )
                 } else {
                     None

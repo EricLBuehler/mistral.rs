@@ -251,7 +251,7 @@ pub async fn parse_request(
                             }
                             let content = match image_messages[0]["text"].deref() {
                                 Either::Left(left) => left.to_string(),
-                                Either::Right(right) => format!("{:?}", right),
+                                Either::Right(right) => format!("{right:?}"),
                             };
                             let mut message_map: IndexMap<
                                 String,
@@ -382,7 +382,7 @@ pub async fn parse_request(
                 for url_unparsed in image_urls {
                     let image = parse_image_url(&url_unparsed)
                         .await
-                        .context(format!("Failed to parse image resource: {}", url_unparsed))?;
+                        .context(format!("Failed to parse image resource: {url_unparsed}"))?;
                     images.push(image);
                 }
 
@@ -391,7 +391,7 @@ pub async fn parse_request(
                 for url_unparsed in audio_urls {
                     let audio = parse_audio_url(&url_unparsed)
                         .await
-                        .context(format!("Failed to parse audio resource: {}", url_unparsed))?;
+                        .context(format!("Failed to parse audio resource: {url_unparsed}"))?;
                     audios.push(audio);
                 }
 
