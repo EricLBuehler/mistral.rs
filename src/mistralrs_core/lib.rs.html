@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/lib.rs`."><title>lib.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-916cea96.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0 (17067e9ac 2025-05-09)" data-channel="1.87.0" data-search-js="search-e7298875.js" data-settings-js="settings-d72f25bb.js" ><script src="../../static.files/storage-82c7156e.js"></script><script defer src="../../static.files/src-script-63605ae7.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-fb8c74a8.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/</div>lib.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/lib.rs`."><title>lib.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-1a91846b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.88.0 (6b00bc388 2025-06-23)" data-channel="1.88.0" data-search-js="search-f7877310.js" data-settings-js="settings-5514c975.js" ><script src="../../static.files/storage-4e99c027.js"></script><script defer src="../../static.files/src-script-63605ae7.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-7ef8a74a.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/</div>lib.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 <a href=#2 id=2 data-nosnippet>2</a></span><span class="kw">use </span>candle_core::Device;
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>engine::Engine;
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">pub use </span>engine::{
@@ -247,7 +247,7 @@
 <a href=#247 id=247 data-nosnippet>247</a><span class="attr">#[cfg(feature = <span class="string">"pyo3_macros"</span>)]
 <a href=#248 id=248 data-nosnippet>248</a></span><span class="kw">impl </span>From&lt;MistralRsError&gt; <span class="kw">for </span>pyo3::PyErr {
 <a href=#249 id=249 data-nosnippet>249</a>    <span class="kw">fn </span>from(value: MistralRsError) -&gt; <span class="self">Self </span>{
-<a href=#250 id=250 data-nosnippet>250</a>        PyValueError::new_err(<span class="macro">format!</span>(<span class="string">"{:?}"</span>, value))
+<a href=#250 id=250 data-nosnippet>250</a>        PyValueError::new_err(<span class="macro">format!</span>(<span class="string">"{value:?}"</span>))
 <a href=#251 id=251 data-nosnippet>251</a>    }
 <a href=#252 id=252 data-nosnippet>252</a>}
 <a href=#253 id=253 data-nosnippet>253</a>
@@ -872,7 +872,7 @@
 <a href=#872 id=872 data-nosnippet>872</a>
 <a href=#873 id=873 data-nosnippet>873</a>            <span class="prelude-val">Ok</span>(())
 <a href=#874 id=874 data-nosnippet>874</a>        } <span class="kw">else </span>{
-<a href=#875 id=875 data-nosnippet>875</a>            <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Model {} not found"</span>, model_id))
+<a href=#875 id=875 data-nosnippet>875</a>            <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Model {model_id} not found"</span>))
 <a href=#876 id=876 data-nosnippet>876</a>        }
 <a href=#877 id=877 data-nosnippet>877</a>    }
 <a href=#878 id=878 data-nosnippet>878</a>
@@ -901,7 +901,7 @@
 <a href=#901 id=901 data-nosnippet>901</a>            .read()
 <a href=#902 id=902 data-nosnippet>902</a>            .map_err(|<span class="kw">_</span>| <span class="string">"Failed to acquire read lock on engines"</span>)<span class="question-mark">?</span>;
 <a href=#903 id=903 data-nosnippet>903</a>        <span class="kw">if </span>!engines.contains_key(model_id) {
-<a href=#904 id=904 data-nosnippet>904</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Model {} not found"</span>, model_id));
+<a href=#904 id=904 data-nosnippet>904</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Model {model_id} not found"</span>));
 <a href=#905 id=905 data-nosnippet>905</a>        }
 <a href=#906 id=906 data-nosnippet>906</a>        drop(engines);
 <a href=#907 id=907 data-nosnippet>907</a>
@@ -990,7 +990,7 @@
 <a href=#990 id=990 data-nosnippet>990</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(engine_instance) = engines.get(<span class="kw-2">&amp;</span>resolved_model_id) {
 <a href=#991 id=991 data-nosnippet>991</a>            <span class="prelude-val">Ok</span>(engine_instance.reboot_state.tool_callbacks_with_tools.len())
 <a href=#992 id=992 data-nosnippet>992</a>        } <span class="kw">else </span>{
-<a href=#993 id=993 data-nosnippet>993</a>            <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Model {} not found"</span>, resolved_model_id))
+<a href=#993 id=993 data-nosnippet>993</a>            <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Model {resolved_model_id} not found"</span>))
 <a href=#994 id=994 data-nosnippet>994</a>        }
 <a href=#995 id=995 data-nosnippet>995</a>    }
 <a href=#996 id=996 data-nosnippet>996</a>
@@ -1017,7 +1017,7 @@
 <a href=#1017 id=1017 data-nosnippet>1017</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(engine_instance) = engines.get(<span class="kw-2">&amp;</span>resolved_model_id) {
 <a href=#1018 id=1018 data-nosnippet>1018</a>            <span class="prelude-val">Ok</span>(engine_instance.reboot_state.mcp_client_config.is_some())
 <a href=#1019 id=1019 data-nosnippet>1019</a>        } <span class="kw">else </span>{
-<a href=#1020 id=1020 data-nosnippet>1020</a>            <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Model {} not found"</span>, resolved_model_id))
+<a href=#1020 id=1020 data-nosnippet>1020</a>            <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Model {resolved_model_id} not found"</span>))
 <a href=#1021 id=1021 data-nosnippet>1021</a>        }
 <a href=#1022 id=1022 data-nosnippet>1022</a>    }
 <a href=#1023 id=1023 data-nosnippet>1023</a>
@@ -1044,7 +1044,7 @@
 <a href=#1044 id=1044 data-nosnippet>1044</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(engine_instance) = engines.get(<span class="kw-2">&amp;</span>resolved_model_id) {
 <a href=#1045 id=1045 data-nosnippet>1045</a>            <span class="prelude-val">Ok</span>(engine_instance.config.clone())
 <a href=#1046 id=1046 data-nosnippet>1046</a>        } <span class="kw">else </span>{
-<a href=#1047 id=1047 data-nosnippet>1047</a>            <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Model {} not found"</span>, resolved_model_id))
+<a href=#1047 id=1047 data-nosnippet>1047</a>            <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Model {resolved_model_id} not found"</span>))
 <a href=#1048 id=1048 data-nosnippet>1048</a>        }
 <a href=#1049 id=1049 data-nosnippet>1049</a>    }
 <a href=#1050 id=1050 data-nosnippet>1050</a>}</code></pre></div></section></main></body></html>
