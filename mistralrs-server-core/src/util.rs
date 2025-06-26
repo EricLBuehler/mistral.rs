@@ -234,7 +234,7 @@ mod tests {
         c7YCVIAfi6JYn5bHjTHTGmurQJXJ8C/um928G9zK4gAAAABJRU5ErkJggg==
         ";
 
-        let url = format!("data:image/png;base64,{}", url);
+        let url = format!("data:image/png;base64,{url}");
         let image = parse_image_url(&url).await.unwrap();
         assert_eq!(image.dimensions(), (32, 32));
 

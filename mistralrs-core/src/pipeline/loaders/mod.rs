@@ -192,9 +192,9 @@ impl FromStr for TokenSource {
 impl fmt::Display for TokenSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TokenSource::Literal(value) => write!(f, "literal:{}", value),
-            TokenSource::EnvVar(value) => write!(f, "env:{}", value),
-            TokenSource::Path(value) => write!(f, "path:{}", value),
+            TokenSource::Literal(value) => write!(f, "literal:{value}"),
+            TokenSource::EnvVar(value) => write!(f, "env:{value}"),
+            TokenSource::Path(value) => write!(f, "path:{value}"),
             TokenSource::CacheToken => write!(f, "cache"),
             TokenSource::None => write!(f, "none"),
         }

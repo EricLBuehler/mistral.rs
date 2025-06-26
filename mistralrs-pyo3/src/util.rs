@@ -90,10 +90,10 @@ pub(crate) fn parse_image_url(url_unparsed: &str) -> PyApiResult<DynamicImage> {
         url
     } else if File::open(url_unparsed).is_ok() {
         url::Url::from_file_path(std::path::absolute(url_unparsed)?)
-            .map_err(|_| format!("Could not parse file path: {}", url_unparsed))?
+            .map_err(|_| format!("Could not parse file path: {url_unparsed}"))?
     } else {
         url::Url::parse(url_unparsed)
-            .map_err(|_| format!("Could not parse as base64 data: {}", url_unparsed))?
+            .map_err(|_| format!("Could not parse as base64 data: {url_unparsed}"))?
     };
 
     let bytes = if url.scheme() == "http" || url.scheme() == "https" {
@@ -105,7 +105,7 @@ pub(crate) fn parse_image_url(url_unparsed: &str) -> PyApiResult<DynamicImage> {
     } else if url.scheme() == "file" {
         let path = url
             .to_file_path()
-            .map_err(|_| format!("Could not parse file path: {}", url))?;
+            .map_err(|_| format!("Could not parse file path: {url}"))?;
 
         if let Ok(mut f) = File::open(&path) {
             // Read from local file
@@ -115,8 +115,7 @@ pub(crate) fn parse_image_url(url_unparsed: &str) -> PyApiResult<DynamicImage> {
             buffer
         } else {
             return Err(PyApiErr::from(format!(
-                "Could not open file at path: {}",
-                url
+                "Could not open file at path: {url}"
             )));
         }
     } else if url.scheme() == "data" {
@@ -140,10 +139,10 @@ pub(crate) fn parse_audio_url(url_unparsed: &str) -> PyApiResult<AudioInput> {
         url
     } else if File::open(url_unparsed).is_ok() {
         url::Url::from_file_path(std::path::absolute(url_unparsed)?)
-            .map_err(|_| format!("Could not parse file path: {}", url_unparsed))?
+            .map_err(|_| format!("Could not parse file path: {url_unparsed}"))?
     } else {
         url::Url::parse(url_unparsed)
-            .map_err(|_| format!("Could not parse as base64 data: {}", url_unparsed))?
+            .map_err(|_| format!("Could not parse as base64 data: {url_unparsed}"))?
     };
 
     let bytes = if url.scheme() == "http" || url.scheme() == "https" {
@@ -157,7 +156,7 @@ pub(crate) fn parse_audio_url(url_unparsed: &str) -> PyApiResult<AudioInput> {
     } else if url.scheme() == "file" {
         let path = url
             .to_file_path()
-            .map_err(|_| format!("Could not parse file path: {}", url))?;
+            .map_err(|_| format!("Could not parse file path: {url}"))?;
 
         if let Ok(mut f) = File::open(&path) {
             let metadata = fs::metadata(&path)?;
@@ -166,8 +165,7 @@ pub(crate) fn parse_audio_url(url_unparsed: &str) -> PyApiResult<AudioInput> {
             buffer
         } else {
             return Err(PyApiErr::from(format!(
-                "Could not open file at path: {}",
-                url
+                "Could not open file at path: {url}"
             )));
         }
     } else if url.scheme() == "data" {
