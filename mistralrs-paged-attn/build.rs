@@ -151,6 +151,24 @@ fn main() -> Result<(), String> {
     println!("cargo::rerun-if-changed=src/metal/kernels/float8.metal");
     println!("cargo::rerun-if-changed=build.rs");
 
+    // Check if precompilation should be skipped
+    // https://github.com/EricLBuehler/mistral.rs/pull/1311#issuecomment-3001309885
+    println!("cargo:rerun-if-env-changed=MISTRALRS_METAL_PRECOMPILE");
+    let skip_precompile = env::var("MISTRALRS_METAL_PRECOMPILE")
+        .map(|v| v == "0" || v.to_lowercase() == "false")
+        .unwrap_or(false);
+
+    if skip_precompile {
+        println!(
+            "cargo:warning=Skipping Metal kernel precompilation (MISTRALRS_METAL_PRECOMPILE=0)"
+        );
+        // Write a dummy metallib file to satisfy the include_bytes! macro
+        let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
+        std::fs::write(out_dir.join("mistralrs_paged_attention.metallib"), &[]).unwrap();
+        std::fs::write(out_dir.join("mistralrs_paged_attention_ios.metallib"), &[]).unwrap();
+        return Ok(());
+    }
+
     enum Platform {
         MacOS,
         Ios,

@@ -34,6 +34,8 @@ pub enum MetalKernelError {
     FailedToCreatePipeline(String),
     #[error("dtype mismatch, got {got:?}, expected {expected:?}")]
     DTypeMismatch { expected: Vec<DType>, got: DType },
+    #[error("Failed to compile Metal shader: {0}")]
+    CompilationError(String),
 }
 
 impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
@@ -70,13 +72,186 @@ impl Kernels {
             Ok(lib.clone())
         } else {
             let source_data = KERNELS;
-            let lib = device.new_library_with_data(source_data).map_err(|e| {
-                MetalKernelError::LoadLibraryError(format!(
-                    "Metal requires macosx > 13.0 or higher, cannot load candle metal library: {e}"
-                ))
-            })?;
+            // Check if the precompiled library is empty (which indicates runtime compilation is needed)
+            let lib = if source_data.is_empty() {
+                // Runtime compilation path
+                self.compile_kernels_at_runtime(device)?
+            } else {
+                // Precompiled path
+                device.new_library_with_data(source_data).map_err(|e| {
+                    MetalKernelError::LoadLibraryError(format!(
+                        "Metal requires macosx > 13.0 or higher, cannot load candle metal library: {e}"
+                    ))
+                })?
+            };
             Ok(LIBRARY.get_or_init(|| lib).clone())
         }
+    }
+
+    fn compile_kernels_at_runtime(&self, device: &Device) -> Result<Library, MetalKernelError> {
+        use std::collections::{HashMap, HashSet};
+
+        // Create a virtual filesystem with all our Metal sources
+        let mut file_system = HashMap::new();
+        file_system.insert("copy_blocks.metal", include_str!("copy_blocks.metal"));
+        file_system.insert("pagedattention.metal", include_str!("pagedattention.metal"));
+        file_system.insert(
+            "reshape_and_cache.metal",
+            include_str!("reshape_and_cache.metal"),
+        );
+        file_system.insert("utils.metal", include_str!("utils.metal"));
+        file_system.insert("float8.metal", include_str!("float8.metal"));
+
+        // Recursive include preprocessor
+        fn preprocess_includes(
+            content: &str,
+            current_file: &str,
+            file_system: &HashMap<&str, &str>,
+            included_files: &mut HashSet<String>,
+            include_stack: &mut Vec<String>,
+        ) -> Result<String, String> {
+            // Check for circular includes
+            if include_stack.contains(&current_file.to_string()) {
+                return Err(format!(
+                    "Circular include detected: {} -> {}",
+                    include_stack.join(" -> "),
+                    current_file
+                ));
+            }
+
+            include_stack.push(current_file.to_string());
+
+            let mut result = String::new();
+            let mut lines = content.lines();
+
+            while let Some(line) = lines.next() {
+                let trimmed = line.trim();
+
+                // Check for #include directive
+                if trimmed.starts_with("#include") {
+                    // Extract the included filename
+                    if let Some(start) = trimmed.find('"') {
+                        if let Some(end) = trimmed[start + 1..].find('"') {
+                            let include_file = &trimmed[start + 1..start + 1 + end];
+
+                            // Check if this is one of our local files
+                            if let Some(included_content) = file_system.get(include_file) {
+                                // Only include each file once (like #pragma once)
+                                if !included_files.contains(include_file) {
+                                    included_files.insert(include_file.to_string());
+
+                                    // Recursively process the included file
+                                    let processed = preprocess_includes(
+                                        included_content,
+                                        include_file,
+                                        file_system,
+                                        included_files,
+                                        include_stack,
+                                    )?;
+
+                                    result.push_str(&format!(
+                                        "\n// ===== Start of {} =====\n",
+                                        include_file
+                                    ));
+                                    result.push_str(&processed);
+                                    result.push_str(&format!(
+                                        "\n// ===== End of {} =====\n",
+                                        include_file
+                                    ));
+                                }
+                                // Skip the original #include line
+                                continue;
+                            } else if !trimmed.contains('<') {
+                                // This is a quoted include but not one of our files
+                                // Skip it to avoid "file not found" errors
+                                continue;
+                            }
+                        }
+                    }
+                    // For system includes (with < >), keep them
+                    if trimmed.contains('<') {
+                        result.push_str(line);
+                        result.push('\n');
+                    }
+                } else if trimmed == "#pragma once" {
+                    // Skip #pragma once as we handle it differently
+                    continue;
+                } else {
+                    // Fix backslash-newline warnings by removing trailing spaces
+                    if line.ends_with("\\ ") || line.ends_with("\\\t") {
+                        let cleaned = line.trim_end();
+                        let without_backslash = cleaned.trim_end_matches('\\');
+                        result.push_str(without_backslash);
+                        result.push_str(" \\");
+                    } else {
+                        result.push_str(line);
+                    }
+                    result.push('\n');
+                }
+            }
+
+            include_stack.pop();
+            Ok(result)
+        }
+
+        // Start with a clean slate
+        let mut included_files = HashSet::new();
+        let mut include_stack = Vec::new();
+
+        // Build the main source file
+        let mut main_source = String::new();
+
+        // Add standard Metal includes first
+        main_source.push_str("#include <metal_stdlib>\n");
+        main_source.push_str("#include <metal_common>\n");
+        main_source.push_str("#include <metal_math>\n");
+        main_source.push_str("#include <metal_simdgroup>\n");
+        main_source.push_str("\nusing namespace metal;\n\n");
+
+        // Process all the main implementation files
+        // Order matters - we need to ensure dependencies are included first
+        let main_files = vec![
+            "float8.metal",      // Float8 types
+            "utils.metal",       // Utility functions (depends on float8)
+            "copy_blocks.metal", // Main implementations
+            "pagedattention.metal",
+            "reshape_and_cache.metal",
+        ];
+
+        for file in main_files {
+            if !included_files.contains(file) {
+                if let Some(content) = file_system.get(file) {
+                    match preprocess_includes(
+                        content,
+                        file,
+                        &file_system,
+                        &mut included_files,
+                        &mut include_stack,
+                    ) {
+                        Ok(processed) => {
+                            main_source.push_str(&format!("\n// ===== {} =====\n", file));
+                            main_source.push_str(&processed);
+                        }
+                        Err(e) => {
+                            return Err(MetalKernelError::CompilationError(format!(
+                                "Failed to preprocess {}: {}",
+                                file, e
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Compile the preprocessed source
+        let compile_options = metal::CompileOptions::new();
+        device
+            .new_library_with_source(&main_source, &compile_options)
+            .map_err(|e| {
+                MetalKernelError::CompilationError(format!(
+                    "Failed to compile Metal kernels at runtime: {e}"
+                ))
+            })
     }
 
     fn load_function(
