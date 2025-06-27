@@ -241,7 +241,7 @@ impl Attention {
                     comm,
                 ),
                 softcap: None,
-                softmax_scale: 1.0 / (cfg.query_pre_attn_scalar as f32).sqrt(),
+                softmax_scale: 1.0,
                 sliding_window,
             },
             q_norm,
@@ -277,32 +277,24 @@ impl Attention {
             v = v.to_dtype(original_dtype)?;
         }
 
-        (q, k, v) = if q_len != 1 {
-            let q = q
-                .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            let k = k
-                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            let v = v
-                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            (q, k, v)
-        } else {
-            let q = q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?;
-            let k = k.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
-            let v = v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
-            (q, k, v)
+        q = q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?;
+        k = k.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
+        v = v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
+
+        (q, k) = match self.use_sliding_window {
+            true => self.rotary_emb_local.forward(&q, &k, seqlen_offsets)?,
+            false => self.rotary_emb_global.forward(&q, &k, seqlen_offsets)?,
         };
 
         q = q.apply(&self.q_norm)?;
         k = k.apply(&self.k_norm)?;
         v = v.apply(&self.v_norm)?;
 
-        (q, k) = match self.use_sliding_window {
-            true => self.rotary_emb_local.forward(&q, &k, seqlen_offsets)?,
-            false => self.rotary_emb_global.forward(&q, &k, seqlen_offsets)?,
-        };
+        if q_len != 1 {
+            q = q.transpose(1, 2)?;
+            k = k.transpose(1, 2)?;
+            v = v.transpose(1, 2)?;
+        }
 
         let mask = if self.use_sliding_window {
             sliding_attention_mask

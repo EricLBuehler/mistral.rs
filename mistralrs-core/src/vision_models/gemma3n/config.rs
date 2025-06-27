@@ -41,8 +41,6 @@ pub struct Gemma3nTextConfig {
     #[serde(default = "vocab_size")]
     pub vocab_size: usize,
     pub sliding_window: usize,
-    #[serde(default = "query_pre_attn_scalar")]
-    pub query_pre_attn_scalar: usize,
     #[serde(default = "max_position_embeddings")]
     pub max_position_embeddings: usize,
     pub quantization_config: Option<QuantizedConfig>,
