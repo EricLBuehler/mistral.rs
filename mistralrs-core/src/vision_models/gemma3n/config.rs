@@ -57,6 +57,10 @@ pub struct Gemma3nTextConfig {
     pub hidden_size_per_layer_input: usize,
     pub altup_num_inputs: usize,
     pub layer_types: Vec<String>,
+    pub altup_active_idx: usize,
+    pub altup_coef_clip: Option<f64>,
+    pub laurel_rank: usize,
+    pub altup_correct_scale: bool,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

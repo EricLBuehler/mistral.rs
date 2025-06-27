@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_nn::Linear;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
@@ -11,8 +12,8 @@ use crate::{
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{
-        embedding, CausalMasker, Gemma3nRotaryEmbedding, MatMul, Mlp, RmsNorm, RotaryEmbedding,
-        ScaledEmbedding, Sdpa,
+        self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, MatMul, Mlp, RmsNorm,
+        RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -263,6 +264,136 @@ impl Attention {
     }
 }
 
+struct TextAltUp {
+    correct_output_scale: Tensor,
+    correction_coefs: Linear,
+    prediction_coefs: Linear,
+    modality_router: Linear,
+    router_norm: RmsNorm,
+    router_input_scale: f64,
+    altup_active_idx: usize,
+    altup_num_inputs: usize,
+}
+
+impl TextAltUp {
+    fn new(cfg: &Gemma3nTextConfig, vb: ShardedVarBuilder) -> Result<Self> {
+        let correct_output_scale = vb.get(cfg.hidden_size, "correct_output_scale")?;
+        let mut correction_coefs = layers::linear_no_bias(
+            cfg.altup_num_inputs,
+            cfg.altup_num_inputs,
+            vb.pp("correction_coefs"),
+        )?;
+        if let Some(altup_coef_clip) = cfg.altup_coef_clip {
+            correction_coefs = Linear::new(
+                correction_coefs
+                    .weight()
+                    .clamp(-altup_coef_clip, altup_coef_clip)?,
+                None,
+            );
+        }
+        let prediction_coefs = layers::linear_no_bias(
+            cfg.altup_num_inputs,
+            cfg.altup_num_inputs.pow(2),
+            vb.pp("prediction_coefs"),
+        )?;
+        let modality_router = layers::linear_no_bias(
+            cfg.hidden_size,
+            cfg.altup_num_inputs,
+            vb.pp("modality_router"),
+        )?;
+        let router_norm =
+            RmsNorm::new_gemma(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("router_norm"))?;
+
+        Ok(Self {
+            correct_output_scale,
+            correction_coefs,
+            prediction_coefs,
+            modality_router,
+            router_norm,
+            router_input_scale: 1. / (cfg.hidden_size as f64),
+            altup_active_idx: cfg.altup_active_idx,
+            altup_num_inputs: cfg.altup_num_inputs,
+        })
+    }
+
+    fn compute_router_modalities(&self, xs: &Tensor) -> Result<Tensor> {
+        let router_inputs = (self.router_norm.forward(xs)? * self.router_input_scale)?;
+        let routed = self.modality_router.forward(&router_inputs)?;
+        routed.to_dtype(DType::F32)?.tanh()?.to_dtype(xs.dtype())
+    }
+
+    fn predict(&self, xs: &Tensor) -> Result<Tensor> {
+        let modalities = self.compute_router_modalities(&xs.i(self.altup_active_idx)?)?;
+
+        // Project and then transpose all 2D matrices contained so that mulmat gives the correct result
+        let shape = [
+            modalities.dims()[..modalities.dims().len() - 1].to_vec(),
+            vec![self.altup_num_inputs, self.altup_num_inputs],
+        ]
+        .concat();
+        let all_coefs = self
+            .prediction_coefs
+            .forward(&modalities)?
+            .reshape(shape)?
+            .permute((0, 1, 3, 2))?;
+
+        // permute hidden_states to [batch_size, num_tokens, hidden_size, altup_num_inputs]
+        let mut predictions = xs.permute((1, 2, 3, 0))?.matmul(&all_coefs)?;
+        predictions = predictions.permute((3, 0, 1, 2))?;
+        predictions = (predictions + modalities)?;
+        predictions.contiguous()
+    }
+
+    fn correct(&self, predictions: &Tensor, activated: &Tensor) -> Result<Tensor> {
+        let modalities = self.compute_router_modalities(&activated)?;
+        let innovation = activated
+            .broadcast_sub(&predictions.i(self.altup_active_idx)?)?
+            .repeat((self.altup_num_inputs, 1, 1, 1))?;
+
+        let all_coefs = (self.correction_coefs.forward(&modalities)? + 1.)?
+            .permute((2, 0, 1))?
+            .unsqueeze(D::Minus1)?;
+
+        innovation
+            .broadcast_mul(&all_coefs)?
+            .broadcast_add(predictions)?
+            .contiguous()
+    }
+
+    fn scale_corrected_output(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.to_dtype(self.correct_output_scale.dtype())?
+            .broadcast_mul(&self.correct_output_scale)?
+            .to_dtype(xs.dtype())
+    }
+}
+
+struct TextLaurelBlock {
+    left: Linear,
+    right: Linear,
+    post_norm: RmsNorm,
+}
+
+impl TextLaurelBlock {
+    fn new(cfg: &Gemma3nTextConfig, vb: ShardedVarBuilder) -> Result<Self> {
+        Ok(Self {
+            left: layers::linear_no_bias(cfg.hidden_size, cfg.laurel_rank, vb.pp("linear_left"))?,
+            right: layers::linear_no_bias(cfg.laurel_rank, cfg.hidden_size, vb.pp("linear_right"))?,
+            post_norm: RmsNorm::new_gemma(
+                cfg.hidden_size,
+                cfg.rms_norm_eps,
+                vb.pp("post_laurel_norm"),
+            )?,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let mut laurel_xs = self.left.forward(xs)?;
+        laurel_xs = self.right.forward(&laurel_xs)?;
+        laurel_xs = self.post_norm.forward(&laurel_xs)?;
+        xs + laurel_xs
+    }
+}
+
 struct DecoderLayer {
     self_attn: Attention,
     mlp: Box<dyn MlpLayer>,
@@ -270,6 +401,14 @@ struct DecoderLayer {
     post_attention_layernorm: RmsNorm,
     pre_feedforward_layernorm: RmsNorm,
     post_feedforward_layernorm: RmsNorm,
+    altup: TextAltUp,
+    laurel: TextLaurelBlock,
+    per_layer_input_gate: Linear,
+    per_layer_projection: Linear,
+    post_per_layer_input_norm: RmsNorm,
+    altup_active_idx: usize,
+    altup_correct_scale: bool,
+    act: Activation,
 }
 
 impl DecoderLayer {
@@ -323,6 +462,24 @@ impl DecoderLayer {
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm"), false),
         )?;
+
+        let altup = TextAltUp::new(cfg, vb.pp("altup"))?;
+        let laurel = TextLaurelBlock::new(cfg, vb.pp("laurel"))?;
+        let per_layer_input_gate = layers::linear_no_bias(
+            cfg.hidden_size,
+            cfg.hidden_size_per_layer_input,
+            vb.pp("per_layer_input_gate"),
+        )?;
+        let per_layer_projection = layers::linear_no_bias(
+            cfg.hidden_size_per_layer_input,
+            cfg.hidden_size,
+            vb.pp("per_layer_projection"),
+        )?;
+        let post_per_layer_input_norm = RmsNorm::new_gemma(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            vb.pp("post_per_layer_input_norm"),
+        )?;
         Ok(Self {
             self_attn,
             mlp: Box::new(mlp),
@@ -330,6 +487,14 @@ impl DecoderLayer {
             post_attention_layernorm,
             pre_feedforward_layernorm,
             post_feedforward_layernorm,
+            altup,
+            laurel,
+            per_layer_input_gate,
+            per_layer_projection,
+            post_per_layer_input_norm,
+            altup_active_idx: cfg.altup_active_idx,
+            altup_correct_scale: cfg.altup_correct_scale,
+            act: cfg.hidden_activation,
         })
     }
 
@@ -345,9 +510,13 @@ impl DecoderLayer {
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let residual = xs;
-        let xs = self.input_layernorm.forward(xs)?;
-        let xs = self
+        let predictions = self.altup.predict(xs)?;
+        let active_prediction = predictions.i(self.altup_active_idx)?;
+
+        let active_prediction_normed = self.input_layernorm.forward(&active_prediction)?;
+        let laurel_output = self.laurel.forward(&active_prediction_normed)?;
+
+        let attn = self
             .self_attn
             .forward(
                 &xs,
@@ -359,13 +528,30 @@ impl DecoderLayer {
                 flash_params,
             )?
             .apply(&self.post_attention_layernorm)?;
-        let xs = (xs + residual)?;
-        let residual = &xs;
-        let xs = self
-            .mlp
-            .forward(&xs.apply(&self.pre_feedforward_layernorm)?)?
-            .apply(&self.post_feedforward_layernorm)?;
-        residual + xs
+
+        let attn_gated = (&active_prediction + attn)?;
+        let attn_laurel = ((attn_gated + laurel_output)? / 2f64.sqrt())?;
+
+        let attn_norm = self.pre_feedforward_layernorm.forward(&attn_laurel)?;
+        let attn_ffw = self.mlp.forward(&attn_norm)?;
+        let attn_ffw_norm = self.post_feedforward_layernorm.forward(&attn_ffw)?;
+        let attn_ffw_laurel_gated = (&attn_laurel + attn_ffw_norm)?;
+        let corrected_predictions = self.altup.correct(&predictions, &attn_ffw_laurel_gated)?;
+
+        let mut first_prediction = corrected_predictions.i(self.altup_active_idx)?;
+        if self.altup_correct_scale {
+            first_prediction = self.altup.scale_corrected_output(&first_prediction)?;
+        }
+        first_prediction = self.per_layer_input_gate.forward(&first_prediction)?;
+        first_prediction = self.act.forward(&first_prediction)?;
+        first_prediction = (&first_prediction * per_layer_input)?;
+
+        first_prediction = self.per_layer_projection.forward(&first_prediction)?;
+        first_prediction = self.post_per_layer_input_norm.forward(&first_prediction)?;
+
+        corrected_predictions.slice_set(&first_prediction, 0, 1)?;
+
+        Ok(corrected_predictions)
     }
 }
 
@@ -633,6 +819,9 @@ impl TextModel {
         ]
         .concat();
         per_layer_projection = per_layer_projection.reshape(shape)?;
+        per_layer_projection = self
+            .per_layer_projection_norm
+            .forward(&per_layer_projection)?;
 
         let Some(mut per_layer_inputs) = per_layer_inputs else {
             return Ok(per_layer_projection.clone());

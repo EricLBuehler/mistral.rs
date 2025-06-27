@@ -23,7 +23,6 @@ mod text;
 
 pub struct Gemma3Model {
     language_model: TextModel,
-    cfg: Gemma3nConfig,
 }
 
 impl Gemma3Model {
@@ -42,7 +41,6 @@ impl Gemma3Model {
                 normal_loading_metadata,
                 attention_mechanism,
             )?,
-            cfg: cfg.clone(),
         })
     }
 
