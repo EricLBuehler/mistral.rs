@@ -3,8 +3,10 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
+    ShardedVarBuilder,
 };
+use statrs::distribution::{ContinuousCDF, Normal};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
@@ -12,7 +14,7 @@ use crate::{
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{
-        self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, MatMul, Mlp, RmsNorm,
+        self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, MatMul, RmsNorm,
         RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -31,6 +33,95 @@ macro_rules! is_sliding {
     ($layer_idx:expr, $cfg:expr) => {
         $cfg.layer_types[$layer_idx] == "sliding_attention"
     };
+}
+
+const EPS: f64 = 1e-8;
+
+#[derive(Clone)]
+pub struct Mlp {
+    gate: Arc<dyn QuantMethod>,
+    up: Arc<dyn QuantMethod>,
+    down: Arc<dyn QuantMethod>,
+    activation_sparsity: f64,
+    act: Activation,
+    std_multiplier: Tensor,
+}
+
+impl Mlp {
+    fn new(
+        vb: ShardedVarBuilder,
+        cfg: &Gemma3nTextConfig,
+        comm: &Arc<mistralrs_quant::Comm>,
+        layer_idx: usize,
+    ) -> Result<Self> {
+        let std_multiplier = Self::std_multiplier(cfg.activation_sparsity_pattern[layer_idx]);
+        let std_multiplier = Tensor::new(std_multiplier, vb.device())?.reshape(1)?;
+        Ok(Self {
+            gate: ColumnParallelLayer::new(
+                cfg.hidden_size,
+                cfg.intermediate_size,
+                &cfg.quantization_config,
+                false,
+                comm,
+                vb.pp("gate_proj"),
+            )?,
+            up: ColumnParallelLayer::new(
+                cfg.hidden_size,
+                cfg.intermediate_size,
+                &cfg.quantization_config,
+                false,
+                comm,
+                vb.pp("up_proj"),
+            )?,
+            down: RowParallelLayer::new(
+                cfg.intermediate_size,
+                cfg.hidden_size,
+                &cfg.quantization_config,
+                false,
+                comm,
+                vb.pp("down_proj"),
+            )?,
+            activation_sparsity: cfg.activation_sparsity_pattern[layer_idx],
+            act: cfg.hidden_activation,
+            std_multiplier,
+        })
+    }
+
+    fn std_multiplier(p: f64) -> f64 {
+        let normal = Normal::new(0.0, 1.0).unwrap();
+        normal.inverse_cdf(p)
+    }
+
+    fn gaussian_topk(&self, xs: &Tensor) -> Result<Tensor> {
+        let xs_mean = xs.mean_keepdim(D::Minus1)?;
+        let xs_sq_mean = xs.sqr()?.mean_keepdim(D::Minus1)?;
+        let var = (&xs_sq_mean - xs_mean.sqr()?)?;
+        let xs_std = (var + EPS)?.sqrt()?;
+        let cutoff_xs = (xs_mean + xs_std.broadcast_mul(&self.std_multiplier)?)?;
+        (xs - cutoff_xs)?.relu()
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if let Some(t) = self.gate.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
+        let mut gate = self.gate.forward(&xs)?;
+        if self.activation_sparsity > 0. {
+            gate = self.gaussian_topk(&gate)?;
+        }
+        let up = self.up.forward(&xs)?;
+        let mut res = self.down.forward(&candle_nn::ops::mul_and_act(
+            &gate,
+            &up,
+            self.act.try_into()?,
+        )?)?;
+        if self.gate.quantized_act_type().is_some() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
+    }
 }
 
 struct Attention {
@@ -412,7 +503,7 @@ impl TextLaurelBlock {
 
 struct DecoderLayer {
     self_attn: Attention,
-    mlp: Box<dyn MlpLayer>,
+    mlp: Mlp,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
     pre_feedforward_layernorm: RmsNorm,
@@ -452,11 +543,9 @@ impl DecoderLayer {
         )?;
         let mlp = Mlp::new(
             mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
-            cfg.hidden_size,
-            cfg.intermediate_size,
-            &cfg.quantization_config,
-            cfg.hidden_activation,
+            cfg,
             comm,
+            layer_idx,
         )?;
         let input_layernorm = RmsNorm::new_gemma_3n(
             cfg.hidden_size,
@@ -503,7 +592,7 @@ impl DecoderLayer {
         )?;
         Ok(Self {
             self_attn,
-            mlp: Box::new(mlp),
+            mlp,
             input_layernorm,
             post_attention_layernorm,
             pre_feedforward_layernorm,
@@ -595,6 +684,7 @@ pub struct TextModel {
     per_layer_model_projection: Arc<dyn QuantMethod>,
     per_layer_projection_norm: RmsNorm,
     hidden_size_per_layer_input: usize,
+    final_logit_softcapping: Option<f64>,
 }
 
 impl TextModel {
@@ -812,6 +902,7 @@ impl TextModel {
             per_layer_model_projection,
             per_layer_projection_norm,
             hidden_size_per_layer_input: cfg.hidden_size_per_layer_input,
+            final_logit_softcapping: cfg.final_logit_softcapping,
         })
     }
 
@@ -904,7 +995,7 @@ impl TextModel {
             .mean_all()?
             .reshape((1,))?
             .sqrt()?;
-        let eps = Tensor::new(&[1e-5f32], target_magnitude.device())?;
+        let eps = Tensor::new(&[EPS as f32], target_magnitude.device())?;
 
         let mut temp_hidden_states = vec![xs.clone()];
         for altup_proj in &self.altup_projections {
@@ -977,6 +1068,12 @@ impl TextModel {
 
         xs = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
 
+        if let Some(final_logit_softcapping) = self.final_logit_softcapping {
+            xs = (xs / final_logit_softcapping)?;
+            xs = xs.tanh()?;
+            xs = (xs * final_logit_softcapping)?;
+        }
+
         extract_logits(&xs, context_lens)
     }
 }
@@ -988,74 +1085,15 @@ impl IsqModel for TextModel {
         Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
         &dyn DeviceMapper,
     ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.extend(
-                layer
-                    .mlp
-                    .get_isq_layers()
-                    .into_iter()
-                    .map(|m| (m, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
-        }
-        (tensors, &*self.mapper)
+        todo!()
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        let uvb = UnVarBuilder::new();
-
-        let uvb_m = uvb.pp("model");
-        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
-        uvb_m.pp("norm").add(&self.norm.undo_gemma().unwrap());
-
-        for (layer_idx, layer) in self.layers.iter().enumerate() {
-            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
-            uvb_l
-                .pp("self_attn")
-                .pp("q_norm")
-                .add(&layer.self_attn.q_norm.undo_gemma().unwrap());
-            uvb_l
-                .pp("self_attn")
-                .pp("k_norm")
-                .add(&layer.self_attn.k_norm.undo_gemma().unwrap());
-            uvb_l
-                .pp("input_layernorm")
-                .add(&layer.input_layernorm.undo_gemma().unwrap());
-            uvb_l
-                .pp("post_attention_layernorm")
-                .add(&layer.post_attention_layernorm.undo_gemma().unwrap());
-            uvb_l
-                .pp("pre_feedforward_layernorm")
-                .add(&layer.pre_feedforward_layernorm.undo_gemma().unwrap());
-            uvb_l
-                .pp("post_feedforward_layernorm")
-                .add(&layer.post_feedforward_layernorm.undo_gemma().unwrap());
-        }
-
-        uvb.to_safetensors()
+        todo!()
     }
 
     fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        // NOTE: dependant on the exact implementation in get_layers!
-        let mut names = Vec::new();
-        // lm_head
-        names.push(None);
-        for i in 0..self.layers.len() {
-            names.push(Some(format!("blk.{i}.attn_q.weight")));
-            names.push(Some(format!("blk.{i}.attn_k.weight")));
-            names.push(Some(format!("blk.{i}.attn_v.weight")));
-            names.push(Some(format!("blk.{i}.attn_output.weight")));
-            names.push(Some(format!("blk.{i}.ffn_gate.weight")));
-            names.push(Some(format!("blk.{i}.ffn_up.weight")));
-            names.push(Some(format!("blk.{i}.ffn_down.weight")));
-        }
-        Ok(names)
+        todo!()
     }
 }
 
@@ -1093,122 +1131,4 @@ impl VisionModel for TextModel {
     }
 }
 
-impl AnyMoeBaseModelMixin for TextModel {
-    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
-        let mut mlps = Vec::new();
-        for layer in &self.layers {
-            mlps.push(&*layer.mlp);
-        }
-        mlps
-    }
-    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
-        let mut mlps = Vec::new();
-        for layer in &mut self.layers {
-            mlps.push(&mut layer.mlp);
-        }
-        mlps
-    }
-    fn create_anymoe_layers(
-        &mut self,
-        additional_vbs: Vec<ShardedVarBuilder>,
-        config: AnyMoeConfig,
-        (prefix, mlp): (String, String),
-        mut layers: Vec<usize>,
-        expert_type: AnyMoeExpertType,
-        gate_vb: Option<ShardedVarBuilder>,
-    ) -> Result<()> {
-        let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
-        if layers.is_empty() {
-            layers = (0..self.layers.len()).collect::<Vec<_>>();
-        }
-        for _ in 0..layers.len() {
-            experts.push(Vec::new());
-        }
-        for vb in additional_vbs {
-            let vb = vb.pp(&prefix);
-            for (layer, row) in experts.iter_mut().enumerate() {
-                if !layers.contains(&layer) {
-                    continue;
-                }
-
-                let intermediate_size = self.layers[layer].mlp.get_params()[1];
-                let hidden_size = self.layers[layer].mlp.get_params()[0];
-                match expert_type {
-                    AnyMoeExpertType::FineTuned => {
-                        let (dtype, device) = self.layers[layer].mlp.dtype_device();
-                        row.push(Box::new(Mlp::replicate(
-                            self.layers[layer].mlp.get_params(),
-                            vb.pp(layer).pp(&mlp).set_dtype(dtype).set_device(device),
-                            self.layers[layer].mlp.hidden_act(),
-                            &self.mapper.get_comm_for(layer)?,
-                        )?));
-                    }
-                    AnyMoeExpertType::LoraAdapter {
-                        rank,
-                        alpha,
-                        ref target_modules,
-                    } => {
-                        let vb_mlp = vb.pp(layer).pp(&mlp);
-
-                        let gate_proj_delta = if target_modules.contains(&"gate_proj".to_string()) {
-                            Some(get_delta_from_lora_ab!(
-                                vb_mlp,
-                                rank,
-                                alpha,
-                                (hidden_size, intermediate_size),
-                                "gate_proj"
-                            ))
-                        } else {
-                            None
-                        };
-                        let up_proj_delta = if target_modules.contains(&"up_proj".to_string()) {
-                            Some(get_delta_from_lora_ab!(
-                                vb_mlp,
-                                rank,
-                                alpha,
-                                (hidden_size, intermediate_size),
-                                "up_proj"
-                            ))
-                        } else {
-                            None
-                        };
-                        let down_proj_delta = if target_modules.contains(&"down_proj".to_string()) {
-                            Some(get_delta_from_lora_ab!(
-                                vb_mlp,
-                                rank,
-                                alpha,
-                                (intermediate_size, hidden_size),
-                                "down_proj"
-                            ))
-                        } else {
-                            None
-                        };
-
-                        row.push(self.layers[layer].mlp.new_added_delta(vec![
-                            gate_proj_delta,
-                            up_proj_delta,
-                            down_proj_delta,
-                        ])?);
-                    }
-                }
-            }
-        }
-        for (layer, expert) in layers.into_iter().zip(experts) {
-            let mut experts_all = vec![self.layers[layer].mlp.clone()];
-            experts_all.extend(expert);
-            let (dtype, device) = self.layers[layer].mlp.dtype_device();
-            self.layers[layer].mlp = Box::new(MoeMlp::new(
-                experts_all,
-                config.clone(),
-                dtype,
-                &device,
-                layer,
-                gate_vb.as_ref(),
-            )?);
-        }
-        Ok(())
-    }
-    fn amoe_supported(&self) -> bool {
-        true
-    }
-}
+impl AnyMoeBaseModelMixin for TextModel {}

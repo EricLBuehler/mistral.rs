@@ -61,6 +61,8 @@ pub struct Gemma3nTextConfig {
     pub altup_coef_clip: Option<f64>,
     pub laurel_rank: usize,
     pub altup_correct_scale: bool,
+    pub activation_sparsity_pattern: Vec<f64>,
+    pub final_logit_softcapping: Option<f64>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
