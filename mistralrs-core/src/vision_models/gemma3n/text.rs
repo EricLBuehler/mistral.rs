@@ -140,6 +140,7 @@ struct Attention {
     q_norm: RmsNorm,
     k_norm: RmsNorm,
     v_norm: RmsNorm,
+    kv_shared_layer_index: Option<usize>,
 }
 
 impl Attention {
@@ -222,6 +223,24 @@ impl Attention {
             false, // this is unique, it is false
             mapper.set_device(layer_idx, vb.pp("v_norm"), false),
         )?;
+
+        let first_kv_shared_layer_idx = cfg.num_hidden_layers - cfg.first_kv_shared_layer_idx;
+        let is_kv_shared_layer = layer_idx >= first_kv_shared_layer_idx;
+        // Find the index of the last sliding or full layer before sharing starts (or None if no sharing)
+        let layer_type = &cfg.layer_types[layer_idx];
+        let kv_shared_layer_index = if is_kv_shared_layer {
+            let start_idx = first_kv_shared_layer_idx - 1;
+            Some(
+                start_idx
+                    - cfg.layer_types[..=start_idx]
+                        .iter()
+                        .rev()
+                        .position(|lt| lt == layer_type)
+                        .unwrap(),
+            )
+        } else {
+            None
+        };
         Ok(Self {
             q_proj,
             k_proj,
@@ -247,6 +266,7 @@ impl Attention {
             q_norm,
             k_norm,
             v_norm,
+            kv_shared_layer_index,
         })
     }
 
@@ -336,7 +356,8 @@ impl Attention {
             },
             None => {
                 // self.sliding_window is None if !self.use_sliding_window
-                let (k, v) = kv_cache.append(&k, &v)?;
+                // TODO: kv shared?
+                (k, v) = kv_cache.append(&k, &v)?;
 
                 Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?
             }
