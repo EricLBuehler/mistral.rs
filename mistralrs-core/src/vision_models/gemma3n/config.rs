@@ -3,7 +3,6 @@ use mistralrs_quant::QuantizedConfig;
 use crate::{
     layers::{Activation, Gemma3RopeScalingConfig},
     serde_default_fn,
-    vision_models::siglip::SiglipVisionConfig,
 };
 
 serde_default_fn!(bool, attention_bias, false);
@@ -56,17 +55,12 @@ pub struct Gemma3nTextConfig {
     #[serde(default = "sliding_window_pattern")]
     pub sliding_window_pattern: usize,
     pub rope_scaling: Option<Gemma3RopeScalingConfig>,
+    pub vocab_size_per_layer_input: usize,
+    pub hidden_size_per_layer_input: usize,
+    pub altup_num_inputs: usize,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
-pub enum Gemma3Config {
-    #[serde(untagged)]
-    WithVision {
-        text_config: Gemma3nTextConfig,
-        vision_config: SiglipVisionConfig,
-        image_token_index: usize,
-        mm_tokens_per_image: usize,
-    },
-    #[serde(untagged)]
-    Text(Gemma3nTextConfig),
+pub struct Gemma3nConfig {
+    pub text_config: Gemma3nTextConfig,
 }

@@ -2,10 +2,9 @@
 
 use std::sync::Arc;
 
-use candle_core::{Context, DType, Device, Result, Tensor, D};
-use config::Gemma3Config;
-use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
-use mmproj::Gemma3MultiModalProjector;
+use candle_core::{Device, Result, Tensor};
+use config::Gemma3nConfig;
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use text::TextModel;
 
 use crate::{
@@ -16,76 +15,35 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
-    utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
 };
 
 pub mod config;
-mod inputs_processor;
-mod mmproj;
 mod text;
-pub(crate) use inputs_processor::Gemma3Processor;
-
-use super::siglip::SiglipVisionTransformer;
 
 pub struct Gemma3Model {
     language_model: TextModel,
-    multi_modal_projector: Option<Gemma3MultiModalProjector>,
-    vision_tower: Option<SiglipVisionTransformer>,
-    cfg: Gemma3Config,
+    cfg: Gemma3nConfig,
 }
 
 impl Gemma3Model {
     pub fn new(
-        cfg: &Gemma3Config,
+        cfg: &Gemma3nConfig,
         vb: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        match cfg {
-            Gemma3Config::Text(text_cfg) => Ok(Self {
-                language_model: TextModel::new(
-                    text_cfg,
-                    vb,
-                    is_gptx,
-                    normal_loading_metadata,
-                    attention_mechanism,
-                )?,
-                multi_modal_projector: None,
-                vision_tower: None,
-                cfg: cfg.clone(),
-            }),
-            Gemma3Config::WithVision {
-                text_config,
-                vision_config,
-                image_token_index,
-                mm_tokens_per_image: _,
-            } => {
-                assert!(*image_token_index < text_config.vocab_size);
-                Ok(Self {
-                    multi_modal_projector: Some(Gemma3MultiModalProjector::new(
-                        cfg,
-                        vb.pp("multi_modal_projector")
-                            .set_device(normal_loading_metadata.real_device.clone()),
-                    )?),
-                    vision_tower: Some(SiglipVisionTransformer::new(
-                        vision_config,
-                        vb.pp("vision_tower")
-                            .pp("vision_model")
-                            .set_device(normal_loading_metadata.real_device.clone()),
-                    )?),
-                    language_model: TextModel::new(
-                        text_config,
-                        vb.pp("language_model"),
-                        is_gptx,
-                        normal_loading_metadata,
-                        attention_mechanism,
-                    )?,
-                    cfg: cfg.clone(),
-                })
-            }
-        }
+        Ok(Self {
+            language_model: TextModel::new(
+                &cfg.text_config,
+                vb.pp("language_model"),
+                is_gptx,
+                normal_loading_metadata,
+                attention_mechanism,
+            )?,
+            cfg: cfg.clone(),
+        })
     }
 
     fn forward(
@@ -97,43 +55,7 @@ impl Gemma3Model {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let mut input_embeds = self.language_model.embed_tokens(input_ids)?;
-        if let Some(pixel_values) = pixel_values {
-            let Gemma3Config::WithVision {
-                image_token_index, ..
-            } = &self.cfg
-            else {
-                unreachable!()
-            };
-            let special_image_mask = input_ids
-                .eq(*image_token_index as f64)?
-                .unsqueeze(D::Minus1)?
-                .broadcast_as(input_embeds.shape())?
-                .to_dtype(DType::U32)?;
-
-            let mask_flat = special_image_mask.flatten_all()?;
-            // Nonzero before vision model to allow async processing all the way through logits.
-            let indices = mask_flat.nonzero()?.squeeze(1)?;
-
-            let vision_tower = self
-                .vision_tower
-                .as_ref()
-                .context("This model does not support vision.")?;
-            let multi_modal_projector = self.multi_modal_projector.as_ref().unwrap();
-            let dtype = vision_tower.dtype();
-            let vision_outputs =
-                vision_tower.forward(&pixel_values.to_dtype(dtype)?, None, None)?;
-            let image_features = multi_modal_projector.forward(&vision_outputs)?;
-
-            let mut x_flat = input_embeds.flatten_all()?;
-            let src_flat = image_features.flatten_all()?;
-
-            let current_vals = x_flat.gather(&indices, 0)?;
-            let diff = (src_flat - current_vals)?;
-            x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
-
-            input_embeds = x_flat.reshape(input_embeds.shape())?;
-        };
+        let input_embeds = self.language_model.embed_tokens(input_ids)?;
         let res = self.language_model.forward_embeds(
             input_ids,
             input_embeds,
@@ -157,24 +79,7 @@ impl IsqModel for Gemma3Model {
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        match &self.cfg {
-            Gemma3Config::Text(_) => self.language_model.residual_tensors(),
-            Gemma3Config::WithVision { .. } => {
-                let vision_tower = self.vision_tower.as_ref().unwrap();
-                let multi_modal_projector = self.multi_modal_projector.as_ref().unwrap();
-
-                let uvb = UnVarBuilder::new();
-                uvb.pp("multi_modal_projector")
-                    .extend(multi_modal_projector.residual_tensors());
-                uvb.pp("language_model")
-                    .extend(self.language_model.residual_tensors());
-                uvb.pp("vision_tower")
-                    .pp("vision_model")
-                    .extend(vision_tower.residual_tensors());
-
-                uvb.to_safetensors()
-            }
-        }
+        self.language_model.residual_tensors()
     }
 
     fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {

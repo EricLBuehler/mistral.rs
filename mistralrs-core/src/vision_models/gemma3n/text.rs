@@ -370,6 +370,7 @@ impl DecoderLayer {
 
 pub struct TextModel {
     embed_tokens: ScaledEmbedding,
+    embed_tokens_per_layer: ScaledEmbedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -380,6 +381,10 @@ pub struct TextModel {
     sliding_window: usize,
     final_logit_softcapping: Option<f64>,
     cfg: ModelConfigMetadata,
+    per_layer_projection_scale: f64,
+    per_layer_input_scale: f64,
+    altup_projections: Vec<Arc<dyn QuantMethod>>,
+    altup_unembed_projections: Vec<Arc<dyn QuantMethod>>,
 }
 
 impl TextModel {
@@ -405,6 +410,15 @@ impl TextModel {
             embedding(
                 cfg.vocab_size,
                 cfg.hidden_size,
+                mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+                &cfg.quantization_config,
+            )?,
+        );
+        let embed_tokens_per_layer = ScaledEmbedding::new(
+            (cfg.hidden_size as f64).sqrt(),
+            embedding(
+                cfg.vocab_size_per_layer_input,
+                cfg.hidden_size_per_layer_input * cfg.num_hidden_layers,
                 mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
                 &cfg.quantization_config,
             )?,
@@ -504,6 +518,48 @@ impl TextModel {
                 None,
             ))?
         };
+
+        let per_layer_model_projection = ReplicatedLayer::new(
+            cfg.hidden_size,
+            cfg.num_hidden_layers * cfg.hidden_size_per_layer_input,
+            &cfg.quantization_config,
+            false,
+            mapper.set_nm_device(
+                vb.pp("per_layer_model_projection"),
+                normal_loading_metadata.loading_isq,
+            ),
+        )?;
+        let per_layer_projection_norm = RmsNorm::new_gemma(
+            cfg.hidden_size_per_layer_input,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb_m.pp("per_layer_projection_norm"), false),
+        )?;
+
+        let mut altup_projections = Vec::new();
+        let mut altup_unembed_projections = Vec::new();
+        for i in 1..cfg.altup_num_inputs {
+            altup_projections.push(ReplicatedLayer::new(
+                cfg.hidden_size,
+                cfg.hidden_size,
+                &cfg.quantization_config,
+                false,
+                mapper.set_nm_device(
+                    vb.pp("altup_projections").pp(i - 1),
+                    normal_loading_metadata.loading_isq,
+                ),
+            )?);
+            altup_unembed_projections.push(ReplicatedLayer::new(
+                cfg.hidden_size,
+                cfg.hidden_size,
+                &cfg.quantization_config,
+                false,
+                mapper.set_nm_device(
+                    vb.pp("altup_unembed_projections").pp(i - 1),
+                    normal_loading_metadata.loading_isq,
+                ),
+            )?);
+        }
+
         let cache_types = (0..cfg.num_hidden_layers)
             .map(|layer_idx| {
                 is_sliding!(layer_idx, cfg)
@@ -517,6 +573,7 @@ impl TextModel {
             .collect::<Vec<_>>();
         Ok(Self {
             embed_tokens,
+            embed_tokens_per_layer,
             layers,
             norm,
             lm_head,
@@ -537,6 +594,10 @@ impl TextModel {
                 v_head_dim: cfg.head_dim,
             },
             mapper,
+            per_layer_input_scale: 1. / (2f64.sqrt()),
+            per_layer_projection_scale: 1. / (cfg.hidden_size as f64).sqrt(),
+            altup_projections,
+            altup_unembed_projections,
         })
     }
 
