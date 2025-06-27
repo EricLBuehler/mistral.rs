@@ -48,6 +48,7 @@ struct Attention {
     sdpa_params: SdpaParams,
     q_norm: RmsNorm,
     k_norm: RmsNorm,
+    v_norm: RmsNorm,
 }
 
 impl Attention {
@@ -112,15 +113,23 @@ impl Attention {
             None
         };
 
-        let q_norm = RmsNorm::new_gemma(
+        let q_norm = RmsNorm::new_gemma_3n(
             cfg.head_dim,
             cfg.rms_norm_eps,
+            true,
             mapper.set_device(layer_idx, vb.pp("q_norm"), false),
         )?;
-        let k_norm = RmsNorm::new_gemma(
+        let k_norm = RmsNorm::new_gemma_3n(
             cfg.head_dim,
             cfg.rms_norm_eps,
+            true,
             mapper.set_device(layer_idx, vb.pp("k_norm"), false),
+        )?;
+        let v_norm = RmsNorm::new_gemma_3n(
+            cfg.head_dim,
+            cfg.rms_norm_eps,
+            false, // this is unique, it is false
+            mapper.set_device(layer_idx, vb.pp("v_norm"), false),
         )?;
         Ok(Self {
             q_proj,
@@ -146,6 +155,7 @@ impl Attention {
             },
             q_norm,
             k_norm,
+            v_norm,
         })
     }
 
@@ -196,6 +206,7 @@ impl Attention {
 
         q = q.apply(&self.q_norm)?;
         k = k.apply(&self.k_norm)?;
+        v = v.apply(&self.v_norm)?;
 
         (q, k) = match self.use_sliding_window {
             true => self.rotary_emb_local.forward(&q, &k, seqlen_offsets)?,
@@ -301,8 +312,12 @@ impl TextAltUp {
             cfg.altup_num_inputs,
             vb.pp("modality_router"),
         )?;
-        let router_norm =
-            RmsNorm::new_gemma(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("router_norm"))?;
+        let router_norm = RmsNorm::new_gemma_3n(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            true,
+            vb.pp("router_norm"),
+        )?;
 
         Ok(Self {
             correct_output_scale,
@@ -378,9 +393,10 @@ impl TextLaurelBlock {
         Ok(Self {
             left: layers::linear_no_bias(cfg.hidden_size, cfg.laurel_rank, vb.pp("linear_left"))?,
             right: layers::linear_no_bias(cfg.laurel_rank, cfg.hidden_size, vb.pp("linear_right"))?,
-            post_norm: RmsNorm::new_gemma(
+            post_norm: RmsNorm::new_gemma_3n(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
+                true,
                 vb.pp("post_laurel_norm"),
             )?,
         })
@@ -442,24 +458,28 @@ impl DecoderLayer {
             cfg.hidden_activation,
             comm,
         )?;
-        let input_layernorm = RmsNorm::new_gemma(
+        let input_layernorm = RmsNorm::new_gemma_3n(
             cfg.hidden_size,
             cfg.rms_norm_eps,
+            true,
             mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
-        let post_attention_layernorm = RmsNorm::new_gemma(
+        let post_attention_layernorm = RmsNorm::new_gemma_3n(
             cfg.hidden_size,
             cfg.rms_norm_eps,
+            true,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
-        let pre_feedforward_layernorm = RmsNorm::new_gemma(
+        let pre_feedforward_layernorm = RmsNorm::new_gemma_3n(
             cfg.hidden_size,
             cfg.rms_norm_eps,
+            true,
             mapper.set_device(layer_idx, vb.pp("pre_feedforward_layernorm"), false),
         )?;
-        let post_feedforward_layernorm = RmsNorm::new_gemma(
+        let post_feedforward_layernorm = RmsNorm::new_gemma_3n(
             cfg.hidden_size,
             cfg.rms_norm_eps,
+            true,
             mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm"), false),
         )?;
 
@@ -475,9 +495,10 @@ impl DecoderLayer {
             cfg.hidden_size,
             vb.pp("per_layer_projection"),
         )?;
-        let post_per_layer_input_norm = RmsNorm::new_gemma(
+        let post_per_layer_input_norm = RmsNorm::new_gemma_3n(
             cfg.hidden_size,
             cfg.rms_norm_eps,
+            true,
             vb.pp("post_per_layer_input_norm"),
         )?;
         Ok(Self {
@@ -684,9 +705,10 @@ impl TextModel {
                 &comm,
             )
         })?;
-        let norm = RmsNorm::new_gemma(
+        let norm = RmsNorm::new_gemma_3n(
             cfg.hidden_size,
             cfg.rms_norm_eps,
+            true,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
 
@@ -718,9 +740,10 @@ impl TextModel {
                 normal_loading_metadata.loading_isq,
             ),
         )?;
-        let per_layer_projection_norm = RmsNorm::new_gemma(
+        let per_layer_projection_norm = RmsNorm::new_gemma_3n(
             cfg.hidden_size_per_layer_input,
             cfg.rms_norm_eps,
+            true,
             mapper.set_nm_device(vb_m.pp("per_layer_projection_norm"), false),
         )?;
 
