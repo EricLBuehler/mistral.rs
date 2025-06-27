@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Device, Module, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
@@ -28,7 +28,7 @@ use super::config::Gemma3nTextConfig;
 
 macro_rules! is_sliding {
     ($layer_idx:expr, $cfg:expr) => {
-        ($layer_idx + 1) % $cfg.sliding_window_pattern != 0
+        $cfg.layer_types[$layer_idx] == "sliding_attention"
     };
 }
 
@@ -139,7 +139,7 @@ impl Attention {
                     cfg.num_attention_heads,
                     comm,
                 ),
-                softcap: cfg.attn_logit_softcapping.map(|x| x as f32),
+                softcap: None,
                 softmax_scale: 1.0 / (cfg.query_pre_attn_scalar as f32).sqrt(),
                 sliding_window,
             },
@@ -337,6 +337,7 @@ impl DecoderLayer {
     fn forward(
         &self,
         xs: &Tensor,
+        per_layer_input: &Tensor,
         attention_mask: Option<&Tensor>,
         sliding_attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -379,12 +380,14 @@ pub struct TextModel {
     max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: usize,
-    final_logit_softcapping: Option<f64>,
     cfg: ModelConfigMetadata,
     per_layer_projection_scale: f64,
     per_layer_input_scale: f64,
     altup_projections: Vec<Arc<dyn QuantMethod>>,
     altup_unembed_projections: Vec<Arc<dyn QuantMethod>>,
+    per_layer_model_projection: Arc<dyn QuantMethod>,
+    per_layer_projection_norm: RmsNorm,
+    hidden_size_per_layer_input: usize,
 }
 
 impl TextModel {
@@ -581,7 +584,6 @@ impl TextModel {
             cache: EitherCache::Normal(NormalCache::from_types(cache_types)),
             max_seq_len: cfg.max_position_embeddings,
             sliding_window: cfg.sliding_window,
-            final_logit_softcapping: cfg.final_logit_softcapping,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
@@ -598,11 +600,49 @@ impl TextModel {
             per_layer_projection_scale: 1. / (cfg.hidden_size as f64).sqrt(),
             altup_projections,
             altup_unembed_projections,
+            per_layer_model_projection,
+            per_layer_projection_norm,
+            hidden_size_per_layer_input: cfg.hidden_size_per_layer_input,
         })
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
         self.embed_tokens.forward(input_ids)
+    }
+
+    fn get_per_layer_inputs(&self, input_ids: &Tensor) -> Result<Tensor> {
+        let shape = [
+            input_ids.dims().to_vec(),
+            vec![self.layers.len(), self.hidden_size_per_layer_input],
+        ]
+        .concat();
+        self.embed_tokens_per_layer
+            .forward(input_ids)?
+            .reshape(shape)
+    }
+    fn project_per_layer_inputs(
+        &self,
+        xs: &Tensor,
+        per_layer_inputs: Option<Tensor>,
+    ) -> Result<Tensor> {
+        let mut per_layer_projection = self.per_layer_model_projection.forward(xs)?;
+        per_layer_projection = (per_layer_projection * self.per_layer_projection_scale)?;
+        let shape = [
+            xs.dims()[..xs.dims().len() - 1].to_vec(),
+            vec![self.layers.len(), self.hidden_size_per_layer_input],
+        ]
+        .concat();
+        per_layer_projection = per_layer_projection.reshape(shape)?;
+
+        let Some(mut per_layer_inputs) = per_layer_inputs else {
+            return Ok(per_layer_projection.clone());
+        };
+
+        if per_layer_projection.shape() != per_layer_inputs.shape() {
+            // per-layer inputs are sometimes padded with zeros, slice the relevant embeddings.
+            per_layer_inputs = per_layer_inputs.narrow(D::Minus2, 0, self.layers.len())?;
+        }
+        (per_layer_projection + per_layer_inputs)? * self.per_layer_input_scale
     }
 
     pub fn forward_embeds(
@@ -614,6 +654,9 @@ impl TextModel {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
+        let per_layer_inputs = self.get_per_layer_inputs(input_ids)?;
+        let per_layer_inputs = self.project_per_layer_inputs(&xs, Some(per_layer_inputs))?;
+
         let cache = &mut self.cache.normal().0;
         let attention_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
@@ -642,10 +685,37 @@ impl TextModel {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+
+        let target_magnitude = xs
+            .to_dtype(DType::F32)?
+            .sqr()?
+            .mean_all()?
+            .reshape((1,))?
+            .sqrt()?;
+        let eps = Tensor::new(&[1e-5f32], target_magnitude.device())?;
+
+        let mut temp_hidden_states = vec![xs.clone()];
+        for altup_proj in &self.altup_projections {
+            let altup_proj = altup_proj.forward_autocast(&xs)?;
+            let new_magnitude = altup_proj
+                .to_dtype(DType::F32)?
+                .sqr()?
+                .mean_all()?
+                .reshape((1,))?
+                .sqrt()?;
+
+            let current_hidden_state =
+                (altup_proj * (&target_magnitude / new_magnitude.maximum(&eps)?)?)?;
+            temp_hidden_states.push(current_hidden_state);
+        }
+        xs = Tensor::stack(&temp_hidden_states, 0)?;
+
         for (i, layer) in self.layers.iter().enumerate() {
+            let per_layer_input = per_layer_inputs.i((.., .., i, ..))?;
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
+                &per_layer_input,
                 attention_mask
                     .as_ref()
                     .map(|m| m.to_device(xs.device()).unwrap())
@@ -662,19 +732,38 @@ impl TextModel {
                 flash_params,
             )?;
         }
-        let xs = xs.to_device(&self.device)?;
-        let mut xs = xs.apply(&self.norm)?;
+        xs = xs.to_device(&self.device)?;
+
+        let target_magnitude = xs
+            .i(0)?
+            .to_dtype(DType::F32)?
+            .sqr()?
+            .mean_all()?
+            .reshape((1,))?
+            .sqrt()?;
+
+        let mut temp_hidden_states = vec![xs.i(0)?];
+        for altup_proj in &self.altup_unembed_projections {
+            let altup_proj = altup_proj.forward_autocast(&xs)?;
+            let new_magnitude = altup_proj
+                .to_dtype(DType::F32)?
+                .sqr()?
+                .mean_all()?
+                .reshape((1,))?
+                .sqrt()?;
+
+            let current_hidden_state =
+                (altup_proj * (&target_magnitude / new_magnitude.maximum(&eps)?)?)?;
+            temp_hidden_states.push(current_hidden_state);
+        }
+        xs = Tensor::stack(&temp_hidden_states, 0)?.mean(0)?;
+
+        xs = xs.apply(&self.norm)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
 
-        let mut xs = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
-
-        if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            xs = (xs / final_logit_softcapping)?;
-            xs = xs.tanh()?;
-            xs = (xs * final_logit_softcapping)?;
-        }
+        xs = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
 
         extract_logits(&xs, context_lens)
     }

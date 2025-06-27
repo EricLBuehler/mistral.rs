@@ -41,8 +41,6 @@ pub struct Gemma3nTextConfig {
     #[serde(default = "vocab_size")]
     pub vocab_size: usize,
     pub sliding_window: usize,
-    pub attn_logit_softcapping: Option<f64>,
-    pub final_logit_softcapping: Option<f64>,
     #[serde(default = "query_pre_attn_scalar")]
     pub query_pre_attn_scalar: usize,
     #[serde(default = "max_position_embeddings")]
@@ -58,6 +56,7 @@ pub struct Gemma3nTextConfig {
     pub vocab_size_per_layer_input: usize,
     pub hidden_size_per_layer_input: usize,
     pub altup_num_inputs: usize,
+    pub layer_types: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
