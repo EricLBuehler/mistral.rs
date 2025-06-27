@@ -19,13 +19,15 @@ use crate::{
 };
 
 pub mod config;
+mod inputs_processor;
 mod text;
+pub(crate) use inputs_processor::Gemma3nProcessor;
 
-pub struct Gemma3Model {
+pub struct Gemma3nModel {
     language_model: TextModel,
 }
 
-impl Gemma3Model {
+impl Gemma3nModel {
     pub fn new(
         cfg: &Gemma3nConfig,
         vb: ShardedVarBuilder,
@@ -66,7 +68,7 @@ impl Gemma3Model {
     }
 }
 
-impl IsqModel for Gemma3Model {
+impl IsqModel for Gemma3nModel {
     fn get_layers(
         &mut self,
     ) -> (
@@ -85,9 +87,9 @@ impl IsqModel for Gemma3Model {
     }
 }
 
-pub struct Gemma3SpecificArgs;
+pub struct Gemma3nSpecificArgs;
 
-impl VisionModel for Gemma3Model {
+impl VisionModel for Gemma3nModel {
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -109,7 +111,7 @@ impl VisionModel for Gemma3Model {
         )
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
-        Box::new(Gemma3SpecificArgs)
+        Box::new(Gemma3nSpecificArgs)
     }
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()
@@ -128,32 +130,4 @@ impl VisionModel for Gemma3Model {
     }
 }
 
-impl AnyMoeBaseModelMixin for Gemma3Model {
-    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
-        self.language_model.get_mlps()
-    }
-    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
-        self.language_model.get_mlps_mut()
-    }
-    fn create_anymoe_layers(
-        &mut self,
-        additional_vbs: Vec<ShardedVarBuilder>,
-        config: AnyMoeConfig,
-        (prefix, mlp): (String, String),
-        layers: Vec<usize>,
-        expert_type: AnyMoeExpertType,
-        gate_vb: Option<ShardedVarBuilder>,
-    ) -> Result<()> {
-        self.language_model.create_anymoe_layers(
-            additional_vbs,
-            config,
-            (prefix, mlp),
-            layers,
-            expert_type,
-            gate_vb,
-        )
-    }
-    fn amoe_supported(&self) -> bool {
-        true
-    }
-}
+impl AnyMoeBaseModelMixin for Gemma3nModel {}

@@ -8,8 +8,8 @@ use super::{
     Qwen2VLLoader, TokenSource, VLlama4Loader, VLlamaLoader, VisionModel, VisionModelLoader,
 };
 use super::{
-    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader, Phi3VLoader,
-    Qwen2_5VLLoader, VisionLoaderType,
+    Gemma3nLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader,
+    Phi3VLoader, Qwen2_5VLLoader, VisionLoaderType,
 };
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
@@ -170,6 +170,7 @@ impl VisionLoaderBuilder {
             Some(VisionLoaderType::Gemma3) => Box::new(Gemma3Loader),
             Some(VisionLoaderType::Mistral3) => Box::new(Mistral3Loader),
             Some(VisionLoaderType::Llama4) => Box::new(VLlama4Loader),
+            Some(VisionLoaderType::Gemma3n) => Box::new(Gemma3nLoader),
             None => Box::new(AutoVisionLoader),
         };
         Box::new(VisionLoader {
