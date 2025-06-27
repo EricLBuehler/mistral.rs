@@ -1028,8 +1028,10 @@ impl TextModel {
                 .reshape((1,))?
                 .sqrt()?;
 
-            let current_hidden_state =
-                altup_proj.broadcast_mul(&(&target_magnitude / new_magnitude.maximum(&eps)?)?)?;
+            let current_hidden_state = altup_proj
+                .to_dtype(DType::F32)?
+                .broadcast_mul(&(&target_magnitude / new_magnitude.maximum(&eps)?)?)?
+                .to_dtype(altup_proj.dtype())?;
             temp_hidden_states.push(current_hidden_state);
         }
         xs = Tensor::stack(&temp_hidden_states, 0)?;
@@ -1076,8 +1078,10 @@ impl TextModel {
                 .reshape((1,))?
                 .sqrt()?;
 
-            let current_hidden_state =
-                altup_proj.broadcast_mul(&(&target_magnitude / new_magnitude.maximum(&eps))?)?;
+            let current_hidden_state = altup_proj
+                .to_dtype(DType::F32)?
+                .broadcast_mul(&(&target_magnitude / new_magnitude.maximum(&eps)?)?)?
+                .to_dtype(altup_proj.dtype())?;
             temp_hidden_states.push(current_hidden_state);
         }
         xs = Tensor::stack(&temp_hidden_states, 0)?.mean(0)?;
