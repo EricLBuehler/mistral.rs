@@ -55,7 +55,7 @@ impl Mlp {
         layer_idx: usize,
     ) -> Result<Self> {
         let std_multiplier = Self::std_multiplier(cfg.activation_sparsity_pattern[layer_idx]);
-        let std_multiplier = Tensor::new(std_multiplier, vb.device())?.reshape(1)?;
+        let std_multiplier = Tensor::new(std_multiplier as f32, vb.device())?.reshape(1)?;
         Ok(Self {
             gate: ColumnParallelLayer::new(
                 cfg.hidden_size,
@@ -97,8 +97,9 @@ impl Mlp {
         let xs_sq_mean = xs.sqr()?.mean_keepdim(D::Minus1)?;
         let var = (&xs_sq_mean - xs_mean.sqr()?)?;
         let xs_std = (var + EPS)?.sqrt()?;
-        let cutoff_xs = (xs_mean + xs_std.broadcast_mul(&self.std_multiplier)?)?;
-        (xs - cutoff_xs)?.relu()
+        let cutoff_xs =
+            (xs_mean + xs_std.broadcast_mul(&self.std_multiplier.to_dtype(xs_std.dtype())?)?)?;
+        xs.broadcast_sub(&cutoff_xs)?.relu()
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
@@ -112,11 +113,12 @@ impl Mlp {
             gate = self.gaussian_topk(&gate)?;
         }
         let up = self.up.forward(&xs)?;
-        let mut res = self.down.forward(&candle_nn::ops::mul_and_act(
-            &gate,
-            &up,
-            self.act.try_into()?,
-        )?)?;
+        // let mut res = self.down.forward(&candle_nn::ops::mul_and_act(
+        //     &gate,
+        //     &up,
+        //     self.act.try_into()?,
+        // )?)?;
+        let mut res = self.down.forward(&(&gate.apply(&self.act)? * &up)?)?;
         if self.gate.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
@@ -224,7 +226,7 @@ impl Attention {
             mapper.set_device(layer_idx, vb.pp("v_norm"), false),
         )?;
 
-        let first_kv_shared_layer_idx = cfg.num_hidden_layers - cfg.first_kv_shared_layer_idx;
+        let first_kv_shared_layer_idx = cfg.num_hidden_layers - cfg.num_kv_shared_layers;
         let is_kv_shared_layer = layer_idx >= first_kv_shared_layer_idx;
         // Find the index of the last sliding or full layer before sharing starts (or None if no sharing)
         let layer_type = &cfg.layer_types[layer_idx];
@@ -297,9 +299,9 @@ impl Attention {
             v = v.to_dtype(original_dtype)?;
         }
 
-        q = q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?;
-        k = k.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
-        v = v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
+        q = q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?;
+        k = k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
+        v = v.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
 
         (q, k) = match self.use_sliding_window {
             true => self.rotary_emb_local.forward(&q, &k, seqlen_offsets)?,
@@ -310,11 +312,9 @@ impl Attention {
         k = k.apply(&self.k_norm)?;
         v = v.apply(&self.v_norm)?;
 
-        if q_len != 1 {
-            q = q.transpose(1, 2)?;
-            k = k.transpose(1, 2)?;
-            v = v.transpose(1, 2)?;
-        }
+        q = q.transpose(1, 2)?;
+        k = k.transpose(1, 2)?;
+        v = v.transpose(1, 2)?;
 
         let mask = if self.use_sliding_window {
             sliding_attention_mask
@@ -457,9 +457,12 @@ impl TextAltUp {
             .permute((0, 1, 3, 2))?;
 
         // permute hidden_states to [batch_size, num_tokens, hidden_size, altup_num_inputs]
-        let mut predictions = xs.permute((1, 2, 3, 0))?.matmul(&all_coefs)?;
+        let mut predictions = xs
+            .permute((1, 2, 3, 0))?
+            .contiguous()?
+            .matmul(&all_coefs.contiguous()?)?;
         predictions = predictions.permute((3, 0, 1, 2))?;
-        predictions = (predictions + modalities)?;
+        predictions = (predictions + xs)?;
         predictions.contiguous()
     }
 
@@ -642,7 +645,7 @@ impl DecoderLayer {
         let attn = self
             .self_attn
             .forward(
-                &xs,
+                &active_prediction_normed,
                 attention_mask,
                 sliding_attention_mask,
                 seqlen_offsets,
@@ -659,7 +662,7 @@ impl DecoderLayer {
         let attn_ffw = self.mlp.forward(&attn_norm)?;
         let attn_ffw_norm = self.post_feedforward_layernorm.forward(&attn_ffw)?;
         let attn_ffw_laurel_gated = (&attn_laurel + attn_ffw_norm)?;
-        let corrected_predictions = self.altup.correct(&predictions, &attn_ffw_laurel_gated)?;
+        let mut corrected_predictions = self.altup.correct(&predictions, &attn_ffw_laurel_gated)?;
 
         let mut first_prediction = corrected_predictions.i(self.altup_active_idx)?;
         if self.altup_correct_scale {
@@ -672,7 +675,12 @@ impl DecoderLayer {
         first_prediction = self.per_layer_projection.forward(&first_prediction)?;
         first_prediction = self.post_per_layer_input_norm.forward(&first_prediction)?;
 
-        corrected_predictions.slice_set(&first_prediction, 0, 1)?;
+        corrected_predictions = corrected_predictions.slice_assign(
+            &[&(1..), &.., &.., &..],
+            &corrected_predictions
+                .i((1.., .., .., ..))?
+                .broadcast_add(&first_prediction)?,
+        )?;
 
         Ok(corrected_predictions)
     }
@@ -717,13 +725,12 @@ impl TextModel {
         }
         let mapper = normal_loading_metadata.mapper;
 
-        let vb_m = vb.pp("model");
         let embed_tokens = ScaledEmbedding::new(
             (cfg.hidden_size as f64).sqrt(),
             embedding(
                 cfg.vocab_size,
                 cfg.hidden_size,
-                mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+                mapper.set_nm_device(vb.pp("embed_tokens"), false),
                 &cfg.quantization_config,
             )?,
         );
@@ -732,7 +739,7 @@ impl TextModel {
             embedding(
                 cfg.vocab_size_per_layer_input,
                 cfg.hidden_size_per_layer_input * cfg.num_hidden_layers,
-                mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+                mapper.set_nm_device(vb.pp("embed_tokens_per_layer"), false),
                 &cfg.quantization_config,
             )?,
         );
@@ -766,12 +773,12 @@ impl TextModel {
                     cfg.max_position_embeddings,
                     device,
                     is_gptx,
-                    vb_m.dtype(),
+                    vb.dtype(),
                 )?),
             );
         }
 
-        let vb_l = vb_m.pp("layers");
+        let vb_l = vb.pp("layers");
         let layers = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
@@ -812,7 +819,7 @@ impl TextModel {
             cfg.hidden_size,
             cfg.rms_norm_eps,
             true,
-            mapper.set_nm_device(vb_m.pp("norm"), false),
+            mapper.set_nm_device(vb.pp("norm"), false),
         )?;
 
         let lm_head = if !cfg.tie_word_embeddings {
@@ -847,7 +854,7 @@ impl TextModel {
             cfg.hidden_size_per_layer_input,
             cfg.rms_norm_eps,
             true,
-            mapper.set_nm_device(vb_m.pp("per_layer_projection_norm"), false),
+            mapper.set_nm_device(vb.pp("per_layer_projection_norm"), false),
         )?;
 
         let mut altup_projections = Vec::new();
@@ -1010,6 +1017,7 @@ impl TextModel {
             .sqrt()?;
         let eps = Tensor::new(&[EPS as f32], target_magnitude.device())?;
 
+        let xs_orig = xs.clone();
         let mut temp_hidden_states = vec![xs.clone()];
         for altup_proj in &self.altup_projections {
             let altup_proj = altup_proj.forward_autocast(&xs)?;
@@ -1021,7 +1029,7 @@ impl TextModel {
                 .sqrt()?;
 
             let current_hidden_state =
-                (altup_proj * (&target_magnitude / new_magnitude.maximum(&eps)?)?)?;
+                altup_proj.broadcast_mul(&(&target_magnitude / new_magnitude.maximum(&eps)?)?)?;
             temp_hidden_states.push(current_hidden_state);
         }
         xs = Tensor::stack(&temp_hidden_states, 0)?;
@@ -1060,7 +1068,7 @@ impl TextModel {
 
         let mut temp_hidden_states = vec![xs.i(0)?];
         for altup_proj in &self.altup_unembed_projections {
-            let altup_proj = altup_proj.forward_autocast(&xs)?;
+            let altup_proj = altup_proj.forward_autocast(&xs_orig)?;
             let new_magnitude = altup_proj
                 .to_dtype(DType::F32)?
                 .sqr()?
@@ -1069,7 +1077,7 @@ impl TextModel {
                 .sqrt()?;
 
             let current_hidden_state =
-                (altup_proj * (&target_magnitude / new_magnitude.maximum(&eps)?)?)?;
+                altup_proj.broadcast_mul(&(&target_magnitude / new_magnitude.maximum(&eps))?)?;
             temp_hidden_states.push(current_hidden_state);
         }
         xs = Tensor::stack(&temp_hidden_states, 0)?.mean(0)?;

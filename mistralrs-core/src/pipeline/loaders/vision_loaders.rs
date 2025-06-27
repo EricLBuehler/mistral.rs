@@ -4729,11 +4729,13 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
-        Ok(vec![0])
+        let cfg: Gemma3nConfig = serde_json::from_str(config)?;
+        Ok(vec![0; cfg.text_config.num_hidden_layers])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        Ok(0)
+        let cfg: Gemma3nConfig = serde_json::from_str(config)?;
+        Ok(cfg.text_config.num_hidden_layers)
     }
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {

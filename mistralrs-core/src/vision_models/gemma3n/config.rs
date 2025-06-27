@@ -32,7 +32,7 @@ pub struct Gemma3nTextConfig {
     #[serde(default = "num_attention_heads")]
     pub num_attention_heads: usize,
     pub num_hidden_layers: usize,
-    pub first_kv_shared_layer_idx: usize,
+    pub num_kv_shared_layers: usize,
     #[serde(default = "num_key_value_heads")]
     pub num_key_value_heads: usize,
     #[serde(default = "rms_norm_eps")]

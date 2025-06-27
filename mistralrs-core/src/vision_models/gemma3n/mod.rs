@@ -35,6 +35,7 @@ impl Gemma3nModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        let vb = vb.pp("model");
         Ok(Self {
             language_model: TextModel::new(
                 &cfg.text_config,
