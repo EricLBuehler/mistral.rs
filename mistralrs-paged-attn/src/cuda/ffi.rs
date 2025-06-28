@@ -190,7 +190,7 @@ extern "C" {
         v_scale: *const f32,
     );
 
-    pub fn copy_blocks_kernel_bf16(
+    pub fn copy_blocks_bf16(
         key_cache_ptrs: *mut c_void,
         value_cache_ptrs: *mut c_void,
         block_mapping: *const c_void,
@@ -200,7 +200,7 @@ extern "C" {
         stream: i64,
     );
 
-    pub fn copy_blocks_kernel_f16(
+    pub fn copy_blocks_f16(
         key_cache_ptrs: *mut c_void,
         value_cache_ptrs: *mut c_void,
         block_mapping: *const c_void,
@@ -210,7 +210,7 @@ extern "C" {
         stream: i64,
     );
 
-    pub fn copy_blocks_kernel_f32(
+    pub fn copy_blocks_f32(
         key_cache_ptrs: *mut c_void,
         value_cache_ptrs: *mut c_void,
         block_mapping: *const c_void,

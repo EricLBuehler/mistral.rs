@@ -1,6 +1,6 @@
 use std::{collections::HashMap, iter::zip};
 
-use crate::cuda::ffi::{copy_blocks_kernel_bf16, copy_blocks_kernel_f16, copy_blocks_kernel_f32};
+use crate::cuda::ffi::{copy_blocks_bf16, copy_blocks_f16, copy_blocks_f32};
 use candle_core::cuda::WrapErr;
 use candle_core::cuda_backend::CudaStorageSlice;
 use candle_core::Result;
@@ -119,7 +119,7 @@ pub fn copy_blocks(
 
     match dtype {
         candle_core::DType::BF16 => unsafe {
-            copy_blocks_kernel_bf16(
+            copy_blocks_bf16(
                 key_cache_ptr,
                 value_cache_ptr,
                 block_mapping_ptr,
@@ -130,7 +130,7 @@ pub fn copy_blocks(
             );
         },
         candle_core::DType::F16 => unsafe {
-            copy_blocks_kernel_f16(
+            copy_blocks_f16(
                 key_cache_ptr,
                 value_cache_ptr,
                 block_mapping_ptr,
@@ -141,7 +141,7 @@ pub fn copy_blocks(
             );
         },
         candle_core::DType::F32 => unsafe {
-            copy_blocks_kernel_f32(
+            copy_blocks_f32(
                 key_cache_ptr,
                 value_cache_ptr,
                 block_mapping_ptr,
