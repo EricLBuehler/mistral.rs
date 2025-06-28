@@ -58,12 +58,16 @@ pub trait Processor {
             self.template_action(),
             tools,
         )?;
+        let prompt = "<bos><start_of_turn>user
+hi<end_of_turn>
+<start_of_turn>model
+".to_string();
         let encoding = pipeline
             .tokenizer()
             .with_context(|| {
                 "Default `Processor::process` requires the model to have a tokenizer."
             })?
-            .encode_fast(prompt.clone(), add_special_tokens)
+            .encode_fast(prompt.clone(), false)
             .map_err(anyhow::Error::msg)?;
         Ok((encoding.get_ids().to_vec(), prompt))
     }
