@@ -1,18 +1,13 @@
-use std::{collections::HashMap, iter::zip, ptr::NonNull};
+use std::{collections::HashMap, iter::zip};
 
-use crate::cuda::backend::get_or_load_func;
-
-use candle_core::cuda::cudarc::driver::LaunchAsync;
+use crate::cuda::ffi::{copy_blocks_bf16, copy_blocks_f16, copy_blocks_f32};
 use candle_core::cuda::WrapErr;
 use candle_core::cuda_backend::CudaStorageSlice;
 use candle_core::Result;
 use candle_core::{
-    cuda_backend::cudarc::driver::{CudaSlice, DevicePtr, LaunchConfig},
-    Device, IndexOp, Storage, Tensor,
+    cuda_backend::cudarc::driver::{CudaSlice, DevicePtr},
+    DType, Device, IndexOp, Storage, Tensor,
 };
-
-use super::{Conjoined, COPY_BLOCKS_KERNEL_NAME};
-use crate::COPY_BLOCKS_KERNEL;
 
 pub fn copy_blocks(
     key_caches: Vec<&mut Tensor>,
@@ -46,6 +41,8 @@ pub fn copy_blocks(
     key_cache_ptrs.reserve_exact(num_layers as usize);
     let mut value_cache_ptrs = Vec::new();
     value_cache_ptrs.reserve_exact(num_layers as usize);
+    let mut dtype = DType::F32;
+
     for (key_cache, value_cache) in zip(&key_caches, &value_caches) {
         key_cache.to_device(cache_dev)?;
         value_cache.to_device(cache_dev)?;
@@ -74,11 +71,13 @@ pub fn copy_blocks(
             (CudaStorageSlice::BF16(slice_key), CudaStorageSlice::BF16(slice_value)) => {
                 let ptr_key = *slice_key.slice(0..).device_ptr();
                 let ptr_value = *slice_value.slice(0..).device_ptr();
+                dtype = DType::BF16;
                 (ptr_key, ptr_value)
             }
             (CudaStorageSlice::F16(slice_key), CudaStorageSlice::F16(slice_value)) => {
                 let ptr_key = *slice_key.slice(0..).device_ptr();
                 let ptr_value = *slice_value.slice(0..).device_ptr();
+                dtype = DType::F16;
                 (ptr_key, ptr_value)
             }
             (CudaStorageSlice::F32(slice_key), CudaStorageSlice::F32(slice_value)) => {
@@ -102,19 +101,10 @@ pub fn copy_blocks(
         }
     }
     let num_pairs: u32 = (block_mapping_vec.len() / 2).try_into().unwrap();
-    let block_mapping_ptr = Conjoined::new(
-        NonNull::new(block_mapping_vec.as_mut_ptr()).unwrap(),
-        &mut block_mapping_vec,
-    );
 
-    let key_cache_ptr = Conjoined::new(
-        NonNull::new(key_cache_ptrs.as_mut_ptr()).unwrap(),
-        &mut key_cache_ptrs,
-    );
-    let value_cache_ptr = Conjoined::new(
-        NonNull::new(value_cache_ptrs.as_mut_ptr()).unwrap(),
-        &mut value_cache_ptrs,
-    );
+    let key_cache_ptr = key_cache_ptrs.as_mut_ptr() as *mut core::ffi::c_void;
+    let value_cache_ptr = value_cache_ptrs.as_mut_ptr() as *mut core::ffi::c_void;
+    let block_mapping_ptr = block_mapping_vec.as_mut_ptr() as *const core::ffi::c_void;
 
     let numel_per_block: u32 = key_caches
         .first()
@@ -126,34 +116,42 @@ pub fn copy_blocks(
         .product::<usize>()
         .try_into()
         .unwrap();
-    let launch_conf = LaunchConfig {
-        grid_dim: (num_layers, num_pairs, 1u32),
-        block_dim: (numel_per_block.min(1024), 1u32, 1u32),
-        shared_mem_bytes: 0,
-    };
-    let stream = dev.fork_default_stream().w()?;
 
-    let kernel = get_or_load_func(
-        COPY_BLOCKS_KERNEL,
-        COPY_BLOCKS_KERNEL_NAME,
-        key_caches.first().unwrap().dtype(),
-        None,
-        dev,
-    )?;
-
-    unsafe {
-        kernel
-            .launch_on_stream(
-                &stream,
-                launch_conf,
-                (
-                    key_cache_ptr,
-                    value_cache_ptr,
-                    block_mapping_ptr,
-                    numel_per_block as i32,
-                ),
-            )
-            .w()?;
+    match dtype {
+        candle_core::DType::BF16 => unsafe {
+            copy_blocks_bf16(
+                key_cache_ptr,
+                value_cache_ptr,
+                block_mapping_ptr,
+                num_layers as i32,
+                num_pairs as i32,
+                numel_per_block as i32,
+                *dev.cu_stream() as i64,
+            );
+        },
+        candle_core::DType::F16 => unsafe {
+            copy_blocks_f16(
+                key_cache_ptr,
+                value_cache_ptr,
+                block_mapping_ptr,
+                num_layers as i32,
+                num_pairs as i32,
+                numel_per_block as i32,
+                *dev.cu_stream() as i64,
+            );
+        },
+        candle_core::DType::F32 => unsafe {
+            copy_blocks_f32(
+                key_cache_ptr,
+                value_cache_ptr,
+                block_mapping_ptr,
+                num_layers as i32,
+                num_pairs as i32,
+                numel_per_block as i32,
+                *dev.cu_stream() as i64,
+            );
+        },
+        _ => {}
     }
 
     Ok(())

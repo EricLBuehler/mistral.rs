@@ -88,7 +88,11 @@ fn main() -> Result<(), String> {
             "kernels/rotary/rotary.cu",
         ];
         if cc_over_800 {
-            lib_files.push("kernels/marlin/marlin_kernel.cu");
+            lib_files.push("kernels/marlin/marlin_matmul_f16.cu");
+            lib_files.push("kernels/marlin/marlin_matmul_bf16.cu");
+            lib_files.push("kernels/marlin/marlin_matmul_awq_f16.cu");
+            lib_files.push("kernels/marlin/marlin_matmul_awq_bf16.cu");
+            lib_files.push("kernels/marlin/marlin_repack.cu");
             lib_files.push("kernels/blockwise_fp8/blockwise_fp8.cu");
         } else {
             lib_files.push("kernels/marlin/dummy_marlin_kernel.cu");

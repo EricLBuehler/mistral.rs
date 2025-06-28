@@ -1,4 +1,5 @@
-#pragma once
+#ifndef _marlin_cuh
+#define _marlin_cuh
 #include <cuda.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -125,3 +126,5 @@ enum ScalarTypeID {
 };
 
 }  // namespace marlin
+
+#endif
