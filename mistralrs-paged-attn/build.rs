@@ -11,11 +11,6 @@ fn main() -> Result<()> {
     use std::process::Command;
 
     const OTHER_CONTENT: &str = r#"
-pub const COPY_BLOCKS_KERNEL: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/copy_blocks_kernel.ptx"));
-pub const PAGEDATTENTION: &str = include_str!(concat!(env!("OUT_DIR"), "/pagedattention.ptx"));
-pub const RESHAPE_AND_CACHE_KERNEL: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/reshape_and_cache_kernel.ptx"));
 pub const USE_FP8: bool = false;
 
 mod backend;
@@ -25,7 +20,7 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
     "#;
 
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=src/cuda/pagedattention.cu");
+    println!("cargo:rerun-if-changed=src/cuda/pagedattention.cuh");
     println!("cargo:rerun-if-changed=src/cuda/copy_blocks_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/reshape_and_cache_kernel.cu");
 
@@ -101,9 +96,6 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
         build_dir.join("libmistralrspagedattention.a")
     };
     builder.build_lib(out_file);
-
-    let bindings = builder.build_ptx().unwrap();
-    bindings.write("src/cuda/mod.rs").unwrap();
 
     let kernel_dir = PathBuf::from("../mistralrs-paged-attn");
     let absolute_kernel_dir = std::fs::canonicalize(kernel_dir).unwrap();

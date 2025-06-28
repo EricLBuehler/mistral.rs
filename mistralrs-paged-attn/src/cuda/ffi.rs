@@ -25,7 +25,7 @@ extern "C" {
         v_scale: *const f32,
     );
 
-    pub fn paged_attention_v1(
+    pub fn paged_attention_v1_f16(
         out: *const c_void,
         query: *const c_void,
         key_cache: *const c_void,
@@ -38,7 +38,6 @@ extern "C" {
         context_lens: *const c_int,
         block_size: c_int,
         max_context_len: c_int,
-
         num_seqs: c_int,
         num_heads: c_int,
         head_size: c_int,
@@ -47,14 +46,64 @@ extern "C" {
         kv_block_stride: c_int,
         kv_head_stride: c_int,
         stream: CUstream,
-
-        dtype: u32,
         cache_dtype: u32,
         k_scale: *const f32,
         v_scale: *const f32,
     );
 
-    pub fn paged_attention_v2(
+    pub fn paged_attention_v1_bf16(
+        out: *const c_void,
+        query: *const c_void,
+        key_cache: *const c_void,
+        value_cache: *const c_void,
+        alibi_slopes: *const c_void,
+        num_kv_heads: c_int,
+        scale: f32,
+        softcapping: f32,
+        block_tables: *const c_int,
+        context_lens: *const c_int,
+        block_size: c_int,
+        max_context_len: c_int,
+        num_seqs: c_int,
+        num_heads: c_int,
+        head_size: c_int,
+        max_num_blocks_per_seq: c_int,
+        q_stride: c_int,
+        kv_block_stride: c_int,
+        kv_head_stride: c_int,
+        stream: CUstream,
+        cache_dtype: u32,
+        k_scale: *const f32,
+        v_scale: *const f32,
+    );
+
+    pub fn paged_attention_v1_f32(
+        out: *const c_void,
+        query: *const c_void,
+        key_cache: *const c_void,
+        value_cache: *const c_void,
+        alibi_slopes: *const c_void,
+        num_kv_heads: c_int,
+        scale: f32,
+        softcapping: f32,
+        block_tables: *const c_int,
+        context_lens: *const c_int,
+        block_size: c_int,
+        max_context_len: c_int,
+        num_seqs: c_int,
+        num_heads: c_int,
+        head_size: c_int,
+        max_num_blocks_per_seq: c_int,
+        q_stride: c_int,
+        kv_block_stride: c_int,
+        kv_head_stride: c_int,
+        stream: CUstream,
+        cache_dtype: u32,
+        k_scale: *const f32,
+        v_scale: *const f32,
+    );
+
+    pub fn paged_attention_v2_f16(
         out: *const c_void,
         exp_sums: *const f32,
         max_logits: *const f32,
@@ -70,7 +119,6 @@ extern "C" {
         context_lens: *const c_int,
         block_size: c_int,
         max_context_len: c_int,
-
         num_seqs: c_int,
         num_heads: c_int,
         head_size: c_int,
@@ -79,10 +127,96 @@ extern "C" {
         kv_block_stride: c_int,
         kv_head_stride: c_int,
         stream: CUstream,
-
-        dtype: u32,
         cache_dtype: u32,
         k_scale: *const f32,
         v_scale: *const f32,
+    );
+
+    pub fn paged_attention_v2_bf16(
+        out: *const c_void,
+        exp_sums: *const f32,
+        max_logits: *const f32,
+        tmp_out: *const c_void,
+        query: *const c_void,
+        key_cache: *const c_void,
+        value_cache: *const c_void,
+        alibi_slopes: *const c_void,
+        num_kv_heads: c_int,
+        scale: f32,
+        softcapping: f32,
+        block_tables: *const c_int,
+        context_lens: *const c_int,
+        block_size: c_int,
+        max_context_len: c_int,
+        num_seqs: c_int,
+        num_heads: c_int,
+        head_size: c_int,
+        max_num_blocks_per_seq: c_int,
+        q_stride: c_int,
+        kv_block_stride: c_int,
+        kv_head_stride: c_int,
+        stream: CUstream,
+        cache_dtype: u32,
+        k_scale: *const f32,
+        v_scale: *const f32,
+    );
+
+    pub fn paged_attention_v2_f32(
+        out: *const c_void,
+        exp_sums: *const f32,
+        max_logits: *const f32,
+        tmp_out: *const c_void,
+        query: *const c_void,
+        key_cache: *const c_void,
+        value_cache: *const c_void,
+        alibi_slopes: *const c_void,
+        num_kv_heads: c_int,
+        scale: f32,
+        softcapping: f32,
+        block_tables: *const c_int,
+        context_lens: *const c_int,
+        block_size: c_int,
+        max_context_len: c_int,
+        num_seqs: c_int,
+        num_heads: c_int,
+        head_size: c_int,
+        max_num_blocks_per_seq: c_int,
+        q_stride: c_int,
+        kv_block_stride: c_int,
+        kv_head_stride: c_int,
+        stream: CUstream,
+        cache_dtype: u32,
+        k_scale: *const f32,
+        v_scale: *const f32,
+    );
+
+    pub fn copy_blocks_kernel_bf16(
+        key_cache_ptrs: *mut c_void,
+        value_cache_ptrs: *mut c_void,
+        block_mapping: *const c_void,
+        num_layers: i32,
+        num_pairs: i32,
+        numel_per_block: i32,
+        stream: i64,
+    );
+
+    pub fn copy_blocks_kernel_f16(
+        key_cache_ptrs: *mut c_void,
+        value_cache_ptrs: *mut c_void,
+        block_mapping: *const c_void,
+        num_layers: i32,
+        num_pairs: i32,
+        numel_per_block: i32,
+        stream: i64,
+    );
+
+    pub fn copy_blocks_kernel_f32(
+        key_cache_ptrs: *mut c_void,
+        value_cache_ptrs: *mut c_void,
+        block_mapping: *const c_void,
+        num_layers: i32,
+        num_pairs: i32,
+        numel_per_block: i32,
+        stream: i64,
     );
 }
