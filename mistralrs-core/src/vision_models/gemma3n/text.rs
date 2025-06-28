@@ -3,16 +3,14 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder,
+    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
 use statrs::distribution::{ContinuousCDF, Normal};
 
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
+    amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    get_delta_from_lora_ab,
     layers::{
         self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, MatMul, RmsNorm,
         RotaryEmbedding, ScaledEmbedding, Sdpa,
@@ -24,7 +22,7 @@ use crate::{
         EitherCache, IsqModel, KvCache, NormalCache, NormalCacheType, NormalLoadingMetadata,
         VisionModel,
     },
-    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
+    utils::progress::NiceProgressBar,
 };
 
 use super::config::Gemma3nTextConfig;
@@ -229,8 +227,7 @@ impl Attention {
 
         let first_kv_shared_layer_idx = cfg.num_hidden_layers - cfg.num_kv_shared_layers;
         let is_kv_shared_layer = layer_idx >= first_kv_shared_layer_idx;
-        // Find the index of the last sliding or full layer before sharing starts (or None if no sharing)
-        let layer_type = &cfg.layer_types[layer_idx];
+
         let kv_shared_layer_index = if !is_kv_shared_layer {
             None
         } else if sliding_window.is_some() {
@@ -1098,7 +1095,6 @@ impl TextModel {
             .sqrt()?;
         let eps = Tensor::new(&[EPS as f32], target_magnitude.device())?;
 
-        let xs_orig = xs.clone();
         let mut temp_hidden_states = vec![xs.clone()];
         for altup_proj in &self.altup_projections {
             let altup_proj = altup_proj.forward_autocast(&xs)?;
@@ -1154,7 +1150,7 @@ impl TextModel {
 
         let mut temp_hidden_states = vec![xs.i(0)?];
         for (i, altup_proj) in self.altup_unembed_projections.iter().enumerate() {
-            let altup_proj = altup_proj.forward_autocast(&xs.i(i+1)?)?;
+            let altup_proj = altup_proj.forward_autocast(&xs.i(i + 1)?)?;
             let new_magnitude = altup_proj
                 .to_dtype(DType::F32)?
                 .sqr()?

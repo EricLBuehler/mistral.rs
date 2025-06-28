@@ -8,14 +8,13 @@ use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use text::TextModel;
 
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, MlpLayer},
+    amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
-    AnyMoeConfig, AnyMoeExpertType,
 };
 
 pub mod config;
