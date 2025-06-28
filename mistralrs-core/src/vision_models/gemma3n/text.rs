@@ -274,6 +274,18 @@ impl Attention {
         })
     }
 
+    fn rotate_half(xs: &Tensor) -> Result<Tensor> {
+        let last_dim = xs.dim(D::Minus1)?;
+        let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
+        let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
+        Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
+    }
+
+    fn apply_rotary_pos_emb(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+        xs.broadcast_mul(&cos.unsqueeze(2)?)?
+            + Self::rotate_half(xs)?.broadcast_mul(&sin.unsqueeze(2)?)?
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
@@ -304,15 +316,50 @@ impl Attention {
         q = q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?;
         k = k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
         v = v.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
+        q.write_npy("q_proj_m.npy")?;
 
         q = q.apply(&self.q_norm)?;
         k = k.apply(&self.k_norm)?;
         v = v.apply(&self.v_norm)?;
+        q.write_npy("q_norm_m.npy")?;
 
+        // (q, k) = match self.use_sliding_window {
+        //     true => self.rotary_emb_local.forward(&q, &k, seqlen_offsets)?,
+        //     false => self.rotary_emb_global.forward(&q, &k, seqlen_offsets)?,
+        // };
         (q, k) = match self.use_sliding_window {
-            true => self.rotary_emb_local.forward(&q, &k, seqlen_offsets)?,
-            false => self.rotary_emb_global.forward(&q, &k, seqlen_offsets)?,
+            true => {
+                let (cos,sin) = self.rotary_emb_local.get_cos_sin()?;
+
+                let mut q_embeds = Vec::new();
+                let mut k_embeds = Vec::new();
+                for (i, offset) in seqlen_offsets.iter().enumerate() {
+                    let cos = cos.narrow(0, *offset, q_len)?.unsqueeze(0)?.repeat((1,1,2))?;
+                    let sin = sin.narrow(0, *offset, q_len)?.unsqueeze(0)?.repeat((1,1,2))?;
+                    let q_embed = Self::apply_rotary_pos_emb(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                    let k_embed = Self::apply_rotary_pos_emb(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                    q_embeds.push(q_embed);
+                    k_embeds.push(k_embed);
+                }
+                (Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?)
+            }
+            false => {
+                let (cos,sin) = self.rotary_emb_global.get_cos_sin()?;
+
+                let mut q_embeds = Vec::new();
+                let mut k_embeds = Vec::new();
+                for (i, offset) in seqlen_offsets.iter().enumerate() {
+                    let cos = cos.narrow(0, *offset, q_len)?.unsqueeze(0)?.repeat((1,1,2))?;
+                    let sin = sin.narrow(0, *offset, q_len)?.unsqueeze(0)?.repeat((1,1,2))?;
+                    let q_embed = Self::apply_rotary_pos_emb(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                    let k_embed = Self::apply_rotary_pos_emb(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                    q_embeds.push(q_embed);
+                    k_embeds.push(k_embed);
+                }
+                (Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?)
+            }
         };
+        q.write_npy("q_rope_m.npy")?;
 
         q = q.transpose(1, 2)?;
         k = k.transpose(1, 2)?;
@@ -368,11 +415,8 @@ impl Attention {
         if let Some(t) = self.q_proj.quantized_act_type() {
             attn_output = attn_output.to_dtype(t)?;
         }
-        attn_output = if attention_mask.is_some() {
-            attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
-        } else {
-            attn_output.reshape((b_sz, q_len, ()))?
-        };
+        attn_output.transpose(1, 2)?.write_npy("attn_out_m.npy")?;
+        attn_output = attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?;
         let mut res = MatMul.qmethod_matmul(&attn_output, &*self.o_proj)?;
         if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
@@ -646,6 +690,9 @@ impl DecoderLayer {
         let laurel_output = self.laurel.forward(&active_prediction_normed)?;
         laurel_output.write_npy("laurel_output_m.npy")?;
 
+        let active_prediction_normed = Tensor::read_npy("active_prediction_normed.npy")?
+            .to_device(active_prediction_normed.device())?
+            .to_dtype(active_prediction_normed.dtype())?;
         let attn = self
             .self_attn
             .forward(
@@ -1052,7 +1099,7 @@ impl TextModel {
             xs = self.mapper.map(xs, i)?;
             dbg!(&xs.mean_all()?);
             dbg!(&per_layer_input.mean_all()?);
-            dbg!(&xs,&input_ids,&per_layer_input);
+            dbg!(&xs, &input_ids, &per_layer_input);
             xs = layer.forward(
                 &xs,
                 &per_layer_input,

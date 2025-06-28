@@ -1614,6 +1614,10 @@ impl Gemma3nRotaryEmbedding {
         }
     }
 
+    pub fn get_cos_sin(&self) -> Result<(Tensor, Tensor)> {
+        self.0.get_cos_sin()
+    }
+
     pub fn forward(
         &self,
         q: &Tensor,
@@ -1878,6 +1882,10 @@ impl RotaryEmbedding {
             sin,
             is_gpt_neox,
         })
+    }
+
+    pub fn get_cos_sin(&self) -> Result<(Tensor, Tensor)> {
+        Ok((self.cos.clone(), self.sin.clone()))
     }
 
     pub fn new_partial(

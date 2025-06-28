@@ -61,7 +61,8 @@ pub trait Processor {
         let prompt = "<bos><start_of_turn>user
 hi<end_of_turn>
 <start_of_turn>model
-".to_string();
+"
+        .to_string();
         let encoding = pipeline
             .tokenizer()
             .with_context(|| {
