@@ -735,7 +735,7 @@ impl TextModel {
             )?,
         );
         let embed_tokens_per_layer = ScaledEmbedding::new(
-            (cfg.hidden_size as f64).sqrt(),
+            (cfg.hidden_size_per_layer_input as f64).sqrt(),
             embedding(
                 cfg.vocab_size_per_layer_input,
                 cfg.hidden_size_per_layer_input * cfg.num_hidden_layers,
