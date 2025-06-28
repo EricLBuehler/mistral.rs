@@ -22,7 +22,7 @@ use crate::{
         EitherCache, IsqModel, KvCache, NormalCache, NormalCacheType, NormalLoadingMetadata,
         VisionModel,
     },
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 use super::config::Gemma3nTextConfig;
@@ -1082,11 +1082,93 @@ impl IsqModel for TextModel {
         Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
         &dyn DeviceMapper,
     ) {
-        todo!()
+        let mut layers = Vec::new();
+        
+        // Add the lm_head
+        layers.push((&mut self.lm_head, None));
+        
+        // Add all the layer components
+        for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
+            // Attention projections
+            let layer_ptr = layer as *const _ as *mut DecoderLayer;
+            unsafe {
+                let layer_mut = &mut *layer_ptr;
+                layers.push((&mut layer_mut.self_attn.q_proj, Some(layer_idx)));
+                layers.push((&mut layer_mut.self_attn.k_proj, Some(layer_idx)));
+                layers.push((&mut layer_mut.self_attn.v_proj, Some(layer_idx)));
+                layers.push((&mut layer_mut.self_attn.o_proj, Some(layer_idx)));
+                
+                // MLP projections
+                layers.push((&mut layer_mut.mlp.gate, Some(layer_idx)));
+                layers.push((&mut layer_mut.mlp.up, Some(layer_idx)));
+                layers.push((&mut layer_mut.mlp.down, Some(layer_idx)));
+            }
+        }
+        
+        // Add AltUp projections
+        for altup_proj in &mut self.altup_projections {
+            layers.push((altup_proj, None));
+        }
+        
+        for altup_unembed_proj in &mut self.altup_unembed_projections {
+            layers.push((altup_unembed_proj, None));
+        }
+        
+        layers.push((&mut self.per_layer_model_projection, None));
+        
+        (layers, &*self.mapper)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        todo!()
+        let uvb = UnVarBuilder::new();
+        
+        // Embeddings
+        uvb.pp("embed_tokens").add(&self.embed_tokens);
+        uvb.pp("embed_tokens_per_layer").add(&self.embed_tokens_per_layer);
+        
+        // Layer components
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let layer_uvb = uvb.pp(format!("layers.{layer_idx}"));
+            
+            // Layer norms
+            layer_uvb.pp("input_layernorm").add(&layer.input_layernorm);
+            layer_uvb.pp("post_attention_layernorm").add(&layer.post_attention_layernorm);
+            layer_uvb.pp("pre_feedforward_layernorm").add(&layer.pre_feedforward_layernorm);
+            layer_uvb.pp("post_feedforward_layernorm").add(&layer.post_feedforward_layernorm);
+            layer_uvb.pp("post_per_layer_input_norm").add(&layer.post_per_layer_input_norm);
+            
+            // Attention norms
+            let attn_uvb = layer_uvb.pp("self_attn");
+            attn_uvb.pp("q_norm").add(&layer.self_attn.q_norm);
+            attn_uvb.pp("k_norm").add(&layer.self_attn.k_norm);
+            attn_uvb.pp("v_norm").add(&layer.self_attn.v_norm);
+            
+            // AltUp components
+            let altup_uvb = layer_uvb.pp("altup");
+            altup_uvb.add_tensor("correct_output_scale", layer.altup.correct_output_scale.clone());
+            altup_uvb.pp("correction_coefs").add(&layer.altup.correction_coefs);
+            altup_uvb.pp("prediction_coefs").add(&layer.altup.prediction_coefs);
+            altup_uvb.pp("modality_router").add(&layer.altup.modality_router);
+            altup_uvb.pp("router_norm").add(&layer.altup.router_norm);
+            
+            // Laurel block
+            let laurel_uvb = layer_uvb.pp("laurel");
+            laurel_uvb.pp("left").add(&layer.laurel.left);
+            laurel_uvb.pp("right").add(&layer.laurel.right);
+            laurel_uvb.pp("post_laurel_norm").add(&layer.laurel.post_norm);
+            
+            // Per-layer input components
+            layer_uvb.pp("per_layer_input_gate").add(&layer.per_layer_input_gate);
+            layer_uvb.pp("per_layer_projection").add(&layer.per_layer_projection);
+        }
+        
+        // Final norm
+        uvb.pp("norm").add(&self.norm);
+        
+        // Per-layer projection components
+        uvb.pp("per_layer_projection_norm").add(&self.per_layer_projection_norm);
+        
+        uvb.to_safetensors()
     }
 
     fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
