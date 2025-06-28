@@ -145,6 +145,7 @@ struct Attention {
     k_norm: RmsNorm,
     v_norm: RmsNorm,
     kv_shared_layer_index: Option<usize>,
+    layer_idx: usize,
 }
 
 impl Attention {
@@ -232,18 +233,14 @@ impl Attention {
         let is_kv_shared_layer = layer_idx >= first_kv_shared_layer_idx;
         // Find the index of the last sliding or full layer before sharing starts (or None if no sharing)
         let layer_type = &cfg.layer_types[layer_idx];
-        let kv_shared_layer_index = if is_kv_shared_layer {
-            let start_idx = first_kv_shared_layer_idx - 1;
-            Some(
-                start_idx
-                    - cfg.layer_types[..=start_idx]
-                        .iter()
-                        .rev()
-                        .position(|lt| lt == layer_type)
-                        .unwrap(),
-            )
-        } else {
+        let kv_shared_layer_index = if !is_kv_shared_layer {
             None
+        } else if sliding_window.is_some() {
+            // Last layer that computes local sliding attention is always 2 before sharing starts
+            Some(first_kv_shared_layer_idx - 2)
+        } else {
+            // Last layer before sharing starts is always the last that computes global attention layer
+            Some(first_kv_shared_layer_idx - 1)
         };
         Ok(Self {
             q_proj,
@@ -271,6 +268,7 @@ impl Attention {
             k_norm,
             v_norm,
             kv_shared_layer_index,
+            layer_idx,
         })
     }
 
@@ -293,46 +291,20 @@ impl Attention {
         attention_mask: Option<&Tensor>,
         sliding_attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        kv_cache: &mut KvCache,
+        kv_caches: &mut [KvCache],
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut q = MatMul.qmethod_matmul(&xs, &*self.q_proj)?;
-        let mut k = MatMul.qmethod_matmul(&xs, &*self.k_proj)?;
-        let mut v = MatMul.qmethod_matmul(&xs, &*self.v_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
+        let mut q = self.q_proj.forward_autocast(&xs)?;
         q = q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?;
-        k = k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
-        v = v.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
-        q.write_npy("q_proj_m.npy")?;
-
         q = q.apply(&self.q_norm)?;
-        k = k.apply(&self.k_norm)?;
-        v = v.apply(&self.v_norm)?;
-        q.write_npy("q_norm_m.npy")?;
-
-        // (q, k) = match self.use_sliding_window {
-        //     true => self.rotary_emb_local.forward(&q, &k, seqlen_offsets)?,
-        //     false => self.rotary_emb_global.forward(&q, &k, seqlen_offsets)?,
-        // };
-        (q, k) = match self.use_sliding_window {
+        q = match self.use_sliding_window {
             true => {
                 let (cos, sin) = self.rotary_emb_local.get_cos_sin()?;
 
-                let mut q_embeds = Vec::new();
-                let mut k_embeds = Vec::new();
+                let mut embeds = Vec::new();
                 for (i, offset) in seqlen_offsets.iter().enumerate() {
                     let cos = cos
                         .narrow(0, *offset, q_len)?
@@ -342,26 +314,19 @@ impl Attention {
                         .narrow(0, *offset, q_len)?
                         .unsqueeze(0)?
                         .repeat((1, 1, 2))?;
-                    let q_embed = Self::apply_rotary_pos_emb(
+                    let embed = Self::apply_rotary_pos_emb(
                         &q.i(i)?.unsqueeze(0)?.contiguous()?,
                         &cos,
                         &sin,
                     )?;
-                    let k_embed = Self::apply_rotary_pos_emb(
-                        &k.i(i)?.unsqueeze(0)?.contiguous()?,
-                        &cos,
-                        &sin,
-                    )?;
-                    q_embeds.push(q_embed);
-                    k_embeds.push(k_embed);
+                    embeds.push(embed);
                 }
-                (Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?)
+                Tensor::cat(&embeds, 0)?
             }
             false => {
                 let (cos, sin) = self.rotary_emb_global.get_cos_sin()?;
 
-                let mut q_embeds = Vec::new();
-                let mut k_embeds = Vec::new();
+                let mut embeds = Vec::new();
                 for (i, offset) in seqlen_offsets.iter().enumerate() {
                     let cos = cos
                         .narrow(0, *offset, q_len)?
@@ -371,27 +336,80 @@ impl Attention {
                         .narrow(0, *offset, q_len)?
                         .unsqueeze(0)?
                         .repeat((1, 1, 2))?;
-                    let q_embed = Self::apply_rotary_pos_emb(
+                    let embed = Self::apply_rotary_pos_emb(
                         &q.i(i)?.unsqueeze(0)?.contiguous()?,
                         &cos,
                         &sin,
                     )?;
-                    let k_embed = Self::apply_rotary_pos_emb(
-                        &k.i(i)?.unsqueeze(0)?.contiguous()?,
-                        &cos,
-                        &sin,
-                    )?;
-                    q_embeds.push(q_embed);
-                    k_embeds.push(k_embed);
+                    embeds.push(embed);
                 }
-                (Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?)
+                Tensor::cat(&embeds, 0)?
             }
         };
-        q.write_npy("q_rope_m.npy")?;
-
         q = q.transpose(1, 2)?;
-        k = k.transpose(1, 2)?;
-        v = v.transpose(1, 2)?;
+
+        let (k, v) = if let Some(kv_shared_layer_index) = self.kv_shared_layer_index {
+            let shared_cache = &kv_caches[kv_shared_layer_index];
+            (shared_cache.k()?.unwrap(), shared_cache.v()?.unwrap())
+        } else {
+            let mut k = self.k_proj.forward_autocast(&xs)?;
+            k = k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
+            k = k.apply(&self.k_norm)?;
+            k = match self.use_sliding_window {
+                true => {
+                    let (cos, sin) = self.rotary_emb_local.get_cos_sin()?;
+
+                    let mut embeds = Vec::new();
+                    for (i, offset) in seqlen_offsets.iter().enumerate() {
+                        let cos = cos
+                            .narrow(0, *offset, q_len)?
+                            .unsqueeze(0)?
+                            .repeat((1, 1, 2))?;
+                        let sin = sin
+                            .narrow(0, *offset, q_len)?
+                            .unsqueeze(0)?
+                            .repeat((1, 1, 2))?;
+                        let embed = Self::apply_rotary_pos_emb(
+                            &k.i(i)?.unsqueeze(0)?.contiguous()?,
+                            &cos,
+                            &sin,
+                        )?;
+                        embeds.push(embed);
+                    }
+                    Tensor::cat(&embeds, 0)?
+                }
+                false => {
+                    let (cos, sin) = self.rotary_emb_global.get_cos_sin()?;
+
+                    let mut embeds = Vec::new();
+                    for (i, offset) in seqlen_offsets.iter().enumerate() {
+                        let cos = cos
+                            .narrow(0, *offset, q_len)?
+                            .unsqueeze(0)?
+                            .repeat((1, 1, 2))?;
+                        let sin = sin
+                            .narrow(0, *offset, q_len)?
+                            .unsqueeze(0)?
+                            .repeat((1, 1, 2))?;
+                        let embed = Self::apply_rotary_pos_emb(
+                            &k.i(i)?.unsqueeze(0)?.contiguous()?,
+                            &cos,
+                            &sin,
+                        )?;
+                        embeds.push(embed);
+                    }
+                    Tensor::cat(&embeds, 0)?
+                }
+            };
+            k = k.transpose(1, 2)?;
+
+            let mut v = self.v_proj.forward_autocast(&xs)?;
+            v = v.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
+            v = v.apply(&self.v_norm)?;
+            v = v.transpose(1, 2)?;
+
+            kv_caches[self.layer_idx].append(&k, &v)?
+        };
 
         let mask = if self.use_sliding_window {
             sliding_attention_mask
@@ -434,21 +452,15 @@ impl Attention {
             None => {
                 // self.sliding_window is None if !self.use_sliding_window
                 // TODO: kv shared?
-                (k, v) = kv_cache.append(&k, &v)?;
+                // (k, v) = kv_cache.append(&k, &v)?;
 
                 Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?
             }
         };
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
         attn_output.transpose(1, 2)?.write_npy("attn_out_m.npy")?;
         attn_output = attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?;
-        let mut res = MatMul.qmethod_matmul(&attn_output, &*self.o_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let mut res = self.o_proj.forward_autocast(&attn_output)?;
         Ok(res)
     }
 }
@@ -706,7 +718,7 @@ impl DecoderLayer {
         attention_mask: Option<&Tensor>,
         sliding_attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        kv_cache: &mut KvCache,
+        kv_caches: &mut [KvCache],
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -732,7 +744,7 @@ impl DecoderLayer {
                 attention_mask,
                 sliding_attention_mask,
                 seqlen_offsets,
-                kv_cache,
+                kv_caches,
                 metadata,
                 flash_params,
             )?
@@ -1125,6 +1137,8 @@ impl TextModel {
         }
         xs = Tensor::stack(&temp_hidden_states, 0)?;
 
+        xs.write_npy("xs_in_m.npy")?;
+        per_layer_inputs.write_npy("per_layer_inputs_m.npy")?;
         for (i, layer) in self.layers.iter().enumerate() {
             let per_layer_input = per_layer_inputs.i((.., .., i, ..))?;
             xs = self.mapper.map(xs, i)?;
@@ -1143,15 +1157,18 @@ impl TextModel {
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
-                &mut cache[i],
+                &mut *cache,
                 metadata
                     .as_ref()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
                 flash_params,
             )?;
-            panic!();
+            xs.write_npy(format!("decoder_out_{i}_m.npy"))?;
+            // panic!();
         }
         xs = xs.to_device(&self.device)?;
+        xs.write_npy("layers_out_m.npy")?;
+        panic!();
 
         let target_magnitude = xs
             .i(0)?
