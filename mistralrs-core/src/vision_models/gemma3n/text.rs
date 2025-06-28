@@ -109,12 +109,10 @@ impl Mlp {
             xs = xs.to_dtype(t)?;
         }
         let mut gate = self.gate.forward(&xs)?;
-        gate.write_npy("gate_proj_m.npy")?;
         if self.activation_sparsity > 0. {
             gate = self.gaussian_topk(&gate)?;
         }
         let up = self.up.forward(&xs)?;
-        up.write_npy("up_proj_m.npy")?;
         // let mut res = self.down.forward(&candle_nn::ops::mul_and_act(
         //     &gate,
         //     &up,
@@ -458,10 +456,8 @@ impl Attention {
             }
         };
 
-        attn_output.transpose(1, 2)?.write_npy("attn_out_m.npy")?;
         attn_output = attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?;
-        let mut res = self.o_proj.forward_autocast(&attn_output)?;
-        Ok(res)
+        self.o_proj.forward_autocast(&attn_output)
     }
 }
 
@@ -722,21 +718,12 @@ impl DecoderLayer {
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        // xs.write_npy("decoder_in_m.npy")?;
-        // let xs = Tensor::read_npy("decoder_in.npy")?
-        //     .to_device(xs.device())?
-        //     .to_dtype(xs.dtype())?;
         let predictions = self.altup.predict(&xs)?;
-        // predictions.write_npy("predictions_m.npy")?;
         let active_prediction = predictions.i(self.altup_active_idx)?;
 
         let active_prediction_normed = self.input_layernorm.forward(&active_prediction)?;
         let laurel_output = self.laurel.forward(&active_prediction_normed)?;
-        // laurel_output.write_npy("laurel_output_m.npy")?;
 
-        // let active_prediction_normed = Tensor::read_npy("active_prediction_normed.npy")?
-        //     .to_device(active_prediction_normed.device())?
-        //     .to_dtype(active_prediction_normed.dtype())?;
         let attn = self
             .self_attn
             .forward(
@@ -749,20 +736,15 @@ impl DecoderLayer {
                 flash_params,
             )?
             .apply(&self.post_attention_layernorm)?;
-        // attn.write_npy("attn_m.npy")?;
 
         let attn_gated = (&active_prediction + attn)?;
         let attn_laurel = ((attn_gated + laurel_output)? / 2f64.sqrt())?;
-        // attn_laurel.write_npy("attn_laurel_m.npy")?;
 
         let attn_norm = self.pre_feedforward_layernorm.forward(&attn_laurel)?;
-        // attn_norm.write_npy("attn_norm_m.npy")?;
         let attn_ffw = self.mlp.forward(&attn_norm)?;
-        // attn_ffw.write_npy("attn_ffw_m.npy")?;
         let attn_ffw_norm = self.post_feedforward_layernorm.forward(&attn_ffw)?;
         let attn_ffw_laurel_gated = (&attn_laurel + attn_ffw_norm)?;
         let mut corrected_predictions = self.altup.correct(&predictions, &attn_ffw_laurel_gated)?;
-        // corrected_predictions.write_npy("corrected_predictions_m.npy")?;
 
         let mut first_prediction = corrected_predictions.i(self.altup_active_idx)?;
         if self.altup_correct_scale {
@@ -774,7 +756,6 @@ impl DecoderLayer {
 
         first_prediction = self.per_layer_projection.forward(&first_prediction)?;
         first_prediction = self.post_per_layer_input_norm.forward(&first_prediction)?;
-        // first_prediction.write_npy("first_prediction_m.npy")?;
 
         corrected_predictions = corrected_predictions.slice_assign(
             &[&(1..), &.., &.., &..],
@@ -1137,8 +1118,6 @@ impl TextModel {
         }
         xs = Tensor::stack(&temp_hidden_states, 0)?;
 
-        // xs.write_npy("xs_in_m.npy")?;
-        // per_layer_inputs.write_npy("per_layer_inputs_m.npy")?;
         for (i, layer) in self.layers.iter().enumerate() {
             let per_layer_input = per_layer_inputs.i((.., .., i, ..))?;
             xs = self.mapper.map(xs, i)?;
@@ -1163,11 +1142,8 @@ impl TextModel {
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
                 flash_params,
             )?;
-            // xs.write_npy(format!("decoder_out_{i}_m.npy"))?;
-            // panic!();
         }
         xs = xs.to_device(&self.device)?;
-        // xs.write_npy("layers_out_m.npy")?;
 
         let target_magnitude = xs
             .i(0)?
@@ -1196,8 +1172,6 @@ impl TextModel {
         xs = Tensor::stack(&temp_hidden_states, 0)?.mean(0)?;
 
         xs = xs.apply(&self.norm)?;
-        // xs.write_npy("final_normed_m.npy")?;
-        // panic!();
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
