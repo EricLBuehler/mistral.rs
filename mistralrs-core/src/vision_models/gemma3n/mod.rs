@@ -52,7 +52,7 @@ impl Gemma3nModel {
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let input_embeds = self.language_model.embed_tokens(input_ids)?;
@@ -61,7 +61,6 @@ impl Gemma3nModel {
             input_embeds,
             seqlen_offsets,
             context_lens,
-            metadata,
             flash_params,
         )?;
         Ok(res)

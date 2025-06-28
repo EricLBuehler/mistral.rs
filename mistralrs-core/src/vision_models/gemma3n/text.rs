@@ -15,7 +15,7 @@ use crate::{
         self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, MatMul, RmsNorm,
         RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -135,7 +135,6 @@ struct Attention {
     rotary_emb_global: Arc<Gemma3nRotaryEmbedding>,
     rotary_emb_local: Arc<RotaryEmbedding>,
     use_sliding_window: bool,
-    paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     q_norm: RmsNorm,
     k_norm: RmsNorm,
@@ -153,7 +152,6 @@ impl Attention {
         layer_idx: usize,
         mapper: &dyn DeviceMapper,
         vb: ShardedVarBuilder,
-        paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
@@ -248,7 +246,6 @@ impl Attention {
             rotary_emb_global,
             rotary_emb_local,
             use_sliding_window: sliding_window.is_some(),
-            paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(
                     cfg.num_key_value_heads,
@@ -287,7 +284,6 @@ impl Attention {
         sliding_attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         kv_caches: &mut [KvCache],
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
@@ -412,46 +408,8 @@ impl Attention {
             attention_mask
         };
 
-        let mut attn_output = match &self.paged_attn {
-            Some(paged_attn) => match metadata {
-                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
-                    &q,
-                    &k,
-                    &v,
-                    attention_mask,
-                    Some(key_cache),
-                    Some(value_cache),
-                    input_metadata,
-                    &self.sdpa_params,
-                    Some(flash_params),
-                )?,
-                None => {
-                    // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
-                    // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
-                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                    // Sanity check.
-                    assert!(attention_mask.is_some());
-                    paged_attn.forward(
-                        &q,
-                        &k,
-                        &v,
-                        attention_mask,
-                        None,
-                        None,
-                        &input_metadata,
-                        &self.sdpa_params,
-                        Some(flash_params),
-                    )?
-                }
-            },
-            None => {
-                // self.sliding_window is None if !self.use_sliding_window
-                // TODO: kv shared?
-                // (k, v) = kv_cache.append(&k, &v)?;
-
-                Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?
-            }
-        };
+        let mut attn_output =
+            Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?;
 
         attn_output = attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?;
         self.o_proj.forward_autocast(&attn_output)
@@ -623,7 +581,6 @@ impl DecoderLayer {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
@@ -633,7 +590,6 @@ impl DecoderLayer {
             layer_idx,
             mapper,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
-            paged_attn,
             comm,
         )?;
         let mlp = Mlp::new(
@@ -712,7 +668,6 @@ impl DecoderLayer {
         sliding_attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         kv_caches: &mut [KvCache],
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let predictions = self.altup.predict(&xs)?;
@@ -729,7 +684,6 @@ impl DecoderLayer {
                 sliding_attention_mask,
                 seqlen_offsets,
                 kv_caches,
-                metadata,
                 flash_params,
             )?
             .apply(&self.post_attention_layernorm)?;
@@ -801,6 +755,9 @@ impl TextModel {
                 quant_cfg.name(),
                 quant_cfg.get_bits_name(&vb)
             );
+        }
+        if !matches!(attention_mechanism, AttentionImplementation::Eager) {
+            candle_core::bail!("Expected eager attention implementation");
         }
         let mapper = normal_loading_metadata.mapper;
 
@@ -875,12 +832,6 @@ impl TextModel {
                 .get(&device.location())
                 .expect("No RoPE for device location!")
                 .clone();
-            let paged_attn = match &attention_mechanism {
-                AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => {
-                    Some(PagedAttention::new(cfg.head_dim, device, None)?)
-                }
-            };
             let comm = mapper.get_comm_for(layer_idx)?;
             DecoderLayer::new(
                 rotary_emb_global,
@@ -890,7 +841,6 @@ impl TextModel {
                 &*mapper,
                 layer_idx,
                 normal_loading_metadata.loading_isq,
-                paged_attn,
                 &comm,
             )
         })?;
@@ -1053,7 +1003,6 @@ impl TextModel {
         mut xs: Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let per_layer_inputs = self.get_per_layer_inputs(input_ids)?;
@@ -1066,13 +1015,6 @@ impl TextModel {
             xs.dtype(),
             self.cfg.num_attn_heads,
         )?;
-        // PagedAttention prompt chunking
-        let attention_mask = attention_mask.filter(|_| {
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-        });
         let sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             &*cache,
@@ -1080,13 +1022,6 @@ impl TextModel {
             xs.dtype(),
             self.cfg.num_attn_heads,
         )?;
-        // PagedAttention prompt chunking
-        let sliding_attention_mask = sliding_attention_mask.filter(|_| {
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-        });
 
         let target_magnitude = xs
             .to_dtype(DType::F32)?
@@ -1133,9 +1068,6 @@ impl TextModel {
                     .as_ref(),
                 seqlen_offsets,
                 &mut *cache,
-                metadata
-                    .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
                 flash_params,
             )?;
         }
