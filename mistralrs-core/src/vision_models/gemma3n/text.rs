@@ -722,17 +722,17 @@ impl DecoderLayer {
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        xs.write_npy("decoder_in_m.npy")?;
+        // xs.write_npy("decoder_in_m.npy")?;
         // let xs = Tensor::read_npy("decoder_in.npy")?
         //     .to_device(xs.device())?
         //     .to_dtype(xs.dtype())?;
         let predictions = self.altup.predict(&xs)?;
-        predictions.write_npy("predictions_m.npy")?;
+        // predictions.write_npy("predictions_m.npy")?;
         let active_prediction = predictions.i(self.altup_active_idx)?;
 
         let active_prediction_normed = self.input_layernorm.forward(&active_prediction)?;
         let laurel_output = self.laurel.forward(&active_prediction_normed)?;
-        laurel_output.write_npy("laurel_output_m.npy")?;
+        // laurel_output.write_npy("laurel_output_m.npy")?;
 
         // let active_prediction_normed = Tensor::read_npy("active_prediction_normed.npy")?
         //     .to_device(active_prediction_normed.device())?
@@ -749,20 +749,20 @@ impl DecoderLayer {
                 flash_params,
             )?
             .apply(&self.post_attention_layernorm)?;
-        attn.write_npy("attn_m.npy")?;
+        // attn.write_npy("attn_m.npy")?;
 
         let attn_gated = (&active_prediction + attn)?;
         let attn_laurel = ((attn_gated + laurel_output)? / 2f64.sqrt())?;
-        attn_laurel.write_npy("attn_laurel_m.npy")?;
+        // attn_laurel.write_npy("attn_laurel_m.npy")?;
 
         let attn_norm = self.pre_feedforward_layernorm.forward(&attn_laurel)?;
-        attn_norm.write_npy("attn_norm_m.npy")?;
+        // attn_norm.write_npy("attn_norm_m.npy")?;
         let attn_ffw = self.mlp.forward(&attn_norm)?;
-        attn_ffw.write_npy("attn_ffw_m.npy")?;
+        // attn_ffw.write_npy("attn_ffw_m.npy")?;
         let attn_ffw_norm = self.post_feedforward_layernorm.forward(&attn_ffw)?;
         let attn_ffw_laurel_gated = (&attn_laurel + attn_ffw_norm)?;
         let mut corrected_predictions = self.altup.correct(&predictions, &attn_ffw_laurel_gated)?;
-        corrected_predictions.write_npy("corrected_predictions_m.npy")?;
+        // corrected_predictions.write_npy("corrected_predictions_m.npy")?;
 
         let mut first_prediction = corrected_predictions.i(self.altup_active_idx)?;
         if self.altup_correct_scale {
@@ -774,7 +774,7 @@ impl DecoderLayer {
 
         first_prediction = self.per_layer_projection.forward(&first_prediction)?;
         first_prediction = self.post_per_layer_input_norm.forward(&first_prediction)?;
-        first_prediction.write_npy("first_prediction_m.npy")?;
+        // first_prediction.write_npy("first_prediction_m.npy")?;
 
         corrected_predictions = corrected_predictions.slice_assign(
             &[&(1..), &.., &.., &..],
@@ -1137,14 +1137,14 @@ impl TextModel {
         }
         xs = Tensor::stack(&temp_hidden_states, 0)?;
 
-        xs.write_npy("xs_in_m.npy")?;
-        per_layer_inputs.write_npy("per_layer_inputs_m.npy")?;
+        // xs.write_npy("xs_in_m.npy")?;
+        // per_layer_inputs.write_npy("per_layer_inputs_m.npy")?;
         for (i, layer) in self.layers.iter().enumerate() {
             let per_layer_input = per_layer_inputs.i((.., .., i, ..))?;
             xs = self.mapper.map(xs, i)?;
-            dbg!(&xs.mean_all()?);
-            dbg!(&per_layer_input.mean_all()?);
-            dbg!(&xs, &input_ids, &per_layer_input);
+            // dbg!(&xs.mean_all()?);
+            // dbg!(&per_layer_input.mean_all()?);
+            // dbg!(&xs, &input_ids, &per_layer_input);
             xs = layer.forward(
                 &xs,
                 &per_layer_input,
@@ -1163,12 +1163,11 @@ impl TextModel {
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
                 flash_params,
             )?;
-            xs.write_npy(format!("decoder_out_{i}_m.npy"))?;
+            // xs.write_npy(format!("decoder_out_{i}_m.npy"))?;
             // panic!();
         }
         xs = xs.to_device(&self.device)?;
-        xs.write_npy("layers_out_m.npy")?;
-        panic!();
+        // xs.write_npy("layers_out_m.npy")?;
 
         let target_magnitude = xs
             .i(0)?
@@ -1178,8 +1177,8 @@ impl TextModel {
             .sqrt()?;
 
         let mut temp_hidden_states = vec![xs.i(0)?];
-        for altup_proj in &self.altup_unembed_projections {
-            let altup_proj = altup_proj.forward_autocast(&xs_orig)?;
+        for (i, altup_proj) in self.altup_unembed_projections.iter().enumerate() {
+            let altup_proj = altup_proj.forward_autocast(&xs.i(i+1)?)?;
             let new_magnitude = altup_proj
                 .to_dtype(DType::F32)?
                 .sqr()?
@@ -1197,6 +1196,8 @@ impl TextModel {
         xs = Tensor::stack(&temp_hidden_states, 0)?.mean(0)?;
 
         xs = xs.apply(&self.norm)?;
+        // xs.write_npy("final_normed_m.npy")?;
+        // panic!();
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }

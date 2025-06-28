@@ -221,6 +221,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
         seqs: &mut [&mut crate::sequence::Sequence],
         modify_draft_cache: bool,
     ) {
+        return;
         let mut new_k_cache = Vec::new();
         let mut new_v_cache = Vec::new();
 
@@ -340,6 +341,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
         *pipeline.cache().normal() = NormalCache(caches);
     }
     fn clone_out_cache(&self, pipeline: &T, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        return;
         let all_cache = pipeline.cache().normal();
         for layer in 0..pipeline.get_metadata().num_hidden_layers {
             let cache = all_cache.0.get(layer).unwrap();
