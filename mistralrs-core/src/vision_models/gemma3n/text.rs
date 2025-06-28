@@ -329,30 +329,58 @@ impl Attention {
         // };
         (q, k) = match self.use_sliding_window {
             true => {
-                let (cos,sin) = self.rotary_emb_local.get_cos_sin()?;
+                let (cos, sin) = self.rotary_emb_local.get_cos_sin()?;
 
                 let mut q_embeds = Vec::new();
                 let mut k_embeds = Vec::new();
                 for (i, offset) in seqlen_offsets.iter().enumerate() {
-                    let cos = cos.narrow(0, *offset, q_len)?.unsqueeze(0)?.repeat((1,1,2))?;
-                    let sin = sin.narrow(0, *offset, q_len)?.unsqueeze(0)?.repeat((1,1,2))?;
-                    let q_embed = Self::apply_rotary_pos_emb(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                    let k_embed = Self::apply_rotary_pos_emb(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                    let cos = cos
+                        .narrow(0, *offset, q_len)?
+                        .unsqueeze(0)?
+                        .repeat((1, 1, 2))?;
+                    let sin = sin
+                        .narrow(0, *offset, q_len)?
+                        .unsqueeze(0)?
+                        .repeat((1, 1, 2))?;
+                    let q_embed = Self::apply_rotary_pos_emb(
+                        &q.i(i)?.unsqueeze(0)?.contiguous()?,
+                        &cos,
+                        &sin,
+                    )?;
+                    let k_embed = Self::apply_rotary_pos_emb(
+                        &k.i(i)?.unsqueeze(0)?.contiguous()?,
+                        &cos,
+                        &sin,
+                    )?;
                     q_embeds.push(q_embed);
                     k_embeds.push(k_embed);
                 }
                 (Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?)
             }
             false => {
-                let (cos,sin) = self.rotary_emb_global.get_cos_sin()?;
+                let (cos, sin) = self.rotary_emb_global.get_cos_sin()?;
 
                 let mut q_embeds = Vec::new();
                 let mut k_embeds = Vec::new();
                 for (i, offset) in seqlen_offsets.iter().enumerate() {
-                    let cos = cos.narrow(0, *offset, q_len)?.unsqueeze(0)?.repeat((1,1,2))?;
-                    let sin = sin.narrow(0, *offset, q_len)?.unsqueeze(0)?.repeat((1,1,2))?;
-                    let q_embed = Self::apply_rotary_pos_emb(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                    let k_embed = Self::apply_rotary_pos_emb(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                    let cos = cos
+                        .narrow(0, *offset, q_len)?
+                        .unsqueeze(0)?
+                        .repeat((1, 1, 2))?;
+                    let sin = sin
+                        .narrow(0, *offset, q_len)?
+                        .unsqueeze(0)?
+                        .repeat((1, 1, 2))?;
+                    let q_embed = Self::apply_rotary_pos_emb(
+                        &q.i(i)?.unsqueeze(0)?.contiguous()?,
+                        &cos,
+                        &sin,
+                    )?;
+                    let k_embed = Self::apply_rotary_pos_emb(
+                        &k.i(i)?.unsqueeze(0)?.contiguous()?,
+                        &cos,
+                        &sin,
+                    )?;
                     q_embeds.push(q_embed);
                     k_embeds.push(k_embed);
                 }
@@ -682,7 +710,11 @@ impl DecoderLayer {
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let predictions = self.altup.predict(xs)?;
+        xs.write_npy("decoder_in_m.npy")?;
+        // let xs = Tensor::read_npy("decoder_in.npy")?
+        //     .to_device(xs.device())?
+        //     .to_dtype(xs.dtype())?;
+        let predictions = self.altup.predict(&xs)?;
         predictions.write_npy("predictions_m.npy")?;
         let active_prediction = predictions.i(self.altup_active_idx)?;
 
@@ -690,9 +722,9 @@ impl DecoderLayer {
         let laurel_output = self.laurel.forward(&active_prediction_normed)?;
         laurel_output.write_npy("laurel_output_m.npy")?;
 
-        let active_prediction_normed = Tensor::read_npy("active_prediction_normed.npy")?
-            .to_device(active_prediction_normed.device())?
-            .to_dtype(active_prediction_normed.dtype())?;
+        // let active_prediction_normed = Tensor::read_npy("active_prediction_normed.npy")?
+        //     .to_device(active_prediction_normed.device())?
+        //     .to_dtype(active_prediction_normed.dtype())?;
         let attn = self
             .self_attn
             .forward(
@@ -1069,8 +1101,7 @@ impl TextModel {
         let target_magnitude = xs
             .to_dtype(DType::F32)?
             .sqr()?
-            .mean_all()?
-            .reshape((1,))?
+            .mean_keepdim(D::Minus1)?
             .sqrt()?;
         let eps = Tensor::new(&[EPS as f32], target_magnitude.device())?;
 
@@ -1126,8 +1157,7 @@ impl TextModel {
             .i(0)?
             .to_dtype(DType::F32)?
             .sqr()?
-            .mean_all()?
-            .reshape((1,))?
+            .mean_keepdim(D::Minus1)?
             .sqrt()?;
 
         let mut temp_hidden_states = vec![xs.i(0)?];
