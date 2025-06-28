@@ -276,6 +276,55 @@ impl Attention {
             + Self::rotate_half(xs)?.broadcast_mul(&sin.unsqueeze(2)?)?
     }
 
+    fn apply_rope(&self, xs: &Tensor, seqlen_offsets: &[usize], seq_len: usize) -> Result<Tensor> {
+        match self.use_sliding_window {
+            true => {
+                let (cos, sin) = self.rotary_emb_local.get_cos_sin()?;
+
+                let mut embeds = Vec::new();
+                for (i, offset) in seqlen_offsets.iter().enumerate() {
+                    let cos = cos
+                        .narrow(0, *offset, seq_len)?
+                        .unsqueeze(0)?
+                        .repeat((1, 1, 2))?;
+                    let sin = sin
+                        .narrow(0, *offset, seq_len)?
+                        .unsqueeze(0)?
+                        .repeat((1, 1, 2))?;
+                    let embed = Self::apply_rotary_pos_emb(
+                        &xs.i(i)?.unsqueeze(0)?.contiguous()?,
+                        &cos,
+                        &sin,
+                    )?;
+                    embeds.push(embed);
+                }
+                Tensor::cat(&embeds, 0)
+            }
+            false => {
+                let (cos, sin) = self.rotary_emb_global.get_cos_sin()?;
+
+                let mut embeds = Vec::new();
+                for (i, offset) in seqlen_offsets.iter().enumerate() {
+                    let cos = cos
+                        .narrow(0, *offset, seq_len)?
+                        .unsqueeze(0)?
+                        .repeat((1, 1, 2))?;
+                    let sin = sin
+                        .narrow(0, *offset, seq_len)?
+                        .unsqueeze(0)?
+                        .repeat((1, 1, 2))?;
+                    let embed = Self::apply_rotary_pos_emb(
+                        &xs.i(i)?.unsqueeze(0)?.contiguous()?,
+                        &cos,
+                        &sin,
+                    )?;
+                    embeds.push(embed);
+                }
+                Tensor::cat(&embeds, 0)
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
@@ -291,52 +340,7 @@ impl Attention {
         let mut q = self.q_proj.forward_autocast(&xs)?;
         q = q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?;
         q = q.apply(&self.q_norm)?;
-        q = match self.use_sliding_window {
-            true => {
-                let (cos, sin) = self.rotary_emb_local.get_cos_sin()?;
-
-                let mut embeds = Vec::new();
-                for (i, offset) in seqlen_offsets.iter().enumerate() {
-                    let cos = cos
-                        .narrow(0, *offset, q_len)?
-                        .unsqueeze(0)?
-                        .repeat((1, 1, 2))?;
-                    let sin = sin
-                        .narrow(0, *offset, q_len)?
-                        .unsqueeze(0)?
-                        .repeat((1, 1, 2))?;
-                    let embed = Self::apply_rotary_pos_emb(
-                        &q.i(i)?.unsqueeze(0)?.contiguous()?,
-                        &cos,
-                        &sin,
-                    )?;
-                    embeds.push(embed);
-                }
-                Tensor::cat(&embeds, 0)?
-            }
-            false => {
-                let (cos, sin) = self.rotary_emb_global.get_cos_sin()?;
-
-                let mut embeds = Vec::new();
-                for (i, offset) in seqlen_offsets.iter().enumerate() {
-                    let cos = cos
-                        .narrow(0, *offset, q_len)?
-                        .unsqueeze(0)?
-                        .repeat((1, 1, 2))?;
-                    let sin = sin
-                        .narrow(0, *offset, q_len)?
-                        .unsqueeze(0)?
-                        .repeat((1, 1, 2))?;
-                    let embed = Self::apply_rotary_pos_emb(
-                        &q.i(i)?.unsqueeze(0)?.contiguous()?,
-                        &cos,
-                        &sin,
-                    )?;
-                    embeds.push(embed);
-                }
-                Tensor::cat(&embeds, 0)?
-            }
-        };
+        q = self.apply_rope(&q, seqlen_offsets, q_len)?;
         q = q.transpose(1, 2)?;
 
         let (k, v) = if let Some(kv_shared_layer_index) = self.kv_shared_layer_index {
@@ -346,52 +350,7 @@ impl Attention {
             let mut k = self.k_proj.forward_autocast(&xs)?;
             k = k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
             k = k.apply(&self.k_norm)?;
-            k = match self.use_sliding_window {
-                true => {
-                    let (cos, sin) = self.rotary_emb_local.get_cos_sin()?;
-
-                    let mut embeds = Vec::new();
-                    for (i, offset) in seqlen_offsets.iter().enumerate() {
-                        let cos = cos
-                            .narrow(0, *offset, q_len)?
-                            .unsqueeze(0)?
-                            .repeat((1, 1, 2))?;
-                        let sin = sin
-                            .narrow(0, *offset, q_len)?
-                            .unsqueeze(0)?
-                            .repeat((1, 1, 2))?;
-                        let embed = Self::apply_rotary_pos_emb(
-                            &k.i(i)?.unsqueeze(0)?.contiguous()?,
-                            &cos,
-                            &sin,
-                        )?;
-                        embeds.push(embed);
-                    }
-                    Tensor::cat(&embeds, 0)?
-                }
-                false => {
-                    let (cos, sin) = self.rotary_emb_global.get_cos_sin()?;
-
-                    let mut embeds = Vec::new();
-                    for (i, offset) in seqlen_offsets.iter().enumerate() {
-                        let cos = cos
-                            .narrow(0, *offset, q_len)?
-                            .unsqueeze(0)?
-                            .repeat((1, 1, 2))?;
-                        let sin = sin
-                            .narrow(0, *offset, q_len)?
-                            .unsqueeze(0)?
-                            .repeat((1, 1, 2))?;
-                        let embed = Self::apply_rotary_pos_emb(
-                            &k.i(i)?.unsqueeze(0)?.contiguous()?,
-                            &cos,
-                            &sin,
-                        )?;
-                        embeds.push(embed);
-                    }
-                    Tensor::cat(&embeds, 0)?
-                }
-            };
+            k = self.apply_rope(&k, seqlen_offsets, q_len)?;
             k = k.transpose(1, 2)?;
 
             let mut v = self.v_proj.forward_autocast(&xs)?;
