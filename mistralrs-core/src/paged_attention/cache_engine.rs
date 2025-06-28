@@ -4,9 +4,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use candle_core::{
-    from_storage_no_op, DType, Device, MetalStorage, Result, Shape, Storage, Tensor,
-};
+use candle_core::{DType, Device, Result, Tensor};
 use mistralrs_paged_attn::{copy_blocks, swap_blocks};
 use serde::{Deserialize, Serialize};
 
@@ -106,9 +104,12 @@ impl CacheEngine {
             .take(model_config.num_layers())
             .map(|x| x.as_ref().unwrap_or(device))
         {
+            #[allow(unused)]
             let key_blocks = if let Device::Metal(dev) = &device {
                 #[cfg(feature = "metal")]
                 {
+                    use candle_core::{from_storage_no_op, MetalStorage, Shape, Storage};
+
                     let elem_count = cache_config.num_gpu_blocks
                         * key_block_shape.0
                         * key_block_shape.1
@@ -149,9 +150,12 @@ impl CacheEngine {
                     )?
                 }
             };
+            #[allow(unused)]
             let value_blocks = if let Device::Metal(dev) = &device {
                 #[cfg(feature = "metal")]
                 {
+                    use candle_core::{from_storage_no_op, MetalStorage, Shape, Storage};
+
                     let elem_count = cache_config.num_gpu_blocks
                         * value_block_shape.0
                         * value_block_shape.1
