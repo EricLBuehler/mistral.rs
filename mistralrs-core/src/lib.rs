@@ -595,55 +595,55 @@ impl MistralRs {
         let is_multi_threaded = tokio::runtime::Handle::try_current()
             .is_ok_and(|h| h.runtime_flavor() != tokio::runtime::RuntimeFlavor::CurrentThread);
 
-        // Do a dummy run
-        if !distributed::is_daemon()
-            && is_multi_threaded
-            && matches!(
-                engine_instance.category,
-                ModelCategory::Text | ModelCategory::Vision { .. }
-            )
-        {
-            let clone_sender = engine_instance.sender.clone();
-            tokio::task::block_in_place(|| {
-                let (tx, mut rx) = channel(1);
-                let req = Request::Normal(Box::new(NormalRequest {
-                    id: 0,
-                    messages: RequestMessage::Completion {
-                        text: "hello".to_string(),
-                        echo_prompt: false,
-                        best_of: None,
-                    },
-                    sampling_params: SamplingParams {
-                        max_len: Some(1),
-                        ..SamplingParams::deterministic()
-                    },
-                    response: tx,
-                    return_logprobs: false,
-                    is_streaming: false,
-                    constraint: Constraint::None,
-                    suffix: None,
-                    tool_choice: None,
-                    tools: None,
-                    logits_processors: None,
-                    return_raw_logits: false,
-                    web_search_options: None,
-                    model_id: None,
-                }));
-                info!("Beginning dummy run.");
-                let start = Instant::now();
-                clone_sender.blocking_send(req).unwrap();
+        // // Do a dummy run
+        // if !distributed::is_daemon()
+        //     && is_multi_threaded
+        //     && matches!(
+        //         engine_instance.category,
+        //         ModelCategory::Text | ModelCategory::Vision { .. }
+        //     )
+        // {
+        //     let clone_sender = engine_instance.sender.clone();
+        //     tokio::task::block_in_place(|| {
+        //         let (tx, mut rx) = channel(1);
+        //         let req = Request::Normal(Box::new(NormalRequest {
+        //             id: 0,
+        //             messages: RequestMessage::Completion {
+        //                 text: "hello".to_string(),
+        //                 echo_prompt: false,
+        //                 best_of: None,
+        //             },
+        //             sampling_params: SamplingParams {
+        //                 max_len: Some(1),
+        //                 ..SamplingParams::deterministic()
+        //             },
+        //             response: tx,
+        //             return_logprobs: false,
+        //             is_streaming: false,
+        //             constraint: Constraint::None,
+        //             suffix: None,
+        //             tool_choice: None,
+        //             tools: None,
+        //             logits_processors: None,
+        //             return_raw_logits: false,
+        //             web_search_options: None,
+        //             model_id: None,
+        //         }));
+        //         info!("Beginning dummy run.");
+        //         let start = Instant::now();
+        //         clone_sender.blocking_send(req).unwrap();
 
-                if let Some(_resp) = rx.blocking_recv() {
-                    let end = Instant::now();
-                    info!(
-                        "Dummy run completed in {}s.",
-                        end.duration_since(start).as_secs_f64()
-                    );
-                } else {
-                    warn!("Dummy run failed!");
-                }
-            });
-        }
+        //         if let Some(_resp) = rx.blocking_recv() {
+        //             let end = Instant::now();
+        //             info!(
+        //                 "Dummy run completed in {}s.",
+        //                 end.duration_since(start).as_secs_f64()
+        //             );
+        //         } else {
+        //             warn!("Dummy run failed!");
+        //         }
+        //     });
+        // }
 
         // Create engines map with the first engine
         let mut engines = HashMap::new();

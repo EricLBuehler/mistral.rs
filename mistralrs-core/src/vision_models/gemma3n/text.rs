@@ -1024,13 +1024,14 @@ impl TextModel {
             let new_magnitude = altup_proj
                 .to_dtype(DType::F32)?
                 .sqr()?
-                .mean_all()?
-                .reshape((1,))?
+                .mean_keepdim(D::Minus1)?
                 .sqrt()?;
 
             let current_hidden_state = altup_proj
                 .to_dtype(DType::F32)?
-                .broadcast_mul(&(&target_magnitude / new_magnitude.maximum(&eps)?)?)?
+                .broadcast_mul(
+                    &target_magnitude.broadcast_div(&new_magnitude.broadcast_maximum(&eps)?)?,
+                )?
                 .to_dtype(altup_proj.dtype())?;
             temp_hidden_states.push(current_hidden_state);
         }
@@ -1074,13 +1075,14 @@ impl TextModel {
             let new_magnitude = altup_proj
                 .to_dtype(DType::F32)?
                 .sqr()?
-                .mean_all()?
-                .reshape((1,))?
+                .mean_keepdim(D::Minus1)?
                 .sqrt()?;
 
             let current_hidden_state = altup_proj
                 .to_dtype(DType::F32)?
-                .broadcast_mul(&(&target_magnitude / new_magnitude.maximum(&eps)?)?)?
+                .broadcast_mul(
+                    &target_magnitude.broadcast_div(&new_magnitude.broadcast_maximum(&eps)?)?,
+                )?
                 .to_dtype(altup_proj.dtype())?;
             temp_hidden_states.push(current_hidden_state);
         }
