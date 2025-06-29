@@ -138,8 +138,16 @@ macro_rules! get_paths {
             info!("Using tokenizer.json at `{p}`");
             PathBuf::from_str(p)?
         } else {
-            info!("Loading `tokenizer.json` at `{}`", $this.model_id);
-            $crate::api_get_file!(api, "tokenizer.json", model_id)
+            // Try to find tekken.json first, then fallback to tokenizer.json
+            let mut dir_list = $crate::api_dir_list!(api, &$this.model_id, true);
+            let has_tekken = dir_list.any(|f| f == "tekken.json");
+            if has_tekken {
+                info!("Loading `tekken.json` at `{}`", $this.model_id);
+                $crate::api_get_file!(api, "tekken.json", model_id)
+            } else {
+                info!("Loading `tokenizer.json` at `{}`", $this.model_id);
+                $crate::api_get_file!(api, "tokenizer.json", model_id)
+            }
         };
         info!("Loading `config.json` at `{}`", $this.model_id);
         let config_filename = $crate::api_get_file!(api, "config.json", model_id);
@@ -377,9 +385,16 @@ macro_rules! get_paths_gguf {
             None
         };
 
-        let tokenizer_filename = if $this.model_id.is_some() && dir_list.contains(&"tokenizer.json".to_string()) {
-            info!("Loading `tokenizer.json` at `{}`", this_model_id);
-            $crate::api_get_file!(api, "tokenizer.json", model_id)
+        let tokenizer_filename = if $this.model_id.is_some() {
+            if dir_list.contains(&"tekken.json".to_string()) {
+                info!("Loading `tekken.json` at `{}`", this_model_id);
+                $crate::api_get_file!(api, "tekken.json", model_id)
+            } else if dir_list.contains(&"tokenizer.json".to_string()) {
+                info!("Loading `tokenizer.json` at `{}`", this_model_id);
+                $crate::api_get_file!(api, "tokenizer.json", model_id)
+            } else {
+                PathBuf::from_str("")?
+            }
         } else {
             PathBuf::from_str("")?
         };

@@ -102,6 +102,7 @@ symphonia.workspace = true
 mistralrs-audio.workspace = true
 rust-mcp-schema.workspace = true
 mistralrs-mcp = { workspace = true, features = ["utoipa"] }
+tiktoken-rs.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = { workspace = true, optional = true }
