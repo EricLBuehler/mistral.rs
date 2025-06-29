@@ -98,13 +98,13 @@
 <a href=#98 id=98 data-nosnippet>98</a>                <span class="macro">error!</span>(<span class="string">"{} - Model failed with error: {:?}"</span>, <span class="macro-nonterminal">$stage</span>, <span class="kw-2">&amp;</span>e);
 <a href=#99 id=99 data-nosnippet>99</a>                <span class="kw">for </span>seq <span class="kw">in </span><span class="macro-nonterminal">$seq_slice</span>.iter_mut() {
 <a href=#100 id=100 data-nosnippet>100</a>                    <span class="comment">// Step 1: Add all choices to groups
-<a href=#101 id=101 data-nosnippet>101</a>                    </span><span class="kw">let </span>res = <span class="kw">match </span><span class="kw-2">&amp;</span>tokenizer
-<a href=#102 id=102 data-nosnippet>102</a>                    {
-<a href=#103 id=103 data-nosnippet>103</a>                        <span class="prelude-val">Some</span>(tok) =&gt; <span class="kw">match </span>tok.decode(<span class="kw-2">&amp;</span>seq.get_toks()[seq.prompt_tokens()..], <span class="bool-val">false</span>) {
+<a href=#101 id=101 data-nosnippet>101</a>                    </span><span class="kw">let </span>start = seq.prompt_tokens().min(seq.get_toks().len());
+<a href=#102 id=102 data-nosnippet>102</a>                    <span class="kw">let </span>res = <span class="kw">match </span><span class="kw-2">&amp;</span>tokenizer {
+<a href=#103 id=103 data-nosnippet>103</a>                        <span class="prelude-val">Some</span>(tok) =&gt; <span class="kw">match </span>tok.decode(<span class="kw-2">&amp;</span>seq.get_toks()[start..], <span class="bool-val">false</span>) {
 <a href=#104 id=104 data-nosnippet>104</a>                            <span class="prelude-val">Ok</span>(t) =&gt; t,
-<a href=#105 id=105 data-nosnippet>105</a>                            <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; <span class="string">""</span>.to_string()
+<a href=#105 id=105 data-nosnippet>105</a>                            <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; <span class="string">""</span>.to_string(),
 <a href=#106 id=106 data-nosnippet>106</a>                        },
-<a href=#107 id=107 data-nosnippet>107</a>                        <span class="prelude-val">None </span>=&gt; <span class="string">""</span>.to_string()
+<a href=#107 id=107 data-nosnippet>107</a>                        <span class="prelude-val">None </span>=&gt; <span class="string">""</span>.to_string(),
 <a href=#108 id=108 data-nosnippet>108</a>                    };
 <a href=#109 id=109 data-nosnippet>109</a>
 <a href=#110 id=110 data-nosnippet>110</a>                    <span class="kw">if </span>seq.get_mut_group().is_chat {
