@@ -35,6 +35,7 @@ const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}.((pth)|(pt)|(bin))\b";
 pub struct LoraAdapterPaths {
     pub lora_config: mistralrs_quant::LoraConfig,
     pub adapter_path: PathBuf,
+    pub adapter_id: String,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -296,6 +297,7 @@ pub fn get_xlora_paths(
                 lora_adapter_paths.push(LoraAdapterPaths {
                     lora_config,
                     adapter_path,
+                    adapter_id: adapter_id.clone(),
                 });
             }
 
