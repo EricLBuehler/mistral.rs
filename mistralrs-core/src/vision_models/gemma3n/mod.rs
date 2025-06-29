@@ -80,7 +80,7 @@ impl Gemma3nModel {
             let vision_offset = self.embed_vision.vocab_offset() as f64;
             let vision_mask = input_ids.ge(vision_offset)?;
             
-            if vision_mask.sum_all()?.to_scalar::<f32>()? > 0.0 {
+            if vision_mask.sum_all()?.to_scalar::<u8>()? > 0 {
                 // Process vision features through vision tower
                 let dtype = self.vision_tower.dtype();
                 let vision_outputs = self.vision_tower.forward(&pixel_values.to_dtype(dtype)?)?;

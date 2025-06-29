@@ -6,6 +6,7 @@ use candle_core::{Device, Result, Tensor};
 use image::{DynamicImage, GenericImageView};
 use itertools::Itertools;
 use mistralrs_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};
+use regex::Regex;
 use tokenizers::Tokenizer;
 use tracing::warn;
 
@@ -28,23 +29,43 @@ use crate::{
 
 use super::Gemma3nSpecificArgs;
 
-struct Gemma3nImageProcessor;
+struct Gemma3nImageProcessor {
+    full_image_sequence: String,
+    supports_images: bool,
+}
 
-pub struct Gemma3nProcessor;
+const IMAGE_TOKEN: &str = "<image_soft_token>";
+const BOI_TOKEN: &str = "<boi>";
+const EOI_TOKEN: &str = "<eoi>";
+
+pub struct Gemma3nProcessor {
+    full_image_sequence: String,
+    supports_images: bool,
+}
 
 impl Gemma3nProcessor {
     pub fn new(processor_config: ProcessorConfig, supports_images: bool) -> Self {
-        Self
+        let image_tokens_expanded =
+            vec![IMAGE_TOKEN.to_string(); processor_config.image_seq_len.unwrap_or(256)].join("");
+        let full_image_sequence = format!("\n\n{BOI_TOKEN}{image_tokens_expanded}{EOI_TOKEN}\n\n");
+
+        Self {
+            full_image_sequence,
+            supports_images,
+        }
     }
 }
 
 impl Processor for Gemma3nProcessor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
-        Arc::new(Gemma3nImageProcessor)
+        Arc::new(Gemma3nImageProcessor {
+            full_image_sequence: self.full_image_sequence.clone(),
+            supports_images: self.supports_images,
+        })
     }
 
     fn get_special_tokens(&self) -> &[&'static str] {
-        &[]
+        &[BOI_TOKEN, EOI_TOKEN, IMAGE_TOKEN]
     }
 
     fn template_action(&self) -> MessagesAction {
@@ -92,11 +113,90 @@ impl InputsProcessor for Gemma3nImageProcessor {
         };
 
         let config = other_config.expect("Need a PreProcessorConfig config.");
-        let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
+        let preprocessor_config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
         let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
-        let pixel_values = if has_images { todo!() } else { None };
+        let pixel_values = if has_images {
+            if !self.supports_images {
+                return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                    "This image processor does not support images.",
+                ))));
+            }
+
+            let mut pixel_values_accum = Vec::new();
+            let re = Regex::new(BOI_TOKEN).unwrap();
+            for seq in input_seqs.iter_mut() {
+                let PreprocessedImages {
+                    pixel_values,
+                    pixel_attention_mask: _,
+                    image_sizes: _,
+                    num_img_tokens: _,
+                    aspect_ratio_ids: _,
+                    aspect_ratio_mask: _,
+                    num_tiles: _,
+                    image_grid_thw: _,
+                    video_grid_thw: _,
+                    rows: _,
+                    cols: _,
+                    pixel_values_list: _,
+                    tgt_sizes: _,
+                    image_sizes_all: _,
+                    num_crops,
+                } = self
+                    .preprocess(
+                        seq.take_images()
+                            .expect("Need to have images by this point."),
+                        vec![],
+                        preprocessor_config,
+                        device,
+                        (usize::MAX, usize::MAX), // Don't use it here...
+                    )
+                    .expect("Preprocessing failed");
+
+                let num_crops = num_crops.unwrap();
+
+                // Deliberately no .unsqueeze here
+                pixel_values_accum.push(pixel_values.clone());
+
+                let mut prompt = _tokenizer
+                    .decode(seq.get_toks(), false)
+                    .expect("Detokenization failed!");
+
+                let image_indexes: Vec<usize> =
+                    re.find_iter(&prompt).map(|mat| mat.start()).collect();
+
+                for (num, idx) in num_crops.into_iter().zip(image_indexes).rev() {
+                    if num != 0 {
+                        let formatted_image_text = format!(
+                            "Here is the original image {BOI_TOKEN} and here are some crops to help you see better {}", vec![BOI_TOKEN.to_string(); num].join(" ")
+                        );
+                        prompt = format!(
+                            "{}{formatted_image_text}{}",
+                            &prompt[..idx],
+                            &prompt[idx + BOI_TOKEN.len()..]
+                        );
+                    }
+                }
+
+                prompt = prompt.replace(BOI_TOKEN, &self.full_image_sequence);
+
+                if !seq.multimodal.has_changed_prompt {
+                    seq.set_initial_prompt(prompt.clone());
+                    let toks = _tokenizer
+                        .encode_fast(prompt, false)
+                        .expect("Detokenization failed!");
+
+                    let ids = toks.get_ids().to_vec();
+                    seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+                    seq.multimodal.has_changed_prompt = true;
+                }
+            }
+
+            Some(Tensor::cat(&pixel_values_accum, 0).unwrap())
+        } else {
+            None
+        };
 
         let text_models_inputs_processor::InnerInputProcessorOutput {
             inputs:
