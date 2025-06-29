@@ -4620,12 +4620,15 @@ impl VisionModelLoader for Gemma3nLoader {
     fn get_processor(
         &self,
         _config: &str,
-        _processor_config: Option<ProcessorConfig>,
+        processor_config: Option<ProcessorConfig>,
         _preprocessor_config: PreProcessorConfig,
         _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
         // Handle the Gemma 3 1b case here
-        Arc::new(Gemma3nProcessor)
+        Arc::new(Gemma3nProcessor::new(
+            processor_config.unwrap_or_else(ProcessorConfig::default),
+            true,
+        ))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true

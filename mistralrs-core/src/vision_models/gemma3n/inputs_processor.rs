@@ -85,7 +85,7 @@ impl InputsProcessor for Gemma3nImageProcessor {
         if prompt_chunksize.is_some() {
             warn!("`prompt_chunksize` is set. Gemma3 does not support prompt batching.");
         }
-        let Some(tokenizer) = tokenizer else {
+        let Some(_tokenizer) = tokenizer else {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
                 "Idefics3ImageProcessor requires a specified tokenizer.",
             ))));
