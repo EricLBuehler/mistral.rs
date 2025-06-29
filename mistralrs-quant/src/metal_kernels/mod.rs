@@ -907,6 +907,7 @@ pub fn call_afq_qmm(
     kernels: &Kernels,
     ty: DType,
     x: &Buffer,
+    x_offset: usize,
     x_shape: &[usize],
     x_stride: &[usize],
     w: &Buffer,
@@ -1099,7 +1100,7 @@ pub fn call_afq_qmm(
     encoder.set_buffer(0, Some(w), 0);
     encoder.set_buffer(1, Some(scales), 0);
     encoder.set_buffer(2, Some(biases), 0);
-    encoder.set_buffer(3, Some(x), 0);
+    encoder.set_buffer(3, Some(x), x_offset as u64);
     encoder.set_buffer(4, Some(out), 0);
     <i32 as EncoderParam>::set_param(encoder, 5, d as i32);
     <i32 as EncoderParam>::set_param(encoder, 6, o as i32);
