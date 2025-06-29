@@ -15,9 +15,7 @@ FROM debian:bookworm-slim AS runtime
 
 # Set environment variables
 ENV HUGGINGFACE_HUB_CACHE=/data \
-    PORT=80 \
-    MKL_ENABLE_INSTRUCTIONS=AVX512_E4 \
-    LD_LIBRARY_PATH=/usr/local/lib
+    PORT=80
 
 # Install only essential runtime dependencies and clean up
 ARG DEBIAN_FRONTEND=noninteractive
