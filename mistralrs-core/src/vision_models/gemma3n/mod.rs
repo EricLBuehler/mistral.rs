@@ -88,9 +88,17 @@ impl Gemma3nModel {
                 // Get vision embeddings using soft embedding path
                 let vision_embeds = self.embed_vision.forward(None, Some(&vision_outputs))?;
                 
-                // Flatten to match token dimension
+                // Flatten vision embeddings to match sequence dimension
                 let (b, h, w, c) = vision_embeds.dims4()?;
-                let vision_embeds_flat = vision_embeds.reshape((b * h * w, c))?;
+                let num_vision_patches = h * w;
+                let vision_embeds_flat = vision_embeds.reshape((b * num_vision_patches, c))?;
+                
+                // Count vision tokens in the input
+                let num_vision_tokens = vision_mask.sum_all()?.to_scalar::<u8>()? as usize;
+                
+                // Vision embeddings should match the number of vision tokens
+                // We only take the first num_vision_tokens embeddings
+                let vision_embeds_to_use = vision_embeds_flat.narrow(0, 0, num_vision_tokens)?;
                 
                 // Create expanded vision mask for embedding dimension
                 let vision_mask_expanded = vision_mask
@@ -104,7 +112,7 @@ impl Gemma3nModel {
                 // Scatter vision embeddings into input embeddings
                 let mut x_flat = input_embeds.flatten_all()?;
                 let current_vals = x_flat.gather(&indices, 0)?;
-                let diff = (vision_embeds_flat - current_vals)?;
+                let diff = (vision_embeds_to_use.flatten_all()? - current_vals)?;
                 x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
                 
                 input_embeds = x_flat.reshape(input_embeds.shape())?;

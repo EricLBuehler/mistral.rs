@@ -5,8 +5,8 @@ use candle_nn::{Conv2d, Conv2dConfig, Module};
 use mistralrs_quant::ShardedVarBuilder;
 
 use crate::{
-    layers::{conv2d_no_bias, Sdpa},
-    attention::SdpaParams,
+    layers::{conv2d_no_bias, repeat_kv},
+    attention::{SdpaParams, naive_sdpa},
 };
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -146,12 +146,10 @@ impl RmsNormAct2d {
 
 impl Module for RmsNormAct2d {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        // Convert from NHWC to NCHW for normalization
-        let x = xs.transpose(1, 3)?.transpose(2, 3)?;
-        
+        // Already in NCHW format
         // RMS normalization over channel dimension
-        let dtype = x.dtype();
-        let x = x.to_dtype(DType::F32)?;
+        let dtype = xs.dtype();
+        let x = xs.to_dtype(DType::F32)?;
         let variance = x.sqr()?.mean_keepdim(1)?;
         let x = x.broadcast_div(&(variance + self.eps)?.sqrt()?)?;
         
@@ -161,14 +159,11 @@ impl Module for RmsNormAct2d {
         let x = x.broadcast_mul(&weight)?;
         
         // Apply activation if needed
-        let x = if self.apply_act {
-            candle_nn::Activation::Gelu.forward(&x)?
+        if self.apply_act {
+            x.gelu()
         } else {
-            x
-        };
-        
-        // Convert back to NHWC
-        x.transpose(2, 3)?.transpose(1, 3)
+            Ok(x)
+        }
     }
 }
 
@@ -186,7 +181,9 @@ impl LayerScale2d {
 
 impl Module for LayerScale2d {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.broadcast_mul(&self.gamma)
+        // Input is in NCHW format, reshape gamma for broadcasting along channel dimension
+        let gamma = self.gamma.reshape((1, (), 1, 1))?;
+        xs.broadcast_mul(&gamma)
     }
 }
 
@@ -389,16 +386,37 @@ impl Module for EdgeResidual {
 }
 
 #[derive(Debug, Clone)]
+enum KeyValueProjection {
+    Simple(Conv2d),
+    Downsampling {
+        down_conv: Conv2d,
+        norm: RmsNormAct2d,
+        proj: Conv2d,
+    },
+}
+
+impl KeyValueProjection {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            KeyValueProjection::Simple(conv) => conv.forward(xs),
+            KeyValueProjection::Downsampling { down_conv, norm, proj } => {
+                let x = down_conv.forward(xs)?;
+                let x = norm.forward(&x)?;
+                proj.forward(&x)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct MultiQueryAttention2d {
     num_heads: usize,
     key_dim: usize,
     value_dim: usize,
     scale: f32,
     query_proj: Conv2d,
-    key_proj: Conv2d,
-    key_norm: Option<RmsNormAct2d>,
-    value_proj: Conv2d,
-    value_norm: Option<RmsNormAct2d>,
+    key_proj: KeyValueProjection,
+    value_proj: KeyValueProjection,
     output_proj: Conv2d,
 }
 
@@ -423,58 +441,72 @@ impl MultiQueryAttention2d {
             vb.pp("query").pp("proj"),
         )?;
         
-        let (key_proj, key_norm) = if kv_stride > 1 {
-            // Implement downsampling for key
-            let down_conv = conv2d_no_bias(
-                dim,
-                dim,
-                3,
-                Conv2dConfig {
-                    padding: 1,
-                    stride: kv_stride,
-                    groups: dim,
-                    dilation: 1,
-                },
-                vb.pp("key").pp("down_conv"),
-            )?;
-            let norm = RmsNormAct2d::new(dim, 1e-6, false, vb.pp("key").pp("norm"))?;
-            (down_conv, Some(norm))
+        let key_proj = if kv_stride > 1 {
+            // Implement downsampling for key: downsample -> norm -> project
+            KeyValueProjection::Downsampling {
+                down_conv: conv2d_no_bias(
+                    dim,
+                    dim,
+                    3,
+                    Conv2dConfig {
+                        padding: 1,
+                        stride: kv_stride,
+                        groups: dim,
+                        dilation: 1,
+                    },
+                    vb.pp("key").pp("down_conv"),
+                )?,
+                norm: RmsNormAct2d::new(dim, 1e-6, false, vb.pp("key").pp("norm"))?,
+                proj: conv2d_no_bias(
+                    dim,
+                    key_dim,
+                    1,
+                    Conv2dConfig::default(),
+                    vb.pp("key").pp("proj"),
+                )?,
+            }
         } else {
-            let proj = conv2d_no_bias(
+            KeyValueProjection::Simple(conv2d_no_bias(
                 dim,
                 key_dim,
                 1,
                 Conv2dConfig::default(),
                 vb.pp("key").pp("proj"),
-            )?;
-            (proj, None)
+            )?)
         };
         
-        let (value_proj, value_norm) = if kv_stride > 1 {
-            // Implement downsampling for value
-            let down_conv = conv2d_no_bias(
-                dim,
-                dim,
-                3,
-                Conv2dConfig {
-                    padding: 1,
-                    stride: kv_stride,
-                    groups: dim,
-                    dilation: 1,
-                },
-                vb.pp("value").pp("down_conv"),
-            )?;
-            let norm = RmsNormAct2d::new(dim, 1e-6, false, vb.pp("value").pp("norm"))?;
-            (down_conv, Some(norm))
+        let value_proj = if kv_stride > 1 {
+            // Implement downsampling for value: downsample -> norm -> project
+            KeyValueProjection::Downsampling {
+                down_conv: conv2d_no_bias(
+                    dim,
+                    dim,
+                    3,
+                    Conv2dConfig {
+                        padding: 1,
+                        stride: kv_stride,
+                        groups: dim,
+                        dilation: 1,
+                    },
+                    vb.pp("value").pp("down_conv"),
+                )?,
+                norm: RmsNormAct2d::new(dim, 1e-6, false, vb.pp("value").pp("norm"))?,
+                proj: conv2d_no_bias(
+                    dim,
+                    value_dim,
+                    1,
+                    Conv2dConfig::default(),
+                    vb.pp("value").pp("proj"),
+                )?,
+            }
         } else {
-            let proj = conv2d_no_bias(
+            KeyValueProjection::Simple(conv2d_no_bias(
                 dim,
                 value_dim,
                 1,
                 Conv2dConfig::default(),
                 vb.pp("value").pp("proj"),
-            )?;
-            (proj, None)
+            )?)
         };
         
         let output_proj = conv2d_no_bias(
@@ -492,9 +524,7 @@ impl MultiQueryAttention2d {
             scale,
             query_proj,
             key_proj,
-            key_norm,
             value_proj,
-            value_norm,
             output_proj,
         })
     }
@@ -502,45 +532,54 @@ impl MultiQueryAttention2d {
 
 impl Module for MultiQueryAttention2d {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let (b_sz, h, w, _) = xs.dims4()?;
+        // Input is in NCHW format, convert to NHWC for attention
+        let x_nhwc = xs.transpose(1, 3)?.transpose(1, 2)?;
+        let (b_sz, h, w, _) = x_nhwc.dims4()?;
         
-        // Project queries
+        // Project queries - conv expects NCHW, so use original input
         let q = self.query_proj.forward(xs)?;
+        // Convert output to NHWC for further processing
+        let q = q.transpose(1, 3)?.transpose(1, 2)?;
         let q = q.reshape((b_sz, h * w, self.num_heads, self.key_dim))?
             .transpose(1, 2)?; // [B, NH, L, D]
         
-        // Project keys
-        let mut k = self.key_proj.forward(xs)?;
-        if let Some(norm) = &self.key_norm {
-            k = norm.forward(&k)?;
-        }
-        let k = k.flatten(1, 2)?  // [B, H*W, C]
-            .unsqueeze(1)?; // [B, 1, H*W, C]
+        // Project keys - conv expects NCHW
+        let k = self.key_proj.forward(xs)?;
+        // Convert to NHWC and flatten
+        let k = k.transpose(1, 3)?.transpose(1, 2)?;
+        let (_, k_h, k_w, k_c) = k.dims4()?;
+        let k = k.reshape((b_sz, 1, k_h * k_w, k_c))?; // [B, 1, H*W, C]
         
-        // Project values  
-        let mut v = self.value_proj.forward(xs)?;
-        if let Some(norm) = &self.value_norm {
-            v = norm.forward(&v)?;
-        }
-        let v = v.flatten(1, 2)?  // [B, H*W, C]
-            .unsqueeze(1)?; // [B, 1, H*W, C]
+        // Project values - conv expects NCHW
+        let v = self.value_proj.forward(xs)?;
+        // Convert to NHWC and flatten
+        let v = v.transpose(1, 3)?.transpose(1, 2)?;
+        let (_, v_h, v_w, v_c) = v.dims4()?;
+        let v = v.reshape((b_sz, 1, v_h * v_w, v_c))?; // [B, 1, H*W, C]
         
         // Attention
-        let sdpa = Sdpa;
         let sdpa_params = SdpaParams {
-            n_kv_groups: self.num_heads,
+            n_kv_groups: self.num_heads, // Multi-query attention: 1 KV head for all Q heads
             softcap: None,
             softmax_scale: self.scale,
             sliding_window: None,
         };
         
-        let attn = sdpa.run_attention(&q, &k, &v, None, None, &sdpa_params)?;
+        // Repeat K/V for multi-query attention
+        let k = repeat_kv(k, sdpa_params.n_kv_groups)?.contiguous()?;
+        let v = repeat_kv(v, sdpa_params.n_kv_groups)?.contiguous()?;
+        
+        // Use naive_sdpa to handle multi-query attention with different sequence lengths
+        // Metal backend has issues with this configuration
+        let attn = naive_sdpa(&q.contiguous()?, &k, &v, None, &sdpa_params)?;
         
         // Reshape and project output
         let attn = attn.transpose(1, 2)?  // [B, L, NH, D]
             .reshape((b_sz, h, w, self.num_heads * self.value_dim))?;
         
-        self.output_proj.forward(&attn)
+        // Convert to NCHW for output projection
+        let attn_nchw = attn.transpose(1, 2)?.transpose(1, 3)?;
+        self.output_proj.forward(&attn_nchw)
     }
 }
 
@@ -650,25 +689,24 @@ impl MobileNetV5MultiScaleFusionAdapter {
 
 impl MobileNetV5MultiScaleFusionAdapter {
     fn forward(&self, inputs: &[Tensor]) -> Result<Tensor> {
-        // Assuming inputs are in NHWC format
-        let high_resolution = (inputs[0].dim(1)?, inputs[0].dim(2)?);
+        // Inputs are in NCHW format
+        let high_resolution = (inputs[0].dim(2)?, inputs[0].dim(3)?);
         
         // Resize all inputs to highest resolution
         let mut resized_inputs = Vec::new();
         for img in inputs {
-            let (_, h, w, _) = img.dims4()?;
+            let (_, _, h, w) = img.dims4()?;
             if h < high_resolution.0 || w < high_resolution.1 {
                 // Upsample using nearest neighbor
-                let upsampled = img.transpose(1, 3)?.transpose(2, 3)? // Convert to NCHW
-                    .upsample_nearest2d(high_resolution.0, high_resolution.1)?;
-                resized_inputs.push(upsampled.transpose(2, 3)?.transpose(1, 3)?); // Back to NHWC
+                let upsampled = img.upsample_nearest2d(high_resolution.0, high_resolution.1)?;
+                resized_inputs.push(upsampled);
             } else {
                 resized_inputs.push(img.clone());
             }
         }
         
         // Concatenate along channel dimension
-        let cat_imgs = Tensor::cat(&resized_inputs, 3)?;
+        let cat_imgs = Tensor::cat(&resized_inputs, 1)?;
         
         // Apply FFN
         let x = self.ffn.forward(&cat_imgs)?;
@@ -679,17 +717,12 @@ impl MobileNetV5MultiScaleFusionAdapter {
             let h_stride = high_resolution.0 / h_out;
             let w_stride = high_resolution.1 / w_out;
             
-            // Convert to NCHW for pooling
-            let x = x.transpose(1, 3)?.transpose(2, 3)?;
-            
             // Average pooling
             let x = x.avg_pool2d_with_stride((h_stride, w_stride), (h_stride, w_stride))?;
             
-            // Back to NHWC
-            let x = x.transpose(2, 3)?.transpose(1, 3)?;
             self.norm.forward(&x)
         } else {
-            Ok(x)
+            self.norm.forward(&x)
         }
     }
 }
@@ -895,10 +928,9 @@ impl Gemma3nVisionTower {
     }
     
     pub fn forward(&self, pixel_values: &Tensor) -> Result<Tensor> {
-        // Convert from NCHW to NHWC for processing
-        let x = pixel_values.transpose(1, 3)?.transpose(1, 2)?;
-        
-        let mut x = self.conv_stem.forward(&x)?;
+        // Input is expected to be in NCHW format: [batch, 3, height, width]
+        // Keep in NCHW format for conv operations
+        let mut x = self.conv_stem.forward(pixel_values)?;
         let mut intermediates = Vec::new();
         
         for (stage_idx, stage_blocks) in self.blocks.iter().enumerate() {
@@ -913,7 +945,10 @@ impl Gemma3nVisionTower {
         }
         
         // Apply multi-scale fusion adapter
-        self.msfa.forward(&intermediates)
+        let output = self.msfa.forward(&intermediates)?;
+        
+        // Convert from NCHW to NHWC for compatibility with embed_vision
+        output.transpose(1, 3)?.transpose(1, 2)
     }
     
     pub fn dtype(&self) -> DType {
