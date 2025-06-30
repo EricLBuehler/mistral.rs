@@ -3,10 +3,8 @@
 use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
-use image::{DynamicImage, GenericImageView};
-use itertools::Itertools;
+use image::DynamicImage;
 use mistralrs_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};
-use regex::Regex;
 use tokenizers::Tokenizer;
 use tracing::warn;
 
@@ -30,42 +28,50 @@ use crate::{
 use super::Gemma3nSpecificArgs;
 
 struct Gemma3nImageProcessor {
-    full_image_sequence: String,
+    vision_soft_tokens_per_image: usize,
     supports_images: bool,
+    full_image_sequence: String,
 }
 
 const IMAGE_TOKEN: &str = "<image_soft_token>";
 const BOI_TOKEN: &str = "<boi>";
 const EOI_TOKEN: &str = "<eoi>";
+pub const IMAGE_TOKEN_ID: u32 = 262145;
 
 pub struct Gemma3nProcessor {
-    full_image_sequence: String,
+    vision_soft_tokens_per_image: usize,
     supports_images: bool,
 }
 
 impl Gemma3nProcessor {
     pub fn new(processor_config: ProcessorConfig, supports_images: bool) -> Self {
-        let image_tokens_expanded =
-            vec![IMAGE_TOKEN.to_string(); processor_config.image_seq_len.unwrap_or(256)].join("");
-        let full_image_sequence = format!("\n\n{BOI_TOKEN}{image_tokens_expanded}{EOI_TOKEN}\n\n");
+        // Default to 256 soft tokens per image if not specified
+        let vision_soft_tokens_per_image = processor_config.image_seq_len.unwrap_or(256);
 
         Self {
-            full_image_sequence,
+            vision_soft_tokens_per_image,
             supports_images,
         }
+    }
+
+    fn create_full_image_sequence(&self) -> String {
+        // Create the full image token sequence: "\n\n<boi>{repeated image tokens}<eoi>\n\n"
+        let image_tokens_expanded = vec![IMAGE_TOKEN.to_string(); self.vision_soft_tokens_per_image].join("");
+        format!("\n\n{BOI_TOKEN}{image_tokens_expanded}{EOI_TOKEN}\n\n")
     }
 }
 
 impl Processor for Gemma3nProcessor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         Arc::new(Gemma3nImageProcessor {
-            full_image_sequence: self.full_image_sequence.clone(),
+            vision_soft_tokens_per_image: self.vision_soft_tokens_per_image,
             supports_images: self.supports_images,
+            full_image_sequence: self.create_full_image_sequence(),
         })
     }
 
     fn get_special_tokens(&self) -> &[&'static str] {
-        &[BOI_TOKEN, EOI_TOKEN, IMAGE_TOKEN]
+        &[IMAGE_TOKEN, BOI_TOKEN, EOI_TOKEN]
     }
 
     fn template_action(&self) -> MessagesAction {
@@ -126,7 +132,7 @@ impl InputsProcessor for Gemma3nImageProcessor {
             }
 
             let mut pixel_values_accum = Vec::new();
-            let re = Regex::new(BOI_TOKEN).unwrap();
+            
             for seq in input_seqs.iter_mut() {
                 let PreprocessedImages {
                     pixel_values,
@@ -143,7 +149,7 @@ impl InputsProcessor for Gemma3nImageProcessor {
                     pixel_values_list: _,
                     tgt_sizes: _,
                     image_sizes_all: _,
-                    num_crops,
+                    num_crops: _,
                 } = self
                     .preprocess(
                         seq.take_images()
@@ -151,43 +157,28 @@ impl InputsProcessor for Gemma3nImageProcessor {
                         vec![],
                         preprocessor_config,
                         device,
-                        (usize::MAX, usize::MAX), // Don't use it here...
+                        (usize::MAX, usize::MAX),
                     )
                     .expect("Preprocessing failed");
 
-                let num_crops = num_crops.unwrap();
-
-                // Deliberately no .unsqueeze here
+                // Store pixel values
                 pixel_values_accum.push(pixel_values.clone());
 
-                let mut prompt = _tokenizer
-                    .decode(seq.get_toks(), false)
-                    .expect("Detokenization failed!");
-
-                let image_indexes: Vec<usize> =
-                    re.find_iter(&prompt).map(|mat| mat.start()).collect();
-
-                for (num, idx) in num_crops.into_iter().zip(image_indexes).rev() {
-                    if num != 0 {
-                        let formatted_image_text = format!(
-                            "Here is the original image {BOI_TOKEN} and here are some crops to help you see better {}", vec![BOI_TOKEN.to_string(); num].join(" ")
-                        );
-                        prompt = format!(
-                            "{}{formatted_image_text}{}",
-                            &prompt[..idx],
-                            &prompt[idx + BOI_TOKEN.len()..]
-                        );
-                    }
-                }
-
-                prompt = prompt.replace(BOI_TOKEN, &self.full_image_sequence);
-
+                // Replace <image> placeholders with full image sequence
                 if !seq.multimodal.has_changed_prompt {
+                    let mut prompt = _tokenizer
+                        .decode(seq.get_toks(), false)
+                        .expect("Detokenization failed!");
+                    
+                    // Replace each <image> token with the full image sequence
+                    prompt = prompt.replace(IMAGE_TOKEN, &self.full_image_sequence);
+                    
+                    // Re-tokenize the modified prompt
                     seq.set_initial_prompt(prompt.clone());
                     let toks = _tokenizer
                         .encode_fast(prompt, false)
-                        .expect("Detokenization failed!");
-
+                        .expect("Tokenization failed!");
+                    
                     let ids = toks.get_ids().to_vec();
                     seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
                     seq.multimodal.has_changed_prompt = true;
@@ -264,104 +255,8 @@ impl InputsProcessor for Gemma3nImageProcessor {
     }
 }
 
-impl Gemma3nImageProcessor {
-    fn pan_and_scan(
-        &self,
-        image: &DynamicImage,
-        pan_and_scan_min_crop_size: usize,
-        pan_and_scan_max_num_crops: usize,
-        pan_and_scan_min_ratio_to_activate: f64,
-    ) -> Vec<DynamicImage> {
-        let (width, height) = image.dimensions();
-
-        let (num_crops_w, num_crops_h) = if width >= height {
-            if (width as f64 / height as f64) < pan_and_scan_min_ratio_to_activate {
-                return vec![];
-            }
-
-            // Select ideal number of crops close to the image aspect ratio and such that crop_size > min_crop_size.
-            let mut num_crops_w = (width as f64 / height as f64 + 0.5).floor() as usize;
-            num_crops_w = num_crops_w
-                .min((width as f64 / pan_and_scan_min_crop_size as f64).floor() as usize);
-
-            // Make sure the number of crops is in range [2, pan_and_scan_max_num_crops].
-            num_crops_w = num_crops_w.max(2);
-            num_crops_w = num_crops_w.min(pan_and_scan_max_num_crops);
-
-            (num_crops_w, 1)
-        } else {
-            if (width as f64 / height as f64) < pan_and_scan_min_ratio_to_activate {
-                return vec![];
-            }
-
-            // Select ideal number of crops close to the image aspect ratio and such that crop_size > min_crop_size.
-            let mut num_crops_h = (height as f64 / width as f64 + 0.5).floor() as usize;
-            num_crops_h = num_crops_h
-                .min((height as f64 / pan_and_scan_min_crop_size as f64).floor() as usize);
-
-            // Make sure the number of crops is in range [2, pan_and_scan_max_num_crops].
-            num_crops_h = num_crops_h.max(2);
-            num_crops_h = num_crops_h.min(pan_and_scan_max_num_crops);
-
-            (1, num_crops_h)
-        };
-
-        let crop_size_w = (width as f64 / num_crops_w as f64).ceil() as usize;
-        let crop_size_h = (height as f64 / num_crops_h as f64).ceil() as usize;
-
-        if crop_size_w.min(crop_size_h) < pan_and_scan_min_crop_size {
-            return vec![];
-        }
-
-        let crop_positions_w = (0..num_crops_w)
-            .map(|i| i * crop_size_w)
-            .collect::<Vec<_>>();
-        let crop_positions_h = (0..num_crops_h)
-            .map(|i| i * crop_size_h)
-            .collect::<Vec<_>>();
-
-        let mut image_crops = Vec::new();
-        for (pos_h, pos_w) in crop_positions_h
-            .into_iter()
-            .cartesian_product(crop_positions_w)
-        {
-            image_crops.push(image.crop_imm(
-                pos_w as u32,
-                pos_h as u32,
-                crop_size_w as u32,
-                crop_size_h as u32,
-            ));
-        }
-
-        image_crops
-    }
-
-    fn process_images_for_pan_and_scan(
-        &self,
-        images: Vec<DynamicImage>,
-        pan_and_scan_min_crop_size: usize,
-        pan_and_scan_max_num_crops: usize,
-        pan_and_scan_min_ratio_to_activate: f64,
-    ) -> (Vec<DynamicImage>, Vec<usize>) {
-        let mut pas_images_list = Vec::new();
-        let mut num_crops = Vec::new();
-
-        for image in images {
-            let pas_images = self.pan_and_scan(
-                &image,
-                pan_and_scan_min_crop_size,
-                pan_and_scan_max_num_crops,
-                pan_and_scan_min_ratio_to_activate,
-            );
-            num_crops.push(pas_images.len());
-            pas_images_list.extend([vec![image], pas_images].concat());
-        }
-
-        (pas_images_list, num_crops)
-    }
-}
-
 impl ImagePreProcessor for Gemma3nImageProcessor {
+    // Siglip uses these defaults for normalization
     const DEFAULT_MEAN: [f64; 3] = [0.5, 0.5, 0.5];
     const DEFAULT_STD: [f64; 3] = [0.5, 0.5, 0.5];
 
@@ -375,22 +270,22 @@ impl ImagePreProcessor for Gemma3nImageProcessor {
     ) -> Result<PreprocessedImages> {
         assert!(videos.is_empty());
 
-        let do_resize = config.do_resize.unwrap();
+        // Get preprocessing parameters with defaults
+        let do_resize = config.do_resize.unwrap_or(true);
         let size = config.size.as_ref().unwrap();
-        let (height, width) = (size["height"], size["width"]);
+        let (height, width) = if let (Some(h), Some(w)) = (size.get("height"), size.get("width")) {
+            (*h, *w)
+        } else {
+            // Default to 768x768 for Gemma3n (based on test files)
+            (768, 768)
+        };
         let resample = config.resampling.to_filter()?;
-        let do_rescale = config.do_rescale.unwrap();
-        let rescale_factor = config.rescale_factor.unwrap();
-        let do_normalize = config.do_normalize.unwrap();
+        let do_rescale = config.do_rescale.unwrap_or(true);
+        let rescale_factor = config.rescale_factor.unwrap_or(1.0 / 255.0);
+        let do_normalize = config.do_normalize.unwrap_or(true);
         let image_mean = config.image_mean.unwrap_or(Self::DEFAULT_MEAN);
         let image_std = config.image_std.unwrap_or(Self::DEFAULT_STD);
         let do_convert_rgb = config.do_convert_rgb.unwrap_or(true);
-        let do_pan_and_scan = config.do_pan_and_scan.unwrap_or(do_convert_rgb);
-        // https://github.com/huggingface/transformers/blob/ea219ed164bead55a5513e8cfaa17a25d5613b9e/src/transformers/models/gemma3/processing_gemma3.py#L42
-        let pan_and_scan_min_crop_size = config.pan_and_scan_min_crop_size.unwrap_or(256);
-        let pan_and_scan_max_num_crops = config.pan_and_scan_max_num_crops.unwrap_or(4);
-        let pan_and_scan_min_ratio_to_activate =
-            config.pan_and_scan_min_ratio_to_activate.unwrap_or(1.2);
 
         for image in images.iter_mut() {
             // Convert to rgb
@@ -398,19 +293,6 @@ impl ImagePreProcessor for Gemma3nImageProcessor {
                 *image = DynamicImage::ImageRgb8(image.to_rgb8());
             }
         }
-
-        let num_crops = if do_pan_and_scan {
-            let (new_images, num_crops) = self.process_images_for_pan_and_scan(
-                images,
-                pan_and_scan_min_crop_size,
-                pan_and_scan_max_num_crops,
-                pan_and_scan_min_ratio_to_activate,
-            );
-            images = new_images;
-            num_crops
-        } else {
-            vec![0]
-        };
 
         let mut pixel_values = Vec::new();
         for mut image in images {
@@ -450,7 +332,7 @@ impl ImagePreProcessor for Gemma3nImageProcessor {
             pixel_values_list: None,
             tgt_sizes: None,
             image_sizes_all: None,
-            num_crops: Some(num_crops),
+            num_crops: None,
         })
     }
 }

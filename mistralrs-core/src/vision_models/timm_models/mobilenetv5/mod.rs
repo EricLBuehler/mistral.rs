@@ -6,7 +6,6 @@ use mistralrs_quant::ShardedVarBuilder;
 
 use crate::layers::conv2d_no_bias;
 
-pub use config::MobileNetV5Config;
 
 use std::fmt::Debug;
 

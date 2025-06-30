@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor, D};
 use config::Gemma3nConfig;
-use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use text::TextModel;
 
 use crate::{
@@ -30,6 +30,7 @@ pub struct Gemma3nModel {
     language_model: TextModel,
     vision_tower: timm_models::VisionTower,
     embed_vision: Gemma3nMultimodalEmbedder,
+    cfg: config::Gemma3nConfig,
 }
 
 impl Gemma3nModel {
@@ -66,6 +67,7 @@ impl Gemma3nModel {
             )?,
             vision_tower,
             embed_vision,
+            cfg: cfg.clone(),
         })
     }
 
@@ -78,16 +80,69 @@ impl Gemma3nModel {
         _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let input_embeds = if let Some(pixel_values) = pixel_values {
+        // Get the vocab offset from vision config
+        let vision_cfg = self.cfg.vision_config.as_ref()
+            .ok_or_else(|| candle_core::Error::Msg("Vision config required".to_string()))?;
+        let vocab_offset = vision_cfg.vocab_offset as f64;
+        
+        // Step 1: Get base language model embeddings
+        let language_embeds = self.language_model.embed_tokens(input_ids)?;
+        
+        // Step 2: Create mask for vision tokens (tokens >= vocab_offset)
+        // In Gemma3n, vision tokens are those with IDs >= vocab_offset
+        let vision_mask = input_ids.to_dtype(DType::F32)?.ge(vocab_offset)?;
+        let expanded_vision_mask = vision_mask
+            .unsqueeze(D::Minus1)?
+            .broadcast_as(language_embeds.shape())?;
+        
+        // Step 3: Get vision token embeddings using the multimodal embedder
+        // These handle BOI, EOI, and placeholder image tokens
+        let vision_token_embeds = self.embed_vision.forward_text(input_ids)?;
+        
+        // Step 4: Combine language and vision token embeddings
+        // Use vision embeddings where we have vision tokens, language embeddings elsewhere
+        let mut input_embeds = expanded_vision_mask
+            .where_cond(&vision_token_embeds, &language_embeds)?;
+        
+        // Step 5: If we have actual images, replace the image placeholder tokens with vision features
+        if let Some(pixel_values) = pixel_values {
             // Process vision inputs through vision tower
             let vision_features = self.vision_tower.forward(&pixel_values)?;
             
+            // Reshape vision features to (batch_size * num_images, soft_tokens_per_image, hidden_size)
+            let (batch_size, channels, h, w) = vision_features.dims4()?;
+            let vision_features = vision_features
+                .permute((0, 2, 3, 1))? // NCHW -> NHWC
+                .reshape((batch_size, h * w, channels))?;
+            
             // Convert vision features to embeddings using multimodal embedder
-            self.embed_vision.forward_vision(&vision_features)?
-        } else {
-            // For text-only inputs, use the multimodal embedder's text path
-            self.embed_vision.forward_text(input_ids)?
-        };
+            let image_embeds = self.embed_vision.forward_vision(&vision_features)?;
+            
+            // Create mask specifically for the image soft tokens (not BOI/EOI)
+            let image_token_mask = input_ids
+                .to_dtype(DType::F32)?
+                .eq(inputs_processor::IMAGE_TOKEN_ID as f64)?
+                .unsqueeze(D::Minus1)?
+                .broadcast_as(input_embeds.shape())?
+                .to_dtype(DType::U32)?;
+            
+            // Flatten tensors for scatter operation
+            let mask_flat = image_token_mask.flatten_all()?;
+            let indices = mask_flat.nonzero()?.squeeze(1)?;
+            
+            // Only do the replacement if we have image tokens to replace
+            if indices.dims()[0] > 0 {
+                let mut x_flat = input_embeds.flatten_all()?;
+                let src_flat = image_embeds.flatten_all()?;
+                
+                // Replace image tokens with actual vision embeddings
+                let current_vals = x_flat.gather(&indices, 0)?;
+                let diff = (src_flat - current_vals)?;
+                x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
+                
+                input_embeds = x_flat.reshape(input_embeds.shape())?;
+            }
+        }
 
         let res = self.language_model.forward_embeds(
             input_ids,
