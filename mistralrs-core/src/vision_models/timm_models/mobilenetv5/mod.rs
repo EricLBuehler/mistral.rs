@@ -1,6 +1,6 @@
 mod config;
 
-use candle_core::{Result, Tensor, D};
+use candle_core::{DType, Result, Tensor, D};
 use candle_nn::{Activation, Conv2d, Conv2dConfig, Module};
 use mistralrs_quant::ShardedVarBuilder;
 
@@ -48,7 +48,7 @@ impl RMSNorm {
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let dtype = x.dtype();
-        let x = x.to_dtype(candle_core::DType::F32)?;
+        let x = x.to_dtype(DType::F32)?;
         let mean_square = x.sqr()?.mean_keepdim(D::Minus1)?;
         let x = x.broadcast_div(&(mean_square + self.eps)?.sqrt()?)?;
         let x = x.to_dtype(dtype)?;
@@ -78,14 +78,23 @@ impl RMSNormAct2d {
         // Input is NCHW format
         let (b, c, h, w) = x.dims4()?;
         
-        // Reshape to (B, C, H*W)
-        let x_reshaped = x.reshape((b, c, h * w))?;
+        // For 2D normalization, we need to normalize along spatial dimensions (H, W)
+        // Reshape to (B*C, H*W) to apply normalization per channel
+        let x_reshaped = x.reshape((b * c, h * w))?;
         
-        // Apply normalization along the spatial dimension
-        let x_norm = self.norm.forward(&x_reshaped)?;
+        // Compute RMS normalization along the spatial dimension
+        let dtype = x_reshaped.dtype();
+        let x_f32 = x_reshaped.to_dtype(DType::F32)?;
+        let mean_square = x_f32.sqr()?.mean_keepdim(D::Minus1)?;
+        let x_norm = x_f32.broadcast_div(&(mean_square + self.norm.eps)?.sqrt()?)?;
+        let x_norm = x_norm.to_dtype(dtype)?;
         
         // Reshape back to (B, C, H, W)
-        let mut x = x_norm.reshape((b, c, h, w))?;
+        let x_norm = x_norm.reshape((b, c, h, w))?;
+        
+        // Apply channel-wise weight
+        let weight = self.norm.weight.reshape((1, c, 1, 1))?;
+        let mut x = x_norm.broadcast_mul(&weight)?;
         
         if let Some(act) = &self.activation {
             x = x.apply(act)?;
@@ -529,8 +538,8 @@ impl MultiQueryAttention2d {
         // Reshape: (B, KD, H', W') -> (B, 1, H'*W', KD)
         let (_, _, kh, kw) = k.dims4()?;
         let k = k.reshape((b, self.key_dim, kh * kw))?
-            .transpose(1, 2)?
-            .unsqueeze(1)?;
+            .transpose(1, 2)?  // Now: (B, H'*W', KD)
+            .unsqueeze(1)?;    // Now: (B, 1, H'*W', KD)
         
         // Value path
         let mut v = x.clone();
@@ -546,9 +555,21 @@ impl MultiQueryAttention2d {
             .unsqueeze(1)?;
         
         // Attention
-        let attn = q.matmul(&k.transpose(D::Minus1, D::Minus2)?)?;
-        let attn = candle_nn::ops::softmax(&attn, D::Minus1)?;
-        let o = attn.matmul(&v)?;
+        // q: [B, NH, H*W, KD], k: [B, 1, H'*W', KD]
+        // We need to compute q @ k^T -> [B, NH, H*W, H'*W']
+        
+        // For matmul with broadcasting: q @ k^T
+        // q: [B, NH, H*W, KD] @ k^T: [B, 1, KD, H'*W'] -> [B, NH, H*W, H'*W']
+        // The matmul will automatically broadcast the second dimension
+        let k_t = k.transpose(D::Minus1, D::Minus2)?; // [B, 1, KD, H'*W']
+        
+        // Use broadcast_matmul for proper broadcasting
+        let attn = q.broadcast_matmul(&k_t)?; // [B, NH, H*W, H'*W']
+        let attn = candle_nn::ops::softmax_last_dim(&attn)?;
+        
+        // v: [B, 1, H'*W', VD]
+        // attn: [B, NH, H*W, H'*W'] @ v: [B, 1, H'*W', VD] -> [B, NH, H*W, VD]
+        let o = attn.broadcast_matmul(&v)?; // [B, NH, H*W, VD]
         
         // Reshape output: (B, NH, H*W, VD) -> (B, NH*VD, H, W)
         let o = o.transpose(1, 2)?
@@ -1089,6 +1110,11 @@ impl VisionTower {
         let x = self.msfa.forward(&intermediates)?;
         
         Ok(x)
+    }
+    
+    pub fn dtype(&self) -> DType {
+        // Return the dtype from the conv_stem weight
+        self.conv_stem.conv.weight().dtype()
     }
 }
 

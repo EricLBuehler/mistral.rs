@@ -1,4 +1,4 @@
-use candle_core::{DType, Module, Result, Tensor};
+use candle_core::{Module, Result, Tensor};
 use candle_nn::Linear;
 use mistralrs_quant::ShardedVarBuilder;
 
