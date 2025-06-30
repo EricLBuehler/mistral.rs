@@ -113,7 +113,8 @@ impl InputsProcessor for Gemma3nImageProcessor {
         };
 
         let config = other_config.expect("Need a PreProcessorConfig config.");
-        let preprocessor_config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
+        let preprocessor_config: &PreProcessorConfig =
+            config.downcast_ref().expect("Downcast failed.");
 
         let has_images = input_seqs.iter().all(|seq| seq.has_images());
 

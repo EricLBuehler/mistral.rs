@@ -4703,8 +4703,9 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         let text_cfg = &cfg.text_config;
 
         // Calculate max attention size for text model
-        let max_text_attn = max_batch_size * text_cfg.num_attention_heads * max_seq_len * max_seq_len;
-        
+        let max_text_attn =
+            max_batch_size * text_cfg.num_attention_heads * max_seq_len * max_seq_len;
+
         Ok(max_text_attn)
     }
 
@@ -4739,31 +4740,41 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         let text_elems = {
             // Embeddings
             let embed_tokens = text_cfg.hidden_size * text_cfg.vocab_size / weight_pack_factor;
-            let embed_tokens_per_layer = text_cfg.hidden_size_per_layer_input * text_cfg.vocab_size_per_layer_input / weight_pack_factor;
-            
+            let embed_tokens_per_layer = text_cfg.hidden_size_per_layer_input
+                * text_cfg.vocab_size_per_layer_input
+                / weight_pack_factor;
+
             // LM head (if not tied)
             let lm_head = if !text_cfg.tie_word_embeddings || weight_pack_factor != 1 {
                 text_cfg.hidden_size * text_cfg.vocab_size / weight_pack_factor
             } else {
                 0
             };
-            
+
             // Final layer norm
             let norm = text_cfg.hidden_size;
-            
+
             // AltUp projections (not device-mapped)
-            let altup_projections = text_cfg.altup_num_inputs * text_cfg.hidden_size / weight_pack_factor;
-            let altup_unembed_projections = text_cfg.altup_num_inputs * text_cfg.hidden_size / weight_pack_factor;
-            
+            let altup_projections =
+                text_cfg.altup_num_inputs * text_cfg.hidden_size / weight_pack_factor;
+            let altup_unembed_projections =
+                text_cfg.altup_num_inputs * text_cfg.hidden_size / weight_pack_factor;
+
             // Per-layer model projection
-            let per_layer_model_projection = text_cfg.hidden_size * text_cfg.hidden_size_per_layer_input / weight_pack_factor;
+            let per_layer_model_projection =
+                text_cfg.hidden_size * text_cfg.hidden_size_per_layer_input / weight_pack_factor;
             let per_layer_projection_norm = text_cfg.hidden_size;
-            
-            embed_tokens + embed_tokens_per_layer + lm_head + norm + 
-            altup_projections + altup_unembed_projections + 
-            per_layer_model_projection + per_layer_projection_norm
+
+            embed_tokens
+                + embed_tokens_per_layer
+                + lm_head
+                + norm
+                + altup_projections
+                + altup_unembed_projections
+                + per_layer_model_projection
+                + per_layer_projection_norm
         };
-        
+
         Ok(text_elems * dtype.size_in_bytes())
     }
 
@@ -4775,9 +4786,9 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
     ) -> Result<Vec<usize>> {
         let cfg: Gemma3nConfig = serde_json::from_str(config)?;
         let text_cfg = &cfg.text_config;
-        
+
         let mut layer_sizes = Vec::new();
-        
+
         for _layer_idx in 0..text_cfg.num_hidden_layers {
             let per_layer_elems = {
                 // Layer norms
@@ -4786,27 +4797,30 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                 let pre_feedforward_layernorm = text_cfg.hidden_size;
                 let post_feedforward_layernorm = text_cfg.hidden_size;
                 let post_per_layer_input_norm = text_cfg.hidden_size;
-                
+
                 // Attention components
                 let size_in = text_cfg.hidden_size;
                 let size_q = text_cfg.num_attention_heads * text_cfg.head_dim;
                 let size_kv = text_cfg.num_key_value_heads * text_cfg.head_dim;
-                
+
                 let q_proj = size_in * size_q / weight_pack_factor;
                 let k_proj = size_in * size_kv / weight_pack_factor;
                 let v_proj = size_in * size_kv / weight_pack_factor;
                 let o_proj = size_q * size_in / weight_pack_factor;
-                
+
                 // Q, K, V norms
                 let q_norm = text_cfg.head_dim;
                 let k_norm = text_cfg.head_dim;
-                let v_norm = text_cfg.head_dim;  // No bias for v_norm
-                
+                let v_norm = text_cfg.head_dim; // No bias for v_norm
+
                 // MLP components
-                let gate_proj = text_cfg.hidden_size * text_cfg.intermediate_size / weight_pack_factor;
-                let up_proj = text_cfg.hidden_size * text_cfg.intermediate_size / weight_pack_factor;
-                let down_proj = text_cfg.intermediate_size * text_cfg.hidden_size / weight_pack_factor;
-                
+                let gate_proj =
+                    text_cfg.hidden_size * text_cfg.intermediate_size / weight_pack_factor;
+                let up_proj =
+                    text_cfg.hidden_size * text_cfg.intermediate_size / weight_pack_factor;
+                let down_proj =
+                    text_cfg.intermediate_size * text_cfg.hidden_size / weight_pack_factor;
+
                 // AltUp components (per layer)
                 let altup_elems = {
                     let correct_output_scale = text_cfg.hidden_size;
@@ -4814,35 +4828,53 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                     let prediction_coefs = text_cfg.altup_num_inputs * text_cfg.altup_num_inputs;
                     let modality_router = text_cfg.hidden_size * text_cfg.hidden_size;
                     let router_norm = text_cfg.hidden_size;
-                    
-                    correct_output_scale + correction_coefs + prediction_coefs + modality_router + router_norm
+
+                    correct_output_scale
+                        + correction_coefs
+                        + prediction_coefs
+                        + modality_router
+                        + router_norm
                 };
-                
+
                 // Laurel block components
                 let laurel_elems = {
                     let left = text_cfg.hidden_size * text_cfg.laurel_rank;
                     let right = text_cfg.laurel_rank * text_cfg.hidden_size;
                     let post_norm = text_cfg.hidden_size;
-                    
+
                     left + right + post_norm
                 };
-                
+
                 // Per-layer input components
-                let per_layer_input_gate = text_cfg.hidden_size * text_cfg.hidden_size_per_layer_input;
-                let per_layer_projection = text_cfg.hidden_size_per_layer_input * text_cfg.hidden_size;
-                
-                input_layernorm + post_attention_layernorm + pre_feedforward_layernorm + 
-                post_feedforward_layernorm + post_per_layer_input_norm +
-                q_proj + k_proj + v_proj + o_proj + 
-                q_norm + k_norm + v_norm +
-                gate_proj + up_proj + down_proj +
-                altup_elems + laurel_elems +
-                per_layer_input_gate + per_layer_projection
+                let per_layer_input_gate =
+                    text_cfg.hidden_size * text_cfg.hidden_size_per_layer_input;
+                let per_layer_projection =
+                    text_cfg.hidden_size_per_layer_input * text_cfg.hidden_size;
+
+                input_layernorm
+                    + post_attention_layernorm
+                    + pre_feedforward_layernorm
+                    + post_feedforward_layernorm
+                    + post_per_layer_input_norm
+                    + q_proj
+                    + k_proj
+                    + v_proj
+                    + o_proj
+                    + q_norm
+                    + k_norm
+                    + v_norm
+                    + gate_proj
+                    + up_proj
+                    + down_proj
+                    + altup_elems
+                    + laurel_elems
+                    + per_layer_input_gate
+                    + per_layer_projection
             };
-            
+
             layer_sizes.push(per_layer_elems * dtype.size_in_bytes());
         }
-        
+
         Ok(layer_sizes)
     }
 

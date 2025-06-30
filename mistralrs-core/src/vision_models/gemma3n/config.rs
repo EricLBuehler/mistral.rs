@@ -5,8 +5,6 @@ use crate::{
     serde_default_fn,
 };
 
-use super::vision::Gemma3nVisionConfig;
-
 serde_default_fn!(bool, attention_bias, false);
 serde_default_fn!(usize, head_dim, 256);
 serde_default_fn!(Activation, hidden_activation, Activation::GeluPytorchTanh);
@@ -19,8 +17,6 @@ serde_default_fn!(f64, rope_local_base_freq, 10000.);
 serde_default_fn!(usize, sliding_window_pattern, 6);
 serde_default_fn!(usize, num_attention_heads, 8);
 serde_default_fn!(usize, num_key_value_heads, 4);
-// Vision tokens typically start at vocab_size - 256
-serde_default_fn!(usize, vision_vocab_offset, 261952); // 262208 - 256
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Gemma3nTextConfig {
@@ -70,7 +66,4 @@ pub struct Gemma3nTextConfig {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Gemma3nConfig {
     pub text_config: Gemma3nTextConfig,
-    pub vision_config: Gemma3nVisionConfig,
-    #[serde(default = "vision_vocab_offset")]
-    pub vision_vocab_offset: usize,
 }
