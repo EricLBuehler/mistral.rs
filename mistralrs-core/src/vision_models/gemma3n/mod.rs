@@ -15,7 +15,7 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
-    utils::unvarbuilder::UnVarBuilder,
+    utils::unvarbuilder::UnVarBuilder, vision_models::timm_models,
 };
 
 pub mod config;
@@ -36,6 +36,7 @@ impl Gemma3nModel {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let vb = vb.pp("model");
+        let vision_tower = timm_models::VisionTower::new(vb.pp("vision_tower").pp("timm_model"))?;
         Ok(Self {
             language_model: TextModel::new(
                 &cfg.text_config,
