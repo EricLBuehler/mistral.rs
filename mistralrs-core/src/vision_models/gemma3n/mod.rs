@@ -18,13 +18,18 @@ use crate::{
     utils::unvarbuilder::UnVarBuilder, vision_models::timm_models,
 };
 
+use self::multimodal_embedding::Gemma3nMultimodalEmbedder;
+
 pub mod config;
 mod inputs_processor;
+mod multimodal_embedding;
 mod text;
 pub(crate) use inputs_processor::Gemma3nProcessor;
 
 pub struct Gemma3nModel {
     language_model: TextModel,
+    vision_tower: timm_models::VisionTower,
+    embed_vision: Gemma3nMultimodalEmbedder,
 }
 
 impl Gemma3nModel {
@@ -36,7 +41,21 @@ impl Gemma3nModel {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let vb = vb.pp("model");
+        
+        // Initialize vision tower
         let vision_tower = timm_models::VisionTower::new(vb.pp("vision_tower").pp("timm_model"))?;
+        
+        // Initialize multimodal embedder
+        let vision_cfg = cfg.vision_config.as_ref()
+            .ok_or_else(|| candle_core::Error::Msg("Vision config is required for Gemma3n".to_string()))?;
+        let embed_vision = Gemma3nMultimodalEmbedder::new(
+            &cfg.text_config,
+            vision_cfg.vocab_size,
+            vision_cfg.hidden_size,
+            vision_cfg.vocab_offset,
+            vb.pp("embed_vision"),
+        )?;
+        
         Ok(Self {
             language_model: TextModel::new(
                 &cfg.text_config,
@@ -45,6 +64,8 @@ impl Gemma3nModel {
                 normal_loading_metadata,
                 attention_mechanism,
             )?,
+            vision_tower,
+            embed_vision,
         })
     }
 
@@ -57,7 +78,16 @@ impl Gemma3nModel {
         _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let input_embeds = self.language_model.embed_tokens(input_ids)?;
+        let input_embeds = if let Some(pixel_values) = pixel_values {
+            // Process vision inputs through vision tower
+            let vision_features = self.vision_tower.forward(&pixel_values)?;
+            
+            // Convert vision features to embeddings using multimodal embedder
+            self.embed_vision.forward_vision(&vision_features)?
+        } else {
+            // For text-only inputs, use the multimodal embedder's text path
+            self.embed_vision.forward_text(input_ids)?
+        };
 
         let res = self.language_model.forward_embeds(
             input_ids,

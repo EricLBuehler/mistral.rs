@@ -63,7 +63,23 @@ pub struct Gemma3nTextConfig {
     pub final_logit_softcapping: Option<f64>,
 }
 
+serde_default_fn!(usize, vision_hidden_size, 2048);
+serde_default_fn!(i64, vision_vocab_offset, 262144);
+
+serde_default_fn!(usize, vision_vocab_size, 262400);
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Gemma3nVisionConfig {
+    #[serde(default = "vision_hidden_size")]
+    pub hidden_size: usize,
+    #[serde(default = "vision_vocab_offset")]
+    pub vocab_offset: i64,
+    #[serde(default = "vision_vocab_size")]
+    pub vocab_size: usize,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Gemma3nConfig {
     pub text_config: Gemma3nTextConfig,
+    pub vision_config: Option<Gemma3nVisionConfig>,
 }

@@ -4,7 +4,7 @@ use candle_core::{Result, Tensor, D};
 use candle_nn::{Activation, Conv2d, Conv2dConfig, Module};
 use mistralrs_quant::ShardedVarBuilder;
 
-use crate::layers::{conv2d, conv2d_no_bias};
+use crate::layers::conv2d_no_bias;
 
 pub use config::MobileNetV5Config;
 
