@@ -111,7 +111,7 @@ struct LayerScale2d {
 
 impl LayerScale2d {
     fn new(dim: usize, init_values: f64, vb: ShardedVarBuilder) -> Result<Self> {
-        let gamma = (Tensor::ones(dim, vb.dtype(), vb.device())? * init_values)?;
+        let gamma = vb.get(dim, "gamma")?;
         Ok(Self { gamma })
     }
 
@@ -1115,24 +1115,5 @@ impl VisionTower {
     pub fn dtype(&self) -> DType {
         // Return the dtype from the conv_stem weight
         self.conv_stem.conv.weight().dtype()
-    }
-}
-
-// Public interface
-#[derive(Debug, Clone)]
-pub struct MobileNetV5 {
-    vision_tower: VisionTower,
-}
-
-impl MobileNetV5 {
-    pub fn new(vb: ShardedVarBuilder) -> Result<Self> {
-        let vision_tower = VisionTower::new(vb.pp("vision_tower"))?;
-        Ok(Self { vision_tower })
-    }
-}
-
-impl Module for MobileNetV5 {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.vision_tower.forward(x)
     }
 }
