@@ -107,7 +107,10 @@ impl Gemma3nModel {
         // Step 5: If we have actual images, replace the image placeholder tokens with vision features
         if let Some(pixel_values) = pixel_values {
             // Process vision inputs through vision tower
+            pixel_values.write_npy("pixel_values_m.npy")?;
             let vision_features = self.vision_tower.forward(&pixel_values)?;
+            vision_features.write_npy("vision_outputs_m.npy")?;
+            // let vision_features = Tensor::read_npy("vision_outputs.npy")?.to_device(vision_features.device())?.to_dtype(vision_features.dtype())?;
             
             // Reshape vision features to (batch_size * num_images, soft_tokens_per_image, hidden_size)
             let (batch_size, channels, h, w) = vision_features.dims4()?;
