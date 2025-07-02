@@ -16,7 +16,6 @@ use crate::{
         EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
     utils::unvarbuilder::UnVarBuilder,
-    vision_models::timm_models,
 };
 
 use self::multimodal_embedding::Gemma3nMultimodalEmbedder;
@@ -25,11 +24,12 @@ pub mod config;
 mod inputs_processor;
 mod multimodal_embedding;
 mod text;
+mod vision;
 pub(crate) use inputs_processor::Gemma3nProcessor;
 
 pub struct Gemma3nModel {
     language_model: TextModel,
-    vision_tower: timm_models::VisionTower,
+    vision_tower: vision::VisionTower,
     embed_vision: Gemma3nMultimodalEmbedder,
     cfg: config::Gemma3nConfig,
 }
@@ -45,7 +45,7 @@ impl Gemma3nModel {
         let vb = vb.pp("model");
 
         // Initialize vision tower
-        let vision_tower = timm_models::VisionTower::new(vb.pp("vision_tower").pp("timm_model"))?;
+        let vision_tower = vision::VisionTower::new(vb.pp("vision_tower").pp("timm_model"))?;
 
         // Initialize multimodal embedder
         let vision_cfg = cfg.vision_config.as_ref().ok_or_else(|| {

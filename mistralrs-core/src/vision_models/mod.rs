@@ -28,7 +28,6 @@ pub(crate) mod gemma3n;
 pub(crate) mod llama4;
 pub(crate) mod mistral3;
 pub(crate) mod siglip;
-pub(crate) mod timm_models;
 
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 

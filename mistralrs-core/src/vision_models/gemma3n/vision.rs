@@ -4,7 +4,6 @@ use mistralrs_quant::ShardedVarBuilder;
 
 use crate::layers::conv2d_no_bias;
 
-
 use std::fmt::Debug;
 
 #[derive(Debug, Clone)]
@@ -14,6 +13,8 @@ enum BlockType {
         kernel_size: usize,
         stride: usize,
         expand_ratio: f64,
+        // Odd. Neither MLX nor timm use it.
+        #[allow(unused)]
         is_multiscale: bool,
     },
     UniversalInvertedResidual {
@@ -22,12 +23,16 @@ enum BlockType {
         mid_kernel_size: usize,
         stride: usize,
         expand_ratio: f64,
+        // Odd. Neither MLX nor timm use it.
+        #[allow(unused)]
         is_multiscale: bool,
     },
     MultiQueryAttention {
         num_heads: usize,
         kv_dim: usize,
         kv_stride: usize,
+        // Odd. Neither MLX nor timm use it.
+        #[allow(unused)]
         is_multiscale: bool,
     },
 }
@@ -138,22 +143,11 @@ impl ConvNormAct {
             groups,
             ..Default::default()
         };
-        
-        let conv = conv2d_no_bias(
-            in_chs,
-            out_chs,
-            kernel_size,
-            conv_cfg,
-            vb.pp("conv"),
-        )?;
-        
-        let norm = Some(RMSNormAct2d::new(
-            out_chs,
-            eps,
-            apply_act,
-            vb.pp("bn"),
-        )?);
-        
+
+        let conv = conv2d_no_bias(in_chs, out_chs, kernel_size, conv_cfg, vb.pp("conv"))?;
+
+        let norm = Some(RMSNormAct2d::new(out_chs, eps, apply_act, vb.pp("bn"))?);
+
         Ok(Self { conv, norm })
     }
 
@@ -192,13 +186,13 @@ impl EdgeResidual {
     ) -> Result<Self> {
         let mid_chs = make_divisible(in_chs as f64 * expand_ratio, 8);
         let has_skip = in_chs == out_chs && stride == 1;
-        
+
         let conv_exp_cfg = Conv2dConfig {
             stride,
             padding: exp_kernel_size / 2,
             ..Default::default()
         };
-        
+
         let conv_exp = conv2d_no_bias(
             in_chs,
             mid_chs,
@@ -206,23 +200,17 @@ impl EdgeResidual {
             conv_exp_cfg,
             vb.pp("conv_exp"),
         )?;
-        
+
         let bn1 = RMSNormAct2d::new(mid_chs, 1e-5, true, vb.pp("bn1"))?;
-        
+
         let conv_pwl_cfg = Conv2dConfig {
             ..Default::default()
         };
-        
-        let conv_pwl = conv2d_no_bias(
-            mid_chs,
-            out_chs,
-            1,
-            conv_pwl_cfg,
-            vb.pp("conv_pwl"),
-        )?;
-        
+
+        let conv_pwl = conv2d_no_bias(mid_chs, out_chs, 1, conv_pwl_cfg, vb.pp("conv_pwl"))?;
+
         let bn2 = RMSNormAct2d::new(out_chs, 1e-5, false, vb.pp("bn2"))?;
-        
+
         Ok(Self {
             conv_exp,
             bn1,
@@ -238,11 +226,11 @@ impl EdgeResidual {
         x = self.bn1.forward(&x)?;
         x = self.conv_pwl.forward(&x)?;
         x = self.bn2.forward(&x)?;
-        
+
         if self.has_skip {
             x = (x + shortcut)?;
         }
-        
+
         Ok(x)
     }
 }
@@ -276,7 +264,7 @@ impl UniversalInvertedResidual {
     ) -> Result<Self> {
         let has_skip = in_chs == out_chs && stride == 1;
         let mid_chs = make_divisible(in_chs as f64 * exp_ratio, 8);
-        
+
         // DW start (optional)
         let dw_start = if dw_kernel_size_start > 0 {
             let dw_start_stride = if dw_kernel_size_mid > 0 { 1 } else { stride };
@@ -294,20 +282,10 @@ impl UniversalInvertedResidual {
         } else {
             None
         };
-        
+
         // PW expansion
-        let pw_exp = ConvNormAct::new(
-            in_chs,
-            mid_chs,
-            1,
-            1,
-            0,
-            1,
-            true,
-            1e-5,
-            vb.pp("pw_exp"),
-        )?;
-        
+        let pw_exp = ConvNormAct::new(in_chs, mid_chs, 1, 1, 0, 1, true, 1e-5, vb.pp("pw_exp"))?;
+
         // DW mid (optional)
         let dw_mid = if dw_kernel_size_mid > 0 {
             Some(ConvNormAct::new(
@@ -324,27 +302,18 @@ impl UniversalInvertedResidual {
         } else {
             None
         };
-        
+
         // PW projection
-        let pw_proj = ConvNormAct::new(
-            mid_chs,
-            out_chs,
-            1,
-            1,
-            0,
-            1,
-            false,
-            1e-5,
-            vb.pp("pw_proj"),
-        )?;
-        
+        let pw_proj =
+            ConvNormAct::new(mid_chs, out_chs, 1, 1, 0, 1, false, 1e-5, vb.pp("pw_proj"))?;
+
         // Layer scale
         let layer_scale = if layer_scale_init_value.is_some() {
             Some(LayerScale2d::new(out_chs, vb.pp("layer_scale"))?)
         } else {
             None
         };
-        
+
         Ok(Self {
             dw_start,
             pw_exp,
@@ -357,28 +326,28 @@ impl UniversalInvertedResidual {
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let shortcut = x.clone();
-        
+
         let mut x = x.clone();
         if let Some(dw) = &self.dw_start {
             x = dw.forward(&x)?;
         }
-        
+
         x = self.pw_exp.forward(&x)?;
-        
+
         if let Some(dw) = &self.dw_mid {
             x = dw.forward(&x)?;
         }
-        
+
         x = self.pw_proj.forward(&x)?;
-        
+
         if let Some(ls) = &self.layer_scale {
             x = ls.forward(&x)?;
         }
-        
+
         if self.has_skip {
             x = (x + shortcut)?;
         }
-        
+
         Ok(x)
     }
 }
@@ -417,7 +386,7 @@ impl MultiQueryAttention2d {
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let scale = (key_dim as f64).powf(-0.5);
-        
+
         // Query projection
         let query_proj = conv2d_no_bias(
             dim,
@@ -426,7 +395,7 @@ impl MultiQueryAttention2d {
             Conv2dConfig::default(),
             vb.pp("query").pp("proj"),
         )?;
-        
+
         // Key path
         let (key_down_conv, key_norm) = if kv_stride > 1 {
             let conv_cfg = Conv2dConfig {
@@ -447,7 +416,7 @@ impl MultiQueryAttention2d {
         } else {
             (None, None)
         };
-        
+
         let key_proj = conv2d_no_bias(
             dim,
             key_dim,
@@ -455,7 +424,7 @@ impl MultiQueryAttention2d {
             Conv2dConfig::default(),
             vb.pp("key").pp("proj"),
         )?;
-        
+
         // Value path
         let (value_down_conv, value_norm) = if kv_stride > 1 {
             let conv_cfg = Conv2dConfig {
@@ -476,7 +445,7 @@ impl MultiQueryAttention2d {
         } else {
             (None, None)
         };
-        
+
         let value_proj = conv2d_no_bias(
             dim,
             value_dim,
@@ -484,7 +453,7 @@ impl MultiQueryAttention2d {
             Conv2dConfig::default(),
             vb.pp("value").pp("proj"),
         )?;
-        
+
         // Output projection
         let output_proj = conv2d_no_bias(
             value_dim * num_heads,
@@ -493,7 +462,7 @@ impl MultiQueryAttention2d {
             Conv2dConfig::default(),
             vb.pp("output").pp("proj"),
         )?;
-        
+
         Ok(Self {
             num_heads,
             key_dim,
@@ -512,15 +481,16 @@ impl MultiQueryAttention2d {
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let (b, _c, h, w) = x.dims4()?;
-        
+
         // Query path
         let mut q = self.query_proj.forward(x)?;
         // Reshape: (B, NH*KD, H, W) -> (B, NH, H*W, KD)
-        q = q.reshape((b, self.num_heads, self.key_dim, h * w))?
+        q = q
+            .reshape((b, self.num_heads, self.key_dim, h * w))?
             .transpose(2, 3)?;
         // Promote to f32 for stability during softmax / matmul then apply scale
         let q = (q.to_dtype(DType::F32)? * self.scale)?;
-        
+
         // Key path
         let mut k = x.clone();
         if let (Some(down_conv), Some(norm)) = (&self.key_down_conv, &self.key_norm) {
@@ -530,11 +500,12 @@ impl MultiQueryAttention2d {
         k = self.key_proj.forward(&k)?;
         // Reshape: (B, KD, H', W') -> (B, 1, H'*W', KD)
         let (_, _, kh, kw) = k.dims4()?;
-        let mut k = k.reshape((b, self.key_dim, kh * kw))?
-            .transpose(1, 2)?  // (B, H'*W', KD)
-            .unsqueeze(1)?;    // (B, 1, H'*W', KD)
+        let mut k = k
+            .reshape((b, self.key_dim, kh * kw))?
+            .transpose(1, 2)? // (B, H'*W', KD)
+            .unsqueeze(1)?; // (B, 1, H'*W', KD)
         k = k.to_dtype(DType::F32)?;
-        
+
         // Value path
         let mut v = x.clone();
         if let (Some(down_conv), Some(norm)) = (&self.value_down_conv, &self.value_norm) {
@@ -544,39 +515,41 @@ impl MultiQueryAttention2d {
         v = self.value_proj.forward(&v)?;
         // Reshape: (B, VD, H', W') -> (B, 1, H'*W', VD)
         let (_, _, vh, vw) = v.dims4()?;
-        let mut v = v.reshape((b, self.value_dim, vh * vw))?
+        let mut v = v
+            .reshape((b, self.value_dim, vh * vw))?
             .transpose(1, 2)?
             .unsqueeze(1)?;
         // Keep v in original dtype, but we'll cast the output back later.
         v = v.to_dtype(DType::F32)?;
-        
+
         // Attention
         // q: [B, NH, H*W, KD], k: [B, 1, H'*W', KD]
         // We need to compute q @ k^T -> [B, NH, H*W, H'*W']
-        
+
         // For matmul with broadcasting: q @ k^T
         // q: [B, NH, H*W, KD] @ k^T: [B, 1, KD, H'*W'] -> [B, NH, H*W, H'*W']
         // The matmul will automatically broadcast the second dimension
         let k_t = k.transpose(D::Minus1, D::Minus2)?; // [B, 1, KD, H'*W']
-        
+
         // Use broadcast_matmul for proper broadcasting
         let attn = q.broadcast_matmul(&k_t)?; // [B, NH, H*W, H'*W']
         let attn = candle_nn::ops::softmax_last_dim(&attn)?;
-        
+
         // v: [B, 1, H'*W', VD]
         // attn: [B, NH, H*W, H'*W'] @ v: [B, 1, H'*W', VD] -> [B, NH, H*W, VD]
         let o = attn.broadcast_matmul(&v)?; // [B, NH, H*W, VD]
-        
+
         // Reshape output: (B, NH, H*W, VD) -> (B, NH*VD, H, W)
         // Required ordering: channels (NH*VD) first, spatial (H*W) last.
-        let o = o.permute((0, 1, 3, 2))? // (B, NH, VD, H*W)
+        let o = o
+            .permute((0, 1, 3, 2))? // (B, NH, VD, H*W)
             .reshape((b, self.num_heads * self.value_dim, h, w))?;
-        
+
         // Output projection
         // Cast back to original parameter dtype (likely f16) before final proj
         let o = o.to_dtype(x.dtype())?;
         let o = self.output_proj.forward(&o)?;
-        
+
         Ok(o)
     }
 }
@@ -603,9 +576,9 @@ impl MobileAttention {
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let has_skip = stride == 1 && in_chs == out_chs;
-        
+
         let norm = RMSNormAct2d::new(in_chs, 1e-5, false, vb.pp("norm"))?;
-        
+
         let attn = MultiQueryAttention2d::new(
             in_chs,
             out_chs,
@@ -616,13 +589,13 @@ impl MobileAttention {
             dw_kernel_size,
             vb.pp("attn"),
         )?;
-        
+
         let layer_scale = if layer_scale_init_value.is_some() {
             Some(LayerScale2d::new(out_chs, vb.pp("layer_scale"))?)
         } else {
             None
         };
-        
+
         Ok(Self {
             norm,
             attn,
@@ -633,18 +606,18 @@ impl MobileAttention {
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let shortcut = x.clone();
-        
+
         let mut x = self.norm.forward(x)?;
         x = self.attn.forward(&x)?;
-        
+
         if let Some(ls) = &self.layer_scale {
             x = ls.forward(&x)?;
         }
-        
+
         if self.has_skip {
             x = (x + shortcut)?;
         }
-        
+
         Ok(x)
     }
 }
@@ -689,13 +662,13 @@ impl MobileNetV5MultiScaleFusionAdapter {
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let in_channels = in_chs.iter().sum();
-        
+
         let layer_scale = if use_layer_scale {
             Some(layer_scale_init_value)
         } else {
             None
         };
-        
+
         let ffn = UniversalInvertedResidual::new(
             in_channels,
             out_chs,
@@ -706,9 +679,9 @@ impl MobileNetV5MultiScaleFusionAdapter {
             layer_scale,
             vb.pp("ffn"),
         )?;
-        
+
         let norm = RMSNormAct2d::new(out_chs, 1e-6, false, vb.pp("norm"))?;
-        
+
         Ok(Self {
             output_resolution,
             ffn,
@@ -719,7 +692,7 @@ impl MobileNetV5MultiScaleFusionAdapter {
     fn forward(&self, inputs: &[Tensor]) -> Result<Tensor> {
         // Get the highest resolution from the first input
         let (_, _, h0, w0) = inputs[0].dims4()?;
-        
+
         // Resize inputs to match highest resolution
         let mut resized_inputs = Vec::new();
         for img in inputs {
@@ -732,10 +705,10 @@ impl MobileNetV5MultiScaleFusionAdapter {
                 resized_inputs.push(img.clone());
             }
         }
-        
+
         // Concatenate along channel dimension
         let channel_cat_imgs = Tensor::cat(&resized_inputs, 1)?;
-        
+
         // Apply FFN first
         let mut img = self.ffn.forward(&channel_cat_imgs)?;
 
@@ -835,16 +808,14 @@ fn gemma3n_mobilenet_def() -> Vec<Vec<BlockType>> {
         ],
         // Stage 3: Universal Inverted Residuals with Multi-Query Attention
         {
-            let mut blocks = vec![
-                BlockType::UniversalInvertedResidual {
-                    out_channels: 640,
-                    start_kernel_size: 5,
-                    mid_kernel_size: 5,
-                    stride: 2,
-                    expand_ratio: 6.0,
-                    is_multiscale: false,
-                },
-            ];
+            let mut blocks = vec![BlockType::UniversalInvertedResidual {
+                out_channels: 640,
+                start_kernel_size: 5,
+                mid_kernel_size: 5,
+                stride: 2,
+                expand_ratio: 6.0,
+                is_multiscale: false,
+            }];
             // Add 7 UIR blocks
             for _ in 0..7 {
                 blocks.push(BlockType::UniversalInvertedResidual {
@@ -901,16 +872,14 @@ fn gemma3n_mobilenet_def() -> Vec<Vec<BlockType>> {
         },
         // Stage 4: Universal Inverted Residuals with Multi-Query Attention
         {
-            let mut blocks = vec![
-                BlockType::UniversalInvertedResidual {
-                    out_channels: 1280,
-                    start_kernel_size: 5,
-                    mid_kernel_size: 5,
-                    stride: 2,
-                    expand_ratio: 6.0,
-                    is_multiscale: false,
-                },
-            ];
+            let mut blocks = vec![BlockType::UniversalInvertedResidual {
+                out_channels: 1280,
+                start_kernel_size: 5,
+                mid_kernel_size: 5,
+                stride: 2,
+                expand_ratio: 6.0,
+                is_multiscale: false,
+            }];
             // Add 18 pairs of MMQA + UIR
             for _ in 0..18 {
                 blocks.push(BlockType::MultiQueryAttention {
@@ -979,25 +948,25 @@ impl VisionTower {
     pub fn new(vb: ShardedVarBuilder) -> Result<Self> {
         // Initial stem convolution
         let conv_stem = ConvNormAct::new(
-            3,      // in_chs
-            64,     // out_chs
-            3,      // kernel_size
-            2,      // stride
-            1,      // padding
-            1,      // groups
-            true,   // apply_act
-            1e-5,   // eps
+            3,    // in_chs
+            64,   // out_chs
+            3,    // kernel_size
+            2,    // stride
+            1,    // padding
+            1,    // groups
+            true, // apply_act
+            1e-5, // eps
             vb.pp("conv_stem"),
         )?;
-        
+
         // Build blocks according to architecture definition
         let block_defs = gemma3n_mobilenet_def();
         let mut blocks = Vec::new();
         let mut in_chs = 64;
-        
+
         for (stage_idx, stage_blocks) in block_defs.iter().enumerate() {
             let mut stage = Vec::new();
-            
+
             for (block_idx, block_type) in stage_blocks.iter().enumerate() {
                 let block = match block_type {
                     BlockType::EdgeResidual {
@@ -1053,7 +1022,7 @@ impl VisionTower {
                             *kv_dim,
                             *kv_dim, // value_dim same as key_dim
                             *kv_stride,
-                            3, // dw_kernel_size
+                            3,          // dw_kernel_size
                             Some(1e-5), // layer_scale_init_value
                             vb.pp(format!("blocks.{}.{}", stage_idx, block_idx)),
                         )?;
@@ -1064,7 +1033,7 @@ impl VisionTower {
             }
             blocks.push(stage);
         }
-        
+
         // Multi-scale fusion adapter
         let msfa = MobileNetV5MultiScaleFusionAdapter::new(
             vec![1920], // in_chs
@@ -1076,7 +1045,7 @@ impl VisionTower {
             1e-5,       // layer_scale_init_value
             vb.pp("msfa"),
         )?;
-        
+
         Ok(Self {
             conv_stem,
             blocks,
@@ -1084,28 +1053,28 @@ impl VisionTower {
             msfa_indices: vec![3, 4], // Indices for multi-scale features
         })
     }
-    
+
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         // Apply stem
         let mut x = self.conv_stem.forward(x)?;
-        
+
         let mut intermediates = Vec::new();
-        
+
         // Process blocks stage by stage
         for (stage_idx, stage) in self.blocks.iter().enumerate() {
             for block in stage {
                 x = block.forward(&x)?;
             }
-            
+
             // Collect intermediate features for multi-scale fusion
             if self.msfa_indices.contains(&(stage_idx + 1)) {
                 intermediates.push(x.clone());
             }
         }
-        
+
         // Apply multi-scale fusion adapter
         let x = self.msfa.forward(&intermediates)?;
-        
+
         Ok(x)
     }
 }
