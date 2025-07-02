@@ -22,6 +22,7 @@ use self::multimodal_embedding::Gemma3nMultimodalEmbedder;
 
 pub mod config;
 mod audio;
+mod audio_processing;
 mod inputs_processor;
 mod multimodal_embedding;
 mod text;
@@ -33,6 +34,7 @@ pub struct Gemma3nModel {
     vision_tower: vision::VisionTower,
     audio_tower: Option<audio::AudioModel>,
     embed_vision: Gemma3nMultimodalEmbedder,
+    embed_audio: Option<Gemma3nMultimodalEmbedder>,
     cfg: config::Gemma3nConfig,
 }
 
@@ -49,14 +51,22 @@ impl Gemma3nModel {
         // Initialize vision tower
         let vision_tower = vision::VisionTower::new(vb.pp("vision_tower").pp("timm_model"))?;
 
-        // Initialize audio tower if audio config is present
-        let audio_tower = if let Some(audio_cfg) = &cfg.audio_config {
-            Some(audio::AudioModel::new(audio_cfg, vb.pp("audio_tower"))?)
+        // Initialize audio tower and embedder if audio config is present
+        let (audio_tower, embed_audio) = if let Some(audio_cfg) = &cfg.audio_config {
+            let audio_tower = Some(audio::AudioModel::new(audio_cfg, vb.pp("audio_tower"))?);
+            let embed_audio = Some(Gemma3nMultimodalEmbedder::new(
+                &cfg.text_config,
+                audio_cfg.vocab_size,
+                audio_cfg.hidden_size,
+                audio_cfg.vocab_offset,
+                vb.pp("embed_audio"),
+            )?);
+            (audio_tower, embed_audio)
         } else {
-            None
+            (None, None)
         };
 
-        // Initialize multimodal embedder
+        // Initialize vision multimodal embedder
         let vision_cfg = cfg.vision_config.as_ref().ok_or_else(|| {
             candle_core::Error::Msg("Vision config is required for Gemma3n".to_string())
         })?;
@@ -79,6 +89,7 @@ impl Gemma3nModel {
             vision_tower,
             audio_tower,
             embed_vision,
+            embed_audio,
             cfg: cfg.clone(),
         })
     }
@@ -91,6 +102,8 @@ impl Gemma3nModel {
         context_lens: Vec<(usize, usize)>,
         _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
+        audio_mel: Option<&Tensor>,
+        audio_mel_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         // Get the vocab offset from vision config
         let vision_cfg = self
@@ -103,21 +116,35 @@ impl Gemma3nModel {
         // Step 1: Get base language model embeddings
         let language_embeds = self.language_model.embed_tokens(input_ids)?;
 
-        // Step 2: Create mask for vision tokens (tokens >= vocab_offset)
-        // In Gemma3n, vision tokens are those with IDs >= vocab_offset
-        let vision_mask = input_ids.to_dtype(DType::F32)?.ge(vocab_offset)?;
-        let expanded_vision_mask = vision_mask
-            .unsqueeze(D::Minus1)?
-            .broadcast_as(language_embeds.shape())?;
-
-        // Step 3: Get vision token embeddings using the multimodal embedder
-        // These handle BOI, EOI, and placeholder image tokens
-        let vision_token_embeds = self.embed_vision.forward_text(input_ids)?;
-
-        // Step 4: Combine language and vision token embeddings
-        // Use vision embeddings where we have vision tokens, language embeddings elsewhere
-        let mut input_embeds =
-            expanded_vision_mask.where_cond(&vision_token_embeds, &language_embeds)?;
+        // Step 2: Handle audio tokens if audio config is present
+        let mut input_embeds = if let (Some(audio_cfg), Some(embed_audio)) = (&self.cfg.audio_config, &self.embed_audio) {
+            let audio_vocab_offset = audio_cfg.vocab_offset as f64;
+            
+            // Create masks for vision and audio tokens
+            let vision_mask = input_ids.to_dtype(DType::F32)?
+                .ge(vocab_offset)?
+                .mul(&input_ids.to_dtype(DType::F32)?.lt(audio_vocab_offset)?)?;
+            let audio_mask = input_ids.to_dtype(DType::F32)?.ge(audio_vocab_offset)?;
+            
+            // Get embeddings for each modality
+            let vision_token_embeds = self.embed_vision.forward_text(input_ids)?;
+            let audio_token_embeds = embed_audio.forward_text(input_ids)?;
+            
+            // Combine embeddings based on token type
+            let expanded_vision_mask = vision_mask.unsqueeze(D::Minus1)?.broadcast_as(language_embeds.shape())?;
+            let expanded_audio_mask = audio_mask.unsqueeze(D::Minus1)?.broadcast_as(language_embeds.shape())?;
+            
+            let embeds_with_vision = expanded_vision_mask.where_cond(&vision_token_embeds, &language_embeds)?;
+            expanded_audio_mask.where_cond(&audio_token_embeds, &embeds_with_vision)?
+        } else {
+            // No audio config, just handle vision tokens
+            let vision_mask = input_ids.to_dtype(DType::F32)?.ge(vocab_offset)?;
+            let expanded_vision_mask = vision_mask
+                .unsqueeze(D::Minus1)?
+                .broadcast_as(language_embeds.shape())?;
+            let vision_token_embeds = self.embed_vision.forward_text(input_ids)?;
+            expanded_vision_mask.where_cond(&vision_token_embeds, &language_embeds)?
+        };
 
         // Step 5: If we have actual images, replace the image placeholder tokens with vision features
         if let Some(pixel_values) = pixel_values {
@@ -159,6 +186,41 @@ impl Gemma3nModel {
             }
         }
 
+        // Step 6: If we have audio features, replace audio placeholder tokens
+        if let (Some(audio_mel), Some(audio_mel_mask), Some(audio_tower), Some(embed_audio)) = 
+            (audio_mel, audio_mel_mask, &self.audio_tower, &self.embed_audio) {
+            // Process audio through audio tower
+            let (audio_features, _) = audio_tower.forward(audio_mel, audio_mel_mask)?;
+            
+            // Convert audio features to embeddings
+            let audio_embeds = embed_audio.forward_vision(&audio_features)?;
+            
+            // Create mask for audio soft tokens
+            let audio_token_mask = input_ids
+                .to_dtype(DType::F32)?
+                .eq(inputs_processor::AUDIO_TOKEN_ID as f64)?
+                .unsqueeze(D::Minus1)?
+                .broadcast_as(audio_embeds.shape())?
+                .to_dtype(DType::U32)?;
+            
+            // Flatten tensors for scatter operation
+            let mask_flat = audio_token_mask.flatten_all()?;
+            let indices = mask_flat.nonzero()?.squeeze(1)?;
+            
+            // Only do the replacement if we have audio tokens to replace
+            if indices.dims()[0] > 0 {
+                let mut x_flat = input_embeds.flatten_all()?;
+                let src_flat = audio_embeds.flatten_all()?;
+                
+                // Replace audio tokens with actual audio embeddings
+                let current_vals = x_flat.gather(&indices, 0)?;
+                let diff = (src_flat - current_vals)?;
+                x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
+                
+                input_embeds = x_flat.reshape(input_embeds.shape())?;
+            }
+        }
+
         let res = self.language_model.forward_embeds(
             input_ids,
             input_embeds,
@@ -193,7 +255,11 @@ impl IsqModel for Gemma3nModel {
     }
 }
 
-pub struct Gemma3nSpecificArgs;
+#[derive(Default)]
+pub struct Gemma3nSpecificArgs {
+    pub audio_mel: Option<Tensor>,
+    pub audio_mel_mask: Option<Tensor>,
+}
 
 impl VisionModel for Gemma3nModel {
     fn forward(
@@ -203,10 +269,14 @@ impl VisionModel for Gemma3nModel {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        _model_specific_args: Box<dyn std::any::Any>,
+        model_specific_args: Box<dyn std::any::Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
+        let args = model_specific_args
+            .downcast::<Gemma3nSpecificArgs>()
+            .expect("Downcast to Gemma3nSpecificArgs failed");
+        
         self.forward(
             input_ids,
             pixel_values,
@@ -214,10 +284,12 @@ impl VisionModel for Gemma3nModel {
             context_lens,
             metadata,
             flash_params,
+            args.audio_mel.as_ref(),
+            args.audio_mel_mask.as_ref(),
         )
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
-        Box::new(Gemma3nSpecificArgs)
+        Box::new(Gemma3nSpecificArgs::default())
     }
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()

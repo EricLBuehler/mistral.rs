@@ -14,8 +14,8 @@ pub struct Gemma3nCumulativeGroupNorm {
     num_channels: usize,
     feature_dims: Vec<usize>,
     eps: f64,
-    use_scale: bool,
-    use_bias: bool,
+    _use_scale: bool,
+    _use_bias: bool,
     weight: Option<Tensor>,
     bias: Option<Tensor>,
     reduction_axes: Vec<usize>,
@@ -50,8 +50,8 @@ impl Gemma3nCumulativeGroupNorm {
             num_channels,
             feature_dims,
             eps,
-            use_scale,
-            use_bias,
+            _use_scale: use_scale,
+            _use_bias: use_bias,
             weight,
             bias,
             reduction_axes,
@@ -93,7 +93,7 @@ impl Gemma3nCumulativeGroupNorm {
         };
 
         // Mask the input for sum calculation
-        let x_masked_for_sum = x_calc.mul(&mask_calc)?;
+        let x_masked_for_sum = x_calc.broadcast_mul(&mask_calc)?;
 
         // Cumulative Statistics Calculation
         // 1. Sum of values over reduction axes at each time step
@@ -119,8 +119,8 @@ impl Gemma3nCumulativeGroupNorm {
         let cum_mean = cum_sum_values.div(&safe_cum_count_elements)?;
 
         // 6. Sum of squared differences from the cumulative mean
-        let squared_diff_from_mean = (x_calc.sub(&cum_mean))?.sqr()?;
-        let mut sum_sq_diff_at_t = squared_diff_from_mean.mul(&mask_calc)?;
+        let squared_diff_from_mean = (x_calc.broadcast_sub(&cum_mean))?.sqr()?;
+        let mut sum_sq_diff_at_t = squared_diff_from_mean.broadcast_mul(&mask_calc)?;
         for &axis in self.reduction_axes.iter().rev() {
             sum_sq_diff_at_t = sum_sq_diff_at_t.sum_keepdim(axis)?;
         }
@@ -133,8 +133,8 @@ impl Gemma3nCumulativeGroupNorm {
 
         // Normalize the input
         let normalized_x = x_calc
-            .sub(&cum_mean)?
-            .mul(&(cum_variance.add(&Tensor::new(&[self.eps as f32], cum_variance.device())?.to_dtype(calc_dtype)?)?.recip()?.sqrt())?)?;
+            .broadcast_sub(&cum_mean)?
+            .broadcast_mul(&(cum_variance.broadcast_add(&Tensor::new(&[self.eps as f32], cum_variance.device())?.to_dtype(calc_dtype)?)?.recip()?.sqrt())?)?;
 
         // Apply affine transformation
         let mut result = normalized_x;
@@ -143,7 +143,7 @@ impl Gemma3nCumulativeGroupNorm {
             let mut scale_shape = vec![1; x.dims().len()];
             scale_shape[x.dims().len() - 1] = self.num_channels;
             let scale = scale.reshape(scale_shape)?;
-            result = result.mul(&scale)?;
+            result = result.broadcast_mul(&scale)?;
         }
 
         if let Some(bias) = &self.bias {
@@ -151,11 +151,11 @@ impl Gemma3nCumulativeGroupNorm {
             let mut bias_shape = vec![1; x.dims().len()];
             bias_shape[x.dims().len() - 1] = self.num_channels;
             let bias = bias.reshape(bias_shape)?;
-            result = result.add(&bias)?;
+            result = result.broadcast_add(&bias)?;
         }
 
         // Zero out outputs for masked time steps
-        result = result.mul(&mask_calc)?;
+        result = result.broadcast_mul(&mask_calc)?;
 
         result.to_dtype(input_dtype)
     }
@@ -163,7 +163,7 @@ impl Gemma3nCumulativeGroupNorm {
 
 /// Relative Position Embedding for Gemma3n Audio
 pub struct Gemma3nAudioRelativePositionEmbedding {
-    config: Gemma3nAudioConfig,
+    _config: Gemma3nAudioConfig,
     num_heads: usize,
     head_dim: usize,
     max_backward: usize,
@@ -202,7 +202,7 @@ impl Gemma3nAudioRelativePositionEmbedding {
         let inv_timescales = inv_timescales.unsqueeze(0)?.unsqueeze(0)?;
 
         Ok(Self {
-            config: config.clone(),
+            _config: config.clone(),
             num_heads,
             head_dim,
             max_backward,
@@ -340,20 +340,20 @@ impl Gemma3nAudioRelativePositionEmbedding {
             max_span_plus_1,
         )?;
 
-        term_ac.add(&term_bd_shifted)
+        term_ac.broadcast_add(&term_bd_shifted)
     }
 }
 
 /// Gemma3n Audio Attention
 pub struct Gemma3nAudioAttention {
-    config: Gemma3nAudioConfig,
+    _config: Gemma3nAudioConfig,
     num_heads: usize,
     head_dim: usize,
     chunk_size: usize,
     max_future_horizon: usize,
     max_past_horizon: usize,
     attention_invalid_logits_value: f64,
-    attention_logits_soft_cap: f64,
+    _attention_logits_soft_cap: f64,
     context_size: usize,
     relative_position_embedding: Gemma3nAudioRelativePositionEmbedding,
     per_dim_scale: Tensor,
@@ -423,20 +423,20 @@ impl Gemma3nAudioAttention {
         };
 
         let local_causal_valid_mask = lower_causal_mask
-            .mul(&upper_causal_mask)?
+            .broadcast_mul(&upper_causal_mask)?
             .to_dtype(DType::U8)?;
 
         let softcap = Tensor::new(&[config.conf_attention_logit_cap as f32], vb.device())?;
 
         Ok(Self {
-            config: config.clone(),
+            _config: config.clone(),
             num_heads,
             head_dim,
             chunk_size,
             max_future_horizon,
             max_past_horizon,
             attention_invalid_logits_value: config.conf_attention_invalid_logits_value,
-            attention_logits_soft_cap: config.conf_attention_logit_cap,
+            _attention_logits_soft_cap: config.conf_attention_logit_cap,
             context_size,
             relative_position_embedding,
             per_dim_scale,
@@ -521,7 +521,7 @@ impl Gemma3nAudioAttention {
         let per_dim_scale_sp = self.per_dim_scale
             .to_dtype(DType::F32)?
             .exp()?
-            .add(&Tensor::new(&[1.0_f32], self.per_dim_scale.device())?)?
+            .broadcast_add(&Tensor::new(&[1.0_f32], self.per_dim_scale.device())?)?
             .log()?; // logaddexp(x, 0) = log(exp(x) + exp(0)) = log(exp(x) + 1)
 
         let per_dim_scale_sp_broadcast = per_dim_scale_sp
@@ -530,7 +530,7 @@ impl Gemma3nAudioAttention {
 
         let query_states = query_states
             .affine(self.q_scale, 0.0)?
-            .mul(&per_dim_scale_sp_broadcast)?;
+            .broadcast_mul(&per_dim_scale_sp_broadcast)?;
 
         let (batch_size, q_time) = (query_states.dim(0)?, query_states.dim(1)?);
 
@@ -575,7 +575,7 @@ impl Gemma3nAudioAttention {
 
         // Combine conditions
         let final_condition_for_where = condition_from_input_validity
-            .mul(&condition_from_causality)?
+            .broadcast_mul(&condition_from_causality)?
             .to_dtype(DType::U8)?;
 
         // Compute attention logits
@@ -585,7 +585,7 @@ impl Gemma3nAudioAttention {
         let logits = logits
             .div(&self.softcap)?
             .tanh()?
-            .mul(&self.softcap)?;
+            .broadcast_mul(&self.softcap)?;
 
         // Apply mask
         let logits = final_condition_for_where.where_cond(
@@ -713,7 +713,7 @@ pub struct Gemma3nAudioSubSampleConvProjection {
     conv_0: Gemma3nAudioSSCPConvBlock,
     conv_1: Gemma3nAudioSSCPConvBlock,
     input_proj_linear: Linear,
-    input_proj_in_features: usize,
+    _input_proj_in_features: usize,
 }
 
 impl Gemma3nAudioSubSampleConvProjection {
@@ -776,7 +776,7 @@ impl Gemma3nAudioSubSampleConvProjection {
             conv_0,
             conv_1,
             input_proj_linear,
-            input_proj_in_features,
+            _input_proj_in_features: input_proj_in_features,
         })
     }
 
@@ -852,7 +852,7 @@ impl Gemma3nAudioConformerAttention {
             self.gradient_clipping.to_scalar::<f64>()?,
         )?;
         
-        audio_encodings_input_to_attn.add(&self.post_norm.forward(&x)?)
+        audio_encodings_input_to_attn.broadcast_add(&self.post_norm.forward(&x)?)
     }
 }
 
@@ -901,7 +901,7 @@ impl Gemma3nAudioConformerFeedForward {
         )?;
         let x = self.post_layer_norm.forward(&x)?;
         
-        residual.add(&x.mul(&self.post_layer_scale)?)
+        residual.broadcast_add(&x.broadcast_mul(&self.post_layer_scale)?)
     }
 }
 
@@ -957,7 +957,7 @@ impl Gemma3nAudioConformerLightConv1d {
         let audio_encodings = self.linear_start.forward(&audio_encodings)?;
         // Implement GLU manually: split tensor in half and apply gating
         let chunks = audio_encodings.chunk(2, D::Minus1)?;
-        let audio_encodings = chunks[0].mul(&candle_nn::ops::sigmoid(&chunks[1])?)?;
+        let audio_encodings = chunks[0].broadcast_mul(&candle_nn::ops::sigmoid(&chunks[1])?)?;
 
         // Permute for Conv1d: [B, T, D] -> [B, D, T]
         let audio_encodings_transposed = audio_encodings.transpose(D::Minus1, D::Minus2)?;
@@ -980,7 +980,7 @@ impl Gemma3nAudioConformerLightConv1d {
         let audio_encodings = candle_nn::ops::silu(&audio_encodings)?;
         let audio_encodings = self.linear_end.forward(&audio_encodings)?;
 
-        audio_encodings_residual.add(&audio_encodings)
+        audio_encodings_residual.broadcast_add(&audio_encodings)
     }
 }
 
@@ -1019,7 +1019,7 @@ impl Gemma3nAudioConformerBlock {
 
         // Apply mask for lconv1d
         let validity_mask_for_lconv = audio_mel_mask.eq(0.0)?; // True for valid
-        let audio_encodings_for_lconv_input = audio_encodings.mul(
+        let audio_encodings_for_lconv_input = audio_encodings.broadcast_mul(
             &validity_mask_for_lconv
                 .unsqueeze(D::Minus1)?
                 .to_dtype(audio_encodings.dtype())?,
@@ -1038,7 +1038,7 @@ impl Gemma3nAudioConformerBlock {
 
 /// Main Audio Model
 pub struct AudioModel {
-    config: Gemma3nAudioConfig,
+    _config: Gemma3nAudioConfig,
     subsample_conv_projection: Gemma3nAudioSubSampleConvProjection,
     conformer: Vec<Gemma3nAudioConformerBlock>,
 }
@@ -1053,7 +1053,7 @@ impl AudioModel {
         }
 
         Ok(Self {
-            config: config.clone(),
+            _config: config.clone(),
             subsample_conv_projection,
             conformer,
         })
@@ -1067,8 +1067,8 @@ impl AudioModel {
         let t_sub = audio_encodings.dim(1)?;
 
         let mut time_stride_product = 1;
-        for i in 0..self.config.sscp_conv_stride_size.len() {
-            time_stride_product *= self.config.sscp_conv_stride_size[i][0];
+        for i in 0..self._config.sscp_conv_stride_size.len() {
+            time_stride_product *= self._config.sscp_conv_stride_size[i][0];
         }
 
         // Create indices for gathering from the original mask
@@ -1110,8 +1110,8 @@ impl AudioModel {
         }
 
         // Apply reduction factor if specified
-        if self.config.conf_reduction_factor > 1 {
-            let stride = self.config.conf_reduction_factor;
+        if self._config.conf_reduction_factor > 1 {
+            let stride = self._config.conf_reduction_factor;
             let indices = Tensor::arange(0, audio_encodings.dim(1)? as i64, audio_encodings.device())?
                 .affine(stride as f64, 0.0)?;
             let max_idx = audio_encodings.dim(1)? as i64 - 1;

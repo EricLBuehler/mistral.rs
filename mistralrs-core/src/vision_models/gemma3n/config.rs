@@ -125,7 +125,7 @@ pub struct Gemma3nAudioConfig {
     #[serde(default = "conf_conv_kernel_size")]
     pub conf_conv_kernel_size: usize,
     #[serde(default = "conf_positional_bias_size")]
-    pub conf_positional_bias_size: usize,
+    pub _conf_positional_bias_size: usize,
     #[serde(default = "conf_reduction_factor")]
     pub conf_reduction_factor: usize,
     #[serde(default = "conf_residual_weight")]
@@ -133,7 +133,7 @@ pub struct Gemma3nAudioConfig {
     #[serde(default = "sscp_conv_channel_size")]
     pub sscp_conv_channel_size: Vec<usize>,
     #[serde(default = "sscp_conv_group_norm_eps")]
-    pub sscp_conv_group_norm_eps: f64,
+    pub _sscp_conv_group_norm_eps: f64,
     #[serde(default = "sscp_conv_kernel_size")]
     pub sscp_conv_kernel_size: Vec<Vec<usize>>,
     #[serde(default = "sscp_conv_stride_size")]

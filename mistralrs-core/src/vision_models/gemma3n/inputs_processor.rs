@@ -9,6 +9,7 @@ use tokenizers::Tokenizer;
 use tracing::warn;
 
 use crate::{
+    vision_models::gemma3n::audio_processing::AudioProcessor,
     device_map::DeviceMapper,
     pipeline::{
         text_models_inputs_processor::{
@@ -29,7 +30,16 @@ use super::Gemma3nSpecificArgs;
 
 struct Gemma3nImageProcessor {
     supports_images: bool,
+    supports_audio: bool,
     full_image_sequence: String,
+    __audio_soft_tokens_per_audio: usize,
+}
+
+impl Gemma3nImageProcessor {
+    fn create_full_audio_sequence(&self, num_tokens: usize) -> String {
+        let audio_tokens_expanded = vec![AUDIO_TOKEN.to_string(); num_tokens].join("");
+        format!("\n\n{BOA_TOKEN}{audio_tokens_expanded}{EOA_TOKEN}\n\n")
+    }
 }
 
 const IMAGE_TOKEN: &str = "<image_soft_token>";
@@ -37,19 +47,30 @@ const BOI_TOKEN: &str = "<boi>";
 const EOI_TOKEN: &str = "<eoi>";
 pub const IMAGE_TOKEN_ID: u32 = 262145;
 
+const AUDIO_TOKEN: &str = "<audio_soft_token>";
+const BOA_TOKEN: &str = "<boa>";
+const EOA_TOKEN: &str = "<eoa>";
+pub const AUDIO_TOKEN_ID: u32 = 262273; // audio_vocab_offset + 1
+
 pub struct Gemma3nProcessor {
     vision_soft_tokens_per_image: usize,
+    __audio_soft_tokens_per_audio: usize,
     supports_images: bool,
+    supports_audio: bool,
 }
 
 impl Gemma3nProcessor {
     pub fn new(processor_config: ProcessorConfig, supports_images: bool) -> Self {
         // Default to 256 soft tokens per image if not specified
         let vision_soft_tokens_per_image = processor_config.image_seq_len.unwrap_or(256);
+        // Audio tokens are determined by the feature extraction process
+        let audio_soft_tokens_per_audio = 128; // This will be dynamic based on audio length
 
         Self {
             vision_soft_tokens_per_image,
+            __audio_soft_tokens_per_audio: audio_soft_tokens_per_audio,
             supports_images,
+            supports_audio: true, // Enable audio support
         }
     }
 
@@ -59,18 +80,26 @@ impl Gemma3nProcessor {
             vec![IMAGE_TOKEN.to_string(); self.vision_soft_tokens_per_image].join("");
         format!("\n\n{BOI_TOKEN}{image_tokens_expanded}{EOI_TOKEN}\n\n")
     }
+
+    fn _create_full_audio_sequence(&self, num_tokens: usize) -> String {
+        // Create the full audio token sequence: "\n\n<boa>{repeated audio tokens}<eoa>\n\n"
+        let audio_tokens_expanded = vec![AUDIO_TOKEN.to_string(); num_tokens].join("");
+        format!("\n\n{BOA_TOKEN}{audio_tokens_expanded}{EOA_TOKEN}\n\n")
+    }
 }
 
 impl Processor for Gemma3nProcessor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         Arc::new(Gemma3nImageProcessor {
             supports_images: self.supports_images,
+            supports_audio: self.supports_audio,
             full_image_sequence: self.create_full_image_sequence(),
+            __audio_soft_tokens_per_audio: self.__audio_soft_tokens_per_audio,
         })
     }
 
     fn get_special_tokens(&self) -> &[&'static str] {
-        &[IMAGE_TOKEN, BOI_TOKEN, EOI_TOKEN]
+        &[IMAGE_TOKEN, BOI_TOKEN, EOI_TOKEN, AUDIO_TOKEN, BOA_TOKEN, EOA_TOKEN]
     }
 
     fn template_action(&self) -> MessagesAction {
@@ -111,7 +140,7 @@ impl InputsProcessor for Gemma3nImageProcessor {
         if prompt_chunksize.is_some() {
             warn!("`prompt_chunksize` is set. Gemma3 does not support prompt batching.");
         }
-        let Some(_tokenizer) = tokenizer else {
+        let Some(tokenizer) = tokenizer else {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
                 "Idefics3ImageProcessor requires a specified tokenizer.",
             ))));
@@ -121,7 +150,64 @@ impl InputsProcessor for Gemma3nImageProcessor {
         let preprocessor_config: &PreProcessorConfig =
             config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = input_seqs.iter().all(|seq| seq.has_images());
+        let has_images = input_seqs.iter().any(|seq| seq.has_images());
+        let has_audios = input_seqs.iter().any(|seq| seq.has_audios());
+
+        // Process audio if present
+        let (audio_mel, audio_mel_mask) = if has_audios && self.supports_audio {
+            let mut audio_mel_accum = Vec::new();
+            let mut audio_mask_accum = Vec::new();
+            let audio_processor = AudioProcessor::new();
+            
+            for seq in input_seqs.iter_mut() {
+                if let Some(audios) = seq.take_audios() {
+                    for audio in audios {
+                        let (mel, mask) = audio_processor.process_audio(&audio, device)
+                            .expect("Audio processing failed");
+                        
+                        // Calculate number of audio tokens based on mel features before moving
+                        let num_audio_tokens = mel.dim(1).unwrap_or(128);
+                        
+                        audio_mel_accum.push(mel);
+                        audio_mask_accum.push(mask);
+                        
+                        // Update prompt with audio tokens
+                        if !seq.multimodal.has_changed_prompt {
+                            let mut prompt = tokenizer
+                                .decode(seq.get_toks(), false)
+                                .expect("Detokenization failed!");
+                            let audio_sequence = self.create_full_audio_sequence(num_audio_tokens);
+                            
+                            // Replace audio placeholder with tokens
+                            prompt = prompt.replace(AUDIO_TOKEN, &audio_sequence);
+                            
+                            // Re-tokenize
+                            seq.set_initial_prompt(prompt.clone());
+                            let toks = tokenizer
+                                .encode_fast(prompt, false)
+                                .expect("Tokenization failed!");
+                            
+                            let ids = toks.get_ids().to_vec();
+                            seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+                            seq.multimodal.has_changed_prompt = true;
+                        }
+                    }
+                }
+            }
+            
+            if !audio_mel_accum.is_empty() {
+                match (Tensor::cat(&audio_mel_accum, 0), Tensor::cat(&audio_mask_accum, 0)) {
+                    (Ok(mel), Ok(mask)) => (Some(mel), Some(mask)),
+                    (Err(e), _) | (_, Err(e)) => {
+                        return Box::new(std::iter::once(Err(anyhow::Error::from(e))));
+                    }
+                }
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
 
         let pixel_values = if has_images {
             if !self.supports_images {
@@ -165,7 +251,7 @@ impl InputsProcessor for Gemma3nImageProcessor {
 
                 // Replace <image> placeholders with full image sequence
                 if !seq.multimodal.has_changed_prompt {
-                    let mut prompt = _tokenizer
+                    let mut prompt = tokenizer
                         .decode(seq.get_toks(), false)
                         .expect("Detokenization failed!");
 
@@ -174,7 +260,7 @@ impl InputsProcessor for Gemma3nImageProcessor {
 
                     // Re-tokenize the modified prompt
                     seq.set_initial_prompt(prompt.clone());
-                    let toks = _tokenizer
+                    let toks = tokenizer
                         .encode_fast(prompt, false)
                         .expect("Tokenization failed!");
 
@@ -243,7 +329,10 @@ impl InputsProcessor for Gemma3nImageProcessor {
             context_lens,
             position_ids,
             pixel_values,
-            model_specific_args: Box::new(Gemma3nSpecificArgs),
+            model_specific_args: Box::new(Gemma3nSpecificArgs {
+                audio_mel,
+                audio_mel_mask,
+            }),
             paged_attn_meta,
             flash_meta,
         });
