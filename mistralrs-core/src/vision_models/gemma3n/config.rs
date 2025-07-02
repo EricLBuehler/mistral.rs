@@ -78,8 +78,81 @@ pub struct Gemma3nVisionConfig {
     pub vocab_size: usize,
 }
 
+// Audio config defaults
+serde_default_fn!(usize, audio_input_feat_size, 80);
+serde_default_fn!(usize, audio_hidden_size, 1536);
+serde_default_fn!(usize, conf_attention_chunk_size, 12);
+serde_default_fn!(usize, conf_attention_context_left, 13);
+serde_default_fn!(usize, conf_attention_context_right, 0);
+serde_default_fn!(f64, conf_attention_invalid_logits_value, -1e9);
+serde_default_fn!(f64, conf_attention_logit_cap, 50.0);
+serde_default_fn!(usize, conf_num_attention_heads, 8);
+serde_default_fn!(usize, conf_num_hidden_layers, 12);
+serde_default_fn!(usize, conf_conv_kernel_size, 5);
+serde_default_fn!(usize, conf_positional_bias_size, 256);
+serde_default_fn!(usize, conf_reduction_factor, 4);
+serde_default_fn!(f64, conf_residual_weight, 0.5);
+serde_default_fn!(Vec<usize>, sscp_conv_channel_size, vec![128, 32]);
+serde_default_fn!(f64, sscp_conv_group_norm_eps, 1e-3);
+serde_default_fn!(Vec<Vec<usize>>, sscp_conv_kernel_size, vec![vec![3, 3], vec![3, 3]]);
+serde_default_fn!(Vec<Vec<usize>>, sscp_conv_stride_size, vec![vec![2, 2], vec![2, 2]]);
+serde_default_fn!(usize, audio_vocab_size, 128);
+serde_default_fn!(f64, sscp_conv_eps, 1e-3);
+serde_default_fn!(f64, audio_rms_norm_eps, 1e-6);
+serde_default_fn!(f64, gradient_clipping, 10000000000.0);
+serde_default_fn!(i64, audio_vocab_offset, 262272); // text vocab size (262144) + vision vocab size (128)
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Gemma3nAudioConfig {
+    #[serde(default = "audio_input_feat_size")]
+    pub input_feat_size: usize,
+    #[serde(default = "audio_hidden_size")]
+    pub hidden_size: usize,
+    #[serde(default = "conf_attention_chunk_size")]
+    pub conf_attention_chunk_size: usize,
+    #[serde(default = "conf_attention_context_left")]
+    pub conf_attention_context_left: usize,
+    #[serde(default = "conf_attention_context_right")]
+    pub conf_attention_context_right: usize,
+    #[serde(default = "conf_attention_invalid_logits_value")]
+    pub conf_attention_invalid_logits_value: f64,
+    #[serde(default = "conf_attention_logit_cap")]
+    pub conf_attention_logit_cap: f64,
+    #[serde(default = "conf_num_attention_heads")]
+    pub conf_num_attention_heads: usize,
+    #[serde(default = "conf_num_hidden_layers")]
+    pub conf_num_hidden_layers: usize,
+    #[serde(default = "conf_conv_kernel_size")]
+    pub conf_conv_kernel_size: usize,
+    #[serde(default = "conf_positional_bias_size")]
+    pub conf_positional_bias_size: usize,
+    #[serde(default = "conf_reduction_factor")]
+    pub conf_reduction_factor: usize,
+    #[serde(default = "conf_residual_weight")]
+    pub conf_residual_weight: f64,
+    #[serde(default = "sscp_conv_channel_size")]
+    pub sscp_conv_channel_size: Vec<usize>,
+    #[serde(default = "sscp_conv_group_norm_eps")]
+    pub sscp_conv_group_norm_eps: f64,
+    #[serde(default = "sscp_conv_kernel_size")]
+    pub sscp_conv_kernel_size: Vec<Vec<usize>>,
+    #[serde(default = "sscp_conv_stride_size")]
+    pub sscp_conv_stride_size: Vec<Vec<usize>>,
+    #[serde(default = "audio_vocab_size")]
+    pub vocab_size: usize,
+    #[serde(default = "sscp_conv_eps")]
+    pub sscp_conv_eps: f64,
+    #[serde(default = "audio_rms_norm_eps")]
+    pub rms_norm_eps: f64,
+    #[serde(default = "gradient_clipping")]
+    pub gradient_clipping: f64,
+    #[serde(default = "audio_vocab_offset")]
+    pub vocab_offset: i64,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Gemma3nConfig {
     pub text_config: Gemma3nTextConfig,
     pub vision_config: Option<Gemma3nVisionConfig>,
+    pub audio_config: Option<Gemma3nAudioConfig>,
 }

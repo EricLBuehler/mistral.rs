@@ -21,6 +21,7 @@ use crate::{
 use self::multimodal_embedding::Gemma3nMultimodalEmbedder;
 
 pub mod config;
+mod audio;
 mod inputs_processor;
 mod multimodal_embedding;
 mod text;
@@ -30,6 +31,7 @@ pub(crate) use inputs_processor::Gemma3nProcessor;
 pub struct Gemma3nModel {
     language_model: TextModel,
     vision_tower: vision::VisionTower,
+    audio_tower: Option<audio::AudioModel>,
     embed_vision: Gemma3nMultimodalEmbedder,
     cfg: config::Gemma3nConfig,
 }
@@ -46,6 +48,13 @@ impl Gemma3nModel {
 
         // Initialize vision tower
         let vision_tower = vision::VisionTower::new(vb.pp("vision_tower").pp("timm_model"))?;
+
+        // Initialize audio tower if audio config is present
+        let audio_tower = if let Some(audio_cfg) = &cfg.audio_config {
+            Some(audio::AudioModel::new(audio_cfg, vb.pp("audio_tower"))?)
+        } else {
+            None
+        };
 
         // Initialize multimodal embedder
         let vision_cfg = cfg.vision_config.as_ref().ok_or_else(|| {
@@ -68,6 +77,7 @@ impl Gemma3nModel {
                 attention_mechanism,
             )?,
             vision_tower,
+            audio_tower,
             embed_vision,
             cfg: cfg.clone(),
         })
