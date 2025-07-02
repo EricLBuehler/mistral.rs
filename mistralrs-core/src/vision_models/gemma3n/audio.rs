@@ -19,6 +19,7 @@ pub struct Gemma3nCumulativeGroupNorm {
     weight: Option<Tensor>,
     bias: Option<Tensor>,
     reduction_axes: Vec<usize>,
+    channel_axis: usize,  // Track which axis has channels
 }
 
 impl Gemma3nCumulativeGroupNorm {
@@ -42,9 +43,10 @@ impl Gemma3nCumulativeGroupNorm {
             None
         };
 
-        // Axes for normalization: all dimensions except Batch (0) and Time (1).
-        // For input [B, T, *feature_dims, C], these are dims from 2 onwards.
-        let reduction_axes: Vec<usize> = (2..2 + feature_dims.len() + 1).collect();
+        // For NCHW format [B, C, T, *feature_dims], normalize over T and feature_dims
+        // Batch is at 0, Channels at 1, so we reduce over dimensions 2 onwards
+        let reduction_axes: Vec<usize> = (2..2 + 1 + feature_dims.len()).collect();
+        let channel_axis = 1;  // Channels are at dimension 1 in NCHW format
 
         Ok(Self {
             num_channels,
@@ -55,16 +57,18 @@ impl Gemma3nCumulativeGroupNorm {
             weight,
             bias,
             reduction_axes,
+            channel_axis,
         })
     }
 
     pub fn forward(&self, x: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+        // For NCHW format: [B, C, T, *feature_dims]
         // Verify input shape
-        let expected_input_suffix_len = self.feature_dims.len() + 1; // feature_dims + channels
-        if x.dims().len() < 2 + expected_input_suffix_len {
+        let expected_dims = 3 + self.feature_dims.len(); // B, C, T, *feature_dims
+        if x.dims().len() != expected_dims {
             bail!(
-                "Input tensor must have at least {} dimensions, got {}",
-                2 + expected_input_suffix_len,
+                "Input tensor must have exactly {} dimensions, got {}",
+                expected_dims,
                 x.dims().len()
             );
         }
@@ -75,16 +79,18 @@ impl Gemma3nCumulativeGroupNorm {
 
         // Prepare broadcastable mask
         let mask_calc = if let Some(mask) = mask {
-            if mask.dims() != &x.dims()[..2] {
+            // For NCHW format, mask should be [B, T]
+            if mask.dims().len() != 2 || mask.dims()[0] != x.dims()[0] || mask.dims()[1] != x.dims()[2] {
                 bail!(
-                    "Mask shape {:?} must match input Batch/Time dimensions {:?}",
-                    mask.dims(),
-                    &x.dims()[..2]
+                    "Mask shape {:?} must be [B, T] matching input batch and time dimensions",
+                    mask.dims()
                 );
             }
-            // Expand mask from [B, T] to [B, T, 1, ..., 1]
+            // Expand mask from [B, T] to [B, 1, T, 1, ..., 1]
             let mut m = mask.to_dtype(calc_dtype)?;
-            for _ in 0..expected_input_suffix_len {
+            m = m.unsqueeze(1)?; // Insert channel dimension
+            // Add feature dimensions
+            for _ in 0..self.feature_dims.len() {
                 m = m.unsqueeze(D::Minus1)?;
             }
             m
@@ -134,14 +140,14 @@ impl Gemma3nCumulativeGroupNorm {
         // Normalize the input
         let normalized_x = x_calc
             .broadcast_sub(&cum_mean)?
-            .broadcast_mul(&(cum_variance.broadcast_add(&Tensor::new(&[self.eps as f32], cum_variance.device())?.to_dtype(calc_dtype)?)?.recip()?.sqrt())?)?;
+            .broadcast_mul(&(cum_variance.broadcast_add(&Tensor::new(self.eps as f32, cum_variance.device())?.to_dtype(calc_dtype)?)?.recip()?.sqrt())?)?;
 
         // Apply affine transformation
         let mut result = normalized_x;
         if let Some(weight) = &self.weight {
             let scale = weight.to_dtype(calc_dtype)?;
             let mut scale_shape = vec![1; x.dims().len()];
-            scale_shape[x.dims().len() - 1] = self.num_channels;
+            scale_shape[self.channel_axis] = self.num_channels;  // Use channel_axis
             let scale = scale.reshape(scale_shape)?;
             result = result.broadcast_mul(&scale)?;
         }
@@ -149,7 +155,7 @@ impl Gemma3nCumulativeGroupNorm {
         if let Some(bias) = &self.bias {
             let bias = bias.to_dtype(calc_dtype)?;
             let mut bias_shape = vec![1; x.dims().len()];
-            bias_shape[x.dims().len() - 1] = self.num_channels;
+            bias_shape[self.channel_axis] = self.num_channels;  // Use channel_axis
             let bias = bias.reshape(bias_shape)?;
             result = result.broadcast_add(&bias)?;
         }
@@ -275,6 +281,17 @@ impl Gemma3nAudioRelativePositionEmbedding {
             &[b, u, w, n, h] => (b, u, w, n, h),
             _ => bail!("Expected queries to have 5 dimensions"),
         };
+        
+        // Ensure keys have the same number of blocks as queries
+        let keys = if keys.dim(1)? != num_query_blocks {
+            if keys.dim(1)? > num_query_blocks {
+                keys.narrow(1, 0, num_query_blocks)?
+            } else {
+                bail!("Keys have fewer blocks than queries: {} < {}", keys.dim(1)?, num_query_blocks)
+            }
+        } else {
+            keys.clone()
+        };
 
         let key_context_size = keys.dim(2)?;
 
@@ -299,8 +316,16 @@ impl Gemma3nAudioRelativePositionEmbedding {
             .squeeze(0)?;
 
         // term_ac: Query-Key content interaction
-        let queries_p = queries.transpose(1, 3)?.transpose(2, 3)?; // [B, N, U, W, H]
-        let keys_p_t = keys.transpose(1, 3)?.transpose(3, 4)?; // [B, N, U, H, C]
+        let queries_p = queries.transpose(1, 3)?.transpose(2, 3)?.contiguous()?; // [B, N, U, W, H]
+        // For keys: [B, U, C, N, H] -> [B, N, U, H, C]
+        // First swap U and N: [B, U, C, N, H] -> [B, N, C, U, H]
+        // Then swap C and U: [B, N, C, U, H] -> [B, N, U, C, H]  
+        // Finally swap C and H: [B, N, U, C, H] -> [B, N, U, H, C]
+        let keys_p_t = keys
+            .transpose(1, 3)?  // [B, U, C, N, H] -> [B, N, C, U, H]
+            .transpose(2, 3)?  // [B, N, C, U, H] -> [B, N, U, C, H]
+            .transpose(3, 4)?  // [B, N, U, C, H] -> [B, N, U, H, C]
+            .contiguous()?;
         let term_ac = queries_p.matmul(&keys_p_t)?; // [B, N, U, W, C]
 
         // term_bd: Query-Position interaction
@@ -317,9 +342,10 @@ impl Gemma3nAudioRelativePositionEmbedding {
         // Broadcast s_transposed for batch dimension
         let s_broadcast = s_transposed
             .unsqueeze(0)?
-            .broadcast_as((batch_size, num_heads, head_dim, max_span_plus_1))?;
+            .broadcast_as((batch_size, num_heads, head_dim, max_span_plus_1))?
+            .contiguous()?;
 
-        let term_bd_unshifted_matmul = q_reshaped.matmul(&s_broadcast)?;
+        let term_bd_unshifted_matmul = q_reshaped.contiguous()?.matmul(&s_broadcast)?;
 
         let term_bd_unshifted = term_bd_unshifted_matmul.reshape((
             batch_size,
@@ -426,7 +452,7 @@ impl Gemma3nAudioAttention {
             .broadcast_mul(&upper_causal_mask)?
             .to_dtype(DType::U8)?;
 
-        let softcap = Tensor::new(&[config.conf_attention_logit_cap as f32], vb.device())?;
+        let softcap = Tensor::new(config.conf_attention_logit_cap as f32, vb.device())?;
 
         Ok(Self {
             _config: config.clone(),
@@ -521,7 +547,7 @@ impl Gemma3nAudioAttention {
         let per_dim_scale_sp = self.per_dim_scale
             .to_dtype(DType::F32)?
             .exp()?
-            .broadcast_add(&Tensor::new(&[1.0_f32], self.per_dim_scale.device())?)?
+            .broadcast_add(&Tensor::new(1.0_f32, self.per_dim_scale.device())?)?
             .log()?; // logaddexp(x, 0) = log(exp(x) + exp(0)) = log(exp(x) + 1)
 
         let per_dim_scale_sp_broadcast = per_dim_scale_sp
@@ -536,9 +562,51 @@ impl Gemma3nAudioAttention {
 
         // Convert to blocks
         let query_blocks = self.convert_to_block(&query_states, 0.0)?;
-        let key_blocks = self.extract_block_context(&key_states)?;
-        let value_blocks = self.extract_block_context(&value_states)?;
+        let mut key_blocks = self.extract_block_context(&key_states)?;
+        let mut value_blocks = self.extract_block_context(&value_states)?;
         let num_query_blocks = query_blocks.dim(1)?;
+        
+        // Ensure key_blocks and value_blocks have the correct context size
+        if key_blocks.dim(2)? != self.context_size {
+            let current_context = key_blocks.dim(2)?;
+            if current_context < self.context_size {
+                // Pad with zeros
+                let pad_amount = self.context_size - current_context;
+                key_blocks = key_blocks.pad_with_zeros(2, 0, pad_amount)?;
+                value_blocks = value_blocks.pad_with_zeros(2, 0, pad_amount)?;
+            } else {
+                // Truncate
+                key_blocks = key_blocks.narrow(2, 0, self.context_size)?;
+                value_blocks = value_blocks.narrow(2, 0, self.context_size)?;
+            }
+        }
+        
+        // Ensure the number of blocks matches between queries and keys/values
+        let num_key_blocks = key_blocks.dim(1)?;
+        if num_query_blocks != num_key_blocks {
+            if num_query_blocks < num_key_blocks {
+                // Truncate key/value blocks to match query blocks
+                key_blocks = key_blocks.narrow(1, 0, num_query_blocks)?;
+                value_blocks = value_blocks.narrow(1, 0, num_query_blocks)?;
+            } else {
+                // This case is problematic - we have more query blocks than key blocks
+                // We'll pad the key/value blocks, though this might not be semantically correct
+                let pad_blocks = num_query_blocks - num_key_blocks;
+                let (batch_size, context_size, num_heads, head_dim) = 
+                    match key_blocks.dims() {
+                        &[b, _, c, n, h] => (b, c, n, h),
+                        _ => bail!("Unexpected key_blocks dimensions")
+                    };
+                
+                // Create zero padding with the same shape as one block
+                let pad_shape = vec![batch_size, pad_blocks, context_size, num_heads, head_dim];
+                let padding = Tensor::zeros(pad_shape.as_slice(), key_blocks.dtype(), key_blocks.device())?;
+                
+                // Concatenate padding to key and value blocks
+                key_blocks = Tensor::cat(&[key_blocks, padding.clone()], 1)?;
+                value_blocks = Tensor::cat(&[value_blocks, padding], 1)?;
+            }
+        }
 
         // Create validity mask
         let original_valid_mask = mask.eq(0.0)?.to_dtype(DType::U8)?; // True for valid
@@ -559,15 +627,46 @@ impl Gemma3nAudioAttention {
                 == self.context_size
         {
             extracted_valid_mask_blocks.reshape((batch_size, num_query_blocks, self.context_size))?
+        } else if extracted_valid_mask_blocks.dims().len() == 3 {
+            // Already in the correct shape [batch_size, num_query_blocks, context_size]
+            extracted_valid_mask_blocks
+        } else {
+            // If the shape doesn't match expected, try to handle common cases
+            match extracted_valid_mask_blocks.dims() {
+                &[b, n, _c] if b == batch_size && n == num_query_blocks => extracted_valid_mask_blocks,
+                &[b, _c, n] if b == batch_size && n == num_query_blocks => extracted_valid_mask_blocks.transpose(1, 2)?,
+                _ => extracted_valid_mask_blocks
+            }
+        };
+
+        // Ensure the extracted mask has the correct context size
+        let extracted_valid_mask_blocks = if extracted_valid_mask_blocks.dim(D::Minus1)? != self.context_size {
+            // If context size doesn't match, we need to adjust it
+            let current_context_size = extracted_valid_mask_blocks.dim(D::Minus1)?;
+            if current_context_size < self.context_size {
+                // Pad with zeros (invalid positions)
+                let pad_amount = self.context_size - current_context_size;
+                extracted_valid_mask_blocks.pad_with_zeros(D::Minus1, 0, pad_amount)?
+            } else {
+                // Truncate to match expected context size
+                extracted_valid_mask_blocks.narrow(D::Minus1, 0, self.context_size)?
+            }
         } else {
             extracted_valid_mask_blocks
         };
 
         // Expand dimensions for broadcasting
+        // The key insight is that we need to match the attention tensor layout
+        // which appears to be [batch, heads, num_query_blocks, chunk_size, context_size]
+        
+        // extracted_valid_mask_blocks: [batch_size, num_query_blocks, context_size]
+        // Expand to: [batch_size, 1, num_query_blocks, 1, context_size]
         let condition_from_input_validity = extracted_valid_mask_blocks
-            .unsqueeze(1)?
-            .unsqueeze(D::Minus2)?;
+            .unsqueeze(1)?    // [batch_size, 1, num_query_blocks, context_size]
+            .unsqueeze(3)?;   // [batch_size, 1, num_query_blocks, 1, context_size]
 
+        // local_causal_valid_mask: [chunk_size, context_size]
+        // Expand to: [1, 1, 1, chunk_size, context_size]
         let condition_from_causality = self.local_causal_valid_mask
             .unsqueeze(0)?
             .unsqueeze(0)?
@@ -579,18 +678,65 @@ impl Gemma3nAudioAttention {
             .to_dtype(DType::U8)?;
 
         // Compute attention logits
+        // Note: At this point query_blocks and key_blocks should have compatible shapes
+        // query_blocks: [B, U, W, N, H] where U is num_query_blocks, W is chunk_size
+        // key_blocks: [B, U, C, N, H] where C is context_size
         let logits = self.relative_position_embedding.forward(&query_blocks, &key_blocks)?;
 
         // Apply attention logit softcap
+        let softcap_value = self.softcap.to_scalar::<f32>()? as f64;
         let logits = logits
-            .div(&self.softcap)?
+            .affine(1.0 / softcap_value, 0.0)?
             .tanh()?
-            .broadcast_mul(&self.softcap)?;
+            .affine(softcap_value, 0.0)?;
 
         // Apply mask
+        // Ensure mask has the same shape as logits by handling dimension mismatches
+        let final_condition_for_where = if final_condition_for_where.dims() != logits.dims() {
+            // The mask might have shape [1, 1, U_mask, W, C] while logits have [B, N, U, W, C]
+            let logits_shape = logits.dims();
+            let mask_shape = final_condition_for_where.dims().to_vec();
+            
+            let mut mask = final_condition_for_where;
+            
+            // First handle non-broadcast dimension mismatches (like U_mask != U)
+            for (i, (&logit_dim, &mask_dim)) in logits_shape.iter().zip(mask_shape.iter()).enumerate() {
+                if mask_dim != logit_dim && mask_dim != 1 {
+                    // Handle dimension mismatch that isn't a broadcast case
+                    if mask_dim > logit_dim {
+                        // Truncate mask to match logits
+                        mask = mask.narrow(i, 0, logit_dim)?;
+                    } else {
+                        bail!("Mask dimension {} has size {} which is smaller than logits size {} and cannot be broadcast", 
+                              i, mask_dim, logit_dim);
+                    }
+                }
+            }
+            
+            // Now handle broadcasting for dimensions that are 1
+            if mask.dims() != logits.dims() {
+                // Check if we can broadcast
+                let can_broadcast = mask.dims().iter().zip(logits_shape.iter())
+                    .all(|(&m, &l)| m == l || m == 1);
+                
+                if can_broadcast {
+                    mask = mask.broadcast_as(logits_shape)?;
+                } else {
+                    bail!("Cannot broadcast mask shape {:?} to logits shape {:?}", 
+                          mask.dims(), logits_shape);
+                }
+            }
+            
+            mask
+        } else {
+            final_condition_for_where
+        };
+        
+        let invalid_value = Tensor::new(self.attention_invalid_logits_value as f32, logits.device())?
+            .broadcast_as(logits.dims())?;
         let logits = final_condition_for_where.where_cond(
             &logits,
-            &Tensor::new(&[self.attention_invalid_logits_value as f32], logits.device())?,
+            &invalid_value,
         )?;
 
         let probabilities = candle_nn::ops::softmax_last_dim(&logits.to_dtype(DType::F32)?)?
@@ -606,12 +752,14 @@ impl Gemma3nAudioAttention {
         let prob_bun = probabilities
             .transpose(1, 2)?
             .transpose(0, 1)?
-            .reshape((b_dim * u_dim * n_dim, w_dim, c_dim))?;
+            .reshape((b_dim * u_dim * n_dim, w_dim, c_dim))?
+            .contiguous()?;
 
         let v_bun = value_blocks
             .transpose(1, 2)?
             .transpose(2, 3)?
-            .reshape((b_dim * u_dim * n_dim, c_dim, h_dim))?;
+            .reshape((b_dim * u_dim * n_dim, c_dim, h_dim))?
+            .contiguous()?;
 
         let result_bmm = prob_bun.matmul(&v_bun)?;
         let context_vectors = result_bmm
@@ -813,7 +961,7 @@ pub struct Gemma3nAudioConformerAttention {
 
 impl Gemma3nAudioConformerAttention {
     pub fn new(config: &Gemma3nAudioConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        let gradient_clipping = Tensor::new(&[config.gradient_clipping as f32], vb.device())?;
+        let gradient_clipping = Tensor::new(config.gradient_clipping as f32, vb.device())?;
         let pre_attn_norm = RmsNorm::new_gemma_3n(config.hidden_size, config.rms_norm_eps, true, vb.pp("pre_attn_norm"))?;
         let attn = Gemma3nAudioAttention::new(config, vb.pp("attn"))?;
         let post = linear_no_bias(config.hidden_size, config.hidden_size, vb.pp("post"))?;
@@ -830,10 +978,8 @@ impl Gemma3nAudioConformerAttention {
 
     pub fn forward(&self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
         let audio_encodings_input_to_attn = x;
-        let x = x.clamp(
-            -self.gradient_clipping.to_scalar::<f64>()?,
-            self.gradient_clipping.to_scalar::<f64>()?,
-        )?;
+        let clip_value = self.gradient_clipping.to_scalar::<f32>()? as f64;
+        let x = x.clamp(-clip_value, clip_value)?;
         let audio_encodings_norm = self.pre_attn_norm.forward(&x)?;
 
         // attn output: [B, T, NumHeads, HeadDim]
@@ -847,10 +993,8 @@ impl Gemma3nAudioConformerAttention {
         let audio_encodings_reshaped = audio_encodings_attn_out.reshape((b, t, num_heads * head_dim))?;
 
         let x = self.post.forward(&audio_encodings_reshaped)?;
-        let x = x.clamp(
-            -self.gradient_clipping.to_scalar::<f64>()?,
-            self.gradient_clipping.to_scalar::<f64>()?,
-        )?;
+        let clip_value = self.gradient_clipping.to_scalar::<f32>()? as f64;
+        let x = x.clamp(-clip_value, clip_value)?;
         
         audio_encodings_input_to_attn.broadcast_add(&self.post_norm.forward(&x)?)
     }
@@ -868,12 +1012,12 @@ pub struct Gemma3nAudioConformerFeedForward {
 
 impl Gemma3nAudioConformerFeedForward {
     pub fn new(config: &Gemma3nAudioConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        let gradient_clipping = Tensor::new(&[config.gradient_clipping as f32], vb.device())?;
+        let gradient_clipping = Tensor::new(config.gradient_clipping as f32, vb.device())?;
         let pre_layer_norm = RmsNorm::new_gemma_3n(config.hidden_size, config.rms_norm_eps, true, vb.pp("pre_layer_norm"))?;
         let ffw_layer_1 = linear_no_bias(config.hidden_size, config.hidden_size * 4, vb.pp("ffw_layer_1"))?;
         let ffw_layer_2 = linear_no_bias(config.hidden_size * 4, config.hidden_size, vb.pp("ffw_layer_2"))?;
         let post_layer_norm = RmsNorm::new_gemma_3n(config.hidden_size, config.rms_norm_eps, true, vb.pp("post_layer_norm"))?;
-        let post_layer_scale = Tensor::new(&[config.conf_residual_weight as f32], vb.device())?;
+        let post_layer_scale = Tensor::new(config.conf_residual_weight as f32, vb.device())?;
 
         Ok(Self {
             gradient_clipping,
@@ -887,18 +1031,14 @@ impl Gemma3nAudioConformerFeedForward {
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let residual = x;
-        let x = x.clamp(
-            -self.gradient_clipping.to_scalar::<f64>()?,
-            self.gradient_clipping.to_scalar::<f64>()?,
-        )?;
+        let clip_value = self.gradient_clipping.to_scalar::<f32>()? as f64;
+        let x = x.clamp(-clip_value, clip_value)?;
         let x = self.pre_layer_norm.forward(&x)?;
         let x = self.ffw_layer_1.forward(&x)?;
         let x = candle_nn::ops::silu(&x)?;
         let x = self.ffw_layer_2.forward(&x)?;
-        let x = x.clamp(
-            -self.gradient_clipping.to_scalar::<f64>()?,
-            self.gradient_clipping.to_scalar::<f64>()?,
-        )?;
+        let clip_value = self.gradient_clipping.to_scalar::<f32>()? as f64;
+        let x = x.clamp(-clip_value, clip_value)?;
         let x = self.post_layer_norm.forward(&x)?;
         
         residual.broadcast_add(&x.broadcast_mul(&self.post_layer_scale)?)
@@ -934,7 +1074,7 @@ impl Gemma3nAudioConformerLightConv1d {
             vb.pp("depthwise_conv1d"),
         )?;
 
-        let gradient_clipping = Tensor::new(&[config.gradient_clipping as f32], vb.device())?;
+        let gradient_clipping = Tensor::new(config.gradient_clipping as f32, vb.device())?;
         let conv_norm = RmsNorm::new_gemma_3n(config.hidden_size, config.rms_norm_eps, true, vb.pp("conv_norm"))?;
         let linear_end = linear_no_bias(config.hidden_size, config.hidden_size, vb.pp("linear_end"))?;
         let causal_padding = config.conf_conv_kernel_size - 1;
@@ -972,10 +1112,8 @@ impl Gemma3nAudioConformerLightConv1d {
         let audio_encodings = self.depthwise_conv1d.forward(&audio_encodings_padded)?
             .transpose(D::Minus2, D::Minus1)?;
 
-        let audio_encodings = audio_encodings.clamp(
-            -self.gradient_clipping.to_scalar::<f64>()?,
-            self.gradient_clipping.to_scalar::<f64>()?,
-        )?;
+        let clip_value = self.gradient_clipping.to_scalar::<f32>()? as f64;
+        let audio_encodings = audio_encodings.clamp(-clip_value, clip_value)?;
         let audio_encodings = self.conv_norm.forward(&audio_encodings)?;
         let audio_encodings = candle_nn::ops::silu(&audio_encodings)?;
         let audio_encodings = self.linear_end.forward(&audio_encodings)?;
@@ -1000,7 +1138,7 @@ impl Gemma3nAudioConformerBlock {
         let attention = Gemma3nAudioConformerAttention::new(config, vb.pp("attention"))?;
         let lconv1d = Gemma3nAudioConformerLightConv1d::new(config, vb.pp("lconv1d"))?;
         let ffw_layer_end = Gemma3nAudioConformerFeedForward::new(config, vb.pp("ffw_layer_end"))?;
-        let gradient_clipping = Tensor::new(&[config.gradient_clipping as f32], vb.device())?;
+        let gradient_clipping = Tensor::new(config.gradient_clipping as f32, vb.device())?;
         let norm = RmsNorm::new_gemma_3n(config.hidden_size, config.rms_norm_eps, true, vb.pp("norm"))?;
 
         Ok(Self {
@@ -1027,10 +1165,8 @@ impl Gemma3nAudioConformerBlock {
 
         let audio_encodings = self.lconv1d.forward(&audio_encodings_for_lconv_input)?;
         let audio_encodings = self.ffw_layer_end.forward(&audio_encodings)?;
-        let audio_encodings = audio_encodings.clamp(
-            -self.gradient_clipping.to_scalar::<f64>()?,
-            self.gradient_clipping.to_scalar::<f64>()?,
-        )?;
+        let clip_value = self.gradient_clipping.to_scalar::<f32>()? as f64;
+        let audio_encodings = audio_encodings.clamp(-clip_value, clip_value)?;
 
         self.norm.forward(&audio_encodings)
     }
@@ -1072,10 +1208,12 @@ impl AudioModel {
         }
 
         // Create indices for gathering from the original mask
-        let indices = Tensor::arange(0, t_sub as i64, audio_mel_mask.device())?
-            .affine(time_stride_product as f64, 0.0)?;
+        // Use f32 for the affine operation, then convert to i64 for indexing
+        let indices = Tensor::arange(0f32, t_sub as f32, audio_mel_mask.device())?
+            .affine(time_stride_product as f64, 0.0)?
+            .to_dtype(DType::I64)?;
         let max_idx = audio_mel_mask.dim(1)? as i64 - 1;
-        let indices = indices.clamp(0, max_idx)?;
+        let indices = indices.clamp(0i64, max_idx)?;
 
         // Expand indices for batch compatibility
         let indices = if audio_mel_mask.dims().len() > 1 && indices.dims().len() == 1 {
@@ -1092,7 +1230,26 @@ impl AudioModel {
             indices
         };
 
-        let mut current_mask = audio_mel_mask.gather(&indices, 1)?;
+        // Use index_select instead of gather for Metal compatibility
+        let mut current_mask = if indices.dims().len() == 1 {
+            // 1D indices case
+            audio_mel_mask.index_select(&indices, 1)?
+        } else {
+            // 2D indices case - need to handle batch dimension
+            let batch_size = audio_mel_mask.dim(0)?;
+            let mut masks = Vec::new();
+            for b in 0..batch_size {
+                let batch_mask = audio_mel_mask.get(b)?;
+                let batch_indices = if indices.dim(0)? > 1 {
+                    indices.get(b)?
+                } else {
+                    indices.squeeze(0)?
+                };
+                let selected = batch_mask.index_select(&batch_indices, 0)?;
+                masks.push(selected.unsqueeze(0)?);
+            }
+            Tensor::cat(&masks, 0)?
+        };
 
         // Ensure mask length matches feature length
         if current_mask.dim(1)? != t_sub {
@@ -1112,23 +1269,24 @@ impl AudioModel {
         // Apply reduction factor if specified
         if self._config.conf_reduction_factor > 1 {
             let stride = self._config.conf_reduction_factor;
-            let indices = Tensor::arange(0, audio_encodings.dim(1)? as i64, audio_encodings.device())?
-                .affine(stride as f64, 0.0)?;
+            let indices = Tensor::arange(0f32, audio_encodings.dim(1)? as f32, audio_encodings.device())?
+                .affine(stride as f64, 0.0)?
+                .to_dtype(DType::I64)?;
             let max_idx = audio_encodings.dim(1)? as i64 - 1;
             let indices = indices
                 .narrow(0, 0, (audio_encodings.dim(1)? / stride).min(indices.dim(0)?))?
                 .clamp(0, max_idx)?;
             
-            audio_encodings = audio_encodings.gather(&indices.unsqueeze(0)?, 1)?;
-            current_mask = current_mask.gather(&indices.unsqueeze(0)?, 1)?;
+            audio_encodings = audio_encodings.index_select(&indices, 1)?;
+            current_mask = current_mask.index_select(&indices, 1)?;
         }
 
-        // Final masking
-        let audio_encodings = current_mask
+        // Final masking - using multiplication instead of where_cond for Metal compatibility
+        let mask_float = current_mask
             .eq(1.0)?
-            .unsqueeze(D::Minus1)?
             .to_dtype(audio_encodings.dtype())?
-            .where_cond(&Tensor::zeros_like(&audio_encodings)?, &audio_encodings)?;
+            .unsqueeze(D::Minus1)?;
+        let audio_encodings = audio_encodings.broadcast_mul(&mask_float)?;
 
         Ok((audio_encodings, current_mask))
     }

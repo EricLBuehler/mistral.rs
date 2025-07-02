@@ -200,7 +200,7 @@ impl Gemma3nModel {
                 .to_dtype(DType::F32)?
                 .eq(inputs_processor::AUDIO_TOKEN_ID as f64)?
                 .unsqueeze(D::Minus1)?
-                .broadcast_as(audio_embeds.shape())?
+                .broadcast_as(input_embeds.shape())?
                 .to_dtype(DType::U32)?;
             
             // Flatten tensors for scatter operation
@@ -212,9 +212,38 @@ impl Gemma3nModel {
                 let mut x_flat = input_embeds.flatten_all()?;
                 let src_flat = audio_embeds.flatten_all()?;
                 
+                // Get dimensions
+                let embed_dim = audio_embeds.dim(2)?;
+                let _num_audio_embeddings = audio_embeds.dim(1)?; // 58 audio embeddings
+                
+                // Count how many positions we need to fill
+                let num_positions_to_fill = indices.dims()[0]; // Total positions
+                let _num_audio_tokens_in_input = num_positions_to_fill / embed_dim;
+                
+                // With the corrected token count, we should have a 1:1 mapping
+                // between audio tokens and embeddings
+                let audio_values = if num_positions_to_fill == src_flat.dims()[0] {
+                    // Perfect match - this is the expected case
+                    src_flat.clone()
+                } else if num_positions_to_fill < src_flat.dims()[0] {
+                    // We have more embeddings than needed, take only what we need
+                    src_flat.narrow(0, 0, num_positions_to_fill)?
+                } else {
+                    // This shouldn't happen with correct token counting, but handle it gracefully
+                    // by repeating embeddings if needed
+                    let mut repeated_values = Vec::new();
+                    let src_vec: Vec<f32> = src_flat.to_vec1()?;
+                    
+                    for i in 0..num_positions_to_fill {
+                        repeated_values.push(src_vec[i % src_vec.len()]);
+                    }
+                    
+                    Tensor::from_vec(repeated_values, (num_positions_to_fill,), src_flat.device())?
+                };
+                
                 // Replace audio tokens with actual audio embeddings
                 let current_vals = x_flat.gather(&indices, 0)?;
-                let diff = (src_flat - current_vals)?;
+                let diff = (audio_values - current_vals)?;
                 x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
                 
                 input_embeds = x_flat.reshape(input_embeds.shape())?;

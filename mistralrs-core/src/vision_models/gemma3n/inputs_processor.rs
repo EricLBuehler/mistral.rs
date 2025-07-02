@@ -64,7 +64,7 @@ impl Gemma3nProcessor {
         // Default to 256 soft tokens per image if not specified
         let vision_soft_tokens_per_image = processor_config.image_seq_len.unwrap_or(256);
         // Audio tokens are determined by the feature extraction process
-        let audio_soft_tokens_per_audio = 128; // This will be dynamic based on audio length
+        let audio_soft_tokens_per_audio = 58; // Typical output after all reductions
 
         Self {
             vision_soft_tokens_per_image,
@@ -166,7 +166,12 @@ impl InputsProcessor for Gemma3nImageProcessor {
                             .expect("Audio processing failed");
                         
                         // Calculate number of audio tokens based on mel features before moving
-                        let num_audio_tokens = mel.dim(1).unwrap_or(128);
+                        // Account for the reductions in the audio model:
+                        // - Subsampling conv layers: 2x2 stride for 2 layers = 4x reduction in time
+                        // - Conformer reduction factor: 4x (from config)
+                        // Total reduction: 16x
+                        let mel_frames = mel.dim(1).unwrap_or(128);
+                        let num_audio_tokens = (mel_frames + 15) / 16; // Round up division by 16
                         
                         audio_mel_accum.push(mel);
                         audio_mask_accum.push(mask);
