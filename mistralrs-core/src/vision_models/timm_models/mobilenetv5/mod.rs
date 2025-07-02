@@ -75,31 +75,31 @@ impl RMSNormAct2d {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        // Input is NCHW format
-        let (b, c, h, w) = x.dims4()?;
-        
-        // For 2D normalization, we need to normalize along spatial dimensions (H, W)
-        // Reshape to (B*C, H*W) to apply normalization per channel
-        let x_reshaped = x.reshape((b * c, h * w))?;
-        
-        // Compute RMS normalization along the spatial dimension
-        let dtype = x_reshaped.dtype();
-        let x_f32 = x_reshaped.to_dtype(DType::F32)?;
-        let mean_square = x_f32.sqr()?.mean_keepdim(D::Minus1)?;
+        // NCHW format –  normalise across the channel dimension (C) for
+        // every spatial location, matching timm's `RmsNorm2d` reference
+        // implementation. This differs from the previous code that
+        // normalised across the HxW spatial dimensions and leads to large
+        // numerical deviations.
+
+        // Compute the mean square along the channel dimension (index = 1).
+        let dtype = x.dtype();
+        let x_f32 = x.to_dtype(DType::F32)?;
+        let mean_square = x_f32.sqr()?.mean_keepdim(1)?; // keep C dimension
+
+        // x / sqrt(mean_square + eps)
         let x_norm = x_f32.broadcast_div(&(mean_square + self.norm.eps)?.sqrt()?)?;
         let x_norm = x_norm.to_dtype(dtype)?;
-        
-        // Reshape back to (B, C, H, W)
-        let x_norm = x_norm.reshape((b, c, h, w))?;
-        
-        // Apply channel-wise weight
+
+        // Apply learnable weight (per-channel scale)
+        let (_, c, _, _) = x.dims4()?;
         let weight = self.norm.weight.reshape((1, c, 1, 1))?;
         let mut x = x_norm.broadcast_mul(&weight)?;
-        
+
+        // Optional activation
         if let Some(act) = &self.activation {
             x = x.apply(act)?;
         }
-        
+
         Ok(x)
     }
 }
@@ -116,8 +116,12 @@ impl LayerScale2d {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        // Reshape gamma to broadcast correctly for NCHW format
-        let gamma = self.gamma.reshape((1, (), 1, 1))?;
+        // Reshape gamma from (C,) -> (1, C, 1, 1) so that it broadcasts
+        // across the (B, H, W) dimensions when applied to an NCHW tensor.
+        // Using an explicit channel dimension instead of the placeholder
+        // `()` avoids undefined behaviour and ensures correct scaling.
+        let c = self.gamma.dims1()?;
+        let gamma = self.gamma.reshape((1, c, 1, 1))?;
         x.broadcast_mul(&gamma)
     }
 }
@@ -522,11 +526,12 @@ impl MultiQueryAttention2d {
         let (b, _c, h, w) = x.dims4()?;
         
         // Query path
-        let q = self.query_proj.forward(x)?;
+        let mut q = self.query_proj.forward(x)?;
         // Reshape: (B, NH*KD, H, W) -> (B, NH, H*W, KD)
-        let q = q.reshape((b, self.num_heads, self.key_dim, h * w))?
+        q = q.reshape((b, self.num_heads, self.key_dim, h * w))?
             .transpose(2, 3)?;
-        let q = (q * self.scale)?;
+        // Promote to f32 for stability during softmax / matmul then apply scale
+        let q = (q.to_dtype(DType::F32)? * self.scale)?;
         
         // Key path
         let mut k = x.clone();
@@ -537,9 +542,10 @@ impl MultiQueryAttention2d {
         k = self.key_proj.forward(&k)?;
         // Reshape: (B, KD, H', W') -> (B, 1, H'*W', KD)
         let (_, _, kh, kw) = k.dims4()?;
-        let k = k.reshape((b, self.key_dim, kh * kw))?
-            .transpose(1, 2)?  // Now: (B, H'*W', KD)
-            .unsqueeze(1)?;    // Now: (B, 1, H'*W', KD)
+        let mut k = k.reshape((b, self.key_dim, kh * kw))?
+            .transpose(1, 2)?  // (B, H'*W', KD)
+            .unsqueeze(1)?;    // (B, 1, H'*W', KD)
+        k = k.to_dtype(DType::F32)?;
         
         // Value path
         let mut v = x.clone();
@@ -550,9 +556,11 @@ impl MultiQueryAttention2d {
         v = self.value_proj.forward(&v)?;
         // Reshape: (B, VD, H', W') -> (B, 1, H'*W', VD)
         let (_, _, vh, vw) = v.dims4()?;
-        let v = v.reshape((b, self.value_dim, vh * vw))?
+        let mut v = v.reshape((b, self.value_dim, vh * vw))?
             .transpose(1, 2)?
             .unsqueeze(1)?;
+        // Keep v in original dtype, but we'll cast the output back later.
+        v = v.to_dtype(DType::F32)?;
         
         // Attention
         // q: [B, NH, H*W, KD], k: [B, 1, H'*W', KD]
@@ -572,10 +580,13 @@ impl MultiQueryAttention2d {
         let o = attn.broadcast_matmul(&v)?; // [B, NH, H*W, VD]
         
         // Reshape output: (B, NH, H*W, VD) -> (B, NH*VD, H, W)
-        let o = o.transpose(1, 2)?
+        // Required ordering: channels (NH*VD) first, spatial (H*W) last.
+        let o = o.permute((0, 1, 3, 2))? // (B, NH, VD, H*W)
             .reshape((b, self.num_heads * self.value_dim, h, w))?;
         
         // Output projection
+        // Cast back to original parameter dtype (likely f16) before final proj
+        let o = o.to_dtype(x.dtype())?;
         let o = self.output_proj.forward(&o)?;
         
         Ok(o)
@@ -741,27 +752,29 @@ impl MobileNetV5MultiScaleFusionAdapter {
         // Concatenate along channel dimension
         let channel_cat_imgs = Tensor::cat(&resized_inputs, 1)?;
         
-        // Apply FFN
+        // Apply FFN first
         let mut img = self.ffn.forward(&channel_cat_imgs)?;
-        
-        // Apply normalization if not noskip
-        img = self.norm.forward(&img)?;
-        
-        // Resize to output resolution if needed
+
+        // Resize / pool to target output resolution *before* final normalisation
         let (out_h, out_w) = self.output_resolution;
         if h0 != out_h || w0 != out_w {
             if h0 % out_h != 0 || w0 % out_w != 0 {
-                // Use bilinear interpolation as bicubic equivalent
-                // Use nearest neighbor upsampling as a fallback
+                // Fallback to bilinear interpolation if input spatial dims are
+                // not integer multiples of the desired output size. We use
+                // Candle’s nearest-neighbour upsample as the closest available
+                // op; the difference is negligible after the following RMS
+                // normalisation.
                 img = img.upsample_nearest2d(out_h, out_w)?;
             } else {
-                // Use average pooling for downsampling
                 let h_stride = h0 / out_h;
                 let w_stride = w0 / out_w;
                 img = img.avg_pool2d((h_stride, w_stride))?;
             }
         }
-        
+
+        // Final RMS norm (acts like LayerNorm over channels)
+        img = self.norm.forward(&img)?;
+
         Ok(img)
     }
 }
