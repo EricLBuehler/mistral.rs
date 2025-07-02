@@ -70,7 +70,7 @@ mod speech_models;
 mod toml_selector;
 mod tools;
 mod topology;
-mod utils;
+pub mod utils;
 mod vision_models;
 mod xlora_models;
 
