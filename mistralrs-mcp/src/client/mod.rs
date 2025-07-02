@@ -291,15 +291,7 @@ fn tool_from_mcp(info: &McpToolInfo) -> LocalTool {
         function: Function {
             name: info.name.clone(),
             description: info.description.clone(),
-            parameters: if let serde_json::Value::Object(ref obj) = info.input_schema {
-                if let Some(serde_json::Value::Object(props)) = obj.get("properties") {
-                    Some(props.clone().into_iter().collect())
-                } else {
-                    Some(obj.clone().into_iter().collect())
-                }
-            } else {
-                None
-            },
+            parameters: Some(info.input_schema.clone()),
         },
     }
 }
