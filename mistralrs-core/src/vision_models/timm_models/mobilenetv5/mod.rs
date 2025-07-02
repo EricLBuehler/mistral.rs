@@ -1,5 +1,3 @@
-mod config;
-
 use candle_core::{DType, Result, Tensor, D};
 use candle_nn::{Activation, Conv2d, Conv2dConfig, Module};
 use mistralrs_quant::ShardedVarBuilder;
@@ -44,16 +42,6 @@ impl RMSNorm {
     fn new(dims: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
         let weight = vb.get(dims, "weight")?;
         Ok(Self { weight, eps })
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let dtype = x.dtype();
-        let x = x.to_dtype(DType::F32)?;
-        let mean_square = x.sqr()?.mean_keepdim(D::Minus1)?;
-        let x = x.broadcast_div(&(mean_square + self.eps)?.sqrt()?)?;
-        let x = x.to_dtype(dtype)?;
-        let x = x.broadcast_mul(&self.weight)?;
-        Ok(x)
     }
 }
 
@@ -110,7 +98,7 @@ struct LayerScale2d {
 }
 
 impl LayerScale2d {
-    fn new(dim: usize, init_values: f64, vb: ShardedVarBuilder) -> Result<Self> {
+    fn new(dim: usize, vb: ShardedVarBuilder) -> Result<Self> {
         let gamma = vb.get(dim, "gamma")?;
         Ok(Self { gamma })
     }
@@ -351,8 +339,8 @@ impl UniversalInvertedResidual {
         )?;
         
         // Layer scale
-        let layer_scale = if let Some(init_value) = layer_scale_init_value {
-            Some(LayerScale2d::new(out_chs, init_value, vb.pp("layer_scale"))?)
+        let layer_scale = if layer_scale_init_value.is_some() {
+            Some(LayerScale2d::new(out_chs, vb.pp("layer_scale"))?)
         } else {
             None
         };
@@ -629,8 +617,8 @@ impl MobileAttention {
             vb.pp("attn"),
         )?;
         
-        let layer_scale = if let Some(init_value) = layer_scale_init_value {
-            Some(LayerScale2d::new(out_chs, init_value, vb.pp("layer_scale"))?)
+        let layer_scale = if layer_scale_init_value.is_some() {
+            Some(LayerScale2d::new(out_chs, vb.pp("layer_scale"))?)
         } else {
             None
         };
@@ -684,8 +672,6 @@ fn make_divisible(v: f64, divisor: usize) -> usize {
 // Multi-scale fusion adapter
 #[derive(Debug, Clone)]
 struct MobileNetV5MultiScaleFusionAdapter {
-    in_channels: usize,
-    out_channels: usize,
     output_resolution: (usize, usize),
     ffn: UniversalInvertedResidual,
     norm: RMSNormAct2d,
@@ -724,8 +710,6 @@ impl MobileNetV5MultiScaleFusionAdapter {
         let norm = RMSNormAct2d::new(out_chs, 1e-6, false, vb.pp("norm"))?;
         
         Ok(Self {
-            in_channels,
-            out_channels: out_chs,
             output_resolution,
             ffn,
             norm,
@@ -1123,10 +1107,5 @@ impl VisionTower {
         let x = self.msfa.forward(&intermediates)?;
         
         Ok(x)
-    }
-    
-    pub fn dtype(&self) -> DType {
-        // Return the dtype from the conv_stem weight
-        self.conv_stem.conv.weight().dtype()
     }
 }

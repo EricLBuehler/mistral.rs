@@ -28,7 +28,6 @@ use crate::{
 use super::Gemma3nSpecificArgs;
 
 struct Gemma3nImageProcessor {
-    vision_soft_tokens_per_image: usize,
     supports_images: bool,
     full_image_sequence: String,
 }
@@ -56,7 +55,8 @@ impl Gemma3nProcessor {
 
     fn create_full_image_sequence(&self) -> String {
         // Create the full image token sequence: "\n\n<boi>{repeated image tokens}<eoi>\n\n"
-        let image_tokens_expanded = vec![IMAGE_TOKEN.to_string(); self.vision_soft_tokens_per_image].join("");
+        let image_tokens_expanded =
+            vec![IMAGE_TOKEN.to_string(); self.vision_soft_tokens_per_image].join("");
         format!("\n\n{BOI_TOKEN}{image_tokens_expanded}{EOI_TOKEN}\n\n")
     }
 }
@@ -64,7 +64,6 @@ impl Gemma3nProcessor {
 impl Processor for Gemma3nProcessor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         Arc::new(Gemma3nImageProcessor {
-            vision_soft_tokens_per_image: self.vision_soft_tokens_per_image,
             supports_images: self.supports_images,
             full_image_sequence: self.create_full_image_sequence(),
         })
@@ -132,7 +131,7 @@ impl InputsProcessor for Gemma3nImageProcessor {
             }
 
             let mut pixel_values_accum = Vec::new();
-            
+
             for seq in input_seqs.iter_mut() {
                 let PreprocessedImages {
                     pixel_values,
@@ -169,16 +168,16 @@ impl InputsProcessor for Gemma3nImageProcessor {
                     let mut prompt = _tokenizer
                         .decode(seq.get_toks(), false)
                         .expect("Detokenization failed!");
-                    
+
                     // Replace each <image> token with the full image sequence
                     prompt = prompt.replace(IMAGE_TOKEN, &self.full_image_sequence);
-                    
+
                     // Re-tokenize the modified prompt
                     seq.set_initial_prompt(prompt.clone());
                     let toks = _tokenizer
                         .encode_fast(prompt, false)
                         .expect("Tokenization failed!");
-                    
+
                     let ids = toks.get_ids().to_vec();
                     seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
                     seq.multimodal.has_changed_prompt = true;

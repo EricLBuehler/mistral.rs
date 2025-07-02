@@ -38,12 +38,9 @@ impl Gemma3nMultimodalEmbedder {
             vb.pp("embedding"),
             &cfg.quantization_config,
         )?;
-        
+
         // Scale the embeddings by sqrt(multimodal_hidden_size)
-        let embedding = ScaledEmbedding::new(
-            (multimodal_hidden_size as f64).sqrt(),
-            embed_tokens,
-        );
+        let embedding = ScaledEmbedding::new((multimodal_hidden_size as f64).sqrt(), embed_tokens);
 
         // Create normalization layers with proper prefixes
         let hard_embedding_norm = RmsNorm::new_gemma_3n(
@@ -101,13 +98,13 @@ impl Gemma3nMultimodalEmbedder {
 
         // Embed the tokens
         let embeddings = self.embedding.forward(&adjusted_ids)?;
-        
+
         // Apply hard embedding normalization
         let normalized = self.hard_embedding_norm.forward(&embeddings)?;
-        
+
         // Project to text hidden size
         let projected = self.embedding_projection.forward(&normalized)?;
-        
+
         // Apply post-projection normalization
         self.embedding_post_projection_norm.forward(&projected)
     }
@@ -116,29 +113,11 @@ impl Gemma3nMultimodalEmbedder {
     pub fn forward_vision(&self, soft_features: &Tensor) -> Result<Tensor> {
         // Apply soft embedding normalization
         let normalized = self.soft_embedding_norm.forward(soft_features)?;
-        
+
         // Project to text hidden size
         let projected = self.embedding_projection.forward(&normalized)?;
-        
+
         // Apply post-projection normalization
         self.embedding_post_projection_norm.forward(&projected)
-    }
-
-    /// Combined forward pass that can handle either text or vision inputs
-    pub fn forward(
-        &self,
-        input_ids: Option<&Tensor>,
-        inputs_embeds: Option<&Tensor>,
-    ) -> Result<Tensor> {
-        match (input_ids, inputs_embeds) {
-            (Some(ids), None) => self.forward_text(ids),
-            (None, Some(embeds)) => self.forward_vision(embeds),
-            (Some(_), Some(_)) => {
-                candle_core::bail!("Cannot specify both input_ids and inputs_embeds")
-            }
-            (None, None) => {
-                candle_core::bail!("Must specify either input_ids or inputs_embeds")
-            }
-        }
     }
 }
