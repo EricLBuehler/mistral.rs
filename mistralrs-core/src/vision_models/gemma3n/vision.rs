@@ -119,6 +119,7 @@ struct ConvNormAct {
 }
 
 impl ConvNormAct {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         in_chs: usize,
         out_chs: usize,
@@ -245,6 +246,7 @@ struct UniversalInvertedResidual {
 }
 
 impl UniversalInvertedResidual {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         in_chs: usize,
         out_chs: usize,
@@ -368,6 +370,7 @@ struct MultiQueryAttention2d {
 }
 
 impl MultiQueryAttention2d {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         dim: usize,
         dim_out: usize,
@@ -552,6 +555,7 @@ struct MobileAttention {
 }
 
 impl MobileAttention {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         in_chs: usize,
         out_chs: usize,

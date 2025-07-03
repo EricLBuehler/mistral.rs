@@ -94,6 +94,7 @@ impl Gemma3nModel {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -202,7 +203,7 @@ impl Gemma3nModel {
             &self.embed_audio,
         ) {
             // Process audio through audio tower
-            let (audio_features, _) = audio_tower.forward(&audio_mel, &audio_mel_mask)?;
+            let (audio_features, _) = audio_tower.forward(audio_mel, audio_mel_mask)?;
 
             // Convert audio features to embeddings
             let audio_embeds = embed_audio.forward_vision(&audio_features)?;

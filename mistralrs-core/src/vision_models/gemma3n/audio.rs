@@ -84,9 +84,7 @@ impl Gemma3nCumulativeGroupNorm {
             }
             // Expand mask from [B, T] to [B, T, 1, ..., 1] for broadcasting
             let mut mask_shape = mask.dims().to_vec();
-            for _ in 0..expected_suffix.len() {
-                mask_shape.push(1);
-            }
+            mask_shape.extend(std::iter::repeat_n(1, expected_suffix.len()));
             mask.reshape(mask_shape)?.to_dtype(calc_dtype)?
         } else {
             Tensor::ones_like(&x_calc)?
@@ -226,6 +224,7 @@ impl Gemma3nAudioRelativePositionEmbedding {
         timing_signal.to_dtype(dtype)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn relative_shift(
         &self,
         term_bd_before_shift: &Tensor,
@@ -295,7 +294,7 @@ impl Gemma3nAudioRelativePositionEmbedding {
         let pos_indices = &self.pos_indices;
         let max_span_plus_1 = pos_indices.dim(1)?;
 
-        let sin_emb_timing_signal = self.get_timing_signal_1d_pos(&pos_indices, queries.dtype())?;
+        let sin_emb_timing_signal = self.get_timing_signal_1d_pos(pos_indices, queries.dtype())?;
 
         // Project sinusoidal embeddings
         let projected_sin_emb = self.pos_proj.forward(&sin_emb_timing_signal)?;
