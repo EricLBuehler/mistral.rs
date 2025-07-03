@@ -76,8 +76,9 @@ impl RMSNormAct2d {
         let x_f32 = x.to_dtype(DType::F32)?;
         let mean_square = x_f32.sqr()?.mean_keepdim(1)?; // keep C dimension
 
-        // x / sqrt(mean_square + eps)
-        let x_norm = x_f32.broadcast_div(&(mean_square + self.norm.eps)?.sqrt()?)?;
+        // Fused operation: x / sqrt(mean_square + eps)
+        let rsqrt = (mean_square + self.norm.eps)?.recip()?.sqrt()?;
+        let x_norm = x_f32.broadcast_mul(&rsqrt)?;
         let x_norm = x_norm.to_dtype(dtype)?;
 
         // Apply learnable weight (per-channel scale)
@@ -686,7 +687,7 @@ impl MobileNetV5MultiScaleFusionAdapter {
         let (_, _, h0, w0) = inputs[0].dims4()?;
 
         // Resize inputs to match highest resolution
-        let mut resized_inputs = Vec::new();
+        let mut resized_inputs = Vec::with_capacity(inputs.len());
         for img in inputs {
             let (_, _, h, w) = img.dims4()?;
             if h < h0 || w < w0 {
@@ -950,11 +951,11 @@ impl VisionTower {
 
         // Build blocks according to architecture definition
         let block_defs = gemma3n_mobilenet_def();
-        let mut blocks = Vec::new();
+        let mut blocks = Vec::with_capacity(block_defs.len());
         let mut in_chs = 64;
 
         for (stage_idx, stage_blocks) in block_defs.iter().enumerate() {
-            let mut stage = Vec::new();
+            let mut stage = Vec::with_capacity(stage_blocks.len());
 
             for (block_idx, block_type) in stage_blocks.iter().enumerate() {
                 let block = match block_type {

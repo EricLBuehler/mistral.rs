@@ -86,12 +86,20 @@ impl Gemma3nMultimodalEmbedder {
     pub fn forward_text(&self, input_ids: &Tensor) -> Result<Tensor> {
         // Subtract vocab_offset from input_ids
         let adjusted_ids = if self.vocab_offset != 0 {
-            // Convert input_ids to i64 for arithmetic operations
-            let input_ids_i64 = input_ids.to_dtype(candle_core::DType::I64)?;
+            // Optimize: only convert if not already i64
+            let (input_ids_i64, needs_convert_back) = if input_ids.dtype() == candle_core::DType::I64 {
+                (input_ids.clone(), false)
+            } else {
+                (input_ids.to_dtype(candle_core::DType::I64)?, true)
+            };
             let offset_tensor = Tensor::new(self.vocab_offset, input_ids.device())?;
             let adjusted = input_ids_i64.broadcast_sub(&offset_tensor)?;
-            // Convert back to original dtype
-            adjusted.to_dtype(input_ids.dtype())?
+            // Convert back only if needed
+            if needs_convert_back {
+                adjusted.to_dtype(input_ids.dtype())?
+            } else {
+                adjusted
+            }
         } else {
             input_ids.clone()
         };

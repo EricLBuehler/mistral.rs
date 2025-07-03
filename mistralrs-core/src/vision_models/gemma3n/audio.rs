@@ -53,6 +53,8 @@ impl Gemma3nCumulativeGroupNorm {
     }
 
     pub fn forward(&self, x: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+        // Pre-computed expected suffix to avoid repeated allocations
+        let expected_suffix_len = self.feature_dims.len() + 1;
         let expected_suffix = self
             .feature_dims
             .iter()
@@ -84,7 +86,7 @@ impl Gemma3nCumulativeGroupNorm {
             }
             // Expand mask from [B, T] to [B, T, 1, ..., 1] for broadcasting
             let mut mask_shape = mask.dims().to_vec();
-            mask_shape.extend(std::iter::repeat_n(1, expected_suffix.len()));
+            mask_shape.extend(std::iter::repeat_n(1, expected_suffix_len));
             mask.reshape(mask_shape)?.to_dtype(calc_dtype)?
         } else {
             Tensor::ones_like(&x_calc)?
@@ -93,17 +95,19 @@ impl Gemma3nCumulativeGroupNorm {
         // Mask the input for sum calculation: only valid elements contribute
         let x_masked_for_sum = x_calc.broadcast_mul(&mask_calc)?;
 
-        let mut sum_values_at_t = x_masked_for_sum.clone();
-        for &axis in self.reduction_axes.iter().rev() {
-            sum_values_at_t = sum_values_at_t.sum_keepdim(axis)?;
-        }
+        // Fuse reduction operations
+        let sum_values_at_t = self.reduction_axes.iter().rev().try_fold(
+            x_masked_for_sum,
+            |acc, &axis| acc.sum_keepdim(axis)
+        )?;
 
         let cum_sum_values = sum_values_at_t.cumsum(1)?;
 
-        let mut elements_in_group_at_t = mask_calc.clone();
-        for &axis in self.reduction_axes.iter().rev() {
-            elements_in_group_at_t = elements_in_group_at_t.sum_keepdim(axis)?;
-        }
+        // Fuse reduction operations for mask
+        let elements_in_group_at_t = self.reduction_axes.iter().rev().try_fold(
+            mask_calc.clone(),
+            |acc, &axis| acc.sum_keepdim(axis)
+        )?;
 
         let cum_count_elements = elements_in_group_at_t.cumsum(1)?;
         let safe_cum_count_elements = cum_count_elements.clamp(1.0, f64::INFINITY)?;
@@ -111,10 +115,11 @@ impl Gemma3nCumulativeGroupNorm {
         let cum_mean = cum_sum_values.div(&safe_cum_count_elements)?;
 
         let squared_diff_from_mean = (x_calc.broadcast_sub(&cum_mean))?.sqr()?;
-        let mut sum_sq_diff_at_t = squared_diff_from_mean.broadcast_mul(&mask_calc)?;
-        for &axis in self.reduction_axes.iter().rev() {
-            sum_sq_diff_at_t = sum_sq_diff_at_t.sum_keepdim(axis)?;
-        }
+        // Fuse reduction operations for squared differences
+        let sum_sq_diff_at_t = self.reduction_axes.iter().rev().try_fold(
+            squared_diff_from_mean.broadcast_mul(&mask_calc)?,
+            |acc, &axis| acc.sum_keepdim(axis)
+        )?;
 
         let cum_sum_sq_diff = sum_sq_diff_at_t.cumsum(1)?;
 
@@ -130,18 +135,22 @@ impl Gemma3nCumulativeGroupNorm {
         )?;
 
         let mut result = normalized_x;
+        let dims_len = x.dims().len();
+        
         if let Some(weight) = &self.weight {
             let scale = weight.to_dtype(calc_dtype)?;
-            let mut scale_shape = vec![1; x.dims().len()];
-            scale_shape[x.dims().len() - 1] = self.num_channels; // Channels at last dimension
+            // Optimize reshape by reusing shape vector
+            let mut scale_shape = vec![1; dims_len];
+            scale_shape[dims_len - 1] = self.num_channels;
             let scale = scale.reshape(scale_shape)?;
             result = result.broadcast_mul(&scale)?;
         }
 
         if let Some(bias) = &self.bias {
             let bias = bias.to_dtype(calc_dtype)?;
-            let mut bias_shape = vec![1; x.dims().len()];
-            bias_shape[x.dims().len() - 1] = self.num_channels; // Channels at last dimension
+            // Reuse dims_len from earlier
+            let mut bias_shape = vec![1; dims_len];
+            bias_shape[dims_len - 1] = self.num_channels;
             let bias = bias.reshape(bias_shape)?;
             result = result.broadcast_add(&bias)?;
         }
@@ -362,7 +371,7 @@ pub struct Gemma3nAudioAttention {
     max_past_horizon: usize,
     context_size: usize,
     relative_position_embedding: Gemma3nAudioRelativePositionEmbedding,
-    per_dim_scale: Tensor,
+    _per_dim_scale: Tensor,
     q_proj: Linear,
     k_proj: Linear,
     v_proj: Linear,
@@ -370,6 +379,7 @@ pub struct Gemma3nAudioAttention {
     local_causal_valid_mask: Tensor,
     softcap: Tensor,
     invalid_logits_tensor: Tensor,
+    per_dim_scale_softplus: Tensor,  // Pre-computed softplus
 }
 
 impl Gemma3nAudioAttention {
@@ -439,6 +449,13 @@ impl Gemma3nAudioAttention {
             vb.device(),
         )?;
 
+        // Pre-compute softplus of per_dim_scale
+        let per_dim_scale_softplus = {
+            let ones = Tensor::ones_like(&per_dim_scale)?.to_dtype(DType::F32)?;
+            let exp_scale = per_dim_scale.to_dtype(DType::F32)?.exp()?;
+            ones.broadcast_add(&exp_scale)?.log()?
+        };
+
         Ok(Self {
             num_heads,
             head_dim,
@@ -447,7 +464,7 @@ impl Gemma3nAudioAttention {
             max_past_horizon,
             context_size,
             relative_position_embedding,
-            per_dim_scale,
+            _per_dim_scale: per_dim_scale,
             q_proj,
             k_proj,
             v_proj,
@@ -455,6 +472,7 @@ impl Gemma3nAudioAttention {
             local_causal_valid_mask,
             softcap,
             invalid_logits_tensor,
+            per_dim_scale_softplus,
         })
     }
 
@@ -491,10 +509,10 @@ impl Gemma3nAudioAttention {
         let time_dim = x.dim(1)?;
         let num_windows = (time_dim - frame_len) / frame_step + 1;
 
-        let mut windows = Vec::new();
+        // Pre-allocate windows vector with capacity
+        let mut windows = Vec::with_capacity(num_windows);
         for i in 0..num_windows {
             let start_idx = i * frame_step;
-            let _end_idx = start_idx + frame_len;
             let window = x.narrow(1, start_idx, frame_len)?;
             windows.push(window);
         }
@@ -519,14 +537,8 @@ impl Gemma3nAudioAttention {
         let key_states = key_states.reshape((b, t, self.num_heads, self.head_dim))?;
         let value_states = value_states.reshape((b, t, self.num_heads, self.head_dim))?;
 
-        // Apply per-dim scale using logaddexp(x, 0) = log(exp(x) + 1) = softplus(x)
-        let per_dim_scale_sp = {
-            let ones = Tensor::ones_like(&self.per_dim_scale)?.to_dtype(DType::F32)?;
-            let exp_scale = self.per_dim_scale.to_dtype(DType::F32)?.exp()?;
-            ones.broadcast_add(&exp_scale)?.log()?
-        };
-
-        let per_dim_scale_sp_broadcast = per_dim_scale_sp
+        // Use pre-computed softplus and reshape for broadcasting
+        let per_dim_scale_sp_broadcast = self.per_dim_scale_softplus
             .reshape((1, 1, 1, self.head_dim))?
             .to_dtype(query_states.dtype())?;
 
@@ -951,6 +963,7 @@ pub struct Gemma3nAudioConformerAttention {
     attn: Gemma3nAudioAttention,
     post: Linear,
     post_norm: RmsNorm,
+    hidden_size: usize,  // Cache for reshape operations
 }
 
 impl Gemma3nAudioConformerAttention {
@@ -978,6 +991,7 @@ impl Gemma3nAudioConformerAttention {
             attn,
             post,
             post_norm,
+            hidden_size: config.hidden_size,
         })
     }
 
@@ -990,12 +1004,9 @@ impl Gemma3nAudioConformerAttention {
         let audio_encodings_attn_out = self.attn.forward(&audio_encodings_norm, mask)?;
 
         // Reshape to [B, T, NumHeads * HeadDim]
-        let (b, t, num_heads, head_dim) = match audio_encodings_attn_out.dims() {
-            &[b, t, n, h] => (b, t, n, h),
-            _ => bail!("Expected attention output to have 4 dimensions"),
-        };
+        let (b, t, _, _) = audio_encodings_attn_out.dims4()?;
         let audio_encodings_reshaped =
-            audio_encodings_attn_out.reshape((b, t, num_heads * head_dim))?;
+            audio_encodings_attn_out.reshape((b, t, self.hidden_size))?;
 
         let x = self.post.forward(&audio_encodings_reshaped)?;
         let x = x.broadcast_mul(&self.clip_mask.broadcast_as(x.shape())?)?;
@@ -1290,15 +1301,22 @@ impl AudioModel {
         } else {
             // 2D indices case - need to handle batch dimension
             let batch_size = audio_mel_mask.dim(0)?;
-            let mut masks = Vec::new();
+            let mut masks = Vec::with_capacity(batch_size);
+            let indices_single_batch = indices.dim(0)? == 1;
+            let indices_squeezed = if indices_single_batch {
+                Some(indices.squeeze(0)?)
+            } else {
+                None
+            };
+            
             for b in 0..batch_size {
                 let batch_mask = audio_mel_mask.get(b)?;
-                let batch_indices = if indices.dim(0)? > 1 {
-                    indices.get(b)?
+                let batch_indices = if indices_single_batch {
+                    indices_squeezed.as_ref().unwrap()
                 } else {
-                    indices.squeeze(0)?
+                    &indices.get(b)?
                 };
-                let selected = batch_mask.index_select(&batch_indices, 0)?;
+                let selected = batch_mask.index_select(batch_indices, 0)?;
                 masks.push(selected.unsqueeze(0)?);
             }
             Tensor::cat(&masks, 0)?
