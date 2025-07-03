@@ -9,7 +9,6 @@ use tokenizers::Tokenizer;
 use tracing::warn;
 
 use crate::{
-    vision_models::gemma3n::audio_processing::AudioProcessor,
     device_map::DeviceMapper,
     pipeline::{
         text_models_inputs_processor::{
@@ -18,6 +17,7 @@ use crate::{
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
     sequence::Sequence,
+    vision_models::gemma3n::audio_processing::AudioProcessor,
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::{PreProcessorConfig, ToFilter},
@@ -99,7 +99,14 @@ impl Processor for Gemma3nProcessor {
     }
 
     fn get_special_tokens(&self) -> &[&'static str] {
-        &[IMAGE_TOKEN, BOI_TOKEN, EOI_TOKEN, AUDIO_TOKEN, BOA_TOKEN, EOA_TOKEN]
+        &[
+            IMAGE_TOKEN,
+            BOI_TOKEN,
+            EOI_TOKEN,
+            AUDIO_TOKEN,
+            BOA_TOKEN,
+            EOA_TOKEN,
+        ]
     }
 
     fn template_action(&self) -> MessagesAction {
@@ -158,13 +165,14 @@ impl InputsProcessor for Gemma3nImageProcessor {
             let mut audio_mel_accum = Vec::new();
             let mut audio_mask_accum = Vec::new();
             let audio_processor = AudioProcessor::new();
-            
+
             for seq in input_seqs.iter_mut() {
                 if let Some(audios) = seq.take_audios() {
                     for audio in audios {
-                        let (mel, mask) = audio_processor.process_audio(&audio, device)
+                        let (mel, mask) = audio_processor
+                            .process_audio(&audio, device)
                             .expect("Audio processing failed");
-                        
+
                         // Calculate number of audio tokens based on mel features before moving
                         // Account for the reductions in the audio model:
                         // - Subsampling conv layers: 2x2 stride for 2 layers = 4x reduction in time
@@ -172,26 +180,26 @@ impl InputsProcessor for Gemma3nImageProcessor {
                         // Total reduction: 16x
                         let mel_frames = mel.dim(1).unwrap_or(128);
                         let num_audio_tokens = (mel_frames + 15) / 16; // Round up division by 16
-                        
+
                         audio_mel_accum.push(mel);
                         audio_mask_accum.push(mask);
-                        
+
                         // Update prompt with audio tokens
                         if !seq.multimodal.has_changed_prompt {
                             let mut prompt = tokenizer
                                 .decode(seq.get_toks(), false)
                                 .expect("Detokenization failed!");
                             let audio_sequence = self.create_full_audio_sequence(num_audio_tokens);
-                            
+
                             // Replace audio placeholder with tokens
                             prompt = prompt.replace(AUDIO_TOKEN, &audio_sequence);
-                            
+
                             // Re-tokenize
                             seq.set_initial_prompt(prompt.clone());
                             let toks = tokenizer
                                 .encode_fast(prompt, false)
                                 .expect("Tokenization failed!");
-                            
+
                             let ids = toks.get_ids().to_vec();
                             seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
                             seq.multimodal.has_changed_prompt = true;
@@ -199,9 +207,12 @@ impl InputsProcessor for Gemma3nImageProcessor {
                     }
                 }
             }
-            
+
             if !audio_mel_accum.is_empty() {
-                match (Tensor::cat(&audio_mel_accum, 0), Tensor::cat(&audio_mask_accum, 0)) {
+                match (
+                    Tensor::cat(&audio_mel_accum, 0),
+                    Tensor::cat(&audio_mask_accum, 0),
+                ) {
                     (Ok(mel), Ok(mask)) => (Some(mel), Some(mask)),
                     (Err(e), _) | (_, Err(e)) => {
                         return Box::new(std::iter::once(Err(anyhow::Error::from(e))));

@@ -94,8 +94,16 @@ serde_default_fn!(usize, conf_reduction_factor, 4);
 serde_default_fn!(f64, conf_residual_weight, 0.5);
 serde_default_fn!(Vec<usize>, sscp_conv_channel_size, vec![128, 32]);
 serde_default_fn!(f64, sscp_conv_group_norm_eps, 1e-3);
-serde_default_fn!(Vec<Vec<usize>>, sscp_conv_kernel_size, vec![vec![3, 3], vec![3, 3]]);
-serde_default_fn!(Vec<Vec<usize>>, sscp_conv_stride_size, vec![vec![2, 2], vec![2, 2]]);
+serde_default_fn!(
+    Vec<Vec<usize>>,
+    sscp_conv_kernel_size,
+    vec![vec![3, 3], vec![3, 3]]
+);
+serde_default_fn!(
+    Vec<Vec<usize>>,
+    sscp_conv_stride_size,
+    vec![vec![2, 2], vec![2, 2]]
+);
 serde_default_fn!(usize, audio_vocab_size, 128);
 serde_default_fn!(f64, sscp_conv_eps, 1e-3);
 serde_default_fn!(f64, audio_rms_norm_eps, 1e-6);

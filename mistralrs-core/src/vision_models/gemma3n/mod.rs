@@ -20,9 +20,9 @@ use crate::{
 
 use self::multimodal_embedding::Gemma3nMultimodalEmbedder;
 
-pub mod config;
 mod audio;
 mod audio_processing;
+pub mod config;
 mod inputs_processor;
 mod multimodal_embedding;
 mod text;
@@ -117,24 +117,32 @@ impl Gemma3nModel {
         let language_embeds = self.language_model.embed_tokens(input_ids)?;
 
         // Step 2: Handle audio tokens if audio config is present
-        let mut input_embeds = if let (Some(audio_cfg), Some(embed_audio)) = (&self.cfg.audio_config, &self.embed_audio) {
+        let mut input_embeds = if let (Some(audio_cfg), Some(embed_audio)) =
+            (&self.cfg.audio_config, &self.embed_audio)
+        {
             let audio_vocab_offset = audio_cfg.vocab_offset as f64;
-            
+
             // Create masks for vision and audio tokens
-            let vision_mask = input_ids.to_dtype(DType::F32)?
+            let vision_mask = input_ids
+                .to_dtype(DType::F32)?
                 .ge(vocab_offset)?
                 .mul(&input_ids.to_dtype(DType::F32)?.lt(audio_vocab_offset)?)?;
             let audio_mask = input_ids.to_dtype(DType::F32)?.ge(audio_vocab_offset)?;
-            
+
             // Get embeddings for each modality
             let vision_token_embeds = self.embed_vision.forward_text(input_ids)?;
             let audio_token_embeds = embed_audio.forward_text(input_ids)?;
-            
+
             // Combine embeddings based on token type
-            let expanded_vision_mask = vision_mask.unsqueeze(D::Minus1)?.broadcast_as(language_embeds.shape())?;
-            let expanded_audio_mask = audio_mask.unsqueeze(D::Minus1)?.broadcast_as(language_embeds.shape())?;
-            
-            let embeds_with_vision = expanded_vision_mask.where_cond(&vision_token_embeds, &language_embeds)?;
+            let expanded_vision_mask = vision_mask
+                .unsqueeze(D::Minus1)?
+                .broadcast_as(language_embeds.shape())?;
+            let expanded_audio_mask = audio_mask
+                .unsqueeze(D::Minus1)?
+                .broadcast_as(language_embeds.shape())?;
+
+            let embeds_with_vision =
+                expanded_vision_mask.where_cond(&vision_token_embeds, &language_embeds)?;
             expanded_audio_mask.where_cond(&audio_token_embeds, &embeds_with_vision)?
         } else {
             // No audio config, just handle vision tokens
@@ -187,19 +195,27 @@ impl Gemma3nModel {
         }
 
         // Step 6: If we have audio features, replace audio placeholder tokens
-        if let (Some(audio_mel), Some(audio_mel_mask), Some(audio_tower), Some(embed_audio)) = 
-            (audio_mel, audio_mel_mask, &self.audio_tower, &self.embed_audio) {
+        if let (Some(audio_mel), Some(audio_mel_mask), Some(audio_tower), Some(embed_audio)) = (
+            audio_mel,
+            audio_mel_mask,
+            &self.audio_tower,
+            &self.embed_audio,
+        ) {
             audio_mel.write_npy("input_features_m.npy")?;
-            let audio_mel = Tensor::read_npy("input_features.npy")?.to_device(audio_mel.device())?.to_dtype(audio_mel.dtype())?;
-            let audio_mel_mask = Tensor::read_npy("input_features_mask.npy")?.to_device(audio_mel_mask.device())?.to_dtype(audio_mel_mask.dtype())?;
+            let audio_mel = Tensor::read_npy("input_features.npy")?
+                .to_device(audio_mel.device())?
+                .to_dtype(audio_mel.dtype())?;
+            let audio_mel_mask = Tensor::read_npy("input_features_mask.npy")?
+                .to_device(audio_mel_mask.device())?
+                .to_dtype(audio_mel_mask.dtype())?;
             // Process audio through audio tower
             let (audio_features, _) = audio_tower.forward(&audio_mel, &audio_mel_mask)?;
             audio_features.write_npy("audio_outputs_m.npy")?;
             // let audio_features = Tensor::read_npy("audio_outputs.npy")?.to_device(audio_features.device())?.to_dtype(audio_features.dtype())?;
-            
+
             // Convert audio features to embeddings
             let audio_embeds = embed_audio.forward_vision(&audio_features)?;
-            
+
             // Create mask for audio soft tokens
             let audio_token_mask = input_ids
                 .to_dtype(DType::F32)?
@@ -207,24 +223,24 @@ impl Gemma3nModel {
                 .unsqueeze(D::Minus1)?
                 .broadcast_as(input_embeds.shape())?
                 .to_dtype(DType::U32)?;
-            
+
             // Flatten tensors for scatter operation
             let mask_flat = audio_token_mask.flatten_all()?;
             let indices = mask_flat.nonzero()?.squeeze(1)?;
-            
+
             // Only do the replacement if we have audio tokens to replace
             if indices.dims()[0] > 0 {
                 let mut x_flat = input_embeds.flatten_all()?;
                 let src_flat = audio_embeds.flatten_all()?;
-                
+
                 // Get dimensions
                 let embed_dim = audio_embeds.dim(2)?;
                 let _num_audio_embeddings = audio_embeds.dim(1)?; // 58 audio embeddings
-                
+
                 // Count how many positions we need to fill
                 let num_positions_to_fill = indices.dims()[0]; // Total positions
                 let _num_audio_tokens_in_input = num_positions_to_fill / embed_dim;
-                
+
                 // With the corrected token count, we should have a 1:1 mapping
                 // between audio tokens and embeddings
                 let audio_values = if num_positions_to_fill == src_flat.dims()[0] {
@@ -238,19 +254,19 @@ impl Gemma3nModel {
                     // by repeating embeddings if needed
                     let mut repeated_values = Vec::new();
                     let src_vec: Vec<f32> = src_flat.to_vec1()?;
-                    
+
                     for i in 0..num_positions_to_fill {
                         repeated_values.push(src_vec[i % src_vec.len()]);
                     }
-                    
+
                     Tensor::from_vec(repeated_values, (num_positions_to_fill,), src_flat.device())?
                 };
-                
+
                 // Replace audio tokens with actual audio embeddings
                 let current_vals = x_flat.gather(&indices, 0)?;
                 let diff = (audio_values - current_vals)?;
                 x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
-                
+
                 input_embeds = x_flat.reshape(input_embeds.shape())?;
             }
         }
@@ -310,7 +326,7 @@ impl VisionModel for Gemma3nModel {
         let args = model_specific_args
             .downcast::<Gemma3nSpecificArgs>()
             .expect("Downcast to Gemma3nSpecificArgs failed");
-        
+
         self.forward(
             input_ids,
             pixel_values,
