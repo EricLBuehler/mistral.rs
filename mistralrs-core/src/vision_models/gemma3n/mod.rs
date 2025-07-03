@@ -201,17 +201,8 @@ impl Gemma3nModel {
             &self.audio_tower,
             &self.embed_audio,
         ) {
-            audio_mel.write_npy("input_features_m.npy")?;
-            let audio_mel = Tensor::read_npy("input_features.npy")?
-                .to_device(audio_mel.device())?
-                .to_dtype(audio_mel.dtype())?;
-            let audio_mel_mask = Tensor::read_npy("input_features_mask.npy")?
-                .to_device(audio_mel_mask.device())?
-                .to_dtype(audio_mel_mask.dtype())?;
             // Process audio through audio tower
             let (audio_features, _) = audio_tower.forward(&audio_mel, &audio_mel_mask)?;
-            audio_features.write_npy("audio_outputs_m.npy")?;
-            // let audio_features = Tensor::read_npy("audio_outputs.npy")?.to_device(audio_features.device())?.to_dtype(audio_features.dtype())?;
 
             // Convert audio features to embeddings
             let audio_embeds = embed_audio.forward_vision(&audio_features)?;
