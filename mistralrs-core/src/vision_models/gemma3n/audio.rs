@@ -40,8 +40,6 @@ impl Gemma3nCumulativeGroupNorm {
             None
         };
 
-        // For input format [B, T, *feature_dims, C], normalize over feature_dims and C
-        // Batch is at 0, Time at 1, so we reduce over dimensions 2 onwards
         let reduction_axes: Vec<usize> = (2..2 + feature_dims.len() + 1).collect();
 
         Ok(Self {
@@ -55,8 +53,6 @@ impl Gemma3nCumulativeGroupNorm {
     }
 
     pub fn forward(&self, x: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
-        // Input format: [B, T, *feature_dims, C] matching PyTorch
-        // Verify input shape
         let expected_suffix = self
             .feature_dims
             .iter()
@@ -99,43 +95,33 @@ impl Gemma3nCumulativeGroupNorm {
         // Mask the input for sum calculation: only valid elements contribute
         let x_masked_for_sum = x_calc.broadcast_mul(&mask_calc)?;
 
-        // Cumulative Statistics Calculation
-        // 1. Sum of values over reduction axes at each time step
         let mut sum_values_at_t = x_masked_for_sum.clone();
         for &axis in self.reduction_axes.iter().rev() {
             sum_values_at_t = sum_values_at_t.sum_keepdim(axis)?;
         }
 
-        // 2. Cumulative sum of values over time
         let cum_sum_values = sum_values_at_t.cumsum(1)?;
 
-        // 3. Count of valid elements
         let mut elements_in_group_at_t = mask_calc.clone();
         for &axis in self.reduction_axes.iter().rev() {
             elements_in_group_at_t = elements_in_group_at_t.sum_keepdim(axis)?;
         }
 
-        // 4. Cumulative count of valid elements over time
         let cum_count_elements = elements_in_group_at_t.cumsum(1)?;
         let safe_cum_count_elements = cum_count_elements.clamp(1.0, f64::INFINITY)?;
 
-        // 5. Cumulative mean
         let cum_mean = cum_sum_values.div(&safe_cum_count_elements)?;
 
-        // 6. Sum of squared differences from the cumulative mean
         let squared_diff_from_mean = (x_calc.broadcast_sub(&cum_mean))?.sqr()?;
         let mut sum_sq_diff_at_t = squared_diff_from_mean.broadcast_mul(&mask_calc)?;
         for &axis in self.reduction_axes.iter().rev() {
             sum_sq_diff_at_t = sum_sq_diff_at_t.sum_keepdim(axis)?;
         }
 
-        // 7. Cumulative sum of squared differences over time
         let cum_sum_sq_diff = sum_sq_diff_at_t.cumsum(1)?;
 
-        // 8. Cumulative variance
         let cum_variance = cum_sum_sq_diff.div(&safe_cum_count_elements)?;
 
-        // Normalize the input using rsqrt for efficiency
         let normalized_x = x_calc.broadcast_sub(&cum_mean)?.broadcast_mul(
             &(cum_variance
                 .broadcast_add(
@@ -145,7 +131,6 @@ impl Gemma3nCumulativeGroupNorm {
                 .sqrt())?,
         )?;
 
-        // Apply affine transformation
         let mut result = normalized_x;
         if let Some(weight) = &self.weight {
             let scale = weight.to_dtype(calc_dtype)?;
@@ -163,7 +148,6 @@ impl Gemma3nCumulativeGroupNorm {
             result = result.broadcast_add(&bias)?;
         }
 
-        // Zero out outputs for time steps that were originally masked (where mask_calc is 0)
         let final_output = result.broadcast_mul(&mask_calc)?;
 
         final_output.to_dtype(input_dtype)
@@ -320,21 +304,17 @@ impl Gemma3nAudioRelativePositionEmbedding {
             .squeeze(0)?;
 
         // term_ac: Query-Key content interaction
-        let queries_p = queries.transpose(1, 3)?.transpose(2, 3)?.contiguous()?; // [B, N, U, W, H]
-                                                                                 // For keys: [B, U, C, N, H] -> [B, N, U, H, C]
-                                                                                 // First swap U and N: [B, U, C, N, H] -> [B, N, C, U, H]
-                                                                                 // Then swap C and U: [B, N, C, U, H] -> [B, N, U, C, H]
-                                                                                 // Finally swap C and H: [B, N, U, C, H] -> [B, N, U, H, C]
+        let queries_p = queries.transpose(1, 3)?.transpose(2, 3)?.contiguous()?;
         let keys_p_t = keys
-            .transpose(1, 3)? // [B, U, C, N, H] -> [B, N, C, U, H]
-            .transpose(2, 3)? // [B, N, C, U, H] -> [B, N, U, C, H]
-            .transpose(3, 4)? // [B, N, U, C, H] -> [B, N, U, H, C]
+            .transpose(1, 3)?
+            .transpose(2, 3)?
+            .transpose(3, 4)?
             .contiguous()?;
-        let term_ac = queries_p.matmul(&keys_p_t)?; // [B, N, U, W, C]
+        let term_ac = queries_p.matmul(&keys_p_t)?;
 
         // term_bd: Query-Position interaction
-        let q_transposed = queries.transpose(1, 3)?.transpose(2, 3)?; // [B, N, U, W, H]
-        let s_transposed = sin_emb.transpose(0, 2)?.transpose(0, 1)?; // [N, H, F]
+        let q_transposed = queries.transpose(1, 3)?.transpose(2, 3)?;
+        let s_transposed = sin_emb.transpose(0, 2)?.transpose(0, 1)?;
 
         let q_reshaped = q_transposed.reshape((
             batch_size,
@@ -419,27 +399,10 @@ impl Gemma3nAudioAttention {
         let k_proj = linear_no_bias(hidden_size, num_heads * head_dim, vb.pp("k_proj"))?;
         let v_proj = linear_no_bias(hidden_size, num_heads * head_dim, vb.pp("v_proj"))?;
 
-        // Query scaling as used in the reference implementation.
-        // q_scale = 1 / sqrt(head_dim) * (1 / softplus(0))
-        // with softplus(0) = ln(1 + exp(0)) = ln(2).
-        // (Previous code used `exp(1)` by mistake which resulted in an
-        // incorrect scaling factor and therefore large deviations.)
         let q_scale = (head_dim as f64).powf(-0.5);
         let r_softplus_0 = 1.0 / (1.0_f64 + 0.0_f64.exp()).ln(); // 1 / ln(2)
         let q_scale = q_scale * r_softplus_0;
 
-        // Create local causal mask
-        // Following the reference PyTorch implementation the local causal mask
-        // is the conjunction of two triangular masks:
-        //   * lower_causal_mask  : 1 where column (j) >= row (i)
-        //   * upper_causal_mask  : 1 where column (j) <= row (i) + diag_offset
-        // After transposing/reshaping in the PyTorch code the resulting
-        // `lower_causal_mask` has shape [W, C] with the condition j >= i.
-        // Our previous implementation used `j <= i`, which flipped the mask and
-        // admitted future positions while masking past ones. This is now
-        // corrected.
-
-        // 1.  Lower-triangular part (j >= i)
         let lower_causal_mask = {
             let mut mask_vec = vec![0u8; chunk_size * context_size];
             for i in 0..chunk_size {
@@ -453,9 +416,6 @@ impl Gemma3nAudioAttention {
                 .to_dtype(DType::U8)?
         };
 
-        // 2.  Upper-triangular part with positive diagonal offset.
-        //     In PyTorch: torch.tril(ones(chunk_size, context_size), diag=diag_offset)
-        //     keeps positions where j <= i + diag_offset.
         let diag_offset = (max_past_horizon + max_future_horizon) as isize;
         let upper_causal_mask = {
             let mut mask_vec = vec![0u8; chunk_size * context_size];
@@ -528,8 +488,6 @@ impl Gemma3nAudioAttention {
         let frame_len = self.context_size;
         let frame_step = self.chunk_size;
 
-        // Use unfold operation to extract sliding windows
-        // x shape: (batch, time + padding, ...)
         let _batch_size = x.dim(0)?;
         let time_dim = x.dim(1)?;
         let num_windows = (time_dim - frame_len) / frame_step + 1;
@@ -545,16 +503,6 @@ impl Gemma3nAudioAttention {
         // Stack windows along dimension 1 -> shape [B, num_windows, frame_len, ...]
         let result = Tensor::stack(&windows, 1)?;
 
-        // For inputs with extra feature dims (e.g. [B, T, N, H]) the unfold
-        // order matches PyTorch’s `[B, U, N, H, C]`. We need to move the last
-        // dimension (C) to index 2 so that the final shape becomes
-        // `[B, U, C, N, H]`, exactly like the reference implementation’s
-        // `torch.movedim(x_unfolded, -1, 2)`.
-        // The PyTorch reference only moves the newly-created context dimension
-        // when extra feature dimensions (N, H) are present.  With our manual
-        // window extraction we already obtain the final layout
-        //     [B, U, C, N, H]
-        // so no additional transpose is necessary.
         Ok(result)
     }
 
@@ -621,10 +569,7 @@ impl Gemma3nAudioAttention {
                 // This case is problematic - we have more query blocks than key blocks
                 // We'll pad the key/value blocks, though this might not be semantically correct
                 let pad_blocks = num_query_blocks - num_key_blocks;
-                let (batch_size, context_size, num_heads, head_dim) = match key_blocks.dims() {
-                    &[b, _, c, n, h] => (b, c, n, h),
-                    _ => bail!("Unexpected key_blocks dimensions"),
-                };
+                let (batch_size, _, context_size, num_heads, head_dim) = key_blocks.dims5()?;
 
                 // Create zero padding with the same shape as one block
                 let pad_shape = vec![batch_size, pad_blocks, context_size, num_heads, head_dim];
@@ -690,10 +635,6 @@ impl Gemma3nAudioAttention {
             } else {
                 extracted_valid_mask_blocks
             };
-
-        // Expand dimensions for broadcasting
-        // The key insight is that we need to match the attention tensor layout
-        // which appears to be [batch, heads, num_query_blocks, chunk_size, context_size]
 
         // extracted_valid_mask_blocks: [batch_size, num_query_blocks, context_size]
         // Expand to: [batch_size, 1, num_query_blocks, 1, context_size]
@@ -797,14 +738,12 @@ impl Gemma3nAudioAttention {
         let h_dim = value_blocks.dim(D::Minus1)?;
 
         // Reshape for efficient batched matrix multiplication
-        // PyTorch equivalent: probabilities.permute(0,2,1,3,4)
         // Starting layout [B, N, U, W, C] -> [B, U, N, W, C]
         let prob_bun = probabilities
             .transpose(1, 2)? // [B, U, N, W, C]
             .reshape((b_dim * u_dim * n_dim, w_dim, c_dim))?
             .contiguous()?;
 
-        // PyTorch: value_blocks.permute(0,1,3,2,4)  => [B, U, N, C, H]
         let v_bun = value_blocks
             .transpose(2, 3)? // swap C and N: [B, U, N, C, H]
             .reshape((b_dim * u_dim * n_dim, c_dim, h_dim))?
