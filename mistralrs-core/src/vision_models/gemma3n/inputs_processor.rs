@@ -148,6 +148,8 @@ impl InputsProcessor for Gemma3nImageProcessor {
         let has_images = input_seqs.iter().any(|seq| seq.has_images());
         let has_audios = input_seqs.iter().any(|seq| seq.has_audios());
 
+        let mut has_changed_prompt = false;
+
         // Process audio if present
         let (audio_mel, audio_mel_mask) = if has_audios && self.supports_audio {
             let mut audio_mel_accum = Vec::new();
@@ -190,7 +192,8 @@ impl InputsProcessor for Gemma3nImageProcessor {
 
                             let ids = toks.get_ids().to_vec();
                             seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
-                            seq.multimodal.has_changed_prompt = true;
+
+                            has_changed_prompt = true;
                         }
                     }
                 }
@@ -270,7 +273,8 @@ impl InputsProcessor for Gemma3nImageProcessor {
 
                     let ids = toks.get_ids().to_vec();
                     seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
-                    seq.multimodal.has_changed_prompt = true;
+
+                    has_changed_prompt = true;
                 }
             }
 
@@ -278,6 +282,10 @@ impl InputsProcessor for Gemma3nImageProcessor {
         } else {
             None
         };
+
+        for seq in input_seqs.iter_mut() {
+            seq.multimodal.has_changed_prompt = has_changed_prompt;
+        }
 
         let text_models_inputs_processor::InnerInputProcessorOutput {
             inputs:
