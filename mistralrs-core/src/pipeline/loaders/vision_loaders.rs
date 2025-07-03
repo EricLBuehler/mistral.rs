@@ -3218,7 +3218,7 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
     }
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
-        Some(vec![NonMappedSubModel::Vision])
+        Some(vec![NonMappedSubModel::Vision, NonMappedSubModel::Audio])
     }
 }
 
@@ -4641,7 +4641,11 @@ impl VisionModelLoader for Gemma3nLoader {
     }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
         Ok(Modalities {
-            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            input: vec![
+                SupportedModality::Text,
+                SupportedModality::Vision,
+                SupportedModality::Audio,
+            ],
             output: vec![SupportedModality::Text],
         })
     }
@@ -4902,6 +4906,6 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
     }
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
-        Some(vec![NonMappedSubModel::Vision])
+        Some(vec![NonMappedSubModel::Vision, NonMappedSubModel::Audio])
     }
 }

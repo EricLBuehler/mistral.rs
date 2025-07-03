@@ -15,12 +15,14 @@ use super::DeviceMappedModelLoader;
 #[derive(Clone, Debug)]
 pub(crate) enum NonMappedSubModel {
     Vision,
+    Audio,
 }
 
 impl Display for NonMappedSubModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             NonMappedSubModel::Vision => write!(f, "vision"),
+            NonMappedSubModel::Audio => write!(f, "audio"),
         }
     }
 }
