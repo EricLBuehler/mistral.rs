@@ -516,6 +516,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `gemma3`
 - `mistral3`
 - `llama4`
+- `gemma3n`
 
 </details>
 
@@ -577,6 +578,7 @@ Please submit more benchmarks via raising an issue!
 |Llama 4| | |✅|
 |Qwen 3|✅| |✅|
 |Dia 1.6b| | |✅|
+|Gemma 3n| | |✅|
 </details>
 
 <details>
@@ -622,6 +624,7 @@ Please submit more benchmarks via raising an issue!
 |Mistral 3| | | |
 |Llama 4| | | |
 |Qwen 3| | | |
+|Gemma 3n| | | |
 </details>
 
 <details>
@@ -655,6 +658,7 @@ Please submit more benchmarks via raising an issue!
 |Mistral 3|✅|
 |Llama 4| |
 |Qwen 3| |
+|Gemma 3n| | | |
 </details>
 
 ### Using derivative and adapter models

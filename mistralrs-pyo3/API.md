@@ -48,6 +48,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Gemma3`
 - `Mistral3`
 - `Llama4`
+- `Gemma3n`
 
 ### Architecture for diffusion models
 - `Flux`
