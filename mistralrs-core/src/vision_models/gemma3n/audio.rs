@@ -179,10 +179,11 @@ pub struct Gemma3nAudioRelativePositionEmbedding {
     _config: Gemma3nAudioConfig,
     num_heads: usize,
     head_dim: usize,
-    max_backward: usize,
-    max_forward: usize,
+    _max_backward: usize,
+    _max_forward: usize,
     pos_proj: Linear,
     inv_timescales: Tensor,
+    pos_indices: Tensor,
 }
 
 impl Gemma3nAudioRelativePositionEmbedding {
@@ -190,12 +191,12 @@ impl Gemma3nAudioRelativePositionEmbedding {
         let num_heads = config.conf_num_attention_heads;
         let channels = config.hidden_size;
         let head_dim = channels / num_heads;
-        let max_backward = if config.conf_attention_context_left > 0 {
+        let _max_backward = if config.conf_attention_context_left > 0 {
             config.conf_attention_context_left - 1
         } else {
             0
         };
-        let max_forward = config.conf_attention_context_right;
+        let _max_forward = config.conf_attention_context_right;
 
         let pos_proj = linear_no_bias(channels, num_heads * head_dim, vb.pp("pos_proj"))?;
 
@@ -214,14 +215,28 @@ impl Gemma3nAudioRelativePositionEmbedding {
 
         let inv_timescales = inv_timescales.unsqueeze(0)?.unsqueeze(0)?;
 
+        // Pre-compute position indices
+        let mut pos_values = Vec::new();
+        let mut pos = _max_backward as i64;
+        while pos >= -(_max_forward as i64) {
+            pos_values.push(pos);
+            pos -= 1;
+        }
+        let pos_indices = Tensor::from_vec(
+            pos_values,
+            (1, _max_backward + _max_forward + 1),
+            vb.device(),
+        )?;
+
         Ok(Self {
             _config: config.clone(),
             num_heads,
             head_dim,
-            max_backward,
-            max_forward,
+            _max_backward,
+            _max_forward,
             pos_proj,
             inv_timescales,
+            pos_indices,
         })
     }
 
@@ -302,20 +317,8 @@ impl Gemma3nAudioRelativePositionEmbedding {
 
         let key_context_size = keys.dim(2)?;
 
-        // Relative positions: [L, L-1, ..., -R]
-        // Create position indices manually since we need negative step
-        let mut pos_values = Vec::new();
-        let mut pos = self.max_backward as i64;
-        while pos >= -(self.max_forward as i64) {
-            pos_values.push(pos);
-            pos -= 1;
-        }
-        let pos_indices = Tensor::from_vec(
-            pos_values,
-            (1, self.max_backward + self.max_forward + 1),
-            queries.device(),
-        )?;
-
+        // Use pre-computed position indices
+        let pos_indices = &self.pos_indices;
         let max_span_plus_1 = pos_indices.dim(1)?;
 
         let sin_emb_timing_signal = self.get_timing_signal_1d_pos(&pos_indices, queries.dtype())?;
@@ -389,7 +392,7 @@ pub struct Gemma3nAudioAttention {
     chunk_size: usize,
     max_future_horizon: usize,
     max_past_horizon: usize,
-    attention_invalid_logits_value: f64,
+    _attention_invalid_logits_value: f64,
     _attention_logits_soft_cap: f64,
     context_size: usize,
     relative_position_embedding: Gemma3nAudioRelativePositionEmbedding,
@@ -400,6 +403,7 @@ pub struct Gemma3nAudioAttention {
     q_scale: f64,
     local_causal_valid_mask: Tensor,
     softcap: Tensor,
+    invalid_logits_tensor: Tensor,
 }
 
 impl Gemma3nAudioAttention {
@@ -484,6 +488,7 @@ impl Gemma3nAudioAttention {
             .to_dtype(DType::U8)?;
 
         let softcap = Tensor::new(config.conf_attention_logit_cap as f32, vb.device())?;
+        let invalid_logits_tensor = Tensor::new(config.conf_attention_invalid_logits_value as f32, vb.device())?;
 
         Ok(Self {
             _config: config.clone(),
@@ -492,7 +497,7 @@ impl Gemma3nAudioAttention {
             chunk_size,
             max_future_horizon,
             max_past_horizon,
-            attention_invalid_logits_value: config.conf_attention_invalid_logits_value,
+            _attention_invalid_logits_value: config.conf_attention_invalid_logits_value,
             _attention_logits_soft_cap: config.conf_attention_logit_cap,
             context_size,
             relative_position_embedding,
@@ -503,6 +508,7 @@ impl Gemma3nAudioAttention {
             q_scale,
             local_causal_valid_mask,
             softcap,
+            invalid_logits_tensor,
         })
     }
 
@@ -732,11 +738,11 @@ impl Gemma3nAudioAttention {
             .forward(&query_blocks, &key_blocks)?;
 
         // Apply attention logit softcap
-        let softcap_value = self.softcap.to_scalar::<f32>()? as f64;
+        let inv_softcap = Tensor::ones_like(&self.softcap)?.broadcast_div(&self.softcap)?;
         let logits = logits
-            .affine(1.0 / softcap_value, 0.0)?
+            .broadcast_mul(&inv_softcap.broadcast_as(logits.shape())?)?  
             .tanh()?
-            .affine(softcap_value, 0.0)?;
+            .broadcast_mul(&self.softcap.broadcast_as(logits.shape())?)?;
 
         // Apply mask
         // Ensure mask has the same shape as logits by handling dimension mismatches
@@ -788,9 +794,7 @@ impl Gemma3nAudioAttention {
             final_condition_for_where
         };
 
-        let invalid_value =
-            Tensor::new(self.attention_invalid_logits_value as f32, logits.device())?
-                .broadcast_as(logits.dims())?;
+        let invalid_value = self.invalid_logits_tensor.broadcast_as(logits.dims())?;
         let logits = final_condition_for_where.where_cond(&logits, &invalid_value)?;
 
         // For the actual attention computation after logits are computed, we can still optimize
@@ -1019,7 +1023,8 @@ impl Gemma3nAudioSubSampleConvProjection {
 
 /// Conformer Attention Module
 pub struct Gemma3nAudioConformerAttention {
-    gradient_clipping: Tensor,
+    _gradient_clipping: Tensor,
+    clip_mask: Tensor,
     pre_attn_norm: RmsNorm,
     attn: Gemma3nAudioAttention,
     post: Linear,
@@ -1028,7 +1033,8 @@ pub struct Gemma3nAudioConformerAttention {
 
 impl Gemma3nAudioConformerAttention {
     pub fn new(config: &Gemma3nAudioConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        let gradient_clipping = Tensor::new(config.gradient_clipping as f32, vb.device())?;
+        let _gradient_clipping = Tensor::new(config.gradient_clipping as f32, vb.device())?;
+        let clip_mask = Tensor::ones_like(&_gradient_clipping)?.clamp(-1.0, 1.0)?;
         let pre_attn_norm = RmsNorm::new_gemma_3n(
             config.hidden_size,
             config.rms_norm_eps,
@@ -1045,7 +1051,8 @@ impl Gemma3nAudioConformerAttention {
         )?;
 
         Ok(Self {
-            gradient_clipping,
+            _gradient_clipping,
+            clip_mask,
             pre_attn_norm,
             attn,
             post,
@@ -1055,8 +1062,7 @@ impl Gemma3nAudioConformerAttention {
 
     pub fn forward(&self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
         let audio_encodings_input_to_attn = x;
-        let clip_value = self.gradient_clipping.to_scalar::<f32>()? as f64;
-        let x = x.clamp(-clip_value, clip_value)?;
+        let x = x.broadcast_mul(&self.clip_mask.broadcast_as(x.shape())?)?;
         let audio_encodings_norm = self.pre_attn_norm.forward(&x)?;
 
         // attn output: [B, T, NumHeads, HeadDim]
@@ -1071,8 +1077,7 @@ impl Gemma3nAudioConformerAttention {
             audio_encodings_attn_out.reshape((b, t, num_heads * head_dim))?;
 
         let x = self.post.forward(&audio_encodings_reshaped)?;
-        let clip_value = self.gradient_clipping.to_scalar::<f32>()? as f64;
-        let x = x.clamp(-clip_value, clip_value)?;
+        let x = x.broadcast_mul(&self.clip_mask.broadcast_as(x.shape())?)?;
 
         audio_encodings_input_to_attn.broadcast_add(&self.post_norm.forward(&x)?)
     }
@@ -1080,17 +1085,21 @@ impl Gemma3nAudioConformerAttention {
 
 /// Conformer Feed-Forward Module
 pub struct Gemma3nAudioConformerFeedForward {
-    gradient_clipping: Tensor,
+    _gradient_clipping: Tensor,
+    clip_mask: Tensor,
+    scale_tensor: Tensor,
     pre_layer_norm: RmsNorm,
     ffw_layer_1: Linear,
     ffw_layer_2: Linear,
     post_layer_norm: RmsNorm,
-    post_layer_scale: f64,
+    _post_layer_scale: f64,
 }
 
 impl Gemma3nAudioConformerFeedForward {
     pub fn new(config: &Gemma3nAudioConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        let gradient_clipping = Tensor::new(config.gradient_clipping as f32, vb.device())?;
+        let _gradient_clipping = Tensor::new(config.gradient_clipping as f32, vb.device())?;
+        let clip_mask = Tensor::ones_like(&_gradient_clipping)?.clamp(-1.0, 1.0)?;
+        let scale_tensor = Tensor::new(config.conf_residual_weight as f32, vb.device())?;
         let pre_layer_norm = RmsNorm::new_gemma_3n(
             config.hidden_size,
             config.rms_norm_eps,
@@ -1113,33 +1122,31 @@ impl Gemma3nAudioConformerFeedForward {
             true,
             vb.pp("post_layer_norm"),
         )?;
-        let post_layer_scale = config.conf_residual_weight;
+        let _post_layer_scale = config.conf_residual_weight;
 
         Ok(Self {
-            gradient_clipping,
+            _gradient_clipping,
+            clip_mask,
+            scale_tensor,
             pre_layer_norm,
             ffw_layer_1,
             ffw_layer_2,
             post_layer_norm,
-            post_layer_scale,
+            _post_layer_scale,
         })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let residual = x;
-        let clip_value = self.gradient_clipping.to_scalar::<f32>()? as f64;
-        let x = x.clamp(-clip_value, clip_value)?;
+        let x = x.broadcast_mul(&self.clip_mask.broadcast_as(x.shape())?)?;
         let x = self.pre_layer_norm.forward(&x)?;
         let x = self.ffw_layer_1.forward(&x)?;
         let x = candle_nn::ops::silu(&x)?;
         let x = self.ffw_layer_2.forward(&x)?;
-        let clip_value = self.gradient_clipping.to_scalar::<f32>()? as f64;
-        let x = x.clamp(-clip_value, clip_value)?;
+        let x = x.broadcast_mul(&self.clip_mask.broadcast_as(x.shape())?)?;
         let x = self.post_layer_norm.forward(&x)?;
 
-        let scale_tensor =
-            Tensor::new(self.post_layer_scale as f32, x.device())?.to_dtype(x.dtype())?;
-        residual.broadcast_add(&x.broadcast_mul(&scale_tensor)?)
+        residual.broadcast_add(&x.broadcast_mul(&self.scale_tensor.to_dtype(x.dtype())?.broadcast_as(x.shape())?)?)
     }
 }
 
@@ -1148,7 +1155,8 @@ pub struct Gemma3nAudioConformerLightConv1d {
     pre_layer_norm: RmsNorm,
     linear_start: Linear,
     depthwise_conv1d: Conv1d,
-    gradient_clipping: Tensor,
+    _gradient_clipping: Tensor,
+    clip_mask: Tensor,
     conv_norm: RmsNorm,
     linear_end: Linear,
     causal_padding: usize,
@@ -1181,7 +1189,8 @@ impl Gemma3nAudioConformerLightConv1d {
             vb.pp("depthwise_conv1d"),
         )?;
 
-        let gradient_clipping = Tensor::new(config.gradient_clipping as f32, vb.device())?;
+        let _gradient_clipping = Tensor::new(config.gradient_clipping as f32, vb.device())?;
+        let clip_mask = Tensor::ones_like(&_gradient_clipping)?.clamp(-1.0, 1.0)?;
         let conv_norm = RmsNorm::new_gemma_3n(
             config.hidden_size,
             config.rms_norm_eps,
@@ -1196,7 +1205,8 @@ impl Gemma3nAudioConformerLightConv1d {
             pre_layer_norm,
             linear_start,
             depthwise_conv1d,
-            gradient_clipping,
+            _gradient_clipping,
+            clip_mask,
             conv_norm,
             linear_end,
             causal_padding,
@@ -1225,8 +1235,7 @@ impl Gemma3nAudioConformerLightConv1d {
         // Permute back: [B, D, T] -> [B, T, D]
         let audio_encodings = audio_encodings_conv.transpose(D::Minus2, D::Minus1)?;
 
-        let clip_value = self.gradient_clipping.to_scalar::<f32>()? as f64;
-        let audio_encodings = audio_encodings.clamp(-clip_value, clip_value)?;
+        let audio_encodings = audio_encodings.broadcast_mul(&self.clip_mask.broadcast_as(audio_encodings.shape())?)?;
         let audio_encodings = self.conv_norm.forward(&audio_encodings)?;
         let audio_encodings = candle_nn::ops::silu(&audio_encodings)?;
         let audio_encodings = self.linear_end.forward(&audio_encodings)?;
@@ -1241,7 +1250,8 @@ pub struct Gemma3nAudioConformerBlock {
     attention: Gemma3nAudioConformerAttention,
     lconv1d: Gemma3nAudioConformerLightConv1d,
     ffw_layer_end: Gemma3nAudioConformerFeedForward,
-    gradient_clipping: Tensor,
+    _gradient_clipping: Tensor,
+    clip_mask: Tensor,
     norm: RmsNorm,
 }
 
@@ -1252,7 +1262,8 @@ impl Gemma3nAudioConformerBlock {
         let attention = Gemma3nAudioConformerAttention::new(config, vb.pp("attention"))?;
         let lconv1d = Gemma3nAudioConformerLightConv1d::new(config, vb.pp("lconv1d"))?;
         let ffw_layer_end = Gemma3nAudioConformerFeedForward::new(config, vb.pp("ffw_layer_end"))?;
-        let gradient_clipping = Tensor::new(config.gradient_clipping as f32, vb.device())?;
+        let _gradient_clipping = Tensor::new(config.gradient_clipping as f32, vb.device())?;
+        let clip_mask = Tensor::ones_like(&_gradient_clipping)?.clamp(-1.0, 1.0)?;
         let norm =
             RmsNorm::new_gemma_3n(config.hidden_size, config.rms_norm_eps, true, vb.pp("norm"))?;
 
@@ -1261,7 +1272,8 @@ impl Gemma3nAudioConformerBlock {
             attention,
             lconv1d,
             ffw_layer_end,
-            gradient_clipping,
+            _gradient_clipping,
+            clip_mask,
             norm,
         })
     }
@@ -1280,8 +1292,7 @@ impl Gemma3nAudioConformerBlock {
 
         let audio_encodings = self.lconv1d.forward(&audio_encodings_for_lconv_input)?;
         let audio_encodings = self.ffw_layer_end.forward(&audio_encodings)?;
-        let clip_value = self.gradient_clipping.to_scalar::<f32>()? as f64;
-        let audio_encodings = audio_encodings.clamp(-clip_value, clip_value)?;
+        let audio_encodings = audio_encodings.broadcast_mul(&self.clip_mask.broadcast_as(audio_encodings.shape())?)?;
 
         self.norm.forward(&audio_encodings)
     }
