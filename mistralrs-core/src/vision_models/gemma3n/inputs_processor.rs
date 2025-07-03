@@ -179,7 +179,7 @@ impl InputsProcessor for Gemma3nImageProcessor {
                         // - Conformer reduction factor: 4x (from config)
                         // Total reduction: 16x
                         let mel_frames = mel.dim(1).unwrap_or(128);
-                        let num_audio_tokens = (mel_frames + 15) / 16; // Round up division by 16
+                        let num_audio_tokens = mel_frames.div_ceil(16); // Round up division by 16
 
                         audio_mel_accum.push(mel);
                         audio_mask_accum.push(mask);

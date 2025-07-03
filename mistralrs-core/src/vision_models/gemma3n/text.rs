@@ -337,7 +337,7 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let mut q = self.q_proj.forward_autocast(&xs)?;
+        let mut q = self.q_proj.forward_autocast(xs)?;
         q = q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?;
         q = q.apply(&self.q_norm)?;
         q = self.apply_rope(&q, seqlen_offsets, q_len)?;
@@ -347,13 +347,13 @@ impl Attention {
             let shared_cache = &kv_caches[kv_shared_layer_index];
             (shared_cache.k()?.unwrap(), shared_cache.v()?.unwrap())
         } else {
-            let mut k = self.k_proj.forward_autocast(&xs)?;
+            let mut k = self.k_proj.forward_autocast(xs)?;
             k = k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
             k = k.apply(&self.k_norm)?;
             k = self.apply_rope(&k, seqlen_offsets, q_len)?;
             k = k.transpose(1, 2)?;
 
-            let mut v = self.v_proj.forward_autocast(&xs)?;
+            let mut v = self.v_proj.forward_autocast(xs)?;
             v = v.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
             v = v.apply(&self.v_norm)?;
             v = v.transpose(1, 2)?;
@@ -463,7 +463,7 @@ impl TextAltUp {
     }
 
     fn correct(&self, predictions: &Tensor, activated: &Tensor) -> Result<Tensor> {
-        let modalities = self.compute_router_modalities(&activated)?;
+        let modalities = self.compute_router_modalities(activated)?;
         let innovation = activated
             .broadcast_sub(&predictions.i(self.altup_active_idx)?)?
             .repeat((self.altup_num_inputs, 1, 1, 1))?;
@@ -629,7 +629,7 @@ impl DecoderLayer {
         kv_caches: &mut [KvCache],
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let predictions = self.altup.predict(&xs)?;
+        let predictions = self.altup.predict(xs)?;
         let active_prediction = predictions.i(self.altup_active_idx)?;
 
         let active_prediction_normed = self.input_layernorm.forward(&active_prediction)?;

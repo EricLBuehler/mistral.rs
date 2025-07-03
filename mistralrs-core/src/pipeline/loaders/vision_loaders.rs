@@ -4626,7 +4626,7 @@ impl VisionModelLoader for Gemma3nLoader {
     ) -> Arc<dyn Processor + Send + Sync> {
         // Handle the Gemma 3 1b case here
         Arc::new(Gemma3nProcessor::new(
-            processor_config.unwrap_or_else(ProcessorConfig::default),
+            processor_config.unwrap_or_default(),
             true,
         ))
     }

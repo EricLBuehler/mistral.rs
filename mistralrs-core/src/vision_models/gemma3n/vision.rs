@@ -1001,7 +1001,7 @@ impl VisionTower {
                             *kernel_size,
                             *stride,
                             *expand_ratio,
-                            vb.pp(format!("blocks.{}.{}", stage_idx, block_idx)),
+                            vb.pp(format!("blocks.{stage_idx}.{block_idx}")),
                         )?;
                         in_chs = *out_channels;
                         Block::EdgeResidual(edge_res)
@@ -1022,7 +1022,7 @@ impl VisionTower {
                             *stride,
                             *expand_ratio,
                             Some(1e-5), // layer_scale_init_value
-                            vb.pp(format!("blocks.{}.{}", stage_idx, block_idx)),
+                            vb.pp(format!("blocks.{stage_idx}.{block_idx}")),
                         )?;
                         in_chs = *out_channels;
                         Block::UniversalInvertedResidual(uir)
@@ -1043,7 +1043,7 @@ impl VisionTower {
                             *kv_stride,
                             3,          // dw_kernel_size
                             Some(1e-5), // layer_scale_init_value
-                            vb.pp(format!("blocks.{}.{}", stage_idx, block_idx)),
+                            vb.pp(format!("blocks.{stage_idx}.{block_idx}")),
                         )?;
                         Block::MobileAttention(ma)
                     }

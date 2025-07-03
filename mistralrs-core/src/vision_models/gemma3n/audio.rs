@@ -83,7 +83,7 @@ impl Gemma3nCumulativeGroupNorm {
         // Prepare broadcastable mask
         let mask_calc = if let Some(mask) = mask {
             // Mask should be [B, T]
-            if mask.dims() != &[x.dims()[0], x.dims()[1]] {
+            if mask.dims() != [x.dims()[0], x.dims()[1]] {
                 bail!(
                     "Mask shape {:?} must match input Batch/Time dimensions {:?}",
                     mask.dims(),
@@ -513,7 +513,7 @@ impl Gemma3nAudioAttention {
     fn convert_to_block(&self, x: &Tensor, _padding_val: f64) -> Result<Tensor> {
         let shape = x.dims();
         let (b, t) = (shape[0], shape[1]);
-        let num_blocks = (t + self.chunk_size - 1) / self.chunk_size;
+        let num_blocks = t.div_ceil(self.chunk_size);
 
         let padding_len = num_blocks * self.chunk_size - t;
         let x = if padding_len > 0 {
@@ -670,11 +670,11 @@ impl Gemma3nAudioAttention {
             extracted_valid_mask_blocks
         } else {
             // If the shape doesn't match expected, try to handle common cases
-            match extracted_valid_mask_blocks.dims() {
-                &[b, n, _c] if b == batch_size && n == num_query_blocks => {
+            match *extracted_valid_mask_blocks.dims() {
+                [b, n, _c] if b == batch_size && n == num_query_blocks => {
                     extracted_valid_mask_blocks
                 }
-                &[b, _c, n] if b == batch_size && n == num_query_blocks => {
+                [b, _c, n] if b == batch_size && n == num_query_blocks => {
                     extracted_valid_mask_blocks.transpose(1, 2)?
                 }
                 _ => extracted_valid_mask_blocks,
@@ -1303,7 +1303,7 @@ impl AudioModel {
         for i in 0..config.conf_num_hidden_layers {
             conformer.push(Gemma3nAudioConformerBlock::new(
                 config,
-                vb.pp(&format!("conformer.{}", i)),
+                vb.pp(format!("conformer.{i}")),
             )?);
         }
 
