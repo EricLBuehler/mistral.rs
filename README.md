@@ -109,6 +109,15 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ```
   </details>
 
+- 💎💎💎 Run the **Gemma 3n** family (E2B, E4B) with 32k context & vision + audio support: [documentation](docs/GEMMA3N.md)  
+  <details>
+    <summary>Show command</summary>
+
+    ```bash
+    ./mistralrs-server -i --isq 8 run -m google/gemma-3n-E4B-it
+    ```
+  </details>
+
 - 🌲📷 Run the **FLUX.1** diffusion model: [documentation](docs/FLUX.md)  
   <details>
     <summary>Show command</summary>

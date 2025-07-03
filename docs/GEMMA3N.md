@@ -27,8 +27,8 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 ---
 
 **Image:**
-<img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "1000" height = "666">
-<h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
+<img src="https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg" alt="Zinnia Flower" width = "1000" height = "666">
+<h6><a href = "https://www.wikimedia.org/">Credit</a></h6>
 
 **Prompt:**
 ```
