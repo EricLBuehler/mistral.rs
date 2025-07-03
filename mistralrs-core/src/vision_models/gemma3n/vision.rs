@@ -2,7 +2,10 @@ use candle_core::{DType, Result, Tensor, D};
 use candle_nn::{Activation, Conv2d, Conv2dConfig, Module};
 use mistralrs_quant::ShardedVarBuilder;
 
-use crate::layers::conv2d_no_bias;
+use crate::{
+    attention::SdpaParams,
+    layers::{conv2d_no_bias, Sdpa},
+};
 
 use std::fmt::Debug;
 
@@ -488,8 +491,6 @@ impl MultiQueryAttention2d {
         q = q
             .reshape((b, self.num_heads, self.key_dim, h * w))?
             .transpose(2, 3)?;
-        // Promote to f32 for stability during softmax / matmul then apply scale
-        let q = (q.to_dtype(DType::F32)? * self.scale)?;
 
         // Key path
         let mut k = x.clone();
@@ -500,11 +501,10 @@ impl MultiQueryAttention2d {
         k = self.key_proj.forward(&k)?;
         // Reshape: (B, KD, H', W') -> (B, 1, H'*W', KD)
         let (_, _, kh, kw) = k.dims4()?;
-        let mut k = k
+        let k = k
             .reshape((b, self.key_dim, kh * kw))?
             .transpose(1, 2)? // (B, H'*W', KD)
             .unsqueeze(1)?; // (B, 1, H'*W', KD)
-        k = k.to_dtype(DType::F32)?;
 
         // Value path
         let mut v = x.clone();
@@ -515,29 +515,50 @@ impl MultiQueryAttention2d {
         v = self.value_proj.forward(&v)?;
         // Reshape: (B, VD, H', W') -> (B, 1, H'*W', VD)
         let (_, _, vh, vw) = v.dims4()?;
-        let mut v = v
+        let v = v
             .reshape((b, self.value_dim, vh * vw))?
             .transpose(1, 2)?
             .unsqueeze(1)?;
-        // Keep v in original dtype, but we'll cast the output back later.
-        v = v.to_dtype(DType::F32)?;
 
-        // Attention
-        // q: [B, NH, H*W, KD], k: [B, 1, H'*W', KD]
-        // We need to compute q @ k^T -> [B, NH, H*W, H'*W']
+        // Check if we can use fused attention
+        // Metal SDPA requires key length >= query length
+        let can_use_fused = kh * kw >= h * w;
 
-        // For matmul with broadcasting: q @ k^T
-        // q: [B, NH, H*W, KD] @ k^T: [B, 1, KD, H'*W'] -> [B, NH, H*W, H'*W']
-        // The matmul will automatically broadcast the second dimension
-        let k_t = k.transpose(D::Minus1, D::Minus2)?; // [B, 1, KD, H'*W']
+        let o = if can_use_fused && (kh * kw == h * w || !q.device().is_metal()) {
+            // Use fused attention via Sdpa when dimensions are compatible
+            let sdpa_params = SdpaParams {
+                n_kv_groups: self.num_heads, // Each head has its own K/V
+                softcap: None,
+                softmax_scale: self.scale as f32,
+                sliding_window: None,
+            };
 
-        // Use broadcast_matmul for proper broadcasting
-        let attn = q.broadcast_matmul(&k_t)?; // [B, NH, H*W, H'*W']
-        let attn = candle_nn::ops::softmax_last_dim(&attn)?;
+            // Run fused attention
+            // Note: Sdpa expects q: [B, NH, seq_len, head_dim], k/v: [B, 1, seq_len, head_dim]
+            Sdpa.run_attention(&q, &k, &v, None, None, &sdpa_params)?
+        } else {
+            // Fall back to manual attention computation when Metal constraints aren't met
+            // or when spatial dimensions don't match
 
-        // v: [B, 1, H'*W', VD]
-        // attn: [B, NH, H*W, H'*W'] @ v: [B, 1, H'*W', VD] -> [B, NH, H*W, VD]
-        let o = attn.broadcast_matmul(&v)?; // [B, NH, H*W, VD]
+            // Promote to f32 for stability during softmax / matmul then apply scale
+            let q = (q.to_dtype(DType::F32)? * self.scale)?;
+            let k = k.to_dtype(DType::F32)?;
+            let v = v.to_dtype(DType::F32)?;
+
+            // For matmul with broadcasting: q @ k^T
+            let k_t = k.transpose(D::Minus1, D::Minus2)?; // [B, 1, KD, H'*W']
+
+            // Use broadcast_matmul for proper broadcasting
+            let attn = q.broadcast_matmul(&k_t)?; // [B, NH, H*W, H'*W']
+            let attn = candle_nn::ops::softmax_last_dim(&attn)?;
+
+            // v: [B, 1, H'*W', VD]
+            // attn: [B, NH, H*W, H'*W'] @ v: [B, 1, H'*W', VD] -> [B, NH, H*W, VD]
+            let o = attn.broadcast_matmul(&v)?; // [B, NH, H*W, VD]
+
+            // Cast back to original dtype
+            o.to_dtype(x.dtype())?
+        };
 
         // Reshape output: (B, NH, H*W, VD) -> (B, NH*VD, H, W)
         // Required ordering: channels (NH*VD) first, spatial (H*W) last.
@@ -546,8 +567,6 @@ impl MultiQueryAttention2d {
             .reshape((b, self.num_heads * self.value_dim, h, w))?;
 
         // Output projection
-        // Cast back to original parameter dtype (likely f16) before final proj
-        let o = o.to_dtype(x.dtype())?;
         let o = self.output_proj.forward(&o)?;
 
         Ok(o)

@@ -793,6 +793,8 @@ impl Gemma3nAudioAttention {
                 .broadcast_as(logits.dims())?;
         let logits = final_condition_for_where.where_cond(&logits, &invalid_value)?;
 
+        // For the actual attention computation after logits are computed, we can still optimize
+        // by using the fused softmax and matmul operations
         let probabilities = candle_nn::ops::softmax_last_dim(&logits.to_dtype(DType::F32)?)?
             .to_dtype(value_blocks.dtype())?;
 
@@ -803,6 +805,7 @@ impl Gemma3nAudioAttention {
         };
         let h_dim = value_blocks.dim(D::Minus1)?;
 
+        // Reshape for efficient batched matrix multiplication
         // PyTorch equivalent: probabilities.permute(0,2,1,3,4)
         // Starting layout [B, N, U, W, C] -> [B, U, N, W, C]
         let prob_bun = probabilities
@@ -816,6 +819,7 @@ impl Gemma3nAudioAttention {
             .reshape((b_dim * u_dim * n_dim, c_dim, h_dim))?
             .contiguous()?;
 
+        // Use efficient batched matrix multiplication
         let result_bmm = prob_bun.matmul(&v_bun)?;
         let context_vectors = result_bmm
             // [B, U, N, W, H]
