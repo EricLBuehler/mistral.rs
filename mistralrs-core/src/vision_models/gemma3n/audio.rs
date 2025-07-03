@@ -95,19 +95,21 @@ impl Gemma3nCumulativeGroupNorm {
         // Mask the input for sum calculation: only valid elements contribute
         let x_masked_for_sum = x_calc.broadcast_mul(&mask_calc)?;
 
-        // Fuse reduction operations
-        let sum_values_at_t = self.reduction_axes.iter().rev().try_fold(
-            x_masked_for_sum,
-            |acc, &axis| acc.sum_keepdim(axis)
-        )?;
+        // Reduction operations
+        let sum_values_at_t = self
+            .reduction_axes
+            .iter()
+            .rev()
+            .try_fold(x_masked_for_sum, |acc, &axis| acc.sum_keepdim(axis))?;
 
         let cum_sum_values = sum_values_at_t.cumsum(1)?;
 
-        // Fuse reduction operations for mask
-        let elements_in_group_at_t = self.reduction_axes.iter().rev().try_fold(
-            mask_calc.clone(),
-            |acc, &axis| acc.sum_keepdim(axis)
-        )?;
+        // Reduction operations for mask
+        let elements_in_group_at_t = self
+            .reduction_axes
+            .iter()
+            .rev()
+            .try_fold(mask_calc.clone(), |acc, &axis| acc.sum_keepdim(axis))?;
 
         let cum_count_elements = elements_in_group_at_t.cumsum(1)?;
         let safe_cum_count_elements = cum_count_elements.clamp(1.0, f64::INFINITY)?;
@@ -118,7 +120,7 @@ impl Gemma3nCumulativeGroupNorm {
         // Fuse reduction operations for squared differences
         let sum_sq_diff_at_t = self.reduction_axes.iter().rev().try_fold(
             squared_diff_from_mean.broadcast_mul(&mask_calc)?,
-            |acc, &axis| acc.sum_keepdim(axis)
+            |acc, &axis| acc.sum_keepdim(axis),
         )?;
 
         let cum_sum_sq_diff = sum_sq_diff_at_t.cumsum(1)?;
@@ -136,7 +138,7 @@ impl Gemma3nCumulativeGroupNorm {
 
         let mut result = normalized_x;
         let dims_len = x.dims().len();
-        
+
         if let Some(weight) = &self.weight {
             let scale = weight.to_dtype(calc_dtype)?;
             // Optimize reshape by reusing shape vector
@@ -379,7 +381,7 @@ pub struct Gemma3nAudioAttention {
     local_causal_valid_mask: Tensor,
     softcap: Tensor,
     invalid_logits_tensor: Tensor,
-    per_dim_scale_softplus: Tensor,  // Pre-computed softplus
+    per_dim_scale_softplus: Tensor, // Pre-computed softplus
 }
 
 impl Gemma3nAudioAttention {
@@ -538,7 +540,8 @@ impl Gemma3nAudioAttention {
         let value_states = value_states.reshape((b, t, self.num_heads, self.head_dim))?;
 
         // Use pre-computed softplus and reshape for broadcasting
-        let per_dim_scale_sp_broadcast = self.per_dim_scale_softplus
+        let per_dim_scale_sp_broadcast = self
+            .per_dim_scale_softplus
             .reshape((1, 1, 1, self.head_dim))?
             .to_dtype(query_states.dtype())?;
 
@@ -963,7 +966,7 @@ pub struct Gemma3nAudioConformerAttention {
     attn: Gemma3nAudioAttention,
     post: Linear,
     post_norm: RmsNorm,
-    hidden_size: usize,  // Cache for reshape operations
+    hidden_size: usize, // Cache for reshape operations
 }
 
 impl Gemma3nAudioConformerAttention {
@@ -1308,7 +1311,7 @@ impl AudioModel {
             } else {
                 None
             };
-            
+
             for b in 0..batch_size {
                 let batch_mask = audio_mel_mask.get(b)?;
                 let batch_indices = if indices_single_batch {

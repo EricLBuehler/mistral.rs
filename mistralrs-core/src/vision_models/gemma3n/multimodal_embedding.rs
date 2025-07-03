@@ -87,11 +87,12 @@ impl Gemma3nMultimodalEmbedder {
         // Subtract vocab_offset from input_ids
         let adjusted_ids = if self.vocab_offset != 0 {
             // Optimize: only convert if not already i64
-            let (input_ids_i64, needs_convert_back) = if input_ids.dtype() == candle_core::DType::I64 {
-                (input_ids.clone(), false)
-            } else {
-                (input_ids.to_dtype(candle_core::DType::I64)?, true)
-            };
+            let (input_ids_i64, needs_convert_back) =
+                if input_ids.dtype() == candle_core::DType::I64 {
+                    (input_ids.clone(), false)
+                } else {
+                    (input_ids.to_dtype(candle_core::DType::I64)?, true)
+                };
             let offset_tensor = Tensor::new(self.vocab_offset, input_ids.device())?;
             let adjusted = input_ids_i64.broadcast_sub(&offset_tensor)?;
             // Convert back only if needed
