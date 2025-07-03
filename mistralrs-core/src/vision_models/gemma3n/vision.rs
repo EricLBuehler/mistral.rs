@@ -675,7 +675,6 @@ impl MobileNetV5MultiScaleFusionAdapter {
         out_chs: usize,
         output_resolution: (usize, usize),
         expansion_ratio: f64,
-        _noskip: bool,
         use_layer_scale: bool,
         layer_scale_init_value: f64,
         vb: ShardedVarBuilder,
@@ -1059,7 +1058,6 @@ impl VisionTower {
             2048,       // out_chs
             (16, 16),   // output_resolution
             2.0,        // expansion_ratio
-            true,       // noskip
             false,      // use_layer_scale
             1e-5,       // layer_scale_init_value
             vb.pp("msfa"),

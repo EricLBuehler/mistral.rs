@@ -32,7 +32,6 @@ struct Gemma3nImageProcessor {
     supports_images: bool,
     supports_audio: bool,
     full_image_sequence: String,
-    __audio_soft_tokens_per_audio: usize,
 }
 
 impl Gemma3nImageProcessor {
@@ -54,7 +53,6 @@ pub const AUDIO_TOKEN_ID: u32 = 262273; // audio_vocab_offset + 1
 
 pub struct Gemma3nProcessor {
     vision_soft_tokens_per_image: usize,
-    __audio_soft_tokens_per_audio: usize,
     supports_images: bool,
     supports_audio: bool,
 }
@@ -63,12 +61,9 @@ impl Gemma3nProcessor {
     pub fn new(processor_config: ProcessorConfig, supports_images: bool) -> Self {
         // Default to 256 soft tokens per image if not specified
         let vision_soft_tokens_per_image = processor_config.image_seq_len.unwrap_or(256);
-        // Audio tokens are determined by the feature extraction process
-        let audio_soft_tokens_per_audio = 58; // Typical output after all reductions
 
         Self {
             vision_soft_tokens_per_image,
-            __audio_soft_tokens_per_audio: audio_soft_tokens_per_audio,
             supports_images,
             supports_audio: true, // Enable audio support
         }
@@ -80,12 +75,6 @@ impl Gemma3nProcessor {
             vec![IMAGE_TOKEN.to_string(); self.vision_soft_tokens_per_image].join("");
         format!("\n\n{BOI_TOKEN}{image_tokens_expanded}{EOI_TOKEN}\n\n")
     }
-
-    fn _create_full_audio_sequence(&self, num_tokens: usize) -> String {
-        // Create the full audio token sequence: "\n\n<boa>{repeated audio tokens}<eoa>\n\n"
-        let audio_tokens_expanded = vec![AUDIO_TOKEN.to_string(); num_tokens].join("");
-        format!("\n\n{BOA_TOKEN}{audio_tokens_expanded}{EOA_TOKEN}\n\n")
-    }
 }
 
 impl Processor for Gemma3nProcessor {
@@ -94,7 +83,6 @@ impl Processor for Gemma3nProcessor {
             supports_images: self.supports_images,
             supports_audio: self.supports_audio,
             full_image_sequence: self.create_full_image_sequence(),
-            __audio_soft_tokens_per_audio: self.__audio_soft_tokens_per_audio,
         })
     }
 

@@ -89,11 +89,9 @@ serde_default_fn!(f64, conf_attention_logit_cap, 50.0);
 serde_default_fn!(usize, conf_num_attention_heads, 8);
 serde_default_fn!(usize, conf_num_hidden_layers, 12);
 serde_default_fn!(usize, conf_conv_kernel_size, 5);
-serde_default_fn!(usize, conf_positional_bias_size, 256);
 serde_default_fn!(usize, conf_reduction_factor, 4);
 serde_default_fn!(f64, conf_residual_weight, 0.5);
 serde_default_fn!(Vec<usize>, sscp_conv_channel_size, vec![128, 32]);
-serde_default_fn!(f64, sscp_conv_group_norm_eps, 1e-3);
 serde_default_fn!(
     Vec<Vec<usize>>,
     sscp_conv_kernel_size,
@@ -132,16 +130,12 @@ pub struct Gemma3nAudioConfig {
     pub conf_num_hidden_layers: usize,
     #[serde(default = "conf_conv_kernel_size")]
     pub conf_conv_kernel_size: usize,
-    #[serde(default = "conf_positional_bias_size")]
-    pub _conf_positional_bias_size: usize,
     #[serde(default = "conf_reduction_factor")]
     pub conf_reduction_factor: usize,
     #[serde(default = "conf_residual_weight")]
     pub conf_residual_weight: f64,
     #[serde(default = "sscp_conv_channel_size")]
     pub sscp_conv_channel_size: Vec<usize>,
-    #[serde(default = "sscp_conv_group_norm_eps")]
-    pub _sscp_conv_group_norm_eps: f64,
     #[serde(default = "sscp_conv_kernel_size")]
     pub sscp_conv_kernel_size: Vec<Vec<usize>>,
     #[serde(default = "sscp_conv_stride_size")]
