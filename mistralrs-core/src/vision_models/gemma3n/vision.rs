@@ -606,7 +606,7 @@ impl MultiQueryAttention2d {
         let o = if can_use_fused && (kh * kw == h * w || !q.device().is_metal()) {
             // Use fused attention via Sdpa when dimensions are compatible
             let sdpa_params = SdpaParams {
-                n_kv_groups: self.num_heads,
+                n_kv_groups: 1,
                 softcap: None,
                 softmax_scale: self.scale as f32,
                 sliding_window: None,
