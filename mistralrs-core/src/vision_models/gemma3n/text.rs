@@ -343,9 +343,9 @@ impl Attention {
         q = self.apply_rope(&q, seqlen_offsets, q_len)?;
         q = q.transpose(1, 2)?;
 
-        let (k, v) = if let Some(kv_shared_layer_index) = self.kv_shared_layer_index {
+        let ((k, v), is_shared_kv) = if let Some(kv_shared_layer_index) = self.kv_shared_layer_index {
             let shared_cache = &kv_caches[kv_shared_layer_index];
-            (shared_cache.k()?.unwrap(), shared_cache.v()?.unwrap())
+            ((shared_cache.k()?.unwrap(), shared_cache.v()?.unwrap()), true)
         } else {
             let mut k = self.k_proj.forward_autocast(xs)?;
             k = k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
@@ -358,7 +358,7 @@ impl Attention {
             v = v.apply(&self.v_norm)?;
             v = v.transpose(1, 2)?;
 
-            kv_caches[self.layer_idx].append(&k, &v)?
+            (kv_caches[self.layer_idx].append(&k, &v)?, false)
         };
 
         let mask = if self.use_sliding_window {
@@ -367,8 +367,49 @@ impl Attention {
             attention_mask
         };
 
+        // Adjust mask dimensions if using shared KV cache
+        let mask = if is_shared_kv {
+            if let Some(mask) = mask {
+                let kv_seq_len = k.dims()[2];
+                let mask_dims = mask.dims();
+                
+                // Check if we need to adjust the mask dimensions
+                match mask.rank() {
+                    2 => {
+                        // For 2D masks: (q_len, kv_len)
+                        if mask_dims[1] != kv_seq_len {
+                            Some(mask.narrow(1, 0, kv_seq_len)?)
+                        } else {
+                            Some(mask.clone())
+                        }
+                    }
+                    3 => {
+                        // For 3D masks: (batch, q_len, kv_len)
+                        if mask_dims[2] != kv_seq_len {
+                            Some(mask.narrow(2, 0, kv_seq_len)?)
+                        } else {
+                            Some(mask.clone())
+                        }
+                    }
+                    4 => {
+                        // For 4D masks: (batch, heads, q_len, kv_len)
+                        if mask_dims[3] != kv_seq_len {
+                            Some(mask.narrow(3, 0, kv_seq_len)?)
+                        } else {
+                            Some(mask.clone())
+                        }
+                    }
+                    _ => Some(mask.clone())
+                }
+            } else {
+                None
+            }
+        } else {
+            mask.cloned()
+        };
+
         let mut attn_output =
-            Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?;
+            Sdpa.run_attention(&q, &k, &v, mask.as_ref(), Some(flash_params), &self.sdpa_params)?;
 
         attn_output = attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?;
         self.o_proj.forward_autocast(&attn_output)
