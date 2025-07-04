@@ -97,7 +97,7 @@ rand = "0.9.1"
 cli-table = "0.5.0"
 dirs = "6.0.0"
 thiserror = "2.0.12"
-tokenizers = { version = "0.21.1", default-features = false }
+tokenizers = { version = "0.21.2", default-features = false }
 tokio-tungstenite = "0.24.0"
 tqdm = "0.7.0"
 chrono = "0.4.41"
@@ -128,8 +128,8 @@ schemars = "0.8.22"
 serde_yaml = "0.9.34"
 serde_plain = "1.0.2"
 as-any = "0.3.2"
-llguidance = { git = "https://github.com/guidance-ai/llguidance.git", version = "0.7.29", default-features = false, features = ["lark"], rev = "2ce5ab8" }
-toktrie_hf_tokenizers = {git = "https://github.com/guidance-ai/llguidance.git", version = "0.7.29", rev = "2ce5ab8" }
+llguidance = { git = "https://github.com/guidance-ai/llguidance.git", version = "1.0.0", default-features = false, features = ["lark"], rev = "c432092" }
+toktrie_hf_tokenizers = {git = "https://github.com/guidance-ai/llguidance.git", version = "1.0.0", rev = "c432092" }
 objc = { version = "0.2.7" }
 serde-big-array = "0.5.1"
 interprocess = "2.2.3"

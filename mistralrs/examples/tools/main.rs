@@ -1,11 +1,9 @@
-use std::collections::HashMap;
-
 use anyhow::Result;
 use mistralrs::{
     Function, IsqType, RequestBuilder, TextMessageRole, TextModelBuilder, Tool, ToolChoice,
     ToolType,
 };
-use serde_json::{json, Value};
+use serde_json::json;
 
 #[derive(serde::Deserialize, Debug, Clone)]
 struct GetWeatherInput {
@@ -24,7 +22,7 @@ async fn main() -> Result<()> {
         .build()
         .await?;
 
-    let parameters: HashMap<String, Value> = serde_json::from_value(json!({
+    let parameters = json!({
         "type": "object",
         "properties": {
             "place": {
@@ -33,7 +31,7 @@ async fn main() -> Result<()> {
             },
         },
         "required": ["place"],
-    }))?;
+    });
 
     let tools = vec![Tool {
         tp: ToolType::Function,

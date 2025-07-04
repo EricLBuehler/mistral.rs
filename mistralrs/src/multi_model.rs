@@ -83,6 +83,7 @@ impl MultiModel {
             suffix: None,
             tools,
             tool_choice,
+            enforce_tool_schema: request.enforce_tool_schema(),
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),

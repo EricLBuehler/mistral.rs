@@ -25,6 +25,17 @@ http.workspace = true
 pyo3 = { workspace = true, optional = true }
 utoipa = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", rev="9ca20c6", features = [
+    "client",
+    "server",
+    "transport-sse-server",
+    "transport-io",
+    "transport-streamable-http-server",
+    "transport-streamable-http-client",
+    "transport-sse-client",
+    "transport-sse-server",
+    "auth",
+]  }
 
 [features]
 pyo3_macros = ["pyo3"]
