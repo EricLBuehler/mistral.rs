@@ -42,6 +42,7 @@ dependencies = [
  "cfg-if",
  "getrandom 0.3.3",
  "once_cell",
+ "serde",
  "version_check",
  "zerocopy",
 ]
@@ -647,6 +648,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "castaway"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0abae9be0aaf9ea96a3b1b8b1b55c602ca751eba1b1500220cea4ecbafe7c0d5"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -800,6 +810,21 @@ name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
+
+[[package]]
+name = "compact_str"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fdb1325a1cece981e8a296ab8f0f9b63ae357bd0784a9faaf548cc7b480707a"
+dependencies = [
+ "castaway",
+ "cfg-if",
+ "itoa",
+ "rustversion",
+ "ryu",
+ "serde",
+ "static_assertions",
+]
 
 [[package]]
 name = "console"
@@ -1057,6 +1082,15 @@ dependencies = [
  "darling_core 0.20.11",
  "quote",
  "syn 2.0.101",
+]
+
+[[package]]
+name = "dary_heap"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04d2cd9c18b9f454ed67da600630b021a8a80bf33f8c95896ab33aaf1c26b728"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -2413,24 +2447,6 @@ checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 
 [[package]]
 name = "itertools"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1c173a5686ce8bfa551b3563d0c2170bf24ca44da99c7ca4bfdab5418c3fe57"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -2528,8 +2544,8 @@ checksum = "241eaef5fd12c88705a01fc1066c48c4b36e0dd4377dcdc7ec3942cea7a69956"
 
 [[package]]
 name = "llguidance"
-version = "0.7.29"
-source = "git+https://github.com/guidance-ai/llguidance.git?rev=2ce5ab8#2ce5ab8196f16dd8beba5a3d874eb1ab74e0268c"
+version = "1.0.0"
+source = "git+https://github.com/guidance-ai/llguidance.git?rev=c432092#c432092d37b8ccd1afeeff3e7f9c9a29aae0a87e"
 dependencies = [
  "anyhow",
  "derivre",
@@ -2866,7 +2882,7 @@ dependencies = [
  "indicatif",
  "intel-mkl-src",
  "interprocess",
- "itertools 0.14.0",
+ "itertools",
  "libc",
  "llguidance",
  "lrtable",
@@ -2972,7 +2988,7 @@ dependencies = [
  "image",
  "indexmap",
  "intel-mkl-src",
- "itertools 0.14.0",
+ "itertools",
  "mistralrs-core",
  "mistralrs-mcp",
  "pyo3",
@@ -3049,7 +3065,7 @@ dependencies = [
  "image",
  "indexmap",
  "intel-mkl-src",
- "itertools 0.14.0",
+ "itertools",
  "mistralrs-core",
  "reqwest",
  "serde",
@@ -3957,12 +3973,12 @@ dependencies = [
 
 [[package]]
 name = "rayon-cond"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "059f538b55efd2309c9794130bc149c6a553db90e9d99c2030785c82f0bd7df9"
+checksum = "2964d0cf57a3e7a06e8183d14a8b527195c706b7983549cd5462d5aa3747438f"
 dependencies = [
  "either",
- "itertools 0.11.0",
+ "itertools",
  "rayon",
 ]
 
@@ -4773,6 +4789,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
+name = "static_assertions"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
 name = "stop-words"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5246,22 +5268,24 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokenizers"
-version = "0.21.1"
+version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3169b3195f925496c895caee7978a335d49218488ef22375267fba5a46a40bd7"
+checksum = "4c3846d8588abed0daba25a0e47edd58ea15e450a6088b2575f5116fdb0b27ca"
 dependencies = [
+ "ahash",
  "aho-corasick",
+ "compact_str",
+ "dary_heap",
  "derive_builder",
  "esaxx-rs",
  "fancy-regex",
- "getrandom 0.2.16",
- "itertools 0.13.0",
- "lazy_static",
+ "getrandom 0.3.3",
+ "itertools",
  "log",
  "macro_rules_attribute",
  "monostate",
  "paste",
- "rand 0.8.5",
+ "rand 0.9.1",
  "rayon",
  "rayon-cond",
  "regex",
@@ -5397,8 +5421,8 @@ dependencies = [
 
 [[package]]
 name = "toktrie"
-version = "0.7.29"
-source = "git+https://github.com/guidance-ai/llguidance.git?rev=2ce5ab8#2ce5ab8196f16dd8beba5a3d874eb1ab74e0268c"
+version = "1.0.0"
+source = "git+https://github.com/guidance-ai/llguidance.git?rev=c432092#c432092d37b8ccd1afeeff3e7f9c9a29aae0a87e"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -5409,8 +5433,8 @@ dependencies = [
 
 [[package]]
 name = "toktrie_hf_tokenizers"
-version = "0.7.29"
-source = "git+https://github.com/guidance-ai/llguidance.git?rev=2ce5ab8#2ce5ab8196f16dd8beba5a3d874eb1ab74e0268c"
+version = "1.0.0"
+source = "git+https://github.com/guidance-ai/llguidance.git?rev=c432092#c432092d37b8ccd1afeeff3e7f9c9a29aae0a87e"
 dependencies = [
  "anyhow",
  "log",
