@@ -40,6 +40,73 @@ enum BlockType {
     },
 }
 
+// Helper function to calculate same padding
+fn pad_same(x: &Tensor, kernel_size: usize, stride: usize, dilation: usize) -> Result<Tensor> {
+    let (_, _, ih, iw) = x.dims4()?;
+    let oh = (ih + stride - 1) / stride;
+    let ow = (iw + stride - 1) / stride;
+
+    let pad_h = ((oh - 1) * stride + (kernel_size - 1) * dilation + 1).saturating_sub(ih);
+    let pad_w = ((ow - 1) * stride + (kernel_size - 1) * dilation + 1).saturating_sub(iw);
+
+    let pad_top = pad_h / 2;
+    let pad_bottom = pad_h - pad_top;
+    let pad_left = pad_w / 2;
+    let pad_right = pad_w - pad_left;
+
+    if pad_h > 0 || pad_w > 0 {
+        x.pad_with_zeros(2, pad_top, pad_bottom)?
+            .pad_with_zeros(3, pad_left, pad_right)
+    } else {
+        Ok(x.clone())
+    }
+}
+
+// Conv2d with same padding
+#[derive(Debug, Clone)]
+struct Conv2dSame {
+    conv: Conv2d,
+    kernel_size: usize,
+    stride: usize,
+    dilation: usize,
+}
+
+impl Conv2dSame {
+    fn new(
+        in_channels: usize,
+        out_channels: usize,
+        kernel_size: usize,
+        stride: usize,
+        dilation: usize,
+        groups: usize,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
+        let cfg = Conv2dConfig {
+            padding: 0, // We'll handle padding manually
+            stride,
+            dilation,
+            groups,
+            ..Default::default()
+        };
+
+        let conv = conv2d_no_bias(in_channels, out_channels, kernel_size, cfg, vb)?;
+
+        Ok(Self {
+            conv,
+            kernel_size,
+            stride,
+            dilation,
+        })
+    }
+}
+
+impl Module for Conv2dSame {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x = pad_same(x, self.kernel_size, self.stride, self.dilation)?;
+        self.conv.forward(&x)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RMSNorm {
     weight: Tensor,
@@ -114,8 +181,23 @@ impl LayerScale2d {
 }
 
 #[derive(Debug, Clone)]
+enum ConvType {
+    Regular(Conv2d),
+    Same(Conv2dSame),
+}
+
+impl Module for ConvType {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        match self {
+            ConvType::Regular(conv) => conv.forward(x),
+            ConvType::Same(conv) => conv.forward(x),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct ConvNormAct {
-    conv: Conv2d,
+    conv: ConvType,
     norm: Option<RMSNormAct2d>,
 }
 
@@ -132,14 +214,35 @@ impl ConvNormAct {
         eps: f64,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
-        let conv_cfg = Conv2dConfig {
-            stride,
-            padding,
-            groups,
-            ..Default::default()
-        };
+        // Use Conv2dSame for depthwise convolutions (groups == in_chs or groups == out_chs)
+        // and for convolutions with kernel_size > 1 where padding would be needed
+        let use_same_padding = groups == in_chs || (kernel_size > 1 && padding > 0);
 
-        let conv = conv2d_no_bias(in_chs, out_chs, kernel_size, conv_cfg, vb.pp("conv"))?;
+        let conv = if use_same_padding {
+            ConvType::Same(Conv2dSame::new(
+                in_chs,
+                out_chs,
+                kernel_size,
+                stride,
+                1, // dilation
+                groups,
+                vb.pp("conv"),
+            )?)
+        } else {
+            let conv_cfg = Conv2dConfig {
+                stride,
+                padding,
+                groups,
+                ..Default::default()
+            };
+            ConvType::Regular(conv2d_no_bias(
+                in_chs,
+                out_chs,
+                kernel_size,
+                conv_cfg,
+                vb.pp("conv"),
+            )?)
+        };
 
         let norm = Some(RMSNormAct2d::new(out_chs, eps, apply_act, vb.pp("bn"))?);
 
@@ -163,7 +266,7 @@ impl Module for ConvNormAct {
 
 #[derive(Debug, Clone)]
 struct EdgeResidual {
-    conv_exp: Conv2d,
+    conv_exp: Conv2dSame,
     bn1: RMSNormAct2d,
     conv_pwl: Conv2d,
     bn2: RMSNormAct2d,
@@ -182,17 +285,13 @@ impl EdgeResidual {
         let mid_chs = make_divisible(in_chs as f64 * expand_ratio, 8);
         let has_skip = in_chs == out_chs && stride == 1;
 
-        let conv_exp_cfg = Conv2dConfig {
-            stride,
-            padding: exp_kernel_size / 2,
-            ..Default::default()
-        };
-
-        let conv_exp = conv2d_no_bias(
+        let conv_exp = Conv2dSame::new(
             in_chs,
             mid_chs,
             exp_kernel_size,
-            conv_exp_cfg,
+            stride,
+            1, // dilation
+            1, // groups
             vb.pp("conv_exp"),
         )?;
 
@@ -361,10 +460,10 @@ struct MultiQueryAttention2d {
     value_dim: usize,
     scale: f64,
     query_proj: Conv2d,
-    key_down_conv: Option<Conv2d>,
+    key_down_conv: Option<Conv2dSame>,
     key_norm: Option<RMSNormAct2d>,
     key_proj: Conv2d,
-    value_down_conv: Option<Conv2d>,
+    value_down_conv: Option<Conv2dSame>,
     value_norm: Option<RMSNormAct2d>,
     value_proj: Conv2d,
     output_proj: Conv2d,
@@ -395,17 +494,13 @@ impl MultiQueryAttention2d {
 
         // Key path
         let (key_down_conv, key_norm) = if kv_stride > 1 {
-            let conv_cfg = Conv2dConfig {
-                stride: kv_stride,
-                padding: dw_kernel_size / 2,
-                groups: dim, // Depthwise
-                ..Default::default()
-            };
-            let down_conv = conv2d_no_bias(
+            let down_conv = Conv2dSame::new(
                 dim,
                 dim,
                 dw_kernel_size,
-                conv_cfg,
+                kv_stride,
+                1,   // dilation
+                dim, // Depthwise
                 vb.pp("key").pp("down_conv"),
             )?;
             let norm = RMSNormAct2d::new(dim, 1e-6, false, vb.pp("key").pp("norm"))?;
@@ -424,17 +519,13 @@ impl MultiQueryAttention2d {
 
         // Value path
         let (value_down_conv, value_norm) = if kv_stride > 1 {
-            let conv_cfg = Conv2dConfig {
-                stride: kv_stride,
-                padding: dw_kernel_size / 2,
-                groups: dim, // Depthwise
-                ..Default::default()
-            };
-            let down_conv = conv2d_no_bias(
+            let down_conv = Conv2dSame::new(
                 dim,
                 dim,
                 dw_kernel_size,
-                conv_cfg,
+                kv_stride,
+                1,   // dilation
+                dim, // Depthwise
                 vb.pp("value").pp("down_conv"),
             )?;
             let norm = RMSNormAct2d::new(dim, 1e-6, false, vb.pp("value").pp("norm"))?;

@@ -343,9 +343,13 @@ impl Attention {
         q = self.apply_rope(&q, seqlen_offsets, q_len)?;
         q = q.transpose(1, 2)?;
 
-        let ((k, v), is_shared_kv) = if let Some(kv_shared_layer_index) = self.kv_shared_layer_index {
+        let ((k, v), is_shared_kv) = if let Some(kv_shared_layer_index) = self.kv_shared_layer_index
+        {
             let shared_cache = &kv_caches[kv_shared_layer_index];
-            ((shared_cache.k()?.unwrap(), shared_cache.v()?.unwrap()), true)
+            (
+                (shared_cache.k()?.unwrap(), shared_cache.v()?.unwrap()),
+                true,
+            )
         } else {
             let mut k = self.k_proj.forward_autocast(xs)?;
             k = k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
@@ -372,7 +376,7 @@ impl Attention {
             if let Some(mask) = mask {
                 let kv_seq_len = k.dims()[2];
                 let mask_dims = mask.dims();
-                
+
                 // Check if we need to adjust the mask dimensions
                 match mask.rank() {
                     2 => {
@@ -399,7 +403,7 @@ impl Attention {
                             Some(mask.clone())
                         }
                     }
-                    _ => Some(mask.clone())
+                    _ => Some(mask.clone()),
                 }
             } else {
                 None
@@ -408,8 +412,14 @@ impl Attention {
             mask.cloned()
         };
 
-        let mut attn_output =
-            Sdpa.run_attention(&q, &k, &v, mask.as_ref(), Some(flash_params), &self.sdpa_params)?;
+        let mut attn_output = Sdpa.run_attention(
+            &q,
+            &k,
+            &v,
+            mask.as_ref(),
+            Some(flash_params),
+            &self.sdpa_params,
+        )?;
 
         attn_output = attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?;
         self.o_proj.forward_autocast(&attn_output)
