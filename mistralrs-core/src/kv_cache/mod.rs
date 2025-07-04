@@ -142,6 +142,21 @@ impl KvCache {
         }
     }
 
+    pub fn try_set_len(&self, len: usize) -> candle_core::Result<()> {
+        match self {
+            Self::Normal { k, v } => {
+                k.try_set_len(len)?;
+                v.try_set_len(len)?;
+                Ok(())
+            }
+            Self::Rotating { k, v } => {
+                k.try_set_len(len)?;
+                v.try_set_len(len)?;
+                Ok(())
+            }
+        }
+    }
+
     pub fn is_rotating(&self) -> bool {
         matches!(self, Self::Rotating { .. })
     }
