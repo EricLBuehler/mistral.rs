@@ -1,6 +1,8 @@
-# Phi 4 Multimodal Model: [`microsoft/Phi-4-multimodal-instruct`](https://huggingface.co/microsoft/Phi-4-multimodal-instruct)
+# Gemma 3n Model: [`google/gemma-3n-E4B-it`](https://huggingface.co/google/gemma-3n-E4B-it)
 
-The Phi 4 Multimodal Model has support in the Rust, Python, and HTTP APIs. The Phi 4 Multimodal Model supports ISQ for increased performance.
+Gemma 3n models are designed for efficient execution on low-resource devices. They are capable of multimodal input, handling text, image, video, and audio input, and generating text outputs. These models support over 140 spoken languages.
+
+The Gemma 3n Model has support in the Rust, Python, and HTTP APIs. The Gemma 3n Model supports ISQ for increased performance.
 
 The Python and HTTP APIs support sending images as:
 - URL
@@ -9,19 +11,14 @@ The Python and HTTP APIs support sending images as:
 
 The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
-> Note: The Phi 4 Multimodal model works best with one image although it is supported to send multiple images.
+## Audio input
 
-> Note: when sending multiple images, they will be resized to the minimum dimension by which all will fit without cropping.
-> Aspect ratio is not preserved in that case.
+Alongside vision, Gemma 3n in `mistral.rs` can accept **audio** as an additional modality.  This unlocks fully-local pipelines such as **text + speech + vision → text** where the model can reason jointly over what it *hears* and what it *sees*.
 
-> [!NOTE]
-> The Phi 4 Multimodal model does not automatically add the image tokens!
-> They should be added to messages manually, and are of the format `<|image_{N}|>` where N starts from 1.
-
-[**Phi 4 multimodal supports audio inputs!**](#audio-input).
+`mistral.rs` automatically decodes the supplied audio (WAV/MP3/FLAC/OGG/… – anything [Symphonia](https://github.com/pdeljanov/Symphonia) can handle) into 16-bit PCM.
 
 ## HTTP server
-You can find this example [here](../examples/server/phi3v.py).
+You can find this example [here](../examples/server/gemma3n.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -30,17 +27,36 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 ---
 
 **Image:**
-<img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "1000" height = "666">
-<h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
+<img src="https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg" alt="Zinnia Flower" width = "1000" height = "666">
+<h6><a href = "https://www.wikimedia.org/">Credit</a></h6>
 
 **Prompt:**
 ```
-<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.
+Please describe this image in detail.
 ```
 
 **Output:**
 ```
-A mountain with snow on it.
+The image is a close-up shot of a vibrant pink and yellow flower, likely a rose, set against a blurred background of green foliage. The flower is the clear focal point, sharply in focus and brightly illuminated. 
+
+Here's a detailed breakdown:
+
+**The Flower:**
+
+*   **Color:** The petals are a striking, almost neon pink, with hints of deeper magenta in the folds. The center of the flower transitions to a warm, golden yellow.
+*   **Form:** The flower appears to be in full bloom, with numerous layers of petals unfurling outwards. The petals have a soft, velvety texture suggested by the way light catches them. They are arranged in a classic rose shape, with some petals curled and others gently spreading.
+*   **Details:**  The edges of the petals are slightly ruffled and uneven, adding to the naturalistic feel.  There's a subtle gradient of color within each petal, creating depth and dimension.  The yellow center is densely packed with what appear to be stamens or pistils.
+*   **Lighting:** The flower is strongly lit from above and slightly to the side, creating highlights and shadows that emphasize its three-dimensional form. This lighting also enhances the vibrancy of the colors.
+
+**The Background:**
+
+*   **Color:** The background is a soft, out-of-focus green, suggesting leaves and other foliage. 
+*   **Blur:** The background is heavily blurred (bokeh), which helps to isolate the flower and make it stand out. The blur creates a sense of depth and draws the viewer's eye to the sharp details of the flower.
+*   **Texture:** While blurred, you can discern the texture of leaves – some appear smooth, others slightly textured.
+
+**Overall Impression:**
+
+The image is visually striking due to the contrast between the bright pink and yellow of the flower and the soft green background. The sharp focus on the flower combined with the blurred background creates a sense of intimacy and emphasizes the beauty of the bloom. It's a classic example of a macro photograph used to highlight the intricate details and vibrant colors of nature. The overall feeling is one of freshness, beauty, and vibrancy.
 ```
 
 ---
@@ -51,7 +67,7 @@ A mountain with snow on it.
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --release --features ... -- --port 1234 vision-plain -m microsoft/Phi-4-multimodal-instruct
+cargo run --release --features ... -- --port 1234 run -m google/gemma-3n-E4B-it
 ```
 
 2) Send a request
@@ -70,12 +86,12 @@ completion = client.chat.completions.create(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                        "url": "https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg"
                     },
                 },
                 {
                     "type": "text",
-                    "text": "<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.",
+                    "text": "Please describe this image in detail.",
                 },
             ],
         },
@@ -96,9 +112,9 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/phi3v/main.rs).
+You can find this example [here](../mistralrs/examples/gemma3n/main.rs).
 
-This is a minimal example of running the Phi 4 Multimodal model with a dummy image.
+This is a minimal example of running the Gemma 3n model with a dummy image.
 
 ```rust
 use anyhow::Result;
@@ -107,14 +123,14 @@ use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 #[tokio::main]
 async fn main() -> Result<()> {
     let model =
-        VisionModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
+        VisionModelBuilder::new("google/gemma-3n-E4B-it")
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
             .await?;
 
     let bytes = match reqwest::blocking::get(
-        "https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg",
+        "https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg",
     ) {
         Ok(http_resp) => http_resp.bytes()?.to_vec(),
         Err(e) => anyhow::bail!(e),
@@ -123,7 +139,7 @@ async fn main() -> Result<()> {
 
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
-        "What is depicted here? Please describe the scene in detail.",
+        "Please describe the image in detail.",
         image,
         &model,
     )?;
@@ -141,7 +157,7 @@ async fn main() -> Result<()> {
 ```
 
 ## Python
-You can find this example [here](../examples/python/phi3v.py).
+You can find this example [here](../examples/python/gemma3n.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -152,8 +168,8 @@ from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 
 runner = Runner(
     which=Which.VisionPlain(
-        model_id="microsoft/Phi-4-multimodal-instruct",
-        arch=VisionArchitecture.Phi4MM,
+        model_id="google/gemma-3n-E4B-it",
+        arch=VisionArchitecture.Gemma3n,
     ),
 )
 
@@ -167,12 +183,12 @@ res = runner.send_chat_completion_request(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/e/e7/Everest_North_Face_toward_Base_Camp_Tibet_Luca_Galuzzi_2006.jpg"
+                            "url": "https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg"
                         },
                     },
                     {
                         "type": "text",
-                        "text": "<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.",
+                        "text": "Please describe this image in detail.",
                     },
                 ],
             }
@@ -187,11 +203,6 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-## Audio input
-
-Alongside vision, Phi 4 Multimodal in `mistral.rs` can accept **audio** as an additional modality.  This unlocks fully-local pipelines such as **text + speech + vision → text** where the model can reason jointly over what it *hears* and what it *sees*.
-
-`mistral.rs` automatically decodes the supplied audio (WAV/MP3/FLAC/OGG/… – anything [Symphonia](https://github.com/pdeljanov/Symphonia) can handle) into 16-bit PCM.
 
 ### OpenAI HTTP API
 
@@ -211,7 +222,7 @@ Audio is delivered with the `audio_url` content-type that mirrors OpenAIʼs offi
     },
     {
       "type": "text",
-      "text": "<|audio_1|><|image_1|>\nDescribe what is happening in this clip in as much detail as possible."
+      "text": "Describe what is happening in this clip in as much detail as possible."
     }
   ]
 }
@@ -225,7 +236,7 @@ use mistralrs::{AudioInput, IsqType, TextMessageRole, VisionMessages, VisionMode
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
+    let model = VisionModelBuilder::new("google/gemma-3n-E4B-it")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()

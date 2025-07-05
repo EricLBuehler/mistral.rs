@@ -122,6 +122,7 @@ class VisionArchitecture(Enum):
     Gemma3 = "gemma3"
     Mistral3 = "mistral3"
     Llama4 = "llama4"
+    Gemma3n = "Gemma3n"
 
 @dataclass
 class DiffusionArchitecture(Enum):

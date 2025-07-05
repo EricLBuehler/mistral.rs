@@ -68,7 +68,7 @@ impl RotatingCache {
         self.all_data = None;
     }
 
-    pub fn set_len(&mut self, len: usize) -> candle_core::Result<()> {
+    pub fn try_set_len(&self, len: usize) -> candle_core::Result<()> {
         // If trying to roll it back past the boundary of max_seq_len, fail early.
         if self.current_seq_len.saturating_sub(len) > self.max_seq_len {
             candle_core::bail!(
@@ -77,6 +77,11 @@ impl RotatingCache {
                 self.max_seq_len
             );
         }
+        Ok(())
+    }
+
+    pub fn set_len(&mut self, len: usize) -> candle_core::Result<()> {
+        self.try_set_len(len)?;
         self.current_seq_len = len;
         self.offset = len % self.max_seq_len;
         Ok(())
