@@ -155,6 +155,6 @@ pub struct Gemma3nAudioConfig {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Gemma3nConfig {
     pub text_config: Gemma3nTextConfig,
-    pub vision_config: Option<Gemma3nVisionConfig>,
-    pub audio_config: Option<Gemma3nAudioConfig>,
+    pub vision_config: Gemma3nVisionConfig,
+    pub audio_config: Gemma3nAudioConfig,
 }

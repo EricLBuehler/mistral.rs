@@ -4696,8 +4696,8 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
             max_batch_size,
-            max_image_shape: _,
-            max_num_images: _,
+            max_image_shape,
+            max_num_images,
         } = params
         else {
             anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
@@ -4706,29 +4706,124 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         let cfg: Gemma3nConfig = serde_json::from_str(config)?;
         let text_cfg = &cfg.text_config;
 
-        // Calculate max attention size for text model
+        // Gemma3n is an "inject into the prompt" model, similar to Gemma3
+        // We need to account for vision and audio tokens in the sequence length
+
+        let mut total_seq_len = *max_seq_len;
+
+        // Add vision tokens
+        {
+            // Vision tokens are injected into the prompt
+            // Each image produces a fixed number of tokens based on spatial dimensions
+            let image_size = max_image_shape.0;
+            let patch_size = 32; // Typical patch size for vision transformers
+            let num_patches = (image_size / patch_size).pow(2);
+            let vision_tokens_per_image = num_patches + 2; // +2 for BOI/EOI tokens
+            total_seq_len += vision_tokens_per_image * max_num_images;
+        }
+
+        // Add audio tokens
+        {
+            // Audio tokens are also injected into the prompt
+            // Typical audio sequence length after processing
+            let audio_tokens = 58; // Based on the code comment about 58 audio embeddings
+            total_seq_len += audio_tokens;
+        }
+
+        // Calculate max attention size for text model with all injected tokens
         let max_text_attn =
-            max_batch_size * text_cfg.num_attention_heads * max_seq_len * max_seq_len;
+            max_batch_size * text_cfg.num_attention_heads * total_seq_len * total_seq_len;
 
         Ok(max_text_attn)
     }
 
     fn non_mapped_max_act_size_elems(
         &self,
-        _config: &str,
+        config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len: _,
-            max_batch_size: _,
-            max_image_shape: _,
-            max_num_images: _,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
         } = params
         else {
             anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
-        Ok(0)
+        let cfg: Gemma3nConfig = serde_json::from_str(config)?;
+
+        // Calculate max activation sizes for each modality
+        let mut max_activation = 0;
+
+        // Vision activation size
+        {
+            let _vision_cfg = &cfg.vision_config;
+            // Vision tower activations
+            // For EfficientNetV2, the largest activation is typically after the stem
+            // before any downsampling occurs
+            let vision_tower_act = {
+                // Assuming input images are processed one at a time
+                let image_size = max_image_shape.0;
+                let after_stem_size = image_size / 2; // Stem typically has stride 2
+                let after_stem_channels = 24; // From EfficientNetV2 XSmall
+
+                max_batch_size
+                    * max_num_images
+                    * after_stem_channels
+                    * after_stem_size
+                    * after_stem_size
+            };
+
+            // Vision embedder activations
+            let vision_embed_act = {
+                // After vision tower, we have feature maps that get flattened
+                // The vision tower output is typically 2048 channels with spatial dims
+                let spatial_size = 12; // Typical for 384x384 input after all downsampling
+                let vision_features =
+                    max_batch_size * max_num_images * 2048 * spatial_size * spatial_size;
+
+                // After embedding projection to text hidden size
+                let projected = max_batch_size
+                    * max_num_images
+                    * spatial_size
+                    * spatial_size
+                    * cfg.text_config.hidden_size;
+
+                vision_features.max(projected)
+            };
+
+            max_activation = max_activation.max(vision_tower_act).max(vision_embed_act);
+        }
+
+        // Audio activation size
+        {
+            let audio_cfg = &cfg.audio_config;
+            // Audio encoder activations
+            let audio_encoder_act = {
+                // Conformer layer activations
+                // The largest activation is typically in the feed-forward layers
+                let intermediate_size = audio_cfg.hidden_size * 4; // Typical FF expansion
+                let max_audio_seq_len = 1500; // Typical max audio sequence length
+
+                max_batch_size * max_audio_seq_len * intermediate_size
+            };
+
+            // Audio attention activations
+            let audio_attn_act = {
+                // Attention scores for all heads
+                let max_audio_seq_len = 1500;
+                max_batch_size
+                    * audio_cfg.conf_num_attention_heads
+                    * max_audio_seq_len
+                    * max_audio_seq_len
+            };
+
+            max_activation = max_activation.max(audio_encoder_act).max(audio_attn_act);
+        }
+
+        Ok(max_activation)
     }
 
     fn non_mapped_size_in_bytes(
@@ -4779,7 +4874,139 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                 + per_layer_projection_norm
         };
 
-        Ok(text_elems * dtype.size_in_bytes())
+        // Vision components
+        let vision_elems = {
+            let vision_cfg = &cfg.vision_config;
+            // Vision tower - using the actual vision model architecture
+            let vision_tower_elems = {
+                // Stem convolution (first layer)
+                let stem_conv = 3 * 24 * 3 * 3; // in_channels=3, out_channels=24, kernel=3x3
+
+                // Count blocks based on the architecture
+                // This is based on the EfficientNetV2 XSmall config used by Gemma3n
+                let mut block_elems = 0;
+
+                // Edge residual and inverted residual blocks
+                // These are the main computation blocks in EfficientNetV2
+                // Actual sizes would need to be calculated based on the specific config
+                // For now, using typical sizes for XSmall variant
+                block_elems += 24 * 48 * 3 * 3; // Example block sizes
+
+                // Head convolution
+                let head_conv = 1536 * 2048 * 1 * 1; // Final 1x1 conv
+
+                stem_conv + block_elems + head_conv
+            };
+
+            // Vision multimodal embedder components
+            let embed_vision_elems = {
+                // Embedding layer
+                let embedding = vision_cfg.vocab_size * vision_cfg.hidden_size;
+
+                // Normalization layers
+                let hard_norm = vision_cfg.hidden_size;
+                let soft_norm = vision_cfg.hidden_size;
+
+                // Projection from vision to text hidden size
+                let projection = vision_cfg.hidden_size * text_cfg.hidden_size;
+
+                // Post-projection norm
+                let post_norm = text_cfg.hidden_size;
+
+                embedding + hard_norm + soft_norm + projection + post_norm
+            };
+
+            vision_tower_elems + embed_vision_elems
+        };
+
+        // Audio components
+        let audio_elems = {
+            let audio_cfg = &cfg.audio_config;
+            // Audio encoder components
+            let audio_encoder_elems = {
+                // SSCP (Streaming State Space Conformer Pooling) components
+                let sscp_conv_elems = {
+                    let mut conv_elems = 0;
+                    let mut in_channels = audio_cfg.input_feat_size;
+
+                    for (i, &out_channels) in audio_cfg.sscp_conv_channel_size.iter().enumerate() {
+                        if i < audio_cfg.sscp_conv_kernel_size.len() {
+                            let kernel = &audio_cfg.sscp_conv_kernel_size[i];
+                            conv_elems += in_channels * out_channels * kernel[0] * kernel[1];
+                            in_channels = out_channels;
+                        }
+                    }
+
+                    // Group norm parameters
+                    let group_norm = audio_cfg
+                        .sscp_conv_channel_size
+                        .last()
+                        .copied()
+                        .unwrap_or(32)
+                        * 2; // weight + bias
+
+                    conv_elems + group_norm
+                };
+
+                // Conformer layers
+                let conformer_elems = audio_cfg.conf_num_hidden_layers * {
+                    // Each conformer layer has:
+                    // - Conv module
+                    let conv_module = {
+                        let pointwise1 = audio_cfg.hidden_size * audio_cfg.hidden_size * 2;
+                        let depthwise = audio_cfg.hidden_size * audio_cfg.conf_conv_kernel_size;
+                        let pointwise2 = audio_cfg.hidden_size * audio_cfg.hidden_size;
+                        let norm = audio_cfg.hidden_size;
+                        pointwise1 + depthwise + pointwise2 + norm
+                    };
+
+                    // - Multi-head attention
+                    let mha = {
+                        let qkv = audio_cfg.hidden_size * audio_cfg.hidden_size * 3;
+                        let out = audio_cfg.hidden_size * audio_cfg.hidden_size;
+                        qkv + out
+                    };
+
+                    // - Feed-forward
+                    let ff = {
+                        let intermediate_size = audio_cfg.hidden_size * 4; // Typical FF expansion
+                        let ff1 = audio_cfg.hidden_size * intermediate_size;
+                        let ff2 = intermediate_size * audio_cfg.hidden_size;
+                        ff1 + ff2
+                    };
+
+                    // - Layer norms
+                    let norms = audio_cfg.hidden_size * 4; // Multiple norms per layer
+
+                    conv_module + mha + ff + norms
+                };
+
+                sscp_conv_elems + conformer_elems
+            };
+
+            // Audio multimodal embedder components
+            let embed_audio_elems = {
+                // Embedding layer
+                let embedding = audio_cfg.vocab_size * audio_cfg.hidden_size;
+
+                // Normalization layers
+                let hard_norm = audio_cfg.hidden_size;
+                let soft_norm = audio_cfg.hidden_size;
+
+                // Projection from audio to text hidden size
+                let projection = audio_cfg.hidden_size * text_cfg.hidden_size;
+
+                // Post-projection norm
+                let post_norm = text_cfg.hidden_size;
+
+                embedding + hard_norm + soft_norm + projection + post_norm
+            };
+
+            audio_encoder_elems + embed_audio_elems
+        };
+
+        let total_elems = text_elems + vision_elems + audio_elems;
+        Ok(total_elems * dtype.size_in_bytes())
     }
 
     fn layer_sizes_in_bytes(
