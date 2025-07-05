@@ -1,7 +1,7 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
-    sync::{atomic::AtomicUsize, Arc, Mutex},
+    sync::{atomic::AtomicUsize, Arc},
 };
 
 use candle_core::{
@@ -15,7 +15,6 @@ use candle_core::{
     from_storage_no_op, Context, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
 use half::f16;
-use lazy_static::lazy_static;
 
 use crate::{
     gptq::marlin_backend::{marlin_matmul, marlin_weight_repack},

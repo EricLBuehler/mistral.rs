@@ -1,5 +1,8 @@
 use crate::cuda::ffi;
-use crate::cuda::ffi::{paged_attention_v1, paged_attention_v2};
+use crate::cuda::ffi::{
+    paged_attention_v1_bf16, paged_attention_v1_f16, paged_attention_v1_f32,
+    paged_attention_v2_bf16, paged_attention_v2_f16, paged_attention_v2_f32,
+};
 use candle::backend::BackendStorage;
 use candle::cuda_backend::cudarc::driver::DevicePtr;
 use candle::cuda_backend::WrapErr;
@@ -31,13 +34,6 @@ impl PagedAttention {
         q_l: &Layout,
     ) -> Result<(CudaStorage, Shape)> {
         let dtype = q.dtype();
-        let internal_type = match dtype {
-            DType::F16 => 0,
-            DType::BF16 => 1,
-            DType::F32 => 2,
-            dtype => candle::bail!("dtype {dtype:?} is not supported"),
-        };
-
         let cache_dtype = match self.key_cache.dtype() {
             DType::F16 => 0,
             DType::BF16 => 1,
@@ -233,8 +229,14 @@ impl PagedAttention {
         let cl_ptr = *cl.device_ptr() as *const core::ffi::c_int;
 
         if use_v1 {
+            let paged_attention_v1_func = match dtype {
+                DType::F16 => paged_attention_v1_f16,
+                DType::BF16 => paged_attention_v1_bf16,
+                DType::F32 => paged_attention_v1_f32,
+                dtype => candle::bail!("dtype {dtype:?} is not supported"),
+            };
             unsafe {
-                paged_attention_v1(
+                paged_attention_v1_func(
                     out_ptr,
                     q_ptr,
                     kc_ptr,
@@ -255,7 +257,6 @@ impl PagedAttention {
                     kv_block_stride as c_int,
                     kv_head_stride as c_int,
                     *dev.cu_stream(),
-                    internal_type,
                     cache_dtype,
                     k_scale_ptr,
                     v_scale_ptr,
@@ -272,8 +273,14 @@ impl PagedAttention {
             let exp_sums_ptr = *exp_sums.device_ptr() as *const f32;
             let max_logits_ptr = *max_logits.device_ptr() as *const f32;
 
+            let paged_attention_v2_func = match dtype {
+                DType::F16 => paged_attention_v2_f16,
+                DType::BF16 => paged_attention_v2_bf16,
+                DType::F32 => paged_attention_v2_f32,
+                dtype => candle::bail!("dtype {dtype:?} is not supported"),
+            };
             unsafe {
-                paged_attention_v2(
+                paged_attention_v2_func(
                     out_ptr,
                     exp_sums_ptr,
                     max_logits_ptr,
@@ -297,7 +304,6 @@ impl PagedAttention {
                     kv_block_stride as c_int,
                     kv_head_stride as c_int,
                     *dev.cu_stream(),
-                    internal_type,
                     cache_dtype,
                     k_scale_ptr,
                     v_scale_ptr,
