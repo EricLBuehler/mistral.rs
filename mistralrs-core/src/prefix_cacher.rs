@@ -447,7 +447,7 @@ impl PrefixCacheManagerV2 {
                 0
             };
             for layer in cache.cache.iter_mut().flatten() {
-                if let Err(_) = layer.try_set_len(match_len) {
+                if layer.try_set_len(match_len).is_err() {
                     return Ok(None);
                 }
             }

@@ -43,8 +43,8 @@ enum BlockType {
 // Helper function to calculate same padding
 fn pad_same(x: &Tensor, kernel_size: usize, stride: usize, dilation: usize) -> Result<Tensor> {
     let (_, _, ih, iw) = x.dims4()?;
-    let oh = (ih + stride - 1) / stride;
-    let ow = (iw + stride - 1) / stride;
+    let oh = ih.div_ceil(stride);
+    let ow = iw.div_ceil(stride);
 
     // Calculate effective kernel size
     let effective_kernel_h = dilation * (kernel_size - 1) + 1;
@@ -90,7 +90,6 @@ impl Conv2dSame {
             stride,
             dilation,
             groups,
-            ..Default::default()
         };
 
         let conv = conv2d_no_bias(in_channels, out_channels, kernel_size, cfg, vb)?;
