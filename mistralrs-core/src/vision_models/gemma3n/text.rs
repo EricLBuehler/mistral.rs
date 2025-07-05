@@ -42,7 +42,7 @@ pub struct Mlp {
     down: Arc<dyn QuantMethod>,
     activation_sparsity: f64,
     act: Activation,
-    std_multiplier: Tensor,
+    std_multiplier: f64,
 }
 
 impl Mlp {
@@ -53,7 +53,6 @@ impl Mlp {
         layer_idx: usize,
     ) -> Result<Self> {
         let std_multiplier = Self::std_multiplier(cfg.activation_sparsity_pattern[layer_idx]);
-        let std_multiplier = Tensor::new(std_multiplier as f32, vb.device())?.reshape(1)?;
         Ok(Self {
             gate: ColumnParallelLayer::new(
                 cfg.hidden_size,
@@ -95,8 +94,7 @@ impl Mlp {
         let xs_sq_mean = xs.sqr()?.mean_keepdim(D::Minus1)?;
         let var = (&xs_sq_mean - xs_mean.sqr()?)?;
         let xs_std = (var + EPS)?.sqrt()?;
-        let cutoff_xs =
-            (xs_mean + xs_std.broadcast_mul(&self.std_multiplier.to_dtype(xs_std.dtype())?)?)?;
+        let cutoff_xs = (xs_mean + (xs_std * self.std_multiplier)?)?;
         xs.broadcast_sub(&cutoff_xs)?.relu()
     }
 
@@ -633,23 +631,24 @@ impl DecoderLayer {
             mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm"), false),
         )?;
 
-        let altup = TextAltUp::new(cfg, vb.pp("altup"))?;
-        let laurel = TextLaurelBlock::new(cfg, vb.pp("laurel"))?;
+        let altup = TextAltUp::new(cfg, mapper.set_device(layer_idx, vb.pp("altup"), false))?;
+        let laurel =
+            TextLaurelBlock::new(cfg, mapper.set_device(layer_idx, vb.pp("laurel"), false))?;
         let per_layer_input_gate = layers::linear_no_bias(
             cfg.hidden_size,
             cfg.hidden_size_per_layer_input,
-            vb.pp("per_layer_input_gate"),
+            mapper.set_device(layer_idx, vb.pp("per_layer_input_gate"), false),
         )?;
         let per_layer_projection = layers::linear_no_bias(
             cfg.hidden_size_per_layer_input,
             cfg.hidden_size,
-            vb.pp("per_layer_projection"),
+            mapper.set_device(layer_idx, vb.pp("per_layer_projection"), false),
         )?;
         let post_per_layer_input_norm = RmsNorm::new_gemma_3n(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             true,
-            vb.pp("post_per_layer_input_norm"),
+            mapper.set_device(layer_idx, vb.pp("post_per_layer_input_norm"), false),
         )?;
         Ok(Self {
             self_attn,
@@ -984,7 +983,7 @@ impl TextModel {
         xs: &Tensor,
         per_layer_inputs: Option<Tensor>,
     ) -> Result<Tensor> {
-        let mut per_layer_projection = self.per_layer_model_projection.forward(xs)?;
+        let mut per_layer_projection = self.per_layer_model_projection.forward_autocast(xs)?;
         per_layer_projection = (per_layer_projection * self.per_layer_projection_scale)?;
         let shape = [
             xs.dims()[..xs.dims().len() - 1].to_vec(),
