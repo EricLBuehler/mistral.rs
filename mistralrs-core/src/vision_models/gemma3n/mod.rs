@@ -142,7 +142,9 @@ impl Gemma3nModel {
             // Process vision inputs through vision tower
             // TODO: this is a hack necessary because the weights for Gemma 3n are broken and require the image to be rotated.
             let pixel_values = pixel_values.t()?;
-            let vision_features = self.vision_tower.forward(&pixel_values)?;
+            let vision_features = self
+                .vision_tower
+                .forward(&pixel_values.to_dtype(input_embeds.dtype())?)?;
 
             // Reshape vision features to (batch_size * num_images, soft_tokens_per_image, hidden_size)
             let (batch_size, channels, h, w) = vision_features.dims4()?;
