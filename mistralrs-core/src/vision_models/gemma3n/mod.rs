@@ -48,18 +48,25 @@ impl Gemma3nModel {
     ) -> Result<Self> {
         let vb = vb.pp("model");
 
+        let mapper = &normal_loading_metadata.mapper;
+
         // Initialize vision tower
-        let vision_tower = vision::VisionTower::new(vb.pp("vision_tower").pp("timm_model"))?;
+        let vision_tower = vision::VisionTower::new(
+            mapper.set_nm_device(vb.pp("vision_tower").pp("timm_model"), false),
+        )?;
 
         // Initialize audio tower and embedder if audio config is present
         let (audio_tower, embed_audio) = if let Some(audio_cfg) = &cfg.audio_config {
-            let audio_tower = Some(audio::AudioModel::new(audio_cfg, vb.pp("audio_tower"))?);
+            let audio_tower = Some(audio::AudioModel::new(
+                audio_cfg,
+                mapper.set_nm_device(vb.pp("audio_tower"), false),
+            )?);
             let embed_audio = Some(Gemma3nMultimodalEmbedder::new(
                 &cfg.text_config,
                 audio_cfg.vocab_size,
                 audio_cfg.hidden_size,
                 audio_cfg.vocab_offset,
-                vb.pp("embed_audio"),
+                mapper.set_nm_device(vb.pp("embed_audio"), false),
             )?);
             (audio_tower, embed_audio)
         } else {
@@ -75,7 +82,7 @@ impl Gemma3nModel {
             vision_cfg.vocab_size,
             vision_cfg.hidden_size,
             vision_cfg.vocab_offset,
-            vb.pp("embed_vision"),
+            mapper.set_nm_device(vb.pp("embed_vision"), false),
         )?;
 
         Ok(Self {
