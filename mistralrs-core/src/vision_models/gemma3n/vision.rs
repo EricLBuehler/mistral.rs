@@ -46,8 +46,12 @@ fn pad_same(x: &Tensor, kernel_size: usize, stride: usize, dilation: usize) -> R
     let oh = (ih + stride - 1) / stride;
     let ow = (iw + stride - 1) / stride;
 
-    let pad_h = ((oh - 1) * stride + (kernel_size - 1) * dilation + 1).saturating_sub(ih);
-    let pad_w = ((ow - 1) * stride + (kernel_size - 1) * dilation + 1).saturating_sub(iw);
+    // Calculate effective kernel size
+    let effective_kernel_h = dilation * (kernel_size - 1) + 1;
+    let effective_kernel_w = dilation * (kernel_size - 1) + 1;
+
+    let pad_h = ((oh - 1) * stride + effective_kernel_h).saturating_sub(ih);
+    let pad_w = ((ow - 1) * stride + effective_kernel_w).saturating_sub(iw);
 
     let pad_top = pad_h / 2;
     let pad_bottom = pad_h - pad_top;
@@ -570,11 +574,15 @@ impl MultiQueryAttention2d {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let (b, _c, h, w) = x.dims4()?;
 
-        let mut q = self.query_proj.forward(x)?;
-        q = q
-            .reshape((b, self.num_heads, self.key_dim, h * w))?
-            .transpose(2, 3)?;
+        // Query projection and reshape
+        // MLX: [B, H, W, C] -> [B, H, W, num_heads * key_dim] -> [B, H*W, num_heads, key_dim] -> [B, num_heads, H*W, key_dim]
+        let q = self.query_proj.forward(x)?;
+        let q = q
+            .permute((0, 2, 3, 1))? // NCHW -> NHWC
+            .reshape((b, h * w, self.num_heads, self.key_dim))?
+            .permute((0, 2, 1, 3))?; // [B, num_heads, H*W, key_dim]
 
+        // Key projection and reshape
         let mut k = x.clone();
         if let (Some(down_conv), Some(norm)) = (&self.key_down_conv, &self.key_norm) {
             k = down_conv.forward(&k)?;
@@ -582,11 +590,13 @@ impl MultiQueryAttention2d {
         }
         k = self.key_proj.forward(&k)?;
         let (_, _, kh, kw) = k.dims4()?;
+        // MLX: [B, C, H, W] -> [B, H, W, C] -> [B, H*W, C] -> [B, 1, H*W, C]
         let k = k
-            .reshape((b, self.key_dim, kh * kw))?
-            .transpose(1, 2)?
-            .unsqueeze(1)?;
+            .permute((0, 2, 3, 1))? // NCHW -> NHWC
+            .reshape((b, kh * kw, self.key_dim))?
+            .unsqueeze(1)?; // [B, 1, kh*kw, key_dim]
 
+        // Value projection and reshape
         let mut v = x.clone();
         if let (Some(down_conv), Some(norm)) = (&self.value_down_conv, &self.value_norm) {
             v = down_conv.forward(&v)?;
@@ -594,10 +604,11 @@ impl MultiQueryAttention2d {
         }
         v = self.value_proj.forward(&v)?;
         let (_, _, vh, vw) = v.dims4()?;
+        // MLX: [B, C, H, W] -> [B, H, W, C] -> [B, H*W, C] -> [B, 1, H*W, C]
         let v = v
-            .reshape((b, self.value_dim, vh * vw))?
-            .transpose(1, 2)?
-            .unsqueeze(1)?;
+            .permute((0, 2, 3, 1))? // NCHW -> NHWC
+            .reshape((b, vh * vw, self.value_dim))?
+            .unsqueeze(1)?; // [B, 1, vh*vw, value_dim]
 
         // Check if we can use fused attention
         // Metal SDPA requires key length >= query length
@@ -606,7 +617,7 @@ impl MultiQueryAttention2d {
         let o = if can_use_fused && (kh * kw == h * w || !q.device().is_metal()) {
             // Use fused attention via Sdpa when dimensions are compatible
             let sdpa_params = SdpaParams {
-                n_kv_groups: 1,
+                n_kv_groups: self.num_heads, // Multi-query attention has n_kv_groups = num_heads
                 softcap: None,
                 softmax_scale: self.scale as f32,
                 sliding_window: None,
@@ -628,9 +639,12 @@ impl MultiQueryAttention2d {
             o.to_dtype(x.dtype())?
         };
 
+        // Reshape output back
+        // MLX: [B, num_heads, H*W, value_dim] -> [B, H*W, num_heads, value_dim] -> [B, H, W, num_heads * value_dim]
         let o = o
-            .permute((0, 1, 3, 2))?
-            .reshape((b, self.num_heads * self.value_dim, h, w))?;
+            .permute((0, 2, 1, 3))? // [B, H*W, num_heads, value_dim]
+            .reshape((b, h, w, self.num_heads * self.value_dim))?
+            .permute((0, 3, 1, 2))?; // NHWC -> NCHW
 
         let o = self.output_proj.forward(&o)?;
 
@@ -1116,13 +1130,14 @@ impl VisionTower {
         }
 
         // Multi-scale fusion adapter
+        // Collecting from stages 3 and 4 (after 640 and 1280 channel blocks)
         let msfa = MobileNetV5MultiScaleFusionAdapter::new(
-            vec![1920], // in_chs
-            2048,       // out_chs
-            (16, 16),   // output_resolution
-            2.0,        // expansion_ratio
-            false,      // use_layer_scale
-            1e-5,       // layer_scale_init_value
+            vec![640, 1280], // in_chs from stages 3 and 4
+            2048,            // out_chs
+            (16, 16),        // output_resolution
+            2.0,             // expansion_ratio
+            false,           // use_layer_scale
+            1e-5,            // layer_scale_init_value
             vb.pp("msfa"),
         )?;
 
