@@ -52,13 +52,19 @@ impl Gemma3nModel {
 
         // Initialize vision tower
         let vision_tower = vision::VisionTower::new(
-            mapper.set_nm_device(vb.pp("vision_tower").pp("timm_model"), false),
+            mapper
+                .set_nm_device(vb.pp("vision_tower").pp("timm_model"), false)
+                .set_device(Device::Cpu),
         )?;
 
         // Initialize audio tower and embedder
         let audio_cfg = &cfg.audio_config;
-        let audio_tower =
-            audio::AudioModel::new(audio_cfg, mapper.set_nm_device(vb.pp("audio_tower"), false))?;
+        let audio_tower = audio::AudioModel::new(
+            audio_cfg,
+            mapper
+                .set_nm_device(vb.pp("audio_tower"), false)
+                .set_device(Device::Cpu),
+        )?;
         let embed_audio = Gemma3nMultimodalEmbedder::new(
             &cfg.text_config,
             audio_cfg.vocab_size,
@@ -111,7 +117,7 @@ impl Gemma3nModel {
 
         let language_embeds = self.language_model.embed_tokens(input_ids)?;
 
-        let mut input_embeds = {
+        let mut input_embeds = if pixel_values.is_some() || audio_mel.is_some() {
             let audio_vocab_offset = self.cfg.audio_config.vocab_offset as f64;
 
             // Create masks for vision and audio tokens
@@ -121,10 +127,6 @@ impl Gemma3nModel {
                 .mul(&input_ids.to_dtype(DType::F32)?.lt(audio_vocab_offset)?)?;
             let audio_mask = input_ids.to_dtype(DType::F32)?.ge(audio_vocab_offset)?;
 
-            // Get embeddings for each modality
-            let vision_token_embeds = self.embed_vision.forward_text(input_ids)?;
-            let audio_token_embeds = self.embed_audio.forward_text(input_ids)?;
-
             // Combine embeddings based on token type
             let expanded_vision_mask = vision_mask
                 .unsqueeze(D::Minus1)?
@@ -133,9 +135,19 @@ impl Gemma3nModel {
                 .unsqueeze(D::Minus1)?
                 .broadcast_as(language_embeds.shape())?;
 
+            // Get embeddings for each modality
+            let vision_token_embeds = self
+                .embed_vision
+                .forward_text(&vision_mask.where_cond(input_ids, &input_ids.zeros_like()?)?)?;
+            let audio_token_embeds = self
+                .embed_audio
+                .forward_text(&audio_mask.where_cond(input_ids, &input_ids.zeros_like()?)?)?;
+
             let embeds_with_vision =
                 expanded_vision_mask.where_cond(&vision_token_embeds, &language_embeds)?;
             expanded_audio_mask.where_cond(&audio_token_embeds, &embeds_with_vision)?
+        } else {
+            language_embeds
         };
 
         if let Some(pixel_values) = pixel_values {
