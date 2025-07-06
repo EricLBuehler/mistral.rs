@@ -1,10 +1,11 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{bail, DType, Module, Result, Tensor, D};
-use candle_nn::{Conv1d, Conv1dConfig, Conv2d, Conv2dConfig, Linear, ModuleT};
-use mistralrs_quant::ShardedVarBuilder;
+use candle_nn::{Conv1d, Conv1dConfig, Conv2d, Conv2dConfig, ModuleT};
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use std::sync::Arc;
 
-use crate::layers::{conv1d_no_bias, conv2d_no_bias, linear_no_bias, RmsNorm};
+use crate::layers::{conv1d_no_bias, conv2d_no_bias, RmsNorm};
 
 use super::config::Gemma3nAudioConfig;
 
@@ -14,8 +15,8 @@ pub struct Gemma3nCumulativeGroupNorm {
     num_channels: usize,
     feature_dims: Vec<usize>,
     eps: f64,
-    weight: Option<Tensor>,
-    bias: Option<Tensor>,
+    pub(crate) weight: Option<Tensor>,
+    pub(crate) bias: Option<Tensor>,
     reduction_axes: Vec<usize>,
 }
 
@@ -167,7 +168,7 @@ impl Gemma3nCumulativeGroupNorm {
 pub struct Gemma3nAudioRelativePositionEmbedding {
     num_heads: usize,
     head_dim: usize,
-    pos_proj: Linear,
+    pub(crate) pos_proj: Arc<dyn QuantMethod>,
     inv_timescales: Tensor,
     pos_indices: Tensor,
 }
@@ -184,7 +185,12 @@ impl Gemma3nAudioRelativePositionEmbedding {
         };
         let _max_forward = config.conf_attention_context_right;
 
-        let pos_proj = linear_no_bias(channels, num_heads * head_dim, vb.pp("pos_proj"))?;
+        let pos_proj = mistralrs_quant::linear_no_bias(
+            channels,
+            num_heads * head_dim,
+            &None,
+            vb.pp("pos_proj"),
+        )?;
 
         // Create inverse timescales
         let min_timescale = 1.0_f32;
@@ -308,7 +314,7 @@ impl Gemma3nAudioRelativePositionEmbedding {
         let sin_emb_timing_signal = self.get_timing_signal_1d_pos(pos_indices, queries.dtype())?;
 
         // Project sinusoidal embeddings
-        let projected_sin_emb = self.pos_proj.forward(&sin_emb_timing_signal)?;
+        let projected_sin_emb = self.pos_proj.forward_autocast(&sin_emb_timing_signal)?;
         let sin_emb = projected_sin_emb
             .reshape((1, max_span_plus_1, self.num_heads, self.head_dim))?
             .squeeze(0)?;
@@ -372,11 +378,11 @@ pub struct Gemma3nAudioAttention {
     max_future_horizon: usize,
     max_past_horizon: usize,
     context_size: usize,
-    relative_position_embedding: Gemma3nAudioRelativePositionEmbedding,
+    pub(crate) relative_position_embedding: Gemma3nAudioRelativePositionEmbedding,
     _per_dim_scale: Tensor,
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
+    pub(crate) q_proj: Arc<dyn QuantMethod>,
+    pub(crate) k_proj: Arc<dyn QuantMethod>,
+    pub(crate) v_proj: Arc<dyn QuantMethod>,
     q_scale: f64,
     local_causal_valid_mask: Tensor,
     softcap: f64,
@@ -406,9 +412,24 @@ impl Gemma3nAudioAttention {
         // per_dim_scale is a learnable parameter, not zeros
         let per_dim_scale = vb.get(head_dim, "per_dim_scale")?;
 
-        let q_proj = linear_no_bias(hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
-        let k_proj = linear_no_bias(hidden_size, num_heads * head_dim, vb.pp("k_proj"))?;
-        let v_proj = linear_no_bias(hidden_size, num_heads * head_dim, vb.pp("v_proj"))?;
+        let q_proj = mistralrs_quant::linear_no_bias(
+            hidden_size,
+            num_heads * head_dim,
+            &None,
+            vb.pp("q_proj"),
+        )?;
+        let k_proj = mistralrs_quant::linear_no_bias(
+            hidden_size,
+            num_heads * head_dim,
+            &None,
+            vb.pp("k_proj"),
+        )?;
+        let v_proj = mistralrs_quant::linear_no_bias(
+            hidden_size,
+            num_heads * head_dim,
+            &None,
+            vb.pp("v_proj"),
+        )?;
 
         let q_scale = (head_dim as f64).powf(-0.5);
         let r_softplus_0 = 1.0 / (1.0_f64 + 0.0_f64.exp()).ln(); // 1 / ln(2)
@@ -526,9 +547,9 @@ impl Gemma3nAudioAttention {
     }
 
     pub fn forward(&self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
-        let query_states = self.q_proj.forward(x)?;
-        let key_states = self.k_proj.forward(x)?;
-        let value_states = self.v_proj.forward(x)?;
+        let query_states = self.q_proj.forward_autocast(x)?;
+        let key_states = self.k_proj.forward_autocast(x)?;
+        let value_states = self.v_proj.forward_autocast(x)?;
 
         let (b, t) = match x.dims() {
             &[b, t, _] => (b, t),
@@ -785,8 +806,8 @@ impl Gemma3nAudioAttention {
 
 /// SSCP Convolution Block
 pub struct Gemma3nAudioSSCPConvBlock {
-    conv: Conv2d,
-    norm: Gemma3nCumulativeGroupNorm,
+    pub(crate) conv: Conv2d,
+    pub(crate) norm: Gemma3nCumulativeGroupNorm,
     manual_padding: (usize, usize, usize, usize),
 }
 
@@ -868,9 +889,9 @@ impl Gemma3nAudioSSCPConvBlock {
 
 /// Sub-sample Convolution Projection
 pub struct Gemma3nAudioSubSampleConvProjection {
-    conv_0: Gemma3nAudioSSCPConvBlock,
-    conv_1: Gemma3nAudioSSCPConvBlock,
-    input_proj_linear: Linear,
+    pub(crate) conv_0: Gemma3nAudioSSCPConvBlock,
+    pub(crate) conv_1: Gemma3nAudioSSCPConvBlock,
+    pub(crate) input_proj_linear: Arc<dyn QuantMethod>,
 }
 
 impl Gemma3nAudioSubSampleConvProjection {
@@ -923,9 +944,10 @@ impl Gemma3nAudioSubSampleConvProjection {
         let final_f_out = calculated_f_out_dims[1];
         let input_proj_in_features = final_c_out * final_f_out;
 
-        let input_proj_linear = linear_no_bias(
+        let input_proj_linear = mistralrs_quant::linear_no_bias(
             input_proj_in_features,
             config.hidden_size,
+            &None,
             vb.pp("input_proj_linear"),
         )?;
 
@@ -954,16 +976,16 @@ impl Gemma3nAudioSubSampleConvProjection {
         let x_transposed = x.transpose(1, 2)?.transpose(2, 3)?;
         let output_flattened = x_transposed.reshape((b, t_out, f_out * c_out))?;
 
-        self.input_proj_linear.forward(&output_flattened)
+        self.input_proj_linear.forward_autocast(&output_flattened)
     }
 }
 
 /// Conformer Attention Module
 pub struct Gemma3nAudioConformerAttention {
-    pre_attn_norm: RmsNorm,
-    attn: Gemma3nAudioAttention,
-    post: Linear,
-    post_norm: RmsNorm,
+    pub(crate) pre_attn_norm: RmsNorm,
+    pub(crate) attn: Gemma3nAudioAttention,
+    pub(crate) post: Arc<dyn QuantMethod>,
+    pub(crate) post_norm: RmsNorm,
     hidden_size: usize, // Cache for reshape operations
 }
 
@@ -976,7 +998,12 @@ impl Gemma3nAudioConformerAttention {
             vb.pp("pre_attn_norm"),
         )?;
         let attn = Gemma3nAudioAttention::new(config, vb.pp("attn"))?;
-        let post = linear_no_bias(config.hidden_size, config.hidden_size, vb.pp("post"))?;
+        let post = mistralrs_quant::linear_no_bias(
+            config.hidden_size,
+            config.hidden_size,
+            &None,
+            vb.pp("post"),
+        )?;
         let post_norm = RmsNorm::new_gemma_3n(
             config.hidden_size,
             config.rms_norm_eps,
@@ -1005,7 +1032,7 @@ impl Gemma3nAudioConformerAttention {
         let audio_encodings_reshaped =
             audio_encodings_attn_out.reshape((b, t, self.hidden_size))?;
 
-        let x = self.post.forward(&audio_encodings_reshaped)?;
+        let x = self.post.forward_autocast(&audio_encodings_reshaped)?;
 
         audio_encodings_input_to_attn.broadcast_add(&self.post_norm.forward(&x)?)
     }
@@ -1014,10 +1041,10 @@ impl Gemma3nAudioConformerAttention {
 /// Conformer Feed-Forward Module
 pub struct Gemma3nAudioConformerFeedForward {
     scale: f64,
-    pre_layer_norm: RmsNorm,
-    ffw_layer_1: Linear,
-    ffw_layer_2: Linear,
-    post_layer_norm: RmsNorm,
+    pub(crate) pre_layer_norm: RmsNorm,
+    pub(crate) ffw_layer_1: Arc<dyn QuantMethod>,
+    pub(crate) ffw_layer_2: Arc<dyn QuantMethod>,
+    pub(crate) post_layer_norm: RmsNorm,
 }
 
 impl Gemma3nAudioConformerFeedForward {
@@ -1028,14 +1055,16 @@ impl Gemma3nAudioConformerFeedForward {
             true,
             vb.pp("pre_layer_norm"),
         )?;
-        let ffw_layer_1 = linear_no_bias(
+        let ffw_layer_1 = mistralrs_quant::linear_no_bias(
             config.hidden_size,
             config.hidden_size * 4,
+            &None,
             vb.pp("ffw_layer_1"),
         )?;
-        let ffw_layer_2 = linear_no_bias(
+        let ffw_layer_2 = mistralrs_quant::linear_no_bias(
             config.hidden_size * 4,
             config.hidden_size,
+            &None,
             vb.pp("ffw_layer_2"),
         )?;
         let post_layer_norm = RmsNorm::new_gemma_3n(
@@ -1057,9 +1086,9 @@ impl Gemma3nAudioConformerFeedForward {
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let residual = x;
         let x = self.pre_layer_norm.forward(&x)?;
-        let x = self.ffw_layer_1.forward(&x)?;
+        let x = self.ffw_layer_1.forward_autocast(&x)?;
         let x = candle_nn::ops::silu(&x)?;
-        let x = self.ffw_layer_2.forward(&x)?;
+        let x = self.ffw_layer_2.forward_autocast(&x)?;
         let x = self.post_layer_norm.forward(&x)?;
 
         residual.broadcast_add(&(x * self.scale)?)
@@ -1068,11 +1097,11 @@ impl Gemma3nAudioConformerFeedForward {
 
 /// Lightweight 1D Convolution Module
 pub struct Gemma3nAudioConformerLightConv1d {
-    pre_layer_norm: RmsNorm,
-    linear_start: Linear,
-    depthwise_conv1d: Conv1d,
-    conv_norm: RmsNorm,
-    linear_end: Linear,
+    pub(crate) pre_layer_norm: RmsNorm,
+    pub(crate) linear_start: Arc<dyn QuantMethod>,
+    pub(crate) depthwise_conv1d: Conv1d,
+    pub(crate) conv_norm: RmsNorm,
+    pub(crate) linear_end: Arc<dyn QuantMethod>,
     causal_padding: usize,
 }
 
@@ -1084,9 +1113,10 @@ impl Gemma3nAudioConformerLightConv1d {
             true,
             vb.pp("pre_layer_norm"),
         )?;
-        let linear_start = linear_no_bias(
+        let linear_start = mistralrs_quant::linear_no_bias(
             config.hidden_size,
             config.hidden_size * 2,
+            &None,
             vb.pp("linear_start"),
         )?;
 
@@ -1109,8 +1139,12 @@ impl Gemma3nAudioConformerLightConv1d {
             true,
             vb.pp("conv_norm"),
         )?;
-        let linear_end =
-            linear_no_bias(config.hidden_size, config.hidden_size, vb.pp("linear_end"))?;
+        let linear_end = mistralrs_quant::linear_no_bias(
+            config.hidden_size,
+            config.hidden_size,
+            &None,
+            vb.pp("linear_end"),
+        )?;
         let causal_padding = config.conf_conv_kernel_size - 1;
 
         Ok(Self {
@@ -1127,7 +1161,7 @@ impl Gemma3nAudioConformerLightConv1d {
         let audio_encodings_residual = audio_encodings;
 
         let audio_encodings = self.pre_layer_norm.forward(audio_encodings)?;
-        let audio_encodings = self.linear_start.forward(&audio_encodings)?;
+        let audio_encodings = self.linear_start.forward_autocast(&audio_encodings)?;
         // Implement GLU manually: split tensor in half and apply gating
         let chunks = audio_encodings.chunk(2, D::Minus1)?;
         let audio_encodings = chunks[0].broadcast_mul(&candle_nn::ops::sigmoid(&chunks[1])?)?;
@@ -1150,7 +1184,7 @@ impl Gemma3nAudioConformerLightConv1d {
 
         let audio_encodings = self.conv_norm.forward(&audio_encodings)?;
         let audio_encodings = candle_nn::ops::silu(&audio_encodings)?;
-        let audio_encodings = self.linear_end.forward(&audio_encodings)?;
+        let audio_encodings = self.linear_end.forward_autocast(&audio_encodings)?;
 
         audio_encodings_residual.broadcast_add(&audio_encodings)
     }
@@ -1158,11 +1192,11 @@ impl Gemma3nAudioConformerLightConv1d {
 
 /// Conformer Block
 pub struct Gemma3nAudioConformerBlock {
-    ffw_layer_start: Gemma3nAudioConformerFeedForward,
-    attention: Gemma3nAudioConformerAttention,
-    lconv1d: Gemma3nAudioConformerLightConv1d,
-    ffw_layer_end: Gemma3nAudioConformerFeedForward,
-    norm: RmsNorm,
+    pub(crate) ffw_layer_start: Gemma3nAudioConformerFeedForward,
+    pub(crate) attention: Gemma3nAudioConformerAttention,
+    pub(crate) lconv1d: Gemma3nAudioConformerLightConv1d,
+    pub(crate) ffw_layer_end: Gemma3nAudioConformerFeedForward,
+    pub(crate) norm: RmsNorm,
 }
 
 impl Gemma3nAudioConformerBlock {
@@ -1205,8 +1239,8 @@ impl Gemma3nAudioConformerBlock {
 
 /// Main Audio Model
 pub struct AudioModel {
-    subsample_conv_projection: Gemma3nAudioSubSampleConvProjection,
-    conformer: Vec<Gemma3nAudioConformerBlock>,
+    pub(crate) subsample_conv_projection: Gemma3nAudioSubSampleConvProjection,
+    pub(crate) conformer: Vec<Gemma3nAudioConformerBlock>,
     sscp_conv_stride_size: Vec<Vec<usize>>,
     conf_reduction_factor: usize,
 }

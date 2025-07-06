@@ -48,23 +48,29 @@ impl Gemma3nModel {
     ) -> Result<Self> {
         let vb = vb.pp("model");
 
-        let mapper = &normal_loading_metadata.mapper;
-
         // Initialize vision tower
         let vision_tower = vision::VisionTower::new(
-            mapper.set_nm_device(vb.pp("vision_tower").pp("timm_model"), false),
+            normal_loading_metadata
+                .mapper
+                .set_nm_device(vb.pp("vision_tower").pp("timm_model"), false),
         )?;
 
         // Initialize audio tower and embedder
         let audio_cfg = &cfg.audio_config;
-        let audio_tower =
-            audio::AudioModel::new(audio_cfg, mapper.set_nm_device(vb.pp("audio_tower"), false))?;
+        let audio_tower = audio::AudioModel::new(
+            audio_cfg,
+            normal_loading_metadata
+                .mapper
+                .set_nm_device(vb.pp("audio_tower"), false),
+        )?;
         let embed_audio = Gemma3nMultimodalEmbedder::new(
             &cfg.text_config,
             audio_cfg.vocab_size,
             audio_cfg.hidden_size,
             audio_cfg.vocab_offset,
-            mapper.set_nm_device(vb.pp("embed_audio"), false),
+            normal_loading_metadata
+                .mapper
+                .set_nm_device(vb.pp("embed_audio"), false),
         )?;
 
         // Initialize vision tower and embedder
@@ -74,7 +80,9 @@ impl Gemma3nModel {
             vision_cfg.vocab_size,
             vision_cfg.hidden_size,
             vision_cfg.vocab_offset,
-            mapper.set_nm_device(vb.pp("embed_vision"), false),
+            normal_loading_metadata
+                .mapper
+                .set_nm_device(vb.pp("embed_vision"), false),
         )?;
 
         Ok(Self {
@@ -285,13 +293,169 @@ impl IsqModel for Gemma3nModel {
         Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
         &dyn DeviceMapper,
     ) {
-        self.language_model.get_layers()
+        let (mut tensors, mapper) = self.language_model.get_layers();
+
+        // Add audio tower layers
+        for (i, block) in self.audio_tower.conformer.iter_mut().enumerate() {
+            // Attention layers
+            tensors.push((&mut block.attention.attn.q_proj, Some(i)));
+            tensors.push((&mut block.attention.attn.k_proj, Some(i)));
+            tensors.push((&mut block.attention.attn.v_proj, Some(i)));
+            tensors.push((
+                &mut block.attention.attn.relative_position_embedding.pos_proj,
+                Some(i),
+            ));
+            tensors.push((&mut block.attention.post, Some(i)));
+
+            // FFW layers
+            tensors.push((&mut block.ffw_layer_start.ffw_layer_1, Some(i)));
+            tensors.push((&mut block.ffw_layer_start.ffw_layer_2, Some(i)));
+            tensors.push((&mut block.ffw_layer_end.ffw_layer_1, Some(i)));
+            tensors.push((&mut block.ffw_layer_end.ffw_layer_2, Some(i)));
+
+            // Conv1d layers
+            tensors.push((&mut block.lconv1d.linear_start, Some(i)));
+            tensors.push((&mut block.lconv1d.linear_end, Some(i)));
+        }
+
+        // Add audio subsample conv projection
+        tensors.push((
+            &mut self.audio_tower.subsample_conv_projection.input_proj_linear,
+            None,
+        ));
+
+        // Add multimodal embedder layers
+        tensors.push((&mut self.embed_vision.embedding_projection, None));
+        tensors.push((&mut self.embed_audio.embedding_projection, None));
+
+        (tensors, mapper)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
-        uvb.pp("model")
-            .extend(self.language_model.residual_tensors());
+        let uvb_model = uvb.pp("model");
+
+        // Add language model residual tensors
+        uvb_model.extend(self.language_model.residual_tensors());
+
+        // Add vision tower residual tensors (conv layers, norms, etc.)
+        // Vision tower uses Conv2d layers which are not quantized
+
+        // Add audio tower residual tensors (norms, conv layers, etc.)
+        let uvb_audio = uvb_model.pp("audio_tower");
+
+        // Add subsample conv projection residual tensors (conv layers, norms)
+        let uvb_sscp = uvb_audio.pp("subsample_conv_projection");
+
+        // Add conv blocks
+        let uvb_conv0 = uvb_sscp.pp("conv_0");
+        uvb_conv0
+            .pp("conv")
+            .add(&self.audio_tower.subsample_conv_projection.conv_0.conv);
+        if let Some(weight) = &self
+            .audio_tower
+            .subsample_conv_projection
+            .conv_0
+            .norm
+            .weight
+        {
+            uvb_conv0.pp("norm").add_tensor("weight", weight.clone());
+        }
+        if let Some(bias) = &self.audio_tower.subsample_conv_projection.conv_0.norm.bias {
+            uvb_conv0.pp("norm").add_tensor("bias", bias.clone());
+        }
+
+        let uvb_conv1 = uvb_sscp.pp("conv_1");
+        uvb_conv1
+            .pp("conv")
+            .add(&self.audio_tower.subsample_conv_projection.conv_1.conv);
+        if let Some(weight) = &self
+            .audio_tower
+            .subsample_conv_projection
+            .conv_1
+            .norm
+            .weight
+        {
+            uvb_conv1.pp("norm").add_tensor("weight", weight.clone());
+        }
+        if let Some(bias) = &self.audio_tower.subsample_conv_projection.conv_1.norm.bias {
+            uvb_conv1.pp("norm").add_tensor("bias", bias.clone());
+        }
+
+        // Add conformer block residual tensors (norms, conv1d)
+        for (i, block) in self.audio_tower.conformer.iter().enumerate() {
+            let uvb_block = uvb_audio.pp("conformer").pp(i);
+
+            // Add all the norm layers
+            uvb_block
+                .pp("attention")
+                .pp("pre_attn_norm")
+                .add(&block.attention.pre_attn_norm);
+            uvb_block
+                .pp("attention")
+                .pp("post_norm")
+                .add(&block.attention.post_norm);
+            uvb_block
+                .pp("ffw_layer_start")
+                .pp("pre_layer_norm")
+                .add(&block.ffw_layer_start.pre_layer_norm);
+            uvb_block
+                .pp("ffw_layer_start")
+                .pp("post_layer_norm")
+                .add(&block.ffw_layer_start.post_layer_norm);
+            uvb_block
+                .pp("ffw_layer_end")
+                .pp("pre_layer_norm")
+                .add(&block.ffw_layer_end.pre_layer_norm);
+            uvb_block
+                .pp("ffw_layer_end")
+                .pp("post_layer_norm")
+                .add(&block.ffw_layer_end.post_layer_norm);
+            uvb_block
+                .pp("lconv1d")
+                .pp("pre_layer_norm")
+                .add(&block.lconv1d.pre_layer_norm);
+            uvb_block
+                .pp("lconv1d")
+                .pp("conv_norm")
+                .add(&block.lconv1d.conv_norm);
+            uvb_block.pp("norm").add(&block.norm);
+
+            // Add conv1d layer
+            uvb_block
+                .pp("lconv1d")
+                .pp("depthwise_conv1d")
+                .add(&block.lconv1d.depthwise_conv1d);
+        }
+
+        // Add multimodal embedder residual tensors (embeddings, norms)
+        let uvb_embed_vision = uvb_model.pp("embed_vision");
+        uvb_embed_vision
+            .pp("embedding")
+            .add(&self.embed_vision.embedding);
+        uvb_embed_vision
+            .pp("hard_embedding_norm")
+            .add(&self.embed_vision.hard_embedding_norm);
+        uvb_embed_vision
+            .pp("soft_embedding_norm")
+            .add(&self.embed_vision.soft_embedding_norm);
+        uvb_embed_vision
+            .pp("embedding_post_projection_norm")
+            .add(&self.embed_vision.embedding_post_projection_norm);
+
+        let uvb_embed_audio = uvb_model.pp("embed_audio");
+        uvb_embed_audio
+            .pp("embedding")
+            .add(&self.embed_audio.embedding);
+        uvb_embed_audio
+            .pp("hard_embedding_norm")
+            .add(&self.embed_audio.hard_embedding_norm);
+        uvb_embed_audio
+            .pp("soft_embedding_norm")
+            .add(&self.embed_audio.soft_embedding_norm);
+        uvb_embed_audio
+            .pp("embedding_post_projection_norm")
+            .add(&self.embed_audio.embedding_post_projection_norm);
 
         uvb.to_safetensors()
     }

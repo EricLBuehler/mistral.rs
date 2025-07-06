@@ -1,23 +1,23 @@
 use candle_core::{DType, Module, Result, Tensor};
-use candle_nn::Linear;
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use std::sync::Arc;
 
-use crate::layers::{embedding, linear_no_bias, RmsNorm, ScaledEmbedding};
+use crate::layers::{embedding, RmsNorm, ScaledEmbedding};
 
 use super::config::Gemma3nTextConfig;
 
 /// Multimodal embedder for Gemma3n that handles both text tokens and vision embeddings
 pub struct Gemma3nMultimodalEmbedder {
     /// Embedding layer for vocabulary tokens
-    embedding: ScaledEmbedding,
+    pub(crate) embedding: ScaledEmbedding,
     /// RMS normalization for hard embeddings (text tokens)
-    hard_embedding_norm: RmsNorm,
+    pub(crate) hard_embedding_norm: RmsNorm,
     /// RMS normalization for soft embeddings (vision features)
-    soft_embedding_norm: RmsNorm,
+    pub(crate) soft_embedding_norm: RmsNorm,
     /// Linear projection from multimodal hidden size to text hidden size
-    embedding_projection: Linear,
+    pub(crate) embedding_projection: Arc<dyn QuantMethod>,
     /// Post-projection normalization (without scale)
-    embedding_post_projection_norm: RmsNorm,
+    pub(crate) embedding_post_projection_norm: RmsNorm,
     /// The vocabulary offset to subtract from input IDs
     vocab_offset: i64,
 }
@@ -58,9 +58,10 @@ impl Gemma3nMultimodalEmbedder {
         )?;
 
         // Linear projection from multimodal to text hidden size
-        let embedding_projection = linear_no_bias(
+        let embedding_projection = mistralrs_quant::linear_no_bias(
             multimodal_hidden_size,
             cfg.hidden_size,
+            &None,
             vb.pp("embedding_projection"),
         )?;
 
@@ -99,7 +100,7 @@ impl Gemma3nMultimodalEmbedder {
         let normalized = self.hard_embedding_norm.forward(&embeddings)?;
 
         // Project to text hidden size
-        let projected = self.embedding_projection.forward(&normalized)?;
+        let projected = self.embedding_projection.forward_autocast(&normalized)?;
 
         // Apply post-projection normalization
         self.embedding_post_projection_norm.forward(&projected)
@@ -111,7 +112,7 @@ impl Gemma3nMultimodalEmbedder {
         let normalized = self.soft_embedding_norm.forward(soft_features)?;
 
         // Project to text hidden size
-        let projected = self.embedding_projection.forward(&normalized)?;
+        let projected = self.embedding_projection.forward_autocast(&normalized)?;
 
         // Apply post-projection normalization
         self.embedding_post_projection_norm.forward(&projected)
