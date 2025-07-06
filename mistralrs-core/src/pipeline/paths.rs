@@ -19,6 +19,7 @@ use crate::{
     lora::LoraConfig,
     pipeline::{
         chat_template::{ChatTemplate, ChatTemplateValue},
+        embedded_templates::get_embedded_chat_template_for_model_type,
         isq::UQFF_RESIDUAL_SAFETENSORS,
     },
     utils::tokens::get_token,
@@ -539,8 +540,34 @@ pub(crate) fn get_chat_template(
                     }
                 }
                 None => {
-                    info!("No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.");
-                    deser.insert("chat_template".to_string(), Value::Null);
+                    // Try to use embedded template as last resort based on model_type from config
+                    let embedded_template = paths
+                        .get_config_filename()
+                        .to_str()
+                        .and_then(|config_path| fs::read_to_string(config_path).ok())
+                        .and_then(|config_content| {
+                            serde_json::from_str::<Value>(&config_content).ok()
+                        })
+                        .and_then(|config_json| {
+                            config_json
+                                .get("model_type")
+                                .and_then(|v| v.as_str())
+                                .map(String::from)
+                        })
+                        .and_then(|model_type| {
+                            get_embedded_chat_template_for_model_type(&model_type)
+                        });
+
+                    if let Some(embedded_template) = embedded_template {
+                        info!("Using embedded chat template for model.");
+                        deser.insert(
+                            "chat_template".to_string(),
+                            Value::String(embedded_template.to_string()),
+                        );
+                    } else {
+                        info!("No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.");
+                        deser.insert("chat_template".to_string(), Value::Null);
+                    }
                 }
             }
 

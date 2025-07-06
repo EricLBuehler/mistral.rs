@@ -961,7 +961,6 @@ impl Gemma3nAudioSubSampleConvProjection {
 
 /// Conformer Attention Module
 pub struct Gemma3nAudioConformerAttention {
-    clip_mask: Tensor,
     pre_attn_norm: RmsNorm,
     attn: Gemma3nAudioAttention,
     post: Linear,
@@ -971,8 +970,6 @@ pub struct Gemma3nAudioConformerAttention {
 
 impl Gemma3nAudioConformerAttention {
     pub fn new(config: &Gemma3nAudioConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        let _gradient_clipping = Tensor::new(config.gradient_clipping as f32, vb.device())?;
-        let clip_mask = Tensor::ones_like(&_gradient_clipping)?.clamp(-1.0, 1.0)?;
         let pre_attn_norm = RmsNorm::new_gemma_3n(
             config.hidden_size,
             config.rms_norm_eps,
@@ -989,7 +986,6 @@ impl Gemma3nAudioConformerAttention {
         )?;
 
         Ok(Self {
-            clip_mask,
             pre_attn_norm,
             attn,
             post,
@@ -1000,7 +996,6 @@ impl Gemma3nAudioConformerAttention {
 
     pub fn forward(&self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
         let audio_encodings_input_to_attn = x;
-        let x = x.broadcast_mul(&self.clip_mask.broadcast_as(x.shape())?)?;
         let audio_encodings_norm = self.pre_attn_norm.forward(&x)?;
 
         // attn output: [B, T, NumHeads, HeadDim]
@@ -1012,7 +1007,6 @@ impl Gemma3nAudioConformerAttention {
             audio_encodings_attn_out.reshape((b, t, self.hidden_size))?;
 
         let x = self.post.forward(&audio_encodings_reshaped)?;
-        let x = x.broadcast_mul(&self.clip_mask.broadcast_as(x.shape())?)?;
 
         audio_encodings_input_to_attn.broadcast_add(&self.post_norm.forward(&x)?)
     }
@@ -1020,8 +1014,7 @@ impl Gemma3nAudioConformerAttention {
 
 /// Conformer Feed-Forward Module
 pub struct Gemma3nAudioConformerFeedForward {
-    clip_mask: Tensor,
-    scale_tensor: Tensor,
+    scale: f64,
     pre_layer_norm: RmsNorm,
     ffw_layer_1: Linear,
     ffw_layer_2: Linear,
@@ -1030,9 +1023,6 @@ pub struct Gemma3nAudioConformerFeedForward {
 
 impl Gemma3nAudioConformerFeedForward {
     pub fn new(config: &Gemma3nAudioConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        let _gradient_clipping = Tensor::new(config.gradient_clipping as f32, vb.device())?;
-        let clip_mask = Tensor::ones_like(&_gradient_clipping)?.clamp(-1.0, 1.0)?;
-        let scale_tensor = Tensor::new(config.conf_residual_weight as f32, vb.device())?;
         let pre_layer_norm = RmsNorm::new_gemma_3n(
             config.hidden_size,
             config.rms_norm_eps,
@@ -1057,8 +1047,7 @@ impl Gemma3nAudioConformerFeedForward {
         )?;
 
         Ok(Self {
-            clip_mask,
-            scale_tensor,
+            scale: config.conf_residual_weight,
             pre_layer_norm,
             ffw_layer_1,
             ffw_layer_2,
@@ -1068,22 +1057,13 @@ impl Gemma3nAudioConformerFeedForward {
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let residual = x;
-        let x = x.broadcast_mul(&self.clip_mask.broadcast_as(x.shape())?)?;
         let x = self.pre_layer_norm.forward(&x)?;
         let x = self.ffw_layer_1.forward(&x)?;
         let x = candle_nn::ops::silu(&x)?;
         let x = self.ffw_layer_2.forward(&x)?;
-        let x = x.broadcast_mul(&self.clip_mask.broadcast_as(x.shape())?)?;
         let x = self.post_layer_norm.forward(&x)?;
 
-        residual.broadcast_add(
-            &x.broadcast_mul(
-                &self
-                    .scale_tensor
-                    .to_dtype(x.dtype())?
-                    .broadcast_as(x.shape())?,
-            )?,
-        )
+        residual.broadcast_add(&(x * self.scale)?)
     }
 }
 
@@ -1092,7 +1072,6 @@ pub struct Gemma3nAudioConformerLightConv1d {
     pre_layer_norm: RmsNorm,
     linear_start: Linear,
     depthwise_conv1d: Conv1d,
-    clip_mask: Tensor,
     conv_norm: RmsNorm,
     linear_end: Linear,
     causal_padding: usize,
@@ -1125,8 +1104,6 @@ impl Gemma3nAudioConformerLightConv1d {
             vb.pp("depthwise_conv1d"),
         )?;
 
-        let _gradient_clipping = Tensor::new(config.gradient_clipping as f32, vb.device())?;
-        let clip_mask = Tensor::ones_like(&_gradient_clipping)?.clamp(-1.0, 1.0)?;
         let conv_norm = RmsNorm::new_gemma_3n(
             config.hidden_size,
             config.rms_norm_eps,
@@ -1141,7 +1118,6 @@ impl Gemma3nAudioConformerLightConv1d {
             pre_layer_norm,
             linear_start,
             depthwise_conv1d,
-            clip_mask,
             conv_norm,
             linear_end,
             causal_padding,
@@ -1170,8 +1146,6 @@ impl Gemma3nAudioConformerLightConv1d {
         // Permute back: [B, D, T] -> [B, T, D]
         let audio_encodings = audio_encodings_conv.transpose(D::Minus2, D::Minus1)?;
 
-        let audio_encodings = audio_encodings
-            .broadcast_mul(&self.clip_mask.broadcast_as(audio_encodings.shape())?)?;
         let audio_encodings = self.conv_norm.forward(&audio_encodings)?;
         let audio_encodings = candle_nn::ops::silu(&audio_encodings)?;
         let audio_encodings = self.linear_end.forward(&audio_encodings)?;
@@ -1186,7 +1160,6 @@ pub struct Gemma3nAudioConformerBlock {
     attention: Gemma3nAudioConformerAttention,
     lconv1d: Gemma3nAudioConformerLightConv1d,
     ffw_layer_end: Gemma3nAudioConformerFeedForward,
-    clip_mask: Tensor,
     norm: RmsNorm,
 }
 
@@ -1197,8 +1170,6 @@ impl Gemma3nAudioConformerBlock {
         let attention = Gemma3nAudioConformerAttention::new(config, vb.pp("attention"))?;
         let lconv1d = Gemma3nAudioConformerLightConv1d::new(config, vb.pp("lconv1d"))?;
         let ffw_layer_end = Gemma3nAudioConformerFeedForward::new(config, vb.pp("ffw_layer_end"))?;
-        let _gradient_clipping = Tensor::new(config.gradient_clipping as f32, vb.device())?;
-        let clip_mask = Tensor::ones_like(&_gradient_clipping)?.clamp(-1.0, 1.0)?;
         let norm =
             RmsNorm::new_gemma_3n(config.hidden_size, config.rms_norm_eps, true, vb.pp("norm"))?;
 
@@ -1207,7 +1178,6 @@ impl Gemma3nAudioConformerBlock {
             attention,
             lconv1d,
             ffw_layer_end,
-            clip_mask,
             norm,
         })
     }
@@ -1226,8 +1196,6 @@ impl Gemma3nAudioConformerBlock {
 
         let audio_encodings = self.lconv1d.forward(&audio_encodings_for_lconv_input)?;
         let audio_encodings = self.ffw_layer_end.forward(&audio_encodings)?;
-        let audio_encodings = audio_encodings
-            .broadcast_mul(&self.clip_mask.broadcast_as(audio_encodings.shape())?)?;
 
         self.norm.forward(&audio_encodings)
     }

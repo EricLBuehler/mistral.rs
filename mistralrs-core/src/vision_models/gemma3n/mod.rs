@@ -208,7 +208,9 @@ impl Gemma3nModel {
             input_embeds = x_flat.reshape(input_embeds.shape())?;
 
             // Process audio through audio tower
-            let (audio_features, _) = self.audio_tower.forward(audio_mel, audio_mel_mask)?;
+            let (audio_features, _) = self
+                .audio_tower
+                .forward(&audio_mel.to_dtype(input_embeds.dtype())?, audio_mel_mask)?;
 
             // Convert audio features to embeddings
             let mut audio_embeds = self.embed_audio.forward_vision(&audio_features)?;

@@ -105,7 +105,6 @@ serde_default_fn!(
 serde_default_fn!(usize, audio_vocab_size, 128);
 serde_default_fn!(f64, sscp_conv_eps, 1e-3);
 serde_default_fn!(f64, audio_rms_norm_eps, 1e-6);
-serde_default_fn!(f64, gradient_clipping, 10000000000.0);
 serde_default_fn!(i64, audio_vocab_offset, 262272); // text vocab size (262144) + vision vocab size (128)
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -146,8 +145,6 @@ pub struct Gemma3nAudioConfig {
     pub sscp_conv_eps: f64,
     #[serde(default = "audio_rms_norm_eps")]
     pub rms_norm_eps: f64,
-    #[serde(default = "gradient_clipping")]
-    pub gradient_clipping: f64,
     #[serde(default = "audio_vocab_offset")]
     pub vocab_offset: i64,
 }
