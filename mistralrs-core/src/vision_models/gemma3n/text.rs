@@ -90,12 +90,15 @@ impl Mlp {
     }
 
     fn gaussian_topk(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs_mean = xs.mean_keepdim(D::Minus1)?;
-        let xs_sq_mean = xs.sqr()?.mean_keepdim(D::Minus1)?;
+        // Cast to float32 for better precision in statistical calculations
+        let xs_f32 = xs.to_dtype(DType::F32)?;
+        let xs_mean = xs_f32.mean_keepdim(D::Minus1)?;
+        let xs_sq_mean = xs_f32.sqr()?.mean_keepdim(D::Minus1)?;
         let var = (&xs_sq_mean - xs_mean.sqr()?)?;
         let xs_std = (var + EPS)?.sqrt()?;
         let cutoff_xs = (xs_mean + (xs_std * self.std_multiplier)?)?;
-        xs.broadcast_sub(&cutoff_xs)?.relu()
+        // Convert back to original dtype after computation
+        xs.broadcast_sub(&cutoff_xs.to_dtype(xs.dtype())?)?.relu()
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
@@ -770,8 +773,10 @@ impl TextModel {
         }
         let mapper = normal_loading_metadata.mapper;
 
+        // Use float32 for embedding scale factor as in MLX implementation
+        let embed_scale = (cfg.hidden_size as f64).sqrt();
         let embed_tokens = ScaledEmbedding::new(
-            (cfg.hidden_size as f64).sqrt(),
+            embed_scale,
             embedding(
                 cfg.vocab_size,
                 cfg.hidden_size,
@@ -779,8 +784,10 @@ impl TextModel {
                 &cfg.quantization_config,
             )?,
         );
+        // Use float32 for per-layer embedding scale factor as in MLX implementation
+        let per_layer_embed_scale = (cfg.hidden_size_per_layer_input as f64).sqrt();
         let embed_tokens_per_layer = ScaledEmbedding::new(
-            (cfg.hidden_size_per_layer_input as f64).sqrt(),
+            per_layer_embed_scale,
             embedding(
                 cfg.vocab_size_per_layer_input,
                 cfg.hidden_size_per_layer_input * cfg.num_hidden_layers,
@@ -954,6 +961,7 @@ impl TextModel {
             },
             mapper,
             per_layer_input_scale: 1. / (2f64.sqrt()),
+            // Keep scale factors in float64 for maximum precision
             per_layer_projection_scale: 1. / (cfg.hidden_size as f64).sqrt(),
             altup_projections,
             altup_unembed_projections,
@@ -974,23 +982,32 @@ impl TextModel {
             vec![self.layers.len(), self.hidden_size_per_layer_input],
         ]
         .concat();
-        self.embed_tokens_per_layer
-            .forward(input_ids)?
-            .reshape(shape)
+        // Cast to float32 for better precision, following MLX implementation
+        let per_layer_embeds = self.embed_tokens_per_layer.forward(input_ids)?;
+        let original_dtype = per_layer_embeds.dtype();
+        per_layer_embeds
+            .to_dtype(DType::F32)?
+            .reshape(shape)?
+            .to_dtype(original_dtype)
     }
     fn project_per_layer_inputs(
         &self,
         xs: &Tensor,
         per_layer_inputs: Option<Tensor>,
     ) -> Result<Tensor> {
+        // Cast to float32 for per-layer projection scaling
         let mut per_layer_projection = self.per_layer_model_projection.forward_autocast(xs)?;
-        per_layer_projection = (per_layer_projection * self.per_layer_projection_scale)?;
+        let original_dtype = per_layer_projection.dtype();
+        let per_layer_projection_f32 = per_layer_projection.to_dtype(DType::F32)?;
+        per_layer_projection = (per_layer_projection_f32 * self.per_layer_projection_scale)?;
         let shape = [
             xs.dims()[..xs.dims().len() - 1].to_vec(),
             vec![self.layers.len(), self.hidden_size_per_layer_input],
         ]
         .concat();
-        per_layer_projection = per_layer_projection.reshape(shape)?;
+        per_layer_projection = per_layer_projection
+            .reshape(shape)?
+            .to_dtype(original_dtype)?; // Convert back to model dtype before RMSNorm
         per_layer_projection = self
             .per_layer_projection_norm
             .forward(&per_layer_projection)?;
@@ -1003,7 +1020,10 @@ impl TextModel {
             // per-layer inputs are sometimes padded with zeros, slice the relevant embeddings.
             per_layer_inputs = per_layer_inputs.narrow(D::Minus2, 0, self.layers.len())?;
         }
-        (per_layer_projection + per_layer_inputs)? * self.per_layer_input_scale
+        // Perform scaling in float32 for better precision
+        let result = (per_layer_projection + per_layer_inputs)?;
+        let result_f32 = result.to_dtype(DType::F32)?;
+        (result_f32 * self.per_layer_input_scale)?.to_dtype(result.dtype())
     }
 
     pub fn forward_embeds(
@@ -1016,6 +1036,8 @@ impl TextModel {
     ) -> Result<Tensor> {
         let per_layer_inputs = self.get_per_layer_inputs(input_ids)?;
         let per_layer_inputs = self.project_per_layer_inputs(&xs, Some(per_layer_inputs))?;
+        // Cast per_layer_inputs back to model dtype after float32 operations
+        let per_layer_inputs = per_layer_inputs.to_dtype(xs.dtype())?;
 
         let cache = &mut self.cache.normal().0;
         let attention_mask = CausalMasker.make_causal_mask_matrix(
@@ -1032,6 +1054,7 @@ impl TextModel {
             self.cfg.num_attn_heads,
         )?;
 
+        // Already using float32 for magnitude calculations
         let target_magnitude = xs
             .to_dtype(DType::F32)?
             .sqr()?
@@ -1061,9 +1084,6 @@ impl TextModel {
         for (i, layer) in self.layers.iter().enumerate() {
             let per_layer_input = per_layer_inputs.i((.., .., i, ..))?;
             xs = self.mapper.map(xs, i)?;
-            // dbg!(&xs.mean_all()?);
-            // dbg!(&per_layer_input.mean_all()?);
-            // dbg!(&xs, &input_ids, &per_layer_input);
             xs = layer.forward(
                 &xs,
                 &per_layer_input,
