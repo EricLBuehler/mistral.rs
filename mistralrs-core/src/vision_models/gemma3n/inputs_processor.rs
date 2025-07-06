@@ -43,8 +43,8 @@ impl Gemma3nImageProcessor {
 }
 
 const IMAGE_TOKEN: &str = "<image_soft_token>";
-const BOI_TOKEN: &str = "<boi>";
-const EOI_TOKEN: &str = "<eoi>";
+const BOI_TOKEN: &str = "<start_of_image>";
+const EOI_TOKEN: &str = "<end_of_image>";
 pub const IMAGE_TOKEN_ID: u32 = 262145;
 
 const AUDIO_TOKEN: &str = "<audio_soft_token>";
