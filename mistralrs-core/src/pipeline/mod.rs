@@ -2,6 +2,7 @@ mod amoe;
 mod auto;
 pub mod chat_template;
 mod diffusion;
+mod embedded_templates;
 mod ggml;
 mod gguf;
 mod inputs_processor;
