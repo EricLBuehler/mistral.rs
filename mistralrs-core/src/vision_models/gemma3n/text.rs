@@ -273,8 +273,13 @@ impl Attention {
     }
 
     fn apply_rotary_pos_emb(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
-        xs.broadcast_mul(&cos.unsqueeze(2)?)?
-            + Self::rotate_half(xs)?.broadcast_mul(&sin.unsqueeze(2)?)?
+        // Perform rotary position embedding in float32 for better precision
+        let xs_f32 = xs.to_dtype(DType::F32)?;
+        let cos_f32 = cos.to_dtype(DType::F32)?;
+        let sin_f32 = sin.to_dtype(DType::F32)?;
+        let result_f32 = (xs_f32.broadcast_mul(&cos_f32.unsqueeze(2)?)?
+            + Self::rotate_half(&xs_f32)?.broadcast_mul(&sin_f32.unsqueeze(2)?)?)?;
+        result_f32.to_dtype(xs.dtype())
     }
 
     fn apply_rope(&self, xs: &Tensor, seqlen_offsets: &[usize], seq_len: usize) -> Result<Tensor> {
@@ -484,7 +489,10 @@ impl TextAltUp {
     }
 
     fn compute_router_modalities(&self, xs: &Tensor) -> Result<Tensor> {
-        let router_inputs = (self.router_norm.forward(xs)? * self.router_input_scale)?;
+        // Perform routing calculations in float32 for better precision
+        let router_inputs_normed = self.router_norm.forward(xs)?;
+        let router_inputs_f32 = router_inputs_normed.to_dtype(DType::F32)?;
+        let router_inputs = (router_inputs_f32 * self.router_input_scale)?.to_dtype(xs.dtype())?;
         let routed = self.modality_router.forward(&router_inputs)?;
         routed.to_dtype(DType::F32)?.tanh()?.to_dtype(xs.dtype())
     }
@@ -510,17 +518,29 @@ impl TextAltUp {
             .contiguous()?
             .matmul(&all_coefs.contiguous()?)?;
         predictions = predictions.permute((3, 0, 1, 2))?;
-        predictions = (predictions + xs)?;
+        // Perform addition in float32 for precision
+        let predictions_f32 = predictions.to_dtype(DType::F32)?;
+        let xs_f32 = xs.to_dtype(DType::F32)?;
+        predictions = (predictions_f32 + xs_f32)?.to_dtype(predictions.dtype())?;
         predictions.contiguous()
     }
 
     fn correct(&self, predictions: &Tensor, activated: &Tensor) -> Result<Tensor> {
         let modalities = self.compute_router_modalities(activated)?;
-        let innovation = activated
-            .broadcast_sub(&predictions.i(self.altup_active_idx)?)?
-            .repeat((self.altup_num_inputs, 1, 1, 1))?;
+        // Compute innovation in float32 for better precision
+        let activated_f32 = activated.to_dtype(DType::F32)?;
+        let pred_active_f32 = predictions.i(self.altup_active_idx)?.to_dtype(DType::F32)?;
+        let innovation_f32 = activated_f32.broadcast_sub(&pred_active_f32)?;
+        let innovation =
+            innovation_f32
+                .to_dtype(activated.dtype())?
+                .repeat((self.altup_num_inputs, 1, 1, 1))?;
 
-        let all_coefs = (self.correction_coefs.forward(&modalities)? + 1.)?
+        // Perform coefficient computation in float32
+        let coefs = self.correction_coefs.forward(&modalities)?;
+        let coefs_f32 = coefs.to_dtype(DType::F32)?;
+        let all_coefs = (coefs_f32 + 1.)?
+            .to_dtype(coefs.dtype())?
             .permute((2, 0, 1))?
             .unsqueeze(D::Minus1)?;
 
@@ -561,7 +581,10 @@ impl TextLaurelBlock {
         let mut laurel_xs = self.left.forward(xs)?;
         laurel_xs = self.right.forward(&laurel_xs)?;
         laurel_xs = self.post_norm.forward(&laurel_xs)?;
-        xs + laurel_xs
+        // Perform addition in float32 for precision
+        let xs_f32 = xs.to_dtype(DType::F32)?;
+        let laurel_xs_f32 = laurel_xs.to_dtype(DType::F32)?;
+        (xs_f32 + laurel_xs_f32)?.to_dtype(xs.dtype())
     }
 }
 
@@ -700,13 +723,22 @@ impl DecoderLayer {
             )?
             .apply(&self.post_attention_layernorm)?;
 
-        let attn_gated = (&active_prediction + attn)?;
-        let attn_laurel = ((attn_gated + laurel_output)? / 2f64.sqrt())?;
+        // Perform addition and scaling in float32 for precision
+        let active_pred_f32 = active_prediction.to_dtype(DType::F32)?;
+        let attn_f32 = attn.to_dtype(DType::F32)?;
+        let attn_gated_f32 = (active_pred_f32 + attn_f32)?;
+        let attn_gated = attn_gated_f32.to_dtype(active_prediction.dtype())?;
+        let attn_laurel_f32 = (attn_gated_f32 + laurel_output.to_dtype(DType::F32)?)?;
+        let attn_laurel = (attn_laurel_f32 / 2f64.sqrt())?.to_dtype(attn_gated.dtype())?;
 
         let attn_norm = self.pre_feedforward_layernorm.forward(&attn_laurel)?;
         let attn_ffw = self.mlp.forward(&attn_norm)?;
         let attn_ffw_norm = self.post_feedforward_layernorm.forward(&attn_ffw)?;
-        let attn_ffw_laurel_gated = (&attn_laurel + attn_ffw_norm)?;
+        // Perform addition in float32 for precision
+        let attn_laurel_f32 = attn_laurel.to_dtype(DType::F32)?;
+        let attn_ffw_norm_f32 = attn_ffw_norm.to_dtype(DType::F32)?;
+        let attn_ffw_laurel_gated =
+            (attn_laurel_f32 + attn_ffw_norm_f32)?.to_dtype(attn_laurel.dtype())?;
         let mut corrected_predictions = self.altup.correct(&predictions, &attn_ffw_laurel_gated)?;
 
         let mut first_prediction = corrected_predictions.i(self.altup_active_idx)?;
@@ -715,17 +747,25 @@ impl DecoderLayer {
         }
         first_prediction = self.per_layer_input_gate.forward(&first_prediction)?;
         first_prediction = self.act.forward(&first_prediction)?;
-        first_prediction = (&first_prediction * per_layer_input)?;
+        // Perform multiplication in float32
+        let first_pred_f32 = first_prediction.to_dtype(DType::F32)?;
+        let per_layer_input_f32 = per_layer_input.to_dtype(DType::F32)?;
+        first_prediction =
+            (first_pred_f32 * per_layer_input_f32)?.to_dtype(first_prediction.dtype())?;
 
         first_prediction = self.per_layer_projection.forward(&first_prediction)?;
         first_prediction = self.post_per_layer_input_norm.forward(&first_prediction)?;
 
-        corrected_predictions = corrected_predictions.slice_assign(
-            &[&(1..), &.., &.., &..],
-            &corrected_predictions
-                .i((1.., .., .., ..))?
-                .broadcast_add(&first_prediction)?,
-        )?;
+        // Perform broadcast add in float32 for precision
+        let slice_f32 = corrected_predictions
+            .i((1.., .., .., ..))?
+            .to_dtype(DType::F32)?;
+        let first_pred_f32 = first_prediction.to_dtype(DType::F32)?;
+        let added = slice_f32
+            .broadcast_add(&first_pred_f32)?
+            .to_dtype(corrected_predictions.dtype())?;
+        corrected_predictions =
+            corrected_predictions.slice_assign(&[&(1..), &.., &.., &..], &added)?;
 
         Ok(corrected_predictions)
     }
@@ -1020,10 +1060,11 @@ impl TextModel {
             // per-layer inputs are sometimes padded with zeros, slice the relevant embeddings.
             per_layer_inputs = per_layer_inputs.narrow(D::Minus2, 0, self.layers.len())?;
         }
-        // Perform scaling in float32 for better precision
-        let result = (per_layer_projection + per_layer_inputs)?;
-        let result_f32 = result.to_dtype(DType::F32)?;
-        (result_f32 * self.per_layer_input_scale)?.to_dtype(result.dtype())
+        // Perform addition and scaling in float32 for better precision
+        let per_layer_projection_f32 = per_layer_projection.to_dtype(DType::F32)?;
+        let per_layer_inputs_f32 = per_layer_inputs.to_dtype(DType::F32)?;
+        let result_f32 = (per_layer_projection_f32 + per_layer_inputs_f32)?;
+        (result_f32 * self.per_layer_input_scale)?.to_dtype(per_layer_projection.dtype())
     }
 
     pub fn forward_embeds(
@@ -1126,7 +1167,10 @@ impl TextModel {
                 .to_dtype(altup_proj.dtype())?;
             temp_hidden_states.push(current_hidden_state);
         }
-        xs = Tensor::stack(&temp_hidden_states, 0)?.mean(0)?;
+        // Perform mean operation in float32 for better precision
+        let stacked = Tensor::stack(&temp_hidden_states, 0)?;
+        let stacked_f32 = stacked.to_dtype(DType::F32)?;
+        xs = stacked_f32.mean(0)?.to_dtype(stacked.dtype())?;
 
         xs = xs.apply(&self.norm)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
@@ -1136,9 +1180,11 @@ impl TextModel {
         xs = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            xs = (xs / final_logit_softcapping)?;
-            xs = xs.tanh()?;
-            xs = (xs * final_logit_softcapping)?;
+            // Perform logit softcapping in float32 for precision
+            let xs_f32 = xs.to_dtype(DType::F32)?;
+            let capped = (xs_f32 / final_logit_softcapping)?;
+            let tanh_capped = capped.tanh()?;
+            xs = (tanh_capped * final_logit_softcapping)?.to_dtype(xs.dtype())?;
         }
 
         extract_logits(&xs, context_lens)
