@@ -379,7 +379,7 @@ pub struct Gemma3nAudioAttention {
     v_proj: Linear,
     q_scale: f64,
     local_causal_valid_mask: Tensor,
-    softcap: Tensor,
+    softcap: f64,
     invalid_logits_tensor: Tensor,
     per_dim_scale_softplus: Tensor, // Pre-computed softplus
 }
@@ -445,7 +445,7 @@ impl Gemma3nAudioAttention {
             .broadcast_mul(&upper_causal_mask)?
             .to_dtype(DType::U8)?;
 
-        let softcap = Tensor::new(config.conf_attention_logit_cap as f32, vb.device())?;
+        let softcap = config.conf_attention_logit_cap;
         let invalid_logits_tensor = Tensor::new(
             config.conf_attention_invalid_logits_value as f32,
             vb.device(),
@@ -454,7 +454,7 @@ impl Gemma3nAudioAttention {
         // Pre-compute softplus of per_dim_scale
         let per_dim_scale_softplus = {
             let ones = Tensor::ones_like(&per_dim_scale)?.to_dtype(DType::F32)?;
-            let exp_scale = per_dim_scale.to_dtype(DType::F32)?.exp()?;
+            let exp_scale: Tensor = per_dim_scale.to_dtype(DType::F32)?.exp()?;
             ones.broadcast_add(&exp_scale)?.log()?
         };
 
@@ -680,11 +680,7 @@ impl Gemma3nAudioAttention {
             .forward(&query_blocks, &key_blocks)?;
 
         // Apply attention logit softcap
-        let inv_softcap = Tensor::ones_like(&self.softcap)?.broadcast_div(&self.softcap)?;
-        let logits = logits
-            .broadcast_mul(&inv_softcap.broadcast_as(logits.shape())?)?
-            .tanh()?
-            .broadcast_mul(&self.softcap.broadcast_as(logits.shape())?)?;
+        let logits = ((logits / self.softcap)?.tanh()? * self.softcap)?;
 
         // Apply mask
         // Ensure mask has the same shape as logits by handling dimension mismatches
@@ -736,7 +732,10 @@ impl Gemma3nAudioAttention {
             final_condition_for_where
         };
 
-        let invalid_value = self.invalid_logits_tensor.broadcast_as(logits.dims())?;
+        let invalid_value = self
+            .invalid_logits_tensor
+            .broadcast_as(logits.dims())?
+            .to_dtype(logits.dtype())?;
         let logits = final_condition_for_where.where_cond(&logits, &invalid_value)?;
 
         // For the actual attention computation after logits are computed, we can still optimize
@@ -1101,7 +1100,7 @@ impl Gemma3nAudioConformerLightConv1d {
                 dilation: 1,
                 groups: config.hidden_size,
             },
-            vb.pp("depthwise_conv1d"),
+            vb.pp("depthwise_conv1d").set_dtype(DType::F32),
         )?;
 
         let conv_norm = RmsNorm::new_gemma_3n(
@@ -1141,7 +1140,10 @@ impl Gemma3nAudioConformerLightConv1d {
             audio_encodings_transposed.pad_with_zeros(D::Minus1, self.causal_padding, 0)?;
 
         // Conv1d expects NCW format, apply directly
-        let audio_encodings_conv = self.depthwise_conv1d.forward(&audio_encodings_padded)?;
+        let audio_encodings_conv = self
+            .depthwise_conv1d
+            .forward(&audio_encodings_padded.to_dtype(DType::F32)?)?
+            .to_dtype(audio_encodings_padded.dtype())?;
 
         // Permute back: [B, D, T] -> [B, T, D]
         let audio_encodings = audio_encodings_conv.transpose(D::Minus2, D::Minus1)?;
