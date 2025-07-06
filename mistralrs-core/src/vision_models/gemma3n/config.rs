@@ -157,4 +157,5 @@ pub struct Gemma3nConfig {
     pub text_config: Gemma3nTextConfig,
     pub vision_config: Gemma3nVisionConfig,
     pub audio_config: Gemma3nAudioConfig,
+    pub audio_soft_tokens_per_image: usize,
 }
