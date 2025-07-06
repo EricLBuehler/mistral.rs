@@ -4,39 +4,49 @@ use mistralrs_audio::AudioInput;
 use rubato::Resampler;
 use rustfft::{num_complex::Complex32, FftPlanner};
 
+use crate::vision_models::preprocessor_config::PreProcessorConfig;
+
 // === Configuration constants ===
-// NOTE: These values must stay in sync with the defaults used by
-// `Gemma3nAudioFeatureExtractor` in the HuggingFace Transformers implementation
-// (see `feature_extraction_gemma3n.py`).
-
-/// Duration of a single analysis frame in milliseconds.
-const FRAME_LENGTH_MS: f32 = 32.0;
-/// Hop size between successive frames in milliseconds.
-const HOP_LENGTH_MS: f32 = 10.0;
-
-/// Minimum / maximum frequencies (Hz) for the mel filter-bank.
-const MIN_FREQUENCY: f32 = 125.0;
-const MAX_FREQUENCY: f32 = 7600.0;
-
-/// Pre-emphasis coefficient (HTK flavour).
-const PREEMPHASIS: f32 = 0.97;
-
-/// Log-mel floor used to avoid `log(0)`.
-const MEL_FLOOR: f32 = 1e-5;
-
-/// Number of mel bins in the output spectrogram.
-const FEATURE_SIZE: usize = 128;
+// NOTE: All configuration values are now loaded from the preprocessor config.
+// Defaults match the HuggingFace Transformers implementation.
 
 pub struct AudioProcessor {
     target_sample_rate: u32,
     fft_overdrive: bool,
+    feature_size: usize,
+    frame_length: usize,
+    hop_length: usize,
+    min_frequency: f32,
+    max_frequency: f32,
+    preemphasis: f32,
+    mel_floor: f32,
+    dither: f32,
+    input_scale_factor: f32,
+    per_bin_mean: Option<Vec<f64>>,
+    per_bin_stddev: Option<Vec<f64>>,
 }
 
 impl AudioProcessor {
-    pub fn new() -> Self {
+    pub fn new(config: &PreProcessorConfig) -> Self {
+        // Load from config with defaults matching transformers implementation
+        let target_sample_rate = config.sampling_rate.unwrap_or(16000) as u32;
+        let frame_length = config.frame_length.unwrap_or(512);
+        let hop_length = config.hop_length.unwrap_or(160);
+
         Self {
-            target_sample_rate: 16000,
-            fft_overdrive: true,
+            target_sample_rate,
+            fft_overdrive: config.fft_overdrive.unwrap_or(true),
+            feature_size: config.feature_size.unwrap_or(128),
+            frame_length,
+            hop_length,
+            min_frequency: config.min_frequency.unwrap_or(125.0) as f32,
+            max_frequency: config.max_frequency.unwrap_or(7600.0) as f32,
+            preemphasis: config.preemphasis.unwrap_or(0.97) as f32,
+            mel_floor: config.mel_floor.unwrap_or(1e-5) as f32,
+            dither: config.dither.unwrap_or(0.0) as f32,
+            input_scale_factor: config.input_scale_factor.unwrap_or(1.0) as f32,
+            per_bin_mean: config.per_bin_mean.clone(),
+            per_bin_stddev: config.per_bin_stddev.clone(),
         }
     }
 
@@ -48,25 +58,40 @@ impl AudioProcessor {
         // Convert to mono
         let mono_samples = audio_input.to_mono();
 
+        // Apply input scaling
+        let scaled_samples: Vec<f32> = mono_samples
+            .iter()
+            .map(|&s| s * self.input_scale_factor)
+            .collect();
+
+        // Apply dithering if configured
+        let dithered_samples = if self.dither > 0.0 {
+            use rand_distr::{Distribution, Normal};
+            let mut rng = rand::rng();
+            let normal = Normal::new(0.0, self.dither as f64).unwrap();
+            scaled_samples
+                .iter()
+                .map(|&s| s + normal.sample(&mut rng) as f32)
+                .collect()
+        } else {
+            scaled_samples
+        };
+
         // Resample if necessary
         let resampled = if audio_input.sample_rate != self.target_sample_rate {
             self.resample(
-                &mono_samples,
+                &dithered_samples,
                 audio_input.sample_rate,
                 self.target_sample_rate,
             )?
         } else {
-            mono_samples
+            dithered_samples
         };
 
-        // Calculate frame parameters
-        let frame_length = (FRAME_LENGTH_MS * self.target_sample_rate as f32 / 1000.0) as usize;
-        let hop_length = (HOP_LENGTH_MS * self.target_sample_rate as f32 / 1000.0) as usize;
+        // Use frame parameters from config
+        let frame_length = self.frame_length;
+        let hop_length = self.hop_length;
 
-        // Apply optional dithering (kept at zero by default). We purposefully
-        // re-use the same algorithm (and default value) as the Python
-        // implementation – if `self.dither` is set to a value > 0.0 we add
-        // Gaussian noise with `std == self.dither`.
         // Compute mel-spectrogram
         let mel_spectrogram = self.compute_mel_spectrogram(
             &resampled,
@@ -75,10 +100,18 @@ impl AudioProcessor {
             self.target_sample_rate,
         )?;
 
+        // Apply per-bin normalization if configured
+        let normalized_spectrogram = if self.per_bin_mean.is_some() || self.per_bin_stddev.is_some()
+        {
+            self.normalize_mel_spectrogram(mel_spectrogram)?
+        } else {
+            mel_spectrogram
+        };
+
         // Convert to tensors
-        let num_frames = mel_spectrogram.len();
-        let mel_data: Vec<f32> = mel_spectrogram.into_iter().flatten().collect();
-        let mel_tensor = Tensor::from_vec(mel_data, (1, num_frames, FEATURE_SIZE), device)?;
+        let num_frames = normalized_spectrogram.len();
+        let mel_data: Vec<f32> = normalized_spectrogram.into_iter().flatten().collect();
+        let mel_tensor = Tensor::from_vec(mel_data, (1, num_frames, self.feature_size), device)?;
 
         // Create mask (all valid for now)
         let mask = Tensor::zeros((1, num_frames), candle_core::DType::F32, device)?;
@@ -153,7 +186,8 @@ impl AudioProcessor {
             .collect();
 
         // Create mel filterbank
-        let mel_filters = self.create_mel_filterbank(FEATURE_SIZE, n_fft, sample_rate as f32)?;
+        let mel_filters =
+            self.create_mel_filterbank(self.feature_size, n_fft, sample_rate as f32)?;
 
         // Process frames
         // We replicate the exact frame logic used in
@@ -180,10 +214,10 @@ impl AudioProcessor {
             // === Pre-emphasis (HTK flavour) ===
             let mut frame: Vec<f32> = Vec::with_capacity(frame_length);
             // First sample – scaled, no look-back.
-            frame.push(raw_frame[0] * (1.0 - PREEMPHASIS));
+            frame.push(raw_frame[0] * (1.0 - self.preemphasis));
             // Remaining samples use the previous raw sample within the frame.
             for i in 1..frame_length {
-                frame.push(raw_frame[i] - PREEMPHASIS * raw_frame[i - 1]);
+                frame.push(raw_frame[i] - self.preemphasis * raw_frame[i - 1]);
             }
 
             // === Window ===
@@ -204,7 +238,7 @@ impl AudioProcessor {
                 .collect();
 
             // === Mel filter-bank projection ===
-            let mut mel_frame = vec![0.0f32; FEATURE_SIZE];
+            let mut mel_frame = vec![0.0f32; self.feature_size];
             for (mel_idx, filter) in mel_filters.iter().enumerate() {
                 let mut sum = 0.0f32;
                 for (freq_idx, &coeff) in filter.iter().enumerate() {
@@ -212,7 +246,7 @@ impl AudioProcessor {
                         sum += magnitude[freq_idx] * coeff;
                     }
                 }
-                mel_frame[mel_idx] = (sum.max(MEL_FLOOR)).ln();
+                mel_frame[mel_idx] = (sum.max(self.mel_floor)).ln();
             }
 
             mel_features.push(mel_frame);
@@ -228,57 +262,79 @@ impl AudioProcessor {
         sample_rate: f32,
     ) -> Result<Vec<Vec<f32>>> {
         let n_freqs = n_fft / 2 + 1;
-        let fmax = sample_rate / 2.0;
 
-        // Mel scale conversion
+        // Create frequency bins (actual frequencies for each FFT bin)
+        let all_freqs: Vec<f32> = (0..n_freqs)
+            .map(|i| i as f32 * sample_rate / n_fft as f32)
+            .collect();
+
+        // Mel scale conversion functions
         let hz_to_mel = |hz: f32| -> f32 { 2595.0 * (1.0 + hz / 700.0).log10() };
-
         let mel_to_hz = |mel: f32| -> f32 { 700.0 * (10.0_f32.powf(mel / 2595.0) - 1.0) };
 
-        // Create mel points
-        let min_mel = hz_to_mel(MIN_FREQUENCY);
-        let max_mel = hz_to_mel(fmax.min(MAX_FREQUENCY));
+        // Create mel points in Hz (not bin indices!)
+        let min_mel = hz_to_mel(self.min_frequency);
+        let max_mel = hz_to_mel(self.max_frequency);
 
-        let mut mel_points = Vec::with_capacity(n_mels + 2);
+        // Linear spacing in mel scale
+        let mut f_pts = Vec::with_capacity(n_mels + 2);
         for i in 0..n_mels + 2 {
             let mel = min_mel + (max_mel - min_mel) * i as f32 / (n_mels + 1) as f32;
-            mel_points.push(mel_to_hz(mel));
+            f_pts.push(mel_to_hz(mel));
         }
-
-        // Convert to FFT bin indices
-        let bin_points: Vec<usize> = mel_points
-            .iter()
-            .map(|&hz| ((n_fft as f32 * hz / sample_rate).round() as usize).min(n_freqs - 1))
-            .collect();
 
         // Create triangular filters
         let mut filterbank = vec![vec![0.0; n_freqs]; n_mels];
 
         for i in 0..n_mels {
-            let left = bin_points[i];
-            let center = bin_points[i + 1];
-            let right = bin_points[i + 2];
+            let left_freq = f_pts[i];
+            let center_freq = f_pts[i + 1];
+            let right_freq = f_pts[i + 2];
 
-            // Rising edge
-            for j in left..center {
-                if center > left {
-                    filterbank[i][j] = (j - left) as f32 / (center - left) as f32;
+            // Apply triangular filter based on actual frequencies
+            for (j, &freq) in all_freqs.iter().enumerate() {
+                if freq >= left_freq && freq <= center_freq {
+                    // Rising edge
+                    if center_freq > left_freq {
+                        filterbank[i][j] = (freq - left_freq) / (center_freq - left_freq);
+                    }
+                } else if freq > center_freq && freq <= right_freq {
+                    // Falling edge
+                    if right_freq > center_freq {
+                        filterbank[i][j] = (right_freq - freq) / (right_freq - center_freq);
+                    }
                 }
-            }
-
-            // Falling edge
-            for j in center..right {
-                if right > center {
-                    filterbank[i][j] = 1.0 - (j - center) as f32 / (right - center) as f32;
-                }
-            }
-
-            // Peak
-            if center < n_freqs {
-                filterbank[i][center] = 1.0;
             }
         }
 
         Ok(filterbank)
+    }
+
+    fn normalize_mel_spectrogram(&self, mel_spectrogram: Vec<Vec<f32>>) -> Result<Vec<Vec<f32>>> {
+        let mut normalized = mel_spectrogram;
+
+        // Apply per-bin mean subtraction
+        if let Some(ref mean) = self.per_bin_mean {
+            for frame in normalized.iter_mut() {
+                for (i, val) in frame.iter_mut().enumerate() {
+                    if i < mean.len() {
+                        *val -= mean[i] as f32;
+                    }
+                }
+            }
+        }
+
+        // Apply per-bin stddev division
+        if let Some(ref stddev) = self.per_bin_stddev {
+            for frame in normalized.iter_mut() {
+                for (i, val) in frame.iter_mut().enumerate() {
+                    if i < stddev.len() && stddev[i] != 0.0 {
+                        *val /= stddev[i] as f32;
+                    }
+                }
+            }
+        }
+
+        Ok(normalized)
     }
 }

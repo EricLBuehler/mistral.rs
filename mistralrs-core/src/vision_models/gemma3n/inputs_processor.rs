@@ -32,11 +32,12 @@ struct Gemma3nImageProcessor {
     supports_images: bool,
     supports_audio: bool,
     full_image_sequence: String,
+    audio_seq_length: usize,
 }
 
 impl Gemma3nImageProcessor {
-    fn create_full_audio_sequence(&self, num_tokens: usize) -> String {
-        let audio_tokens_expanded = vec![AUDIO_TOKEN.to_string(); num_tokens].join("");
+    fn create_full_audio_sequence(&self) -> String {
+        let audio_tokens_expanded = vec![AUDIO_TOKEN.to_string(); self.audio_seq_length].join("");
         format!("\n\n{BOA_TOKEN}{audio_tokens_expanded}{EOA_TOKEN}\n\n")
     }
 }
@@ -47,12 +48,13 @@ const EOI_TOKEN: &str = "<eoi>";
 pub const IMAGE_TOKEN_ID: u32 = 262145;
 
 const AUDIO_TOKEN: &str = "<audio_soft_token>";
-const BOA_TOKEN: &str = "<boa>";
-const EOA_TOKEN: &str = "<eoa>";
+const BOA_TOKEN: &str = "<start_of_audio>";
+const EOA_TOKEN: &str = "<end_of_audio>";
 pub const AUDIO_TOKEN_ID: u32 = 262273; // audio_vocab_offset + 1
 
 pub struct Gemma3nProcessor {
     vision_soft_tokens_per_image: usize,
+    audio_seq_length: usize,
     supports_images: bool,
     supports_audio: bool,
 }
@@ -61,9 +63,12 @@ impl Gemma3nProcessor {
     pub fn new(processor_config: ProcessorConfig, supports_images: bool) -> Self {
         // Default to 256 soft tokens per image if not specified
         let vision_soft_tokens_per_image = processor_config.image_seq_len.unwrap_or(256);
+        // Default to 188 audio tokens as per transformers implementation
+        let audio_seq_length = processor_config.audio_seq_length.unwrap_or(188);
 
         Self {
             vision_soft_tokens_per_image,
+            audio_seq_length,
             supports_images,
             supports_audio: true, // Enable audio support
         }
@@ -83,6 +88,7 @@ impl Processor for Gemma3nProcessor {
             supports_images: self.supports_images,
             supports_audio: self.supports_audio,
             full_image_sequence: self.create_full_image_sequence(),
+            audio_seq_length: self.audio_seq_length,
         })
     }
 
@@ -154,7 +160,7 @@ impl InputsProcessor for Gemma3nImageProcessor {
         let (audio_mel, audio_mel_mask) = if has_audios && self.supports_audio {
             let mut audio_mel_accum = Vec::new();
             let mut audio_mask_accum = Vec::new();
-            let audio_processor = AudioProcessor::new();
+            let audio_processor = AudioProcessor::new(preprocessor_config);
 
             for seq in input_seqs.iter_mut() {
                 if let Some(audios) = seq.take_audios() {
@@ -162,14 +168,6 @@ impl InputsProcessor for Gemma3nImageProcessor {
                         let (mel, mask) = audio_processor
                             .process_audio(&audio, device)
                             .expect("Audio processing failed");
-
-                        // Calculate number of audio tokens based on mel features before moving
-                        // Account for the reductions in the audio model:
-                        // - Subsampling conv layers: 2x2 stride for 2 layers = 4x reduction in time
-                        // - Conformer reduction factor: 4x (from config)
-                        // Total reduction: 16x
-                        let mel_frames = mel.dim(1).unwrap_or(128);
-                        let num_audio_tokens = mel_frames.div_ceil(16); // Round up division by 16
 
                         audio_mel_accum.push(mel);
                         audio_mask_accum.push(mask);
@@ -179,7 +177,7 @@ impl InputsProcessor for Gemma3nImageProcessor {
                             let mut prompt = tokenizer
                                 .decode(seq.get_toks(), false)
                                 .expect("Detokenization failed!");
-                            let audio_sequence = self.create_full_audio_sequence(num_audio_tokens);
+                            let audio_sequence = self.create_full_audio_sequence();
 
                             // Replace audio placeholder with tokens
                             prompt = prompt.replace(AUDIO_TOKEN, &audio_sequence);

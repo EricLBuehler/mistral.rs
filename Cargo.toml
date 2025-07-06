@@ -94,6 +94,7 @@ hf-hub = { version = "0.4.2", default-features = false, features = [
 ] }
 itertools = "0.14.0"
 rand = "0.9.1"
+rand_distr = "0.5.0"
 cli-table = "0.5.0"
 dirs = "6.0.0"
 thiserror = "2.0.12"
