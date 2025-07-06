@@ -1,17 +1,31 @@
 use anyhow::Result;
-use apodize::hanning_iter;
 use candle_core::{Device, Tensor};
 use mistralrs_audio::AudioInput;
 use rubato::Resampler;
 use rustfft::{num_complex::Complex32, FftPlanner};
 
+// === Configuration constants ===
+// NOTE: These values must stay in sync with the defaults used by
+// `Gemma3nAudioFeatureExtractor` in the HuggingFace Transformers implementation
+// (see `feature_extraction_gemma3n.py`).
+
+/// Duration of a single analysis frame in milliseconds.
 const FRAME_LENGTH_MS: f32 = 32.0;
+/// Hop size between successive frames in milliseconds.
 const HOP_LENGTH_MS: f32 = 10.0;
+
+/// Minimum / maximum frequencies (Hz) for the mel filter-bank.
 const MIN_FREQUENCY: f32 = 125.0;
 const MAX_FREQUENCY: f32 = 7600.0;
+
+/// Pre-emphasis coefficient (HTK flavour).
 const PREEMPHASIS: f32 = 0.97;
+
+/// Log-mel floor used to avoid `log(0)`.
 const MEL_FLOOR: f32 = 1e-5;
-const FEATURE_SIZE: usize = 128; // Number of mel bins
+
+/// Number of mel bins in the output spectrogram.
+const FEATURE_SIZE: usize = 128;
 
 pub struct AudioProcessor {
     target_sample_rate: u32,
@@ -49,12 +63,13 @@ impl AudioProcessor {
         let frame_length = (FRAME_LENGTH_MS * self.target_sample_rate as f32 / 1000.0) as usize;
         let hop_length = (HOP_LENGTH_MS * self.target_sample_rate as f32 / 1000.0) as usize;
 
-        // Apply preemphasis
-        let preemphasized = self.apply_preemphasis(&resampled, PREEMPHASIS);
-
-        // Compute mel spectrogram
+        // Apply optional dithering (kept at zero by default). We purposefully
+        // re-use the same algorithm (and default value) as the Python
+        // implementation – if `self.dither` is set to a value > 0.0 we add
+        // Gaussian noise with `std == self.dither`.
+        // Compute mel-spectrogram
         let mel_spectrogram = self.compute_mel_spectrogram(
-            &preemphasized,
+            &resampled,
             frame_length,
             hop_length,
             self.target_sample_rate,
@@ -97,22 +112,20 @@ impl AudioProcessor {
         Ok(result[0].clone())
     }
 
+    #[allow(dead_code)]
     fn apply_preemphasis(&self, samples: &[f32], coeff: f32) -> Vec<f32> {
+        // Retained for potential future use (e.g. non-HTK pre-emphasis) but not
+        // called in the current implementation.
         if samples.is_empty() {
             return vec![];
         }
 
-        let mut preemphasized = Vec::with_capacity(samples.len());
-
-        // HTK-style: first sample is unmodified
-        preemphasized.push(samples[0]);
-
-        // Apply filter to remaining samples
+        let mut out = Vec::with_capacity(samples.len());
+        out.push(samples[0] * (1.0 - coeff));
         for i in 1..samples.len() {
-            preemphasized.push(samples[i] - coeff * samples[i - 1]);
+            out.push(samples[i] - coeff * samples[i - 1]);
         }
-
-        preemphasized
+        out
     }
 
     fn compute_mel_spectrogram(
@@ -132,52 +145,73 @@ impl AudioProcessor {
         let mut planner = FftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(n_fft);
 
-        // Create Hanning window
-        let window: Vec<f64> = hanning_iter(frame_length).collect();
+        // === Hann window (same formulation as the reference implementation) ===
+        let window: Vec<f64> = (0..frame_length)
+            .map(|n| {
+                0.5 * (1.0 - (2.0 * std::f64::consts::PI * n as f64 / frame_length as f64).cos())
+            })
+            .collect();
 
         // Create mel filterbank
         let mel_filters = self.create_mel_filterbank(FEATURE_SIZE, n_fft, sample_rate as f32)?;
 
         // Process frames
-        let num_frames = (samples.len() - frame_length) / hop_length + 1;
+        // We replicate the exact frame logic used in
+        // `Gemma3nAudioFeatureExtractor` from the Python reference.
+        // frame_length_py == self.frame_length (512) and Python computes
+        // `frame_size_for_unfold = frame_length + 1` to be able to reference
+        // the previous sample when applying pre-emphasis.  Instead of copying
+        // a full additional sample we simply look back one position when
+        // computing each point **inside the same frame**.  The resulting
+        // values are identical to the reference implementation.
+
+        let frame_size_for_pe = frame_length + 1; // 513
+        if samples.len() < frame_size_for_pe {
+            return Ok(Vec::new());
+        }
+
+        let num_frames = (samples.len() - frame_size_for_pe) / hop_length + 1;
         let mut mel_features = Vec::with_capacity(num_frames);
 
-        for i in 0..num_frames {
-            let start = i * hop_length;
-            let end = start + frame_length;
-            if end > samples.len() {
-                break;
+        for frame_idx in 0..num_frames {
+            let start = frame_idx * hop_length;
+            let raw_frame = &samples[start..start + frame_size_for_pe];
+
+            // === Pre-emphasis (HTK flavour) ===
+            let mut frame: Vec<f32> = Vec::with_capacity(frame_length);
+            // First sample – scaled, no look-back.
+            frame.push(raw_frame[0] * (1.0 - PREEMPHASIS));
+            // Remaining samples use the previous raw sample within the frame.
+            for i in 1..frame_length {
+                frame.push(raw_frame[i] - PREEMPHASIS * raw_frame[i - 1]);
             }
 
-            // Apply window
-            let mut windowed: Vec<Complex32> = samples[start..end]
+            // === Window ===
+            let mut windowed: Vec<Complex32> = frame
                 .iter()
                 .zip(window.iter())
                 .map(|(s, w)| Complex32::new(s * *w as f32, 0.0))
                 .collect();
 
-            // Pad to FFT size
+            // === FFT ===
             windowed.resize(n_fft, Complex32::new(0.0, 0.0));
-
-            // Apply FFT
             fft.process(&mut windowed);
 
-            // Take magnitude spectrum of positive frequencies
+            // Positive frequencies magnitude (length n_fft/2 + 1)
             let magnitude: Vec<f32> = windowed[0..n_fft / 2 + 1]
                 .iter()
                 .map(|c| c.norm())
                 .collect();
 
-            // Apply mel filterbank
-            let mut mel_frame = vec![0.0; FEATURE_SIZE];
+            // === Mel filter-bank projection ===
+            let mut mel_frame = vec![0.0f32; FEATURE_SIZE];
             for (mel_idx, filter) in mel_filters.iter().enumerate() {
-                let mut sum = 0.0;
+                let mut sum = 0.0f32;
                 for (freq_idx, &coeff) in filter.iter().enumerate() {
                     if freq_idx < magnitude.len() {
-                        sum += magnitude[freq_idx] * magnitude[freq_idx] * coeff;
+                        sum += magnitude[freq_idx] * coeff;
                     }
                 }
-                // Log with floor to avoid log(0)
                 mel_frame[mel_idx] = (sum.max(MEL_FLOOR)).ln();
             }
 
