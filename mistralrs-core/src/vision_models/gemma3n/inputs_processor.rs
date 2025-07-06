@@ -48,8 +48,8 @@ const EOI_TOKEN: &str = "<eoi>";
 pub const IMAGE_TOKEN_ID: u32 = 262145;
 
 const AUDIO_TOKEN: &str = "<audio_soft_token>";
-const BOA_TOKEN: &str = "<start_of_audio>";
-const EOA_TOKEN: &str = "<end_of_audio>";
+const BOA_TOKEN: &str = "<boa>";
+const EOA_TOKEN: &str = "<eoa>";
 pub const AUDIO_TOKEN_ID: u32 = 262273; // audio_vocab_offset + 1
 
 pub struct Gemma3nProcessor {
