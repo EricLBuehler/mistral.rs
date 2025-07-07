@@ -26,7 +26,7 @@ pub mod config;
 mod inputs_processor;
 mod multimodal_embedding;
 mod text;
-mod vision;
+pub mod vision;
 pub(crate) use inputs_processor::Gemma3nProcessor;
 
 pub struct Gemma3nModel {

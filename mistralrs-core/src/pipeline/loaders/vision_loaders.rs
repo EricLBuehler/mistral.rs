@@ -4939,40 +4939,123 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         // Vision components
         let vision_elems = {
             let vision_cfg = &cfg.vision_config;
-            // Vision tower - using the actual vision model architecture
+            // Vision tower - calculated from actual Gemma3n architecture
+            // NOTE: Vision tower uses only Conv2d layers, NOT Arc<dyn QuantMethod>,
+            // so NONE of these should be divided by weight_pack_factor
             let vision_tower_elems = {
-                // Stem convolution (first layer)
-                let stem_conv = 3 * 24 * 3 * 3; // in_channels=3, out_channels=24, kernel=3x3
+                use crate::vision_models::gemma3n::vision::{
+                    gemma3n_mobilenet_def, make_divisible, BlockType, INPUT_CHANNELS,
+                    MSFA_EXPANSION_RATIO, MSFA_IN_CHANNELS, MSFA_OUT_CHANNELS, STEM_KERNEL_SIZE,
+                    STEM_OUT_CHANNELS,
+                };
 
-                // Count blocks based on the architecture
-                // This is based on the EfficientNetV2 XSmall config used by Gemma3n
-                let mut block_elems = 0;
+                // Stem: ConvNormAct (Conv2d + RMSNorm)
+                let stem_conv =
+                    INPUT_CHANNELS * STEM_OUT_CHANNELS * STEM_KERNEL_SIZE * STEM_KERNEL_SIZE;
+                let stem_norm = STEM_OUT_CHANNELS; // RMSNorm weight
 
-                // Edge residual and inverted residual blocks
-                // These are the main computation blocks in EfficientNetV2
-                // Actual sizes would need to be calculated based on the specific config
-                // For now, using typical sizes for XSmall variant
-                block_elems += 24 * 48 * 3 * 3; // Example block sizes
+                // Track input channels through the network
+                let mut in_chs = STEM_OUT_CHANNELS;
+                let mut total_elems = stem_conv + stem_norm;
 
-                // Head convolution
-                let head_conv = 1536 * 2048 * 1 * 1; // Final 1x1 conv
+                // Process all stages from gemma3n_mobilenet_def
+                let block_defs = gemma3n_mobilenet_def();
 
-                stem_conv + block_elems + head_conv
+                for stage_blocks in block_defs.iter() {
+                    for block_type in stage_blocks.iter() {
+                        match block_type {
+                            BlockType::EdgeResidual {
+                                out_channels,
+                                kernel_size,
+                                stride: _,
+                                expand_ratio,
+                                ..
+                            } => {
+                                let mid_chs = make_divisible(in_chs as f64 * expand_ratio, 8);
+                                // EdgeResidual: all Conv2d layers, not quantizable
+                                total_elems += in_chs * mid_chs * kernel_size * kernel_size; // conv_exp (Conv2d)
+                                total_elems += mid_chs; // bn1 weight
+                                total_elems += mid_chs * out_channels * 1 * 1; // conv_pwl (Conv2d)
+                                total_elems += out_channels; // bn2 weight
+                                in_chs = *out_channels;
+                            }
+                            BlockType::UniversalInvertedResidual {
+                                out_channels,
+                                start_kernel_size,
+                                mid_kernel_size,
+                                stride: _,
+                                expand_ratio,
+                                ..
+                            } => {
+                                let mid_chs = make_divisible(in_chs as f64 * expand_ratio, 8);
+                                // UniversalInvertedResidual: all Conv2d layers, not quantizable
+                                if *expand_ratio != 1.0 {
+                                    total_elems += in_chs * mid_chs * 1 * 1; // expand conv (Conv2d)
+                                    total_elems += mid_chs; // expand norm
+                                }
+                                if *start_kernel_size > 0 {
+                                    total_elems += mid_chs * start_kernel_size * start_kernel_size; // depthwise start (Conv2d)
+                                    total_elems += mid_chs; // norm
+                                }
+                                if *mid_kernel_size > 0 {
+                                    total_elems += mid_chs * mid_kernel_size * mid_kernel_size; // depthwise mid (Conv2d)
+                                    total_elems += mid_chs; // norm
+                                }
+                                total_elems += mid_chs * out_channels * 1 * 1; // project conv (Conv2d)
+                                total_elems += out_channels; // project norm
+                                total_elems += out_channels; // layer scale gamma
+                                in_chs = *out_channels;
+                            }
+                            BlockType::MultiQueryAttention {
+                                num_heads,
+                                kv_dim,
+                                kv_stride: _,
+                                ..
+                            } => {
+                                // MMQA: all Conv2d layers, not quantizable
+                                let dw_kernel_size = 3; // Default dw_kernel_size for MMQA
+                                total_elems += in_chs; // norm weight
+                                total_elems += in_chs * num_heads * kv_dim * 1 * 1; // query_proj (Conv2d)
+                                total_elems += in_chs * kv_dim * 1 * 1; // key_proj (Conv2d)
+                                total_elems += in_chs * dw_kernel_size * dw_kernel_size; // key_dw_conv (Conv2d)
+                                total_elems += kv_dim * 1 * 1; // value_down_conv (Conv2d)
+                                total_elems += 1; // value_norm weight
+                                total_elems += 1 * kv_dim * 1 * 1; // value_proj (Conv2d)
+                                total_elems += num_heads * kv_dim * in_chs * 1 * 1; // output_proj (Conv2d)
+                                total_elems += in_chs; // layer scale
+                            }
+                        }
+                    }
+                }
+
+                // Multi-scale fusion adapter (msfa) - also uses Conv2d layers
+                let msfa_in = MSFA_IN_CHANNELS.iter().sum::<usize>();
+                let msfa_out = MSFA_OUT_CHANNELS;
+                let msfa_mid = make_divisible(msfa_in as f64 * MSFA_EXPANSION_RATIO, 8);
+
+                // MSFA FFN (UIR with expansion_ratio) - Conv2d layers, not quantizable
+                total_elems += msfa_in * msfa_mid * 1 * 1; // expand (Conv2d)
+                total_elems += msfa_mid; // expand norm
+                total_elems += msfa_mid * msfa_out * 1 * 1; // project (Conv2d)
+                total_elems += msfa_out; // project norm
+                total_elems += msfa_out; // final norm
+
+                total_elems
             };
 
             // Vision multimodal embedder components
             let embed_vision_elems = {
-                // Embedding layer
+                // Embedding layer (not quantizable)
                 let embedding = vision_cfg.vocab_size * vision_cfg.hidden_size;
 
-                // Normalization layers
+                // Normalization layers (not quantizable)
                 let hard_norm = vision_cfg.hidden_size;
                 let soft_norm = vision_cfg.hidden_size;
 
-                // Projection from vision to text hidden size
-                let projection = vision_cfg.hidden_size * text_cfg.hidden_size;
+                // Projection from vision to text hidden size (IS Arc<dyn QuantMethod>, so quantizable)
+                let projection = vision_cfg.hidden_size * text_cfg.hidden_size / weight_pack_factor;
 
-                // Post-projection norm
+                // Post-projection norm (not quantizable)
                 let post_norm = text_cfg.hidden_size;
 
                 embedding + hard_norm + soft_norm + projection + post_norm
@@ -4981,90 +5064,172 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
             vision_tower_elems + embed_vision_elems
         };
 
-        // Audio components
+        // Audio components - based on actual audio.rs structure
         let audio_elems = {
             let audio_cfg = &cfg.audio_config;
-            // Audio encoder components
-            let audio_encoder_elems = {
-                // SSCP (Streaming State Space Conformer Pooling) components
-                let sscp_conv_elems = {
-                    let mut conv_elems = 0;
-                    let mut in_channels = audio_cfg.input_feat_size;
 
-                    for (i, &out_channels) in audio_cfg.sscp_conv_channel_size.iter().enumerate() {
-                        if i < audio_cfg.sscp_conv_kernel_size.len() {
-                            let kernel = &audio_cfg.sscp_conv_kernel_size[i];
-                            conv_elems += in_channels * out_channels * kernel[0] * kernel[1];
-                            in_channels = out_channels;
-                        }
-                    }
+            // SubSampleConvProjection components
+            let subsample_conv_projection_elems = {
+                // Conv blocks (Conv2d layers - NOT quantizable)
+                let mut conv_elems = 0;
 
-                    // Group norm parameters
-                    let group_norm = audio_cfg
-                        .sscp_conv_channel_size
-                        .last()
-                        .copied()
-                        .unwrap_or(32)
-                        * 2; // weight + bias
+                // conv_0: Conv2d from 1 channel to first channel size
+                let in_ch_0 = 1;
+                let out_ch_0 = audio_cfg.sscp_conv_channel_size[0];
+                let kernel_0 = &audio_cfg.sscp_conv_kernel_size[0];
+                conv_elems += in_ch_0 * out_ch_0 * kernel_0[0] * kernel_0[1];
 
-                    conv_elems + group_norm
-                };
+                // conv_1: Conv2d from first to second channel size
+                let in_ch_1 = out_ch_0;
+                let out_ch_1 = audio_cfg.sscp_conv_channel_size[1];
+                let kernel_1 = &audio_cfg.sscp_conv_kernel_size[1];
+                conv_elems += in_ch_1 * out_ch_1 * kernel_1[0] * kernel_1[1];
 
-                // Conformer layers
-                let conformer_elems = audio_cfg.conf_num_hidden_layers * {
-                    // Each conformer layer has:
-                    // - Conv module
-                    let conv_module = {
-                        let pointwise1 = audio_cfg.hidden_size * audio_cfg.hidden_size * 2;
-                        let depthwise = audio_cfg.hidden_size * audio_cfg.conf_conv_kernel_size;
-                        let pointwise2 = audio_cfg.hidden_size * audio_cfg.hidden_size;
-                        let norm = audio_cfg.hidden_size;
-                        pointwise1 + depthwise + pointwise2 + norm
-                    };
+                // CumulativeGroupNorm for each conv block (weight only, no bias by default)
+                let norm_0 = out_ch_0; // norm weight for conv_0
+                let norm_1 = out_ch_1; // norm weight for conv_1
 
-                    // - Multi-head attention
-                    let mha = {
-                        let qkv = audio_cfg.hidden_size * audio_cfg.hidden_size * 3;
-                        let out = audio_cfg.hidden_size * audio_cfg.hidden_size;
-                        qkv + out
-                    };
+                // input_proj_linear (Arc<dyn QuantMethod> - IS quantizable)
+                let mut f_out = audio_cfg.input_feat_size;
+                for i in 0..2 {
+                    let kernel_w = audio_cfg.sscp_conv_kernel_size[i][1];
+                    let stride_w = audio_cfg.sscp_conv_stride_size[i][1];
+                    let pad_left = 1;
+                    let pad_right = 1;
+                    f_out = (f_out + pad_left + pad_right + stride_w - kernel_w) / stride_w;
+                }
+                let input_proj_in_features = out_ch_1 * f_out;
+                let input_proj_linear =
+                    input_proj_in_features * audio_cfg.hidden_size / weight_pack_factor;
 
-                    // - Feed-forward
-                    let ff = {
-                        let intermediate_size = audio_cfg.hidden_size * 4; // Typical FF expansion
-                        let ff1 = audio_cfg.hidden_size * intermediate_size;
-                        let ff2 = intermediate_size * audio_cfg.hidden_size;
-                        ff1 + ff2
-                    };
-
-                    // - Layer norms
-                    let norms = audio_cfg.hidden_size * 4; // Multiple norms per layer
-
-                    conv_module + mha + ff + norms
-                };
-
-                sscp_conv_elems + conformer_elems
+                conv_elems + norm_0 + norm_1 + input_proj_linear
             };
 
-            // Audio multimodal embedder components
+            // Conformer blocks
+            let conformer_elems = {
+                let mut total = 0;
+
+                for _ in 0..audio_cfg.conf_num_hidden_layers {
+                    // ConformerAttention
+                    let attention_elems = {
+                        // Norms (NOT quantizable)
+                        let pre_attn_norm = audio_cfg.hidden_size;
+                        let post_norm = audio_cfg.hidden_size;
+
+                        // Attention projections (Arc<dyn QuantMethod> - IS quantizable)
+                        let q_proj =
+                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
+                        let k_proj =
+                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
+                        let v_proj =
+                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
+                        let post =
+                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
+
+                        // RelativePositionEmbedding
+                        let pos_proj =
+                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
+                        let per_dim_scale =
+                            audio_cfg.hidden_size / audio_cfg.conf_num_attention_heads; // head_dim
+                        let inv_timescales = audio_cfg.hidden_size / 2; // num_timescales
+                        let pos_indices = audio_cfg.conf_attention_context_left
+                            + audio_cfg.conf_attention_context_right
+                            + 1;
+
+                        // Local causal masks (precomputed tensors)
+                        let chunk_size = audio_cfg.conf_attention_chunk_size;
+                        let context_size = chunk_size + audio_cfg.conf_attention_context_left - 1
+                            + audio_cfg.conf_attention_context_right;
+                        let local_causal_valid_mask = chunk_size * context_size; // U8 tensor
+                        let invalid_logits_tensor = 1; // single f32 value
+
+                        pre_attn_norm
+                            + post_norm
+                            + q_proj
+                            + k_proj
+                            + v_proj
+                            + post
+                            + pos_proj
+                            + per_dim_scale
+                            + inv_timescales
+                            + pos_indices
+                            + local_causal_valid_mask
+                            + invalid_logits_tensor
+                    };
+
+                    // ConformerFeedForward (start and end)
+                    let ffw_elems = {
+                        // Each FFW has:
+                        // - pre_layer_norm (NOT quantizable)
+                        // - ffw_layer_1 (Arc<dyn QuantMethod> - IS quantizable)
+                        // - ffw_layer_2 (Arc<dyn QuantMethod> - IS quantizable)
+                        // - post_layer_norm (NOT quantizable)
+                        let intermediate_size = audio_cfg.hidden_size * 4;
+
+                        let ffw_start = {
+                            let pre_norm = audio_cfg.hidden_size;
+                            let layer_1 =
+                                audio_cfg.hidden_size * intermediate_size / weight_pack_factor;
+                            let layer_2 =
+                                intermediate_size * audio_cfg.hidden_size / weight_pack_factor;
+                            let post_norm = audio_cfg.hidden_size;
+                            pre_norm + layer_1 + layer_2 + post_norm
+                        };
+
+                        let ffw_end = ffw_start; // Same structure
+
+                        ffw_start + ffw_end
+                    };
+
+                    // ConformerLightConv1d
+                    let lconv1d_elems = {
+                        // Norms (NOT quantizable)
+                        let pre_layer_norm = audio_cfg.hidden_size;
+                        let conv_norm = audio_cfg.hidden_size;
+
+                        // Linear layers (Arc<dyn QuantMethod> - IS quantizable)
+                        let linear_start = audio_cfg.hidden_size * (audio_cfg.hidden_size * 2)
+                            / weight_pack_factor;
+                        let linear_end =
+                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
+
+                        // depthwise_conv1d (Conv1d - NOT quantizable)
+                        let depthwise = audio_cfg.hidden_size * audio_cfg.conf_conv_kernel_size;
+
+                        pre_layer_norm + conv_norm + linear_start + linear_end + depthwise
+                    };
+
+                    // Final norm for conformer block (NOT quantizable)
+                    let block_norm = audio_cfg.hidden_size;
+
+                    total += attention_elems + ffw_elems + lconv1d_elems + block_norm;
+                }
+
+                total
+            };
+
+            // Audio multimodal embedder (embed_audio)
             let embed_audio_elems = {
-                // Embedding layer
+                // Embedding layer (ScaledEmbedding - NOT quantizable)
                 let embedding = audio_cfg.vocab_size * audio_cfg.hidden_size;
 
-                // Normalization layers
-                let hard_norm = audio_cfg.hidden_size;
-                let soft_norm = audio_cfg.hidden_size;
+                // RMS norms (NOT quantizable)
+                let hard_embedding_norm = audio_cfg.hidden_size; // with scale
+                let soft_embedding_norm = audio_cfg.hidden_size; // with scale
+                let embedding_post_projection_norm = text_cfg.hidden_size; // without scale
 
-                // Projection from audio to text hidden size
-                let projection = audio_cfg.hidden_size * text_cfg.hidden_size;
+                // Projection (Arc<dyn QuantMethod> - IS quantizable)
+                let embedding_projection =
+                    audio_cfg.hidden_size * text_cfg.hidden_size / weight_pack_factor;
 
-                // Post-projection norm
-                let post_norm = text_cfg.hidden_size;
-
-                embedding + hard_norm + soft_norm + projection + post_norm
+                embedding
+                    + hard_embedding_norm
+                    + soft_embedding_norm
+                    + embedding_post_projection_norm
+                    + embedding_projection
             };
 
-            audio_encoder_elems + embed_audio_elems
+            subsample_conv_projection_elems + conformer_elems + embed_audio_elems
         };
 
         let total_elems = text_elems + vision_elems + audio_elems;

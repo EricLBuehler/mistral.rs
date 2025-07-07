@@ -10,7 +10,7 @@ use crate::{
 use std::fmt::Debug;
 
 #[derive(Debug, Clone)]
-enum BlockType {
+pub enum BlockType {
     EdgeResidual {
         out_channels: usize,
         kernel_size: usize,
@@ -727,7 +727,7 @@ impl Module for MobileAttention {
 }
 
 // Helper functions
-fn make_divisible(v: f64, divisor: usize) -> usize {
+pub fn make_divisible(v: f64, divisor: usize) -> usize {
     let divisor = divisor as f64;
     let min_value = divisor;
     let new_v = ((v + divisor / 2.0) / divisor).floor() * divisor;
@@ -830,8 +830,16 @@ impl MobileNetV5MultiScaleFusionAdapter {
     }
 }
 
+// Constants for vision tower configuration
+pub const INPUT_CHANNELS: usize = 3;
+pub const STEM_OUT_CHANNELS: usize = 64;
+pub const STEM_KERNEL_SIZE: usize = 3;
+pub const MSFA_IN_CHANNELS: &[usize] = &[640, 1280];
+pub const MSFA_OUT_CHANNELS: usize = 2048;
+pub const MSFA_EXPANSION_RATIO: f64 = 2.0;
+
 // Architecture definition for Gemma3n
-fn gemma3n_mobilenet_def() -> Vec<Vec<BlockType>> {
+pub fn gemma3n_mobilenet_def() -> Vec<Vec<BlockType>> {
     vec![
         // Stage 1: Edge Residuals
         vec![
