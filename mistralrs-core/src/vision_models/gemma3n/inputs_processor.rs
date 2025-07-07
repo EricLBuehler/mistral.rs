@@ -139,11 +139,11 @@ impl InputsProcessor for Gemma3nImageProcessor {
         }
         // TODO(EricLBuehler): support this? Would require some handling of image tokens.
         if prompt_chunksize.is_some() {
-            warn!("`prompt_chunksize` is set. Gemma3 does not support prompt batching.");
+            warn!("`prompt_chunksize` is set. Gemma3n does not support prompt batching.");
         }
         let Some(tokenizer) = tokenizer else {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
-                "Idefics3ImageProcessor requires a specified tokenizer.",
+                "Gemma3nImageProcessor requires a specified tokenizer.",
             ))));
         };
 
