@@ -4971,11 +4971,12 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                                 expand_ratio,
                                 ..
                             } => {
+                                #[allow(clippy::cast_precision_loss)]
                                 let mid_chs = make_divisible(in_chs as f64 * expand_ratio, 8);
                                 // EdgeResidual: all Conv2d layers, not quantizable
                                 total_elems += in_chs * mid_chs * kernel_size * kernel_size; // conv_exp (Conv2d)
                                 total_elems += mid_chs; // bn1 weight
-                                total_elems += mid_chs * out_channels * 1 * 1; // conv_pwl (Conv2d)
+                                total_elems += mid_chs * out_channels; // conv_pwl (Conv2d)
                                 total_elems += out_channels; // bn2 weight
                                 in_chs = *out_channels;
                             }
@@ -4987,10 +4988,11 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                                 expand_ratio,
                                 ..
                             } => {
+                                #[allow(clippy::cast_precision_loss)]
                                 let mid_chs = make_divisible(in_chs as f64 * expand_ratio, 8);
                                 // UniversalInvertedResidual: all Conv2d layers, not quantizable
                                 if *expand_ratio != 1.0 {
-                                    total_elems += in_chs * mid_chs * 1 * 1; // expand conv (Conv2d)
+                                    total_elems += in_chs * mid_chs; // expand conv (Conv2d)
                                     total_elems += mid_chs; // expand norm
                                 }
                                 if *start_kernel_size > 0 {
@@ -5001,7 +5003,7 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                                     total_elems += mid_chs * mid_kernel_size * mid_kernel_size; // depthwise mid (Conv2d)
                                     total_elems += mid_chs; // norm
                                 }
-                                total_elems += mid_chs * out_channels * 1 * 1; // project conv (Conv2d)
+                                total_elems += mid_chs * out_channels; // project conv (Conv2d)
                                 total_elems += out_channels; // project norm
                                 total_elems += out_channels; // layer scale gamma
                                 in_chs = *out_channels;
@@ -5015,13 +5017,13 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                                 // MMQA: all Conv2d layers, not quantizable
                                 let dw_kernel_size = 3; // Default dw_kernel_size for MMQA
                                 total_elems += in_chs; // norm weight
-                                total_elems += in_chs * num_heads * kv_dim * 1 * 1; // query_proj (Conv2d)
-                                total_elems += in_chs * kv_dim * 1 * 1; // key_proj (Conv2d)
+                                total_elems += in_chs * num_heads * kv_dim; // query_proj (Conv2d)
+                                total_elems += in_chs * kv_dim; // key_proj (Conv2d)
                                 total_elems += in_chs * dw_kernel_size * dw_kernel_size; // key_dw_conv (Conv2d)
-                                total_elems += kv_dim * 1 * 1; // value_down_conv (Conv2d)
+                                total_elems += *kv_dim; // value_down_conv (Conv2d)
                                 total_elems += 1; // value_norm weight
-                                total_elems += 1 * kv_dim * 1 * 1; // value_proj (Conv2d)
-                                total_elems += num_heads * kv_dim * in_chs * 1 * 1; // output_proj (Conv2d)
+                                total_elems += *kv_dim; // value_proj (Conv2d)
+                                total_elems += num_heads * kv_dim * in_chs; // output_proj (Conv2d)
                                 total_elems += in_chs; // layer scale
                             }
                         }
@@ -5031,12 +5033,13 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                 // Multi-scale fusion adapter (msfa) - also uses Conv2d layers
                 let msfa_in = MSFA_IN_CHANNELS.iter().sum::<usize>();
                 let msfa_out = MSFA_OUT_CHANNELS;
+                #[allow(clippy::cast_precision_loss)]
                 let msfa_mid = make_divisible(msfa_in as f64 * MSFA_EXPANSION_RATIO, 8);
 
                 // MSFA FFN (UIR with expansion_ratio) - Conv2d layers, not quantizable
-                total_elems += msfa_in * msfa_mid * 1 * 1; // expand (Conv2d)
+                total_elems += msfa_in * msfa_mid; // expand (Conv2d)
                 total_elems += msfa_mid; // expand norm
-                total_elems += msfa_mid * msfa_out * 1 * 1; // project (Conv2d)
+                total_elems += msfa_mid * msfa_out; // project (Conv2d)
                 total_elems += msfa_out; // project norm
                 total_elems += msfa_out; // final norm
 

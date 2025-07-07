@@ -1022,7 +1022,7 @@ impl Gemma3nAudioConformerAttention {
 
     pub fn forward(&self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
         let audio_encodings_input_to_attn = x;
-        let audio_encodings_norm = self.pre_attn_norm.forward(&x)?;
+        let audio_encodings_norm = self.pre_attn_norm.forward(x)?;
 
         // attn output: [B, T, NumHeads, HeadDim]
         let audio_encodings_attn_out = self.attn.forward(&audio_encodings_norm, mask)?;
@@ -1085,7 +1085,7 @@ impl Gemma3nAudioConformerFeedForward {
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let residual = x;
-        let x = self.pre_layer_norm.forward(&x)?;
+        let x = self.pre_layer_norm.forward(x)?;
         let x = self.ffw_layer_1.forward_autocast(&x)?;
         let x = candle_nn::ops::silu(&x)?;
         let x = self.ffw_layer_2.forward_autocast(&x)?;
