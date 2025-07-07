@@ -1,4 +1,4 @@
-use candle_core::{DType, Result, Tensor, D};
+use candle_core::{Result, Tensor};
 use candle_nn::{Activation, Conv2d, Conv2dConfig, Module};
 use mistralrs_quant::ShardedVarBuilder;
 
@@ -567,8 +567,8 @@ impl MultiQueryAttention2d {
 
         // Query projection and reshape
         // MLX: [B, H, W, C] -> [B, H, W, num_heads * key_dim] -> [B, H*W, num_heads, key_dim] -> [B, num_heads, H*W, key_dim]
-        let q = self.query_proj.forward(x)?;
-        let q = q
+        let mut q = self.query_proj.forward(x)?;
+        q = q
             .permute((0, 2, 3, 1))? // NCHW -> NHWC
             .reshape((b, h * w, self.num_heads, self.key_dim))?
             .permute((0, 2, 1, 3))?; // [B, num_heads, H*W, key_dim]
@@ -582,7 +582,7 @@ impl MultiQueryAttention2d {
         k = self.key_proj.forward(&k)?;
         let (_, _, kh, kw) = k.dims4()?;
         // MLX: [B, C, H, W] -> [B, H, W, C] -> [B, H*W, C] -> [B, 1, H*W, C]
-        let k = k
+        k = k
             .permute((0, 2, 3, 1))? // NCHW -> NHWC
             .reshape((b, kh * kw, self.key_dim))?
             .unsqueeze(1)?; // [B, 1, kh*kw, key_dim]
@@ -596,48 +596,27 @@ impl MultiQueryAttention2d {
         v = self.value_proj.forward(&v)?;
         let (_, _, vh, vw) = v.dims4()?;
         // MLX: [B, C, H, W] -> [B, H, W, C] -> [B, H*W, C] -> [B, 1, H*W, C]
-        let v = v
+        v = v
             .permute((0, 2, 3, 1))? // NCHW -> NHWC
             .reshape((b, vh * vw, self.value_dim))?
             .unsqueeze(1)?; // [B, 1, vh*vw, value_dim]
 
-        // Check if we can use fused attention
-        // Metal SDPA requires key length >= query length
-        let can_use_fused = kh * kw >= h * w;
-
-        let o = if can_use_fused && (kh * kw == h * w || !q.device().is_metal()) {
-            // Use fused attention via Sdpa when dimensions are compatible
-            let sdpa_params = SdpaParams {
-                n_kv_groups: self.num_heads, // Multi-query attention has n_kv_groups = num_heads
-                softcap: None,
-                softmax_scale: self.scale as f32,
-                sliding_window: None,
-            };
-
-            Sdpa.run_attention(&q, &k, &v, None, None, &sdpa_params)?
-        } else {
-            let q = (q.to_dtype(DType::F32)? * self.scale)?;
-            let k = k.to_dtype(DType::F32)?;
-            let v = v.to_dtype(DType::F32)?;
-
-            let k_t = k.transpose(D::Minus1, D::Minus2)?;
-
-            let attn = q.broadcast_matmul(&k_t)?;
-            let attn = candle_nn::ops::softmax_last_dim(&attn)?;
-
-            let o = attn.broadcast_matmul(&v)?;
-
-            o.to_dtype(x.dtype())?
+        let sdpa_params = SdpaParams {
+            n_kv_groups: self.num_heads,
+            softcap: None,
+            softmax_scale: self.scale as f32,
+            sliding_window: None,
         };
+        let mut o = Sdpa.run_attention(&q, &k, &v, None, None, &sdpa_params)?;
 
         // Reshape output back
         // MLX: [B, num_heads, H*W, value_dim] -> [B, H*W, num_heads, value_dim] -> [B, H, W, num_heads * value_dim]
-        let o = o
+        o = o
             .permute((0, 2, 1, 3))? // [B, H*W, num_heads, value_dim]
             .reshape((b, h, w, self.num_heads * self.value_dim))?
             .permute((0, 3, 1, 2))?; // NHWC -> NCHW
 
-        let o = self.output_proj.forward(&o)?;
+        o = self.output_proj.forward(&o)?;
 
         Ok(o)
     }
