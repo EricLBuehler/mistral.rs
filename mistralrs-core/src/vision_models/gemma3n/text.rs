@@ -1070,13 +1070,14 @@ impl TextModel {
     pub fn forward_embeds(
         &self,
         input_ids: &Tensor,
+        ple_input_ids: &Tensor,
         mut xs: Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let per_layer_inputs = self.get_per_layer_inputs(input_ids)?;
-        let per_layer_inputs = self.project_per_layer_inputs(&xs, Some(per_layer_inputs))?;
+        let per_layer_inputs = Some(self.get_per_layer_inputs(ple_input_ids)?);
+        let per_layer_inputs = self.project_per_layer_inputs(&xs, per_layer_inputs)?;
         // Cast per_layer_inputs back to model dtype after float32 operations
         let per_layer_inputs = per_layer_inputs.to_dtype(xs.dtype())?;
 

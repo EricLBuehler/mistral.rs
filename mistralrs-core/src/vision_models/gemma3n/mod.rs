@@ -275,8 +275,13 @@ impl Gemma3nModel {
             }
         }
 
+        let ple_inputs_mask =
+            input_ids.lt(self.cfg.text_config.vocab_size_per_layer_input as f64)?;
+        let ple_input_ids = ple_inputs_mask.where_cond(&input_ids, &input_ids.zeros_like()?)?;
+
         let res = self.language_model.forward_embeds(
             input_ids,
+            &ple_input_ids,
             input_embeds,
             seqlen_offsets,
             context_lens,
