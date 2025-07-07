@@ -141,20 +141,12 @@ impl RMSNormAct2d {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        // Compute the mean square along the channel dimension (index = 1).
-        let dtype = x.dtype();
-        let x_f32 = x.to_dtype(DType::F32)?;
-        let mean_square = x_f32.sqr()?.mean_keepdim(1)?; // keep C dimension
-
-        // Fused operation: x / sqrt(mean_square + eps)
-        let rsqrt = (mean_square + self.norm.eps)?.recip()?.sqrt()?;
-        let x_norm = x_f32.broadcast_mul(&rsqrt)?;
-        let x_norm = x_norm.to_dtype(dtype)?;
-
-        // Apply learnable weight (per-channel scale)
-        let (_, c, _, _) = x.dims4()?;
-        let weight = self.norm.weight.reshape((1, c, 1, 1))?;
-        let mut x = x_norm.broadcast_mul(&weight)?;
+        let mut x = candle_nn::ops::rms_norm(
+            &x.permute((0, 2, 3, 1))?.contiguous()?,
+            &self.norm.weight,
+            self.norm.eps as f32,
+        )?
+        .permute((0, 3, 1, 2))?;
 
         // Optional activation
         if let Some(act) = &self.activation {
