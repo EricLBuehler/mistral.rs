@@ -5248,6 +5248,10 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         let cfg: Gemma3nConfig = serde_json::from_str(config)?;
         let text_cfg = &cfg.text_config;
 
+        // Note: This calculates sizes for ALL layers in the model.
+        // When matformer slicing is applied, some layers will be skipped
+        // and the device mapper will handle the remapping accordingly.
+        // The actual layer assignment happens after device mapping is computed.
         let mut layer_sizes = Vec::new();
 
         for layer_idx in 0..text_cfg.num_hidden_layers {
@@ -5344,6 +5348,11 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
 
     fn num_layers(&self, config: &str) -> Result<usize> {
         let cfg: Gemma3nConfig = serde_json::from_str(config)?;
+        // For matformer models, we need to be conservative and assume the smallest possible
+        // number of layers that might be used after slicing. The E2B model has 26 layers
+        // after skipping layers, while the full model has 46 layers.
+        // We use the full layer count here because the device mapping happens before
+        // matformer slicing is applied.
         Ok(cfg.text_config.num_hidden_layers)
     }
 
