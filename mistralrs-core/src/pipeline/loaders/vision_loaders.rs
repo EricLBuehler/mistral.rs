@@ -4631,7 +4631,7 @@ impl VisionModelLoader for Gemma3nLoader {
         ))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        true
+        false
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
