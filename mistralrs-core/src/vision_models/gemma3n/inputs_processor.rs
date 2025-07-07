@@ -163,7 +163,17 @@ impl InputsProcessor for Gemma3nImageProcessor {
             let audio_processor = AudioProcessor::new(preprocessor_config);
 
             for seq in input_seqs.iter_mut() {
-                if let Some(audios) = seq.take_audios() {
+                if let Some(mut audios) = seq.take_audios() {
+                    let max_audio_len = audios
+                        .iter()
+                        .map(|x| x.samples.len())
+                        .max()
+                        .expect("No audios");
+                    for audio in &mut audios {
+                        let pad_len = max_audio_len - audio.samples.len();
+                        audio.samples.extend(std::iter::repeat_n(0., pad_len));
+                    }
+
                     for audio in audios {
                         let (mel, mask) = audio_processor
                             .process_audio(&audio, device)
@@ -171,28 +181,28 @@ impl InputsProcessor for Gemma3nImageProcessor {
 
                         audio_mel_accum.push(mel);
                         audio_mask_accum.push(mask);
+                    }
 
-                        // Update prompt with audio tokens
-                        if !seq.multimodal.has_changed_prompt {
-                            let mut prompt = tokenizer
-                                .decode(seq.get_toks(), false)
-                                .expect("Detokenization failed!");
-                            let audio_sequence = self.create_full_audio_sequence();
+                    // Update prompt with audio tokens
+                    if !seq.multimodal.has_changed_prompt {
+                        let mut prompt = tokenizer
+                            .decode(seq.get_toks(), false)
+                            .expect("Detokenization failed!");
+                        let audio_sequence = self.create_full_audio_sequence();
 
-                            // Replace audio placeholder with tokens
-                            prompt = prompt.replace(AUDIO_TOKEN, &audio_sequence);
+                        // Replace audio placeholder with tokens
+                        prompt = prompt.replace(AUDIO_TOKEN, &audio_sequence);
 
-                            // Re-tokenize
-                            seq.set_initial_prompt(prompt.clone());
-                            let toks = tokenizer
-                                .encode_fast(prompt, false)
-                                .expect("Tokenization failed!");
+                        // Re-tokenize
+                        seq.set_initial_prompt(prompt.clone());
+                        let toks = tokenizer
+                            .encode_fast(prompt, false)
+                            .expect("Tokenization failed!");
 
-                            let ids = toks.get_ids().to_vec();
-                            seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+                        let ids = toks.get_ids().to_vec();
+                        seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
 
-                            has_changed_prompt = true;
-                        }
+                        has_changed_prompt = true;
                     }
                 }
             }
