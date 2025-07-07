@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Linear;
+use either::Either;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
@@ -15,6 +16,7 @@ use crate::{
         self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, MatMul, RmsNorm,
         RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
+    matformer::MatformerSlicingConfig,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         extract_logits,
@@ -25,7 +27,7 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
-use super::config::Gemma3nTextConfig;
+use super::config::{Gemma3nTextConfig, IntermediateSize};
 
 macro_rules! is_sliding {
     ($layer_idx:expr, $cfg:expr) => {
@@ -53,35 +55,79 @@ impl Mlp {
         layer_idx: usize,
     ) -> Result<Self> {
         let std_multiplier = Self::std_multiplier(cfg.activation_sparsity_pattern[layer_idx]);
-        Ok(Self {
-            gate: ColumnParallelLayer::new(
-                cfg.hidden_size,
-                cfg.intermediate_size,
-                &cfg.quantization_config,
-                false,
-                comm,
-                vb.pp("gate_proj"),
-            )?,
-            up: ColumnParallelLayer::new(
-                cfg.hidden_size,
-                cfg.intermediate_size,
-                &cfg.quantization_config,
-                false,
-                comm,
-                vb.pp("up_proj"),
-            )?,
-            down: RowParallelLayer::new(
-                cfg.intermediate_size,
-                cfg.hidden_size,
-                &cfg.quantization_config,
-                false,
-                comm,
-                vb.pp("down_proj"),
-            )?,
-            activation_sparsity: cfg.activation_sparsity_pattern[layer_idx],
-            act: cfg.hidden_activation,
-            std_multiplier,
-        })
+        let (intermediate_size, orig_intermediate_size) = cfg
+            .intermediate_size
+            .0
+            .clone()
+            .map_left(|left| (left, None))
+            .left_or_else(|(sizes, orig_intermediate_size)| {
+                (sizes[layer_idx], Some(orig_intermediate_size))
+            });
+
+        if let Some(orig_intermediate_size) = orig_intermediate_size {
+            Ok(Self {
+                gate: ColumnParallelLayer::new_matformer(
+                    cfg.hidden_size,
+                    intermediate_size,
+                    orig_intermediate_size,
+                    &cfg.quantization_config,
+                    false,
+                    comm,
+                    vb.pp("gate_proj"),
+                )?,
+                up: ColumnParallelLayer::new_matformer(
+                    cfg.hidden_size,
+                    intermediate_size,
+                    orig_intermediate_size,
+                    &cfg.quantization_config,
+                    false,
+                    comm,
+                    vb.pp("up_proj"),
+                )?,
+                down: RowParallelLayer::new_matformer(
+                    intermediate_size,
+                    cfg.hidden_size,
+                    orig_intermediate_size,
+                    &cfg.quantization_config,
+                    false,
+                    comm,
+                    vb.pp("down_proj"),
+                )?,
+                activation_sparsity: cfg.activation_sparsity_pattern[layer_idx],
+                act: cfg.hidden_activation,
+                std_multiplier,
+            })
+        } else {
+            Ok(Self {
+                gate: ColumnParallelLayer::new(
+                    cfg.hidden_size,
+                    intermediate_size,
+                    &cfg.quantization_config,
+                    false,
+                    comm,
+                    vb.pp("gate_proj"),
+                )?,
+                up: ColumnParallelLayer::new(
+                    cfg.hidden_size,
+                    intermediate_size,
+                    &cfg.quantization_config,
+                    false,
+                    comm,
+                    vb.pp("up_proj"),
+                )?,
+                down: RowParallelLayer::new(
+                    intermediate_size,
+                    cfg.hidden_size,
+                    &cfg.quantization_config,
+                    false,
+                    comm,
+                    vb.pp("down_proj"),
+                )?,
+                activation_sparsity: cfg.activation_sparsity_pattern[layer_idx],
+                act: cfg.hidden_activation,
+                std_multiplier,
+            })
+        }
     }
 
     fn std_multiplier(p: f64) -> f64 {
@@ -771,6 +817,111 @@ impl DecoderLayer {
     }
 }
 
+type MatformerSlicingResult = (
+    Gemma3nTextConfig,
+    Option<Tensor>,
+    usize,
+    Option<HashMap<usize, usize>>,
+    Option<Vec<usize>>,
+);
+
+fn handle_matformer_slicing(
+    cfg: &Gemma3nTextConfig,
+    matformer_slicing_config: &Option<MatformerSlicingConfig>,
+    mapper: &(dyn DeviceMapper + Send + Sync),
+) -> Result<MatformerSlicingResult> {
+    match matformer_slicing_config {
+        Some(slicing_config) => {
+            let matformer_slice = slicing_config.get_slicing().ok_or_else(|| {
+                candle_core::Error::Msg(format!(
+                    "Matformer slice '{}' not found in config",
+                    slicing_config.slice_name
+                ))
+            })?;
+            let mut cfg = cfg.clone();
+
+            let layers_skipped = matformer_slice.layers_skipped.clone().unwrap_or_default();
+
+            let first_kv_shared_layer_idx = cfg.num_hidden_layers - cfg.num_kv_shared_layers;
+            let local_kv_sharing_layer_idx = first_kv_shared_layer_idx - 2;
+            let global_kv_sharing_layer_idx = first_kv_shared_layer_idx - 1;
+
+            if layers_skipped.contains(&local_kv_sharing_layer_idx)
+                || layers_skipped.contains(&global_kv_sharing_layer_idx)
+            {
+                candle_core::bail!(
+                    "Layers {} and {} are reserved.",
+                    local_kv_sharing_layer_idx,
+                    global_kv_sharing_layer_idx
+                );
+            }
+
+            let count_kv_sharing = layers_skipped.iter().filter(|x| **x >= 20).count();
+            cfg.num_kv_shared_layers -= count_kv_sharing;
+
+            let count_activation_sparsity = layers_skipped.iter().filter(|x| **x <= 9).count();
+            let final_num_layers = cfg.num_hidden_layers - layers_skipped.len();
+
+            let kept_layers_indices = (0..cfg.num_hidden_layers)
+                .filter_map(|idx| {
+                    if !layers_skipped.contains(&idx) {
+                        Some(idx as u32)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            cfg.layer_types = cfg
+                .layer_types
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, layer_type)| {
+                    if !layers_skipped.contains(&idx) {
+                        Some(layer_type.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let layer_rename_map = kept_layers_indices
+                .iter()
+                .enumerate()
+                .map(|(new_idx, old_idx)| (*old_idx as usize, new_idx))
+                .collect::<HashMap<_, _>>();
+
+            let kept_layers_indices_tensor =
+                mapper.cast_nm_device(&Tensor::new(kept_layers_indices, &Device::Cpu)?, false)?;
+
+            let orig_num_hidden_layers = cfg.num_hidden_layers;
+
+            let activation_sparsity_list = [
+                vec![0.95f64; 10 - count_activation_sparsity],
+                vec![0f64; final_num_layers - 10 + count_activation_sparsity],
+            ]
+            .concat();
+            cfg.activation_sparsity_pattern = activation_sparsity_list;
+
+            cfg.num_hidden_layers = final_num_layers;
+            let orig_intermediate_size = cfg.intermediate_size.0.unwrap_left();
+            cfg.intermediate_size = IntermediateSize(Either::Right((
+                matformer_slice.ffn_hidden_dimensions.clone(),
+                orig_intermediate_size,
+            )));
+
+            Ok((
+                cfg,
+                Some(kept_layers_indices_tensor),
+                orig_num_hidden_layers,
+                Some(layer_rename_map),
+                Some(layers_skipped),
+            ))
+        }
+        None => Ok((cfg.clone(), None, cfg.num_hidden_layers, None, None)),
+    }
+}
+
 pub struct TextModel {
     embed_tokens: ScaledEmbedding,
     embed_tokens_per_layer: ScaledEmbedding,
@@ -813,6 +964,16 @@ impl TextModel {
         }
         let mapper = normal_loading_metadata.mapper;
 
+        // Implement the matformer slicing.
+        // https://colab.research.google.com/github/google-gemini/gemma-cookbook/blob/main/Gemma/[Gemma_3n]MatFormer_Lab.ipynb
+        let (cfg, kept_layers_indices, orig_num_hidden_layers, layer_rename_map, layers_skipped) =
+            handle_matformer_slicing(
+                cfg,
+                &normal_loading_metadata.matformer_slicing_config,
+                &*mapper,
+            )?;
+        let cfg = &cfg;
+
         // Use float32 for embedding scale factor as in MLX implementation
         let embed_scale = (cfg.hidden_size as f64).sqrt();
         let embed_tokens = ScaledEmbedding::new(
@@ -826,18 +987,39 @@ impl TextModel {
         );
         // Use float32 for per-layer embedding scale factor as in MLX implementation
         let per_layer_embed_scale = (cfg.hidden_size_per_layer_input as f64).sqrt();
-        let embed_tokens_per_layer = ScaledEmbedding::new(
+        let mut embed_tokens_per_layer = ScaledEmbedding::new(
             per_layer_embed_scale,
             embedding(
                 cfg.vocab_size_per_layer_input,
-                cfg.hidden_size_per_layer_input * cfg.num_hidden_layers,
+                cfg.hidden_size_per_layer_input * orig_num_hidden_layers,
                 mapper.set_nm_device(vb.pp("embed_tokens_per_layer"), false),
                 &cfg.quantization_config,
             )?,
         );
+        if let Some(kept_layers_indices) = &kept_layers_indices {
+            let embedding = embed_tokens_per_layer.embedding.clone();
+            let embedding_reshaped = embedding.reshape((
+                embedding.dim(0)?,
+                orig_num_hidden_layers,
+                embedding.dim(1)? / orig_num_hidden_layers,
+            ))?;
+
+            embed_tokens_per_layer.embedding = embedding_reshaped
+                .index_select(kept_layers_indices, 1)?
+                .reshape((embedding_reshaped.dim(0)?, ()))?
+                .contiguous()?;
+        }
 
         let mut global_ropes = HashMap::new();
-        for layer_idx in 0..cfg.num_hidden_layers {
+        for layer_idx in 0..orig_num_hidden_layers {
+            let layer_idx = if let Some(layer_rename_map) = &layer_rename_map {
+                if layers_skipped.as_ref().unwrap().contains(&layer_idx) {
+                    continue;
+                }
+                layer_rename_map[&layer_idx]
+            } else {
+                layer_idx
+            };
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -853,7 +1035,15 @@ impl TextModel {
         }
 
         let mut local_ropes = HashMap::new();
-        for layer_idx in 0..cfg.num_hidden_layers {
+        for layer_idx in 0..orig_num_hidden_layers {
+            let layer_idx = if let Some(layer_rename_map) = &layer_rename_map {
+                if layers_skipped.as_ref().unwrap().contains(&layer_idx) {
+                    continue;
+                }
+                layer_rename_map[&layer_idx]
+            } else {
+                layer_idx
+            };
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -871,12 +1061,24 @@ impl TextModel {
         }
 
         let vb_l = vb.pp("layers");
+
         let layers = NiceProgressBar::<_, 'b'>(
-            0..cfg.num_hidden_layers,
+            0..orig_num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .par_iter_if_isq(|layer_idx| {
+        .into_iter()
+        .filter(|layer_idx| {
+            !layers_skipped
+                .as_ref()
+                .is_some_and(|layers_skipped| layers_skipped.contains(layer_idx))
+        })
+        .map(|layer_idx| {
+            let layer_idx_effective = if let Some(layer_rename_map) = &layer_rename_map {
+                layer_rename_map[&layer_idx]
+            } else {
+                layer_idx
+            };
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -895,11 +1097,13 @@ impl TextModel {
                 cfg,
                 vb_l.pp(layer_idx),
                 &*mapper,
-                layer_idx,
+                layer_idx_effective,
                 normal_loading_metadata.loading_isq,
                 &comm,
             )
-        })?;
+        })
+        .collect::<Result<Vec<_>>>()?;
+
         let norm = RmsNorm::new_gemma_3n(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -925,9 +1129,11 @@ impl TextModel {
             ))?
         };
 
-        let per_layer_model_projection = ReplicatedLayer::new(
+        let per_layer_model_projection = ReplicatedLayer::new_layers_matformer_indices(
             cfg.hidden_size,
-            cfg.num_hidden_layers * cfg.hidden_size_per_layer_input,
+            orig_num_hidden_layers * cfg.hidden_size_per_layer_input,
+            kept_layers_indices.as_ref(),
+            orig_num_hidden_layers,
             &cfg.quantization_config,
             false,
             mapper.set_nm_device(

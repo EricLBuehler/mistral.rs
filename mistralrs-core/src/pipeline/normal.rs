@@ -128,6 +128,8 @@ pub struct NormalSpecificConfig {
     pub imatrix: Option<PathBuf>,
     pub calibration_file: Option<PathBuf>,
     pub hf_cache_path: Option<PathBuf>,
+    pub matformer_config_path: Option<PathBuf>,
+    pub matformer_slice_name: Option<String>,
 }
 
 impl NormalLoaderBuilder {
@@ -534,6 +536,27 @@ impl Loader for NormalLoader {
 
         let multi_progress = Arc::new(MultiProgress::new());
 
+        // Load matformer slicing config if provided
+        let matformer_slicing_config = if let Some(matformer_path) =
+            &self.config.matformer_config_path
+        {
+            use crate::matformer::{MatformerConfig, MatformerSlicingConfig};
+            info!("Loading Matformer config from {:?}", matformer_path);
+            let config = Arc::new(MatformerConfig::from_file(matformer_path)?);
+
+            if let Some(slice_name) = &self.config.matformer_slice_name {
+                info!("Using Matformer slice: {}", slice_name);
+                Some(MatformerSlicingConfig::new(slice_name.clone(), config))
+            } else {
+                // If no slice name is provided but config exists, we'll need to handle this
+                // For now, return None and let the model handle the default slice selection
+                warn!("Matformer config loaded but no slice name specified. Models will use their default slice.");
+                None
+            }
+        } else {
+            None
+        };
+
         let mut model = if use_nccl || cfg!(feature = "ring") {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
@@ -559,6 +582,7 @@ impl Loader for NormalLoader {
                     device.clone(),
                     attention_mechanism,
                     multi_progress.clone(),
+                    matformer_slicing_config.clone(),
                 ),
                 ModelKind::Adapter {
                     adapter: AdapterKind::XLora,
@@ -574,6 +598,7 @@ impl Loader for NormalLoader {
                     loading_isq,
                     device.clone(),
                     multi_progress.clone(),
+                    matformer_slicing_config.clone(),
                 ),
                 ModelKind::Adapter {
                     adapter: AdapterKind::Lora,
@@ -592,6 +617,7 @@ impl Loader for NormalLoader {
                     attention_mechanism,
                     matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress.clone(),
+                    matformer_slicing_config.clone(),
                 ),
                 _ => unreachable!(),
             }
@@ -612,6 +638,7 @@ impl Loader for NormalLoader {
                     attention_mechanism,
                     matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress.clone(),
+                    matformer_slicing_config.clone(),
                 ),
                 ModelKind::Adapter {
                     adapter: AdapterKind::XLora,
@@ -627,6 +654,7 @@ impl Loader for NormalLoader {
                     loading_isq,
                     device.clone(),
                     multi_progress.clone(),
+                    matformer_slicing_config.clone(),
                 ),
                 ModelKind::Adapter {
                     adapter: AdapterKind::Lora,
@@ -645,6 +673,7 @@ impl Loader for NormalLoader {
                     attention_mechanism,
                     matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress.clone(),
+                    matformer_slicing_config.clone(),
                 ),
                 _ => unreachable!(),
             }

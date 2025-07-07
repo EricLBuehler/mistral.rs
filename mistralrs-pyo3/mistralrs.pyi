@@ -200,6 +200,7 @@ class Which(Enum):
         calibration_file: str | None = None
         imatrix: str | None = None
         hf_cache_path: str | None = None
+        matformer_config_path: str | None = None
 
     @dataclass
     class XLora:
@@ -312,6 +313,7 @@ class Which(Enum):
         calibration_file: str | None = None
         imatrix: str | None = None
         hf_cache_path: str | None = None
+        matformer_config_path: str | None = None
 
     @dataclass
     class DiffusionPlain:

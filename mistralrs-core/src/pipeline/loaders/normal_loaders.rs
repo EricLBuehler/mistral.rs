@@ -5,6 +5,8 @@ use std::{
     sync::Arc,
 };
 
+use crate::matformer::MatformerSlicingConfig;
+
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
@@ -80,6 +82,8 @@ pub struct NormalLoadingMetadata {
     pub real_device: Device,
     // MultiProgress support for parallelized loading
     pub multi_progress: Arc<MultiProgress>,
+    // Optional Matryoshka Transformer slicing configuration
+    pub matformer_slicing_config: Option<MatformerSlicingConfig>,
 }
 
 pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {

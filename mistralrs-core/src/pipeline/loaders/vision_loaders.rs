@@ -5250,7 +5250,7 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
 
         let mut layer_sizes = Vec::new();
 
-        for _layer_idx in 0..text_cfg.num_hidden_layers {
+        for layer_idx in 0..text_cfg.num_hidden_layers {
             let per_layer_elems = {
                 // Layer norms
                 let input_layernorm = text_cfg.hidden_size;
@@ -5275,12 +5275,15 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                 let v_norm = text_cfg.head_dim; // No bias for v_norm
 
                 // MLP components
-                let gate_proj =
-                    text_cfg.hidden_size * text_cfg.intermediate_size / weight_pack_factor;
-                let up_proj =
-                    text_cfg.hidden_size * text_cfg.intermediate_size / weight_pack_factor;
-                let down_proj =
-                    text_cfg.intermediate_size * text_cfg.hidden_size / weight_pack_factor;
+                let intermediate_size = cfg
+                    .text_config
+                    .intermediate_size
+                    .0
+                    .clone()
+                    .left_or_else(|(sizes, _)| sizes[layer_idx]);
+                let gate_proj = text_cfg.hidden_size * intermediate_size / weight_pack_factor;
+                let up_proj = text_cfg.hidden_size * intermediate_size / weight_pack_factor;
+                let down_proj = intermediate_size * text_cfg.hidden_size / weight_pack_factor;
 
                 // AltUp components (per layer)
                 let altup_elems = {

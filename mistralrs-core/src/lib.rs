@@ -51,6 +51,7 @@ mod gguf;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;
+pub mod matformer;
 mod models;
 #[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
 mod paged_attention;

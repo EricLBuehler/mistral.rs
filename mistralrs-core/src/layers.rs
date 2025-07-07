@@ -2519,21 +2519,25 @@ impl Module for ReflectionPad2d {
 
 pub struct ScaledEmbedding {
     scale: f64,
-    embedding: Embedding,
+    pub embedding: Tensor,
 }
 
 impl ScaledEmbedding {
     pub fn new(scale: f64, embedding: Embedding) -> Self {
-        Self { scale, embedding }
+        Self {
+            scale,
+            embedding: embedding.embeddings().clone(),
+        }
     }
 
     pub fn embeddings(&self) -> &Tensor {
-        self.embedding.embeddings()
+        &self.embedding
     }
 }
 
 impl Module for ScaledEmbedding {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.embedding)? * self.scale
+        let embedding = Embedding::new(self.embedding.clone(), self.embedding.dim(D::Minus1)?);
+        xs.apply(&embedding)? * self.scale
     }
 }

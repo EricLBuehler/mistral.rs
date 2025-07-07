@@ -114,6 +114,14 @@ pub enum ModelSelected {
         /// Cache path for Hugging Face models downloaded locally.
         #[arg(long)]
         hf_cache_path: Option<PathBuf>,
+
+        /// Path to local Matryoshka Transformer configuration CSV file
+        #[arg(long)]
+        matformer_config_path: Option<PathBuf>,
+
+        /// Name of the Matryoshka Transformer slice to use
+        #[arg(long)]
+        matformer_slice_name: Option<String>,
     },
 
     /// Select a plain model, without quantization or adapters
@@ -184,6 +192,16 @@ pub enum ModelSelected {
         #[arg(long)]
         #[serde(default)]
         hf_cache_path: Option<PathBuf>,
+
+        /// Path to local Matryoshka Transformer configuration CSV file
+        #[arg(long)]
+        #[serde(default)]
+        matformer_config_path: Option<PathBuf>,
+
+        /// Name of the Matryoshka Transformer slice to use
+        #[arg(long)]
+        #[serde(default)]
+        matformer_slice_name: Option<String>,
     },
 
     /// Select an X-LoRA architecture
@@ -619,6 +637,14 @@ pub enum ModelSelected {
         /// Cache path for Hugging Face models downloaded locally
         #[arg(long)]
         hf_cache_path: Option<PathBuf>,
+
+        /// Path to local Matryoshka Transformer configuration CSV file
+        #[arg(long)]
+        matformer_config_path: Option<PathBuf>,
+
+        /// Name of the Matryoshka Transformer slice to use
+        #[arg(long)]
+        matformer_slice_name: Option<String>,
     },
 
     /// Select a diffusion model, without quantization or adapters

@@ -427,6 +427,7 @@ macro_rules! normal_model_loader {
         $attention_mechanism:expr,
         $is_moqe:expr,
         $multi_progress:expr,
+        $matformer_config:expr,
     ) => {{
         let regexes = if $loading_isq && $loading_uqff {
             // Dummy weights for the layers which will be overwritten...
@@ -461,6 +462,7 @@ macro_rules! normal_model_loader {
                 loading_isq: $loading_isq,
                 real_device: $real_device,
                 multi_progress: $multi_progress,
+                matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
         )?
@@ -479,6 +481,7 @@ macro_rules! normal_model_loader_sharded {
         $real_device:expr,
         $attention_mechanism:expr,
         $multi_progress:expr,
+        $matformer_config:expr,
     ) => {{
         $loader.load(
             &$config,
@@ -488,6 +491,7 @@ macro_rules! normal_model_loader_sharded {
                 loading_isq: $loading_isq,
                 real_device: $real_device,
                 multi_progress: $multi_progress,
+                matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
         )?
@@ -511,6 +515,7 @@ macro_rules! vision_normal_model_loader {
         $real_device:expr,
         $attention_mechanism:expr,
         $multi_progress:expr,
+        $matformer_config:expr,
     ) => {{
         let regexes = if $loading_isq && $loading_uqff {
             // Dummy weights for the layers which will be overwritten...
@@ -541,6 +546,7 @@ macro_rules! vision_normal_model_loader {
                 loading_isq: $loading_isq,
                 real_device: $real_device,
                 multi_progress: $multi_progress,
+                matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
         )?
@@ -559,6 +565,7 @@ macro_rules! vision_normal_model_loader_sharded {
         $real_device:expr,
         $attention_mechanism:expr,
         $multi_progress:expr,
+        $matformer_config:expr,
     ) => {{
         $loader.load(
             &$config,
@@ -568,6 +575,7 @@ macro_rules! vision_normal_model_loader_sharded {
                 loading_isq: $loading_isq,
                 real_device: $real_device,
                 multi_progress: $multi_progress,
+                matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
         )?
@@ -589,6 +597,7 @@ macro_rules! xlora_model_loader {
         $loading_isq:expr,
         $real_device:expr,
         $multi_progress:expr,
+        $matformer_config:expr,
     ) => {{
         // TODO: remove lora_preload_adapter_info
         let $crate::pipeline::AdapterPaths::XLora {
@@ -639,6 +648,7 @@ macro_rules! xlora_model_loader {
                 loading_isq: $loading_isq,
                 real_device: $real_device,
                 multi_progress: $multi_progress,
+                matformer_slicing_config: $matformer_config,
             },
             &None,
         )?
@@ -663,6 +673,7 @@ macro_rules! lora_model_loader {
         $attention_mechanism:expr,
         $is_moqe:expr,
         $multi_progress:expr,
+        $matformer_config:expr,
     ) => {{
         let $crate::pipeline::AdapterPaths::Lora(lora_adapter_paths) = $paths.get_adapter_paths()
         else {
@@ -725,6 +736,7 @@ macro_rules! lora_model_loader {
                 loading_isq: $loading_isq,
                 real_device: $real_device,
                 multi_progress: $multi_progress,
+                matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
         )?

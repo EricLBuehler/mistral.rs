@@ -40,6 +40,8 @@ pub struct TextModelBuilder {
     pub(crate) tool_callbacks_with_tools: HashMap<String, ToolCallbackWithTool>,
     pub(crate) mcp_client_config: Option<McpClientConfig>,
     pub(crate) device: Option<Device>,
+    pub(crate) matformer_config_path: Option<PathBuf>,
+    pub(crate) matformer_slice_name: Option<String>,
 
     // Model running
     pub(crate) prompt_chunksize: Option<NonZeroUsize>,
@@ -140,6 +142,8 @@ impl TextModelBuilder {
             tool_callbacks_with_tools: HashMap::new(),
             mcp_client_config: None,
             device: None,
+            matformer_config_path: None,
+            matformer_slice_name: None,
         }
     }
 
@@ -354,6 +358,18 @@ impl TextModelBuilder {
         self
     }
 
+    /// Path to a Matryoshka Transformer configuration CSV file.
+    pub fn with_matformer_config_path(mut self, path: PathBuf) -> Self {
+        self.matformer_config_path = Some(path);
+        self
+    }
+
+    /// Name of the slice to use from the Matryoshka Transformer configuration.
+    pub fn with_matformer_slice_name(mut self, name: String) -> Self {
+        self.matformer_slice_name = Some(name);
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = NormalSpecificConfig {
             prompt_chunksize: self.prompt_chunksize,
@@ -364,6 +380,8 @@ impl TextModelBuilder {
             imatrix: self.imatrix,
             calibration_file: self.calibration_file,
             hf_cache_path: self.hf_cache_path,
+            matformer_config_path: self.matformer_config_path,
+            matformer_slice_name: self.matformer_slice_name,
         };
 
         if self.with_logging {

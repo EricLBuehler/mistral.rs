@@ -1,3 +1,4 @@
+use either::Either;
 use mistralrs_quant::QuantizedConfig;
 
 use crate::{
@@ -18,6 +19,12 @@ serde_default_fn!(usize, sliding_window_pattern, 6);
 serde_default_fn!(usize, num_attention_heads, 8);
 serde_default_fn!(usize, num_key_value_heads, 4);
 
+/// Left is normal, Right is (per layer, orig)
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct IntermediateSize(
+    #[serde(with = "either::serde_untagged")] pub Either<usize, (Vec<usize>, usize)>,
+);
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Gemma3nTextConfig {
     #[serde(default = "attention_bias")]
@@ -27,7 +34,7 @@ pub struct Gemma3nTextConfig {
     #[serde(default = "hidden_activation")]
     pub hidden_activation: Activation,
     pub hidden_size: usize,
-    pub intermediate_size: usize,
+    pub intermediate_size: IntermediateSize,
     #[serde(default = "num_attention_heads")]
     pub num_attention_heads: usize,
     pub num_hidden_layers: usize,

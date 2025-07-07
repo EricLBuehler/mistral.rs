@@ -173,6 +173,8 @@ fn parse_which(
             calibration_file,
             auto_map_params: _,
             hf_cache_path,
+            matformer_config_path,
+            matformer_slice_name,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 prompt_chunksize,
@@ -188,6 +190,8 @@ fn parse_which(
                 imatrix,
                 calibration_file,
                 hf_cache_path,
+                matformer_config_path,
+                matformer_slice_name,
             },
             chat_template,
             tokenizer_json,
@@ -224,6 +228,8 @@ fn parse_which(
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
+                matformer_config_path: None,
+                matformer_slice_name: None,
             },
             chat_template,
             tokenizer_json,
@@ -267,6 +273,8 @@ fn parse_which(
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
+                matformer_config_path: None,
+                matformer_slice_name: None,
             },
             chat_template,
             tokenizer_json,
@@ -463,6 +471,8 @@ fn parse_which(
             imatrix,
             auto_map_params: _,
             hf_cache_path,
+            matformer_config_path,
+            matformer_slice_name,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 prompt_chunksize,
@@ -478,6 +488,8 @@ fn parse_which(
                 calibration_file,
                 imatrix,
                 hf_cache_path,
+                matformer_config_path,
+                matformer_slice_name,
             },
             chat_template,
             tokenizer_json,
