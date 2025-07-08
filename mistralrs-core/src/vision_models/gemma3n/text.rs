@@ -987,12 +987,18 @@ impl TextModel {
         );
         // Use float32 for per-layer embedding scale factor as in MLX implementation
         let per_layer_embed_scale = (cfg.hidden_size_per_layer_input as f64).sqrt();
+        // Keep embed_tokens_per_layer on CPU if not using Metal
+        let embed_tokens_per_layer_vb = if normal_loading_metadata.real_device.is_metal() {
+            vb.pp("embed_tokens_per_layer")
+        } else {
+            vb.pp("embed_tokens_per_layer").set_device(Device::Cpu)
+        };
         let mut embed_tokens_per_layer = ScaledEmbedding::new(
             per_layer_embed_scale,
             embedding(
                 cfg.vocab_size_per_layer_input,
                 cfg.hidden_size_per_layer_input * orig_num_hidden_layers,
-                mapper.set_nm_device(vb.pp("embed_tokens_per_layer"), false),
+                embed_tokens_per_layer_vb,
                 &cfg.quantization_config,
             )?,
         );
@@ -1229,12 +1235,31 @@ impl TextModel {
         ]
         .concat();
         // Cast to float32 for better precision, following MLX implementation
-        let per_layer_embeds = self.embed_tokens_per_layer.forward(input_ids)?;
+        let input_ids_device = input_ids.device();
+
+        // Only cast to CPU if not using Metal
+        let per_layer_embeds = if input_ids_device.is_metal() {
+            // On Metal, use input_ids directly
+            self.embed_tokens_per_layer.forward(input_ids)?
+        } else {
+            // On non-Metal devices, cast input to CPU for embedding computation
+            let input_ids_cpu = input_ids.to_device(&Device::Cpu)?;
+            self.embed_tokens_per_layer.forward(&input_ids_cpu)?
+        };
+
         let original_dtype = per_layer_embeds.dtype();
-        per_layer_embeds
+        // Move result back to original device after computation (if needed)
+        let result = per_layer_embeds
             .to_dtype(DType::F32)?
             .reshape(shape)?
-            .to_dtype(original_dtype)
+            .to_dtype(original_dtype)?;
+
+        // Only move back to device if we computed on CPU
+        if !input_ids_device.is_metal() && input_ids_device.location() != Device::Cpu.location() {
+            result.to_device(input_ids_device)
+        } else {
+            Ok(result)
+        }
     }
     fn project_per_layer_inputs(
         &self,
