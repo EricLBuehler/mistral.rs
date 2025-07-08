@@ -78,7 +78,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 - 🦙 Run the **Llama 3.\* and Llama 4** models with long context & vision support: [docs (llama 3.2)](docs/VLLAMA.md), [docs (llama 4)](docs/LLAMA4.md)  
   <details>
-    <summary>Show command</summary>
+    <summary>Show commands</summary>
 
     **Llama 4:**
 
@@ -111,7 +111,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 - 💎🪆💎🪆💎 Run the **Gemma 3n** family (E2B, E4B) with **vision**, **audio**, and **MatFormer** support: [documentation](docs/GEMMA3N.md)  
   <details>
-    <summary>Show command</summary>
+    <summary>Show commands</summary>
 
     **Normal use, run the full model (E4B or E2B):**
     ```bash
