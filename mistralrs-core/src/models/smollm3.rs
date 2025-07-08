@@ -29,7 +29,7 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
-serde_default_fn!(bool, word_emb_default, false);
+serde_default_fn!(bool, word_emb_default, true);
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
