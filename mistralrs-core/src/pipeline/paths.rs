@@ -19,7 +19,6 @@ use crate::{
     lora::LoraConfig,
     pipeline::{
         chat_template::{ChatTemplate, ChatTemplateValue},
-        embedded_templates::get_embedded_chat_template_for_model_type,
         isq::UQFF_RESIDUAL_SAFETENSORS,
     },
     utils::tokens::get_token,

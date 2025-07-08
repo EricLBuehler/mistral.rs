@@ -3677,6 +3677,7 @@ impl DeviceMappedModelLoader for SmolLm3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: crate::models::smollm3::Config = serde_json::from_str(config)?;
 
@@ -3699,6 +3700,7 @@ impl DeviceMappedModelLoader for SmolLm3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::smollm3::Config = serde_json::from_str(config)?;
 
