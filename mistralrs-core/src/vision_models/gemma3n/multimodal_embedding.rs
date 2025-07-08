@@ -100,7 +100,10 @@ impl Gemma3nMultimodalEmbedder {
         let normalized = self.hard_embedding_norm.forward(&embeddings)?;
 
         // Project to text hidden size
-        let projected = self.embedding_projection.forward_autocast(&normalized)?;
+        let projected = self
+            .embedding_projection
+            .forward_autocast(&normalized.unsqueeze(0)?)?
+            .squeeze(0)?;
 
         // Apply post-projection normalization
         self.embedding_post_projection_norm.forward(&projected)
