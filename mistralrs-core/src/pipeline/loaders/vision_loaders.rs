@@ -4980,10 +4980,10 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         // Text components that are not device-mapped
         let text_elems = {
             // Embeddings
-            let embed_tokens = text_cfg.hidden_size * text_cfg.vocab_size / weight_pack_factor;
-            let embed_tokens_per_layer = text_cfg.hidden_size_per_layer_input
-                * text_cfg.vocab_size_per_layer_input
-                / weight_pack_factor;
+            let embed_tokens = text_cfg.hidden_size * text_cfg.vocab_size;
+            let embed_tokens_per_layer = text_cfg.num_hidden_layers
+                * text_cfg.hidden_size_per_layer_input
+                * text_cfg.vocab_size_per_layer_input;
 
             // LM head (if not tied)
             let lm_head = if !text_cfg.tie_word_embeddings || weight_pack_factor != 1 {
@@ -4997,13 +4997,17 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
 
             // AltUp projections (not device-mapped)
             let altup_projections =
-                text_cfg.altup_num_inputs * text_cfg.hidden_size / weight_pack_factor;
+                (text_cfg.altup_num_inputs - 1) * text_cfg.hidden_size * text_cfg.hidden_size
+                    / weight_pack_factor;
             let altup_unembed_projections =
-                text_cfg.altup_num_inputs * text_cfg.hidden_size / weight_pack_factor;
+                (text_cfg.altup_num_inputs - 1) * text_cfg.hidden_size * text_cfg.hidden_size
+                    / weight_pack_factor;
 
             // Per-layer model projection
-            let per_layer_model_projection =
-                text_cfg.hidden_size * text_cfg.hidden_size_per_layer_input / weight_pack_factor;
+            let per_layer_model_projection = text_cfg.num_hidden_layers
+                * text_cfg.hidden_size
+                * text_cfg.hidden_size_per_layer_input
+                / weight_pack_factor;
             let per_layer_projection_norm = text_cfg.hidden_size;
 
             embed_tokens
@@ -5394,8 +5398,9 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                 let altup_elems = {
                     let correct_output_scale = text_cfg.hidden_size;
                     let correction_coefs = text_cfg.altup_num_inputs * text_cfg.altup_num_inputs;
-                    let prediction_coefs = text_cfg.altup_num_inputs * text_cfg.altup_num_inputs;
-                    let modality_router = text_cfg.hidden_size * text_cfg.hidden_size;
+                    let prediction_coefs =
+                        text_cfg.altup_num_inputs * text_cfg.altup_num_inputs.pow(2);
+                    let modality_router = text_cfg.hidden_size * text_cfg.altup_num_inputs;
                     let router_norm = text_cfg.hidden_size;
 
                     correct_output_scale
