@@ -67,6 +67,24 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 ## Quick examples
 
 *After following installation instructions*
+
+- 💎🪆💎🪆💎 Run the **Gemma 3n** family (E2B, E4B) with **vision**, **audio**, and **MatFormer** support: [documentation](docs/GEMMA3N.md)  
+  <details>
+    <summary>Show commands</summary>
+
+    **Normal use, run the full model (E4B or E2B):**
+    ```bash
+    ./mistralrs-server -i --isq 8 run -m google/gemma-3n-E4B-it
+    ```
+
+    **Use [MatFormer](docs/GEMMA3N.md#using-matformer-with-gemma-3n) to get a balanced smaller model:**
+    ```bash
+    ./mistralrs-server -i --isq 8 run -m google/gemma-3n-E4B-it \
+      --matformer-config-path matformer_configs/gemma3n.csv \
+      --matformer-slice-name "Config for E2.49B (block-level)"
+    ```
+  </details>
+  
 - 🔊 Run the **Dia 1.6b** model for highly-realistic dialogue generation: [documentation](docs/DIA.md)  
   <details>
     <summary>Show command</summary>
@@ -106,24 +124,6 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
     ```bash
     ./mistralrs-server -i --isq 8 run -m google/gemma-3-4b-it
-    ```
-  </details>
-
-- 💎🪆💎🪆💎 Run the **Gemma 3n** family (E2B, E4B) with **vision**, **audio**, and **MatFormer** support: [documentation](docs/GEMMA3N.md)  
-  <details>
-    <summary>Show commands</summary>
-
-    **Normal use, run the full model (E4B or E2B):**
-    ```bash
-    # Full model
-    ./mistralrs-server -i --isq 8 run -m google/gemma-3n-E4B-it
-    ```
-
-    **Use [MatFormer](docs/GEMMA3N.md#using-matformer-with-gemma-3n) to get a balanced smaller model:**
-    ```bash
-    ./mistralrs-server -i --isq 8 run -m google/gemma-3n-E4B-it \
-      --matformer-config-path matformer_configs/gemma3n.csv \
-      --matformer-slice-name "Config for E2.49B (block-level)"
     ```
   </details>
 
