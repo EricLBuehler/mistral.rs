@@ -1,182 +1,238 @@
 # Matformer (Matryoshka Transformer) Support
 
-Mistral.rs supports Matformer models, which are elastic transformers that can operate at different computational budgets by selectively using subsets of their layers. This is particularly useful for deploying models on devices with varying computational resources.
+Matformer allows you to dynamically resize transformer models at runtime, trading compute/memory for quality. This enables deploying the same model across devices with different resource constraints - from edge devices to powerful GPUs.
 
-## Overview
+## Quick Start
 
-Matformer models, also known as Matryoshka Transformers, are designed with a nested structure where smaller, efficient models are embedded within larger ones. By skipping certain layers during inference, you can achieve different trade-offs between model quality and computational cost.
-
-## Supported Models
-
-Currently, mistral.rs supports Matformer configurations for:
-- **Gemma3n** (Gemma 3n) - Google's efficient multimodal model with vision and audio capabilities
-
-## Configuration
-
-Matformer models require two components:
-1. A CSV configuration file that defines different "slices" of the model
-2. A slice name to select which configuration to use
-
-### CSV Configuration Format
-
-The Matformer configuration file is a CSV with the following columns:
-- `name`: The name of the slice configuration
-- `# Layers`: Total number of layers in this configuration
-- `# Effective Params (B)`: Effective parameter count in billions
-- `MMLU PT accuracy`: Model accuracy on MMLU benchmark (informational)
-- `FFN Hidden Dims`: List of FFN hidden dimensions for each layer (e.g., `[8192, 8192, ...]`)
-- `Layers Skipped`: Optional list of layer indices to skip (e.g., `[5, 10, 15]`)
-
-Example CSV:
-```csv
-name,# Layers,# Effective Params (B),MMLU PT accuracy,FFN Hidden Dims,Layers Skipped
-Config for official E2B Model,26,2.0,69.4,"[2_048 * 4, 2_048 * 4, ...]","[5, 10, 15, 20, 25, 30, 35, 40]"
-Full Model,46,3.8,72.1,"[2_048 * 8, 2_048 * 8, ...]",
-```
-
-### Using Matformer Models
-
-#### Command Line Interface
+### Command Line
 
 ```bash
-# Run with a specific Matformer slice
-cargo run --release --features cuda -- \
-  -i plain \
-  -m google/gemma-3n-E4B-it \
-  -a gemma3n \
+# Run Gemma 3n with the E2.49B configuration (2.49B params instead of 3.98B)
+./mistralrs-server -i run -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
-  --matformer-slice-name "Config for official E2B Model"
+  --matformer-slice-name "Config for E2.49B (block-level)"
 ```
 
-#### Rust API
+### Python
+
+```python
+from mistralrs import Runner, Which, VisionArchitecture
+
+runner = Runner(
+    which=Which.VisionPlain(
+        model_id="google/gemma-3n-E4B-it",
+        arch=VisionArchitecture.Gemma3n,
+        matformer_config_path="matformer_configs/gemma3n.csv",
+        matformer_slice_name="Config for E2.49B (block-level)",
+    ),
+)
+```
+
+### Rust
 
 ```rust
-use mistralrs::{TextModelBuilder, DeviceMapSetting};
+use mistralrs::VisionModelBuilder;
+use std::path::PathBuf;
 
-let model = TextModelBuilder::new("google/gemma-3n-E4B-it")
-    .with_arch(NormalLoaderType::Gemma3n)
-    .with_matformer_config_path("matformer_configs/gemma3n.csv".into())
-    .with_matformer_slice_name("Config for official E2B Model".to_string())
+let model = VisionModelBuilder::new("google/gemma-3n-E4B-it")
+    .with_matformer_config_path(PathBuf::from("matformer_configs/gemma3n.csv"))
+    .with_matformer_slice_name("Config for E2.49B (block-level)".to_string())
     .build()
     .await?;
 ```
 
-#### Python API
+## How It Works
+
+Matformer models are pre-trained with a special architecture that allows certain layers to be skipped at inference time while maintaining reasonable quality. When you select a "slice":
+
+1. **Layer Skipping**: Specified layers are completely removed from computation
+2. **FFN Resizing**: Feed-forward network dimensions can be adjusted per layer
+3. **Automatic Remapping**: Remaining layers are renumbered sequentially
+
+For example, the Gemma 3n E2.49B (block-level) slice:
+- Keeps all 35 layers (no layer skipping)
+- Uses mixed FFN dimensions: 8192 for layers 0-19, 16384 for layers 20-24, 8192 for layers 25-34
+- Cuts parameters from 3.98B to 2.49B (~37% reduction)
+- Maintains ~87% of the full model's quality
+
+## Configuration Files
+
+Matformer configurations are CSV files with these columns:
+
+```csv
+name,# Layers,# Effective Params (B),MMLU PT accuracy,FFN Hidden Dims,Layers Skipped
+Main model,35,3.98,62.30%,"[16384, 16384, ...]",
+Config for E2.49B (block-level),35,2.49,54.50%,"[8192, 8192, ..., 16384, 16384, ..., 8192, 8192, ...]",
+```
+
+- **name**: Slice identifier used in `matformer_slice_name`
+- **# Layers**: Number of active layers after skipping
+- **# Effective Params (B)**: Approximate parameter count in billions
+- **MMLU PT accuracy**: Benchmark score (informational)
+- **FFN Hidden Dims**: List of FFN dimensions for each layer
+- **Layers Skipped**: Which layers to remove (0-indexed)
+
+## Supported Models
+
+Currently supported:
+- **Gemma 3n** (`google/gemma-3n-E4B-it`) - Multimodal model with vision and audio
+
+See [`matformer_configs/`](../matformer_configs/) for available configurations.
+
+## Performance Guide
+
+### Memory Usage
+
+Memory scales approximately with parameter count:
+- Full model (3.98B): ~8GB VRAM
+- E2.49B slice: ~5GB VRAM
+- E2B slice (1.91B): ~4GB VRAM  
+- Smaller slices: Proportionally less
+
+### Inference Speed
+
+Speed improvement is roughly linear with layer count:
+- 30 layers vs 35 layers = ~14% faster
+- 20 layers vs 35 layers = ~43% faster
+
+### Quality Trade-offs
+
+Example accuracy on MMLU benchmark:
+- Full model: 62.3%
+- E2.98B: 59.5% (-4.5%)
+- E2.49B: 54.5% (-12.5%)
+- E2B: 50.9% (-18.3%)
+
+Choose based on your requirements:
+- **Maximum quality**: Use full model (omit matformer args)
+- **Balanced**: E2.49B to E2.98B configurations (block-level configs recommended)
+- **Resource-constrained**: E2B configuration (1.91B params)
+- **Extreme efficiency**: E1.96B configuration
+
+## Advanced Usage
+
+### With Quantization
+
+Combine Matformer with ISQ for maximum efficiency:
 
 ```python
-from mistralrs import Runner, Which, Architecture
-
 runner = Runner(
-    which=Which.Plain(
+    which=Which.VisionPlain(
         model_id="google/gemma-3n-E4B-it",
-        arch=Architecture.Gemma3n,
+        arch=VisionArchitecture.Gemma3n,
         matformer_config_path="matformer_configs/gemma3n.csv",
-        matformer_slice_name="Config for official E2B Model"
-    )
+        matformer_slice_name="Config for E2.49B (block-level)",
+    ),
+    in_situ_quant="Q4K"  # 4-bit quantization
 )
 ```
 
-## How It Works
+### With Device Mapping
 
-### Layer Skipping
+Matformer works seamlessly with automatic device mapping:
 
-When a Matformer slice is selected:
-1. The model loads all weights from the base model
-2. Layers specified in `Layers Skipped` are removed from the computation graph
-3. The remaining layers are renumbered sequentially
-4. Activations flow through only the active layers
-
-### FFN Dimension Adjustment
-
-Matformer models can have different FFN (feed-forward network) dimensions per layer. The `FFN Hidden Dims` field specifies the intermediate size for each layer's MLP block, allowing for more fine-grained control over model capacity.
-
-### Automatic Device Mapping
-
-When using automatic device mapping with Matformer models:
-- The device mapper initially considers all layers from the base model
-- After matformer slicing is applied, skipped layers are not loaded onto devices
-- This ensures efficient memory usage - you only pay for the layers you actually use
-
-Example with device mapping:
 ```rust
-use mistralrs::{TextModelBuilder, DeviceMapSetting, AutoDeviceMapParams};
+use mistralrs::{VisionModelBuilder, DeviceMapSetting, AutoDeviceMapParams};
 
-let model = TextModelBuilder::new("google/gemma-3n-E4B-it")
-    .with_arch(NormalLoaderType::Gemma3n)
-    .with_matformer_config_path("matformer_configs/gemma3n.csv".into())
-    .with_matformer_slice_name("Config for official E2B Model".to_string())
+let model = VisionModelBuilder::new("google/gemma-3n-E4B-it")
+    .with_matformer_config_path(PathBuf::from("matformer_configs/gemma3n.csv"))
+    .with_matformer_slice_name("Config for E2.49B (block-level)".to_string())
     .with_device_mapping(DeviceMapSetting::Auto(
-        AutoDeviceMapParams::Text {
-            max_seq_len: 4096,
-            max_batch_size: 2,
-        }
+        AutoDeviceMapParams::default_vision()
     ))
     .build()
     .await?;
 ```
 
-## Creating Custom Matformer Configurations
+Only active layers are loaded to GPU, saving memory.
 
-To create your own Matformer configurations:
+## Creating Custom Configurations
 
-1. Start with the base model's architecture
-2. Identify which layers can be skipped while maintaining acceptable quality
-3. Optionally adjust FFN dimensions for remaining layers
-4. Test different configurations to find optimal quality/performance trade-offs
+To create your own Matformer configuration:
 
-### Guidelines for Layer Selection
+1. **Start with the full model** as baseline
+2. **Identify skippable layers**:
+   - Middle layers (10-30) are often good candidates
+   - Avoid early layers (feature extraction) and late layers (final representations)
+   - Never skip special layers (KV-sharing, attention patterns)
+3. **Test quality degradation** at each configuration
+4. **Create CSV file** with your configurations
 
-- **Early layers** (0-10): Usually critical for basic feature extraction
-- **Middle layers** (10-30): Can often be selectively skipped
-- **Late layers** (30+): Important for final representations
-- **Special layers**: Some models have KV-sharing or attention pattern layers that should not be skipped
-
-### Example: Creating a Small Slice
-
-For a model with 46 layers, you might create a "small" configuration:
+Example minimal configuration:
 ```csv
 name,# Layers,# Effective Params (B),FFN Hidden Dims,Layers Skipped
-Small,20,1.2,"[2048 * 2, 2048 * 2, ...]","[5,6,7,8,15,16,17,18,25,26,27,28,35,36,37,38,40,41,42,43,44,45]"
+Tiny,15,0.8,"[4096, 4096, ...]","[5,6,7,10,11,12,15,16,17,20,21,22,25,26,27,30,31,32,33,34]"
 ```
 
-## Performance Considerations
+## API Reference
 
-1. **Memory Usage**: Matformer slices use less memory proportional to the number of skipped layers
-2. **Inference Speed**: Fewer layers means faster inference, roughly linear with layer count
-3. **Quality Trade-off**: Smaller slices may have reduced accuracy but can be much faster
-4. **Loading Time**: Initial model loading still loads all weights, but skipped layers are not transferred to GPU
+### Command Line Arguments
+
+- `--matformer-config-path PATH`: Path to CSV configuration file
+- `--matformer-slice-name NAME`: Exact name of slice from CSV
+
+### Python Parameters
+
+```python
+Which.VisionPlain(
+    model_id: str,
+    arch: VisionArchitecture,
+    matformer_config_path: str = None,  # Path to CSV
+    matformer_slice_name: str = None,   # Slice name
+    # ... other parameters
+)
+```
+
+### Rust Methods
+
+```rust
+// For VisionModelBuilder
+.with_matformer_config_path(path: PathBuf)
+.with_matformer_slice_name(name: String)
+
+// For TextModelBuilder (when supported)
+.with_matformer_config_path(path: PathBuf)  
+.with_matformer_slice_name(name: String)
+```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **"Matformer slice not found"**: Ensure the slice name exactly matches one in your CSV file
-2. **"Layers X and Y are reserved"**: Some models have special layers (e.g., KV-sharing layers) that cannot be skipped
-3. **Device mapping failures**: If using very small slices, adjust `max_seq_len` and `max_batch_size` accordingly
+**"Matformer slice 'X' not found"**
+- Check slice name matches exactly (case-sensitive)
+- Verify CSV file path is correct
+
+**"Layers X and Y are reserved and cannot be skipped"**
+- Some models have special layers that must not be skipped
+- Try different layer combinations
+
+**Memory not reduced as expected**
+- Ensure you're using the slice (check logs)
+- Skipped layers still need to be loaded initially
+- Consider combining with quantization
 
 ### Debugging
 
-Enable verbose logging to see which layers are being skipped:
+Enable logging to see Matformer details:
 ```bash
-RUST_LOG=mistralrs_core=info cargo run ...
+RUST_LOG=mistralrs_core=info ./mistralrs-server ...
 ```
 
-This will show:
-- Which Matformer configuration file is loaded
-- Which slice is selected
-- How many layers are skipped
-- The final layer count after slicing
+This shows:
+- Configuration file loaded
+- Selected slice details  
+- Layers being skipped
+- Final layer count
 
-## Future Enhancements
+## Future Plans
 
-Planned improvements for Matformer support:
+- Support for more model architectures
 - Dynamic slice switching during runtime
 - Automatic slice selection based on available resources
-- Training utilities for creating new Matformer models
-- Support for more model architectures
+- Fine-tuning tools for creating new Matformer models
 
 ## References
 
 - [Matryoshka Transformer Paper](https://arxiv.org/abs/2410.23265)
-- [Gemma 3 Nano Technical Report](https://github.com/google-deepmind/gemma)
-- [Elastic Model Serving Best Practices](https://github.com/EricLBuehler/mistral.rs/discussions)
+- [Example Configurations](../matformer_configs/)

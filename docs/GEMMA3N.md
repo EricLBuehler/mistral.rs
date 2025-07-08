@@ -2,20 +2,137 @@
 
 Gemma 3n models are designed for efficient execution on low-resource devices. They are capable of multimodal input, handling text, image, video, and audio input, and generating text outputs. These models support over 140 spoken languages.
 
-The Gemma 3n Model has support in the Rust, Python, and HTTP APIs. The Gemma 3n Model supports ISQ for increased performance.
+The Gemma 3n Model has support in the Rust, Python, and HTTP APIs. Additionally, the Gemma 3n Model supports ISQ for increased performance.
 
-The Python and HTTP APIs support sending images as:
-- URL
-- Path to a local image
-- [Base64](https://en.wikipedia.org/wiki/Base64) encoded string
+- **Full multimodal support**: mistral.rs supports text, audio, and vision inputs to Gemma 3n!
 
-The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
+- **🪆 mistral.rs supports dynamically resizing the Gemma 3n model with that MatFormer architecture!**
 
-## Audio input
+    Gemma 3n implements the MatFormer architecture, which allows one model to be resized dynamically and tune performance on resource-constrained systems.
 
-Alongside vision, Gemma 3n in `mistral.rs` can accept **audio** as an additional modality.  This unlocks fully-local pipelines such as **text + speech + vision → text** where the model can reason jointly over what it *hears* and what it *sees*.
+    Mistral.rs supports this feature!
+    
+    You can access it using the `matformer_config_path` ([example config](../matformer_configs/gemma3n.csv)) and `matformer_slice_name` arguments throughout the APIs.
 
-`mistral.rs` automatically decodes the supplied audio (WAV/MP3/FLAC/OGG/… – anything [Symphonia](https://github.com/pdeljanov/Symphonia) can handle) into 16-bit PCM.
+## Using MatFormer with Gemma 3n
+
+MatFormer allows you to dynamically adjust the model size based on your resource constraints. The Gemma 3n model comes with several pre-configured slices that offer different performance/resource trade-offs.
+
+You can read more about MatFormer in mistral.rs [here](MATFORMER.md).
+
+### Available Slices
+
+The default configuration file ([`matformer_configs/gemma3n.csv`](../matformer_configs/gemma3n.csv)) includes:
+- **Main model** (3.98B params, 35 layers) - Full model with best performance
+- **Config for official E2B Model** (1.91B params, 30 layers) - Balanced performance/efficiency  
+- Various intermediate configurations from E1.96B to E3.79B with different layer and FFN configurations
+
+### Command Line Example
+
+```bash
+# Run with the E2.49B slice for balanced performance/efficiency
+cargo run --release --features cuda -- \
+  --port 1234 \
+  run -m google/gemma-3n-E4B-it \
+  --matformer-config-path matformer_configs/gemma3n.csv \
+  --matformer-slice-name "Config for E2.49B (block-level)"
+```
+
+### Python API Example
+
+```python
+from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+
+# Use the E2.49B slice for balanced performance/efficiency
+runner = Runner(
+    which=Which.VisionPlain(
+        model_id="google/gemma-3n-E4B-it",
+        arch=VisionArchitecture.Gemma3n,
+        matformer_config_path="matformer_configs/gemma3n.csv",
+        matformer_slice_name="Config for E2.49B (block-level)",
+    ),
+)
+
+# The model will use 35 layers with mixed FFN dimensions (4096 for early layers, 8192 for middle)
+# This results in ~37% parameter reduction while maintaining better performance than E2B
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="ignore",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "What do you see in this image?",
+                    },
+                ],
+            }
+        ],
+        max_tokens=100,
+    )
+)
+print(res.choices[0].message.content)
+```
+
+### Rust API Example
+
+```rust
+use anyhow::Result;
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use std::path::PathBuf;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Build model with MatFormer E2.49B configuration
+    let model = VisionModelBuilder::new("google/gemma-3n-E4B-it")
+        .with_isq(IsqType::Q4K)
+        .with_matformer_config_path(PathBuf::from("matformer_configs/gemma3n.csv"))
+        .with_matformer_slice_name("Config for E2.49B (block-level)".to_string())
+        .with_logging()
+        .build()
+        .await?;
+
+    let bytes = match reqwest::blocking::get(
+        "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg",
+    ) {
+        Ok(http_resp) => http_resp.bytes()?.to_vec(),
+        Err(e) => anyhow::bail!(e),
+    };
+    let image = image::load_from_memory(&bytes)?;
+
+    let messages = VisionMessages::new().add_image_message(
+        TextMessageRole::User,
+        "Describe this image briefly.",
+        image,
+        &model,
+    )?;
+
+    let response = model.send_chat_request(messages).await?;
+
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    println!("Using E2.49B slice: 35 layers, 2.49B effective params");
+    
+    Ok(())
+}
+```
+
+### Choosing the Right Slice
+
+- **Resource-constrained environments**: Use "Config for official E2B Model" (1.91B params)
+- **Balanced performance**: Try E2.49B to E2.98B configurations (block-level configs offer better balance)
+- **Maximum quality**: Use "Main model" (3.98B params) or omit MatFormer configuration entirely
+
+The slice selection allows you to:
+- Reduce memory usage proportionally to the parameter count
+- Speed up inference roughly linearly with the number of layers
+- Maintain acceptable quality for many use cases with smaller slices
 
 ## HTTP server
 You can find this example [here](../examples/server/gemma3n.py).
@@ -27,8 +144,8 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 ---
 
 **Image:**
-<img src="https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg" alt="Zinnia Flower" width = "1000" height = "666">
-<h6><a href = "https://www.wikimedia.org/">Credit</a></h6>
+<img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "1000" height = "666">
+<h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
 
 **Prompt:**
 ```
@@ -37,26 +154,15 @@ Please describe this image in detail.
 
 **Output:**
 ```
-The image is a close-up shot of a vibrant pink and yellow flower, likely a rose, set against a blurred background of green foliage. The flower is the clear focal point, sharply in focus and brightly illuminated. 
+The image captures a breathtaking, wide-angle view of a majestic mountain covered in a blanket of snow. The mountain dominates the frame, its peak reaching towards a partly cloudy sky. The snow cover is uneven, with patches of exposed dark rock and textured snow formations creating a visually interesting surface. 
 
-Here's a detailed breakdown:
+A winding, snow-covered path or road snakes its way up the mountainside, appearing as a bright white line against the darker slopes. This path draws the eye upwards towards the summit, where a few structures, possibly communication towers or observation points, are visible. 
 
-**The Flower:**
+The lower slopes of the mountain are covered in a dense forest of evergreen trees, their dark green hues contrasting beautifully with the white snow. The forest extends down into a valley, hinting at a wider landscape beyond the frame. 
 
-*   **Color:** The petals are a striking, almost neon pink, with hints of deeper magenta in the folds. The center of the flower transitions to a warm, golden yellow.
-*   **Form:** The flower appears to be in full bloom, with numerous layers of petals unfurling outwards. The petals have a soft, velvety texture suggested by the way light catches them. They are arranged in a classic rose shape, with some petals curled and others gently spreading.
-*   **Details:**  The edges of the petals are slightly ruffled and uneven, adding to the naturalistic feel.  There's a subtle gradient of color within each petal, creating depth and dimension.  The yellow center is densely packed with what appear to be stamens or pistils.
-*   **Lighting:** The flower is strongly lit from above and slightly to the side, creating highlights and shadows that emphasize its three-dimensional form. This lighting also enhances the vibrancy of the colors.
+The sky above is a mix of pale blue and soft grey clouds, with some darker, more dramatic cloud formations near the top of the mountain. The lighting suggests it might be early morning or late afternoon, casting subtle shadows across the mountain's surface and highlighting its contours. 
 
-**The Background:**
-
-*   **Color:** The background is a soft, out-of-focus green, suggesting leaves and other foliage. 
-*   **Blur:** The background is heavily blurred (bokeh), which helps to isolate the flower and make it stand out. The blur creates a sense of depth and draws the viewer's eye to the sharp details of the flower.
-*   **Texture:** While blurred, you can discern the texture of leaves – some appear smooth, others slightly textured.
-
-**Overall Impression:**
-
-The image is visually striking due to the contrast between the bright pink and yellow of the flower and the soft green background. The sharp focus on the flower combined with the blurred background creates a sense of intimacy and emphasizes the beauty of the bloom. It's a classic example of a macro photograph used to highlight the intricate details and vibrant colors of nature. The overall feeling is one of freshness, beauty, and vibrancy.
+The overall impression is one of grandeur, tranquility, and the raw beauty of a winter landscape. The scale of the mountain is impressive, and the winding path invites a sense of exploration and adventure.
 ```
 
 ---
@@ -68,6 +174,11 @@ The image is visually striking due to the contrast between the bright pink and y
 
 ```
 cargo run --release --features ... -- --port 1234 run -m google/gemma-3n-E4B-it
+
+# Or with MatFormer for balanced performance:
+cargo run --release --features ... -- --port 1234 run -m google/gemma-3n-E4B-it \
+  --matformer-config-path matformer_configs/gemma3n.csv \
+  --matformer-slice-name "Config for E2.49B (block-level)"
 ```
 
 2) Send a request
@@ -86,7 +197,7 @@ completion = client.chat.completions.create(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": "https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg"
+                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
                     },
                 },
                 {
@@ -130,7 +241,7 @@ async fn main() -> Result<()> {
             .await?;
 
     let bytes = match reqwest::blocking::get(
-        "https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg",
+        "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg",
     ) {
         Ok(http_resp) => http_resp.bytes()?.to_vec(),
         Err(e) => anyhow::bail!(e),
@@ -183,7 +294,7 @@ res = runner.send_chat_completion_request(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg"
+                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
                         },
                     },
                     {
