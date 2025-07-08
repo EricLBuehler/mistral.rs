@@ -142,7 +142,7 @@ impl McpClient {
                 // Merge Bearer token with existing headers if provided
                 let mut merged_headers = headers.clone().unwrap_or_default();
                 if let Some(token) = &config.bearer_token {
-                    merged_headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+                    merged_headers.insert("Authorization".to_string(), format!("Bearer {token}"));
                 }
 
                 let connection = HttpMcpConnection::new(
@@ -180,7 +180,7 @@ impl McpClient {
                 // Merge Bearer token with existing headers if provided
                 let mut merged_headers = headers.clone().unwrap_or_default();
                 if let Some(token) = &config.bearer_token {
-                    merged_headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+                    merged_headers.insert("Authorization".to_string(), format!("Bearer {token}"));
                 }
 
                 let connection = WebSocketMcpConnection::new(

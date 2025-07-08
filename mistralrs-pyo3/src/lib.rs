@@ -27,9 +27,9 @@ use mistralrs_core::{
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
     ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar, Loader,
     MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
-    NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
-    ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader,
-    SpeechLoader, StopTokens, TokenSource, TokenizationRequest, Tool, Topology,
+    NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, Request as _Request,
+    RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig,
+    SpeculativeLoader, SpeechLoader, StopTokens, TokenSource, TokenizationRequest, Tool, Topology,
     VisionLoaderBuilder, VisionSpecificConfig,
 };
 use mistralrs_core::{
@@ -87,6 +87,7 @@ pub struct SpeechGenerationResponse {
 }
 
 #[pyclass]
+#[derive(Clone)]
 /// An object wrapping the underlying Rust system to handle requests and process conversations.
 struct Runner {
     runner: Arc<MistralRs>,
@@ -557,6 +558,7 @@ impl Runner {
         pa_gpu_mem_usage = None,
         pa_ctxt_len = None,
         pa_blk_size = None,
+        pa_cache_type = None,
         no_paged_attn = false,
         paged_attn = false,
         prompt_chunksize = None,
@@ -584,6 +586,7 @@ impl Runner {
         pa_gpu_mem_usage: Option<f32>,
         pa_ctxt_len: Option<usize>,
         pa_blk_size: Option<usize>,
+        pa_cache_type: Option<PagedCacheType>,
         no_paged_attn: bool,
         paged_attn: bool,
         prompt_chunksize: Option<usize>,
@@ -800,44 +803,62 @@ impl Runner {
 
         // Allocate 0.5 GB of CPU memory just as a placeholder.
         // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
-        let cache_config =
-            match (
-                pa_blk_size,
-                pa_gpu_mem,
-                pa_gpu_mem_usage,
-                pa_ctxt_len,
-                paged_attn_supported(),
-                no_paged_attn,
-            ) {
-                (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
+        let cache_config = match (
+            pa_blk_size,
+            pa_gpu_mem,
+            pa_gpu_mem_usage,
+            pa_ctxt_len,
+            paged_attn_supported(),
+            no_paged_attn,
+        ) {
+            (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
+                block_size,
+                512,
+                MemoryGpuConfig::ContextSize(max_seq_len),
+                pa_cache_type.unwrap_or_default(),
+            )?),
+            (block_size, None, None, Some(ctxt), true, false) => Some(PagedAttentionConfig::new(
+                block_size,
+                512,
+                MemoryGpuConfig::ContextSize(ctxt),
+                pa_cache_type.unwrap_or_default(),
+            )?),
+            (block_size, None, Some(f), None, true, false) => Some(PagedAttentionConfig::new(
+                block_size,
+                512,
+                MemoryGpuConfig::Utilization(f),
+                pa_cache_type.unwrap_or_default(),
+            )?),
+            (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
+                block_size,
+                512,
+                MemoryGpuConfig::MbAmount(m),
+                pa_cache_type.unwrap_or_default(),
+            )?),
+            (block_size, Some(_m), Some(f), None, true, false) => Some(PagedAttentionConfig::new(
+                block_size,
+                512,
+                MemoryGpuConfig::Utilization(f),
+                pa_cache_type.unwrap_or_default(),
+            )?),
+            (block_size, Some(_m), None, Some(ctxt), true, false) => {
+                Some(PagedAttentionConfig::new(
                     block_size,
                     512,
-                    MemoryGpuConfig::ContextSize(max_seq_len),
-                )?),
-                (block_size, None, None, Some(ctxt), true, false) => Some(
-                    PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::ContextSize(ctxt))?,
-                ),
-                (block_size, None, Some(f), None, true, false) => Some(PagedAttentionConfig::new(
+                    MemoryGpuConfig::ContextSize(ctxt),
+                    pa_cache_type.unwrap_or_default(),
+                )?)
+            }
+            (block_size, None, Some(f), Some(_ctxt), true, false) => {
+                Some(PagedAttentionConfig::new(
                     block_size,
                     512,
                     MemoryGpuConfig::Utilization(f),
-                )?),
-                (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
-                    block_size,
-                    512,
-                    MemoryGpuConfig::MbAmount(m),
-                )?),
-                (block_size, Some(_m), Some(f), None, true, false) => Some(
-                    PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::Utilization(f))?,
-                ),
-                (block_size, Some(_m), None, Some(ctxt), true, false) => Some(
-                    PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::ContextSize(ctxt))?,
-                ),
-                (block_size, None, Some(f), Some(_ctxt), true, false) => Some(
-                    PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::Utilization(f))?,
-                ),
-                (_, _, _, _, _, _) => None,
-            };
+                    pa_cache_type.unwrap_or_default(),
+                )?)
+            }
+            (_, _, _, _, _, _) => None,
+        };
 
         let pipeline = loader
             .load_model_from_hf(
@@ -916,9 +937,11 @@ impl Runner {
     }
 
     /// Send an OpenAI API compatible request, returning the result.
+    #[pyo3(signature = (request, model_id = None))]
     fn send_chat_completion_request(
         &mut self,
         request: Py<ChatCompletionRequest>,
+        model_id: Option<String>,
     ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
         let (tx, mut rx) = channel(10_000);
         Python::with_gil(|py| {
@@ -973,7 +996,7 @@ impl Runner {
                                     }
                                     let content = match &image_messages[0]["text"] {
                                         Either::Left(left) => left.to_string(),
-                                        Either::Right(right) => format!("{:?}", right),
+                                        Either::Right(right) => format!("{right:?}"),
                                     };
                                     let mut message_map: IndexMap<
                                         String,
@@ -1196,10 +1219,11 @@ impl Runner {
                 logits_processors: None,
                 return_raw_logits: false,
                 web_search_options: request.web_search_options.clone(),
+                model_id: model_id.clone(),
             }));
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
-            let sender = self.runner.get_sender()?;
+            let sender = self.runner.get_sender(model_id.as_deref())?;
             sender.blocking_send(model_request).unwrap();
 
             if request.stream {
@@ -1226,9 +1250,11 @@ impl Runner {
     }
 
     /// Send an OpenAI API compatible request, returning the result.
+    #[pyo3(signature = (request, model_id = None))]
     fn send_completion_request(
         &mut self,
         request: Py<CompletionRequest>,
+        model_id: Option<String>,
     ) -> PyApiResult<CompletionResponse> {
         let (tx, mut rx) = channel(10_000);
         Python::with_gil(|py| {
@@ -1303,10 +1329,11 @@ impl Runner {
                 logits_processors: None,
                 return_raw_logits: false,
                 web_search_options: None,
+                model_id: model_id.clone(),
             }));
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
-            let sender = self.runner.get_sender()?;
+            let sender = self.runner.get_sender(model_id.as_deref())?;
             sender.blocking_send(model_request).unwrap();
             let response = rx.blocking_recv().unwrap();
 
@@ -1333,6 +1360,7 @@ impl Runner {
         response_format,
         height = 720,
         width = 1280,
+        model_id = None,
     ))]
     fn generate_image(
         &self,
@@ -1340,6 +1368,7 @@ impl Runner {
         response_format: ImageGenerationResponseFormat,
         height: usize,
         width: usize,
+        model_id: Option<String>,
     ) -> PyApiResult<ImageGenerationResponse> {
         let (tx, mut rx) = channel(1);
 
@@ -1361,9 +1390,10 @@ impl Runner {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            model_id: model_id.clone(),
         }));
 
-        let sender = self.runner.get_sender()?;
+        let sender = self.runner.get_sender(model_id.as_deref())?;
         sender.blocking_send(request).unwrap();
 
         let ResponseOk::ImageGeneration(response) = rx
@@ -1380,8 +1410,13 @@ impl Runner {
     /// Generate audio.
     #[pyo3(signature = (
         prompt,
+        model_id = None,
     ))]
-    fn generate_audio(&self, prompt: String) -> PyApiResult<SpeechGenerationResponse> {
+    fn generate_audio(
+        &self,
+        prompt: String,
+        model_id: Option<String>,
+    ) -> PyApiResult<SpeechGenerationResponse> {
         let (tx, mut rx) = channel(1);
 
         let request = _Request::Normal(Box::new(NormalRequest {
@@ -1398,9 +1433,10 @@ impl Runner {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            model_id: model_id.clone(),
         }));
 
-        let sender = self.runner.get_sender()?;
+        let sender = self.runner.get_sender(model_id.as_deref())?;
         sender.blocking_send(request).unwrap();
 
         let ResponseOk::Speech {
@@ -1424,18 +1460,24 @@ impl Runner {
 
     /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
     /// then nothing will happen.
-    fn send_re_isq(&self, dtype: String) -> PyApiResult<()> {
+    #[pyo3(signature = (dtype, model_id = None))]
+    fn send_re_isq(&self, dtype: String, model_id: Option<String>) -> PyApiResult<()> {
         let request = _Request::ReIsq(parse_isq_value(&dtype, None)?);
-        self.runner.get_sender()?.blocking_send(request).unwrap();
+        self.runner
+            .get_sender(model_id.as_deref())?
+            .blocking_send(request)
+            .unwrap();
         Ok(())
     }
 
     /// Tokenize some text, returning raw tokens.
+    #[pyo3(signature = (text, add_special_tokens, enable_thinking, model_id = None))]
     fn tokenize_text(
         &self,
         text: String,
         add_special_tokens: bool,
         enable_thinking: Option<bool>,
+        model_id: Option<String>,
     ) -> PyApiResult<Vec<u32>> {
         let (tx, mut rx) = channel(1);
         let request = _Request::Tokenize(TokenizationRequest {
@@ -1447,7 +1489,10 @@ impl Runner {
             enable_thinking,
         });
 
-        self.runner.get_sender()?.blocking_send(request).unwrap();
+        self.runner
+            .get_sender(model_id.as_deref())?
+            .blocking_send(request)
+            .unwrap();
 
         rx.blocking_recv()
             .context("Channel was erroneously closed!")?
@@ -1455,7 +1500,13 @@ impl Runner {
     }
 
     /// Detokenize some tokens, returning text.
-    fn detokenize_text(&self, tokens: Vec<u32>, skip_special_tokens: bool) -> PyApiResult<String> {
+    #[pyo3(signature = (tokens, skip_special_tokens, model_id = None))]
+    fn detokenize_text(
+        &self,
+        tokens: Vec<u32>,
+        skip_special_tokens: bool,
+        model_id: Option<String>,
+    ) -> PyApiResult<String> {
         let (tx, mut rx) = channel(1);
         let request = _Request::Detokenize(DetokenizationRequest {
             tokens,
@@ -1463,11 +1514,596 @@ impl Runner {
             response: tx,
         });
 
-        self.runner.get_sender()?.blocking_send(request).unwrap();
+        self.runner
+            .get_sender(model_id.as_deref())?
+            .blocking_send(request)
+            .unwrap();
 
         rx.blocking_recv()
             .context("Channel was erroneously closed!")?
             .map_err(PyApiErr::from)
+    }
+
+    /// List all available model IDs in multi-model mode.
+    fn list_models(&self) -> PyApiResult<Vec<String>> {
+        self.runner.list_models().map_err(PyApiErr::from)
+    }
+
+    /// Get the default model ID in multi-model mode.
+    fn get_default_model_id(&self) -> PyApiResult<Option<String>> {
+        self.runner.get_default_model_id().map_err(PyApiErr::from)
+    }
+
+    /// Set the default model ID in multi-model mode.
+    fn set_default_model_id(&self, model_id: String) -> PyApiResult<()> {
+        self.runner
+            .set_default_model_id(&model_id)
+            .map_err(PyApiErr::from)
+    }
+
+    /// Remove a model by ID in multi-model mode.
+    fn remove_model(&self, model_id: String) -> PyApiResult<()> {
+        self.runner.remove_model(&model_id).map_err(PyApiErr::from)
+    }
+
+    /// Send an OpenAI API compatible request to a specific model, returning the result.
+    fn send_chat_completion_request_to_model(
+        &mut self,
+        request: Py<ChatCompletionRequest>,
+        model_id: String,
+    ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
+        let (tx, mut rx) = channel(10_000);
+        Python::with_gil(|py| {
+            let request = request.bind(py).borrow();
+            let stop_toks = request
+                .stop_seqs
+                .as_ref()
+                .map(|x| StopTokens::Seqs(x.to_vec()));
+            let constraint =
+                build_constraint(request.grammar.as_deref(), request.grammar_type.as_deref())?;
+
+            let dry_params = if let Some(dry_multiplier) = request.dry_multiplier {
+                Some(DrySamplingParams::new_with_defaults(
+                    dry_multiplier,
+                    request.dry_sequence_breakers.clone(),
+                    request.dry_base,
+                    request.dry_allowed_length,
+                )?)
+            } else {
+                None
+            };
+
+            let messages = match request.messages {
+                Either::Left(ref messages) => {
+                    let mut messages_vec = Vec::new();
+                    let mut image_urls = Vec::new();
+                    let mut audio_urls = Vec::new();
+                    for message in messages {
+                        let role = message["role"].as_ref().left().unwrap().clone();
+                        match &message["content"] {
+                            Either::Left(content) => {
+                                let mut message_map: IndexMap<
+                                    String,
+                                    Either<String, Vec<IndexMap<String, Value>>>,
+                                > = IndexMap::new();
+                                message_map.insert("role".to_string(), Either::Left(role));
+                                message_map.insert(
+                                    "content".to_string(),
+                                    Either::Left(content.to_string()),
+                                );
+                                messages_vec.push(message_map);
+                            }
+                            Either::Right(image_messages) => {
+                                // If there is only one message, it is possible a text message
+                                // found when rig is used as client. In this case, we need to check if
+                                // the message is a text message or an image message.
+                                if image_messages.len() == 1 {
+                                    if !image_messages[0].contains_key("text") {
+                                        return Err(PyApiErr::from(
+                                            "Expected `text` key in input message.",
+                                        ));
+                                    }
+                                    let content = match &image_messages[0]["text"] {
+                                        Either::Left(left) => left.to_string(),
+                                        Either::Right(right) => format!("{right:?}"),
+                                    };
+                                    let mut message_map: IndexMap<
+                                        String,
+                                        Either<String, Vec<IndexMap<String, Value>>>,
+                                    > = IndexMap::new();
+                                    message_map.insert("role".to_string(), Either::Left(role));
+                                    message_map
+                                        .insert("content".to_string(), Either::Left(content));
+                                    messages_vec.push(message_map);
+                                    continue;
+                                }
+                                if role != "user" {
+                                    return Err(PyApiErr::from(
+                                        "Role for an image message must be `user`, but it is {role}",
+                                    ));
+                                }
+
+                                enum ContentPart {
+                                    Text { text: String },
+                                    Image { image_url: String },
+                                    Audio { audio_url: String },
+                                }
+
+                                let mut items = Vec::new();
+                                for image_message in image_messages {
+                                    match image_message.get("type") {
+                                        Some(Either::Left(x)) if x == "text" => {
+                                            items.push(ContentPart::Text {
+                                                text: image_message
+                                                    .get("text").as_ref()
+                                                    .context("Text sub-content must have `text` key.")?.as_ref()
+                                                    .left().context("Text sub-content `text` key must be a string.")?.clone(),
+                                            });
+                                        }
+                                        Some(Either::Left(x)) if x == "image_url" => {
+                                            items.push(ContentPart::Image {
+                                                image_url: image_message
+                                                    .get("image_url")
+                                                    .as_ref()
+                                                    .context("Image sub-content must have `image_url` key.")?
+                                                    .as_ref()
+                                                    .right()
+                                                    .context("Image sub-content `image_url` key must be an object.")?
+                                                    .get("url")
+                                                    .context("Image sub-content `image_url` object must have a `url` key.")?
+                                                    .clone(),
+                                            });
+                                        }
+                                        Some(Either::Left(x)) if x == "audio_url" => {
+                                            items.push(ContentPart::Audio {
+                                                audio_url: image_message
+                                                    .get("audio_url")
+                                                    .as_ref()
+                                                    .context("Audio sub-content must have `audio_url` key.")?
+                                                    .as_ref()
+                                                    .right()
+                                                    .context("Audio sub-content `audio_url` key must be an object.")?
+                                                    .get("url")
+                                                    .context("Audio sub-content `audio_url` object must have a `url` key.")?
+                                                    .clone(),
+                                            });
+                                        }
+                                        _ => return Err(PyApiErr::from("Expected array content sub-content to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}"))
+                                    }
+                                }
+
+                                let text_content = items
+                                    .iter()
+                                    .filter_map(|item| match item {
+                                        ContentPart::Text { text } => Some(text),
+                                        _ => None,
+                                    })
+                                    .join(" ");
+                                let image_urls_iter = items
+                                    .iter()
+                                    .filter_map(|item| match item {
+                                        ContentPart::Image { image_url } => Some(image_url.clone()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                let audio_urls_iter = items
+                                    .iter()
+                                    .filter_map(|item| match item {
+                                        ContentPart::Audio { audio_url } => Some(audio_url.clone()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                let mut message_map: IndexMap<
+                                    String,
+                                    Either<String, Vec<IndexMap<String, Value>>>,
+                                > = IndexMap::new();
+                                message_map.insert("role".to_string(), Either::Left(role));
+
+                                let mut content_map: Vec<IndexMap<String, Value>> = Vec::new();
+                                for _ in &image_urls_iter {
+                                    let mut content_image_map = IndexMap::new();
+                                    content_image_map.insert(
+                                        "type".to_string(),
+                                        Value::String("image".to_string()),
+                                    );
+                                    content_map.push(content_image_map);
+                                }
+                                for _ in &audio_urls_iter {
+                                    let mut content_audio_map = IndexMap::new();
+                                    content_audio_map.insert(
+                                        "type".to_string(),
+                                        Value::String("audio".to_string()),
+                                    );
+                                    content_map.push(content_audio_map);
+                                }
+                                {
+                                    let mut content_text_map = IndexMap::new();
+                                    content_text_map.insert(
+                                        "type".to_string(),
+                                        Value::String("text".to_string()),
+                                    );
+                                    content_text_map
+                                        .insert("text".to_string(), Value::String(text_content));
+                                    content_map.push(content_text_map);
+                                }
+
+                                message_map
+                                    .insert("content".to_string(), Either::Right(content_map));
+                                messages_vec.push(message_map);
+                                image_urls.extend(image_urls_iter);
+                                audio_urls.extend(audio_urls_iter);
+                            }
+                        }
+                    }
+                    if !image_urls.is_empty() || !audio_urls.is_empty() {
+                        let mut images = Vec::new();
+                        for url in image_urls {
+                            let url_unparsed = url.trim();
+
+                            let image = util::parse_image_url(url_unparsed)?;
+                            images.push(image);
+                        }
+                        let mut audios = Vec::new();
+                        for url in audio_urls {
+                            let url_unparsed = url.trim();
+                            let audio = util::parse_audio_url(url_unparsed)?;
+                            audios.push(audio);
+                        }
+                        RequestMessage::VisionChat {
+                            messages: messages_vec,
+                            images,
+                            audios,
+                            enable_thinking: request.enable_thinking,
+                        }
+                    } else {
+                        RequestMessage::Chat {
+                            messages: messages_vec,
+                            enable_thinking: request.enable_thinking,
+                        }
+                    }
+                }
+                Either::Right(ref prompt) => {
+                    let mut messages = Vec::new();
+                    let mut message_map: IndexMap<
+                        String,
+                        Either<String, Vec<IndexMap<String, Value>>>,
+                    > = IndexMap::new();
+                    message_map.insert("role".to_string(), Either::Left("user".to_string()));
+                    message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
+                    messages.push(message_map);
+                    RequestMessage::Chat {
+                        messages,
+                        enable_thinking: request.enable_thinking,
+                    }
+                }
+            };
+
+            let tool_choice = request.tool_choice.as_ref().map(|x| match x {
+                ToolChoice::Auto => mistralrs_core::ToolChoice::Auto,
+                ToolChoice::NoTools => mistralrs_core::ToolChoice::None,
+            });
+
+            let tools = if let Some(tools) = &request.tool_schemas {
+                let mut new_tools = Vec::new();
+                for schema in tools {
+                    new_tools.push(serde_json::from_str::<Tool>(schema)?);
+                }
+                Some(new_tools)
+            } else {
+                None
+            };
+
+            let model_request = _Request::Normal(Box::new(NormalRequest {
+                id: {
+                    let l = NEXT_REQUEST_ID.lock().unwrap();
+                    let last = &mut *l.borrow_mut();
+                    let last_v = *last;
+                    *last += 1;
+                    last_v
+                },
+                messages,
+                sampling_params: SamplingParams {
+                    temperature: request.temperature,
+                    top_k: request.top_k,
+                    top_p: request.top_p,
+                    top_n_logprobs: request.top_logprobs.unwrap_or(1),
+                    frequency_penalty: request.frequency_penalty,
+                    presence_penalty: request.presence_penalty,
+                    max_len: request.max_tokens,
+                    stop_toks,
+                    logits_bias: request.logit_bias.clone(),
+                    n_choices: request.n_choices,
+                    min_p: request.min_p,
+                    dry_params,
+                },
+                response: tx,
+                return_logprobs: request.logprobs,
+                is_streaming: request.stream,
+                constraint,
+                suffix: None,
+                tool_choice,
+                tools,
+                logits_processors: None,
+                return_raw_logits: false,
+                web_search_options: request.web_search_options.clone(),
+                model_id: Some(model_id.clone()),
+            }));
+
+            MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
+            let sender = self.runner.get_sender(Some(&model_id))?;
+            sender.blocking_send(model_request).unwrap();
+
+            if request.stream {
+                Ok(Either::Right(ChatCompletionStreamer::from_rx(rx)))
+            } else {
+                let response = rx.blocking_recv().unwrap();
+
+                match response {
+                    Response::ValidationError(e) | Response::InternalError(e) => {
+                        Err(PyApiErr::from(e.to_string()))
+                    }
+                    Response::Done(response) => Ok(Either::Left(response)),
+                    Response::ModelError(msg, _) => Err(PyApiErr::from(msg.to_string())),
+                    Response::Chunk(_) => unreachable!(),
+                    Response::CompletionDone(_) => unreachable!(),
+                    Response::CompletionModelError(_, _) => unreachable!(),
+                    Response::CompletionChunk(_) => unreachable!(),
+                    Response::ImageGeneration(_) => unreachable!(),
+                    Response::Speech { .. } => unreachable!(),
+                    Response::Raw { .. } => unreachable!(),
+                }
+            }
+        })
+    }
+
+    /// Send an OpenAI API compatible completion request to a specific model, returning the result.
+    fn send_completion_request_to_model(
+        &mut self,
+        request: Py<CompletionRequest>,
+        model_id: String,
+    ) -> PyApiResult<CompletionResponse> {
+        let (tx, mut rx) = channel(10_000);
+        Python::with_gil(|py| {
+            let request = request.bind(py).borrow();
+            let stop_toks = request
+                .stop_seqs
+                .as_ref()
+                .map(|x| StopTokens::Seqs(x.to_vec()));
+            let constraint =
+                build_constraint(request.grammar.as_deref(), request.grammar_type.as_deref())?;
+
+            let tool_choice = request.tool_choice.as_ref().map(|x| match x {
+                ToolChoice::Auto => mistralrs_core::ToolChoice::Auto,
+                ToolChoice::NoTools => mistralrs_core::ToolChoice::None,
+            });
+
+            let tools = if let Some(tools) = &request.tool_schemas {
+                let mut new_tools = Vec::new();
+                for schema in tools {
+                    new_tools.push(serde_json::from_str::<Tool>(schema)?);
+                }
+                Some(new_tools)
+            } else {
+                None
+            };
+
+            let dry_params = if let Some(dry_multiplier) = request.dry_multiplier {
+                Some(DrySamplingParams::new_with_defaults(
+                    dry_multiplier,
+                    request.dry_sequence_breakers.clone(),
+                    request.dry_base,
+                    request.dry_allowed_length,
+                )?)
+            } else {
+                None
+            };
+
+            let model_request = _Request::Normal(Box::new(NormalRequest {
+                id: {
+                    let l = NEXT_REQUEST_ID.lock().unwrap();
+                    let last = &mut *l.borrow_mut();
+                    let last_v = *last;
+                    *last += 1;
+                    last_v
+                },
+                messages: RequestMessage::Completion {
+                    text: request.prompt.clone(),
+                    echo_prompt: request.echo_prompt,
+                    best_of: request.best_of,
+                },
+                sampling_params: SamplingParams {
+                    temperature: request.temperature,
+                    top_k: request.top_k,
+                    top_p: request.top_p,
+                    top_n_logprobs: 1,
+                    frequency_penalty: request.frequency_penalty,
+                    presence_penalty: request.presence_penalty,
+                    max_len: request.max_tokens,
+                    stop_toks,
+                    logits_bias: request.logit_bias.clone(),
+                    n_choices: request.n_choices,
+                    min_p: request.min_p,
+                    dry_params,
+                },
+                response: tx,
+                return_logprobs: false,
+                is_streaming: false,
+                constraint,
+                suffix: request.suffix.clone(),
+                tool_choice,
+                tools,
+                logits_processors: None,
+                return_raw_logits: false,
+                web_search_options: None,
+                model_id: Some(model_id.clone()),
+            }));
+
+            MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
+            let sender = self.runner.get_sender(Some(&model_id))?;
+            sender.blocking_send(model_request).unwrap();
+            let response = rx.blocking_recv().unwrap();
+
+            match response {
+                Response::ValidationError(e) | Response::InternalError(e) => {
+                    Err(PyApiErr::from(e.to_string()))
+                }
+                Response::CompletionDone(response) => Ok(response),
+                Response::CompletionModelError(msg, _) => Err(PyApiErr::from(msg.to_string())),
+                Response::Chunk(_) => unreachable!(),
+                Response::Done(_) => unreachable!(),
+                Response::ModelError(_, _) => unreachable!(),
+                Response::CompletionChunk(_) => unreachable!(),
+                Response::ImageGeneration(_) => unreachable!(),
+                Response::Speech { .. } => unreachable!(),
+                Response::Raw { .. } => unreachable!(),
+            }
+        })
+    }
+}
+
+#[pyclass]
+/// A multi-model runner that provides a cleaner interface for managing multiple models.
+/// This wraps the existing Runner and provides model-specific methods.
+struct MultiModelRunner {
+    runner: Runner,
+}
+
+#[pymethods]
+impl MultiModelRunner {
+    #[new]
+    /// Create a new MultiModelRunner from an existing Runner.
+    /// The Runner should have been created with multiple models loaded.
+    fn new(runner: Runner) -> Self {
+        Self { runner }
+    }
+
+    /// Send a chat completion request to a specific model.
+    #[pyo3(signature = (request, model_id))]
+    fn send_chat_completion_request_to_model(
+        &mut self,
+        request: Py<ChatCompletionRequest>,
+        model_id: String,
+    ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
+        self.runner
+            .send_chat_completion_request(request, Some(model_id))
+    }
+
+    /// Send a completion request to a specific model.
+    #[pyo3(signature = (request, model_id))]
+    fn send_completion_request_to_model(
+        &mut self,
+        request: Py<CompletionRequest>,
+        model_id: String,
+    ) -> PyApiResult<CompletionResponse> {
+        self.runner.send_completion_request(request, Some(model_id))
+    }
+
+    /// List all available model IDs.
+    fn list_models(&self) -> PyApiResult<Vec<String>> {
+        self.runner.list_models()
+    }
+
+    /// Get the default model ID.
+    fn get_default_model_id(&self) -> PyApiResult<Option<String>> {
+        self.runner.get_default_model_id()
+    }
+
+    /// Set the default model ID.
+    fn set_default_model_id(&self, model_id: String) -> PyApiResult<()> {
+        self.runner.set_default_model_id(model_id)
+    }
+
+    /// Remove a model by ID.
+    fn remove_model(&self, model_id: String) -> PyApiResult<()> {
+        self.runner.remove_model(model_id)
+    }
+
+    /// Send a chat completion request to the default model.
+    #[pyo3(signature = (request, model_id = None))]
+    fn send_chat_completion_request(
+        &mut self,
+        request: Py<ChatCompletionRequest>,
+        model_id: Option<String>,
+    ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
+        self.runner.send_chat_completion_request(request, model_id)
+    }
+
+    /// Send a completion request to the default model.
+    #[pyo3(signature = (request, model_id = None))]
+    fn send_completion_request(
+        &mut self,
+        request: Py<CompletionRequest>,
+        model_id: Option<String>,
+    ) -> PyApiResult<CompletionResponse> {
+        self.runner.send_completion_request(request, model_id)
+    }
+
+    /// Generate an image using the default model.
+    #[pyo3(signature = (
+        prompt,
+        response_format,
+        height = 720,
+        width = 1280,
+        model_id = None,
+    ))]
+    fn generate_image(
+        &self,
+        prompt: String,
+        response_format: ImageGenerationResponseFormat,
+        height: usize,
+        width: usize,
+        model_id: Option<String>,
+    ) -> PyApiResult<ImageGenerationResponse> {
+        self.runner
+            .generate_image(prompt, response_format, height, width, model_id)
+    }
+
+    /// Generate audio using the default model.
+    #[pyo3(signature = (prompt, model_id = None))]
+    fn generate_audio(
+        &self,
+        prompt: String,
+        model_id: Option<String>,
+    ) -> PyApiResult<SpeechGenerationResponse> {
+        self.runner.generate_audio(prompt, model_id)
+    }
+
+    /// Send a request to re-ISQ the default model.
+    #[pyo3(signature = (dtype, model_id = None))]
+    fn send_re_isq(&self, dtype: String, model_id: Option<String>) -> PyApiResult<()> {
+        self.runner.send_re_isq(dtype, model_id)
+    }
+
+    /// Tokenize some text using the default model.
+    #[pyo3(signature = (text, add_special_tokens, enable_thinking, model_id = None))]
+    fn tokenize_text(
+        &self,
+        text: String,
+        add_special_tokens: bool,
+        enable_thinking: Option<bool>,
+        model_id: Option<String>,
+    ) -> PyApiResult<Vec<u32>> {
+        self.runner
+            .tokenize_text(text, add_special_tokens, enable_thinking, model_id)
+    }
+
+    /// Detokenize some tokens using the default model.
+    #[pyo3(signature = (tokens, skip_special_tokens, model_id = None))]
+    fn detokenize_text(
+        &self,
+        tokens: Vec<u32>,
+        skip_special_tokens: bool,
+        model_id: Option<String>,
+    ) -> PyApiResult<String> {
+        self.runner
+            .detokenize_text(tokens, skip_special_tokens, model_id)
+    }
+
+    /// Get a copy of the underlying Runner instance.
+    fn inner(&self) -> Runner {
+        self.runner.clone()
     }
 }
 
@@ -1643,6 +2279,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     initialize_logging();
 
     m.add_class::<Runner>()?;
+    m.add_class::<MultiModelRunner>()?;
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<CompletionRequest>()?;

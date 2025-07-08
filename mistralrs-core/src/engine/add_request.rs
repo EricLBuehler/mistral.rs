@@ -393,7 +393,7 @@ impl Engine {
                     request
                         .response
                         .send(Response::ValidationError(
-                            format!("Invalid grammar. {}", err).into(),
+                            format!("Invalid grammar. {err}").into(),
                         ))
                         .await
                         .unwrap_or_else(|_| warn!("Receiver disconnected"));

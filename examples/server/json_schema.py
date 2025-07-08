@@ -15,7 +15,7 @@ addr_schema = {
 }
 
 completion = client.chat.completions.create(
-    model="mistral",
+    model="ignore",
     messages=[
         {
             "role": "user",

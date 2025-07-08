@@ -79,14 +79,19 @@ pub async fn interactive_mode(
     do_search: bool,
     enable_thinking: Option<bool>,
 ) {
-    match mistralrs.get_model_category() {
-        ModelCategory::Text => text_interactive_mode(mistralrs, do_search, enable_thinking).await,
-        ModelCategory::Vision { .. } => {
+    match mistralrs.get_model_category(None) {
+        Ok(ModelCategory::Text) => {
+            text_interactive_mode(mistralrs, do_search, enable_thinking).await
+        }
+        Ok(ModelCategory::Vision { .. }) => {
             vision_interactive_mode(mistralrs, do_search, enable_thinking).await
         }
-        ModelCategory::Diffusion => diffusion_interactive_mode(mistralrs, do_search).await,
-        ModelCategory::Audio => audio_interactive_mode(mistralrs, do_search, enable_thinking).await,
-        ModelCategory::Speech => speech_interactive_mode(mistralrs, do_search).await,
+        Ok(ModelCategory::Diffusion) => diffusion_interactive_mode(mistralrs, do_search).await,
+        Ok(ModelCategory::Audio) => {
+            audio_interactive_mode(mistralrs, do_search, enable_thinking).await
+        }
+        Ok(ModelCategory::Speech) => speech_interactive_mode(mistralrs, do_search).await,
+        Err(e) => eprintln!("Error getting model category: {e}"),
     }
 }
 
@@ -227,7 +232,7 @@ async fn text_interactive_mode(
     do_search: bool,
     enable_thinking: Option<bool>,
 ) {
-    let sender = mistralrs.get_sender().unwrap();
+    let sender = mistralrs.get_sender(None).unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
 
     let mut sampling_params = interactive_sample_parameters();
@@ -323,6 +328,7 @@ async fn text_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            model_id: None,
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -440,12 +446,13 @@ async fn vision_interactive_mode(
     let image_regex = Regex::new(IMAGE_REGEX).unwrap();
     let audio_regex = Regex::new(AUDIO_REGEX).unwrap();
 
-    let sender = mistralrs.get_sender().unwrap();
+    let sender = mistralrs.get_sender(None).unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
     let mut images = Vec::new();
     let mut audios = Vec::new();
 
-    let prefixer = match &mistralrs.config().category {
+    let config = mistralrs.config(None).unwrap();
+    let prefixer = match &config.category {
         ModelCategory::Vision { prefixer } => prefixer,
         ModelCategory::Text
         | ModelCategory::Diffusion
@@ -626,6 +633,7 @@ async fn vision_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            model_id: None,
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -721,7 +729,7 @@ async fn audio_interactive_mode(
 }
 
 async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
-    let sender = mistralrs.get_sender().unwrap();
+    let sender = mistralrs.get_sender(None).unwrap();
 
     let diffusion_params = DiffusionGenerationParams::default();
 
@@ -784,6 +792,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            model_id: None,
         }));
 
         let start = Instant::now();
@@ -810,7 +819,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
 }
 
 async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
-    let sender = mistralrs.get_sender().unwrap();
+    let sender = mistralrs.get_sender(None).unwrap();
 
     info!("Starting interactive loop for speech");
     println!(
@@ -871,6 +880,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            model_id: None,
         }));
 
         let start = Instant::now();

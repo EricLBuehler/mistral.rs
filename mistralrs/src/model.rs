@@ -44,7 +44,7 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
 /// [`AnyMoeModelBuilder`]: crate::AnyMoeModelBuilder
 ///
 pub struct Model {
-    runner: Arc<MistralRs>,
+    pub(crate) runner: Arc<MistralRs>,
 }
 
 pub struct Stream<'a> {
@@ -89,9 +89,10 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
+            model_id: None,
         }));
 
-        self.runner.get_sender()?.send(request).await?;
+        self.runner.get_sender(None)?.send(request).await?;
 
         let stream = Stream { _server: self, rx };
 
@@ -124,9 +125,10 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
+            model_id: None,
         }));
 
-        self.runner.get_sender()?.send(request).await?;
+        self.runner.get_sender(None)?.send(request).await?;
 
         let ResponseOk::Done(response) = rx
             .recv()
@@ -168,9 +170,10 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: true,
             web_search_options: request.take_web_search_options(),
+            model_id: None,
         }));
 
-        self.runner.get_sender()?.send(request).await?;
+        self.runner.get_sender(None)?.send(request).await?;
 
         let ResponseOk::Raw {
             logits_chunks,
@@ -213,9 +216,10 @@ impl Model {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            model_id: None,
         }));
 
-        self.runner.get_sender()?.send(request).await?;
+        self.runner.get_sender(None)?.send(request).await?;
 
         let ResponseOk::ImageGeneration(response) = rx
             .recv()
@@ -254,9 +258,10 @@ impl Model {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            model_id: None,
         }));
 
-        self.runner.get_sender()?.send(request).await?;
+        self.runner.get_sender(None)?.send(request).await?;
 
         let ResponseOk::Speech {
             pcm,
@@ -278,7 +283,7 @@ impl Model {
     pub async fn re_isq_model(&self, isq_type: IsqType) -> anyhow::Result<()> {
         let request = Request::ReIsq(isq_type);
 
-        Ok(self.runner.get_sender()?.send(request).await?)
+        Ok(self.runner.get_sender(None)?.send(request).await?)
     }
 
     /// Tokenize some text or messages.
@@ -300,7 +305,7 @@ impl Model {
             response: tx,
             enable_thinking,
         });
-        self.runner.get_sender()?.send(request).await?;
+        self.runner.get_sender(None)?.send(request).await?;
 
         rx.recv().await.context("Channel was erroneously closed!")?
     }
@@ -317,14 +322,14 @@ impl Model {
             skip_special_tokens,
             response: tx,
         });
-        self.runner.get_sender()?.send(request).await?;
+        self.runner.get_sender(None)?.send(request).await?;
 
         rx.recv().await.context("Channel was erroneously closed!")?
     }
 
     /// Retrieve some information about this model.
-    pub fn config(&self) -> &MistralRsConfig {
-        self.runner.config()
+    pub fn config(&self) -> std::result::Result<MistralRsConfig, String> {
+        self.runner.config(None)
     }
 
     pub fn inner(&self) -> &MistralRs {

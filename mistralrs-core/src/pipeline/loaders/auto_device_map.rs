@@ -99,6 +99,7 @@ impl Display for AutoDeviceMapParams {
 }
 
 impl AutoDeviceMapParams {
+    // Default max sequence length for memory estimation when not specified
     pub const DEFAULT_MAX_SEQ_LEN: usize = 4 * 1024;
     pub const DEFAULT_MAX_BATCH_SIZE: usize = 1;
     pub const DEFAULT_MAX_NUM_IMAGES: usize = 1;
@@ -194,6 +195,9 @@ pub fn get_device_layers(
                 cfg.mem_cpu,
                 Some(cfg.block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE)),
                 dtype,
+                paged_attn_config
+                    .map(|cfg| cfg.cache_type)
+                    .unwrap_or_default(),
                 &*model_cfg,
                 &devices[0],
                 &devices.iter().map(|d| Some(d.clone())).collect::<Vec<_>>(),

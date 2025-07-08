@@ -103,7 +103,7 @@ from openai import OpenAI
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 completion = client.chat.completions.create(
-    model="qwen2vl",
+    model="ignore",
     messages=[
         {
             "role": "user",
@@ -204,7 +204,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="qwen2vl",
+        model="ignore",
         messages=[
             {
                 "role": "user",

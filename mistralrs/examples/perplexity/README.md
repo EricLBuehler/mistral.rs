@@ -10,7 +10,7 @@ cargo run --release --features ... --example perplexity -- --model-id ... --file
 For example,
 ```
 wget https://huggingface.co/datasets/EricB/wikitext2/resolve/main/wiki.test_mini.raw
-cargo run --release --features ... --example perplexity -- --model-id meta-llama/Llama-3.1-8B-Instruct --file wiki.test_mini.raw --isq q4k
+cargo run --release --features ... --example perplexity -- --model-id meta-llama/Llama-3.1-8B-Instruct --file wiki.test_mini.raw --isq 4
 ```
 
 > Note: A table of perplexity benchmarks will be coming soon!

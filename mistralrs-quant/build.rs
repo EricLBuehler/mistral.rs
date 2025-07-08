@@ -88,7 +88,11 @@ fn main() -> Result<(), String> {
             "kernels/rotary/rotary.cu",
         ];
         if cc_over_800 {
-            lib_files.push("kernels/marlin/marlin_kernel.cu");
+            lib_files.push("kernels/marlin/marlin_matmul_f16.cu");
+            lib_files.push("kernels/marlin/marlin_matmul_bf16.cu");
+            lib_files.push("kernels/marlin/marlin_matmul_awq_f16.cu");
+            lib_files.push("kernels/marlin/marlin_matmul_awq_bf16.cu");
+            lib_files.push("kernels/marlin/marlin_repack.cu");
             lib_files.push("kernels/blockwise_fp8/blockwise_fp8.cu");
         } else {
             lib_files.push("kernels/marlin/dummy_marlin_kernel.cu");
@@ -173,6 +177,24 @@ fn main() -> Result<(), String> {
             println!("cargo::rerun-if-changed=src/metal_kernels/{src}.metal");
         }
         println!("cargo::rerun-if-changed=build.rs");
+
+        // Check if precompilation should be skipped
+        // https://github.com/EricLBuehler/mistral.rs/pull/1311#issuecomment-3001309885
+        println!("cargo:rerun-if-env-changed=MISTRALRS_METAL_PRECOMPILE");
+        let skip_precompile = env::var("MISTRALRS_METAL_PRECOMPILE")
+            .map(|v| v == "0" || v.to_lowercase() == "false")
+            .unwrap_or(false);
+
+        if skip_precompile {
+            println!(
+                "cargo:warning=Skipping Metal kernel precompilation (MISTRALRS_METAL_PRECOMPILE=0)"
+            );
+            // Write a dummy metallib file to satisfy the include_bytes! macro
+            let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
+            std::fs::write(out_dir.join("mistralrs_quant.metallib"), &[]).unwrap();
+            std::fs::write(out_dir.join("mistralrs_quant_ios.metallib"), &[]).unwrap();
+            return Ok(());
+        }
 
         enum Platform {
             MacOS,

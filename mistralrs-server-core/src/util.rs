@@ -2,6 +2,8 @@
 
 use image::DynamicImage;
 use mistralrs_core::AudioInput;
+use mistralrs_core::MistralRs;
+use std::sync::Arc;
 use tokio::{
     fs::{self, File},
     io::AsyncReadExt,
@@ -121,6 +123,50 @@ pub async fn parse_audio_url(url_unparsed: &str) -> Result<AudioInput, anyhow::E
     AudioInput::from_bytes(&bytes)
 }
 
+/// Validates that the requested model matches one of the loaded models.
+///
+/// This function checks if the model parameter from an OpenAI API request
+/// matches one of the models that are currently loaded by the server.
+///
+/// The special model name "default" can be used to bypass this validation,
+/// which is useful for clients that require a model parameter but want
+/// to use the default model.
+///
+/// ### Arguments
+///
+/// * `requested_model` - The model name from the API request
+/// * `state` - The MistralRs state containing the loaded models info
+///
+/// ### Returns
+///
+/// Returns `Ok(())` if the model is available or if "default" is specified, otherwise returns an error.
+pub fn validate_model_name(
+    requested_model: &str,
+    state: Arc<MistralRs>,
+) -> Result<(), anyhow::Error> {
+    // Allow "default" as a special case to bypass validation
+    if requested_model == "default" {
+        return Ok(());
+    }
+
+    let available_models = state
+        .list_models()
+        .map_err(|e| anyhow::anyhow!("Failed to get available models: {}", e))?;
+
+    if available_models.is_empty() {
+        anyhow::bail!("No models are currently loaded.");
+    }
+
+    if !available_models.contains(&requested_model.to_string()) {
+        anyhow::bail!(
+            "Requested model '{}' is not available. Available models: {}. Use 'default' to use the default model.",
+            requested_model,
+            available_models.join(", ")
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use image::GenericImageView;
@@ -188,7 +234,7 @@ mod tests {
         c7YCVIAfi6JYn5bHjTHTGmurQJXJ8C/um928G9zK4gAAAABJRU5ErkJggg==
         ";
 
-        let url = format!("data:image/png;base64,{}", url);
+        let url = format!("data:image/png;base64,{url}");
         let image = parse_image_url(&url).await.unwrap();
         assert_eq!(image.dimensions(), (32, 32));
 

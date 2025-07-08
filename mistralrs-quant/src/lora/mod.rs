@@ -1,9 +1,6 @@
 mod static_lora;
 
-use std::{
-    collections::HashSet,
-    sync::{Arc, LazyLock, Mutex},
-};
+use std::{cell::RefCell, collections::HashSet};
 
 use candle_core::{DType, Result, Tensor};
 use regex::Regex;
@@ -12,8 +9,24 @@ pub use static_lora::linear_no_bias_static_lora;
 
 use crate::{Shard, ShardedVarBuilder};
 
-pub static APPLIED_LORAS: LazyLock<Arc<Mutex<Vec<LoraAdapter>>>> =
-    LazyLock::new(|| Arc::new(Mutex::new(Vec::new())));
+thread_local! {
+    static ENGINE_APPLIED_LORAS: RefCell<Vec<LoraAdapter>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Get the LoRA adapters for the current engine thread
+pub fn get_applied_loras() -> Vec<LoraAdapter> {
+    ENGINE_APPLIED_LORAS.with(|loras| loras.borrow().clone())
+}
+
+/// Push a LoRA adapter for the current engine thread
+pub fn push_applied_lora(adapter: LoraAdapter) {
+    ENGINE_APPLIED_LORAS.with(|loras| loras.borrow_mut().push(adapter));
+}
+
+/// Clear all LoRA adapters for the current engine thread
+pub fn clear_applied_loras() {
+    ENGINE_APPLIED_LORAS.with(|loras| loras.borrow_mut().clear());
+}
 
 pub const MULTI_LORA_DELIMITER: &str = ";";
 
@@ -33,6 +46,7 @@ pub struct LoraConfig {
     pub target_modules: HashSet<String>,
 }
 
+#[derive(Clone)]
 pub struct LoraAdapter {
     pub config: LoraConfig,
     pub weights: ShardedVarBuilder,
@@ -45,7 +59,8 @@ pub(crate) fn merge_lora_weights(
     out_dim: usize,
     shard: Shard,
 ) -> Result<Tensor> {
-    for LoraAdapter { config, weights } in &*APPLIED_LORAS.lock().expect("No loras initialized.") {
+    let applied_loras = get_applied_loras();
+    for LoraAdapter { config, weights } in &applied_loras {
         let target_modules = config
             .target_modules
             .iter()
@@ -56,7 +71,17 @@ pub(crate) fn merge_lora_weights(
         if !regex.is_match(&vb.prefix()) {
             continue;
         }
-        let weights = weights.set_prefix(vb.prefix());
+
+        // Handle base_model.model things from peft
+        let weights = if weights
+            .pp("base_model.model")
+            .pp(vb.prefix())
+            .contains_tensor("lora_A.weight")
+        {
+            weights.pp("base_model.model").pp(vb.prefix())
+        } else {
+            weights.pp(vb.prefix())
+        };
 
         let a = weights.get_with_hints((config.rank, in_dim), "lora_A.weight", shard)?;
         let b = weights.get_with_hints((out_dim, config.rank), "lora_B.weight", shard)?;

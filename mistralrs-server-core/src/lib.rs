@@ -95,7 +95,7 @@
 //!     let shared_mistralrs = MistralRsForServerBuilder::new()
 //!         .with_model(model)
 //!         .with_in_situ_quant("8".to_string())
-//!         .with_paged_attn(true)
+//!         .set_paged_attn(Some(true))
 //!         .build()
 //!         .await
 //!         .unwrap();

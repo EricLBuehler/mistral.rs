@@ -33,11 +33,11 @@ These parameters do not translate to hard limits during runtime, they only contr
 - Server
     - Text models: 
     ```
-    ./mistralrs-server -i --isq q4k plain -m meta-llama/Llama-3.3-70B-Instruct --max-seq-len 4096 --max-batch-size 2
+    ./mistralrs-server -i --isq 4 plain -m meta-llama/Llama-3.3-70B-Instruct --max-seq-len 4096 --max-batch-size 2
     ```
     - Vision models:
     ```
-    ./mistralrs-server -i --isq q4k vision-plain -m meta-llama/Llama-3.2-11B-Vision-Instruct --max-seq-len 4096 --max-batch-size 2 --max-num-images 2 --max-image-length 1024
+    ./mistralrs-server -i --isq 4 vision-plain -m meta-llama/Llama-3.2-11B-Vision-Instruct --max-seq-len 4096 --max-batch-size 2 --max-num-images 2 --max-image-length 1024
     ```
 
 ---

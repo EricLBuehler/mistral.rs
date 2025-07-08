@@ -32,7 +32,7 @@ Mistral.rs supports interactive mode for vision models! It is an easy way to int
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --features ... --release -- -i --isq Q4K vision-plain -m openbmb/MiniCPM-o-2_6
+cargo run --features ... --release -- -i --isq 4 vision-plain -m openbmb/MiniCPM-o-2_6
 ```
 
 2) Say hello!
@@ -94,7 +94,7 @@ Overall, the image showcases the diverse geological and ecological features of M
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m openbmb/MiniCPM-o-2_6
+cargo run --release --features ... -- --port 1234 --isq 4 vision-plain -m openbmb/MiniCPM-o-2_6
 ```
 
 2) Send a request
@@ -105,7 +105,7 @@ from openai import OpenAI
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 completion = client.chat.completions.create(
-    model="minicpmo_2_6",
+    model="ignore",
     messages=[
         {
             "role": "user",
@@ -205,7 +205,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="minicpmo_2_6",
+        model="ignore",
         messages=[
             {
                 "role": "user",

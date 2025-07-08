@@ -27,7 +27,7 @@ use crate::models::quantized_llama::PropsGGUF;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 
-const MAX_SEQ_LEN: u32 = 4096;
+const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
 const SUPPORTED_LAYERS: [&str; 8] = [
     "self_attn.q_proj",
     "self_attn.k_proj",
@@ -281,7 +281,7 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
         let rotary = RotaryEmbedding::new_partial(
             10000.,
             ct.hparams.n_rot as usize,
-            MAX_SEQ_LEN as usize,
+            DEFAULT_MAX_SEQ_LEN as usize,
             &ct.device,
             false,
             dtype,
@@ -456,7 +456,7 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb.clone(), true)
                     .unwrap()
             }),
-            max_seq_len: MAX_SEQ_LEN as usize, // Cannot determine from ggml.
+            max_seq_len: DEFAULT_MAX_SEQ_LEN as usize, // Cannot determine from ggml.
             mapper: None,
             dtype,
         })

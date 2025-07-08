@@ -11,7 +11,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="qwen2vl",
+        model="ignore",
         messages=[
             {
                 "role": "user",

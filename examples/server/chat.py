@@ -45,7 +45,7 @@ while True:
     prompt = input(">>> ")
     messages.append({"role": "user", "content": prompt})
     completion = client.chat.completions.create(
-        model="mistral",
+        model="default",
         messages=messages,
         max_tokens=256,
         frequency_penalty=1.0,

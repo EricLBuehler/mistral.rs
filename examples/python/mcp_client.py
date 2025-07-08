@@ -95,7 +95,7 @@ async def main():
 
     # Create a conversation that demonstrates MCP tool usage
     request = mistralrs.ChatCompletionRequest(
-        model="mistral",
+        model="ignore",
         messages=[
             {
                 "role": "system",

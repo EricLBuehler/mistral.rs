@@ -53,7 +53,8 @@
 //!                 name: "Hugging Face MCP Server".to_string(),
 //!                 source: McpServerSource::Http {
 //!                     url: "https://hf.co/mcp".to_string(),
-//!                     ..Default::default()
+//!                     timeout_secs: None,
+//!                     headers: None,
 //!                 },
 //!                 bearer_token: Some("hf_xxx".to_string()),
 //!                 ..Default::default()

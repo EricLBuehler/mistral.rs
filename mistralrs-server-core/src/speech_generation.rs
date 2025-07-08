@@ -19,6 +19,7 @@ use crate::{
     handler_core::{create_response_channel, send_request, ErrorToResponse, JsonError},
     openai::{AudioResponseFormat, SpeechGenerationRequest},
     types::SharedMistralRsState,
+    util::validate_model_name,
 };
 
 /// Represents different types of speech generation responses.
@@ -55,6 +56,9 @@ pub fn parse_request(
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
 
+    // Validate that the requested model matches the loaded model
+    validate_model_name(&oairequest.model, state.clone())?;
+
     let request = Request::Normal(Box::new(NormalRequest {
         id: state.next_request_id(),
         messages: RequestMessage::SpeechGeneration {
@@ -71,6 +75,11 @@ pub fn parse_request(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
+        model_id: if oairequest.model == "default" {
+            None
+        } else {
+            Some(oairequest.model.clone())
+        },
     }));
 
     Ok((request, oairequest.response_format))

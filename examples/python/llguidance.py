@@ -32,7 +32,7 @@ grammars = [
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="phi",
+        model="ignore",
         messages=[
             {
                 "role": "user",

@@ -186,7 +186,8 @@ impl VisionMessages {
         audios: Vec<AudioInput>,
         model: &Model,
     ) -> anyhow::Result<Self> {
-        let prefixer = match &model.config().category {
+        let config = model.config().unwrap();
+        let prefixer = match &config.category {
             ModelCategory::Vision { prefixer } => prefixer,
             ModelCategory::Text
             | ModelCategory::Diffusion
@@ -471,7 +472,8 @@ impl RequestBuilder {
         audios: Vec<AudioInput>,
         model: &Model,
     ) -> anyhow::Result<Self> {
-        let prefixer = match &model.config().category {
+        let config = model.config().unwrap();
+        let prefixer = match &config.category {
             ModelCategory::Vision { prefixer } => prefixer,
             ModelCategory::Text
             | ModelCategory::Diffusion

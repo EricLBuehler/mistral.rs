@@ -64,6 +64,7 @@ pub struct PagedAttentionMetaBuilder {
     block_size: Option<usize>,
     mem_cpu: usize,
     mem_gpu: MemoryGpuConfig,
+    cache_type: PagedCacheType,
 }
 
 impl Default for PagedAttentionMetaBuilder {
@@ -72,6 +73,7 @@ impl Default for PagedAttentionMetaBuilder {
             block_size: None,
             mem_cpu: 64,
             mem_gpu: MemoryGpuConfig::ContextSize(4096),
+            cache_type: PagedCacheType::Auto,
         }
     }
 }
@@ -87,8 +89,13 @@ impl PagedAttentionMetaBuilder {
         self
     }
 
+    pub fn with_paged_cache_type(mut self, cache_type: PagedCacheType) -> Self {
+        self.cache_type = cache_type;
+        self
+    }
+
     pub fn build(self) -> anyhow::Result<PagedAttentionConfig> {
-        PagedAttentionConfig::new(self.block_size, self.mem_cpu, self.mem_gpu)
+        PagedAttentionConfig::new(self.block_size, self.mem_cpu, self.mem_gpu, self.cache_type)
     }
 }
 
