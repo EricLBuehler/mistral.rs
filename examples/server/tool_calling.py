@@ -83,7 +83,7 @@ messages = [
 ]
 
 completion = client.chat.completions.create(
-    model="ignore",
+    model="default",
     messages=messages,
     tools=tools,
     tool_choice="auto",
@@ -109,7 +109,7 @@ if tool_called.name in functions:
     messages.append({"role": "tool", "content": result})
 
     completion = client.chat.completions.create(
-        model="ignore", messages=messages, tools=tools, tool_choice="auto"
+        model="default", messages=messages, tools=tools, tool_choice="auto"
     )
     # print(completion.usage)
     print(completion.choices[0].message.content)

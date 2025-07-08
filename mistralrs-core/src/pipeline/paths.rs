@@ -446,7 +446,23 @@ pub(crate) fn get_chat_template(
             template.chat_template = Some(ChatTemplateValue(Either::Left(chat_template)));
             template
         }
-        None => serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap(),
+        None => {
+            // Check if template_filename is a .jinja file
+            if let Some(template_filename) = paths.get_template_filename() {
+                if template_filename.extension().map(|e| e.to_str()) == Some(Some("jinja")) {
+                    info!("Using chat template from .jinja file.");
+                    let mut template = ChatTemplate::default();
+                    template.chat_template = Some(ChatTemplateValue(Either::Left(
+                        template_content.as_ref().unwrap().clone(),
+                    )));
+                    template
+                } else {
+                    serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap()
+                }
+            } else {
+                serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap()
+            }
+        }
     };
     // Overwrite to use any present `chat_template.json`, only if there is not one present already.
     if template.chat_template.is_none() {
@@ -540,34 +556,8 @@ pub(crate) fn get_chat_template(
                     }
                 }
                 None => {
-                    // Try to use embedded template as last resort based on model_type from config
-                    let embedded_template = paths
-                        .get_config_filename()
-                        .to_str()
-                        .and_then(|config_path| fs::read_to_string(config_path).ok())
-                        .and_then(|config_content| {
-                            serde_json::from_str::<Value>(&config_content).ok()
-                        })
-                        .and_then(|config_json| {
-                            config_json
-                                .get("model_type")
-                                .and_then(|v| v.as_str())
-                                .map(String::from)
-                        })
-                        .and_then(|model_type| {
-                            get_embedded_chat_template_for_model_type(&model_type)
-                        });
-
-                    if let Some(embedded_template) = embedded_template {
-                        info!("Using embedded chat template for model.");
-                        deser.insert(
-                            "chat_template".to_string(),
-                            Value::String(embedded_template.to_string()),
-                        );
-                    } else {
-                        info!("No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.");
-                        deser.insert("chat_template".to_string(), Value::Null);
-                    }
+                    warn!("No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.");
+                    deser.insert("chat_template".to_string(), Value::Null);
                 }
             }
 

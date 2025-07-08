@@ -106,6 +106,7 @@ class Architecture(Enum):
     Qwen3 = "qwen3"
     GLM4 = "glm4"
     Qwen3Moe = "qwen3moe"
+    SmolLm3 = "smollm3"
 
 @dataclass
 class VisionArchitecture(Enum):

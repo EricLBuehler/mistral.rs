@@ -195,6 +195,9 @@ macro_rules! get_paths {
         let template_filename = if let Some(ref p) = $this.chat_template {
             info!("Using chat template file at `{p}`");
             Some(PathBuf::from_str(p)?)
+        } else if dir_list.contains(&"chat_template.jinja".to_string()) {
+            info!("Loading `chat_template.jinja` at `{}`", $this.model_id);
+            Some($crate::api_get_file!(api, "chat_template.jinja", model_id))
         } else {
             info!("Loading `tokenizer_config.json` at `{}`", $this.model_id);
             Some($crate::api_get_file!(
@@ -299,16 +302,26 @@ macro_rules! get_paths_gguf {
         ));
         let model_id = std::path::Path::new(&this_model_id);
 
+        let dir_list = $crate::api_dir_list!(api, model_id, false)
+            .collect::<Vec<_>>();
+
         let chat_template = if let Some(ref p) = $this.chat_template {
-            if p.ends_with(".json") {
+            if p.ends_with(".json") || p.ends_with(".jinja") {
                 info!("Using chat template file at `{p}`");
                 Some(PathBuf::from_str(p)?)
             } else {
-                panic!("Specified chat template file must end with .json");
+                panic!("Specified chat template file must end with .json or .jinja");
             }
         } else {
             if $this.model_id.is_none() {
                 None
+            } else if dir_list.contains(&"chat_template.jinja".to_string()) {
+                info!("Loading `chat_template.jinja` at `{}`", this_model_id);
+                Some($crate::api_get_file!(
+                    api,
+                    "chat_template.jinja",
+                    model_id
+                ))
             } else {
                 info!("Loading `tokenizer_config.json` at `{}` because no chat template file was specified.", this_model_id);
                 let res = $crate::api_get_file!(
@@ -339,9 +352,6 @@ macro_rules! get_paths_gguf {
             revision.clone(),
             $this.xlora_order.as_ref(),
         )?;
-
-        let dir_list = $crate::api_dir_list!(api, model_id, false)
-            .collect::<Vec<_>>();
 
         let gen_conf = if dir_list.contains(&"generation_config.json".to_string()) {
             info!("Loading `generation_config.json` at `{}`", this_model_id);

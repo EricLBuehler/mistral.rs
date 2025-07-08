@@ -85,6 +85,22 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ```
   </details>
   
+
+- 🤗🤗🤗 Run the **SmolLM 3** long-context hybrid-reasoning model with full tool-calling support: [documentation](docs/SMOLLM3.md)  
+  <details>
+    <summary>Show command</summary>
+
+    **Default, easiest:**
+    ```bash
+    ./mistralrs-server -i --isq 8 run -m HuggingFaceTB/SmolLM3-3B
+    ```
+
+    **UQFF prequantized:**
+    ```bash
+    ./mistralrs-server -i run -m EricB/SmolLM3-3B-UQFF -f smollm33b-q4k-0.uqff
+    ```
+  </details>
+
 - 🔊 Run the **Dia 1.6b** model for highly-realistic dialogue generation: [documentation](docs/DIA.md)  
   <details>
     <summary>Show command</summary>
@@ -511,6 +527,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `deepseekv3`
 - `qwen3`
 - `qwen3moe`
+- `smollm3`
 
 </details>
 
@@ -595,6 +612,7 @@ Please submit more benchmarks via raising an issue!
 |Mistral 3| | |✅|
 |Llama 4| | |✅|
 |Qwen 3|✅| |✅|
+|SmolLM3| | |✅|
 |Dia 1.6b| | |✅|
 |Gemma 3n| | |✅|
 </details>
@@ -642,6 +660,7 @@ Please submit more benchmarks via raising an issue!
 |Mistral 3| | | |
 |Llama 4| | | |
 |Qwen 3| | | |
+|SmolLM3|✅| | |
 |Gemma 3n| | | |
 </details>
 
@@ -676,6 +695,7 @@ Please submit more benchmarks via raising an issue!
 |Mistral 3|✅|
 |Llama 4| |
 |Qwen 3| |
+|SmolLM3|✅|
 |Gemma 3n| | | |
 </details>
 

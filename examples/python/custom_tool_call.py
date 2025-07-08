@@ -61,7 +61,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="ignore",
+        model="default",
         messages=[{"role": "user", "content": "Where is Cargo.toml in this repo?"}],
         max_tokens=64,
         tool_schemas=[schema],
