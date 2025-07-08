@@ -36,6 +36,7 @@ pub struct Gemma3nModel {
     embed_vision: Gemma3nMultimodalEmbedder,
     embed_audio: Gemma3nMultimodalEmbedder,
     cfg: config::Gemma3nConfig,
+    vision_dtype: DType,
 }
 
 impl Gemma3nModel {
@@ -49,10 +50,17 @@ impl Gemma3nModel {
         let vb = vb.pp("model");
 
         // Initialize vision tower
+        let vision_dtype = if vb.dtype() == DType::F16 {
+            // f16 -> f32 for vision model in particular.
+            DType::F32
+        } else {
+            vb.dtype()
+        };
         let vision_tower = vision::VisionTower::new(
             normal_loading_metadata
                 .mapper
-                .set_nm_device(vb.pp("vision_tower").pp("timm_model"), false),
+                .set_nm_device(vb.pp("vision_tower").pp("timm_model"), false)
+                .set_dtype(vision_dtype),
         )?;
 
         // Initialize audio tower and embedder
@@ -98,6 +106,7 @@ impl Gemma3nModel {
             embed_vision,
             embed_audio,
             cfg: cfg.clone(),
+            vision_dtype,
         })
     }
 
@@ -152,7 +161,8 @@ impl Gemma3nModel {
             let pixel_values = pixel_values.t()?;
             let vision_features = self
                 .vision_tower
-                .forward(&pixel_values.to_dtype(input_embeds.dtype())?)?;
+                .forward(&pixel_values.to_dtype(self.vision_dtype)?)?
+                .to_dtype(input_embeds.dtype())?;
 
             // Reshape vision features to (batch_size * num_images, soft_tokens_per_image, hidden_size)
             let (batch_size, channels, h, w) = vision_features.dims4()?;

@@ -5320,8 +5320,18 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
             subsample_conv_projection_elems + conformer_elems + embed_audio_elems
         };
 
-        let total_elems = text_elems + vision_elems + audio_elems;
-        Ok(total_elems * dtype.size_in_bytes())
+        let vision_dtype = if dtype == DType::F16 {
+            // f16 -> f32 for vision model in particular.
+            DType::F32
+        } else {
+            dtype
+        };
+
+        let total_elems = text_elems * dtype.size_in_bytes()
+            + vision_elems * vision_dtype.size_in_bytes()
+            + audio_elems * dtype.size_in_bytes();
+
+        Ok(total_elems)
     }
 
     fn layer_sizes_in_bytes(
