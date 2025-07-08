@@ -16,7 +16,7 @@ use crate::{
         self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, MatMul, RmsNorm,
         RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
-    matformer::MatformerSlicingConfig,
+    matformer::MatformerSliceConfig,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         extract_logits,
@@ -817,7 +817,7 @@ impl DecoderLayer {
     }
 }
 
-type MatformerSlicingResult = (
+type MatformerSliceResult = (
     Gemma3nTextConfig,
     Option<Tensor>,
     usize,
@@ -827,9 +827,9 @@ type MatformerSlicingResult = (
 
 pub(crate) fn handle_matformer_slicing(
     cfg: &Gemma3nTextConfig,
-    matformer_slicing_config: &Option<MatformerSlicingConfig>,
+    matformer_slicing_config: &Option<MatformerSliceConfig>,
     mapper: &(dyn DeviceMapper + Send + Sync),
-) -> Result<MatformerSlicingResult> {
+) -> Result<MatformerSliceResult> {
     match matformer_slicing_config {
         Some(slicing_config) => {
             let matformer_slice = slicing_config.get_slicing().ok_or_else(|| {

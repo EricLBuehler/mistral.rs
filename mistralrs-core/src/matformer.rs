@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
-pub struct Slicing {
+pub struct Slice {
     pub effective_params: f64,
     pub ffn_hidden_dimensions: Vec<usize>,
     pub layers_skipped: Option<Vec<usize>>,
@@ -15,21 +15,21 @@ pub struct Slicing {
 
 #[derive(Debug)]
 pub struct MatformerConfig {
-    pub slicings: HashMap<String, Slicing>,
+    pub slices: HashMap<String, Slice>,
 }
 
 #[derive(Debug, Clone)]
-pub struct MatformerSlicingConfig {
+pub struct MatformerSliceConfig {
     pub slice_name: String,
     pub config: Arc<MatformerConfig>,
 }
 
-impl MatformerSlicingConfig {
+impl MatformerSliceConfig {
     pub fn new(slice_name: String, config: Arc<MatformerConfig>) -> Self {
         Self { slice_name, config }
     }
 
-    pub fn get_slicing(&self) -> Option<&Slicing> {
+    pub fn get_slicing(&self) -> Option<&Slice> {
         self.config.get_slicing(&self.slice_name)
     }
 }
@@ -59,7 +59,7 @@ impl MatformerConfig {
         let reader = BufReader::new(file);
 
         let mut rdr = csv::Reader::from_reader(reader);
-        let mut slicings = HashMap::new();
+        let mut slices = HashMap::new();
 
         for result in rdr.deserialize() {
             let record: CsvRecord = result.context("Failed to parse CSV record")?;
@@ -75,20 +75,20 @@ impl MatformerConfig {
                 .transpose()
                 .with_context(|| format!("Failed to parse layers skipped for {}", record.name))?;
 
-            let slicing = Slicing {
+            let slicing = Slice {
                 effective_params: record.effective_params,
                 ffn_hidden_dimensions,
                 layers_skipped,
             };
 
-            slicings.insert(record.name, slicing);
+            slices.insert(record.name, slicing);
         }
 
-        Ok(MatformerConfig { slicings })
+        Ok(MatformerConfig { slices })
     }
 
-    pub fn get_slicing(&self, name: &str) -> Option<&Slicing> {
-        self.slicings.get(name)
+    pub fn get_slicing(&self, name: &str) -> Option<&Slice> {
+        self.slices.get(name)
     }
 }
 

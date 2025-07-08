@@ -558,13 +558,13 @@ impl Loader for NormalLoader {
         let matformer_slicing_config = if let Some(matformer_path) =
             &self.config.matformer_config_path
         {
-            use crate::matformer::{MatformerConfig, MatformerSlicingConfig};
+            use crate::matformer::{MatformerConfig, MatformerSliceConfig};
             info!("Loading Matformer config from {:?}", matformer_path);
             let config = Arc::new(MatformerConfig::from_file(matformer_path)?);
 
             if let Some(slice_name) = &self.config.matformer_slice_name {
                 info!("Using Matformer slice: {}", slice_name);
-                Some(MatformerSlicingConfig::new(slice_name.clone(), config))
+                Some(MatformerSliceConfig::new(slice_name.clone(), config))
             } else {
                 // If no slice name is provided but config exists, we'll need to handle this
                 // For now, return None and let the model handle the default slice selection

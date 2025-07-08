@@ -38,7 +38,7 @@ pub use diffusion_loaders::{
 };
 
 use crate::{
-    matformer::MatformerSlicingConfig, paged_attention::ModelConfigLike, DeviceMapMetadata,
+    matformer::MatformerSliceConfig, paged_attention::ModelConfigLike, DeviceMapMetadata,
     DeviceMapSetting, PagedAttentionConfig, TryIntoDType,
 };
 
@@ -357,7 +357,7 @@ pub trait DeviceMappedModelLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-        matformer_config: Option<&MatformerSlicingConfig>,
+        matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize>;
     /// weight_pack_factor only applies to quantized weights.
     fn layer_sizes_in_bytes(
@@ -365,7 +365,7 @@ pub trait DeviceMappedModelLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-        matformer_config: Option<&MatformerSlicingConfig>,
+        matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<Vec<usize>>;
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
         None
