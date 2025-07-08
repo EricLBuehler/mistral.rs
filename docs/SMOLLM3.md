@@ -1,24 +1,29 @@
-# Qwen 3: [`collection`](https://huggingface.co/collections/Qwen/qwen3-67dd247413f0e2e4f653967f)
+# SmolLM3: [`HuggingFaceTB/SmolLM3-3B`](https://huggingface.co/HuggingFaceTB/SmolLM3-3B)
 
-The Qwen 3 family is a collection of hybrid reasoning MoE and non-MoE models ranging from 0.6b to 235b parameters.
+SmolLM3 is a 3B parameter long-context hybrid reasoning language model. It supports 6 languages, advanced reasoning and long context. SmolLM3 is a fully open model that offers strong performance at the 3B–4B scale.
 
+**Default, easiest:**
+```bash
+./mistralrs-server -i --isq 8 run -m HuggingFaceTB/SmolLM3-3B
 ```
-./mistralrs-server --isq 4 -i plain -m Qwen/Qwen3-8B
-./mistralrs-server --isq 4 -i plain -m Qwen/Qwen3-30B-A3B
+
+**UQFF prequantized:**
+```bash
+./mistralrs-server -i run -m EricB/SmolLM3-3B-UQFF -f smollm33b-q4k-0.uqff
 ```
 
-> Note: mistral.rs can load all [FP8 pre-quantized versions](https://huggingface.co/Qwen/Qwen3-14B-FP8) natively! Simply replace the model ID.
+> Note: tool calling support is fully implemented for the SmolLM3 models, including agentic web search.
 
-> Note: tool calling support is fully implemented for the Qwen 3 models, including agentic web search.
+> Check out prequantized UQFF SmolLM3 here: https://huggingface.co/EricB/SmolLM3-3B-UQFF
 
 ## Enabling thinking
-The Qwen 3 models are hybrid reasoning models which can be controlled at inference-time. **By default, reasoning is enabled for these models.** To dynamically control this, it is recommended to either add `/no_think` or `/think` to your prompt. Alternatively, you can specify the `enable_thinking` flag as detailed by the API-specific examples.
+The SmolLM3 models are hybrid reasoning models which can be controlled at inference-time. **By default, reasoning is enabled for these models.** To dynamically control this, it is recommended to either add `/no_think` or `/think` to your prompt. Alternatively, you can specify the `enable_thinking` flag as detailed by the API-specific examples.
 
 ## HTTP API
-You can find a more detailed example demonstrating enabling/disabling thinking [here](../examples/server/qwen3.py).
+You can find a more detailed example demonstrating enabling/disabling thinking [here](../examples/server/smollm3.py).
 
 ```
-./mistralrs-server --isq 4 --port 1234 plain -m Qwen/Qwen3-8B
+./mistralrs-server --isq 8 --port 1234 plain -m HuggingFaceTB/SmolLM3-3B
 ```
 
 ```py
@@ -48,15 +53,15 @@ while True:
 ```
 
 ## Python API
-You can find a more detailed example demonstrating enabling/disabling thinking [here](../examples/python/qwen3.py).
+You can find a more detailed example demonstrating enabling/disabling thinking [here](../examples/python/smollm3.py).
 
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
     which=Which.Plain(
-        model_id="Qwen/Qwen3-8B",
-        arch=Architecture.Qwen3,
+        model_id="HuggingFaceTB/SmolLM3-3B",
+        arch=Architecture.SmolLm3,
     ),
 )
 
@@ -78,7 +83,7 @@ print(res.usage)
 ```
 
 ## Rust API
-You can find a more detailed example demonstrating enabling/disabling thinking [here](../mistralrs/examples/qwen3/main.rs).
+You can find a more detailed example demonstrating enabling/disabling thinking [here](../mistralrs/examples/smollm3/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -88,8 +93,8 @@ use mistralrs::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("Qwen/Qwen3-8B")
-        .with_isq(IsqType::Q4K)
+    let model = TextModelBuilder::new("HuggingFaceTB/SmolLM3-3B")
+        .with_isq(IsqType::Q8_0)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
         .build()

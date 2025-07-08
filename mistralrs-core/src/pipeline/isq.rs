@@ -710,6 +710,7 @@ pub trait IsqModel {
                 let config_out = parent.join("config.json");
                 let tokenizer_out = parent.join("tokenizer.json");
                 let tokenizer_cfg_out = parent.join("tokenizer_config.json");
+                let chat_template_jinja_out = parent.join("chat_template.jinja");
                 let gen_cfg_out = parent.join("generation_config.json");
                 let processor_out = parent.join("processor_config.json");
                 let preprocessor_out = parent.join("preprocessor_config.json");
@@ -741,15 +742,24 @@ pub trait IsqModel {
                     .map_err(candle_core::Error::msg)?;
 
                 if let Some(template_filename) = template_filename {
-                    info!(
-                        "Serializing tokenizer config to `{}`.",
-                        tokenizer_cfg_out.display()
-                    );
-
                     let template =
-                        std::fs::read(template_filename).map_err(candle_core::Error::msg)?;
-                    std::fs::write(&tokenizer_cfg_out, template)
-                        .map_err(candle_core::Error::msg)?;
+                        std::fs::read(&template_filename).map_err(candle_core::Error::msg)?;
+
+                    if template_filename.extension().map(|e| e.to_str()) == Some(Some("jinja")) {
+                        info!(
+                            "Serializing chat template to `{}`.",
+                            chat_template_jinja_out.display()
+                        );
+                        std::fs::write(&chat_template_jinja_out, template)
+                            .map_err(candle_core::Error::msg)?;
+                    } else {
+                        info!(
+                            "Serializing tokenizer config to `{}`.",
+                            tokenizer_cfg_out.display()
+                        );
+                        std::fs::write(&tokenizer_cfg_out, template)
+                            .map_err(candle_core::Error::msg)?;
+                    }
                 }
 
                 if let Some(generation_config) = generation_config {

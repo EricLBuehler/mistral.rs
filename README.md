@@ -68,7 +68,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 *After following installation instructions*
 
-- 🤗🤗🤗 Run the **SmolLM 3** long-context hybrid-reasoning model:
+- 🤗🤗🤗 Run the **SmolLM 3** long-context hybrid-reasoning model with full tool-calling support: [documentation](docs/SMOLLM3.md)  
   <details>
     <summary>Show command</summary>
 

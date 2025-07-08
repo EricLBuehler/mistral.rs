@@ -13,6 +13,7 @@ extend-ignore-identifiers-re = [
     "tese",
     "seperable",
     "Seperable",
+    "setp",
 ]
 
 [files]

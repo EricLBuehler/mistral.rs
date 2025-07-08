@@ -309,9 +309,14 @@ pub fn apply_chat_template_to(
         .into_owned();
 
     if template.contains("{{ meta }}") {
-        //fix for GLM4 models
+        // Fix for GLM4 models
         template = template.replace("{%- set meta = message.get(\"metadata\", \"\") %}", "");
         template = template.replace("{{ meta }}", "");
+    }
+    if template.contains("{% generation %}") && template.contains("{% endgeneration %}") {
+        // Strip for smollm3 models
+        template = template.replace("{% generation %}", "");
+        template = template.replace("{% endgeneration %}", "");
     }
 
     env.add_template("chat_template", &template)?;

@@ -75,7 +75,9 @@ completion = client.chat.completions.create(
     frequency_penalty=1.0,
     top_p=0.1,
     temperature=0,
-    # enable_thinking=False,
+    # extra_body={
+    #     "enable_thinking": False
+    # }
 )
 resp = completion.choices[0].message.content
 print(resp)
@@ -100,7 +102,9 @@ completion = client.chat.completions.create(
     frequency_penalty=1.0,
     top_p=0.1,
     temperature=0,
-    # enable_thinking=False,
+    # extra_body={
+    #     "enable_thinking": True
+    # }
 )
 resp = completion.choices[0].message.content
 print(resp)
