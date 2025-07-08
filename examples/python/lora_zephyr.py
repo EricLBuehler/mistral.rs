@@ -15,7 +15,7 @@ runner.activate_adapters(["adapter_3"])
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="ignore",
+        model="default",
         messages=[
             {"role": "user", "content": "Tell me a story about the Rust type system."}
         ],

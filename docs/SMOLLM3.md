@@ -1,34 +1,29 @@
-# DeepSeek V3: [`deepseek-ai/DeepSeek-V3`](https://huggingface.co/deepseek-ai/DeepSeek-V3), [`deepseek-ai/DeepSeek-R1`](https://huggingface.co/deepseek-ai/DeepSeek-R1)
+# SmolLM3: [`HuggingFaceTB/SmolLM3-3B`](https://huggingface.co/HuggingFaceTB/SmolLM3-3B)
 
-The DeepSeek V3 is a mixture of expert (MoE) model.
+SmolLM3 is a 3B parameter long-context hybrid reasoning language model. It supports 6 languages, advanced reasoning and long context. SmolLM3 is a fully open model that offers strong performance at the 3B–4B scale.
 
-```
-./mistralrs-server --isq 4 -i plain -m deepseek-ai/DeepSeek-R1
-```
-
-> [!NOTE]
-> The non-distill versions of the DeepSeek R1 models share the DeepSeek V3 architecture.
-
-> [!NOTE]
-> This model supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
-
-```
-./mistralrs-server --isq 4 -i plain -m deepseek-ai/DeepSeek-R1 --organization moqe
+**Default, easiest:**
+```bash
+./mistralrs-server -i --isq 8 run -m HuggingFaceTB/SmolLM3-3B
 ```
 
-## Running the distill models
+**UQFF prequantized:**
+```bash
+./mistralrs-server -i run -m EricB/SmolLM3-3B-UQFF -f smollm33b-q4k-0.uqff
+```
 
-The various [distillation](https://huggingface.co/collections/deepseek-ai/deepseek-r1-678e1e131c0169c0bc89728d) models can be run out of the box.
-```
-./mistralrs-server -i --isq 4 plain -m deepseek-ai/DeepSeek-R1-Distill-Llama-8B
-./mistralrs-server -i --isq 4 plain -m deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
-./mistralrs-server -i --isq 4 plain -m deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
-```
+> Note: tool calling support is fully implemented for the SmolLM3 models, including agentic web search.
+
+> Check out prequantized UQFF SmolLM3 here: https://huggingface.co/EricB/SmolLM3-3B-UQFF
+
+## Enabling thinking
+The SmolLM3 models are hybrid reasoning models which can be controlled at inference-time. **By default, reasoning is enabled for these models.** To dynamically control this, it is recommended to either add `/no_think` or `/think` to your prompt. Alternatively, you can specify the `enable_thinking` flag as detailed by the API-specific examples.
 
 ## HTTP API
+You can find a more detailed example demonstrating enabling/disabling thinking [here](../examples/server/smollm3.py).
 
 ```
-./mistralrs-server --isq 4 --port 1234 plain -m deepseek-ai/DeepSeek-R1
+./mistralrs-server --isq 8 --port 1234 plain -m HuggingFaceTB/SmolLM3-3B
 ```
 
 ```py
@@ -50,6 +45,7 @@ while True:
         frequency_penalty=1.0,
         top_p=0.1,
         temperature=0,
+        # enable_thinking=False,
     )
     resp = completion.choices[0].message.content
     print(resp)
@@ -57,13 +53,15 @@ while True:
 ```
 
 ## Python API
+You can find a more detailed example demonstrating enabling/disabling thinking [here](../examples/python/smollm3.py).
+
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
     which=Which.Plain(
-        model_id="deepseek-ai/DeepSeek-R1",
-        arch=Architecture.DeepseekV3,
+        model_id="HuggingFaceTB/SmolLM3-3B",
+        arch=Architecture.SmolLm3,
     ),
 )
 
@@ -77,6 +75,7 @@ res = runner.send_chat_completion_request(
         presence_penalty=1.0,
         top_p=0.1,
         temperature=0.1,
+        # enable_thinking=False,
     )
 )
 print(res.choices[0].message.content)
@@ -84,7 +83,7 @@ print(res.usage)
 ```
 
 ## Rust API
-You can find this example [here](../mistralrs/examples/deepseekr1/main.rs).
+You can find a more detailed example demonstrating enabling/disabling thinking [here](../mistralrs/examples/smollm3/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -94,14 +93,15 @@ use mistralrs::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("deepseek-ai/DeepSeek-R1")
-        .with_isq(IsqType::Q4K)
+    let model = TextModelBuilder::new("HuggingFaceTB/SmolLM3-3B")
+        .with_isq(IsqType::Q8_0)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
         .build()
         .await?;
 
     let messages = TextMessages::new()
+        // .enable_thinking(false)
         .add_message(
             TextMessageRole::System,
             "You are an AI agent with a specialty in programming.",

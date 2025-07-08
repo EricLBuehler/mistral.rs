@@ -12,7 +12,7 @@ The Qwen 3 family is a collection of hybrid reasoning MoE and non-MoE models ran
 > Note: tool calling support is fully implemented for the Qwen 3 models, including agentic web search.
 
 ## Enabling thinking
-The Qwen 3 models are hybrid reasoning models which can be controlled at inference-time. By default, reasoning is enabled for these models. To dynamically control this, it is recommended to either add `/no_think` or `/think` to your prompt. Alternatively, you can specify the `enable_thinking` flag as detailed by the API-specific examples.
+The Qwen 3 models are hybrid reasoning models which can be controlled at inference-time. **By default, reasoning is enabled for these models.** To dynamically control this, it is recommended to either add `/no_think` or `/think` to your prompt. Alternatively, you can specify the `enable_thinking` flag as detailed by the API-specific examples.
 
 ## HTTP API
 You can find a more detailed example demonstrating enabling/disabling thinking [here](../examples/server/qwen3.py).
@@ -34,12 +34,13 @@ while True:
     prompt = input(">>> ")
     messages.append({"role": "user", "content": prompt})
     completion = client.chat.completions.create(
-        model="ignore",
+        model="default",
         messages=messages,
         max_tokens=256,
         frequency_penalty=1.0,
         top_p=0.1,
         temperature=0,
+        # enable_thinking=False,
     )
     resp = completion.choices[0].message.content
     print(resp)
@@ -61,7 +62,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="ignore",
+        model="default",
         messages=[
             {"role": "user", "content": "Tell me a story about the Rust type system."}
         ],
@@ -69,6 +70,7 @@ res = runner.send_chat_completion_request(
         presence_penalty=1.0,
         top_p=0.1,
         temperature=0.1,
+        # enable_thinking=False,
     )
 )
 print(res.choices[0].message.content)
@@ -94,6 +96,7 @@ async fn main() -> Result<()> {
         .await?;
 
     let messages = TextMessages::new()
+        // .enable_thinking(false)
         .add_message(
             TextMessageRole::System,
             "You are an AI agent with a specialty in programming.",

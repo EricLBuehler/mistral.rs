@@ -1,0 +1,89 @@
+{# ───── defaults ───── #}
+{%- if enable_thinking is not defined -%}
+{%- set enable_thinking = true -%}
+{%- endif -%}
+
+{# ───── reasoning mode ───── #}
+{%- if enable_thinking -%}
+  {%- set reasoning_mode = "/think" -%}
+{%- else -%}
+  {%- set reasoning_mode = "/no_think" -%}
+{%- endif -%}
+
+{# ───── header (system message) ───── #}
+{{- "<|im_start|>system\n" -}}
+
+{%- if messages[0].role == "system" -%}
+  {%- set system_message = messages[0].content -%}
+  {%- if "/no_think" in system_message -%}
+    {%- set reasoning_mode = "/no_think" -%}
+  {%- elif "/think" in system_message -%}
+    {%- set reasoning_mode = "/think" -%}
+  {%- endif -%}
+  {%- set custom_instructions = system_message.replace("/no_think", "").replace("/think", "").rstrip() -%}
+{%- endif -%}
+
+{%- if "/system_override" in system_message -%}
+  {{- custom_instructions.replace("/system_override", "").rstrip() -}}
+  {{- "<|im_end|>\n" -}}
+{%- else -%}
+  {{- "## Metadata\n\n" -}}
+  {{- "Knowledge Cutoff Date: June 2025\n" -}}
+  {%- set today = strftime_now("%d %B %Y") -%}
+  {{- "Today Date: " ~ today ~ "\n" -}}
+  {{- "Reasoning Mode: " + reasoning_mode + "\n\n" -}}
+  
+  {{- "## Custom Instructions\n\n" -}}
+  {%- if custom_instructions -%}
+    {{- custom_instructions + "\n\n" -}}
+  {%- elif reasoning_mode == "/think" -%}
+    {{- "You are a helpful AI assistant named SmolLM, trained by Hugging Face. Your role as an assistant involves thoroughly exploring questions through a systematic thinking process before providing the final precise and accurate solutions. This requires engaging in a comprehensive cycle of analysis, summarizing, exploration, reassessment, reflection, backtracking, and iteration to develop well-considered thinking process. Please structure your response into two main sections: Thought and Solution using the specified format: <think> Thought section </think> Solution section. In the Thought section, detail your reasoning process in steps. Each step should include detailed considerations such as analysing questions, summarizing relevant findings, brainstorming new ideas, verifying the accuracy of the current steps, refining any errors, and revisiting previous steps. In the Solution section, based on various attempts, explorations, and reflections from the Thought section, systematically present the final solution that you deem correct. The Solution section should be logical, accurate, and concise and detail necessary steps needed to reach the conclusion.\n\n" -}}
+  {%- else -%}
+    {{- "You are a helpful AI assistant named SmolLM, trained by Hugging Face.\n\n" -}}
+  {%- endif -%}
+
+  {%- if xml_tools or python_tools -%}
+    {{- "### Tools\n\n" -}}
+    {%- if xml_tools -%}
+      {%- set ns = namespace(xml_tool_string="You may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n\n<tools>\n") -%}
+      {%- for tool in xml_tools[:] -%} {# The slicing makes sure that xml_tools is a list #}
+        {%- set ns.xml_tool_string = ns.xml_tool_string ~ (tool | string) ~ "\n" -%}
+      {%- endfor -%}
+      {%- set xml_tool_string = ns.xml_tool_string + "</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>" -%}
+      {{- xml_tool_string -}}
+    {%- endif -%}
+    {%- if python_tools -%}
+      {%- set ns = namespace(python_tool_string="When you send a message containing Python code between '<code>' and '</code>' tags, it will be executed in a stateful Jupyter notebook environment, and you will then be given the output to continued reasoning in an agentic loop.\n\nYou can use the following tools in your python code like regular functions:\n<tools>\n") -%}
+      {%- for tool in python_tools[:] -%} {# The slicing makes sure that python_tools is a list #}
+        {%- set ns.python_tool_string = ns.python_tool_string ~ (tool | string) ~ "\n" -%}
+      {%- endfor -%}
+      {%- set python_tool_string = ns.python_tool_string + "</tools>\n\nThe state persists between code executions: so variables that you define in one step are still available thereafter." -%}
+      {{- python_tool_string -}}
+    {%- endif -%}
+    {{- "\n\n" -}}
+    {{- "<|im_end|>\n" -}}
+  {%- endif -%}
+{%- endif -%}
+{# ───── main loop ───── #}
+{%- for message in messages -%}
+    {%- set content = message.content if message.content is string else "" -%}
+    {%- if message.role == "user" -%}
+        {{ "<|im_start|>" + message.role + "\n"  + content + "<|im_end|>\n" }}
+    {%- elif message.role == "assistant" -%}
+        {%- if reasoning_mode == "/think" -%}
+            {{ "<|im_start|>assistant\n" + content.lstrip("\n") + "<|im_end|>\n" }}
+        {%- else -%}
+            {{ "<|im_start|>assistant\n" + "<think>\n\n</think>\n" + content.lstrip("\n") + "<|im_end|>\n" }}
+        {%- endif -%}
+    {%- elif message.role == "tool" -%}
+    {{ "<|im_start|>" + "user\n"  + content + "<|im_end|>\n" }}
+    {%- endif -%}
+{%- endfor -%}
+{# ───── generation prompt ───── #}
+{%- if add_generation_prompt -%}
+    {%- if reasoning_mode == "/think" -%}
+        {{ "<|im_start|>assistant\n" }}
+    {%- else -%}
+        {{ "<|im_start|>assistant\n" + "<think>\n\n</think>\n"  }}
+    {%- endif -%}
+{%- endif -%}

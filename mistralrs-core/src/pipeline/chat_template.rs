@@ -309,9 +309,14 @@ pub fn apply_chat_template_to(
         .into_owned();
 
     if template.contains("{{ meta }}") {
-        //fix for GLM4 models
+        // Fix for GLM4 models
         template = template.replace("{%- set meta = message.get(\"metadata\", \"\") %}", "");
         template = template.replace("{{ meta }}", "");
+    }
+    if template.contains("{% generation %}") && template.contains("{% endgeneration %}") {
+        // Strip for smollm3 models
+        template = template.replace("{% generation %}", "");
+        template = template.replace("{% endgeneration %}", "");
     }
 
     env.add_template("chat_template", &template)?;
@@ -331,7 +336,7 @@ pub fn apply_chat_template_to(
             eos_token => eos_tok,
             unk_token => unk_tok,
             date_string => date_string,
-            enable_thinking => enable_thinking,
+            enable_thinking => enable_thinking.unwrap_or(true),
         })?)
     } else {
         Ok(tmpl.render(context! {
@@ -340,9 +345,10 @@ pub fn apply_chat_template_to(
             bos_token => bos_tok,
             eos_token => eos_tok,
             unk_token => unk_tok,
+            xml_tools => tools.clone(), // SmolLM3
             tools => tools,
             date_string => date_string,
-            enable_thinking => enable_thinking,
+            enable_thinking => enable_thinking.unwrap_or(true),
         })?)
     }
 }
