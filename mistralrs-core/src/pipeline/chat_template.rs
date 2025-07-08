@@ -331,7 +331,7 @@ pub fn apply_chat_template_to(
             eos_token => eos_tok,
             unk_token => unk_tok,
             date_string => date_string,
-            enable_thinking => enable_thinking,
+            enable_thinking => enable_thinking.unwrap_or(true),
         })?)
     } else {
         Ok(tmpl.render(context! {
@@ -342,7 +342,7 @@ pub fn apply_chat_template_to(
             unk_token => unk_tok,
             tools => tools,
             date_string => date_string,
-            enable_thinking => enable_thinking,
+            enable_thinking => enable_thinking.unwrap_or(true),
         })?)
     }
 }
