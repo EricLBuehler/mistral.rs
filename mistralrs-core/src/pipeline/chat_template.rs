@@ -340,6 +340,7 @@ pub fn apply_chat_template_to(
             bos_token => bos_tok,
             eos_token => eos_tok,
             unk_token => unk_tok,
+            xml_tools => tools.clone(), // SmolLM3
             tools => tools,
             date_string => date_string,
             enable_thinking => enable_thinking.unwrap_or(true),
