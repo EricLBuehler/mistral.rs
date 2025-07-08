@@ -55,7 +55,7 @@ impl Config {
     fn no_rope_layers(&self) -> Vec<bool> {
         self.no_rope_layers
             .as_ref()
-            .map(|x| x.into_iter().map(|&x| x != 0).collect::<Vec<_>>())
+            .map(|x| x.iter().map(|&x| x != 0).collect::<Vec<_>>())
             .clone()
             .unwrap_or(
                 (0..self.num_hidden_layers)

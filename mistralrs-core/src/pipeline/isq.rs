@@ -743,7 +743,7 @@ pub trait IsqModel {
 
                 if let Some(template_filename) = template_filename {
                     let template =
-                        std::fs::read(&template_filename).map_err(candle_core::Error::msg)?;
+                        std::fs::read(template_filename).map_err(candle_core::Error::msg)?;
 
                     if template_filename.extension().map(|e| e.to_str()) == Some(Some("jinja")) {
                         info!(
