@@ -47,17 +47,21 @@ pub struct Config {
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub tie_word_embeddings: bool,
-    pub no_rope_layers: Option<Vec<bool>>,
+    pub no_rope_layers: Option<Vec<usize>>,
     pub no_rope_layer_interval: usize,
 }
 
 impl Config {
     fn no_rope_layers(&self) -> Vec<bool> {
-        self.no_rope_layers.clone().unwrap_or(
-            (0..self.num_hidden_layers)
-                .map(|i| (i + 1) % self.no_rope_layer_interval != 0)
-                .collect(),
-        )
+        self.no_rope_layers
+            .as_ref()
+            .map(|x| x.into_iter().map(|&x| x != 0).collect::<Vec<_>>())
+            .clone()
+            .unwrap_or(
+                (0..self.num_hidden_layers)
+                    .map(|i| (i + 1) % self.no_rope_layer_interval != 0)
+                    .collect(),
+            )
     }
 }
 
