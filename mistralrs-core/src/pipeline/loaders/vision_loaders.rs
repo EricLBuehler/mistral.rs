@@ -4863,14 +4863,15 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
 
             // From the architecture: stages 3 and 4 have MMQA blocks
             // Input images are 768x768 (from inputs_processor.rs)
-            // Stage 3: 640 channels at 48x48 (768/16 downsampling)
-            // Stage 4: 1280 channels at 24x24 (768/32 downsampling)
+            // Stage 3: 640 channels at 48x48 (768/16 downsampling), MMQA with num_heads=12, kv_dim=64
+            // Stage 4: 1280 channels at 24x24 (768/32 downsampling), MMQA with num_heads=16, kv_dim=96
             // MSFA output: 2048 channels at fixed 16x16
 
             let vision_tower_act = {
                 // Peak is during MMQA attention computation in stage 4
+                // Stage 4 has higher memory usage than Stage 3 due to more heads (16 vs 12)
                 // From vision.rs: Stage 4 has num_heads=16, kv_dim=96, kv_stride=1
-                let num_heads = 16; // Stage 4 uses 16 heads, not 12
+                let num_heads = 16; // Stage 4 configuration
                 let spatial_size = 24; // 768 / 32 = 24 (input 768x768, stage 4 has 32x downsampling)
                 let seq_len = spatial_size * spatial_size;
 
