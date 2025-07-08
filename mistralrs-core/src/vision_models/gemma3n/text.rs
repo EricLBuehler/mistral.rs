@@ -1334,7 +1334,7 @@ impl TextModel {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                &per_layer_input,
+                &per_layer_input.to_device(xs.device())?,
                 attention_mask
                     .as_ref()
                     .map(|m| m.to_device(xs.device()).unwrap())
