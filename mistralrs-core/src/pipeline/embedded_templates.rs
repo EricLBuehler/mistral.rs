@@ -6,10 +6,10 @@ use std::collections::HashMap;
 static EMBEDDED_CHAT_TEMPLATES: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
     let mut templates = HashMap::new();
 
-    // Embed Gemma3n chat template
+    // Embed Smollm3 chat template
     templates.insert(
-        "gemma3n",
-        include_str!("../../../chat_templates/gemma3n.jinja"),
+        "smollm3",
+        include_str!("../../../chat_templates/smollm3.jinja"),
     );
 
     templates
