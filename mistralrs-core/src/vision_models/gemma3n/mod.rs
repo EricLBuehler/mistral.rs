@@ -25,7 +25,7 @@ mod audio_processing;
 pub mod config;
 mod inputs_processor;
 mod multimodal_embedding;
-mod text;
+pub(crate) mod text;
 pub mod vision;
 pub(crate) use inputs_processor::Gemma3nProcessor;
 

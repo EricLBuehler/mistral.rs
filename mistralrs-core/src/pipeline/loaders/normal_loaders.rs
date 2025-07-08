@@ -360,8 +360,14 @@ impl DeviceMappedModelLoader for AutoNormalLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
-        Self::get_loader(config)?.non_mapped_size_in_bytes(config, dtype, weight_pack_factor)
+        Self::get_loader(config)?.non_mapped_size_in_bytes(
+            config,
+            dtype,
+            weight_pack_factor,
+            _matformer_config,
+        )
     }
     fn num_layers(&self, config: &str) -> Result<usize> {
         Self::get_loader(config)?.num_layers(config)
@@ -371,8 +377,14 @@ impl DeviceMappedModelLoader for AutoNormalLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
-        Self::get_loader(config)?.layer_sizes_in_bytes(config, dtype, weight_pack_factor)
+        Self::get_loader(config)?.layer_sizes_in_bytes(
+            config,
+            dtype,
+            weight_pack_factor,
+            _matformer_config,
+        )
     }
     fn mapped_max_act_size_elems(
         &self,
@@ -498,6 +510,7 @@ impl DeviceMappedModelLoader for MistralLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: crate::models::mistral::Config = serde_json::from_str(config)?;
 
@@ -520,6 +533,7 @@ impl DeviceMappedModelLoader for MistralLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::mistral::Config = serde_json::from_str(config)?;
 
@@ -689,6 +703,7 @@ impl DeviceMappedModelLoader for GemmaLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: crate::models::gemma::Config = serde_json::from_str(config)?;
 
@@ -711,6 +726,7 @@ impl DeviceMappedModelLoader for GemmaLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::gemma::Config = serde_json::from_str(config)?;
 
@@ -884,6 +900,7 @@ impl DeviceMappedModelLoader for LlamaLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: crate::models::llama::Config = serde_json::from_str(config)?;
 
@@ -906,6 +923,7 @@ impl DeviceMappedModelLoader for LlamaLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::llama::Config = serde_json::from_str(config)?;
 
@@ -1074,6 +1092,7 @@ impl DeviceMappedModelLoader for MixtralLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
 
@@ -1096,6 +1115,7 @@ impl DeviceMappedModelLoader for MixtralLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
 
@@ -1269,6 +1289,7 @@ impl DeviceMappedModelLoader for Phi2Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: crate::models::phi2::Config = serde_json::from_str(config)?;
 
@@ -1291,6 +1312,7 @@ impl DeviceMappedModelLoader for Phi2Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::phi2::Config = serde_json::from_str(config)?;
 
@@ -1455,6 +1477,7 @@ impl DeviceMappedModelLoader for Phi3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: crate::models::phi3::Config = serde_json::from_str(config)?;
 
@@ -1477,6 +1500,7 @@ impl DeviceMappedModelLoader for Phi3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::phi3::Config = serde_json::from_str(config)?;
 
@@ -1633,6 +1657,7 @@ impl DeviceMappedModelLoader for Qwen2Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: crate::models::qwen2::Config = serde_json::from_str(config)?;
 
@@ -1655,6 +1680,7 @@ impl DeviceMappedModelLoader for Qwen2Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::qwen2::Config = serde_json::from_str(config)?;
 
@@ -1826,6 +1852,7 @@ impl DeviceMappedModelLoader for Gemma2Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: crate::models::gemma2::Config = serde_json::from_str(config)?;
 
@@ -1848,6 +1875,7 @@ impl DeviceMappedModelLoader for Gemma2Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::gemma2::Config = serde_json::from_str(config)?;
 
@@ -2021,6 +2049,7 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: crate::models::starcoder2::Config = serde_json::from_str(config)?;
 
@@ -2043,6 +2072,7 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::starcoder2::Config = serde_json::from_str(config)?;
 
@@ -2225,6 +2255,7 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: crate::models::phi3_5_moe::Config = serde_json::from_str(config)?;
 
@@ -2247,6 +2278,7 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::phi3_5_moe::Config = serde_json::from_str(config)?;
 
@@ -2513,6 +2545,7 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
         let elems = {
@@ -2534,6 +2567,7 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
         let mut per_layer_elems = Vec::new();
@@ -2838,6 +2872,7 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
         let elems = {
@@ -2859,6 +2894,7 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
         let mut per_layer_elems = Vec::new();
@@ -3063,6 +3099,7 @@ impl DeviceMappedModelLoader for Qwen3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: models::qwen3::Config = serde_json::from_str(config)?;
         let elems = {
@@ -3084,6 +3121,7 @@ impl DeviceMappedModelLoader for Qwen3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: models::qwen3::Config = serde_json::from_str(config)?;
         let per_layer_elems = {
@@ -3245,6 +3283,7 @@ impl DeviceMappedModelLoader for GLM4Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: models::glm4::Config = serde_json::from_str(config)?;
         let elems = {
@@ -3266,6 +3305,7 @@ impl DeviceMappedModelLoader for GLM4Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: models::glm4::Config = serde_json::from_str(config)?;
         let per_layer_elems = {
@@ -3429,6 +3469,7 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: models::qwen3_moe::Config = serde_json::from_str(config)?;
         let elems = {
@@ -3450,6 +3491,7 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: models::qwen3_moe::Config = serde_json::from_str(config)?;
 

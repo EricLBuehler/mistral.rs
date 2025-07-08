@@ -22,6 +22,7 @@ use super::{DeviceMappedModelLoader, NonMappedSubModel, NormalLoadingMetadata};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::device_map::DeviceMapper;
 use crate::layers::Conv3dConfig;
+use crate::matformer::MatformerSlicingConfig;
 use crate::paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata};
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::loaders::AutoDeviceMapParams;
@@ -377,16 +378,28 @@ impl DeviceMappedModelLoader for AutoVisionLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
-        Self::get_loader(config)?.non_mapped_size_in_bytes(config, dtype, weight_pack_factor)
+        Self::get_loader(config)?.non_mapped_size_in_bytes(
+            config,
+            dtype,
+            weight_pack_factor,
+            _matformer_config,
+        )
     }
     fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
-        Self::get_loader(config)?.layer_sizes_in_bytes(config, dtype, weight_pack_factor)
+        Self::get_loader(config)?.layer_sizes_in_bytes(
+            config,
+            dtype,
+            weight_pack_factor,
+            _matformer_config,
+        )
     }
     fn num_layers(&self, config: &str) -> Result<usize> {
         Self::get_loader(config)?.num_layers(config)
@@ -607,6 +620,7 @@ impl DeviceMappedModelLoader for Phi3VLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: Phi3Config = serde_json::from_str(config)?;
         let elems = {
@@ -671,6 +685,7 @@ impl DeviceMappedModelLoader for Phi3VLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: Phi3Config = serde_json::from_str(config)?;
         let per_layer_elems = {
@@ -899,6 +914,7 @@ impl DeviceMappedModelLoader for Idefics2Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: Idefics2Config = serde_json::from_str(config)?;
         let text_elems = {
@@ -1014,6 +1030,7 @@ impl DeviceMappedModelLoader for Idefics2Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: Idefics2Config = serde_json::from_str(config)?;
         let cfg = cfg.text_config;
@@ -1251,6 +1268,7 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: LLaVAConfig = serde_json::from_str(config)?;
         let text_elems = {
@@ -1281,6 +1299,7 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: LLaVAConfig = serde_json::from_str(config)?;
         let per_layer_elems = {
@@ -1511,6 +1530,7 @@ impl DeviceMappedModelLoader for LLaVALoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: LLaVAConfig = serde_json::from_str(config)?;
         let text_elems = {
@@ -1541,6 +1561,7 @@ impl DeviceMappedModelLoader for LLaVALoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: LLaVAConfig = serde_json::from_str(config)?;
         let per_layer_elems = {
@@ -1820,6 +1841,7 @@ impl DeviceMappedModelLoader for VLlamaLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let config: MLlamaConfig = serde_json::from_str(config)?;
         let text_elems = {
@@ -1913,6 +1935,7 @@ impl DeviceMappedModelLoader for VLlamaLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let config: MLlamaConfig = serde_json::from_str(config)?;
         let cfg = &config.text_config;
@@ -2156,6 +2179,7 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
         let text_elems = {
@@ -2222,6 +2246,7 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
         let per_layer_elems = {
@@ -2471,6 +2496,7 @@ impl DeviceMappedModelLoader for Idefics3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: Idefics3Config = serde_json::from_str(config)?;
         let text_elems = {
@@ -2537,6 +2563,7 @@ impl DeviceMappedModelLoader for Idefics3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: Idefics3Config = serde_json::from_str(config)?;
         let cfg = cfg.text_config;
@@ -2759,6 +2786,7 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: MiniCpmOConfig = serde_json::from_str(config)?;
         let text_elems = {
@@ -2818,6 +2846,7 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: MiniCpmOConfig = serde_json::from_str(config)?;
         let cfg = cfg.text_config;
@@ -3064,6 +3093,7 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: Phi4MMConfig = serde_json::from_str(config)?;
         let elems = {
@@ -3164,6 +3194,7 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: Phi4MMConfig = serde_json::from_str(config)?;
         let per_layer_elems = {
@@ -3388,6 +3419,7 @@ impl DeviceMappedModelLoader for Qwen2_5VLLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: Qwen2_5VLConfig = serde_json::from_str(config)?;
         let text_elems = {
@@ -3453,6 +3485,7 @@ impl DeviceMappedModelLoader for Qwen2_5VLLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: Qwen2_5VLConfig = serde_json::from_str(config)?;
         let per_layer_elems = {
@@ -3699,6 +3732,7 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: Gemma3Config = serde_json::from_str(config)?;
 
@@ -3769,6 +3803,7 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: Gemma3Config = serde_json::from_str(config)?;
 
@@ -4049,6 +4084,7 @@ impl DeviceMappedModelLoader for Mistral3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: Mistral3Config = serde_json::from_str(config)?;
 
@@ -4109,6 +4145,7 @@ impl DeviceMappedModelLoader for Mistral3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: Mistral3Config = serde_json::from_str(config)?;
         let cfg = &cfg.text_config;
@@ -4413,6 +4450,7 @@ impl DeviceMappedModelLoader for VLlama4Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: Llama4Config = serde_json::from_str(config)?;
         let tcfg = &cfg.text_config;
@@ -4496,6 +4534,7 @@ impl DeviceMappedModelLoader for VLlama4Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: Llama4Config = serde_json::from_str(config)?;
         let tcfg = &cfg.text_config;
@@ -4758,7 +4797,7 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
             max_batch_size,
-            max_image_shape,
+            max_image_shape: _,
             max_num_images,
         } = params
         else {
@@ -4776,19 +4815,17 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         // Add vision tokens
         {
             // Vision tokens are injected into the prompt
-            // Each image produces a fixed number of tokens based on spatial dimensions
-            let image_size = max_image_shape.0;
-            let patch_size = 32; // Typical patch size for vision transformers
-            let num_patches = (image_size / patch_size).pow(2);
-            let vision_tokens_per_image = num_patches + 2; // +2 for BOI/EOI tokens
+            // MSFA outputs fixed 16x16 features regardless of input size
+            let msfa_spatial_size = 16; // Fixed from vision.rs line 1115
+            let vision_tokens_per_image = msfa_spatial_size * msfa_spatial_size; // 256 tokens
             total_seq_len += vision_tokens_per_image * max_num_images;
         }
 
         // Add audio tokens
         {
-            // Audio tokens are also injected into the prompt
-            // Typical audio sequence length after processing
-            let audio_tokens = 58; // Based on the code comment about 58 audio embeddings
+            // Audio tokens are injected into the prompt
+            // From config field audio_soft_tokens_per_image (typically 188)
+            let audio_tokens = cfg.audio_soft_tokens_per_image;
             total_seq_len += audio_tokens;
         }
 
@@ -4807,7 +4844,7 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         let AutoDeviceMapParams::Vision {
             max_seq_len: _,
             max_batch_size,
-            max_image_shape,
+            max_image_shape: _,
             max_num_images,
         } = params
         else {
@@ -4821,30 +4858,33 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
 
         // Vision activation size
         {
-            let _vision_cfg = &cfg.vision_config;
-            // Vision tower activations
-            // For EfficientNetV2, the largest activation is typically after the stem
-            // before any downsampling occurs
-            let vision_tower_act = {
-                // Assuming input images are processed one at a time
-                let image_size = max_image_shape.0;
-                let after_stem_size = image_size / 2; // Stem typically has stride 2
-                let after_stem_channels = 24; // From EfficientNetV2 XSmall
+            // Vision is Gemma3n's MobileNetV5 architecture with Multi-Query Attention
+            // The peak activation is in the Multi-Query Attention layers
 
-                max_batch_size
-                    * max_num_images
-                    * after_stem_channels
-                    * after_stem_size
-                    * after_stem_size
+            // From the architecture: stages 3 and 4 have MMQA blocks
+            // Input images are 768x768 (from inputs_processor.rs)
+            // Stage 3: 640 channels at 48x48 (768/16 downsampling)
+            // Stage 4: 1280 channels at 24x24 (768/32 downsampling)
+            // MSFA output: 2048 channels at fixed 16x16
+
+            let vision_tower_act = {
+                // Peak is during MMQA attention computation in stage 4
+                // From vision.rs: Stage 4 has num_heads=16, kv_dim=96, kv_stride=1
+                let num_heads = 16; // Stage 4 uses 16 heads, not 12
+                let spatial_size = 24; // 768 / 32 = 24 (input 768x768, stage 4 has 32x downsampling)
+                let seq_len = spatial_size * spatial_size;
+
+                // Attention scores: [B * num_images, num_heads, seq_len, seq_len]
+                max_batch_size * max_num_images * num_heads * seq_len * seq_len
             };
 
             // Vision embedder activations
             let vision_embed_act = {
-                // After vision tower, we have feature maps that get flattened
-                // The vision tower output is typically 2048 channels with spatial dims
-                let spatial_size = 12; // Typical for 384x384 input after all downsampling
+                // MSFA output: 2048 channels at fixed 16x16 spatial (from vision.rs line 1115)
+                let msfa_channels = 2048; // MSFA_OUT_CHANNELS from vision.rs
+                let spatial_size = 16; // Fixed output resolution from MSFA
                 let vision_features =
-                    max_batch_size * max_num_images * 2048 * spatial_size * spatial_size;
+                    max_batch_size * max_num_images * msfa_channels * spatial_size * spatial_size;
 
                 // After embedding projection to text hidden size
                 let projected = max_batch_size
@@ -4862,24 +4902,44 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         // Audio activation size
         {
             let audio_cfg = &cfg.audio_config;
+
+            // Calculate max audio sequence length based on config
+            // Audio uses conformer with subsampling and reduction
+
+            // A rough estimate of max_audio_frames
+            let max_audio_frames = 1280;
+
+            let subsample_factor: usize = audio_cfg
+                .sscp_conv_stride_size
+                .iter()
+                .map(|stride| stride[0]) // Time dimension stride
+                .product();
+            let audio_seq_after_subsample = max_audio_frames / subsample_factor;
+
             // Audio encoder activations
             let audio_encoder_act = {
-                // Conformer layer activations
-                // The largest activation is typically in the feed-forward layers
-                let intermediate_size = audio_cfg.hidden_size * 4; // Typical FF expansion
-                let max_audio_seq_len = 1500; // Typical max audio sequence length
+                // Conformer FFW layers have expansion factor from config
+                let intermediate_size = audio_cfg.hidden_size * 4; // FFW expansion factor
 
-                max_batch_size * max_audio_seq_len * intermediate_size
+                // Peak is in the FFW layers before reduction
+                max_batch_size * audio_seq_after_subsample * intermediate_size
             };
 
             // Audio attention activations
             let audio_attn_act = {
-                // Attention scores for all heads
-                let max_audio_seq_len = 1500;
+                // Attention uses chunked processing with specific context sizes
+                let chunk_size = audio_cfg.conf_attention_chunk_size;
+                let context_size = chunk_size + audio_cfg.conf_attention_context_left - 1
+                    + audio_cfg.conf_attention_context_right;
+
+                // Peak is attention scores: [B, num_heads, num_chunks, chunk_size, context_size]
+                let num_chunks = audio_seq_after_subsample.div_ceil(chunk_size);
+
                 max_batch_size
                     * audio_cfg.conf_num_attention_heads
-                    * max_audio_seq_len
-                    * max_audio_seq_len
+                    * num_chunks
+                    * chunk_size
+                    * context_size
             };
 
             max_activation = max_activation.max(audio_encoder_act).max(audio_attn_act);
@@ -4893,9 +4953,29 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let cfg: Gemma3nConfig = serde_json::from_str(config)?;
-        let text_cfg = &cfg.text_config;
+
+        // Apply matformer slicing if configured
+        let text_cfg = if let Some(matformer_cfg) = matformer_config {
+            use crate::device_map::DummyDeviceMapper;
+            use crate::vision_models::gemma3n::text::handle_matformer_slicing;
+
+            let dummy_mapper = DummyDeviceMapper {
+                nm_device: Device::Cpu,
+            };
+            let (adjusted_cfg, _, _, _, _) = handle_matformer_slicing(
+                &cfg.text_config,
+                &Some(matformer_cfg.clone()),
+                &dummy_mapper,
+            )?;
+            adjusted_cfg
+        } else {
+            cfg.text_config.clone()
+        };
+
+        let text_cfg = &text_cfg;
 
         // Text components that are not device-mapped
         let text_elems = {
@@ -5244,15 +5324,37 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: Gemma3nConfig = serde_json::from_str(config)?;
-        let text_cfg = &cfg.text_config;
 
-        // Note: This calculates sizes for ALL layers in the model.
-        // When matformer slicing is applied, some layers will be skipped
-        // and the device mapper will handle the remapping accordingly.
-        // The actual layer assignment happens after device mapping is computed.
+        // Apply matformer slicing if configured
+        let (text_cfg, _layer_rename_map, _layers_skipped) = if let Some(matformer_cfg) =
+            matformer_config
+        {
+            use crate::device_map::DummyDeviceMapper;
+            use crate::vision_models::gemma3n::text::handle_matformer_slicing;
+
+            let dummy_mapper = DummyDeviceMapper {
+                nm_device: Device::Cpu,
+            };
+            let (adjusted_cfg, _, _, layer_rename_map, layers_skipped) = handle_matformer_slicing(
+                &cfg.text_config,
+                &Some(matformer_cfg.clone()),
+                &dummy_mapper,
+            )?;
+            (adjusted_cfg, layer_rename_map, layers_skipped)
+        } else {
+            (cfg.text_config.clone(), None, None)
+        };
+
+        let text_cfg = &text_cfg;
+
+        // When matformer slicing is applied, we only include the layers that are kept
         let mut layer_sizes = Vec::new();
+
+        // Note: We don't need orig_intermediate_sizes anymore since the adjusted config
+        // already has the correct intermediate sizes after matformer slicing
 
         for layer_idx in 0..text_cfg.num_hidden_layers {
             let per_layer_elems = {
@@ -5278,9 +5380,8 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                 let k_norm = text_cfg.head_dim;
                 let v_norm = text_cfg.head_dim; // No bias for v_norm
 
-                // MLP components
-                let intermediate_size = cfg
-                    .text_config
+                // MLP components - use the adjusted intermediate sizes from matformer
+                let intermediate_size = text_cfg
                     .intermediate_size
                     .0
                     .clone()
@@ -5348,11 +5449,6 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
 
     fn num_layers(&self, config: &str) -> Result<usize> {
         let cfg: Gemma3nConfig = serde_json::from_str(config)?;
-        // For matformer models, we need to be conservative and assume the smallest possible
-        // number of layers that might be used after slicing. The E2B model has 26 layers
-        // after skipping layers, while the full model has 46 layers.
-        // We use the full layer count here because the device mapping happens before
-        // matformer slicing is applied.
         Ok(cfg.text_config.num_hidden_layers)
     }
 

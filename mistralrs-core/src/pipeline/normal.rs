@@ -392,12 +392,18 @@ impl Loader for NormalLoader {
                         total_pack_factors / total_tensors
                     };
 
-                    let layer_sizes_in_bytes =
-                        self.inner
-                            .layer_sizes_in_bytes(&config, dtype, weight_pack_factor)?;
-                    let non_mapped_size_in_bytes =
-                        self.inner
-                            .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        None,
+                    )?;
+                    let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        None,
+                    )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
                     (
                         layer_sizes_in_bytes,
@@ -406,12 +412,18 @@ impl Loader for NormalLoader {
                     )
                 } else if let Some(isq) = in_situ_quant {
                     let weight_pack_factor = isq.pack_factor(dtype);
-                    let layer_sizes_in_bytes =
-                        self.inner
-                            .layer_sizes_in_bytes(&config, dtype, weight_pack_factor)?;
-                    let non_mapped_size_in_bytes =
-                        self.inner
-                            .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        None,
+                    )?;
+                    let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        None,
+                    )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
                     (
                         layer_sizes_in_bytes,
@@ -422,12 +434,18 @@ impl Loader for NormalLoader {
                     // Be sure to get the weight pack factor here; we might be loading a prequantized model.
                     let weight_pack_factor =
                         QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?;
-                    let layer_sizes_in_bytes =
-                        self.inner
-                            .layer_sizes_in_bytes(&config, dtype, weight_pack_factor)?;
-                    let non_mapped_size_in_bytes =
-                        self.inner
-                            .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        None,
+                    )?;
+                    let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        None,
+                    )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
                     (
                         layer_sizes_in_bytes,

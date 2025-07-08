@@ -825,7 +825,7 @@ type MatformerSlicingResult = (
     Option<Vec<usize>>,
 );
 
-fn handle_matformer_slicing(
+pub(crate) fn handle_matformer_slicing(
     cfg: &Gemma3nTextConfig,
     matformer_slicing_config: &Option<MatformerSlicingConfig>,
     mapper: &(dyn DeviceMapper + Send + Sync),

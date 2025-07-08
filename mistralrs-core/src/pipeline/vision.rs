@@ -277,6 +277,27 @@ impl Loader for VisionLoader {
             device.clone()
         };
 
+        // Load matformer slicing config if provided
+        let matformer_slicing_config = if let Some(matformer_path) =
+            &self.config.matformer_config_path
+        {
+            use crate::matformer::{MatformerConfig, MatformerSlicingConfig};
+            info!("Loading Matformer config from {:?}", matformer_path);
+            let config = Arc::new(MatformerConfig::from_file(matformer_path)?);
+
+            if let Some(slice_name) = &self.config.matformer_slice_name {
+                info!("Using Matformer slice: {}", slice_name);
+                Some(MatformerSlicingConfig::new(slice_name.clone(), config))
+            } else {
+                // If no slice name is provided but config exists, we'll need to handle this
+                // For now, return None and let the model handle the default slice selection
+                warn!("Matformer config loaded but no slice name specified. Models will use their default slice.");
+                None
+            }
+        } else {
+            None
+        };
+
         // If auto, convert to Map if not using nccl
         if use_nccl {
             mapper = DeviceMapSetting::DummyNccl {
@@ -331,12 +352,18 @@ impl Loader for VisionLoader {
                         total_pack_factors / total_tensors
                     };
 
-                    let layer_sizes_in_bytes =
-                        self.inner
-                            .layer_sizes_in_bytes(&config, dtype, weight_pack_factor)?;
-                    let non_mapped_size_in_bytes =
-                        self.inner
-                            .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        matformer_slicing_config.as_ref(),
+                    )?;
+                    let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        matformer_slicing_config.as_ref(),
+                    )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
                     (
                         layer_sizes_in_bytes,
@@ -345,12 +372,18 @@ impl Loader for VisionLoader {
                     )
                 } else if let Some(isq) = in_situ_quant {
                     let weight_pack_factor = isq.pack_factor(dtype);
-                    let layer_sizes_in_bytes =
-                        self.inner
-                            .layer_sizes_in_bytes(&config, dtype, weight_pack_factor)?;
-                    let non_mapped_size_in_bytes =
-                        self.inner
-                            .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        matformer_slicing_config.as_ref(),
+                    )?;
+                    let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        matformer_slicing_config.as_ref(),
+                    )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
                     (
                         layer_sizes_in_bytes,
@@ -361,12 +394,18 @@ impl Loader for VisionLoader {
                     // Be sure to get the weight pack factor here; we might be loading a prequantized model.
                     let weight_pack_factor =
                         QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?;
-                    let layer_sizes_in_bytes =
-                        self.inner
-                            .layer_sizes_in_bytes(&config, dtype, weight_pack_factor)?;
-                    let non_mapped_size_in_bytes =
-                        self.inner
-                            .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        matformer_slicing_config.as_ref(),
+                    )?;
+                    let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        matformer_slicing_config.as_ref(),
+                    )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
                     (
                         layer_sizes_in_bytes,
@@ -467,27 +506,6 @@ impl Loader for VisionLoader {
         };
 
         let multi_progress = Arc::new(MultiProgress::new());
-
-        // Load matformer slicing config if provided
-        let matformer_slicing_config = if let Some(matformer_path) =
-            &self.config.matformer_config_path
-        {
-            use crate::matformer::{MatformerConfig, MatformerSlicingConfig};
-            info!("Loading Matformer config from {:?}", matformer_path);
-            let config = Arc::new(MatformerConfig::from_file(matformer_path)?);
-
-            if let Some(slice_name) = &self.config.matformer_slice_name {
-                info!("Using Matformer slice: {}", slice_name);
-                Some(MatformerSlicingConfig::new(slice_name.clone(), config))
-            } else {
-                // If no slice name is provided but config exists, we'll need to handle this
-                // For now, return None and let the model handle the default slice selection
-                warn!("Matformer config loaded but no slice name specified. Models will use their default slice.");
-                None
-            }
-        } else {
-            None
-        };
 
         let mut model = if use_nccl {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(

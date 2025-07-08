@@ -8,6 +8,7 @@ use std::fs;
 use tracing::warn;
 
 use crate::gguf::Content;
+use crate::matformer::MatformerSlicingConfig;
 use crate::paged_attention::ModelConfigLike;
 use crate::pipeline::AutoDeviceMapParams;
 use crate::pipeline::DeviceMappedModelLoader;
@@ -261,6 +262,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
         _config: &str,
         _dtype: DType,
         _weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<usize> {
         let size_in_bytes = match self.arch {
             GGUFArchitecture::Llama => {
@@ -357,6 +359,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
         config: &str,
         _dtype: DType,
         _weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSlicingConfig>,
     ) -> Result<Vec<usize>> {
         let size_in_bytes = match self.arch {
             GGUFArchitecture::Llama => {
