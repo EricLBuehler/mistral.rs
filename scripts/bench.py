@@ -56,7 +56,7 @@ async def timed_chat(client: AsyncOpenAI, messages):
     """
     start = time.perf_counter()
     completion = await client.chat.completions.create(
-        model="ignore",
+        model="default",
         messages=messages,
         max_tokens=256,
         frequency_penalty=1.0,

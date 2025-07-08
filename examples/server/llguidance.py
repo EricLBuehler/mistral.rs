@@ -22,7 +22,7 @@ grammars = [
 ]
 
 completion = client.chat.completions.create(
-    model="ignore",
+    model="default",
     messages=[
         {
             "role": "user",

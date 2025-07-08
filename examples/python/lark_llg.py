@@ -25,7 +25,7 @@ answer: %json {
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="ignore",
+        model="default",
         messages=[
             {
                 "role": "user",

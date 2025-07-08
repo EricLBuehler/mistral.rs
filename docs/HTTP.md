@@ -46,7 +46,7 @@ client = openai.OpenAI(
 )
 
 completion = client.chat.completions.create(
-model="ignore",
+model="default",
 messages=[
     {"role": "system", "content": "You are Mistral.rs, an AI assistant."},
     {"role": "user", "content": "Write a story about Rust error handling."}
@@ -62,7 +62,7 @@ curl http://localhost:8080/v1/chat/completions \
 -H "Content-Type: application/json" \
 -H "Authorization: Bearer EMPTY" \
 -d '{
-"model": "ignore",
+"model": "default",
 "messages": [
 {
     "role": "system",
@@ -116,7 +116,7 @@ client = openai.OpenAI(
 )
 
 completion = client.completions.create(
-    model="ignore",
+    model="default",
     prompt="What is Rust?",
     max_tokens=256,
     frequency_penalty=1.0,
@@ -133,7 +133,7 @@ curl http://localhost:8080/v1/completions \
 -H "Content-Type: application/json" \
 -H "Authorization: Bearer EMPTY" \
 -d '{
-"model": "ignore",
+"model": "default",
 "prompt": "What is Rust?"
 }'
 ```
