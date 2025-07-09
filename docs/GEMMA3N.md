@@ -13,6 +13,10 @@ The Gemma 3n Model has support in the Rust, Python, and HTTP APIs. Additionally,
     Mistral.rs supports this feature!
     
     You can access it using the `matformer_config_path` ([example config](../matformer_configs/gemma3n.csv)) and `matformer_slice_name` arguments throughout the APIs.
+    
+- **Prequantized UQFF models:**
+  - [Gemma 3n E4B](https://huggingface.co/EricB/gemma-3n-E4B-it-UQFF)
+  - [Gemma 3n E2B](https://huggingface.co/EricB/gemma-3n-E2B-it-UQFF)
 
 ## Using MatFormer with Gemma 3n
 
