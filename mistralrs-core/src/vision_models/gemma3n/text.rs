@@ -974,7 +974,7 @@ impl TextModel {
             )?;
         let cfg = &cfg;
 
-        // Use float32 for embedding scale factor as in MLX implementation
+        // Use float32 for embedding scale factor
         let embed_scale = (cfg.hidden_size as f64).sqrt();
         let embed_tokens = ScaledEmbedding::new(
             embed_scale,
@@ -985,11 +985,11 @@ impl TextModel {
                 &cfg.quantization_config,
             )?,
         );
-        // Use float32 for per-layer embedding scale factor as in MLX implementation
+        // Use float32 for per-layer embedding scale factor
         let per_layer_embed_scale = (cfg.hidden_size_per_layer_input as f64).sqrt();
         // Keep embed_tokens_per_layer on CPU if not using Metal
         let embed_tokens_per_layer_vb = if normal_loading_metadata.real_device.is_metal() {
-            vb.pp("embed_tokens_per_layer")
+            mapper.set_nm_device(vb.pp("embed_tokens_per_layer"), false)
         } else {
             vb.pp("embed_tokens_per_layer").set_device(Device::Cpu)
         };
@@ -1234,7 +1234,7 @@ impl TextModel {
             vec![self.layers.len(), self.hidden_size_per_layer_input],
         ]
         .concat();
-        // Cast to float32 for better precision, following MLX implementation
+        // Cast to float32 for better precision
         let input_ids_device = input_ids.device();
 
         // Only cast to CPU if not using Metal

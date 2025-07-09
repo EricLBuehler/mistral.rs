@@ -566,7 +566,7 @@ impl MultiQueryAttention2d {
         let (b, _c, h, w) = x.dims4()?;
 
         // Query projection and reshape
-        // MLX: [B, H, W, C] -> [B, H, W, num_heads * key_dim] -> [B, H*W, num_heads, key_dim] -> [B, num_heads, H*W, key_dim]
+        // [B, H, W, C] -> [B, H, W, num_heads * key_dim] -> [B, H*W, num_heads, key_dim] -> [B, num_heads, H*W, key_dim]
         let mut q = self.query_proj.forward(x)?;
         q = q
             .permute((0, 2, 3, 1))? // NCHW -> NHWC
@@ -581,7 +581,7 @@ impl MultiQueryAttention2d {
         }
         k = self.key_proj.forward(&k)?;
         let (_, _, kh, kw) = k.dims4()?;
-        // MLX: [B, C, H, W] -> [B, H, W, C] -> [B, H*W, C] -> [B, 1, H*W, C]
+        // [B, C, H, W] -> [B, H, W, C] -> [B, H*W, C] -> [B, 1, H*W, C]
         k = k
             .permute((0, 2, 3, 1))? // NCHW -> NHWC
             .reshape((b, kh * kw, self.key_dim))?
@@ -595,7 +595,7 @@ impl MultiQueryAttention2d {
         }
         v = self.value_proj.forward(&v)?;
         let (_, _, vh, vw) = v.dims4()?;
-        // MLX: [B, C, H, W] -> [B, H, W, C] -> [B, H*W, C] -> [B, 1, H*W, C]
+        // [B, C, H, W] -> [B, H, W, C] -> [B, H*W, C] -> [B, 1, H*W, C]
         v = v
             .permute((0, 2, 3, 1))? // NCHW -> NHWC
             .reshape((b, vh * vw, self.value_dim))?
@@ -610,7 +610,7 @@ impl MultiQueryAttention2d {
         let mut o = Sdpa.run_attention(&q, &k, &v, None, None, &sdpa_params)?;
 
         // Reshape output back
-        // MLX: [B, num_heads, H*W, value_dim] -> [B, H*W, num_heads, value_dim] -> [B, H, W, num_heads * value_dim]
+        // [B, num_heads, H*W, value_dim] -> [B, H*W, num_heads, value_dim] -> [B, H, W, num_heads * value_dim]
         o = o
             .permute((0, 2, 1, 3))? // [B, H*W, num_heads, value_dim]
             .reshape((b, h, w, self.num_heads * self.value_dim))?
