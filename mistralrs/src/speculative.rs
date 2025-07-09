@@ -48,6 +48,8 @@ impl TextSpeculativeBuilder {
             imatrix: builder.imatrix,
             calibration_file: builder.calibration_file,
             hf_cache_path: builder.hf_cache_path,
+            matformer_config_path: None,
+            matformer_slice_name: None,
         };
 
         if builder.with_logging {

@@ -251,6 +251,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             max_seq_len: _,
             max_batch_size: _,
             hf_cache_path,
+            matformer_config_path,
+            matformer_slice_name,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 prompt_chunksize: args.prompt_chunksize,
@@ -266,6 +268,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 imatrix,
                 calibration_file,
                 hf_cache_path,
+                matformer_config_path,
+                matformer_slice_name,
             },
             args.chat_template,
             tokenizer_json,
@@ -290,6 +294,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             max_num_images: _,
             max_image_length: _,
             hf_cache_path,
+            matformer_config_path,
+            matformer_slice_name,
         } => {
             let builder = AutoLoaderBuilder::new(
                 NormalSpecificConfig {
@@ -306,6 +312,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     imatrix: imatrix.clone(),
                     calibration_file: calibration_file.clone(),
                     hf_cache_path: hf_cache_path.clone(),
+                    matformer_config_path: matformer_config_path.clone(),
+                    matformer_slice_name: matformer_slice_name.clone(),
                 },
                 VisionSpecificConfig {
                     prompt_chunksize: args.prompt_chunksize,
@@ -321,6 +329,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     calibration_file,
                     imatrix,
                     hf_cache_path: hf_cache_path.clone(),
+                    matformer_config_path,
+                    matformer_slice_name,
                 },
                 args.chat_template,
                 tokenizer_json,
@@ -351,6 +361,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             max_image_length: _,
             hf_cache_path,
             imatrix,
+            matformer_config_path,
+            matformer_slice_name,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 prompt_chunksize: args.prompt_chunksize,
@@ -366,6 +378,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 calibration_file,
                 imatrix,
                 hf_cache_path,
+                matformer_config_path,
+                matformer_slice_name,
             },
             args.chat_template,
             tokenizer_json,
@@ -418,6 +432,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
+                matformer_config_path: None,
+                matformer_slice_name: None,
             },
             args.chat_template,
             tokenizer_json,
@@ -462,6 +478,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
+                matformer_config_path: None,
+                matformer_slice_name: None,
             },
             args.chat_template,
             tokenizer_json,

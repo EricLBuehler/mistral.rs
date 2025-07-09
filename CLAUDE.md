@@ -50,6 +50,12 @@ cargo run --release --features <features> -- -i gguf -f <file> -t <tokenizer>
 cargo run --release --features <features> -- --port 1234 <model_args>
 ```
 
+## Models
+
+When integrating a new model, make sure it respects all of the varbuilder `.pp` calls. In Candle, a VarBuilder maintains an internal path vector that acts like a “current working directory” for model weights; every call to pp("sub") (alias for push_prefix) clones the builder and appends sub, so successive calls accumulate a dotted prefix such as transformer.h.0 while leaving the original builder untouched . When you eventually call get(...), Candle joins that prefix with the tensor name (prefix + "." + name) and looks it up in the checkpoint backend, producing keys that exactly match the dot-separated names emitted by PyTorch’s state_dict/named_parameters, which means PyTorch-trained weights can be loaded without any renaming  ￼. This lets you recreate the PyTorch module tree in Rust by “walking” it: e.g. vb.pp("word_embeddings") grabs word_embeddings.*, while a chain like vb.pp("encoder").pp("layers").pp(i.to_string()) targets keys such as encoder.layers.0.*, exactly as shown in community tutorials porting Transformers models to Candle  ￼. As one maintainer put it, the prefix system lets you “cd” around the parameter hierarchy, giving a lightweight namespace mechanism that keeps Candle fully compatible with PyTorch naming conventions while remaining ergonomic to use.
+
+You should also look for a model.safetensors.index.json file for the model at hand to verify correct structure.
+
 ## Architecture Overview
 
 ### Workspace Structure
@@ -98,6 +104,10 @@ When adding new quantization methods:
 - `mistralrs/examples/` - Usage examples for Rust API
 
 ### Testing Approach
+
+You should *always* run `cargo check`/`cargo c` before returning to make sure code compiles. If code does not compile, only make edits.
+
+Avoid returning TODOs.
 
 - Unit tests are colocated with source files
 - Integration tests in `tests/` directories

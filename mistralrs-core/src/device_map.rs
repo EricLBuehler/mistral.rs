@@ -336,7 +336,7 @@ impl DeviceMapper for LayerDeviceMapper {
 
 #[derive(Debug)]
 pub struct DummyDeviceMapper {
-    nm_device: Device,
+    pub(crate) nm_device: Device,
 }
 
 impl DeviceMapper for DummyDeviceMapper {

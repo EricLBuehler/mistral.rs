@@ -27,10 +27,10 @@ license = "MIT"
 rust-version = "1.82"
 
 [workspace.dependencies]
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "98c0436e" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "98c0436e" }
-candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "98c0436e" }
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "98c0436e" }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "2c9f2fc9" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "2c9f2fc9" }
+candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "2c9f2fc9" }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "2c9f2fc9" }
 # candle-core = { path = "../candle/candle-core" }
 # candle-nn = { path = "../candle/candle-nn" }
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }
@@ -94,6 +94,7 @@ hf-hub = { version = "0.4.2", default-features = false, features = [
 ] }
 itertools = "0.14.0"
 rand = "0.9.1"
+rand_distr = "0.5.0"
 cli-table = "0.5.0"
 dirs = "6.0.0"
 thiserror = "2.0.12"
@@ -169,6 +170,7 @@ rubato = "0.16.2"
 rustfft = "6.3.0"
 hound = "3.5.1"
 apodize = "1.0.0"
+statrs = "0.18.0"
 
 mistralrs-core = { path = "mistralrs-core" }
 mistralrs-paged-attn = { path = "mistralrs-paged-attn" }

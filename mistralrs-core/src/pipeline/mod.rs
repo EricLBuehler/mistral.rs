@@ -37,8 +37,8 @@ use llguidance::toktrie::TokEnv;
 pub use loaders::{
     AdapterKind, AutoDeviceMapParams, AutoNormalLoader, AutoVisionLoader, DeepSeekV2Loader,
     DeepSeekV3Loader, DeviceMappedModelLoader, DiffusionLoaderType, DiffusionModel,
-    DiffusionModelLoader, FluxLoader, GLM4Loader, Gemma2Loader, Gemma3Loader, GemmaLoader,
-    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
+    DiffusionModelLoader, FluxLoader, GLM4Loader, Gemma2Loader, Gemma3Loader, Gemma3nLoader,
+    GemmaLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
     LocalModelPaths, MiniCpmOLoader, Mistral3Loader, MistralLoader, MixtralLoader, ModelKind,
     ModelPaths, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
     Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName,

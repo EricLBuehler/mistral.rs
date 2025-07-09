@@ -1,4 +1,4 @@
-use candle_core::{DType, Device, Error, Result, Shape, Tensor, WithDType};
+use candle_core::{DType, Device, Error, IndexOp, Result, Shape, Tensor, WithDType};
 use candle_nn::var_builder::{Backend, SimpleBackend, VarBuilderArgs};
 use float8::F8E4M3;
 use regex::Regex;
@@ -326,6 +326,56 @@ pub enum Shard {
     },
 }
 
+impl Shard {
+    pub fn apply_to(&self, tensor: &Tensor) -> Result<Tensor> {
+        match *self {
+            Shard::Simple {
+                dim,
+                rank,
+                world_size,
+            } => {
+                let size = tensor.dim(dim)?;
+                let shape = tensor.dims().to_vec();
+
+                if size % world_size != 0 {
+                    return Err(Error::ShapeMismatchSplit {
+                        shape: shape.into(),
+                        dim,
+                        n_parts: world_size,
+                    });
+                }
+                let block_size = size / world_size;
+                let start = rank * block_size;
+                let stop = (rank + 1) * block_size;
+
+                if dim == 0 {
+                    tensor.i(start..stop)
+                } else if dim == 1 {
+                    tensor.i((.., start..stop))
+                } else if dim == 2 {
+                    tensor.i((.., .., start..stop))
+                } else {
+                    candle_core::bail!("Got sharded on dimensions != 0 or 1 or 2")
+                }
+            }
+            Shard::Offset { dim, offset, len } => {
+                let start = offset;
+                let stop = start + len;
+
+                if dim == 0 {
+                    tensor.i(start..stop)
+                } else if dim == 1 {
+                    tensor.i((.., start..stop))
+                } else if dim == 2 {
+                    tensor.i((.., .., start..stop))
+                } else {
+                    candle_core::bail!("Got sharded on dimensions != 0 or 1 or 2")
+                }
+            }
+        }
+    }
+}
+
 impl Default for Shard {
     fn default() -> Self {
         Self::Simple {
@@ -479,32 +529,8 @@ impl Backend for ShardedSafeTensors {
                         Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)?
                     }
                     Self::SimpleBackend(b) => {
-                        use candle_core::IndexOp;
                         let tensor = b.get(target_shape, path, Default::default(), dtype, dev)?;
-
-                        let size = tensor.dim(dim)?;
-                        let shape = tensor.dims().to_vec();
-
-                        if size % world_size != 0 {
-                            return Err(Error::ShapeMismatchSplit {
-                                shape: shape.into(),
-                                dim,
-                                n_parts: world_size,
-                            });
-                        }
-                        let block_size = size / world_size;
-                        let start = rank * block_size;
-                        let stop = (rank + 1) * block_size;
-
-                        if dim == 0 {
-                            tensor.i(start..stop)?
-                        } else if dim == 1 {
-                            tensor.i((.., start..stop))?
-                        } else if dim == 2 {
-                            tensor.i((.., .., start..stop))?
-                        } else {
-                            candle_core::bail!("Got sharded on dimensions != 0 or 1 or 2")
-                        }
+                        h.apply_to(&tensor)?
                     }
                 }
             }
@@ -570,21 +596,8 @@ impl Backend for ShardedSafeTensors {
                         Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)?
                     }
                     Self::SimpleBackend(b) => {
-                        use candle_core::IndexOp;
                         let tensor = b.get(target_shape, path, Default::default(), dtype, dev)?;
-
-                        let start = offset;
-                        let stop = start + len;
-
-                        if dim == 0 {
-                            tensor.i(start..stop)?
-                        } else if dim == 1 {
-                            tensor.i((.., start..stop))?
-                        } else if dim == 2 {
-                            tensor.i((.., .., start..stop))?
-                        } else {
-                            candle_core::bail!("Got sharded on dimensions != 0 or 1 or 2")
-                        }
+                        h.apply_to(&tensor)?
                     }
                 }
             }

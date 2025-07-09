@@ -33,6 +33,7 @@ accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 tracing.workspace = true
 rand.workspace = true
+rand_distr.workspace = true
 regex-automata.workspace = true
 rustc-hash.workspace = true
 vob.workspace = true
@@ -102,6 +103,7 @@ symphonia.workspace = true
 mistralrs-audio.workspace = true
 rust-mcp-schema.workspace = true
 mistralrs-mcp = { workspace = true, features = ["utoipa"] }
+statrs.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = { workspace = true, optional = true }

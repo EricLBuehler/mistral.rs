@@ -1184,13 +1184,13 @@ impl SequenceGroup {
     pub fn get_usage(&self) -> Usage {
         #[allow(clippy::cast_precision_loss)]
         Usage {
-            completion_tokens: self.total_toks - self.total_prompt_toks,
+            completion_tokens: self.total_toks.saturating_sub(self.total_prompt_toks),
             prompt_tokens: self.total_prompt_toks,
             total_tokens: self.total_toks,
             avg_tok_per_sec: (self.total_toks as f32 / self.total_time as f32) * 1000.,
             avg_prompt_tok_per_sec: (self.total_prompt_toks as f32 / self.total_prompt_time as f32)
                 * 1000.,
-            avg_compl_tok_per_sec: ((self.total_toks - self.total_prompt_toks) as f32
+            avg_compl_tok_per_sec: (self.total_toks.saturating_sub(self.total_prompt_toks) as f32
                 / self.total_completion_time as f32)
                 * 1000.,
             total_time_sec: self.total_time as f32 / 1000.,

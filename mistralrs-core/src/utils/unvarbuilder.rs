@@ -72,6 +72,17 @@ impl ToTensors for Conv2d {
     }
 }
 
+impl ToTensors for candle_nn::Conv1d {
+    fn to_tensors(&self) -> HashMap<String, Tensor> {
+        let mut map = HashMap::new();
+        map.insert("weight".to_string(), self.weight().clone());
+        if let Some(bias) = self.bias() {
+            map.insert("bias".to_string(), bias.clone());
+        }
+        map
+    }
+}
+
 impl ToTensors for QLinear {
     fn to_tensors(&self) -> HashMap<String, Tensor> {
         let mut map = HashMap::new();

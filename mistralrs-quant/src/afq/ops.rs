@@ -294,7 +294,6 @@ pub(crate) fn afq_mm_op(
 
         let device = w_s.device();
 
-        assert_eq!(x.layout().start_offset(), 0);
         assert_eq!(w.layout().start_offset(), 0);
         assert_eq!(scales.layout().start_offset(), 0);
         assert_eq!(biases.layout().start_offset(), 0);
@@ -348,6 +347,7 @@ pub(crate) fn afq_mm_op(
                 &crate::metal_kernels::Kernels::new(),
                 scales.dtype(),
                 x_s.buffer(),
+                x.layout().start_offset() * x.dtype().size_in_bytes(),
                 x.dims(),
                 x.stride(),
                 w_s.buffer(),
@@ -385,6 +385,7 @@ pub(crate) fn afq_mm_op(
                 &crate::metal_kernels::Kernels::new(),
                 scales.dtype(),
                 x_s.buffer(),
+                x.layout().start_offset() * x.dtype().size_in_bytes(),
                 x.dims(),
                 x.stride(),
                 w_s.buffer(),

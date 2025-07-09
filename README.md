@@ -68,6 +68,24 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 *After following installation instructions*
 
+- 💎🪆💎🪆💎 Run the **Gemma 3n** family (E2B, E4B) with **vision**, **audio**, and **MatFormer** support: [documentation](docs/GEMMA3N.md)  
+  <details>
+    <summary>Show commands</summary>
+
+    **Normal use, run the full model (E4B or E2B):**
+    ```bash
+    ./mistralrs-server -i --isq 8 run -m google/gemma-3n-E4B-it
+    ```
+
+    **Use [MatFormer](docs/GEMMA3N.md#using-matformer-with-gemma-3n) to get a balanced smaller model:**
+    ```bash
+    ./mistralrs-server -i --isq 8 run -m google/gemma-3n-E4B-it \
+      --matformer-config-path matformer_configs/gemma3n.csv \
+      --matformer-slice-name "Config for E2.49B (block-level)"
+    ```
+  </details>
+  
+
 - 🤗🤗🤗 Run the **SmolLM 3** long-context hybrid-reasoning model with full tool-calling support: [documentation](docs/SMOLLM3.md)  
   <details>
     <summary>Show command</summary>
@@ -94,7 +112,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 - 🦙 Run the **Llama 3.\* and Llama 4** models with long context & vision support: [docs (llama 3.2)](docs/VLLAMA.md), [docs (llama 4)](docs/LLAMA4.md)  
   <details>
-    <summary>Show command</summary>
+    <summary>Show commands</summary>
 
     **Llama 4:**
 
@@ -533,6 +551,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `gemma3`
 - `mistral3`
 - `llama4`
+- `gemma3n`
 
 </details>
 
@@ -595,6 +614,7 @@ Please submit more benchmarks via raising an issue!
 |Qwen 3|✅| |✅|
 |SmolLM3| | |✅|
 |Dia 1.6b| | |✅|
+|Gemma 3n| | |✅|
 </details>
 
 <details>
@@ -641,6 +661,7 @@ Please submit more benchmarks via raising an issue!
 |Llama 4| | | |
 |Qwen 3| | | |
 |SmolLM3|✅| | |
+|Gemma 3n| | | |
 </details>
 
 <details>
@@ -675,6 +696,7 @@ Please submit more benchmarks via raising an issue!
 |Llama 4| |
 |Qwen 3| |
 |SmolLM3|✅|
+|Gemma 3n| | | |
 </details>
 
 ### Using derivative and adapter models

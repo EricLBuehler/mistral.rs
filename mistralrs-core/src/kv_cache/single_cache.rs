@@ -55,7 +55,7 @@ impl SingleCache {
         self.all_data = None;
     }
 
-    pub fn set_len(&mut self, len: usize) -> candle_core::Result<()> {
+    pub fn try_set_len(&self, len: usize) -> candle_core::Result<()> {
         if len > self.capacity_seq_len {
             candle_core::bail!(
                 "kv-cache: requested length ({}) exceeds current capacity ({})",
@@ -63,6 +63,11 @@ impl SingleCache {
                 self.capacity_seq_len
             );
         }
+        Ok(())
+    }
+
+    pub fn set_len(&mut self, len: usize) -> candle_core::Result<()> {
+        self.try_set_len(len)?;
         self.current_seq_len = len;
         Ok(())
     }
