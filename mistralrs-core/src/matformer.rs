@@ -135,8 +135,8 @@ fn parse_layers_skipped(s: &str) -> Result<Vec<usize>> {
 fn evaluate_expression(expr: &str) -> Result<usize> {
     let expr = expr.trim();
 
-    // Handle simple number
-    if let Ok(num) = expr.parse::<usize>() {
+    // Handle simple number (with potential underscores)
+    if let Ok(num) = expr.replace('_', "").parse::<usize>() {
         return Ok(num);
     }
 
