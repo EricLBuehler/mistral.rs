@@ -5,7 +5,10 @@ use candle_nn::{Conv1d, Conv1dConfig, Conv2d, Conv2dConfig, ModuleT};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use std::sync::Arc;
 
-use crate::layers::{conv1d_no_bias, conv2d_no_bias, RmsNorm};
+use crate::{
+    layers::{conv1d_no_bias, conv2d_no_bias, RmsNorm},
+    utils::unvarbuilder::UnVarBuilder,
+};
 
 use super::config::Gemma3nAudioConfig;
 
@@ -1377,5 +1380,128 @@ impl AudioModel {
             .where_cond(&audio_encodings, &zeros)?;
 
         Ok((audio_encodings, current_mask))
+    }
+
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        // Add subsample conv projection residual tensors
+        let uvb_sscp = uvb.pp("subsample_conv_projection");
+
+        // Add conv blocks
+        let uvb_conv0 = uvb_sscp.pp("conv_0");
+        uvb_conv0
+            .pp("conv")
+            .add(&self.subsample_conv_projection.conv_0.conv);
+        if let Some(weight) = &self.subsample_conv_projection.conv_0.norm.weight {
+            uvb_conv0.pp("norm").add_tensor("weight", weight.clone());
+        }
+        if let Some(bias) = &self.subsample_conv_projection.conv_0.norm.bias {
+            uvb_conv0.pp("norm").add_tensor("bias", bias.clone());
+        }
+
+        let uvb_conv1 = uvb_sscp.pp("conv_1");
+        uvb_conv1
+            .pp("conv")
+            .add(&self.subsample_conv_projection.conv_1.conv);
+        if let Some(weight) = &self.subsample_conv_projection.conv_1.norm.weight {
+            uvb_conv1.pp("norm").add_tensor("weight", weight.clone());
+        }
+        if let Some(bias) = &self.subsample_conv_projection.conv_1.norm.bias {
+            uvb_conv1.pp("norm").add_tensor("bias", bias.clone());
+        }
+
+        // Add conformer block residual tensors
+        for (i, block) in self.conformer.iter().enumerate() {
+            let uvb_block = uvb.pp("conformer").pp(i);
+
+            // Add all the norm layers
+            uvb_block
+                .pp("attention")
+                .pp("pre_attn_norm")
+                .add(&block.attention.pre_attn_norm);
+            uvb_block
+                .pp("attention")
+                .pp("post_norm")
+                .add(&block.attention.post_norm);
+
+            // Add attention residual tensors
+            let uvb_attn = uvb_block.pp("attention").pp("attn");
+
+            // Add per_dim_scale tensor
+            uvb_attn.add_tensor("per_dim_scale", block.attention.attn._per_dim_scale.clone());
+
+            // Add relative position embedding tensors
+            let uvb_rel_pos = uvb_attn.pp("relative_position_embedding");
+            uvb_rel_pos.add_tensor(
+                "inv_timescales",
+                block
+                    .attention
+                    .attn
+                    .relative_position_embedding
+                    .inv_timescales
+                    .clone(),
+            );
+            uvb_rel_pos.add_tensor(
+                "pos_indices",
+                block
+                    .attention
+                    .attn
+                    .relative_position_embedding
+                    .pos_indices
+                    .clone(),
+            );
+
+            // Add attention mask tensors
+            uvb_attn.add_tensor(
+                "local_causal_valid_mask",
+                block.attention.attn.local_causal_valid_mask.clone(),
+            );
+            uvb_attn.add_tensor(
+                "invalid_logits_tensor",
+                block.attention.attn.invalid_logits_tensor.clone(),
+            );
+            uvb_attn.add_tensor(
+                "per_dim_scale_softplus",
+                block.attention.attn.per_dim_scale_softplus.clone(),
+            );
+
+            // Add FFW layer norms
+            uvb_block
+                .pp("ffw_layer_start")
+                .pp("pre_layer_norm")
+                .add(&block.ffw_layer_start.pre_layer_norm);
+            uvb_block
+                .pp("ffw_layer_start")
+                .pp("post_layer_norm")
+                .add(&block.ffw_layer_start.post_layer_norm);
+            uvb_block
+                .pp("ffw_layer_end")
+                .pp("pre_layer_norm")
+                .add(&block.ffw_layer_end.pre_layer_norm);
+            uvb_block
+                .pp("ffw_layer_end")
+                .pp("post_layer_norm")
+                .add(&block.ffw_layer_end.post_layer_norm);
+
+            // Add lconv1d tensors
+            uvb_block
+                .pp("lconv1d")
+                .pp("pre_layer_norm")
+                .add(&block.lconv1d.pre_layer_norm);
+            uvb_block
+                .pp("lconv1d")
+                .pp("conv_norm")
+                .add(&block.lconv1d.conv_norm);
+            uvb_block
+                .pp("lconv1d")
+                .pp("depthwise_conv1d")
+                .add(&block.lconv1d.depthwise_conv1d);
+
+            // Add final norm
+            uvb_block.pp("norm").add(&block.norm);
+        }
+
+        uvb.to_safetensors()
     }
 }

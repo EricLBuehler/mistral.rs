@@ -351,97 +351,17 @@ impl IsqModel for Gemma3nModel {
         let uvb_model = uvb.pp("model");
 
         // Add language model residual tensors
-        uvb_model.extend(self.language_model.residual_tensors());
+        let uvb_language = uvb_model.pp("language_model");
+        uvb_language.extend(self.language_model.residual_tensors());
 
         // Add vision tower residual tensors (conv layers, norms, etc.)
         // Vision tower uses Conv2d layers which are not quantized
+        let uvb_vision = uvb_model.pp("vision_tower").pp("timm_model");
+        uvb_vision.extend(self.vision_tower.residual_tensors());
 
         // Add audio tower residual tensors (norms, conv layers, etc.)
         let uvb_audio = uvb_model.pp("audio_tower");
-
-        // Add subsample conv projection residual tensors (conv layers, norms)
-        let uvb_sscp = uvb_audio.pp("subsample_conv_projection");
-
-        // Add conv blocks
-        let uvb_conv0 = uvb_sscp.pp("conv_0");
-        uvb_conv0
-            .pp("conv")
-            .add(&self.audio_tower.subsample_conv_projection.conv_0.conv);
-        if let Some(weight) = &self
-            .audio_tower
-            .subsample_conv_projection
-            .conv_0
-            .norm
-            .weight
-        {
-            uvb_conv0.pp("norm").add_tensor("weight", weight.clone());
-        }
-        if let Some(bias) = &self.audio_tower.subsample_conv_projection.conv_0.norm.bias {
-            uvb_conv0.pp("norm").add_tensor("bias", bias.clone());
-        }
-
-        let uvb_conv1 = uvb_sscp.pp("conv_1");
-        uvb_conv1
-            .pp("conv")
-            .add(&self.audio_tower.subsample_conv_projection.conv_1.conv);
-        if let Some(weight) = &self
-            .audio_tower
-            .subsample_conv_projection
-            .conv_1
-            .norm
-            .weight
-        {
-            uvb_conv1.pp("norm").add_tensor("weight", weight.clone());
-        }
-        if let Some(bias) = &self.audio_tower.subsample_conv_projection.conv_1.norm.bias {
-            uvb_conv1.pp("norm").add_tensor("bias", bias.clone());
-        }
-
-        // Add conformer block residual tensors (norms, conv1d)
-        for (i, block) in self.audio_tower.conformer.iter().enumerate() {
-            let uvb_block = uvb_audio.pp("conformer").pp(i);
-
-            // Add all the norm layers
-            uvb_block
-                .pp("attention")
-                .pp("pre_attn_norm")
-                .add(&block.attention.pre_attn_norm);
-            uvb_block
-                .pp("attention")
-                .pp("post_norm")
-                .add(&block.attention.post_norm);
-            uvb_block
-                .pp("ffw_layer_start")
-                .pp("pre_layer_norm")
-                .add(&block.ffw_layer_start.pre_layer_norm);
-            uvb_block
-                .pp("ffw_layer_start")
-                .pp("post_layer_norm")
-                .add(&block.ffw_layer_start.post_layer_norm);
-            uvb_block
-                .pp("ffw_layer_end")
-                .pp("pre_layer_norm")
-                .add(&block.ffw_layer_end.pre_layer_norm);
-            uvb_block
-                .pp("ffw_layer_end")
-                .pp("post_layer_norm")
-                .add(&block.ffw_layer_end.post_layer_norm);
-            uvb_block
-                .pp("lconv1d")
-                .pp("pre_layer_norm")
-                .add(&block.lconv1d.pre_layer_norm);
-            uvb_block
-                .pp("lconv1d")
-                .pp("conv_norm")
-                .add(&block.lconv1d.conv_norm);
-            uvb_block.pp("norm").add(&block.norm);
-
-            // Add conv1d layer
-            uvb_block
-                .pp("lconv1d")
-                .pp("depthwise_conv1d")
-                .add(&block.lconv1d.depthwise_conv1d);
-        }
+        uvb_audio.extend(self.audio_tower.residual_tensors());
 
         // Add multimodal embedder residual tensors (embeddings, norms)
         let uvb_embed_vision = uvb_model.pp("embed_vision");

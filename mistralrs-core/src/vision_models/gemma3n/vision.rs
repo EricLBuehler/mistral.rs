@@ -5,6 +5,7 @@ use mistralrs_quant::ShardedVarBuilder;
 use crate::{
     attention::SdpaParams,
     layers::{conv2d_no_bias, Sdpa},
+    utils::unvarbuilder::UnVarBuilder,
 };
 
 use std::fmt::Debug;
@@ -1150,4 +1151,134 @@ impl VisionTower {
 
         Ok(x)
     }
+
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        // Add conv_stem tensors
+        add_conv_norm_act(&uvb.pp("conv_stem"), &self.conv_stem);
+
+        // Add blocks tensors
+        for (stage_idx, stage) in self.blocks.iter().enumerate() {
+            for (block_idx, block) in stage.iter().enumerate() {
+                let uvb_block = uvb.pp(format!("blocks.{stage_idx}.{block_idx}"));
+                match block {
+                    Block::EdgeResidual(edge) => add_edge_residual(&uvb_block, edge),
+                    Block::UniversalInvertedResidual(uir) => {
+                        add_universal_inverted_residual(&uvb_block, uir)
+                    }
+                    Block::MobileAttention(ma) => add_mobile_attention(&uvb_block, ma),
+                }
+            }
+        }
+
+        // Add MSFA tensors
+        add_msfa(&uvb.pp("msfa"), &self.msfa);
+
+        uvb.to_safetensors()
+    }
+}
+
+// Helper functions for adding residual tensors
+fn add_conv_norm_act(uvb: &UnVarBuilder, cna: &ConvNormAct) {
+    // Add conv layer
+    match &cna.conv {
+        ConvType::Regular(conv) => uvb.pp("conv").add(conv),
+        ConvType::Same(conv) => uvb.pp("conv").add(&conv.conv),
+    }
+
+    // Add norm layer
+    if let Some(norm) = &cna.norm {
+        uvb.pp("bn").add_tensor("weight", norm.norm.weight.clone());
+    }
+}
+
+fn add_edge_residual(uvb: &UnVarBuilder, edge: &EdgeResidual) {
+    uvb.pp("conv_exp").add(&edge.conv_exp.conv);
+    uvb.pp("bn1")
+        .add_tensor("weight", edge.bn1.norm.weight.clone());
+    uvb.pp("conv_pwl").add(&edge.conv_pwl);
+    uvb.pp("bn2")
+        .add_tensor("weight", edge.bn2.norm.weight.clone());
+}
+
+fn add_universal_inverted_residual(uvb: &UnVarBuilder, uir: &UniversalInvertedResidual) {
+    // Add dw_start if present
+    if let Some(dw_start) = &uir.dw_start {
+        add_conv_norm_act(&uvb.pp("dw_start"), dw_start);
+    }
+
+    // Add pw_exp
+    add_conv_norm_act(&uvb.pp("pw_exp"), &uir.pw_exp);
+
+    // Add dw_mid if present
+    if let Some(dw_mid) = &uir.dw_mid {
+        add_conv_norm_act(&uvb.pp("dw_mid"), dw_mid);
+    }
+
+    // Add pw_proj
+    add_conv_norm_act(&uvb.pp("pw_proj"), &uir.pw_proj);
+
+    // Add layer_scale if present
+    if let Some(layer_scale) = &uir.layer_scale {
+        uvb.pp("layer_scale")
+            .add_tensor("gamma", layer_scale.gamma.clone());
+    }
+}
+
+fn add_mobile_attention(uvb: &UnVarBuilder, ma: &MobileAttention) {
+    // Add norm
+    uvb.pp("norm")
+        .add_tensor("weight", ma.norm.norm.weight.clone());
+
+    // Add attention components
+    let uvb_attn = uvb.pp("attn");
+
+    // Query projection
+    uvb_attn.pp("query").pp("proj").add(&ma.attn.query_proj);
+
+    // Key components
+    if let Some(key_down_conv) = &ma.attn.key_down_conv {
+        uvb_attn.pp("key").pp("down_conv").add(&key_down_conv.conv);
+    }
+    if let Some(key_norm) = &ma.attn.key_norm {
+        uvb_attn
+            .pp("key")
+            .pp("norm")
+            .add_tensor("weight", key_norm.norm.weight.clone());
+    }
+    uvb_attn.pp("key").pp("proj").add(&ma.attn.key_proj);
+
+    // Value components
+    if let Some(value_down_conv) = &ma.attn.value_down_conv {
+        uvb_attn
+            .pp("value")
+            .pp("down_conv")
+            .add(&value_down_conv.conv);
+    }
+    if let Some(value_norm) = &ma.attn.value_norm {
+        uvb_attn
+            .pp("value")
+            .pp("norm")
+            .add_tensor("weight", value_norm.norm.weight.clone());
+    }
+    uvb_attn.pp("value").pp("proj").add(&ma.attn.value_proj);
+
+    // Output projection
+    uvb_attn.pp("output").pp("proj").add(&ma.attn.output_proj);
+
+    // Layer scale if present
+    if let Some(layer_scale) = &ma.layer_scale {
+        uvb.pp("layer_scale")
+            .add_tensor("gamma", layer_scale.gamma.clone());
+    }
+}
+
+fn add_msfa(uvb: &UnVarBuilder, msfa: &MobileNetV5MultiScaleFusionAdapter) {
+    // Add FFN (UniversalInvertedResidual)
+    add_universal_inverted_residual(&uvb.pp("ffn"), &msfa.ffn);
+
+    // Add norm
+    uvb.pp("norm")
+        .add_tensor("weight", msfa.norm.norm.weight.clone());
 }
