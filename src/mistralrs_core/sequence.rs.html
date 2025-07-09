@@ -1184,13 +1184,13 @@
 <a href=#1184 id=1184 data-nosnippet>1184</a>    <span class="kw">pub fn </span>get_usage(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Usage {
 <a href=#1185 id=1185 data-nosnippet>1185</a>        <span class="attr">#[allow(clippy::cast_precision_loss)]
 <a href=#1186 id=1186 data-nosnippet>1186</a>        </span>Usage {
-<a href=#1187 id=1187 data-nosnippet>1187</a>            completion_tokens: <span class="self">self</span>.total_toks - <span class="self">self</span>.total_prompt_toks,
+<a href=#1187 id=1187 data-nosnippet>1187</a>            completion_tokens: <span class="self">self</span>.total_toks.saturating_sub(<span class="self">self</span>.total_prompt_toks),
 <a href=#1188 id=1188 data-nosnippet>1188</a>            prompt_tokens: <span class="self">self</span>.total_prompt_toks,
 <a href=#1189 id=1189 data-nosnippet>1189</a>            total_tokens: <span class="self">self</span>.total_toks,
 <a href=#1190 id=1190 data-nosnippet>1190</a>            avg_tok_per_sec: (<span class="self">self</span>.total_toks <span class="kw">as </span>f32 / <span class="self">self</span>.total_time <span class="kw">as </span>f32) * <span class="number">1000.</span>,
 <a href=#1191 id=1191 data-nosnippet>1191</a>            avg_prompt_tok_per_sec: (<span class="self">self</span>.total_prompt_toks <span class="kw">as </span>f32 / <span class="self">self</span>.total_prompt_time <span class="kw">as </span>f32)
 <a href=#1192 id=1192 data-nosnippet>1192</a>                * <span class="number">1000.</span>,
-<a href=#1193 id=1193 data-nosnippet>1193</a>            avg_compl_tok_per_sec: ((<span class="self">self</span>.total_toks - <span class="self">self</span>.total_prompt_toks) <span class="kw">as </span>f32
+<a href=#1193 id=1193 data-nosnippet>1193</a>            avg_compl_tok_per_sec: (<span class="self">self</span>.total_toks.saturating_sub(<span class="self">self</span>.total_prompt_toks) <span class="kw">as </span>f32
 <a href=#1194 id=1194 data-nosnippet>1194</a>                / <span class="self">self</span>.total_completion_time <span class="kw">as </span>f32)
 <a href=#1195 id=1195 data-nosnippet>1195</a>                * <span class="number">1000.</span>,
 <a href=#1196 id=1196 data-nosnippet>1196</a>            total_time_sec: <span class="self">self</span>.total_time <span class="kw">as </span>f32 / <span class="number">1000.</span>,

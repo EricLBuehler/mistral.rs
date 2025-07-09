@@ -342,9 +342,9 @@
 <a href=#342 id=342 data-nosnippet>342</a>            };
 <a href=#343 id=343 data-nosnippet>343</a>
 <a href=#344 id=344 data-nosnippet>344</a>            <span class="kw">let </span>layer_sizes_in_bytes =
-<a href=#345 id=345 data-nosnippet>345</a>                model.layer_sizes_in_bytes(<span class="string">"this is a dummy config!"</span>, dtype, <span class="number">1</span>)<span class="question-mark">?</span>;
+<a href=#345 id=345 data-nosnippet>345</a>                model.layer_sizes_in_bytes(<span class="string">"this is a dummy config!"</span>, dtype, <span class="number">1</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
 <a href=#346 id=346 data-nosnippet>346</a>            <span class="kw">let </span>non_mapped_size_in_bytes =
-<a href=#347 id=347 data-nosnippet>347</a>                model.non_mapped_size_in_bytes(<span class="string">"this is a dummy config!"</span>, dtype, <span class="number">1</span>)<span class="question-mark">?</span>;
+<a href=#347 id=347 data-nosnippet>347</a>                model.non_mapped_size_in_bytes(<span class="string">"this is a dummy config!"</span>, dtype, <span class="number">1</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
 <a href=#348 id=348 data-nosnippet>348</a>            <span class="kw">let </span>total_model_size_in_bytes =
 <a href=#349 id=349 data-nosnippet>349</a>                layer_sizes_in_bytes.iter().sum::&lt;usize&gt;() + non_mapped_size_in_bytes;
 <a href=#350 id=350 data-nosnippet>350</a>

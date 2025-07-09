@@ -72,110 +72,121 @@
 <a href=#72 id=72 data-nosnippet>72</a>    }
 <a href=#73 id=73 data-nosnippet>73</a>}
 <a href=#74 id=74 data-nosnippet>74</a>
-<a href=#75 id=75 data-nosnippet>75</a><span class="kw">impl </span>ToTensors <span class="kw">for </span>QLinear {
+<a href=#75 id=75 data-nosnippet>75</a><span class="kw">impl </span>ToTensors <span class="kw">for </span>candle_nn::Conv1d {
 <a href=#76 id=76 data-nosnippet>76</a>    <span class="kw">fn </span>to_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; HashMap&lt;String, Tensor&gt; {
 <a href=#77 id=77 data-nosnippet>77</a>        <span class="kw">let </span><span class="kw-2">mut </span>map = HashMap::new();
-<a href=#78 id=78 data-nosnippet>78</a>        <span class="kw">match </span><span class="self">self</span>.inner_ref() {
-<a href=#79 id=79 data-nosnippet>79</a>            QMatMul::Tensor(w) | QMatMul::TensorF16(w) =&gt; {
-<a href=#80 id=80 data-nosnippet>80</a>                map.insert(<span class="string">"weight"</span>.to_string(), w.clone());
-<a href=#81 id=81 data-nosnippet>81</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="self">self</span>.bias() {
-<a href=#82 id=82 data-nosnippet>82</a>                    map.insert(<span class="string">"bias"</span>.to_string(), bias.clone());
-<a href=#83 id=83 data-nosnippet>83</a>                }
-<a href=#84 id=84 data-nosnippet>84</a>            }
-<a href=#85 id=85 data-nosnippet>85</a>            QMatMul::QTensor(<span class="kw">_</span>) =&gt; <span class="kw">return </span>HashMap::new(),
-<a href=#86 id=86 data-nosnippet>86</a>        }
-<a href=#87 id=87 data-nosnippet>87</a>        map
-<a href=#88 id=88 data-nosnippet>88</a>    }
-<a href=#89 id=89 data-nosnippet>89</a>}
-<a href=#90 id=90 data-nosnippet>90</a>
-<a href=#91 id=91 data-nosnippet>91</a><span class="kw">impl </span>ToTensors <span class="kw">for </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; {
-<a href=#92 id=92 data-nosnippet>92</a>    <span class="kw">fn </span>to_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; HashMap&lt;String, Tensor&gt; {
-<a href=#93 id=93 data-nosnippet>93</a>        <span class="kw">let </span>(w, b) = <span class="kw">match </span><span class="self">self</span>.unquant_weight_bias() {
-<a href=#94 id=94 data-nosnippet>94</a>            <span class="prelude-val">Some</span>(x) =&gt; x,
-<a href=#95 id=95 data-nosnippet>95</a>            <span class="prelude-val">None </span>=&gt; <span class="kw">return </span>HashMap::new(),
-<a href=#96 id=96 data-nosnippet>96</a>        };
-<a href=#97 id=97 data-nosnippet>97</a>        <span class="kw">let </span><span class="kw-2">mut </span>map = HashMap::new();
-<a href=#98 id=98 data-nosnippet>98</a>        map.insert(<span class="string">"weight"</span>.to_string(), w);
-<a href=#99 id=99 data-nosnippet>99</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = b {
-<a href=#100 id=100 data-nosnippet>100</a>            map.insert(<span class="string">"bias"</span>.to_string(), bias.clone());
-<a href=#101 id=101 data-nosnippet>101</a>        }
-<a href=#102 id=102 data-nosnippet>102</a>        map
-<a href=#103 id=103 data-nosnippet>103</a>    }
-<a href=#104 id=104 data-nosnippet>104</a>}
-<a href=#105 id=105 data-nosnippet>105</a>
-<a href=#106 id=106 data-nosnippet>106</a><span class="kw">pub struct </span>UnVarBuilder {
-<a href=#107 id=107 data-nosnippet>107</a>    data: Arc&lt;RwLock&lt;HashMap&lt;String, Tensor&gt;&gt;&gt;,
-<a href=#108 id=108 data-nosnippet>108</a>    path: Vec&lt;String&gt;,
-<a href=#109 id=109 data-nosnippet>109</a>}
-<a href=#110 id=110 data-nosnippet>110</a>
-<a href=#111 id=111 data-nosnippet>111</a><span class="kw">impl </span>UnVarBuilder {
-<a href=#112 id=112 data-nosnippet>112</a>    <span class="kw">pub fn </span>new() -&gt; <span class="self">Self </span>{
-<a href=#113 id=113 data-nosnippet>113</a>        <span class="self">Self </span>{
-<a href=#114 id=114 data-nosnippet>114</a>            data: Arc::new(RwLock::new(HashMap::new())),
-<a href=#115 id=115 data-nosnippet>115</a>            path: Vec::new(),
-<a href=#116 id=116 data-nosnippet>116</a>        }
-<a href=#117 id=117 data-nosnippet>117</a>    }
-<a href=#118 id=118 data-nosnippet>118</a>
-<a href=#119 id=119 data-nosnippet>119</a>    <span class="kw">pub fn </span>push_prefix&lt;S: ToString&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, s: S) -&gt; <span class="self">Self </span>{
-<a href=#120 id=120 data-nosnippet>120</a>        <span class="kw">let </span><span class="kw-2">mut </span>path = <span class="self">self</span>.path.clone();
-<a href=#121 id=121 data-nosnippet>121</a>        path.push(s.to_string());
-<a href=#122 id=122 data-nosnippet>122</a>        <span class="self">Self </span>{
-<a href=#123 id=123 data-nosnippet>123</a>            data: <span class="self">self</span>.data.clone(),
-<a href=#124 id=124 data-nosnippet>124</a>            path,
-<a href=#125 id=125 data-nosnippet>125</a>        }
-<a href=#126 id=126 data-nosnippet>126</a>    }
-<a href=#127 id=127 data-nosnippet>127</a>
-<a href=#128 id=128 data-nosnippet>128</a>    <span class="kw">pub fn </span>pp&lt;S: ToString&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, s: S) -&gt; <span class="self">Self </span>{
-<a href=#129 id=129 data-nosnippet>129</a>        <span class="self">self</span>.push_prefix(s)
-<a href=#130 id=130 data-nosnippet>130</a>    }
-<a href=#131 id=131 data-nosnippet>131</a>
-<a href=#132 id=132 data-nosnippet>132</a>    <span class="kw">pub fn </span>path(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-<a href=#133 id=133 data-nosnippet>133</a>        <span class="self">self</span>.path.iter().filter(|p| !p.trim().is_empty()).join(<span class="string">"."</span>)
-<a href=#134 id=134 data-nosnippet>134</a>    }
-<a href=#135 id=135 data-nosnippet>135</a>
-<a href=#136 id=136 data-nosnippet>136</a>    <span class="kw">pub fn </span>add&lt;T: ToTensors&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, item: <span class="kw-2">&amp;</span>T) {
-<a href=#137 id=137 data-nosnippet>137</a>        <span class="kw">let </span><span class="kw-2">mut </span>data = <span class="self">self</span>.data.write().expect(<span class="string">"Write failed!"</span>);
-<a href=#138 id=138 data-nosnippet>138</a>        <span class="kw">let </span>path = <span class="self">self</span>.path();
-<a href=#139 id=139 data-nosnippet>139</a>        data.extend(
-<a href=#140 id=140 data-nosnippet>140</a>            item.to_tensors()
-<a href=#141 id=141 data-nosnippet>141</a>                .into_iter()
-<a href=#142 id=142 data-nosnippet>142</a>                .map(|(n, t)| (<span class="macro">format!</span>(<span class="string">"{path}.{n}"</span>), t))
-<a href=#143 id=143 data-nosnippet>143</a>                .collect::&lt;Vec&lt;(<span class="kw">_</span>, <span class="kw">_</span>)&gt;&gt;(),
-<a href=#144 id=144 data-nosnippet>144</a>        );
+<a href=#78 id=78 data-nosnippet>78</a>        map.insert(<span class="string">"weight"</span>.to_string(), <span class="self">self</span>.weight().clone());
+<a href=#79 id=79 data-nosnippet>79</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="self">self</span>.bias() {
+<a href=#80 id=80 data-nosnippet>80</a>            map.insert(<span class="string">"bias"</span>.to_string(), bias.clone());
+<a href=#81 id=81 data-nosnippet>81</a>        }
+<a href=#82 id=82 data-nosnippet>82</a>        map
+<a href=#83 id=83 data-nosnippet>83</a>    }
+<a href=#84 id=84 data-nosnippet>84</a>}
+<a href=#85 id=85 data-nosnippet>85</a>
+<a href=#86 id=86 data-nosnippet>86</a><span class="kw">impl </span>ToTensors <span class="kw">for </span>QLinear {
+<a href=#87 id=87 data-nosnippet>87</a>    <span class="kw">fn </span>to_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; HashMap&lt;String, Tensor&gt; {
+<a href=#88 id=88 data-nosnippet>88</a>        <span class="kw">let </span><span class="kw-2">mut </span>map = HashMap::new();
+<a href=#89 id=89 data-nosnippet>89</a>        <span class="kw">match </span><span class="self">self</span>.inner_ref() {
+<a href=#90 id=90 data-nosnippet>90</a>            QMatMul::Tensor(w) | QMatMul::TensorF16(w) =&gt; {
+<a href=#91 id=91 data-nosnippet>91</a>                map.insert(<span class="string">"weight"</span>.to_string(), w.clone());
+<a href=#92 id=92 data-nosnippet>92</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="self">self</span>.bias() {
+<a href=#93 id=93 data-nosnippet>93</a>                    map.insert(<span class="string">"bias"</span>.to_string(), bias.clone());
+<a href=#94 id=94 data-nosnippet>94</a>                }
+<a href=#95 id=95 data-nosnippet>95</a>            }
+<a href=#96 id=96 data-nosnippet>96</a>            QMatMul::QTensor(<span class="kw">_</span>) =&gt; <span class="kw">return </span>HashMap::new(),
+<a href=#97 id=97 data-nosnippet>97</a>        }
+<a href=#98 id=98 data-nosnippet>98</a>        map
+<a href=#99 id=99 data-nosnippet>99</a>    }
+<a href=#100 id=100 data-nosnippet>100</a>}
+<a href=#101 id=101 data-nosnippet>101</a>
+<a href=#102 id=102 data-nosnippet>102</a><span class="kw">impl </span>ToTensors <span class="kw">for </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; {
+<a href=#103 id=103 data-nosnippet>103</a>    <span class="kw">fn </span>to_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; HashMap&lt;String, Tensor&gt; {
+<a href=#104 id=104 data-nosnippet>104</a>        <span class="kw">let </span>(w, b) = <span class="kw">match </span><span class="self">self</span>.unquant_weight_bias() {
+<a href=#105 id=105 data-nosnippet>105</a>            <span class="prelude-val">Some</span>(x) =&gt; x,
+<a href=#106 id=106 data-nosnippet>106</a>            <span class="prelude-val">None </span>=&gt; <span class="kw">return </span>HashMap::new(),
+<a href=#107 id=107 data-nosnippet>107</a>        };
+<a href=#108 id=108 data-nosnippet>108</a>        <span class="kw">let </span><span class="kw-2">mut </span>map = HashMap::new();
+<a href=#109 id=109 data-nosnippet>109</a>        map.insert(<span class="string">"weight"</span>.to_string(), w);
+<a href=#110 id=110 data-nosnippet>110</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = b {
+<a href=#111 id=111 data-nosnippet>111</a>            map.insert(<span class="string">"bias"</span>.to_string(), bias.clone());
+<a href=#112 id=112 data-nosnippet>112</a>        }
+<a href=#113 id=113 data-nosnippet>113</a>        map
+<a href=#114 id=114 data-nosnippet>114</a>    }
+<a href=#115 id=115 data-nosnippet>115</a>}
+<a href=#116 id=116 data-nosnippet>116</a>
+<a href=#117 id=117 data-nosnippet>117</a><span class="kw">pub struct </span>UnVarBuilder {
+<a href=#118 id=118 data-nosnippet>118</a>    data: Arc&lt;RwLock&lt;HashMap&lt;String, Tensor&gt;&gt;&gt;,
+<a href=#119 id=119 data-nosnippet>119</a>    path: Vec&lt;String&gt;,
+<a href=#120 id=120 data-nosnippet>120</a>}
+<a href=#121 id=121 data-nosnippet>121</a>
+<a href=#122 id=122 data-nosnippet>122</a><span class="kw">impl </span>UnVarBuilder {
+<a href=#123 id=123 data-nosnippet>123</a>    <span class="kw">pub fn </span>new() -&gt; <span class="self">Self </span>{
+<a href=#124 id=124 data-nosnippet>124</a>        <span class="self">Self </span>{
+<a href=#125 id=125 data-nosnippet>125</a>            data: Arc::new(RwLock::new(HashMap::new())),
+<a href=#126 id=126 data-nosnippet>126</a>            path: Vec::new(),
+<a href=#127 id=127 data-nosnippet>127</a>        }
+<a href=#128 id=128 data-nosnippet>128</a>    }
+<a href=#129 id=129 data-nosnippet>129</a>
+<a href=#130 id=130 data-nosnippet>130</a>    <span class="kw">pub fn </span>push_prefix&lt;S: ToString&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, s: S) -&gt; <span class="self">Self </span>{
+<a href=#131 id=131 data-nosnippet>131</a>        <span class="kw">let </span><span class="kw-2">mut </span>path = <span class="self">self</span>.path.clone();
+<a href=#132 id=132 data-nosnippet>132</a>        path.push(s.to_string());
+<a href=#133 id=133 data-nosnippet>133</a>        <span class="self">Self </span>{
+<a href=#134 id=134 data-nosnippet>134</a>            data: <span class="self">self</span>.data.clone(),
+<a href=#135 id=135 data-nosnippet>135</a>            path,
+<a href=#136 id=136 data-nosnippet>136</a>        }
+<a href=#137 id=137 data-nosnippet>137</a>    }
+<a href=#138 id=138 data-nosnippet>138</a>
+<a href=#139 id=139 data-nosnippet>139</a>    <span class="kw">pub fn </span>pp&lt;S: ToString&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, s: S) -&gt; <span class="self">Self </span>{
+<a href=#140 id=140 data-nosnippet>140</a>        <span class="self">self</span>.push_prefix(s)
+<a href=#141 id=141 data-nosnippet>141</a>    }
+<a href=#142 id=142 data-nosnippet>142</a>
+<a href=#143 id=143 data-nosnippet>143</a>    <span class="kw">pub fn </span>path(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+<a href=#144 id=144 data-nosnippet>144</a>        <span class="self">self</span>.path.iter().filter(|p| !p.trim().is_empty()).join(<span class="string">"."</span>)
 <a href=#145 id=145 data-nosnippet>145</a>    }
 <a href=#146 id=146 data-nosnippet>146</a>
-<a href=#147 id=147 data-nosnippet>147</a>    <span class="kw">pub fn </span>add_tensor&lt;S: ToString&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, s: S, v: Tensor) {
+<a href=#147 id=147 data-nosnippet>147</a>    <span class="kw">pub fn </span>add&lt;T: ToTensors&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, item: <span class="kw-2">&amp;</span>T) {
 <a href=#148 id=148 data-nosnippet>148</a>        <span class="kw">let </span><span class="kw-2">mut </span>data = <span class="self">self</span>.data.write().expect(<span class="string">"Write failed!"</span>);
-<a href=#149 id=149 data-nosnippet>149</a>        <span class="kw">let </span><span class="kw-2">mut </span>path = <span class="self">self</span>.path.clone();
-<a href=#150 id=150 data-nosnippet>150</a>        path.push(s.to_string());
-<a href=#151 id=151 data-nosnippet>151</a>        data.insert(
-<a href=#152 id=152 data-nosnippet>152</a>            path.into_iter().filter(|p| !p.trim().is_empty()).join(<span class="string">"."</span>),
-<a href=#153 id=153 data-nosnippet>153</a>            v,
-<a href=#154 id=154 data-nosnippet>154</a>        );
-<a href=#155 id=155 data-nosnippet>155</a>    }
-<a href=#156 id=156 data-nosnippet>156</a>
-<a href=#157 id=157 data-nosnippet>157</a>    <span class="kw">pub fn </span>extend(<span class="kw-2">&amp;</span><span class="self">self</span>, other: Vec&lt;(String, Tensor)&gt;) {
-<a href=#158 id=158 data-nosnippet>158</a>        <span class="kw">let </span><span class="kw-2">mut </span>data = <span class="self">self</span>.data.write().expect(<span class="string">"Write failed!"</span>);
-<a href=#159 id=159 data-nosnippet>159</a>        <span class="kw">let </span>path = <span class="self">self</span>.path();
-<a href=#160 id=160 data-nosnippet>160</a>        data.extend(
-<a href=#161 id=161 data-nosnippet>161</a>            other
-<a href=#162 id=162 data-nosnippet>162</a>                .into_iter()
-<a href=#163 id=163 data-nosnippet>163</a>                .map(|(n, t)| {
-<a href=#164 id=164 data-nosnippet>164</a>                    (
-<a href=#165 id=165 data-nosnippet>165</a>                        <span class="kw">if </span>path.is_empty() {
-<a href=#166 id=166 data-nosnippet>166</a>                            n
-<a href=#167 id=167 data-nosnippet>167</a>                        } <span class="kw">else </span>{
-<a href=#168 id=168 data-nosnippet>168</a>                            <span class="macro">format!</span>(<span class="string">"{path}.{n}"</span>)
-<a href=#169 id=169 data-nosnippet>169</a>                        },
-<a href=#170 id=170 data-nosnippet>170</a>                        t,
-<a href=#171 id=171 data-nosnippet>171</a>                    )
-<a href=#172 id=172 data-nosnippet>172</a>                })
-<a href=#173 id=173 data-nosnippet>173</a>                .collect::&lt;Vec&lt;(<span class="kw">_</span>, <span class="kw">_</span>)&gt;&gt;(),
-<a href=#174 id=174 data-nosnippet>174</a>        );
-<a href=#175 id=175 data-nosnippet>175</a>    }
-<a href=#176 id=176 data-nosnippet>176</a>
-<a href=#177 id=177 data-nosnippet>177</a>    <span class="kw">pub fn </span>to_safetensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
-<a href=#178 id=178 data-nosnippet>178</a>        <span class="kw">let </span>data = <span class="self">self</span>.data.read().expect(<span class="string">"Read failed!"</span>);
-<a href=#179 id=179 data-nosnippet>179</a>        data.iter().map(|(p, t)| (p.clone(), t.clone())).collect()
-<a href=#180 id=180 data-nosnippet>180</a>    }
-<a href=#181 id=181 data-nosnippet>181</a>}</code></pre></div></section></main></body></html>
+<a href=#149 id=149 data-nosnippet>149</a>        <span class="kw">let </span>path = <span class="self">self</span>.path();
+<a href=#150 id=150 data-nosnippet>150</a>        data.extend(
+<a href=#151 id=151 data-nosnippet>151</a>            item.to_tensors()
+<a href=#152 id=152 data-nosnippet>152</a>                .into_iter()
+<a href=#153 id=153 data-nosnippet>153</a>                .map(|(n, t)| (<span class="macro">format!</span>(<span class="string">"{path}.{n}"</span>), t))
+<a href=#154 id=154 data-nosnippet>154</a>                .collect::&lt;Vec&lt;(<span class="kw">_</span>, <span class="kw">_</span>)&gt;&gt;(),
+<a href=#155 id=155 data-nosnippet>155</a>        );
+<a href=#156 id=156 data-nosnippet>156</a>    }
+<a href=#157 id=157 data-nosnippet>157</a>
+<a href=#158 id=158 data-nosnippet>158</a>    <span class="kw">pub fn </span>add_tensor&lt;S: ToString&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, s: S, v: Tensor) {
+<a href=#159 id=159 data-nosnippet>159</a>        <span class="kw">let </span><span class="kw-2">mut </span>data = <span class="self">self</span>.data.write().expect(<span class="string">"Write failed!"</span>);
+<a href=#160 id=160 data-nosnippet>160</a>        <span class="kw">let </span><span class="kw-2">mut </span>path = <span class="self">self</span>.path.clone();
+<a href=#161 id=161 data-nosnippet>161</a>        path.push(s.to_string());
+<a href=#162 id=162 data-nosnippet>162</a>        data.insert(
+<a href=#163 id=163 data-nosnippet>163</a>            path.into_iter().filter(|p| !p.trim().is_empty()).join(<span class="string">"."</span>),
+<a href=#164 id=164 data-nosnippet>164</a>            v,
+<a href=#165 id=165 data-nosnippet>165</a>        );
+<a href=#166 id=166 data-nosnippet>166</a>    }
+<a href=#167 id=167 data-nosnippet>167</a>
+<a href=#168 id=168 data-nosnippet>168</a>    <span class="kw">pub fn </span>extend(<span class="kw-2">&amp;</span><span class="self">self</span>, other: Vec&lt;(String, Tensor)&gt;) {
+<a href=#169 id=169 data-nosnippet>169</a>        <span class="kw">let </span><span class="kw-2">mut </span>data = <span class="self">self</span>.data.write().expect(<span class="string">"Write failed!"</span>);
+<a href=#170 id=170 data-nosnippet>170</a>        <span class="kw">let </span>path = <span class="self">self</span>.path();
+<a href=#171 id=171 data-nosnippet>171</a>        data.extend(
+<a href=#172 id=172 data-nosnippet>172</a>            other
+<a href=#173 id=173 data-nosnippet>173</a>                .into_iter()
+<a href=#174 id=174 data-nosnippet>174</a>                .map(|(n, t)| {
+<a href=#175 id=175 data-nosnippet>175</a>                    (
+<a href=#176 id=176 data-nosnippet>176</a>                        <span class="kw">if </span>path.is_empty() {
+<a href=#177 id=177 data-nosnippet>177</a>                            n
+<a href=#178 id=178 data-nosnippet>178</a>                        } <span class="kw">else </span>{
+<a href=#179 id=179 data-nosnippet>179</a>                            <span class="macro">format!</span>(<span class="string">"{path}.{n}"</span>)
+<a href=#180 id=180 data-nosnippet>180</a>                        },
+<a href=#181 id=181 data-nosnippet>181</a>                        t,
+<a href=#182 id=182 data-nosnippet>182</a>                    )
+<a href=#183 id=183 data-nosnippet>183</a>                })
+<a href=#184 id=184 data-nosnippet>184</a>                .collect::&lt;Vec&lt;(<span class="kw">_</span>, <span class="kw">_</span>)&gt;&gt;(),
+<a href=#185 id=185 data-nosnippet>185</a>        );
+<a href=#186 id=186 data-nosnippet>186</a>    }
+<a href=#187 id=187 data-nosnippet>187</a>
+<a href=#188 id=188 data-nosnippet>188</a>    <span class="kw">pub fn </span>to_safetensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+<a href=#189 id=189 data-nosnippet>189</a>        <span class="kw">let </span>data = <span class="self">self</span>.data.read().expect(<span class="string">"Read failed!"</span>);
+<a href=#190 id=190 data-nosnippet>190</a>        data.iter().map(|(p, t)| (p.clone(), t.clone())).collect()
+<a href=#191 id=191 data-nosnippet>191</a>    }
+<a href=#192 id=192 data-nosnippet>192</a>}</code></pre></div></section></main></body></html>

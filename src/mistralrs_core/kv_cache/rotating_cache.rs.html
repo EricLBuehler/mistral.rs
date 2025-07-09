@@ -68,7 +68,7 @@
 <a href=#68 id=68 data-nosnippet>68</a>        <span class="self">self</span>.all_data = <span class="prelude-val">None</span>;
 <a href=#69 id=69 data-nosnippet>69</a>    }
 <a href=#70 id=70 data-nosnippet>70</a>
-<a href=#71 id=71 data-nosnippet>71</a>    <span class="kw">pub fn </span>set_len(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: usize) -&gt; candle_core::Result&lt;()&gt; {
+<a href=#71 id=71 data-nosnippet>71</a>    <span class="kw">pub fn </span>try_set_len(<span class="kw-2">&amp;</span><span class="self">self</span>, len: usize) -&gt; candle_core::Result&lt;()&gt; {
 <a href=#72 id=72 data-nosnippet>72</a>        <span class="comment">// If trying to roll it back past the boundary of max_seq_len, fail early.
 <a href=#73 id=73 data-nosnippet>73</a>        </span><span class="kw">if </span><span class="self">self</span>.current_seq_len.saturating_sub(len) &gt; <span class="self">self</span>.max_seq_len {
 <a href=#74 id=74 data-nosnippet>74</a>            <span class="macro">candle_core::bail!</span>(
@@ -77,75 +77,80 @@
 <a href=#77 id=77 data-nosnippet>77</a>                <span class="self">self</span>.max_seq_len
 <a href=#78 id=78 data-nosnippet>78</a>            );
 <a href=#79 id=79 data-nosnippet>79</a>        }
-<a href=#80 id=80 data-nosnippet>80</a>        <span class="self">self</span>.current_seq_len = len;
-<a href=#81 id=81 data-nosnippet>81</a>        <span class="self">self</span>.offset = len % <span class="self">self</span>.max_seq_len;
-<a href=#82 id=82 data-nosnippet>82</a>        <span class="prelude-val">Ok</span>(())
-<a href=#83 id=83 data-nosnippet>83</a>    }
-<a href=#84 id=84 data-nosnippet>84</a>
-<a href=#85 id=85 data-nosnippet>85</a>    <span class="kw">pub fn </span>append(<span class="kw-2">&amp;mut </span><span class="self">self</span>, src: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#86 id=86 data-nosnippet>86</a>        <span class="kw">let </span>seq_len = src.dim(<span class="self">self</span>.dim)<span class="question-mark">?</span>;
-<a href=#87 id=87 data-nosnippet>87</a>        <span class="comment">// This doesn't seem very idiomatic but because the creation can fail, it's tricky to use
-<a href=#88 id=88 data-nosnippet>88</a>        // self.all_data.get_or_insert_with.
-<a href=#89 id=89 data-nosnippet>89</a>        </span><span class="kw">if </span><span class="self">self</span>.all_data.is_none() {
-<a href=#90 id=90 data-nosnippet>90</a>            <span class="kw">let </span><span class="kw-2">mut </span>shape = src.dims().to_vec();
-<a href=#91 id=91 data-nosnippet>91</a>            shape[<span class="self">self</span>.dim] = <span class="self">self</span>.capacity_seq_len;
-<a href=#92 id=92 data-nosnippet>92</a>            <span class="kw">let </span>ad = Tensor::zeros(shape, src.dtype(), src.device())<span class="question-mark">?</span>;
-<a href=#93 id=93 data-nosnippet>93</a>            <span class="self">self</span>.all_data = <span class="prelude-val">Some</span>(ad)
-<a href=#94 id=94 data-nosnippet>94</a>        };
-<a href=#95 id=95 data-nosnippet>95</a>
-<a href=#96 id=96 data-nosnippet>96</a>        <span class="comment">// Expand kv cache, this case is a little more complex.
-<a href=#97 id=97 data-nosnippet>97</a>        </span><span class="kw">if </span><span class="self">self</span>.current_seq_len + seq_len &gt; <span class="self">self</span>.capacity_seq_len || <span class="self">self</span>.current_seq_len == <span class="number">0 </span>{
-<a href=#98 id=98 data-nosnippet>98</a>            <span class="kw">let </span>diff = <span class="self">self</span>.current_seq_len + seq_len.saturating_sub(<span class="self">self</span>.capacity_seq_len);
-<a href=#99 id=99 data-nosnippet>99</a>            <span class="kw">let </span>n_blocks_needed = diff.div_ceil(NormalCache::CACHE_GROW_SIZE);
-<a href=#100 id=100 data-nosnippet>100</a>            <span class="self">self</span>.capacity_seq_len += n_blocks_needed * NormalCache::CACHE_GROW_SIZE;
-<a href=#101 id=101 data-nosnippet>101</a>            <span class="self">self</span>.capacity_seq_len = <span class="self">self</span>.capacity_seq_len.min(<span class="self">self</span>.max_seq_len);
-<a href=#102 id=102 data-nosnippet>102</a>            <span class="kw">if </span><span class="self">self</span>.capacity_seq_len &gt; <span class="self">self</span>.max_seq_len {
-<a href=#103 id=103 data-nosnippet>103</a>                <span class="macro">candle_core::bail!</span>(
-<a href=#104 id=104 data-nosnippet>104</a>                    <span class="string">"kv-cache: requested capacity ({}) above max seq len ({})"</span>,
-<a href=#105 id=105 data-nosnippet>105</a>                    <span class="self">self</span>.capacity_seq_len,
-<a href=#106 id=106 data-nosnippet>106</a>                    <span class="self">self</span>.max_seq_len
-<a href=#107 id=107 data-nosnippet>107</a>                )
-<a href=#108 id=108 data-nosnippet>108</a>            }
-<a href=#109 id=109 data-nosnippet>109</a>            <span class="kw">let </span><span class="kw-2">mut </span>shape = src.dims().to_vec();
-<a href=#110 id=110 data-nosnippet>110</a>            shape[<span class="self">self</span>.dim] = <span class="self">self</span>.capacity_seq_len;
-<a href=#111 id=111 data-nosnippet>111</a>            <span class="kw">let </span>ad = Tensor::zeros(shape, src.dtype(), src.device())<span class="question-mark">?</span>;
-<a href=#112 id=112 data-nosnippet>112</a>            ad.slice_set(<span class="self">self</span>.all_data.as_ref().unwrap(), <span class="self">self</span>.dim, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#113 id=113 data-nosnippet>113</a>            <span class="self">self</span>.all_data = <span class="prelude-val">Some</span>(ad);
-<a href=#114 id=114 data-nosnippet>114</a>        }
-<a href=#115 id=115 data-nosnippet>115</a>
-<a href=#116 id=116 data-nosnippet>116</a>        <span class="kw">let </span>ad = <span class="self">self</span>.all_data.as_mut().unwrap();
-<a href=#117 id=117 data-nosnippet>117</a>
-<a href=#118 id=118 data-nosnippet>118</a>        <span class="self">self</span>.current_seq_len += seq_len;
-<a href=#119 id=119 data-nosnippet>119</a>        <span class="kw">if </span>seq_len &gt;= <span class="self">self</span>.max_seq_len {
-<a href=#120 id=120 data-nosnippet>120</a>            <span class="kw">let </span>to_copy = src
-<a href=#121 id=121 data-nosnippet>121</a>                .narrow(<span class="self">self</span>.dim, seq_len - <span class="self">self</span>.max_seq_len, <span class="self">self</span>.max_seq_len)<span class="question-mark">?
-<a href=#122 id=122 data-nosnippet>122</a>                </span>.contiguous()<span class="question-mark">?</span>;
-<a href=#123 id=123 data-nosnippet>123</a>            ad.slice_set(<span class="kw-2">&amp;</span>to_copy, <span class="self">self</span>.dim, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#124 id=124 data-nosnippet>124</a>            <span class="self">self</span>.offset = <span class="number">0</span>;
-<a href=#125 id=125 data-nosnippet>125</a>            <span class="comment">// Here we return `src` rather than `ad` so that all the past can be used.
-<a href=#126 id=126 data-nosnippet>126</a>            </span><span class="prelude-val">Ok</span>(src.clone())
-<a href=#127 id=127 data-nosnippet>127</a>        } <span class="kw">else </span>{
-<a href=#128 id=128 data-nosnippet>128</a>            <span class="kw">let </span>rem_len = <span class="self">self</span>.max_seq_len - <span class="self">self</span>.offset;
-<a href=#129 id=129 data-nosnippet>129</a>            <span class="kw">if </span>seq_len &lt;= rem_len {
-<a href=#130 id=130 data-nosnippet>130</a>                ad.slice_set(<span class="kw-2">&amp;</span>src.contiguous()<span class="question-mark">?</span>, <span class="self">self</span>.dim, <span class="self">self</span>.offset)<span class="question-mark">?</span>;
-<a href=#131 id=131 data-nosnippet>131</a>                <span class="self">self</span>.offset = (<span class="self">self</span>.offset + seq_len) % <span class="self">self</span>.max_seq_len;
-<a href=#132 id=132 data-nosnippet>132</a>            } <span class="kw">else </span>{
-<a href=#133 id=133 data-nosnippet>133</a>                <span class="comment">// We have to make two copies here as we go over the boundary of the cache.
-<a href=#134 id=134 data-nosnippet>134</a>                </span><span class="kw">if </span>rem_len &gt; <span class="number">0 </span>{
-<a href=#135 id=135 data-nosnippet>135</a>                    <span class="kw">let </span>src1 = src.narrow(<span class="self">self</span>.dim, <span class="number">0</span>, rem_len)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-<a href=#136 id=136 data-nosnippet>136</a>                    ad.slice_set(<span class="kw-2">&amp;</span>src1, <span class="self">self</span>.dim, <span class="self">self</span>.offset)<span class="question-mark">?</span>;
-<a href=#137 id=137 data-nosnippet>137</a>                }
-<a href=#138 id=138 data-nosnippet>138</a>                <span class="kw">let </span>src2 = src
-<a href=#139 id=139 data-nosnippet>139</a>                    .narrow(<span class="self">self</span>.dim, rem_len, seq_len - rem_len)<span class="question-mark">?
-<a href=#140 id=140 data-nosnippet>140</a>                    </span>.contiguous()<span class="question-mark">?</span>;
-<a href=#141 id=141 data-nosnippet>141</a>                ad.slice_set(<span class="kw-2">&amp;</span>src2, <span class="self">self</span>.dim, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#142 id=142 data-nosnippet>142</a>                <span class="self">self</span>.offset = seq_len - rem_len;
-<a href=#143 id=143 data-nosnippet>143</a>            }
-<a href=#144 id=144 data-nosnippet>144</a>            <span class="kw">if </span><span class="self">self</span>.current_seq_len &gt;= <span class="self">self</span>.max_seq_len {
-<a href=#145 id=145 data-nosnippet>145</a>                <span class="prelude-val">Ok</span>(ad.clone())
-<a href=#146 id=146 data-nosnippet>146</a>            } <span class="kw">else </span>{
-<a href=#147 id=147 data-nosnippet>147</a>                <span class="prelude-val">Ok</span>(ad.narrow(<span class="self">self</span>.dim, <span class="number">0</span>, <span class="self">self</span>.current_seq_len)<span class="question-mark">?</span>)
+<a href=#80 id=80 data-nosnippet>80</a>        <span class="prelude-val">Ok</span>(())
+<a href=#81 id=81 data-nosnippet>81</a>    }
+<a href=#82 id=82 data-nosnippet>82</a>
+<a href=#83 id=83 data-nosnippet>83</a>    <span class="kw">pub fn </span>set_len(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: usize) -&gt; candle_core::Result&lt;()&gt; {
+<a href=#84 id=84 data-nosnippet>84</a>        <span class="self">self</span>.try_set_len(len)<span class="question-mark">?</span>;
+<a href=#85 id=85 data-nosnippet>85</a>        <span class="self">self</span>.current_seq_len = len;
+<a href=#86 id=86 data-nosnippet>86</a>        <span class="self">self</span>.offset = len % <span class="self">self</span>.max_seq_len;
+<a href=#87 id=87 data-nosnippet>87</a>        <span class="prelude-val">Ok</span>(())
+<a href=#88 id=88 data-nosnippet>88</a>    }
+<a href=#89 id=89 data-nosnippet>89</a>
+<a href=#90 id=90 data-nosnippet>90</a>    <span class="kw">pub fn </span>append(<span class="kw-2">&amp;mut </span><span class="self">self</span>, src: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#91 id=91 data-nosnippet>91</a>        <span class="kw">let </span>seq_len = src.dim(<span class="self">self</span>.dim)<span class="question-mark">?</span>;
+<a href=#92 id=92 data-nosnippet>92</a>        <span class="comment">// This doesn't seem very idiomatic but because the creation can fail, it's tricky to use
+<a href=#93 id=93 data-nosnippet>93</a>        // self.all_data.get_or_insert_with.
+<a href=#94 id=94 data-nosnippet>94</a>        </span><span class="kw">if </span><span class="self">self</span>.all_data.is_none() {
+<a href=#95 id=95 data-nosnippet>95</a>            <span class="kw">let </span><span class="kw-2">mut </span>shape = src.dims().to_vec();
+<a href=#96 id=96 data-nosnippet>96</a>            shape[<span class="self">self</span>.dim] = <span class="self">self</span>.capacity_seq_len;
+<a href=#97 id=97 data-nosnippet>97</a>            <span class="kw">let </span>ad = Tensor::zeros(shape, src.dtype(), src.device())<span class="question-mark">?</span>;
+<a href=#98 id=98 data-nosnippet>98</a>            <span class="self">self</span>.all_data = <span class="prelude-val">Some</span>(ad)
+<a href=#99 id=99 data-nosnippet>99</a>        };
+<a href=#100 id=100 data-nosnippet>100</a>
+<a href=#101 id=101 data-nosnippet>101</a>        <span class="comment">// Expand kv cache, this case is a little more complex.
+<a href=#102 id=102 data-nosnippet>102</a>        </span><span class="kw">if </span><span class="self">self</span>.current_seq_len + seq_len &gt; <span class="self">self</span>.capacity_seq_len || <span class="self">self</span>.current_seq_len == <span class="number">0 </span>{
+<a href=#103 id=103 data-nosnippet>103</a>            <span class="kw">let </span>diff = <span class="self">self</span>.current_seq_len + seq_len.saturating_sub(<span class="self">self</span>.capacity_seq_len);
+<a href=#104 id=104 data-nosnippet>104</a>            <span class="kw">let </span>n_blocks_needed = diff.div_ceil(NormalCache::CACHE_GROW_SIZE);
+<a href=#105 id=105 data-nosnippet>105</a>            <span class="self">self</span>.capacity_seq_len += n_blocks_needed * NormalCache::CACHE_GROW_SIZE;
+<a href=#106 id=106 data-nosnippet>106</a>            <span class="self">self</span>.capacity_seq_len = <span class="self">self</span>.capacity_seq_len.min(<span class="self">self</span>.max_seq_len);
+<a href=#107 id=107 data-nosnippet>107</a>            <span class="kw">if </span><span class="self">self</span>.capacity_seq_len &gt; <span class="self">self</span>.max_seq_len {
+<a href=#108 id=108 data-nosnippet>108</a>                <span class="macro">candle_core::bail!</span>(
+<a href=#109 id=109 data-nosnippet>109</a>                    <span class="string">"kv-cache: requested capacity ({}) above max seq len ({})"</span>,
+<a href=#110 id=110 data-nosnippet>110</a>                    <span class="self">self</span>.capacity_seq_len,
+<a href=#111 id=111 data-nosnippet>111</a>                    <span class="self">self</span>.max_seq_len
+<a href=#112 id=112 data-nosnippet>112</a>                )
+<a href=#113 id=113 data-nosnippet>113</a>            }
+<a href=#114 id=114 data-nosnippet>114</a>            <span class="kw">let </span><span class="kw-2">mut </span>shape = src.dims().to_vec();
+<a href=#115 id=115 data-nosnippet>115</a>            shape[<span class="self">self</span>.dim] = <span class="self">self</span>.capacity_seq_len;
+<a href=#116 id=116 data-nosnippet>116</a>            <span class="kw">let </span>ad = Tensor::zeros(shape, src.dtype(), src.device())<span class="question-mark">?</span>;
+<a href=#117 id=117 data-nosnippet>117</a>            ad.slice_set(<span class="self">self</span>.all_data.as_ref().unwrap(), <span class="self">self</span>.dim, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#118 id=118 data-nosnippet>118</a>            <span class="self">self</span>.all_data = <span class="prelude-val">Some</span>(ad);
+<a href=#119 id=119 data-nosnippet>119</a>        }
+<a href=#120 id=120 data-nosnippet>120</a>
+<a href=#121 id=121 data-nosnippet>121</a>        <span class="kw">let </span>ad = <span class="self">self</span>.all_data.as_mut().unwrap();
+<a href=#122 id=122 data-nosnippet>122</a>
+<a href=#123 id=123 data-nosnippet>123</a>        <span class="self">self</span>.current_seq_len += seq_len;
+<a href=#124 id=124 data-nosnippet>124</a>        <span class="kw">if </span>seq_len &gt;= <span class="self">self</span>.max_seq_len {
+<a href=#125 id=125 data-nosnippet>125</a>            <span class="kw">let </span>to_copy = src
+<a href=#126 id=126 data-nosnippet>126</a>                .narrow(<span class="self">self</span>.dim, seq_len - <span class="self">self</span>.max_seq_len, <span class="self">self</span>.max_seq_len)<span class="question-mark">?
+<a href=#127 id=127 data-nosnippet>127</a>                </span>.contiguous()<span class="question-mark">?</span>;
+<a href=#128 id=128 data-nosnippet>128</a>            ad.slice_set(<span class="kw-2">&amp;</span>to_copy, <span class="self">self</span>.dim, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#129 id=129 data-nosnippet>129</a>            <span class="self">self</span>.offset = <span class="number">0</span>;
+<a href=#130 id=130 data-nosnippet>130</a>            <span class="comment">// Here we return `src` rather than `ad` so that all the past can be used.
+<a href=#131 id=131 data-nosnippet>131</a>            </span><span class="prelude-val">Ok</span>(src.clone())
+<a href=#132 id=132 data-nosnippet>132</a>        } <span class="kw">else </span>{
+<a href=#133 id=133 data-nosnippet>133</a>            <span class="kw">let </span>rem_len = <span class="self">self</span>.max_seq_len - <span class="self">self</span>.offset;
+<a href=#134 id=134 data-nosnippet>134</a>            <span class="kw">if </span>seq_len &lt;= rem_len {
+<a href=#135 id=135 data-nosnippet>135</a>                ad.slice_set(<span class="kw-2">&amp;</span>src.contiguous()<span class="question-mark">?</span>, <span class="self">self</span>.dim, <span class="self">self</span>.offset)<span class="question-mark">?</span>;
+<a href=#136 id=136 data-nosnippet>136</a>                <span class="self">self</span>.offset = (<span class="self">self</span>.offset + seq_len) % <span class="self">self</span>.max_seq_len;
+<a href=#137 id=137 data-nosnippet>137</a>            } <span class="kw">else </span>{
+<a href=#138 id=138 data-nosnippet>138</a>                <span class="comment">// We have to make two copies here as we go over the boundary of the cache.
+<a href=#139 id=139 data-nosnippet>139</a>                </span><span class="kw">if </span>rem_len &gt; <span class="number">0 </span>{
+<a href=#140 id=140 data-nosnippet>140</a>                    <span class="kw">let </span>src1 = src.narrow(<span class="self">self</span>.dim, <span class="number">0</span>, rem_len)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+<a href=#141 id=141 data-nosnippet>141</a>                    ad.slice_set(<span class="kw-2">&amp;</span>src1, <span class="self">self</span>.dim, <span class="self">self</span>.offset)<span class="question-mark">?</span>;
+<a href=#142 id=142 data-nosnippet>142</a>                }
+<a href=#143 id=143 data-nosnippet>143</a>                <span class="kw">let </span>src2 = src
+<a href=#144 id=144 data-nosnippet>144</a>                    .narrow(<span class="self">self</span>.dim, rem_len, seq_len - rem_len)<span class="question-mark">?
+<a href=#145 id=145 data-nosnippet>145</a>                    </span>.contiguous()<span class="question-mark">?</span>;
+<a href=#146 id=146 data-nosnippet>146</a>                ad.slice_set(<span class="kw-2">&amp;</span>src2, <span class="self">self</span>.dim, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#147 id=147 data-nosnippet>147</a>                <span class="self">self</span>.offset = seq_len - rem_len;
 <a href=#148 id=148 data-nosnippet>148</a>            }
-<a href=#149 id=149 data-nosnippet>149</a>        }
-<a href=#150 id=150 data-nosnippet>150</a>    }
-<a href=#151 id=151 data-nosnippet>151</a>}</code></pre></div></section></main></body></html>
+<a href=#149 id=149 data-nosnippet>149</a>            <span class="kw">if </span><span class="self">self</span>.current_seq_len &gt;= <span class="self">self</span>.max_seq_len {
+<a href=#150 id=150 data-nosnippet>150</a>                <span class="prelude-val">Ok</span>(ad.clone())
+<a href=#151 id=151 data-nosnippet>151</a>            } <span class="kw">else </span>{
+<a href=#152 id=152 data-nosnippet>152</a>                <span class="prelude-val">Ok</span>(ad.narrow(<span class="self">self</span>.dim, <span class="number">0</span>, <span class="self">self</span>.current_seq_len)<span class="question-mark">?</span>)
+<a href=#153 id=153 data-nosnippet>153</a>            }
+<a href=#154 id=154 data-nosnippet>154</a>        }
+<a href=#155 id=155 data-nosnippet>155</a>    }
+<a href=#156 id=156 data-nosnippet>156</a>}</code></pre></div></section></main></body></html>

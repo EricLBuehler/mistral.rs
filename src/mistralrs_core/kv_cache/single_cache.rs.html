@@ -55,7 +55,7 @@
 <a href=#55 id=55 data-nosnippet>55</a>        <span class="self">self</span>.all_data = <span class="prelude-val">None</span>;
 <a href=#56 id=56 data-nosnippet>56</a>    }
 <a href=#57 id=57 data-nosnippet>57</a>
-<a href=#58 id=58 data-nosnippet>58</a>    <span class="kw">pub fn </span>set_len(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: usize) -&gt; candle_core::Result&lt;()&gt; {
+<a href=#58 id=58 data-nosnippet>58</a>    <span class="kw">pub fn </span>try_set_len(<span class="kw-2">&amp;</span><span class="self">self</span>, len: usize) -&gt; candle_core::Result&lt;()&gt; {
 <a href=#59 id=59 data-nosnippet>59</a>        <span class="kw">if </span>len &gt; <span class="self">self</span>.capacity_seq_len {
 <a href=#60 id=60 data-nosnippet>60</a>            <span class="macro">candle_core::bail!</span>(
 <a href=#61 id=61 data-nosnippet>61</a>                <span class="string">"kv-cache: requested length ({}) exceeds current capacity ({})"</span>,
@@ -63,44 +63,49 @@
 <a href=#63 id=63 data-nosnippet>63</a>                <span class="self">self</span>.capacity_seq_len
 <a href=#64 id=64 data-nosnippet>64</a>            );
 <a href=#65 id=65 data-nosnippet>65</a>        }
-<a href=#66 id=66 data-nosnippet>66</a>        <span class="self">self</span>.current_seq_len = len;
-<a href=#67 id=67 data-nosnippet>67</a>        <span class="prelude-val">Ok</span>(())
-<a href=#68 id=68 data-nosnippet>68</a>    }
-<a href=#69 id=69 data-nosnippet>69</a>
-<a href=#70 id=70 data-nosnippet>70</a>    <span class="kw">pub fn </span>append(<span class="kw-2">&amp;mut </span><span class="self">self</span>, src: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#71 id=71 data-nosnippet>71</a>        <span class="kw">let </span>seq_len = src.dim(<span class="self">self</span>.dim)<span class="question-mark">?</span>;
-<a href=#72 id=72 data-nosnippet>72</a>        <span class="comment">// This doesn't seem very idiomatic but because the creation can fail, it's tricky to use
-<a href=#73 id=73 data-nosnippet>73</a>        // self.all_data.get_or_insert_with.
-<a href=#74 id=74 data-nosnippet>74</a>        </span><span class="kw">if </span><span class="self">self</span>.all_data.is_none() {
-<a href=#75 id=75 data-nosnippet>75</a>            <span class="kw">let </span><span class="kw-2">mut </span>shape = src.dims().to_vec();
-<a href=#76 id=76 data-nosnippet>76</a>            shape[<span class="self">self</span>.dim] = <span class="self">self</span>.capacity_seq_len;
-<a href=#77 id=77 data-nosnippet>77</a>            <span class="kw">let </span>ad = Tensor::zeros(shape, src.dtype(), src.device())<span class="question-mark">?</span>;
-<a href=#78 id=78 data-nosnippet>78</a>            <span class="self">self</span>.all_data = <span class="prelude-val">Some</span>(ad);
-<a href=#79 id=79 data-nosnippet>79</a>        };
-<a href=#80 id=80 data-nosnippet>80</a>
-<a href=#81 id=81 data-nosnippet>81</a>        <span class="comment">// Expand kv cache
-<a href=#82 id=82 data-nosnippet>82</a>        </span><span class="kw">if </span><span class="self">self</span>.current_seq_len + seq_len &gt; <span class="self">self</span>.capacity_seq_len {
-<a href=#83 id=83 data-nosnippet>83</a>            <span class="kw">let </span>diff = <span class="self">self</span>.current_seq_len + seq_len - <span class="self">self</span>.capacity_seq_len;
-<a href=#84 id=84 data-nosnippet>84</a>            <span class="kw">let </span>n_blocks_needed = diff.div_ceil(NormalCache::CACHE_GROW_SIZE);
-<a href=#85 id=85 data-nosnippet>85</a>            <span class="self">self</span>.capacity_seq_len += n_blocks_needed * NormalCache::CACHE_GROW_SIZE;
-<a href=#86 id=86 data-nosnippet>86</a>            <span class="kw">if </span><span class="self">self</span>.capacity_seq_len &gt; <span class="self">self</span>.max_seq_len {
-<a href=#87 id=87 data-nosnippet>87</a>                <span class="macro">candle_core::bail!</span>(
-<a href=#88 id=88 data-nosnippet>88</a>                    <span class="string">"kv-cache: requested capacity ({}) above max seq len ({})"</span>,
-<a href=#89 id=89 data-nosnippet>89</a>                    <span class="self">self</span>.capacity_seq_len,
-<a href=#90 id=90 data-nosnippet>90</a>                    <span class="self">self</span>.max_seq_len
-<a href=#91 id=91 data-nosnippet>91</a>                )
-<a href=#92 id=92 data-nosnippet>92</a>            }
-<a href=#93 id=93 data-nosnippet>93</a>            <span class="kw">let </span><span class="kw-2">mut </span>shape = src.dims().to_vec();
-<a href=#94 id=94 data-nosnippet>94</a>            shape[<span class="self">self</span>.dim] = <span class="self">self</span>.capacity_seq_len;
-<a href=#95 id=95 data-nosnippet>95</a>            <span class="kw">let </span>ad = Tensor::zeros(shape, src.dtype(), src.device())<span class="question-mark">?</span>;
-<a href=#96 id=96 data-nosnippet>96</a>            ad.slice_set(<span class="self">self</span>.all_data.as_ref().unwrap(), <span class="self">self</span>.dim, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#97 id=97 data-nosnippet>97</a>            <span class="self">self</span>.all_data = <span class="prelude-val">Some</span>(ad);
-<a href=#98 id=98 data-nosnippet>98</a>        }
-<a href=#99 id=99 data-nosnippet>99</a>
-<a href=#100 id=100 data-nosnippet>100</a>        <span class="kw">let </span>ad = <span class="self">self</span>.all_data.as_mut().unwrap();
-<a href=#101 id=101 data-nosnippet>101</a>
-<a href=#102 id=102 data-nosnippet>102</a>        ad.slice_set(src, <span class="self">self</span>.dim, <span class="self">self</span>.current_seq_len)<span class="question-mark">?</span>;
-<a href=#103 id=103 data-nosnippet>103</a>        <span class="self">self</span>.current_seq_len += seq_len;
-<a href=#104 id=104 data-nosnippet>104</a>        <span class="prelude-val">Ok</span>(())
-<a href=#105 id=105 data-nosnippet>105</a>    }
-<a href=#106 id=106 data-nosnippet>106</a>}</code></pre></div></section></main></body></html>
+<a href=#66 id=66 data-nosnippet>66</a>        <span class="prelude-val">Ok</span>(())
+<a href=#67 id=67 data-nosnippet>67</a>    }
+<a href=#68 id=68 data-nosnippet>68</a>
+<a href=#69 id=69 data-nosnippet>69</a>    <span class="kw">pub fn </span>set_len(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: usize) -&gt; candle_core::Result&lt;()&gt; {
+<a href=#70 id=70 data-nosnippet>70</a>        <span class="self">self</span>.try_set_len(len)<span class="question-mark">?</span>;
+<a href=#71 id=71 data-nosnippet>71</a>        <span class="self">self</span>.current_seq_len = len;
+<a href=#72 id=72 data-nosnippet>72</a>        <span class="prelude-val">Ok</span>(())
+<a href=#73 id=73 data-nosnippet>73</a>    }
+<a href=#74 id=74 data-nosnippet>74</a>
+<a href=#75 id=75 data-nosnippet>75</a>    <span class="kw">pub fn </span>append(<span class="kw-2">&amp;mut </span><span class="self">self</span>, src: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#76 id=76 data-nosnippet>76</a>        <span class="kw">let </span>seq_len = src.dim(<span class="self">self</span>.dim)<span class="question-mark">?</span>;
+<a href=#77 id=77 data-nosnippet>77</a>        <span class="comment">// This doesn't seem very idiomatic but because the creation can fail, it's tricky to use
+<a href=#78 id=78 data-nosnippet>78</a>        // self.all_data.get_or_insert_with.
+<a href=#79 id=79 data-nosnippet>79</a>        </span><span class="kw">if </span><span class="self">self</span>.all_data.is_none() {
+<a href=#80 id=80 data-nosnippet>80</a>            <span class="kw">let </span><span class="kw-2">mut </span>shape = src.dims().to_vec();
+<a href=#81 id=81 data-nosnippet>81</a>            shape[<span class="self">self</span>.dim] = <span class="self">self</span>.capacity_seq_len;
+<a href=#82 id=82 data-nosnippet>82</a>            <span class="kw">let </span>ad = Tensor::zeros(shape, src.dtype(), src.device())<span class="question-mark">?</span>;
+<a href=#83 id=83 data-nosnippet>83</a>            <span class="self">self</span>.all_data = <span class="prelude-val">Some</span>(ad);
+<a href=#84 id=84 data-nosnippet>84</a>        };
+<a href=#85 id=85 data-nosnippet>85</a>
+<a href=#86 id=86 data-nosnippet>86</a>        <span class="comment">// Expand kv cache
+<a href=#87 id=87 data-nosnippet>87</a>        </span><span class="kw">if </span><span class="self">self</span>.current_seq_len + seq_len &gt; <span class="self">self</span>.capacity_seq_len {
+<a href=#88 id=88 data-nosnippet>88</a>            <span class="kw">let </span>diff = <span class="self">self</span>.current_seq_len + seq_len - <span class="self">self</span>.capacity_seq_len;
+<a href=#89 id=89 data-nosnippet>89</a>            <span class="kw">let </span>n_blocks_needed = diff.div_ceil(NormalCache::CACHE_GROW_SIZE);
+<a href=#90 id=90 data-nosnippet>90</a>            <span class="self">self</span>.capacity_seq_len += n_blocks_needed * NormalCache::CACHE_GROW_SIZE;
+<a href=#91 id=91 data-nosnippet>91</a>            <span class="kw">if </span><span class="self">self</span>.capacity_seq_len &gt; <span class="self">self</span>.max_seq_len {
+<a href=#92 id=92 data-nosnippet>92</a>                <span class="macro">candle_core::bail!</span>(
+<a href=#93 id=93 data-nosnippet>93</a>                    <span class="string">"kv-cache: requested capacity ({}) above max seq len ({})"</span>,
+<a href=#94 id=94 data-nosnippet>94</a>                    <span class="self">self</span>.capacity_seq_len,
+<a href=#95 id=95 data-nosnippet>95</a>                    <span class="self">self</span>.max_seq_len
+<a href=#96 id=96 data-nosnippet>96</a>                )
+<a href=#97 id=97 data-nosnippet>97</a>            }
+<a href=#98 id=98 data-nosnippet>98</a>            <span class="kw">let </span><span class="kw-2">mut </span>shape = src.dims().to_vec();
+<a href=#99 id=99 data-nosnippet>99</a>            shape[<span class="self">self</span>.dim] = <span class="self">self</span>.capacity_seq_len;
+<a href=#100 id=100 data-nosnippet>100</a>            <span class="kw">let </span>ad = Tensor::zeros(shape, src.dtype(), src.device())<span class="question-mark">?</span>;
+<a href=#101 id=101 data-nosnippet>101</a>            ad.slice_set(<span class="self">self</span>.all_data.as_ref().unwrap(), <span class="self">self</span>.dim, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#102 id=102 data-nosnippet>102</a>            <span class="self">self</span>.all_data = <span class="prelude-val">Some</span>(ad);
+<a href=#103 id=103 data-nosnippet>103</a>        }
+<a href=#104 id=104 data-nosnippet>104</a>
+<a href=#105 id=105 data-nosnippet>105</a>        <span class="kw">let </span>ad = <span class="self">self</span>.all_data.as_mut().unwrap();
+<a href=#106 id=106 data-nosnippet>106</a>
+<a href=#107 id=107 data-nosnippet>107</a>        ad.slice_set(src, <span class="self">self</span>.dim, <span class="self">self</span>.current_seq_len)<span class="question-mark">?</span>;
+<a href=#108 id=108 data-nosnippet>108</a>        <span class="self">self</span>.current_seq_len += seq_len;
+<a href=#109 id=109 data-nosnippet>109</a>        <span class="prelude-val">Ok</span>(())
+<a href=#110 id=110 data-nosnippet>110</a>    }
+<a href=#111 id=111 data-nosnippet>111</a>}</code></pre></div></section></main></body></html>

@@ -244,7 +244,7 @@
 <a href=#244 id=244 data-nosnippet>244</a><span class="kw">where
 <a href=#245 id=245 data-nosnippet>245</a>    </span>T: serde::de::DeserializeOwned,
 <a href=#246 id=246 data-nosnippet>246</a>{
-<a href=#247 id=247 data-nosnippet>247</a>    <span class="kw">if </span>text_prefix.is_empty() {
+<a href=#247 id=247 data-nosnippet>247</a>    <span class="kw">if </span>text_prefix.trim().is_empty() {
 <a href=#248 id=248 data-nosnippet>248</a>        <span class="kw">return </span>(<span class="bool-val">false</span>, <span class="bool-val">false</span>);
 <a href=#249 id=249 data-nosnippet>249</a>    }
 <a href=#250 id=250 data-nosnippet>250</a>    <span class="kw">match </span>serde_json::from_str::&lt;T&gt;(text_prefix) {
