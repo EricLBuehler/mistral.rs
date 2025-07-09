@@ -14,6 +14,7 @@ extend-ignore-identifiers-re = [
     "seperable",
     "Seperable",
     "setp",
+    "cna",
 ]
 
 [files]
