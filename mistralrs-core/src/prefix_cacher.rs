@@ -447,10 +447,12 @@ impl PrefixCacheManagerV2 {
                 0
             };
             for layer in cache.cache.iter_mut().flatten() {
-                if let Err(e) = layer.set_len(match_len) {
-                    tracing::warn!("Failed to set cache length to {}: {:?}", match_len, e);
+                if layer.try_set_len(match_len).is_err() {
                     return Ok(None);
                 }
+            }
+            for layer in cache.cache.iter_mut().flatten() {
+                layer.set_len(match_len)?;
             }
             return Ok(Some(MatchingCache::Normal {
                 normal: cache.cache,

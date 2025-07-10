@@ -11,7 +11,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="minicpmo_2_6",
+        model="default",
         messages=[
             {
                 "role": "user",

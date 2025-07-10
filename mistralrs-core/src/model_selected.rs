@@ -7,6 +7,19 @@ use crate::{
     DiffusionLoaderType, ModelDType, SpeechLoaderType,
 };
 
+// Default value functions for serde deserialization
+fn default_model_dtype() -> ModelDType {
+    ModelDType::Auto
+}
+
+fn default_max_seq_len() -> usize {
+    AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN
+}
+
+fn default_max_batch_size() -> usize {
+    AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE
+}
+
 fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
     x.parse()
 }
@@ -27,7 +40,7 @@ fn parse_model_dtype(x: &str) -> Result<ModelDType, String> {
     x.parse()
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, serde::Deserialize)]
 pub enum ModelSelected {
     /// Select the model from a toml file
     Toml {
@@ -101,6 +114,14 @@ pub enum ModelSelected {
         /// Cache path for Hugging Face models downloaded locally.
         #[arg(long)]
         hf_cache_path: Option<PathBuf>,
+
+        /// Path to local Matryoshka Transformer configuration CSV file
+        #[arg(long)]
+        matformer_config_path: Option<PathBuf>,
+
+        /// Name of the Matryoshka Transformer slice to use
+        #[arg(long)]
+        matformer_slice_name: Option<String>,
     },
 
     /// Select a plain model, without quantization or adapters
@@ -111,54 +132,76 @@ pub enum ModelSelected {
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(short, long)]
+        #[serde(default)]
         tokenizer_json: Option<String>,
 
         /// The architecture of the model.
         #[arg(short, long, value_parser = parse_arch)]
+        #[serde(default)]
         arch: Option<NormalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        #[serde(default = "default_model_dtype")]
         dtype: ModelDType,
 
         /// Path to a topology YAML file.
         #[arg(long)]
+        #[serde(default)]
         topology: Option<String>,
 
         #[allow(rustdoc::bare_urls)]
         /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
         #[arg(short, long)]
+        #[serde(default)]
         organization: Option<IsqOrganization>,
 
         /// UQFF path to write to.
         #[arg(short, long)]
+        #[serde(default)]
         write_uqff: Option<PathBuf>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;)
         #[arg(short, long)]
+        #[serde(default)]
         from_uqff: Option<String>,
 
         /// .imatrix file to enhance GGUF quantizations with.
         /// Incompatible with `--calibration-file/-c`
         #[arg(short, long)]
+        #[serde(default)]
         imatrix: Option<PathBuf>,
 
         /// Generate and utilize an imatrix to enhance GGUF quantizations.
         /// Incompatible with `--imatrix/-i`
         #[arg(short, long)]
+        #[serde(default)]
         calibration_file: Option<PathBuf>,
 
         /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
+        #[serde(default = "default_max_seq_len")]
         max_seq_len: usize,
 
         /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
+        #[serde(default = "default_max_batch_size")]
         max_batch_size: usize,
 
         /// Cache path for Hugging Face models downloaded locally
         #[arg(long)]
+        #[serde(default)]
         hf_cache_path: Option<PathBuf>,
+
+        /// Path to local Matryoshka Transformer configuration CSV file
+        #[arg(long)]
+        #[serde(default)]
+        matformer_config_path: Option<PathBuf>,
+
+        /// Name of the Matryoshka Transformer slice to use
+        #[arg(long)]
+        #[serde(default)]
+        matformer_slice_name: Option<String>,
     },
 
     /// Select an X-LoRA architecture
@@ -594,6 +637,14 @@ pub enum ModelSelected {
         /// Cache path for Hugging Face models downloaded locally
         #[arg(long)]
         hf_cache_path: Option<PathBuf>,
+
+        /// Path to local Matryoshka Transformer configuration CSV file
+        #[arg(long)]
+        matformer_config_path: Option<PathBuf>,
+
+        /// Name of the Matryoshka Transformer slice to use
+        #[arg(long)]
+        matformer_slice_name: Option<String>,
     },
 
     /// Select a diffusion model, without quantization or adapters
@@ -629,5 +680,17 @@ pub enum ModelSelected {
         /// Model data type. Defaults to `auto`.
         #[arg(long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
+    },
+
+    /// Select multi-model mode with configuration file
+    #[command(name = "multi-model")]
+    MultiModel {
+        /// Multi-model configuration file path (JSON format)
+        #[arg(short, long)]
+        config: String,
+
+        /// Default model ID to use when no model is specified in requests
+        #[arg(short, long)]
+        default_model_id: Option<String>,
     },
 }

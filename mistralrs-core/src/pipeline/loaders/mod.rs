@@ -23,13 +23,13 @@ pub use normal_loaders::{
     AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, GLM4Loader, Gemma2Loader, GemmaLoader,
     LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, NormalLoadingMetadata,
     NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader,
-    Qwen3Loader, Qwen3MoELoader, Starcoder2Loader,
+    Qwen3Loader, Qwen3MoELoader, SmolLm3Loader, Starcoder2Loader,
 };
 
 pub use vision_loaders::{
-    AutoVisionLoader, Gemma3Loader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader,
-    MiniCpmOLoader, Mistral3Loader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader, Qwen2_5VLLoader,
-    VLlama4Loader, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
+    AutoVisionLoader, Gemma3Loader, Gemma3nLoader, Idefics2Loader, Idefics3Loader, LLaVALoader,
+    LLaVANextLoader, MiniCpmOLoader, Mistral3Loader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader,
+    Qwen2_5VLLoader, VLlama4Loader, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
 };
 
 pub use diffusion_loaders::{
@@ -38,8 +38,8 @@ pub use diffusion_loaders::{
 };
 
 use crate::{
-    paged_attention::ModelConfigLike, DeviceMapMetadata, DeviceMapSetting, PagedAttentionConfig,
-    TryIntoDType,
+    matformer::MatformerSliceConfig, paged_attention::ModelConfigLike, DeviceMapMetadata,
+    DeviceMapSetting, PagedAttentionConfig, TryIntoDType,
 };
 
 use super::{paths::AdapterPaths, Pipeline};
@@ -192,9 +192,9 @@ impl FromStr for TokenSource {
 impl fmt::Display for TokenSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TokenSource::Literal(value) => write!(f, "literal:{}", value),
-            TokenSource::EnvVar(value) => write!(f, "env:{}", value),
-            TokenSource::Path(value) => write!(f, "path:{}", value),
+            TokenSource::Literal(value) => write!(f, "literal:{value}"),
+            TokenSource::EnvVar(value) => write!(f, "env:{value}"),
+            TokenSource::Path(value) => write!(f, "path:{value}"),
             TokenSource::CacheToken => write!(f, "cache"),
             TokenSource::None => write!(f, "none"),
         }
@@ -357,6 +357,7 @@ pub trait DeviceMappedModelLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize>;
     /// weight_pack_factor only applies to quantized weights.
     fn layer_sizes_in_bytes(
@@ -364,6 +365,7 @@ pub trait DeviceMappedModelLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<Vec<usize>>;
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
         None

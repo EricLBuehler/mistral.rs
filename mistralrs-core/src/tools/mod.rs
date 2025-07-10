@@ -203,6 +203,7 @@ impl ToolCallingMatcher {
         if let Ok(deser) = serde_json::from_str::<CalledFunctionParameters>(&message) {
             let id = format!("call-{}", Uuid::new_v4());
             Ok(vec![ToolCallResponse {
+                index: 0,
                 id,
                 tp: ToolCallType::Function,
                 function: CalledFunction {
@@ -213,9 +214,11 @@ impl ToolCallingMatcher {
         } else if let Ok(deser) = serde_json::from_str::<Vec<CalledFunctionParameters>>(&message) {
             Ok(deser
                 .into_iter()
-                .map(|deser| {
+                .enumerate()
+                .map(|(idx, deser)| {
                     let id = format!("call-{}", Uuid::new_v4());
                     Ok(ToolCallResponse {
+                        index: idx,
                         id,
                         tp: ToolCallType::Function,
                         function: CalledFunction {
@@ -241,7 +244,7 @@ fn could_be_json<T>(text_prefix: &str) -> (bool, bool)
 where
     T: serde::de::DeserializeOwned,
 {
-    if text_prefix.is_empty() {
+    if text_prefix.trim().is_empty() {
         return (false, false);
     }
     match serde_json::from_str::<T>(text_prefix) {

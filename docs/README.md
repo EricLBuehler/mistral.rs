@@ -34,6 +34,7 @@
 
 ## Other
 - [Chat templates and tokenizers](CHAT_TOK.md)
+- [Multi-model support](multi_model/README.md) - Serve multiple models simultaneously
 - [Paged Attention](PAGED_ATTENTION.md)
 - [Sampling](SAMPLING.md)
 - [TOML selector](TOML_SELECTOR.md)

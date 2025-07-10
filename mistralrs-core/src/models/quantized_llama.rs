@@ -24,7 +24,8 @@ use crate::pipeline::NormalCache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
-const MAX_SEQ_LEN: u32 = 4096;
+// Default fallback for models that don't specify context_length
+const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
 
 struct Mlp {
     feed_forward_w1: Arc<dyn QuantMethod>,
@@ -229,7 +230,7 @@ impl ModelConfig::FromGGML for ModelWeights {
         let rotary = RotaryEmbedding::new_partial(
             10000.,
             ct.hparams.n_rot as usize,
-            MAX_SEQ_LEN as usize,
+            DEFAULT_MAX_SEQ_LEN as usize,
             &ct.device,
             false,
             dtype,
@@ -316,9 +317,9 @@ impl ModelConfig::FromGGML for ModelWeights {
             device: ct.device.clone(),
             cache: EitherCache::Normal(NormalCache::new(
                 ct.hparams.n_layer as usize,
-                MAX_SEQ_LEN as usize,
+                DEFAULT_MAX_SEQ_LEN as usize,
             )),
-            max_seq_len: MAX_SEQ_LEN as usize, // Cannot determine from ggml.
+            max_seq_len: DEFAULT_MAX_SEQ_LEN as usize, // Cannot determine from ggml.
             mapper: None,
             dtype,
         })
@@ -377,7 +378,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             max_seq_len: c
                 .get_value::<u64>("context_length")
                 .ok()
-                .unwrap_or(MAX_SEQ_LEN as u64) as usize,
+                .unwrap_or(DEFAULT_MAX_SEQ_LEN as u64) as usize,
             rope_freq_base: c.get_value("rope.freq_base").ok().unwrap_or(10_000_f32),
             key_length: c
                 .get_value::<u32>("attention.key_length")

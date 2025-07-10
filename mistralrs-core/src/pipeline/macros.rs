@@ -195,6 +195,9 @@ macro_rules! get_paths {
         let template_filename = if let Some(ref p) = $this.chat_template {
             info!("Using chat template file at `{p}`");
             Some(PathBuf::from_str(p)?)
+        } else if dir_list.contains(&"chat_template.jinja".to_string()) {
+            info!("Loading `chat_template.jinja` at `{}`", $this.model_id);
+            Some($crate::api_get_file!(api, "chat_template.jinja", model_id))
         } else {
             info!("Loading `tokenizer_config.json` at `{}`", $this.model_id);
             Some($crate::api_get_file!(
@@ -299,16 +302,26 @@ macro_rules! get_paths_gguf {
         ));
         let model_id = std::path::Path::new(&this_model_id);
 
+        let dir_list = $crate::api_dir_list!(api, model_id, false)
+            .collect::<Vec<_>>();
+
         let chat_template = if let Some(ref p) = $this.chat_template {
-            if p.ends_with(".json") {
+            if p.ends_with(".json") || p.ends_with(".jinja") {
                 info!("Using chat template file at `{p}`");
                 Some(PathBuf::from_str(p)?)
             } else {
-                panic!("Specified chat template file must end with .json");
+                panic!("Specified chat template file must end with .json or .jinja");
             }
         } else {
             if $this.model_id.is_none() {
                 None
+            } else if dir_list.contains(&"chat_template.jinja".to_string()) {
+                info!("Loading `chat_template.jinja` at `{}`", this_model_id);
+                Some($crate::api_get_file!(
+                    api,
+                    "chat_template.jinja",
+                    model_id
+                ))
             } else {
                 info!("Loading `tokenizer_config.json` at `{}` because no chat template file was specified.", this_model_id);
                 let res = $crate::api_get_file!(
@@ -339,9 +352,6 @@ macro_rules! get_paths_gguf {
             revision.clone(),
             $this.xlora_order.as_ref(),
         )?;
-
-        let dir_list = $crate::api_dir_list!(api, model_id, false)
-            .collect::<Vec<_>>();
 
         let gen_conf = if dir_list.contains(&"generation_config.json".to_string()) {
             info!("Loading `generation_config.json` at `{}`", this_model_id);
@@ -427,6 +437,7 @@ macro_rules! normal_model_loader {
         $attention_mechanism:expr,
         $is_moqe:expr,
         $multi_progress:expr,
+        $matformer_config:expr,
     ) => {{
         let regexes = if $loading_isq && $loading_uqff {
             // Dummy weights for the layers which will be overwritten...
@@ -461,6 +472,7 @@ macro_rules! normal_model_loader {
                 loading_isq: $loading_isq,
                 real_device: $real_device,
                 multi_progress: $multi_progress,
+                matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
         )?
@@ -479,6 +491,7 @@ macro_rules! normal_model_loader_sharded {
         $real_device:expr,
         $attention_mechanism:expr,
         $multi_progress:expr,
+        $matformer_config:expr,
     ) => {{
         $loader.load(
             &$config,
@@ -488,6 +501,7 @@ macro_rules! normal_model_loader_sharded {
                 loading_isq: $loading_isq,
                 real_device: $real_device,
                 multi_progress: $multi_progress,
+                matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
         )?
@@ -511,6 +525,7 @@ macro_rules! vision_normal_model_loader {
         $real_device:expr,
         $attention_mechanism:expr,
         $multi_progress:expr,
+        $matformer_config:expr,
     ) => {{
         let regexes = if $loading_isq && $loading_uqff {
             // Dummy weights for the layers which will be overwritten...
@@ -541,6 +556,7 @@ macro_rules! vision_normal_model_loader {
                 loading_isq: $loading_isq,
                 real_device: $real_device,
                 multi_progress: $multi_progress,
+                matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
         )?
@@ -559,6 +575,7 @@ macro_rules! vision_normal_model_loader_sharded {
         $real_device:expr,
         $attention_mechanism:expr,
         $multi_progress:expr,
+        $matformer_config:expr,
     ) => {{
         $loader.load(
             &$config,
@@ -568,6 +585,7 @@ macro_rules! vision_normal_model_loader_sharded {
                 loading_isq: $loading_isq,
                 real_device: $real_device,
                 multi_progress: $multi_progress,
+                matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
         )?
@@ -589,6 +607,7 @@ macro_rules! xlora_model_loader {
         $loading_isq:expr,
         $real_device:expr,
         $multi_progress:expr,
+        $matformer_config:expr,
     ) => {{
         // TODO: remove lora_preload_adapter_info
         let $crate::pipeline::AdapterPaths::XLora {
@@ -639,6 +658,7 @@ macro_rules! xlora_model_loader {
                 loading_isq: $loading_isq,
                 real_device: $real_device,
                 multi_progress: $multi_progress,
+                matformer_slicing_config: $matformer_config,
             },
             &None,
         )?
@@ -663,6 +683,7 @@ macro_rules! lora_model_loader {
         $attention_mechanism:expr,
         $is_moqe:expr,
         $multi_progress:expr,
+        $matformer_config:expr,
     ) => {{
         let $crate::pipeline::AdapterPaths::Lora(lora_adapter_paths) = $paths.get_adapter_paths()
         else {
@@ -711,13 +732,10 @@ macro_rules! lora_model_loader {
                 get_device_for_tensor.clone(),
             )?;
 
-            mistralrs_quant::APPLIED_LORAS
-                .lock()
-                .unwrap()
-                .push(mistralrs_quant::LoraAdapter {
-                    config: lora_config.clone(),
-                    weights: lora_vb,
-                });
+            mistralrs_quant::push_applied_lora(mistralrs_quant::LoraAdapter {
+                config: lora_config.clone(),
+                weights: lora_vb,
+            });
         }
 
         $loader.load(
@@ -728,6 +746,7 @@ macro_rules! lora_model_loader {
                 loading_isq: $loading_isq,
                 real_device: $real_device,
                 multi_progress: $multi_progress,
+                matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
         )?

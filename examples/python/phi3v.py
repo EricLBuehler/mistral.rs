@@ -9,7 +9,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="phi3v",
+        model="default",
         messages=[
             {
                 "role": "user",

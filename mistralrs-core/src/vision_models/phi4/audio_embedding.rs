@@ -107,7 +107,7 @@ impl AudioEmbedding {
 
         // Apply projection based on mode
         let projection_layers = self.proj.get(input_mode).ok_or_else(|| {
-            candle_core::Error::Msg(format!("Projection mode {:?} not found", input_mode))
+            candle_core::Error::Msg(format!("Projection mode {input_mode:?} not found"))
         })?;
 
         let mut audio_set_tensor = audio_features;

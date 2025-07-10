@@ -112,7 +112,7 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             let original_paths = std::mem::take(&mut doc.paths.paths);
 
             for (path, item) in original_paths {
-                let prefixed_path = format!("{}{}", prefix, path);
+                let prefixed_path = format!("{prefix}{path}");
                 prefixed_paths.paths.insert(prefixed_path, item);
             }
 

@@ -58,6 +58,26 @@ pub struct PreProcessorConfig {
     pub(crate) audio_compression_rate: Option<usize>,
     pub(crate) audio_downsample_rate: Option<usize>,
     pub(crate) audio_feat_stride: Option<usize>,
+
+    // Audio feature extraction configuration
+    pub(crate) dither: Option<f64>,
+    pub(crate) feature_size: Option<usize>,
+    pub(crate) fft_length: Option<usize>,
+    pub(crate) fft_overdrive: Option<bool>,
+    pub(crate) frame_length: Option<usize>,
+    pub(crate) hop_length: Option<usize>,
+    pub(crate) input_scale_factor: Option<f64>,
+    pub(crate) max_frequency: Option<f64>,
+    pub(crate) mel_floor: Option<f64>,
+    pub(crate) min_frequency: Option<f64>,
+    pub(crate) padding_side: Option<String>,
+    pub(crate) padding_value: Option<f64>,
+    pub(crate) per_bin_mean: Option<Vec<f64>>,
+    pub(crate) per_bin_stddev: Option<Vec<f64>>,
+    pub(crate) preemphasis: Option<f64>,
+    pub(crate) preemphasis_htk_flavor: Option<bool>,
+    pub(crate) return_attention_mask: Option<bool>,
+    pub(crate) sampling_rate: Option<usize>,
 }
 
 #[allow(dead_code)]

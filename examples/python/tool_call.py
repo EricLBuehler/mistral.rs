@@ -71,7 +71,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="llama-3.1",
+        model="default",
         messages=messages,
         max_tokens=256,
         presence_penalty=1.0,
@@ -102,7 +102,7 @@ if tool_called.name in functions:
 
     res = runner.send_chat_completion_request(
         ChatCompletionRequest(
-            model="llama-3.1",
+            model="default",
             messages=messages,
             max_tokens=256,
             presence_penalty=1.0,

@@ -10,7 +10,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="phi",
+        model="default",
         messages=[{"role": "user", "content": "Tell me a short joke."}],
         max_tokens=30,
         temperature=0.1,

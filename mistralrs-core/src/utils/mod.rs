@@ -98,13 +98,13 @@ macro_rules! handle_pipeline_forward_error {
                 error!("{} - Model failed with error: {:?}", $stage, &e);
                 for seq in $seq_slice.iter_mut() {
                     // Step 1: Add all choices to groups
-                    let res = match &tokenizer
-                    {
-                        Some(tok) => match tok.decode(&seq.get_toks()[seq.prompt_tokens()..], false) {
+                    let start = seq.prompt_tokens().min(seq.get_toks().len());
+                    let res = match &tokenizer {
+                        Some(tok) => match tok.decode(&seq.get_toks()[start..], false) {
                             Ok(t) => t,
-                            Err(_) => "".to_string()
+                            Err(_) => "".to_string(),
                         },
-                        None => "".to_string()
+                        None => "".to_string(),
                     };
 
                     if seq.get_mut_group().is_chat {

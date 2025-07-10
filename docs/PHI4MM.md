@@ -62,7 +62,7 @@ from openai import OpenAI
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 completion = client.chat.completions.create(
-    model="phi4mm",
+    model="default",
     messages=[
         {
             "role": "user",
@@ -159,7 +159,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="phi4mm",
+        model="default",
         messages=[
             {
                 "role": "user",
@@ -167,7 +167,7 @@ res = runner.send_chat_completion_request(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/e/e7/ Everest_North_Face_toward_Base_Camp_Tibet_Luca_Galuzzi_2006.jpg"
+                            "url": "https://upload.wikimedia.org/wikipedia/commons/e/e7/Everest_North_Face_toward_Base_Camp_Tibet_Luca_Galuzzi_2006.jpg"
                         },
                     },
                     {
@@ -207,7 +207,7 @@ Audio is delivered with the `audio_url` content-type that mirrors OpenAIʼs offi
     },
     {
       "type": "image_url",
-      "image_url": { "url": "https://www.allaboutbirds.org/guide/assets/og/528129121-1200px.jpgg" }
+      "image_url": { "url": "https://www.allaboutbirds.org/guide/assets/og/528129121-1200px.jpg" }
     },
     {
       "type": "text",

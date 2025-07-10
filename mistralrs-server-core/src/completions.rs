@@ -35,6 +35,7 @@ use crate::{
     openai::{CompletionRequest, Grammar},
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
+    util::validate_model_name,
 };
 
 /// A callback function that processes streaming response chunks before they are sent to the client.
@@ -192,6 +193,9 @@ pub fn parse_request(
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
 
+    // Validate that the requested model matches the loaded model
+    validate_model_name(&oairequest.model, state.clone())?;
+
     let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
 
     if oairequest.logprobs.is_some() {
@@ -245,6 +249,11 @@ pub fn parse_request(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            model_id: if oairequest.model == "default" {
+                None
+            } else {
+                Some(oairequest.model.clone())
+            },
         })),
         is_streaming,
     ))

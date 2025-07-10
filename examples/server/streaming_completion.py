@@ -5,7 +5,7 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 
 response = client.completions.create(
-    model="mistral",
+    model="default",
     prompt="My favorite theorem is",
     max_tokens=32,
     stream=True,

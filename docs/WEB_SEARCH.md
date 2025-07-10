@@ -82,7 +82,7 @@ messages = [
 ]
 
 completion = client.chat.completions.create(
-    model="llama-3.1",
+    model="default",
     messages=messages,
     tool_choice="auto",
     max_tokens=1024,
@@ -132,7 +132,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="mistral",
+        model="default",
         messages=[
             {
                 "role": "user",

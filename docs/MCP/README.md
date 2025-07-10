@@ -150,7 +150,7 @@ runner = mistralrs.Runner(
 # Use the model - tools are automatically available
 res = runner.send_chat_completion_request(
     mistralrs.ChatCompletionRequest(
-        model="mistral",
+        model="default",
         messages=[
             {"role": "user", "content": "List the files in the current directory and create a test.txt file"}
         ],

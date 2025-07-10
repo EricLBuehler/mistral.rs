@@ -13,7 +13,7 @@ use super::{
 use super::{
     AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, GLM4Loader, Gemma2Loader, GemmaLoader,
     LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader,
-    Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader, Starcoder2Loader,
+    Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader, SmolLm3Loader, Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
 use crate::device_map::{self, DeviceMapper};
@@ -128,6 +128,8 @@ pub struct NormalSpecificConfig {
     pub imatrix: Option<PathBuf>,
     pub calibration_file: Option<PathBuf>,
     pub hf_cache_path: Option<PathBuf>,
+    pub matformer_config_path: Option<PathBuf>,
+    pub matformer_slice_name: Option<String>,
 }
 
 impl NormalLoaderBuilder {
@@ -224,6 +226,7 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::Qwen3) => Box::new(Qwen3Loader),
             Some(NormalLoaderType::GLM4) => Box::new(GLM4Loader),
             Some(NormalLoaderType::Qwen3Moe) => Box::new(Qwen3MoELoader),
+            Some(NormalLoaderType::SmolLm3) => Box::new(SmolLm3Loader),
             None => Box::new(AutoNormalLoader),
         };
         Ok(Box::new(NormalLoader {
@@ -390,12 +393,18 @@ impl Loader for NormalLoader {
                         total_pack_factors / total_tensors
                     };
 
-                    let layer_sizes_in_bytes =
-                        self.inner
-                            .layer_sizes_in_bytes(&config, dtype, weight_pack_factor)?;
-                    let non_mapped_size_in_bytes =
-                        self.inner
-                            .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        None,
+                    )?;
+                    let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        None,
+                    )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
                     (
                         layer_sizes_in_bytes,
@@ -404,12 +413,18 @@ impl Loader for NormalLoader {
                     )
                 } else if let Some(isq) = in_situ_quant {
                     let weight_pack_factor = isq.pack_factor(dtype);
-                    let layer_sizes_in_bytes =
-                        self.inner
-                            .layer_sizes_in_bytes(&config, dtype, weight_pack_factor)?;
-                    let non_mapped_size_in_bytes =
-                        self.inner
-                            .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        None,
+                    )?;
+                    let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        None,
+                    )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
                     (
                         layer_sizes_in_bytes,
@@ -420,12 +435,18 @@ impl Loader for NormalLoader {
                     // Be sure to get the weight pack factor here; we might be loading a prequantized model.
                     let weight_pack_factor =
                         QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?;
-                    let layer_sizes_in_bytes =
-                        self.inner
-                            .layer_sizes_in_bytes(&config, dtype, weight_pack_factor)?;
-                    let non_mapped_size_in_bytes =
-                        self.inner
-                            .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        None,
+                    )?;
+                    let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                        &config,
+                        dtype,
+                        weight_pack_factor,
+                        None,
+                    )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
                     (
                         layer_sizes_in_bytes,
@@ -470,7 +491,7 @@ impl Loader for NormalLoader {
         // TODO: PagedAttention is not supported with CPU for now.
         // This check is not really necessary because `get_device_layers` should prevent it.
         let mapping_uses_cpu = mapper.get_unique_devices().iter().any(Device::is_cpu);
-        if mapping_uses_cpu {
+        if mapping_uses_cpu && paged_attn_config.is_some() {
             warn!("Device mapping contains a mix of GPU and CPU. There is no CPU support for PagedAttention, disabling PagedAttention.");
             paged_attn_config = None;
         }
@@ -534,6 +555,27 @@ impl Loader for NormalLoader {
 
         let multi_progress = Arc::new(MultiProgress::new());
 
+        // Load matformer slicing config if provided
+        let matformer_slicing_config = if let Some(matformer_path) =
+            &self.config.matformer_config_path
+        {
+            use crate::matformer::{MatformerConfig, MatformerSliceConfig};
+            info!("Loading Matformer config from {:?}", matformer_path);
+            let config = Arc::new(MatformerConfig::from_file(matformer_path)?);
+
+            if let Some(slice_name) = &self.config.matformer_slice_name {
+                info!("Using Matformer slice: {}", slice_name);
+                Some(MatformerSliceConfig::new(slice_name.clone(), config))
+            } else {
+                // If no slice name is provided but config exists, we'll need to handle this
+                // For now, return None and let the model handle the default slice selection
+                warn!("Matformer config loaded but no slice name specified. Models will use their default slice.");
+                None
+            }
+        } else {
+            None
+        };
+
         let mut model = if use_nccl || cfg!(feature = "ring") {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
@@ -559,6 +601,7 @@ impl Loader for NormalLoader {
                     device.clone(),
                     attention_mechanism,
                     multi_progress.clone(),
+                    matformer_slicing_config.clone(),
                 ),
                 ModelKind::Adapter {
                     adapter: AdapterKind::XLora,
@@ -574,6 +617,7 @@ impl Loader for NormalLoader {
                     loading_isq,
                     device.clone(),
                     multi_progress.clone(),
+                    matformer_slicing_config.clone(),
                 ),
                 ModelKind::Adapter {
                     adapter: AdapterKind::Lora,
@@ -592,6 +636,7 @@ impl Loader for NormalLoader {
                     attention_mechanism,
                     matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress.clone(),
+                    matformer_slicing_config.clone(),
                 ),
                 _ => unreachable!(),
             }
@@ -612,6 +657,7 @@ impl Loader for NormalLoader {
                     attention_mechanism,
                     matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress.clone(),
+                    matformer_slicing_config.clone(),
                 ),
                 ModelKind::Adapter {
                     adapter: AdapterKind::XLora,
@@ -627,6 +673,7 @@ impl Loader for NormalLoader {
                     loading_isq,
                     device.clone(),
                     multi_progress.clone(),
+                    matformer_slicing_config.clone(),
                 ),
                 ModelKind::Adapter {
                     adapter: AdapterKind::Lora,
@@ -645,6 +692,7 @@ impl Loader for NormalLoader {
                     attention_mechanism,
                     matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress.clone(),
+                    matformer_slicing_config.clone(),
                 ),
                 _ => unreachable!(),
             }
@@ -815,6 +863,7 @@ impl Loader for NormalLoader {
                 paged_attn_config.mem_cpu,
                 paged_attn_config.block_size,
                 dtype,
+                paged_attn_config.cache_type,
                 model.config(),
                 &device,
                 &pipeline_mapper

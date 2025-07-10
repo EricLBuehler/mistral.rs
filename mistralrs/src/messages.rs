@@ -27,11 +27,14 @@ pub trait RequestLike {
 /// No constraints, logits processors, logprobs, tools, or adapters.
 ///
 /// Sampling is deterministic.
-pub struct TextMessages(Vec<IndexMap<String, MessageContent>>);
+pub struct TextMessages {
+    messages: Vec<IndexMap<String, MessageContent>>,
+    enable_thinking: Option<bool>,
+}
 
 impl From<TextMessages> for Vec<IndexMap<String, MessageContent>> {
     fn from(value: TextMessages) -> Self {
-        value.0
+        value.messages
     }
 }
 
@@ -65,11 +68,14 @@ impl Default for TextMessages {
 
 impl TextMessages {
     pub fn new() -> Self {
-        Self(Vec::new())
+        Self {
+            messages: Vec::new(),
+            enable_thinking: None,
+        }
     }
 
     pub fn add_message(mut self, role: TextMessageRole, text: impl ToString) -> Self {
-        self.0.push(IndexMap::from([
+        self.messages.push(IndexMap::from([
             ("role".to_string(), Either::Left(role.to_string())),
             ("content".to_string(), Either::Left(text.to_string())),
         ]));
@@ -77,24 +83,29 @@ impl TextMessages {
     }
 
     pub fn clear(mut self) -> Self {
-        self.0.clear();
+        self.messages.clear();
+        self
+    }
+
+    pub fn enable_thinking(mut self, enable_thinking: bool) -> Self {
+        self.enable_thinking = Some(enable_thinking);
         self
     }
 }
 
 impl RequestLike for TextMessages {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>] {
-        &self.0
+        &self.messages
     }
     fn images_ref(&self) -> &[DynamicImage] {
         &[]
     }
     fn take_messages(&mut self) -> RequestMessage {
         let mut other = Vec::new();
-        std::mem::swap(&mut other, &mut self.0);
+        std::mem::swap(&mut other, &mut self.messages);
         RequestMessage::Chat {
             messages: other,
-            enable_thinking: self.enable_search(),
+            enable_thinking: self.enable_thinking,
         }
     }
     fn enable_search(&self) -> Option<bool> {
@@ -133,6 +144,7 @@ pub struct VisionMessages {
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,
     audios: Vec<AudioInput>,
+    enable_thinking: Option<bool>,
 }
 
 impl Default for VisionMessages {
@@ -147,6 +159,7 @@ impl VisionMessages {
             images: Vec::new(),
             messages: Vec::new(),
             audios: Vec::new(),
+            enable_thinking: None,
         }
     }
 
@@ -186,7 +199,8 @@ impl VisionMessages {
         audios: Vec<AudioInput>,
         model: &Model,
     ) -> anyhow::Result<Self> {
-        let prefixer = match &model.config().category {
+        let config = model.config().unwrap();
+        let prefixer = match &config.category {
             ModelCategory::Vision { prefixer } => prefixer,
             ModelCategory::Text
             | ModelCategory::Diffusion
@@ -241,6 +255,11 @@ impl VisionMessages {
 
         self
     }
+
+    pub fn enable_thinking(mut self, enable_thinking: bool) -> Self {
+        self.enable_thinking = Some(enable_thinking);
+        self
+    }
 }
 
 impl RequestLike for VisionMessages {
@@ -261,7 +280,7 @@ impl RequestLike for VisionMessages {
             images: other_images,
             messages: other_messages,
             audios: other_audios,
-            enable_thinking: self.enable_search(),
+            enable_thinking: self.enable_thinking,
         }
     }
     fn enable_search(&self) -> Option<bool> {
@@ -324,7 +343,7 @@ impl Default for RequestBuilder {
 impl From<TextMessages> for RequestBuilder {
     fn from(value: TextMessages) -> Self {
         Self {
-            messages: value.0,
+            messages: value.messages,
             images: Vec::new(),
             audios: Vec::new(),
             logits_processors: Vec::new(),
@@ -471,7 +490,8 @@ impl RequestBuilder {
         audios: Vec<AudioInput>,
         model: &Model,
     ) -> anyhow::Result<Self> {
-        let prefixer = match &model.config().category {
+        let config = model.config().unwrap();
+        let prefixer = match &config.category {
             ModelCategory::Vision { prefixer } => prefixer,
             ModelCategory::Text
             | ModelCategory::Diffusion

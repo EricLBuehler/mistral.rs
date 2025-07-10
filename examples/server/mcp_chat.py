@@ -70,7 +70,7 @@ def main():
     try:
         # Send the chat completion request
         response = client.chat.completions.create(
-            model="mistral",  # This will be handled by the configured model
+            model="default",  # This will be handled by the configured model
             messages=messages,
             max_tokens=1000,
             temperature=0.1,

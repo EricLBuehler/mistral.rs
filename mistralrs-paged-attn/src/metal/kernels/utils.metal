@@ -1,4 +1,6 @@
+#include "float8.metal"
 #include <metal_stdlib>
+
 using namespace metal;
 
 #if defined(__HAVE_BFLOAT__)

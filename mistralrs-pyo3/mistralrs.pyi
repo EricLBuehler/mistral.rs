@@ -106,6 +106,7 @@ class Architecture(Enum):
     Qwen3 = "qwen3"
     GLM4 = "glm4"
     Qwen3Moe = "qwen3moe"
+    SmolLm3 = "smollm3"
 
 @dataclass
 class VisionArchitecture(Enum):
@@ -122,6 +123,7 @@ class VisionArchitecture(Enum):
     Gemma3 = "gemma3"
     Mistral3 = "mistral3"
     Llama4 = "llama4"
+    Gemma3n = "Gemma3n"
 
 @dataclass
 class DiffusionArchitecture(Enum):
@@ -199,6 +201,7 @@ class Which(Enum):
         calibration_file: str | None = None
         imatrix: str | None = None
         hf_cache_path: str | None = None
+        matformer_config_path: str | None = None
 
     @dataclass
     class XLora:
@@ -311,6 +314,7 @@ class Which(Enum):
         calibration_file: str | None = None
         imatrix: str | None = None
         hf_cache_path: str | None = None
+        matformer_config_path: str | None = None
 
     @dataclass
     class DiffusionPlain:
@@ -324,6 +328,10 @@ class Which(Enum):
         arch: DiffusionArchitecture
         dac_model_id: str | None = None
         dtype: ModelDType = ModelDType.Auto
+
+class PagedCacheType(Enum):
+    Auto: int = 0
+    F8E4M3: int = 1
 
 class Runner:
     def __init__(
@@ -342,6 +350,7 @@ class Runner:
         anymoe_config: AnyMoeConfig | None = None,
         pa_gpu_mem: int | float | None = None,
         pa_blk_size: int | None = None,
+        pa_cache_type: PagedCacheType | None = None,
         no_paged_attn: bool = False,
         paged_attn: bool = False,
         prompt_batchsize: int | None = None,
@@ -387,6 +396,7 @@ class Runner:
             This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
         - `pa_blk_size` sets the block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA,
             it will default to 32. PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
+        - `pa_cache_type` sets the PagedAttention KV cache type (auto or f8e4m3). Defaults to `auto`.
         - `no_paged_attn` disables PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
         - `paged_attn` enables PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
         - `prompt_batchsize` Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.

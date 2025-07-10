@@ -88,7 +88,7 @@ impl Display for McpToolResult {
             .map(|content| match content {
                 McpContent::Text { text } => text.clone(),
                 McpContent::Image { mime_type, .. } => {
-                    format!("[Image: {}]", mime_type)
+                    format!("[Image: {mime_type}]")
                 }
                 McpContent::Resource { resource } => resource
                     .text

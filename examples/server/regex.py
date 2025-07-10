@@ -5,7 +5,7 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 BULLET_LIST_REGEX = "(- [^\n]*\n)+(- [^\n]*)(\n\n)?"
 
 completion = client.chat.completions.create(
-    model="mistral",
+    model="default",
     messages=[
         {
             "role": "user",
@@ -28,7 +28,7 @@ print("---")
 # "Sure!" we guarantee a space after "Sure!" but we haven't forced which token that starts with space should be used yet.
 
 completion = client.chat.completions.create(
-    model="mistral",
+    model="default",
     messages=[
         {
             "role": "user",

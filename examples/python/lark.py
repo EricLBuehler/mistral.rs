@@ -35,7 +35,7 @@ NUMBER: /-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?/
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="phi",
+        model="default",
         messages=[{"role": "user", "content": "Give me a sample address."}],
         max_tokens=30,
         temperature=0.1,

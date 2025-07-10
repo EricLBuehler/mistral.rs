@@ -9,7 +9,7 @@ IMAGE_URL = "https://www.allaboutbirds.org/guide/assets/og/528129121-1200px.jpg"
 AUDIO_URL = "https://upload.wikimedia.org/wikipedia/commons/4/42/Bird_singing.ogg"
 
 completion = client.chat.completions.create(
-    model="phi4mm",
+    model="default",
     messages=[
         {
             "role": "user",

@@ -39,6 +39,8 @@ impl XLoraModelBuilder {
             imatrix: None,
             calibration_file: None,
             hf_cache_path: self.text_model.hf_cache_path,
+            matformer_config_path: None,
+            matformer_slice_name: None,
         };
 
         if self.text_model.with_logging {

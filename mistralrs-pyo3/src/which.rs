@@ -24,6 +24,7 @@ pub enum Architecture {
     Qwen3,
     GLM4,
     Qwen3Moe,
+    SmolLm3,
 }
 
 impl From<Architecture> for NormalLoaderType {
@@ -44,6 +45,7 @@ impl From<Architecture> for NormalLoaderType {
             Architecture::Qwen3 => Self::Qwen3,
             Architecture::GLM4 => Self::GLM4,
             Architecture::Qwen3Moe => Self::Qwen3Moe,
+            Architecture::SmolLm3 => Self::SmolLm3,
         }
     }
 }
@@ -64,6 +66,7 @@ pub enum VisionArchitecture {
     Gemma3,
     Mistral3,
     Llama4,
+    Gemma3n,
 }
 
 impl From<VisionArchitecture> for VisionLoaderType {
@@ -82,6 +85,7 @@ impl From<VisionArchitecture> for VisionLoaderType {
             VisionArchitecture::Gemma3 => VisionLoaderType::Gemma3,
             VisionArchitecture::Mistral3 => VisionLoaderType::Mistral3,
             VisionArchitecture::Llama4 => VisionLoaderType::Llama4,
+            VisionArchitecture::Gemma3n => VisionLoaderType::Gemma3n,
         }
     }
 }
@@ -205,6 +209,8 @@ pub enum Which {
         calibration_file = None,
         auto_map_params = None,
         hf_cache_path = None,
+        matformer_config_path = None,
+        matformer_slice_name = None,
     ))]
     Plain {
         model_id: String,
@@ -219,6 +225,8 @@ pub enum Which {
         calibration_file: Option<PathBuf>,
         auto_map_params: Option<TextAutoMapParams>,
         hf_cache_path: Option<PathBuf>,
+        matformer_config_path: Option<PathBuf>,
+        matformer_slice_name: Option<String>,
     },
 
     #[pyo3(constructor = (
@@ -424,6 +432,8 @@ pub enum Which {
         imatrix = None,
         auto_map_params = None,
         hf_cache_path = None,
+        matformer_config_path = None,
+        matformer_slice_name = None,
     ))]
     VisionPlain {
         model_id: String,
@@ -438,6 +448,8 @@ pub enum Which {
         imatrix: Option<PathBuf>,
         auto_map_params: Option<VisionAutoMapParams>,
         hf_cache_path: Option<PathBuf>,
+        matformer_config_path: Option<PathBuf>,
+        matformer_slice_name: Option<String>,
     },
 
     #[pyo3(constructor = (

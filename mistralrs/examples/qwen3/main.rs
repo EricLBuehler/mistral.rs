@@ -3,7 +3,7 @@ use mistralrs::{IsqType, TextMessageRole, TextMessages, TextModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("https://huggingface.co/Qwen/Qwen3-30B-A3B")
+    let model = TextModelBuilder::new("Qwen/Qwen3-30B-A3B")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()

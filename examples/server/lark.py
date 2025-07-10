@@ -47,7 +47,7 @@ STRING: /"[^"]*"/
 """
 
 completion = client.chat.completions.create(
-    model="mistral",
+    model="default",
     messages=[
         {
             "role": "user",

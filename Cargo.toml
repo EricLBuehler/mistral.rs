@@ -27,10 +27,10 @@ license = "MIT"
 rust-version = "1.82"
 
 [workspace.dependencies]
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "e8209f3" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "e8209f3" }
-candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "e8209f3" }
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "e8209f3" }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "132643d" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "132643d" }
+candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "132643d" }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "132643d" }
 # candle-core = { path = "../candle/candle-core" }
 # candle-nn = { path = "../candle/candle-nn" }
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }
@@ -94,10 +94,11 @@ hf-hub = { version = "0.4.2", default-features = false, features = [
 ] }
 itertools = "0.14.0"
 rand = "0.9.1"
+rand_distr = "0.5.0"
 cli-table = "0.5.0"
 dirs = "6.0.0"
 thiserror = "2.0.12"
-tokenizers = { version = "0.21.1", default-features = false }
+tokenizers = { version = "0.21.2", default-features = false }
 tokio-tungstenite = "0.24.0"
 tqdm = "0.7.0"
 chrono = "0.4.41"
@@ -128,8 +129,8 @@ schemars = "0.8.22"
 serde_yaml = "0.9.34"
 serde_plain = "1.0.2"
 as-any = "0.3.2"
-llguidance = { git = "https://github.com/guidance-ai/llguidance.git", version = "0.7.29", default-features = false, features = ["lark"], rev = "2ce5ab8" }
-toktrie_hf_tokenizers = {git = "https://github.com/guidance-ai/llguidance.git", version = "0.7.29", rev = "2ce5ab8" }
+llguidance = { git = "https://github.com/guidance-ai/llguidance.git", version = "1.0.0", default-features = false, features = ["lark"], rev = "c432092" }
+toktrie_hf_tokenizers = {git = "https://github.com/guidance-ai/llguidance.git", version = "1.0.0", rev = "c432092" }
 objc = { version = "0.2.7" }
 serde-big-array = "0.5.1"
 interprocess = "2.2.3"
@@ -169,6 +170,7 @@ rubato = "0.16.2"
 rustfft = "6.3.0"
 hound = "3.5.1"
 apodize = "1.0.0"
+statrs = "0.18.0"
 
 mistralrs-core = { path = "mistralrs-core" }
 mistralrs-paged-attn = { path = "mistralrs-paged-attn" }

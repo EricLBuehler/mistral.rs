@@ -12,4 +12,5 @@ pub struct ProcessorConfig {
     pub(crate) patch_size: Option<usize>,
     pub(crate) spatial_merge_size: Option<usize>,
     pub(crate) pixel_shuffle_ratio: Option<f32>,
+    pub(crate) audio_seq_length: Option<usize>,
 }

@@ -342,9 +342,9 @@ impl Loader for GGUFLoader {
             };
 
             let layer_sizes_in_bytes =
-                model.layer_sizes_in_bytes("this is a dummy config!", dtype, 1)?;
+                model.layer_sizes_in_bytes("this is a dummy config!", dtype, 1, None)?;
             let non_mapped_size_in_bytes =
-                model.non_mapped_size_in_bytes("this is a dummy config!", dtype, 1)?;
+                model.non_mapped_size_in_bytes("this is a dummy config!", dtype, 1, None)?;
             let total_model_size_in_bytes =
                 layer_sizes_in_bytes.iter().sum::<usize>() + non_mapped_size_in_bytes;
 
@@ -472,6 +472,7 @@ impl Loader for GGUFLoader {
                 paged_attn_config.mem_cpu,
                 paged_attn_config.block_size,
                 internal_dtype,
+                paged_attn_config.cache_type,
                 model_config,
                 device,
                 &layer_devices,
@@ -489,10 +490,9 @@ impl Loader for GGUFLoader {
             (None, None)
         };
 
-        let gen_conf: Option<GenerationConfig> = paths.get_gen_conf_filename().map(|f| {
-            serde_json::from_str(&fs::read_to_string(f).unwrap())
-                .expect("bos_token_id/eos_token_id missing in generation_config.json")
-        });
+        let gen_conf: Option<GenerationConfig> = paths
+            .get_gen_conf_filename()
+            .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
         let chat_template_explicit = paths
             .get_chat_template_explicit()
             .as_ref()

@@ -12,12 +12,12 @@ runner = Runner(
     which=Which.Plain(
         model_id="microsoft/Phi-3.5-mini-instruct",
     ),
-    in_situ_quant="Q4K",
+    in_situ_quant="4",
 )
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="mistral",
+        model="default",
         messages=[
             {"role": "user", "content": "Tell me a story about the Rust type system."}
         ],
@@ -54,7 +54,7 @@ AUDIO_URL = "https://upload.wikimedia.org/wikipedia/commons/4/42/Bird_singing.og
 
 response = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="phi4mm",
+        model="default",
         messages=[
             {
                 "role": "user",

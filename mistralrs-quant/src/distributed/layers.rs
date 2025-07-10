@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use candle_core::{Context, Device, Result, Tensor};
+use candle_core::{Context, Device, IndexOp, Result, Tensor, D};
 use candle_nn::Linear;
 
 use crate::{
@@ -99,6 +99,70 @@ impl RowParallelLayer {
                 ))?;
                 Arc::new(layer) as Arc<dyn QuantMethod>
             }
+        };
+
+        // Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
+        let bias = if bias && vb.contains_tensor("bias") {
+            Some(vb.get((out_dim,), "bias")?)
+        } else {
+            None
+        };
+
+        let this_unquant = Arc::new(Self {
+            weight,
+            bias,
+            all_reduce: distributed::SumAllReduce::new(comm),
+        });
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        Ok(this)
+    }
+
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new_matformer(
+        in_dim: usize,
+        out_dim: usize,
+        orig_intermediate_size: usize,
+        config: &Option<QuantizedConfig>,
+        bias: bool,
+        comm: &Arc<crate::Comm>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        let rank = comm.rank();
+        let world_size = comm.world_size();
+        let shard = shard(1, rank, world_size);
+
+        let base_vb = vb.clone();
+        let vb = if should_apply_immediate_isq(&vb) {
+            vb.set_device(Device::Cpu)
+        } else {
+            vb
+        };
+
+        if config.is_some() {
+            candle_core::bail!("Cannot load a matformer layer with a pre-quantized model.");
+        }
+
+        // Handle the case where the layer is dummy (no tensors)
+        let weight = if !vb.contains_tensor("weight") {
+            let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
+            Arc::new(layer) as Arc<dyn QuantMethod>
+        } else {
+            let weight = vb
+                .get_with_hints(
+                    (out_dim, orig_intermediate_size),
+                    "weight",
+                    Default::default(),
+                )?
+                .i((.., ..in_dim))?
+                .contiguous()?;
+
+            let weight = shard.apply_to(&weight)?;
+            let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
+
+            let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+                Linear::new(weight, None),
+            ))?;
+            Arc::new(layer) as Arc<dyn QuantMethod>
         };
 
         // Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
@@ -339,6 +403,66 @@ impl ColumnParallelLayer {
         Self::new_with_shard(in_dim, out_dim, config, bias, comm, shard, vb)
     }
 
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new_matformer(
+        in_dim: usize,
+        out_dim: usize,
+        orig_intermediate_size: usize,
+        config: &Option<QuantizedConfig>,
+        bias: bool,
+        comm: &Arc<crate::Comm>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        let rank = comm.rank();
+        let world_size = comm.world_size();
+        let shard = shard(0, rank, world_size);
+
+        let base_vb = vb.clone();
+        let vb = if should_apply_immediate_isq(&vb) {
+            vb.set_device(Device::Cpu)
+        } else {
+            vb
+        };
+
+        if config.is_some() {
+            candle_core::bail!("Cannot load a matformer layer with a pre-quantized model.");
+        }
+
+        // Handle the case where the layer is dummy (no tensors)
+        let weight = if !vb.contains_tensor("weight") {
+            let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
+            Arc::new(layer) as Arc<dyn QuantMethod>
+        } else {
+            let weight = vb
+                .get_with_hints(
+                    (orig_intermediate_size, in_dim),
+                    "weight",
+                    Default::default(),
+                )?
+                .i((..out_dim, ..))?
+                .contiguous()?;
+
+            let weight = shard.apply_to(&weight)?;
+            let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
+
+            let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+                Linear::new(weight, None),
+            ))?;
+            Arc::new(layer) as Arc<dyn QuantMethod>
+        };
+
+        // Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
+        let bias = if bias && vb.contains_tensor("bias") {
+            Some(vb.get_with_hints((out_dim,), "bias", shard)?)
+        } else {
+            None
+        };
+
+        let this_unquant = Arc::new(Self { weight, bias });
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        Ok(this)
+    }
+
     pub fn new_merged(
         in_dim: usize,
         out_dim: usize,
@@ -535,6 +659,88 @@ impl ReplicatedLayer {
             } else {
                 let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
                 let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
+
+                let bias = if bias {
+                    Some(vb.get_with_hints((out_dim,), "bias", Default::default())?)
+                } else {
+                    None
+                };
+                let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+                    Linear::new(weight, bias),
+                ))?;
+                Arc::new(layer) as Arc<dyn QuantMethod>
+            }
+        };
+
+        let this_unquant = Arc::new(Self(layer));
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        Ok(this)
+    }
+
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new_layers_matformer_indices(
+        in_dim: usize,
+        out_dim: usize,
+        kept_layers_indices: Option<&Tensor>,
+        orig_num_hidden_layers: usize,
+        config: &Option<QuantizedConfig>,
+        bias: bool,
+        vb: ShardedVarBuilder,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        let base_vb = vb.clone();
+        let vb = if should_apply_immediate_isq(&vb) {
+            vb.set_device(Device::Cpu)
+        } else {
+            vb
+        };
+
+        let layer = if let Some(quant_conf) = &config {
+            if kept_layers_indices.is_some() {
+                candle_core::bail!("Cannot load a matformer layer with a pre-quantized model.");
+            }
+
+            match quant_conf {
+                QuantizedConfig::GptqAwq { .. } => {
+                    gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
+                }
+                QuantizedConfig::Fp8 { .. } => blockwise_fp8_linear_b(
+                    in_dim,
+                    out_dim,
+                    quant_conf,
+                    bias,
+                    Default::default(),
+                    vb.clone(),
+                )?,
+                QuantizedConfig::Bitsandbytes { .. } => {
+                    Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>
+                }
+                QuantizedConfig::Afq { .. } => {
+                    AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
+            }
+        } else {
+            // Handle the case where the layer is dummy (no tensors)
+            if !vb.contains_tensor("weight") {
+                let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
+                Arc::new(layer) as Arc<dyn QuantMethod>
+            } else {
+                let mut weight =
+                    vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
+
+                if let Some(kept_layers_indices) = &kept_layers_indices {
+                    let weight_reshaped = weight.reshape((
+                        orig_num_hidden_layers,
+                        weight.dim(0)? / orig_num_hidden_layers,
+                        weight.dim(1)?,
+                    ))?;
+
+                    weight = weight_reshaped
+                        .index_select(&kept_layers_indices.to_device(weight.device())?, 0)?
+                        .reshape(((), weight_reshaped.dim(D::Minus1)?))?
+                        .contiguous()?;
+                }
+
+                weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
 
                 let bias = if bias {
                     Some(vb.get_with_hints((out_dim,), "bias", Default::default())?)

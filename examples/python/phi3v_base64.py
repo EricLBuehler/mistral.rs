@@ -14,7 +14,7 @@ with open(FILENAME, "rb") as image_file:
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="phi3v",
+        model="default",
         messages=[
             {
                 "role": "user",

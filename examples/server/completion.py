@@ -38,7 +38,7 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 while True:
     prompt = input(">>> ")
     completion = client.completions.create(
-        model="mistral",
+        model="default",
         prompt=prompt,
         max_tokens=256,
         frequency_penalty=1.0,

@@ -57,7 +57,7 @@ cargo run --features cuda -- -i gguf -f my-gguf-file.gguf
 See the [docs](ISQ.md)
 
 ```
-cargo run --features cuda -- -i --isq Q4K plain -m microsoft/Phi-3-mini-4k-instruct
+cargo run --features cuda -- -i --isq 4 plain -m microsoft/Phi-3-mini-4k-instruct
 ```
 
 ## Using a GPTQ quantized model

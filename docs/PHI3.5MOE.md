@@ -15,20 +15,20 @@ The Phi 3.5 MoE model is a 16x3.8B parameter decoder-only text-to-text mixture o
     - The design is flexible: 2 or 1 experts can be selected, enabling dense or sparse gating
 
 ```
-./mistralrs-server --isq Q4K -i plain -m microsoft/Phi-3.5-MoE-instruct
+./mistralrs-server --isq 4 -i plain -m microsoft/Phi-3.5-MoE-instruct
 ```
 
 > [!NOTE]
 > This models supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
 
 ```
-./mistralrs-server --isq Q4K -i plain -m microsoft/Phi-3.5-MoE-instruct --organization moqe
+./mistralrs-server --isq 4 -i plain -m microsoft/Phi-3.5-MoE-instruct --organization moqe
 ```
 
 ## HTTP API
 
 ```
-./mistralrs-server --isq Q4K --port 1234 plain -m microsoft/Phi-3.5-MoE-instruct
+./mistralrs-server --isq 4 --port 1234 plain -m microsoft/Phi-3.5-MoE-instruct
 ```
 
 ```py
@@ -44,7 +44,7 @@ while True:
     prompt = input(">>> ")
     messages.append({"role": "user", "content": prompt})
     completion = client.chat.completions.create(
-        model="phi3.5moe",
+        model="default",
         messages=messages,
         max_tokens=256,
         frequency_penalty=1.0,
@@ -69,7 +69,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="mistral",
+        model="default",
         messages=[
             {"role": "user", "content": "Tell me a story about the Rust type system."}
         ],

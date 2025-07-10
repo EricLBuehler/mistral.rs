@@ -9,7 +9,7 @@ ENDPOINT = "http://localhost:1234/v1/"
 def request(stream: bool):
     client = openai.Client(api_key="foobar", base_url=ENDPOINT)
     return client.chat.completions.create(
-        model="mistral",
+        model="default",
         messages=[
             {
                 "role": "user",

@@ -27,7 +27,7 @@ use crate::{
         BaseCompletionResponder,
     },
     handler_core::{
-        base_process_non_streaming_response, create_response_channel, send_request,
+        base_process_non_streaming_response, create_response_channel, send_request_with_model,
         BaseJsonModelError, ErrorToResponse, JsonError, ModelErrorMessage,
     },
     openai::{
@@ -36,7 +36,7 @@ use crate::{
     },
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
-    util::{parse_audio_url, parse_image_url},
+    util::{parse_audio_url, parse_image_url, validate_model_name},
 };
 
 /// A callback function that processes streaming response chunks before they are sent to the client.
@@ -202,6 +202,9 @@ pub async fn parse_request(
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
 
+    // Validate that the requested model matches the loaded model
+    validate_model_name(&oairequest.model, state.clone())?;
+
     let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
 
     let messages = match oairequest.messages {
@@ -248,7 +251,7 @@ pub async fn parse_request(
                             }
                             let content = match image_messages[0]["text"].deref() {
                                 Either::Left(left) => left.to_string(),
-                                Either::Right(right) => format!("{:?}", right),
+                                Either::Right(right) => format!("{right:?}"),
                             };
                             let mut message_map: IndexMap<
                                 String,
@@ -379,7 +382,7 @@ pub async fn parse_request(
                 for url_unparsed in image_urls {
                     let image = parse_image_url(&url_unparsed)
                         .await
-                        .context(format!("Failed to parse image resource: {}", url_unparsed))?;
+                        .context(format!("Failed to parse image resource: {url_unparsed}"))?;
                     images.push(image);
                 }
 
@@ -388,7 +391,7 @@ pub async fn parse_request(
                 for url_unparsed in audio_urls {
                     let audio = parse_audio_url(&url_unparsed)
                         .await
-                        .context(format!("Failed to parse audio resource: {}", url_unparsed))?;
+                        .context(format!("Failed to parse audio resource: {url_unparsed}"))?;
                     audios.push(audio);
                 }
 
@@ -474,6 +477,11 @@ pub async fn parse_request(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: oairequest.web_search_options,
+            model_id: if oairequest.model == "default" {
+                None
+            } else {
+                Some(oairequest.model.clone())
+            },
         })),
         is_streaming,
     ))
@@ -493,12 +501,19 @@ pub async fn chatcompletions(
 ) -> ChatCompletionResponder {
     let (tx, mut rx) = create_response_channel(None);
 
+    // Extract model_id for routing before parsing
+    let model_id = if oairequest.model == "default" {
+        None
+    } else {
+        Some(oairequest.model.clone())
+    };
+
     let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx).await {
         Ok(x) => x,
         Err(e) => return handle_error(state, e.into()),
     };
 
-    if let Err(e) = send_request(&state, request).await {
+    if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
         return handle_error(state, e.into());
     }
 

@@ -5,6 +5,7 @@ These are API docs for the `mistralrs` package.
 **Table of contents**
 - Full API docs: [here](https://ericlbuehler.github.io/mistral.rs/pyo3/mistralrs.html)
 - Docs for the `Which` enum: [here](#which)
+- Multi-model support: [here](#multi-model-support)
 - MCP Client Configuration: [here](#mcp-client)
 - Example: [here](#example)
 
@@ -28,6 +29,9 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Phi3_5MoE`
 - `DeepseekV2`
 - `DeepseekV3`
+- `Qwen3`
+- `Qwen3Moe`
+- `SmolLm3`
 
 ### ISQ Organization
 - `Default`
@@ -47,6 +51,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Gemma3`
 - `Mistral3`
 - `Llama4`
+- `Gemma3n`
 
 ### Architecture for diffusion models
 - `Flux`
@@ -206,6 +211,70 @@ class Which(Enum):
         dtype: ModelDType = ModelDType.Auto
 ```
 
+## Multi-model Support
+
+The `mistralrs` Python API supports running multiple models simultaneously using the `MultiModelRunner` class, enabling you to serve different models and switch between them dynamically.
+
+### Basic Multi-model Usage
+
+```python
+import mistralrs
+
+# Create a MultiModelRunner instead of Runner
+runner = mistralrs.MultiModelRunner(
+    models=[
+        {
+            "model_id": "llama3-3b",
+            "which": mistralrs.Which.Plain(
+                model_id="meta-llama/Llama-3.2-3B-Instruct"
+            )
+        },
+        {
+            "model_id": "qwen3-4b", 
+            "which": mistralrs.Which.Plain(
+                model_id="Qwen/Qwen3-4B"
+            )
+        }
+    ],
+    default_model_id="meta-llama/Llama-3.2-3B-Instruct"
+)
+
+# Send requests to specific models
+response_llama = runner.send_chat_completion_request(
+    mistralrs.ChatCompletionRequest(
+        model="meta-llama/Llama-3.2-3B-Instruct",  # Specify which model to use
+        messages=[{"role": "user", "content": "Hello from Llama!"}],
+        max_tokens=100
+    )
+)
+
+response_qwen = runner.send_chat_completion_request(
+    mistralrs.ChatCompletionRequest(
+        model="Qwen/Qwen3-4B",  # Use a different model
+        messages=[{"role": "user", "content": "Hello from Qwen!"}],
+        max_tokens=100
+    )
+)
+```
+
+### Multi-model Management
+
+```python
+# List available models
+models = runner.list_models()
+print(f"Available models: {models}")
+
+# Get/set default model
+default_model = runner.get_default_model_id()
+runner.set_default_model_id("Qwen/Qwen3-4B")
+
+# Remove a model
+runner.remove_model("meta-llama/Llama-3.2-3B-Instruct")
+```
+
+### Server Configuration
+For server-based multi-model deployment, see the [multi-model documentation](../docs/multi_model/README.md).
+
 ## MCP Client
 
 The `mistralrs` Python API now supports Model Context Protocol (MCP) clients, enabling AI assistants to connect to and interact with external tools and resources through standardized server interfaces.
@@ -324,7 +393,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="mistral",
+        model="default",
         messages=[{"role":"user", "content":"Tell me a story about the Rust type system."}],
         max_tokens=256,
         presence_penalty=1.0,

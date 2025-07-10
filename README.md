@@ -11,6 +11,12 @@ Blazingly fast LLM inference.
 | <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Documentation</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Documentation</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> | <a href="https://matrix.to/#/#mistral.rs:matrix.org"><b>Matrix</b></a> |
 </p>
 
+<p align="center">
+  <a href="https://github.com/EricLBuehler/mistral.rs/stargazers">
+    <img src="https://img.shields.io/github/stars/EricLBuehler/mistral.rs?style=social&label=Star" alt="GitHub stars">
+  </a>
+</p>
+
 **Mistral.rs is a cross-platform, highly-multimodal inference engine that brings you:**
 - All-in-one multimodal workflow: text↔text, text+vision↔text, text+vision+audio↔text, text→speech, text→image
 - APIs: Rust, Python, OpenAI HTTP server, MCP server
@@ -61,6 +67,40 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 ## Quick examples
 
 *After following installation instructions*
+
+- 💎🪆💎🪆💎 Run the **Gemma 3n** family (E2B, E4B) with **vision**, **audio**, and **MatFormer** support: [documentation](docs/GEMMA3N.md)  
+  <details>
+    <summary>Show commands</summary>
+
+    **Normal use, run the full model (E4B or E2B):**
+    ```bash
+    ./mistralrs-server -i --isq 8 run -m google/gemma-3n-E4B-it
+    ```
+
+    **Use [MatFormer](docs/GEMMA3N.md#using-matformer-with-gemma-3n) to get a balanced smaller model:**
+    ```bash
+    ./mistralrs-server -i --isq 8 run -m google/gemma-3n-E4B-it \
+      --matformer-config-path matformer_configs/gemma3n.csv \
+      --matformer-slice-name "Config for E2.49B (block-level)"
+    ```
+  </details>
+  
+
+- 🤗🤗🤗 Run the **SmolLM 3** long-context hybrid-reasoning model with full tool-calling support: [documentation](docs/SMOLLM3.md)  
+  <details>
+    <summary>Show command</summary>
+
+    **Default, easiest:**
+    ```bash
+    ./mistralrs-server -i --isq 8 run -m HuggingFaceTB/SmolLM3-3B
+    ```
+
+    **UQFF prequantized:**
+    ```bash
+    ./mistralrs-server -i run -m EricB/SmolLM3-3B-UQFF -f smollm33b-q4k-0.uqff
+    ```
+  </details>
+
 - 🔊 Run the **Dia 1.6b** model for highly-realistic dialogue generation: [documentation](docs/DIA.md)  
   <details>
     <summary>Show command</summary>
@@ -72,7 +112,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 - 🦙 Run the **Llama 3.\* and Llama 4** models with long context & vision support: [docs (llama 3.2)](docs/VLLAMA.md), [docs (llama 4)](docs/LLAMA4.md)  
   <details>
-    <summary>Show command</summary>
+    <summary>Show commands</summary>
 
     **Llama 4:**
 
@@ -194,8 +234,8 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
    - ⭐ [MCP client](examples/MCP_QUICK_START.md) to connect to external tools and services automatically
 
 2. **Performance**
-   - CPU acceleration (MKL, AVX, [NEON](docs/DEVICE_MAPPING.md#arm-neon), [Accelerate](docs/DEVICE_MAPPING.md#apple-accelerate))
-   - GPU acceleration ([CUDA](docs/HTTP.md#cuda-support) with [FlashAttention](docs/FLASH_ATTENTION.md) & [cuDNN](docs/HTTP.md#cudnn-support), [Metal](docs/HTTP.md#apple-silicon-support))
+   - CPU acceleration (MKL, AVX, NEON, Accelerate)
+   - GPU acceleration (CUDA with [FlashAttention](docs/FLASH_ATTENTION.md) & cuDNN, Metal)
    - Automatic [tensor parallelism](docs/DISTRIBUTED/DISTRIBUTED.md) for splitting models across multiple devices
      - CUDA-specialized [NCCL](docs/DISTRIBUTED/NCCL.md)
      - Heterogeneous, flexible [Ring backend](docs/DISTRIBUTED/RING.md)
@@ -203,8 +243,9 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 3. **Quantization**
    - [In-place quantization (ISQ)](docs/ISQ.md) of Hugging Face models
    - [GGML & GGUF support](docs/QUANTS.md): 2–8 bit
-   - [GPTQ](docs/QUANTS.md), [AWQ](scripts/convert_awq_marlin.py), [AFQ](docs/QUANTS.md#afq), [HQQ](docs/QUANTS.md#hqq), [FP8](docs/QUANTS.md), [BNB](https://github.com/TimDettmers/bitsandbytes) (int8/fp4/nf4)
+   - [GPTQ](docs/QUANTS.md), [AWQ](scripts/convert_awq_marlin.py), [AFQ](docs/QUANTS.md), [HQQ](docs/QUANTS.md), [FP8](docs/QUANTS.md), [BNB](https://github.com/TimDettmers/bitsandbytes) (int8/fp4/nf4)
    - ⭐ Auto-select the fastest quant method
+   - [KV cache quantization](docs/PAGED_ATTENTION.md#kv-cache-quantization)
 
 4. **Flexibility**
    - [LoRA](docs/ADAPTER_MODELS.md) & [X-LoRA](docs/ADAPTER_MODELS.md) adapters with weight merging
@@ -218,7 +259,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
    - Prefix caching (including multimodal)
    - Customizable quantization with [topology](docs/TOPOLOGY.md) & [UQFF format](docs/UQFF.md)
    - Speculative decoding across models
-   - ⭐ Agentic [web search integration](docs/TOOL_CALLING.md#agentic-web-search)
+   - ⭐ Agentic [web search integration](docs/WEB_SEARCH.md)
 
 ## APIs and Integrations
 
@@ -246,20 +287,20 @@ Python API for mistral.rs.
 OpenAI API compatible API server
 
 - [API Docs](docs/HTTP.md)
-- [Launching the server or use the CLI](README.md#run-with-the-cli)
+- [Launching the server or use the CLI](README.md#using-the-cli)
 - [Example](examples/server/chat.py)
 - [Use or extend the server in other axum projects](https://ericlbuehler.github.io/mistral.rs/mistralrs_server_core/)
 - **MCP Client**: Configure via `--mcp-config` flag for automatic tool integration - [Quick Start](examples/MCP_QUICK_START.md)
 
 ### MCP Protocol
 
-Serve the same models over the open [MCP](docs/MCP_SERVER.md) (Model Control Protocol) in parallel to the HTTP API:
+Serve the same models over the open [MCP](docs/mcp/server.md) (Model Context Protocol) in parallel to the HTTP API:
 
 ```bash
 ./mistralrs-server --mcp-port 4321 plain -m Qwen/Qwen3-4B
 ```
 
-See the [docs](docs/MCP_SERVER.md) for feature flags, examples and limitations.
+See the [docs](docs/mcp/server.md) for feature flags, examples and limitations.
 
 
 ### Llama Index integration
@@ -436,6 +477,23 @@ You can launch an HTTP server by replacing `-i` with `--port <port>`. For instan
 
 You can find documentation about the server itself [here](docs/HTTP.md).
 
+### Multi-model support
+
+Serve multiple models simultaneously from a single server instance. Perfect for comparing models, A/B testing, or serving different models for different use cases.
+
+```bash
+./mistralrs-server --port 1234 multi-model --config example-multi-model-config.json --default-model-id meta-llama/Llama-3.2-3B-Instruct
+```
+
+Select models in your requests using the `model` parameter:
+```bash
+curl http://localhost:1234/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "meta-llama/Llama-3.2-3B-Instruct", "messages": [{"role": "user", "content": "Hello!"}]}'
+```
+
+📖 **[Complete multi-model documentation →](docs/multi_model/README.md)**
+
 ### Structured selection with a `.toml` file
 
 We provide a method to select models with a `.toml` file. The keys are the same as the command line, with `no_kv_cache` and `tokenizer_json` being "global" keys.
@@ -469,6 +527,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `deepseekv3`
 - `qwen3`
 - `qwen3moe`
+- `smollm3`
 
 </details>
 
@@ -492,6 +551,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `gemma3`
 - `mistral3`
 - `llama4`
+- `gemma3n`
 
 </details>
 
@@ -552,7 +612,9 @@ Please submit more benchmarks via raising an issue!
 |Mistral 3| | |✅|
 |Llama 4| | |✅|
 |Qwen 3|✅| |✅|
+|SmolLM3| | |✅|
 |Dia 1.6b| | |✅|
+|Gemma 3n| | |✅|
 </details>
 
 <details>
@@ -598,6 +660,8 @@ Please submit more benchmarks via raising an issue!
 |Mistral 3| | | |
 |Llama 4| | | |
 |Qwen 3| | | |
+|SmolLM3|✅| | |
+|Gemma 3n| | | |
 </details>
 
 <details>
@@ -631,6 +695,8 @@ Please submit more benchmarks via raising an issue!
 |Mistral 3|✅|
 |Llama 4| |
 |Qwen 3| |
+|SmolLM3|✅|
+|Gemma 3n| | | |
 </details>
 
 ### Using derivative and adapter models
@@ -693,6 +759,10 @@ If you want to add a new model, please contact us via an issue and we can coordi
 - Metal not found (error: unable to find utility "metal", not a developer tool or in PATH)
     1) Install Xcode: `xcode-select --install`
     2) Set the active developer directory: `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`
+- Disabling Metal kernel precompilation:
+    - By default, Metal kernels are precompiled during build time for better performance
+    - To skip Metal kernel precompilation (useful for CI or when Metal is not needed), set `MISTRALRS_METAL_PRECOMPILE=0` or `MISTRALRS_METAL_PRECOMPILE=false`
+    - Example: `MISTRALRS_METAL_PRECOMPILE=0 cargo build --release --features metal`
   
 ## Credits
 This project would not be possible without the excellent work at [`candle`](https://github.com/huggingface/candle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.

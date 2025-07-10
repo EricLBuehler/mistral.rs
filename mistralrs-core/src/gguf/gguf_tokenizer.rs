@@ -1,9 +1,10 @@
 // https://github.com/huggingface/transformers/blob/8685b3c5d2dd2550527773d2a02499495a759e31/src/transformers/convert_slow_tokenizer.py
 
-use std::{collections::HashMap, sync::atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::DEBUG;
+use ahash::AHashMap;
 use anyhow::Result;
 use candle_core::quantized::gguf_file::Value;
 use itertools::Itertools;
@@ -211,7 +212,7 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
         })
         .collect::<Vec<_>>();
 
-    let mut vocab = HashMap::new();
+    let mut vocab = AHashMap::new();
     for (i, token) in p.tokens.iter().enumerate() {
         #[allow(clippy::cast_possible_truncation)]
         vocab.insert(token.clone(), i as u32);

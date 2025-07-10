@@ -32,7 +32,7 @@ class Fleet(BaseModel):
 
 
 completion = client.beta.chat.completions.parse(
-    model="mistral",
+    model="default",
     messages=[
         {
             "role": "user",

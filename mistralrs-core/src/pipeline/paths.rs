@@ -129,10 +129,7 @@ pub fn get_xlora_paths(
             }
             let xlora_config = xlora_config.map(Some).unwrap_or_else(|| {
                 if let Some(last_err) = last_err {
-                    panic!(
-                        "Unable to derserialize any configs. Last error: {}",
-                        last_err
-                    )
+                    panic!("Unable to derserialize any configs. Last error: {last_err}")
                 } else {
                     None
                 }
@@ -448,7 +445,23 @@ pub(crate) fn get_chat_template(
             template.chat_template = Some(ChatTemplateValue(Either::Left(chat_template)));
             template
         }
-        None => serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap(),
+        None => {
+            // Check if template_filename is a .jinja file
+            if let Some(template_filename) = paths.get_template_filename() {
+                if template_filename.extension().map(|e| e.to_str()) == Some(Some("jinja")) {
+                    info!("Using chat template from .jinja file.");
+                    let mut template = ChatTemplate::default();
+                    template.chat_template = Some(ChatTemplateValue(Either::Left(
+                        template_content.as_ref().unwrap().clone(),
+                    )));
+                    template
+                } else {
+                    serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap()
+                }
+            } else {
+                serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap()
+            }
+        }
     };
     // Overwrite to use any present `chat_template.json`, only if there is not one present already.
     if template.chat_template.is_none() {
@@ -542,7 +555,7 @@ pub(crate) fn get_chat_template(
                     }
                 }
                 None => {
-                    info!("No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.");
+                    warn!("No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.");
                     deser.insert("chat_template".to_string(), Value::Null);
                 }
             }

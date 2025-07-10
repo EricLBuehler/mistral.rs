@@ -36,7 +36,7 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 # )
 
 completion = client.chat.completions.create(
-    model="mistral3",
+    model="ignore3",
     messages=[
         {
             "role": "user",

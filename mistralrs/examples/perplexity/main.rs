@@ -50,9 +50,10 @@ async fn process_chunk(runner: &MistralRs, chunk: Vec<u32>) -> anyhow::Result<(T
         logits_processors: None,
         return_raw_logits: true,
         web_search_options: None,
+        model_id: None,
     }));
 
-    runner.get_sender()?.send(request).await?;
+    runner.get_sender(None)?.send(request).await?;
 
     let ResponseOk::Raw {
         logits_chunks,

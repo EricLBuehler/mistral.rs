@@ -12,7 +12,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="llama-vision",
+        model="default",
         messages=[
             {
                 "role": "user",

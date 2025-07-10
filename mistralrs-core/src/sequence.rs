@@ -868,7 +868,7 @@ impl Sequence {
 
     pub fn set_state(&self, state: SequenceState) {
         if matches!(state, SequenceState::Error) {
-            get_mut_group!(self).n_choices -= 1;
+            get_mut_group!(self).n_choices = get_mut_group!(self).n_choices.saturating_sub(1);
         }
         *self.state.write().unwrap() = state;
     }
@@ -897,11 +897,11 @@ impl Sequence {
         } else if self.stop_tokens.contains(&tok) {
             Some(StopReason::StopTok(tok))
         } else if self.max_len.is_some()
-            && self.tokens.len().saturating_sub(self.prompt_len) == self.max_len.unwrap()
+            && self.tokens.len().saturating_sub(self.prompt_len) + 1 >= self.max_len.unwrap()
         {
-            // add_token was already called
+            // add_token will be called after this check
             Some(StopReason::Length(self.max_len.unwrap()))
-        } else if self.tokens.len().saturating_sub(self.prompt_len) == max_model_len {
+        } else if self.tokens.len().saturating_sub(self.prompt_len) >= max_model_len {
             Some(StopReason::ModelLength(max_model_len))
         } else {
             if !self.stop_strings.is_empty() {
@@ -1184,13 +1184,13 @@ impl SequenceGroup {
     pub fn get_usage(&self) -> Usage {
         #[allow(clippy::cast_precision_loss)]
         Usage {
-            completion_tokens: self.total_toks - self.total_prompt_toks,
+            completion_tokens: self.total_toks.saturating_sub(self.total_prompt_toks),
             prompt_tokens: self.total_prompt_toks,
             total_tokens: self.total_toks,
             avg_tok_per_sec: (self.total_toks as f32 / self.total_time as f32) * 1000.,
             avg_prompt_tok_per_sec: (self.total_prompt_toks as f32 / self.total_prompt_time as f32)
                 * 1000.,
-            avg_compl_tok_per_sec: ((self.total_toks - self.total_prompt_toks) as f32
+            avg_compl_tok_per_sec: (self.total_toks.saturating_sub(self.total_prompt_toks) as f32
                 / self.total_completion_time as f32)
                 * 1000.,
             total_time_sec: self.total_time as f32 / 1000.,

@@ -10,7 +10,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="gemma3",
+        model="default",
         messages=[
             {
                 "role": "user",

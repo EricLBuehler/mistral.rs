@@ -14,7 +14,7 @@ while True:
     messages.append({"role": "user", "content": prompt})
     resp = ""
     response = client.chat.completions.create(
-        model="mistral",
+        model="default",
         messages=messages,
         max_tokens=256,
         stream=True,

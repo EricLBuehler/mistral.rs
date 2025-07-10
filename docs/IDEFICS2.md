@@ -47,7 +47,7 @@ The image depicts a group of orange ants climbing over a black pole. The ants ar
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m HuggingFaceM4/idefics2-8b-chatty
+cargo run --release --features ... -- --port 1234 --isq 4 vision-plain -m HuggingFaceM4/idefics2-8b-chatty
 ```
 
 2) Send a request
@@ -58,7 +58,7 @@ from openai import OpenAI
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 completion = client.chat.completions.create(
-    model="idefics2",
+    model="default",
     messages=[
         {
             "role": "user",
@@ -155,7 +155,7 @@ runner = Runner(
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="idefics2",
+        model="default",
         messages=[
             {
                 "role": "user",
