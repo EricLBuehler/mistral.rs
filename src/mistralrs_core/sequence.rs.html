@@ -897,11 +897,11 @@
 <a href=#897 id=897 data-nosnippet>897</a>        } <span class="kw">else if </span><span class="self">self</span>.stop_tokens.contains(<span class="kw-2">&amp;</span>tok) {
 <a href=#898 id=898 data-nosnippet>898</a>            <span class="prelude-val">Some</span>(StopReason::StopTok(tok))
 <a href=#899 id=899 data-nosnippet>899</a>        } <span class="kw">else if </span><span class="self">self</span>.max_len.is_some()
-<a href=#900 id=900 data-nosnippet>900</a>            &amp;&amp; <span class="self">self</span>.tokens.len().saturating_sub(<span class="self">self</span>.prompt_len) == <span class="self">self</span>.max_len.unwrap()
+<a href=#900 id=900 data-nosnippet>900</a>            &amp;&amp; <span class="self">self</span>.tokens.len().saturating_sub(<span class="self">self</span>.prompt_len) + <span class="number">1 </span>&gt;= <span class="self">self</span>.max_len.unwrap()
 <a href=#901 id=901 data-nosnippet>901</a>        {
-<a href=#902 id=902 data-nosnippet>902</a>            <span class="comment">// add_token was already called
+<a href=#902 id=902 data-nosnippet>902</a>            <span class="comment">// add_token will be called after this check
 <a href=#903 id=903 data-nosnippet>903</a>            </span><span class="prelude-val">Some</span>(StopReason::Length(<span class="self">self</span>.max_len.unwrap()))
-<a href=#904 id=904 data-nosnippet>904</a>        } <span class="kw">else if </span><span class="self">self</span>.tokens.len().saturating_sub(<span class="self">self</span>.prompt_len) == max_model_len {
+<a href=#904 id=904 data-nosnippet>904</a>        } <span class="kw">else if </span><span class="self">self</span>.tokens.len().saturating_sub(<span class="self">self</span>.prompt_len) &gt;= max_model_len {
 <a href=#905 id=905 data-nosnippet>905</a>            <span class="prelude-val">Some</span>(StopReason::ModelLength(max_model_len))
 <a href=#906 id=906 data-nosnippet>906</a>        } <span class="kw">else </span>{
 <a href=#907 id=907 data-nosnippet>907</a>            <span class="kw">if </span>!<span class="self">self</span>.stop_strings.is_empty() {
