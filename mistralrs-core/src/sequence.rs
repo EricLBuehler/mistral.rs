@@ -897,11 +897,11 @@ impl Sequence {
         } else if self.stop_tokens.contains(&tok) {
             Some(StopReason::StopTok(tok))
         } else if self.max_len.is_some()
-            && self.tokens.len().saturating_sub(self.prompt_len) == self.max_len.unwrap()
+            && self.tokens.len().saturating_sub(self.prompt_len) + 1 >= self.max_len.unwrap()
         {
-            // add_token was already called
+            // add_token will be called after this check
             Some(StopReason::Length(self.max_len.unwrap()))
-        } else if self.tokens.len().saturating_sub(self.prompt_len) == max_model_len {
+        } else if self.tokens.len().saturating_sub(self.prompt_len) >= max_model_len {
             Some(StopReason::ModelLength(max_model_len))
         } else {
             if !self.stop_strings.is_empty() {
