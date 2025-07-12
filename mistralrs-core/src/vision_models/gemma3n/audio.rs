@@ -857,7 +857,7 @@ impl Gemma3nAudioSSCPConvBlock {
         let norm = Gemma3nCumulativeGroupNorm::new(
             out_channels,
             vec![f_out_conv],
-            config.sscp_conv_eps,
+            config.sscp_conv_group_norm_eps,
             true,
             false,
             vb.pp("norm"),

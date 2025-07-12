@@ -19,10 +19,10 @@ serde_default_fn!(usize, sliding_window_pattern, 6);
 serde_default_fn!(usize, num_attention_heads, 8);
 serde_default_fn!(usize, num_key_value_heads, 4);
 
-/// Left is normal, Right is (per layer, orig)
+/// Left is normal, Right is (per layer, orig per layer)
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct IntermediateSize(
-    #[serde(with = "either::serde_untagged")] pub Either<usize, (Vec<usize>, usize)>,
+    #[serde(with = "either::serde_untagged")] pub Either<Vec<usize>, (Vec<usize>, Vec<usize>)>,
 );
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -110,7 +110,7 @@ serde_default_fn!(
     vec![vec![2, 2], vec![2, 2]]
 );
 serde_default_fn!(usize, audio_vocab_size, 128);
-serde_default_fn!(f64, sscp_conv_eps, 1e-3);
+serde_default_fn!(f64, sscp_conv_group_norm_eps, 1e-3);
 serde_default_fn!(f64, audio_rms_norm_eps, 1e-6);
 serde_default_fn!(i64, audio_vocab_offset, 262272); // text vocab size (262144) + vision vocab size (128)
 
@@ -148,8 +148,8 @@ pub struct Gemma3nAudioConfig {
     pub sscp_conv_stride_size: Vec<Vec<usize>>,
     #[serde(default = "audio_vocab_size")]
     pub vocab_size: usize,
-    #[serde(default = "sscp_conv_eps")]
-    pub sscp_conv_eps: f64,
+    #[serde(default = "sscp_conv_group_norm_eps")]
+    pub sscp_conv_group_norm_eps: f64,
     #[serde(default = "audio_rms_norm_eps")]
     pub rms_norm_eps: f64,
     #[serde(default = "audio_vocab_offset")]

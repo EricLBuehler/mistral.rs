@@ -5400,6 +5400,7 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                     .intermediate_size
                     .0
                     .clone()
+                    .map_left(|left| left[layer_idx])
                     .left_or_else(|(sizes, _)| sizes[layer_idx]);
                 let gate_proj = text_cfg.hidden_size * intermediate_size / weight_pack_factor;
                 let up_proj = text_cfg.hidden_size * intermediate_size / weight_pack_factor;
