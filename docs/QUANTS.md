@@ -24,8 +24,19 @@ Mistral.rs supports the following quantization:
     - 4, 8 bit
     - CPU, CUDA, Metal (all supported devices)
 - FP8
-    - Supported in all plain/vision and adapter models
-    - CPU, CUDA, Metal (all supported devices)
+    - **Blockwise FP8**:
+        - Loaded via `config.json` with `quant_method: "fp8"` and `weight_block_size` specified.
+        - Supports loading pre-quantized F8E4M3 weights and F32 scales from safetensors.
+        - Supports UQFF save/load.
+        - Execution currently involves dequantization before GEMM.
+        - CPU, CUDA, Metal (all supported devices for dequant path).
+    - **Hybrid Precision FP8 (e.g., Llama 3.1 8B style)**:
+        - Loaded via `config.json` with `quant_method: "cutlass_fp8_e4m3w_e5m2a"`.
+        - Expects pre-quantized E4M3 weights (`.weight`) and BF16/FP16 per-channel scales (`.weight_scale`) in safetensors.
+        - Activations are dynamically quantized to E5M2 per-token.
+        - GEMM execution leverages cuBLASLt for high performance (CUDA only).
+        - Requires compatible GPU (Hopper, Ada, or newer for best FP8 performance).
+        - `activation_dtype` (e.g., "bf16", "f16") can be specified in `config.json` for this method to define the layer's interface and accumulation precision.
 - BNB
     - Supported in all plain/vision and adapter models
     - bitsandbytes int8, fp4, nf4 support

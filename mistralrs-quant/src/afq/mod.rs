@@ -116,8 +116,11 @@ impl QuantMethod for AfqLayer {
                     bias,
                     bits,
                     group_size,
-                })
-            }
+                }) // NO comma inside Ok's block expression
+            }, // Comma HERE to separate from next arm
+            QuantMethodConfig::CutlassFP8PTQ { .. } => { // Make this a block too
+                unreachable!("Cannot create AfqLayer from CutlassFP8PTQ config");
+            } // Comma optional if truly the last arm in the full enum definition, but safer with.
         }
     }
 
@@ -187,6 +190,10 @@ impl QuantMethod for AfqLayer {
     ) -> Result<Arc<dyn QuantMethod>> {
         todo!()
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl AfqLayer {
@@ -208,12 +215,10 @@ impl AfqLayer {
 
         let has_bias = buffer.read_u8()? != 0;
 
-        // Weight, scales, biases
         fake_deserialize_tensor(&mut buffer)?;
         fake_deserialize_tensor(&mut buffer)?;
         fake_deserialize_tensor(&mut buffer)?;
 
-        // Bits and group size
         let bits: AfqBits = buffer.read_u8()?.try_into()?;
         let _group_size: AfqGroupSize = buffer.read_u8()?.try_into()?;
 
@@ -327,29 +332,17 @@ impl QuantizedSerde for AfqLayer {
     fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<[u8]>> {
         let mut buffer = Vec::new();
 
-        // Version is always first!
         buffer.extend(&UQFF_VERSION.to_le_bytes());
-
-        // ISQ type for afq is 4
         buffer.push(QuantizedSerdeType::Afq as u8);
-
-        // Has bias
         buffer.push(bias.is_some() as u8);
-
-        // Weight, scales, biases
         serialize_tensor(&mut buffer, &self.w_q)?;
         serialize_tensor(&mut buffer, &self.scales)?;
         serialize_tensor(&mut buffer, &self.biases)?;
-
-        // Bits and group size
         buffer.push(self.bits as u8);
         buffer.push(self.group_size as u8);
-
-        if let Some(bias) = &bias {
-            // Bias
-            serialize_tensor(&mut buffer, bias)?;
+        if let Some(bias_tensor) = &bias { // Changed variable name to avoid conflict
+            serialize_tensor(&mut buffer, bias_tensor)?;
         }
-
         Ok(Cow::from(buffer))
     }
     fn deserialize(
@@ -362,46 +355,23 @@ impl QuantizedSerde for AfqLayer {
         Self: Sized,
     {
         let mut buffer = Cursor::new(data.to_vec());
-
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
             return Err(candle_core::Error::wrap(e));
         }
-
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Afq as usize {
-            candle_core::bail!(
-                "ISQ type ({isq_type}) doesn't match expected type {}",
-                QuantizedSerdeType::Afq as usize
-            );
+            candle_core::bail!("ISQ type ({isq_type}) doesn't match expected type {}", QuantizedSerdeType::Afq as usize);
         }
-
         let has_bias = buffer.read_u8()? != 0;
-
         let _acquired_load_guard = guard.acquire(device);
-        // Weight, scales, biases
         let w_q = deserialize_tensor(&mut buffer, device)?;
         let scales = deserialize_tensor(&mut buffer, device)?;
         let biases = deserialize_tensor(&mut buffer, device)?;
-
-        // Bits and group size
         let bits: AfqBits = buffer.read_u8()?.try_into()?;
         let group_size: AfqGroupSize = buffer.read_u8()?.try_into()?;
-
-        let b = if has_bias {
-            Some(deserialize_tensor(&mut buffer, device)?)
-        } else {
-            None
-        };
-
-        Ok(Arc::new(Self {
-            w_q,
-            scales,
-            bias: b,
-            biases,
-            bits,
-            group_size,
-        }))
+        let b = if has_bias { Some(deserialize_tensor(&mut buffer, device)?) } else { None };
+        Ok(Arc::new(Self { w_q, scales, bias: b, biases, bits, group_size }))
     }
     fn deserialize_ext_bias(
         data: Cow<[u8]>,
@@ -412,48 +382,22 @@ impl QuantizedSerde for AfqLayer {
         Self: Sized,
     {
         let mut buffer = Cursor::new(data.to_vec());
-
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
             return Err(candle_core::Error::wrap(e));
         }
-
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Afq as usize {
-            candle_core::bail!(
-                "ISQ type ({isq_type}) doesn't match expected type {}",
-                QuantizedSerdeType::Afq as usize
-            );
+            candle_core::bail!("ISQ type ({isq_type}) doesn't match expected type {}", QuantizedSerdeType::Afq as usize);
         }
-
         let has_bias = buffer.read_u8()? != 0;
-
         let _acquired_load_guard = guard.acquire(device);
-        // Weight, scales, biases
         let w_q = deserialize_tensor(&mut buffer, device)?;
         let scales = deserialize_tensor(&mut buffer, device)?;
         let biases = deserialize_tensor(&mut buffer, device)?;
-
-        // Bits and group size
         let bits: AfqBits = buffer.read_u8()?.try_into()?;
         let group_size: AfqGroupSize = buffer.read_u8()?.try_into()?;
-
-        let b = if has_bias {
-            Some(deserialize_tensor(&mut buffer, device)?)
-        } else {
-            None
-        };
-
-        Ok((
-            Arc::new(Self {
-                w_q,
-                scales,
-                bias: None,
-                biases,
-                bits,
-                group_size,
-            }),
-            b,
-        ))
+        let b = if has_bias { Some(deserialize_tensor(&mut buffer, device)?) } else { None };
+        Ok(( Arc::new(Self { w_q, scales, bias: None, biases, bits, group_size }), b, ))
     }
 }
