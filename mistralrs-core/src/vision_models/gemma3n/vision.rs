@@ -77,6 +77,7 @@ struct Conv2dSame {
 }
 
 impl Conv2dSame {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         in_channels: usize,
         out_channels: usize,
