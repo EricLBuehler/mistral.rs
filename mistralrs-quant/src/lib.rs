@@ -59,6 +59,10 @@ pub use lora::{
 pub use unquantized::UnquantLinear;
 pub use utils::isq::apply_immediate_isq;
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
+pub mod cutlass_fp8;
+pub use cutlass_fp8::CutlassHybridFP8Linear;
+pub mod cublaslt_ffi;
+pub mod kernels_ffi; // Added
 
 use candle_nn::{Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -126,6 +130,20 @@ pub enum QuantizedConfig {
         bits: usize,
         group_size: usize,
     },
+    /// Configuration for loading pre-quantized FP8 models compatible with CUTLASS/cuBLASLt,
+    /// specifically targeting a hybrid E4M3 weight / E5M2 activation scheme (e.g., Llama 3.1 8B FP8).
+    ///
+    /// Parsed from `config.json` when `quant_method` is `"cutlass_fp8_e4m3w_e5m2a"`.
+    CutlassHybridFP8 {
+        /// Optional string specifying the data type for the layer's input/output interface
+        /// and for GEMM accumulation (e.g., "bf16", "f16"). Defaults to BF16 if not provided or
+        /// inferred from the VarBuilder's dtype.
+        activation_dtype: Option<String>,
+        /// Data type of the quantized weights, fixed to "e4m3" for this configuration.
+        weight_dtype: String,
+        /// Data type to which activations are dynamically quantized for GEMM, fixed to "e5m2" for this configuration.
+        activation_quant_dtype: String,
+    },
 }
 
 // Common fields for all variants
@@ -135,8 +153,10 @@ struct RawConfig {
     bits: Option<usize>,
     group_size: Option<usize>,
     checkpoint_format: Option<String>,
-    weight_block_size: Option<Vec<usize>>,
+    weight_block_size: Option<Vec<usize>>, // Used by "fp8" (blockwise)
     bnb_4bit_quant_type: Option<String>,
+    // For CutlassHybridFP8, directly in its config variant
+    activation_dtype: Option<String>, // Used by "cutlass_fp8_e4m3w_e5m2a"
 }
 
 // Custom deserializer implementation
@@ -162,11 +182,22 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
                     is_awq: m == "awq",
                 })
             }
-            Some(m) if m == "fp8" => {
+            Some(m) if m == "fp8" => { // This is for BlockwiseFP8Linear
                 let weight_block_size = raw
                     .weight_block_size
                     .ok_or_else(|| serde::de::Error::missing_field("weight_block_size"))?;
                 Ok(QuantizedConfig::Fp8 { weight_block_size })
+            }
+            // New: Specific name for Llama 3.1 style FP8
+            Some(m) if m == "cutlass_fp8_e4m3w_e5m2a" => {
+                let weight_dtype = "e4m3".to_string();
+                let activation_quant_dtype = "e5m2".to_string();
+                Ok(QuantizedConfig::CutlassHybridFP8 {
+                    // The `activation_dtype` field in `RawConfig` will be used here.
+                    activation_dtype: raw.activation_dtype,
+                    weight_dtype,
+                    activation_quant_dtype,
+                })
             }
             Some(m) if m == "bitsandbytes" => Ok(QuantizedConfig::Bitsandbytes {
                 bnb_4bit_quant_type: raw.bnb_4bit_quant_type,
@@ -180,7 +211,7 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
                     .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
                 Ok(QuantizedConfig::Afq { bits, group_size })
             }
-            None => {
+            None => { // Defaulting to AFQ if no method specified but bits/group_size are there.
                 let bits = raw
                     .bits
                     .ok_or_else(|| serde::de::Error::missing_field("bits"))?;
@@ -202,16 +233,18 @@ impl QuantizedConfig {
     pub fn name(&self) -> &'static str {
         match self {
             Self::GptqAwq { .. } => "gptq",
-            Self::Fp8 { .. } => "fp8",
+            Self::Fp8 { .. } => "fp8", // Blockwise FP8
             Self::Bitsandbytes { .. } => "bitsandbytes",
             Self::Afq { .. } => "afq",
+            Self::CutlassHybridFP8 { .. } => "cutlass_fp8_e4m3w_e5m2a",
         }
     }
 
     pub fn get_bits_name(&self, _vb: &ShardedVarBuilder) -> String {
         match self {
             Self::GptqAwq { bits, .. } => format!("{bits} bits"),
-            Self::Fp8 { .. } => "8 bits".to_string(),
+            Self::Fp8 { .. } => "8 bits".to_string(), // Blockwise FP8
+            Self::CutlassHybridFP8 { .. } => "8 bits (E4M3W/E5M2A)".to_string(), // Hybrid FP8
             Self::Bitsandbytes {
                 bnb_4bit_quant_type: Some(_),
             } => "4 bits".to_string(),
@@ -233,7 +266,8 @@ impl QuantizedConfig {
                 8 => IsqType::Q8_0.pack_factor(dtype),
                 other => panic!("Unexpected bits in `pack_factor` {other}"),
             },
-            Self::Fp8 { .. } => IsqType::Q8_0.pack_factor(dtype),
+            Self::Fp8 { .. } => IsqType::Q8_0.pack_factor(dtype), // Blockwise FP8
+            Self::CutlassHybridFP8 { .. } => IsqType::F8E4M3.pack_factor(dtype), // Or consider a combined factor if needed
             Self::Bitsandbytes {
                 bnb_4bit_quant_type: Some(_),
             }
@@ -296,6 +330,15 @@ pub enum QuantMethodConfig {
         bias: Option<Tensor>,
         bits: AfqBits,
         group_size: AfqGroupSize,
+    },
+    CutlassFP8PTQ {
+        // Added
+        weights_e4m3: Tensor,
+        weight_scales: Tensor,
+        bias: Option<Tensor>,
+        in_features: usize,
+        out_features: usize,
+        activation_dtype: DType,
     },
 }
 
@@ -683,6 +726,9 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     /// Add a delta weight from LoRA to the weights. This should be prescaled with alpha.
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>>;
 
+    /// Allows downcasting from `Arc<dyn QuantMethod>` to concrete type for inspection.
+    fn as_any(&self) -> &dyn std::any::Any;
+
     /// If the quant is backed by a qmatmul.
     fn apply_isq(
         self: Arc<Self>,
@@ -743,6 +789,23 @@ pub fn linear_no_bias(
             QuantizedConfig::Afq { .. } => {
                 AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, false, vb)?
             }
+            QuantizedConfig::CutlassHybridFP8 {
+                activation_dtype,
+                weight_dtype,
+                activation_quant_dtype,
+            } => {
+                if weight_dtype != "e4m3" || activation_quant_dtype != "e5m2" {
+                    candle_core::bail!("Mismatched FP8 dtypes for CutlassHybridFP8. Expected e4m3 weights and e5m2 activations.");
+                }
+                // Pass activation_dtype (String) and other params to a new constructor
+                crate::cutlass_fp8::cutlass_hybrid_fp8_linear_b(
+                    in_dim,
+                    out_dim,
+                    false,
+                    activation_dtype.clone(),
+                    vb,
+                )?
+            }
         }
     } else {
         // Handle the case where the layer is dummy (no tensors)
@@ -786,6 +849,22 @@ pub fn linear(
             }
             QuantizedConfig::Afq { .. } => {
                 AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, true, vb)?
+            }
+            QuantizedConfig::CutlassHybridFP8 {
+                activation_dtype,
+                weight_dtype,
+                activation_quant_dtype,
+            } => {
+                if weight_dtype != "e4m3" || activation_quant_dtype != "e5m2" {
+                    candle_core::bail!("Mismatched FP8 dtypes for CutlassHybridFP8. Expected e4m3 weights and e5m2 activations.");
+                }
+                crate::cutlass_fp8::cutlass_hybrid_fp8_linear_b(
+                    in_dim,
+                    out_dim,
+                    true,
+                    activation_dtype.clone(),
+                    vb,
+                )?
             }
         }
     } else {

@@ -283,7 +283,8 @@ impl QuantMethod for GptqLayer {
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
             | QuantMethodConfig::BlockwiseFP8 { .. }
-            | QuantMethodConfig::Afq { .. } => {
+            | QuantMethodConfig::Afq { .. }
+            | QuantMethodConfig::CutlassFP8PTQ { .. } => {
                 unreachable!()
             }
         }
@@ -358,6 +359,10 @@ impl QuantMethod for GptqLayer {
         _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         candle_core::bail!("GPTQ quantization does not support ISQ.")
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

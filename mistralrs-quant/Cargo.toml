@@ -46,3 +46,6 @@ ring = []
 
 [build-dependencies]
 bindgen_cuda = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3.3.0" # Or a compatible version from workspace if specified

@@ -86,6 +86,7 @@ fn main() -> Result<(), String> {
             "kernels/ops/ops.cu",
             "kernels/bitsandbytes/dequant.cu",
             "kernels/rotary/rotary.cu",
+            "kernels/activation_quant_e5m2.cu", // Added new kernel
         ];
         if cc_over_800 {
             lib_files.push("kernels/marlin/marlin_matmul_f16.cu");
@@ -101,6 +102,9 @@ fn main() -> Result<(), String> {
         for lib_file in lib_files.iter() {
             println!("cargo:rerun-if-changed={lib_file}");
         }
+        // Ensure rerun-if-changed for the new kernel is explicitly handled if not covered by loop
+        println!("cargo:rerun-if-changed=kernels/activation_quant_e5m2.cu");
+
         let mut builder = bindgen_cuda::Builder::default()
             .kernel_paths(lib_files)
             .out_dir(build_dir.clone())

@@ -41,6 +41,10 @@ impl QuantMethod for DummyLayer {
     fn quantized_act_type(&self) -> Option<candle_core::DType> {
         None
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl QuantizedSerde for DummyLayer {
