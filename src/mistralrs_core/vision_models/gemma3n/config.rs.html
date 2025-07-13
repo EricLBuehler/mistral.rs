@@ -19,10 +19,10 @@
 <a href=#19 id=19 data-nosnippet>19</a><span class="macro">serde_default_fn!</span>(usize, num_attention_heads, <span class="number">8</span>);
 <a href=#20 id=20 data-nosnippet>20</a><span class="macro">serde_default_fn!</span>(usize, num_key_value_heads, <span class="number">4</span>);
 <a href=#21 id=21 data-nosnippet>21</a>
-<a href=#22 id=22 data-nosnippet>22</a><span class="doccomment">/// Left is normal, Right is (per layer, orig)
+<a href=#22 id=22 data-nosnippet>22</a><span class="doccomment">/// Left is normal, Right is (per layer, orig per layer)
 <a href=#23 id=23 data-nosnippet>23</a></span><span class="attr">#[derive(Debug, Clone, serde::Deserialize)]
 <a href=#24 id=24 data-nosnippet>24</a></span><span class="kw">pub struct </span>IntermediateSize(
-<a href=#25 id=25 data-nosnippet>25</a>    <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span><span class="kw">pub </span>Either&lt;usize, (Vec&lt;usize&gt;, usize)&gt;,
+<a href=#25 id=25 data-nosnippet>25</a>    <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span><span class="kw">pub </span>Either&lt;Vec&lt;usize&gt;, (Vec&lt;usize&gt;, Vec&lt;usize&gt;)&gt;,
 <a href=#26 id=26 data-nosnippet>26</a>);
 <a href=#27 id=27 data-nosnippet>27</a>
 <a href=#28 id=28 data-nosnippet>28</a><span class="attr">#[derive(Debug, Clone, serde::Deserialize)]
@@ -110,7 +110,7 @@
 <a href=#110 id=110 data-nosnippet>110</a>    <span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">2</span>], <span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">2</span>]]
 <a href=#111 id=111 data-nosnippet>111</a>);
 <a href=#112 id=112 data-nosnippet>112</a><span class="macro">serde_default_fn!</span>(usize, audio_vocab_size, <span class="number">128</span>);
-<a href=#113 id=113 data-nosnippet>113</a><span class="macro">serde_default_fn!</span>(f64, sscp_conv_eps, <span class="number">1e-3</span>);
+<a href=#113 id=113 data-nosnippet>113</a><span class="macro">serde_default_fn!</span>(f64, sscp_conv_group_norm_eps, <span class="number">1e-3</span>);
 <a href=#114 id=114 data-nosnippet>114</a><span class="macro">serde_default_fn!</span>(f64, audio_rms_norm_eps, <span class="number">1e-6</span>);
 <a href=#115 id=115 data-nosnippet>115</a><span class="macro">serde_default_fn!</span>(i64, audio_vocab_offset, <span class="number">262272</span>); <span class="comment">// text vocab size (262144) + vision vocab size (128)
 <a href=#116 id=116 data-nosnippet>116</a>
@@ -148,8 +148,8 @@
 <a href=#148 id=148 data-nosnippet>148</a>    </span><span class="kw">pub </span>sscp_conv_stride_size: Vec&lt;Vec&lt;usize&gt;&gt;,
 <a href=#149 id=149 data-nosnippet>149</a>    <span class="attr">#[serde(default = <span class="string">"audio_vocab_size"</span>)]
 <a href=#150 id=150 data-nosnippet>150</a>    </span><span class="kw">pub </span>vocab_size: usize,
-<a href=#151 id=151 data-nosnippet>151</a>    <span class="attr">#[serde(default = <span class="string">"sscp_conv_eps"</span>)]
-<a href=#152 id=152 data-nosnippet>152</a>    </span><span class="kw">pub </span>sscp_conv_eps: f64,
+<a href=#151 id=151 data-nosnippet>151</a>    <span class="attr">#[serde(default = <span class="string">"sscp_conv_group_norm_eps"</span>)]
+<a href=#152 id=152 data-nosnippet>152</a>    </span><span class="kw">pub </span>sscp_conv_group_norm_eps: f64,
 <a href=#153 id=153 data-nosnippet>153</a>    <span class="attr">#[serde(default = <span class="string">"audio_rms_norm_eps"</span>)]
 <a href=#154 id=154 data-nosnippet>154</a>    </span><span class="kw">pub </span>rms_norm_eps: f64,
 <a href=#155 id=155 data-nosnippet>155</a>    <span class="attr">#[serde(default = <span class="string">"audio_vocab_offset"</span>)]

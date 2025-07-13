@@ -59,9 +59,9 @@
 <a href=#59 id=59 data-nosnippet>59</a>            .intermediate_size
 <a href=#60 id=60 data-nosnippet>60</a>            .<span class="number">0
 <a href=#61 id=61 data-nosnippet>61</a>            </span>.clone()
-<a href=#62 id=62 data-nosnippet>62</a>            .map_left(|left| (left, <span class="prelude-val">None</span>))
+<a href=#62 id=62 data-nosnippet>62</a>            .map_left(|left| (left[layer_idx], <span class="prelude-val">None</span>))
 <a href=#63 id=63 data-nosnippet>63</a>            .left_or_else(|(sizes, orig_intermediate_size)| {
-<a href=#64 id=64 data-nosnippet>64</a>                (sizes[layer_idx], <span class="prelude-val">Some</span>(orig_intermediate_size))
+<a href=#64 id=64 data-nosnippet>64</a>                (sizes[layer_idx], <span class="prelude-val">Some</span>(orig_intermediate_size[layer_idx]))
 <a href=#65 id=65 data-nosnippet>65</a>            });
 <a href=#66 id=66 data-nosnippet>66</a>
 <a href=#67 id=67 data-nosnippet>67</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(orig_intermediate_size) = orig_intermediate_size {
