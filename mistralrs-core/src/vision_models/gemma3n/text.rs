@@ -59,9 +59,9 @@ impl Mlp {
             .intermediate_size
             .0
             .clone()
-            .map_left(|left| (left, None))
+            .map_left(|left| (left[layer_idx], None))
             .left_or_else(|(sizes, orig_intermediate_size)| {
-                (sizes[layer_idx], Some(orig_intermediate_size))
+                (sizes[layer_idx], Some(orig_intermediate_size[layer_idx]))
             });
 
         if let Some(orig_intermediate_size) = orig_intermediate_size {

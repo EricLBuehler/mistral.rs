@@ -157,8 +157,6 @@ impl Gemma3nModel {
             input_embeds = x_flat.reshape(input_embeds.shape())?;
 
             // Process vision inputs through vision tower
-            // TODO: this is a hack necessary because the weights for Gemma 3n are broken and require the image to be rotated.
-            let pixel_values = pixel_values.t()?;
             let vision_features = self
                 .vision_tower
                 .forward(&pixel_values.to_dtype(self.vision_dtype)?)?

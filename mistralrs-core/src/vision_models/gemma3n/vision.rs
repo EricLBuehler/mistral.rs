@@ -4,7 +4,7 @@ use mistralrs_quant::ShardedVarBuilder;
 
 use crate::{
     attention::SdpaParams,
-    layers::{conv2d_no_bias, Sdpa},
+    layers::{conv2d, conv2d_no_bias, Sdpa},
     utils::unvarbuilder::UnVarBuilder,
 };
 
@@ -77,6 +77,7 @@ struct Conv2dSame {
 }
 
 impl Conv2dSame {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         in_channels: usize,
         out_channels: usize,
@@ -84,6 +85,7 @@ impl Conv2dSame {
         stride: usize,
         dilation: usize,
         groups: usize,
+        bias: bool,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let cfg = Conv2dConfig {
@@ -93,7 +95,11 @@ impl Conv2dSame {
             groups,
         };
 
-        let conv = conv2d_no_bias(in_channels, out_channels, kernel_size, cfg, vb)?;
+        let conv = if bias {
+            conv2d(in_channels, out_channels, kernel_size, cfg, vb)?
+        } else {
+            conv2d_no_bias(in_channels, out_channels, kernel_size, cfg, vb)?
+        };
 
         Ok(Self {
             conv,
@@ -208,6 +214,7 @@ impl ConvNormAct {
         groups: usize,
         apply_act: bool,
         eps: f64,
+        bias: bool,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         // Use Conv2dSame for depthwise convolutions (groups == in_chs or groups == out_chs)
@@ -222,6 +229,7 @@ impl ConvNormAct {
                 stride,
                 1, // dilation
                 groups,
+                bias,
                 vb.pp("conv"),
             )?)
         } else {
@@ -231,13 +239,12 @@ impl ConvNormAct {
                 groups,
                 ..Default::default()
             };
-            ConvType::Regular(conv2d_no_bias(
-                in_chs,
-                out_chs,
-                kernel_size,
-                conv_cfg,
-                vb.pp("conv"),
-            )?)
+            let conv = if bias {
+                conv2d(in_chs, out_chs, kernel_size, conv_cfg, vb.pp("conv"))?
+            } else {
+                conv2d_no_bias(in_chs, out_chs, kernel_size, conv_cfg, vb.pp("conv"))?
+            };
+            ConvType::Regular(conv)
         };
 
         let norm = Some(RMSNormAct2d::new(out_chs, eps, apply_act, vb.pp("bn"))?);
@@ -288,6 +295,7 @@ impl EdgeResidual {
             stride,
             1, // dilation
             1, // groups
+            false,
             vb.pp("conv_exp"),
         )?;
 
@@ -368,6 +376,7 @@ impl UniversalInvertedResidual {
                 in_chs, // Depthwise
                 false,
                 1e-5,
+                false,
                 vb.pp("dw_start"),
             )?)
         } else {
@@ -375,7 +384,18 @@ impl UniversalInvertedResidual {
         };
 
         // PW expansion
-        let pw_exp = ConvNormAct::new(in_chs, mid_chs, 1, 1, 0, 1, true, 1e-5, vb.pp("pw_exp"))?;
+        let pw_exp = ConvNormAct::new(
+            in_chs,
+            mid_chs,
+            1,
+            1,
+            0,
+            1,
+            true,
+            1e-5,
+            false,
+            vb.pp("pw_exp"),
+        )?;
 
         // DW mid (optional)
         let dw_mid = if dw_kernel_size_mid > 0 {
@@ -388,6 +408,7 @@ impl UniversalInvertedResidual {
                 mid_chs, // Depthwise
                 true,
                 1e-5,
+                false,
                 vb.pp("dw_mid"),
             )?)
         } else {
@@ -395,8 +416,18 @@ impl UniversalInvertedResidual {
         };
 
         // PW projection
-        let pw_proj =
-            ConvNormAct::new(mid_chs, out_chs, 1, 1, 0, 1, false, 1e-5, vb.pp("pw_proj"))?;
+        let pw_proj = ConvNormAct::new(
+            mid_chs,
+            out_chs,
+            1,
+            1,
+            0,
+            1,
+            false,
+            1e-5,
+            false,
+            vb.pp("pw_proj"),
+        )?;
 
         // Layer scale
         let layer_scale = if layer_scale_init_value.is_some() {
@@ -497,6 +528,7 @@ impl MultiQueryAttention2d {
                 kv_stride,
                 1,   // dilation
                 dim, // Depthwise
+                false,
                 vb.pp("key").pp("down_conv"),
             )?;
             let norm = RMSNormAct2d::new(dim, 1e-6, false, vb.pp("key").pp("norm"))?;
@@ -522,6 +554,7 @@ impl MultiQueryAttention2d {
                 kv_stride,
                 1,   // dilation
                 dim, // Depthwise
+                false,
                 vb.pp("value").pp("down_conv"),
             )?;
             let norm = RMSNormAct2d::new(dim, 1e-6, false, vb.pp("value").pp("norm"))?;
@@ -1030,6 +1063,7 @@ impl VisionTower {
             1,    // groups
             true, // apply_act
             1e-5, // eps
+            true, // bias
             vb.pp("conv_stem"),
         )?;
 
