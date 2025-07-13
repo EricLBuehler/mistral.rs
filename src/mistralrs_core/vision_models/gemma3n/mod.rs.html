@@ -141,47 +141,47 @@
 <a href=#141 id=141 data-nosnippet>141</a>                </span>.nonzero()<span class="question-mark">?
 <a href=#142 id=142 data-nosnippet>142</a>                </span>.squeeze(<span class="number">1</span>)<span class="question-mark">?</span>;
 <a href=#143 id=143 data-nosnippet>143</a>
-<a href=#144 id=144 data-nosnippet>144</a>            <span class="kw">let </span>vision_token_embeds = <span class="self">self
-<a href=#145 id=145 data-nosnippet>145</a>                </span>.embed_vision
-<a href=#146 id=146 data-nosnippet>146</a>                .forward_text(<span class="kw-2">&amp;</span>input_ids.flatten_all()<span class="question-mark">?</span>.index_select(<span class="kw-2">&amp;</span>vision_mask_idx, <span class="number">0</span>)<span class="question-mark">?</span>)<span class="question-mark">?
-<a href=#147 id=147 data-nosnippet>147</a>                </span>.reshape((input_ids.dim(<span class="number">0</span>)<span class="question-mark">?</span>, (), input_embeds.dim(D::Minus1)<span class="question-mark">?</span>))<span class="question-mark">?</span>;
-<a href=#148 id=148 data-nosnippet>148</a>
-<a href=#149 id=149 data-nosnippet>149</a>            <span class="kw">let </span><span class="kw-2">mut </span>x_flat = input_embeds.flatten_all()<span class="question-mark">?</span>;
-<a href=#150 id=150 data-nosnippet>150</a>            <span class="kw">let </span>src_flat = vision_token_embeds.flatten_all()<span class="question-mark">?</span>;
+<a href=#144 id=144 data-nosnippet>144</a>            <span class="comment">// Create mask specifically for the image soft tokens (not BOI/EOI)
+<a href=#145 id=145 data-nosnippet>145</a>            </span><span class="kw">let </span>image_token_mask = input_ids
+<a href=#146 id=146 data-nosnippet>146</a>                .to_dtype(DType::F32)<span class="question-mark">?
+<a href=#147 id=147 data-nosnippet>147</a>                </span>.eq(inputs_processor::IMAGE_TOKEN_ID <span class="kw">as </span>f64)<span class="question-mark">?
+<a href=#148 id=148 data-nosnippet>148</a>                </span>.unsqueeze(D::Minus1)<span class="question-mark">?
+<a href=#149 id=149 data-nosnippet>149</a>                </span>.broadcast_as(input_embeds.shape())<span class="question-mark">?
+<a href=#150 id=150 data-nosnippet>150</a>                </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
 <a href=#151 id=151 data-nosnippet>151</a>
-<a href=#152 id=152 data-nosnippet>152</a>            <span class="comment">// Replace image tokens with actual vision embeddings
-<a href=#153 id=153 data-nosnippet>153</a>            </span><span class="kw">let </span>current_vals = x_flat.gather(<span class="kw-2">&amp;</span>vision_mask_embed_idx, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#154 id=154 data-nosnippet>154</a>            <span class="kw">let </span>diff = (src_flat - current_vals)<span class="question-mark">?</span>;
-<a href=#155 id=155 data-nosnippet>155</a>            x_flat = x_flat.scatter_add(<span class="kw-2">&amp;</span>vision_mask_embed_idx, <span class="kw-2">&amp;</span>diff, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#156 id=156 data-nosnippet>156</a>
-<a href=#157 id=157 data-nosnippet>157</a>            input_embeds = x_flat.reshape(input_embeds.shape())<span class="question-mark">?</span>;
-<a href=#158 id=158 data-nosnippet>158</a>
-<a href=#159 id=159 data-nosnippet>159</a>            <span class="comment">// Process vision inputs through vision tower
-<a href=#160 id=160 data-nosnippet>160</a>            </span><span class="kw">let </span>vision_features = <span class="self">self
-<a href=#161 id=161 data-nosnippet>161</a>                </span>.vision_tower
-<a href=#162 id=162 data-nosnippet>162</a>                .forward(<span class="kw-2">&amp;</span>pixel_values.to_dtype(<span class="self">self</span>.vision_dtype)<span class="question-mark">?</span>)<span class="question-mark">?
-<a href=#163 id=163 data-nosnippet>163</a>                </span>.to_dtype(input_embeds.dtype())<span class="question-mark">?</span>;
-<a href=#164 id=164 data-nosnippet>164</a>
-<a href=#165 id=165 data-nosnippet>165</a>            <span class="comment">// Reshape vision features to (batch_size * num_images, soft_tokens_per_image, hidden_size)
-<a href=#166 id=166 data-nosnippet>166</a>            </span><span class="kw">let </span>(batch_size, channels, h, w) = vision_features.dims4()<span class="question-mark">?</span>;
-<a href=#167 id=167 data-nosnippet>167</a>            <span class="kw">let </span>vision_features = vision_features
-<a href=#168 id=168 data-nosnippet>168</a>                .permute((<span class="number">0</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">1</span>))<span class="question-mark">? </span><span class="comment">// NCHW -&gt; NHWC
-<a href=#169 id=169 data-nosnippet>169</a>                </span>.reshape((batch_size, h * w, channels))<span class="question-mark">?</span>;
+<a href=#152 id=152 data-nosnippet>152</a>            <span class="comment">// Flatten tensors for scatter operation
+<a href=#153 id=153 data-nosnippet>153</a>            </span><span class="kw">let </span>mask_flat = image_token_mask.flatten_all()<span class="question-mark">?</span>;
+<a href=#154 id=154 data-nosnippet>154</a>            <span class="kw">let </span>indices = mask_flat.nonzero()<span class="question-mark">?</span>.squeeze(<span class="number">1</span>)<span class="question-mark">?</span>;
+<a href=#155 id=155 data-nosnippet>155</a>
+<a href=#156 id=156 data-nosnippet>156</a>            <span class="kw">let </span>vision_token_embeds = <span class="self">self
+<a href=#157 id=157 data-nosnippet>157</a>                </span>.embed_vision
+<a href=#158 id=158 data-nosnippet>158</a>                .forward_text(<span class="kw-2">&amp;</span>input_ids.flatten_all()<span class="question-mark">?</span>.index_select(<span class="kw-2">&amp;</span>vision_mask_idx, <span class="number">0</span>)<span class="question-mark">?</span>)<span class="question-mark">?
+<a href=#159 id=159 data-nosnippet>159</a>                </span>.reshape((input_ids.dim(<span class="number">0</span>)<span class="question-mark">?</span>, (), input_embeds.dim(D::Minus1)<span class="question-mark">?</span>))<span class="question-mark">?</span>;
+<a href=#160 id=160 data-nosnippet>160</a>
+<a href=#161 id=161 data-nosnippet>161</a>            <span class="kw">let </span><span class="kw-2">mut </span>x_flat = input_embeds.flatten_all()<span class="question-mark">?</span>;
+<a href=#162 id=162 data-nosnippet>162</a>            <span class="kw">let </span>src_flat = vision_token_embeds.flatten_all()<span class="question-mark">?</span>;
+<a href=#163 id=163 data-nosnippet>163</a>
+<a href=#164 id=164 data-nosnippet>164</a>            <span class="comment">// Replace image tokens with actual vision embeddings
+<a href=#165 id=165 data-nosnippet>165</a>            </span><span class="kw">let </span>current_vals = x_flat.gather(<span class="kw-2">&amp;</span>vision_mask_embed_idx, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#166 id=166 data-nosnippet>166</a>            <span class="kw">let </span>diff = (src_flat - current_vals)<span class="question-mark">?</span>;
+<a href=#167 id=167 data-nosnippet>167</a>            x_flat = x_flat.scatter_add(<span class="kw-2">&amp;</span>vision_mask_embed_idx, <span class="kw-2">&amp;</span>diff, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#168 id=168 data-nosnippet>168</a>
+<a href=#169 id=169 data-nosnippet>169</a>            input_embeds = x_flat.reshape(input_embeds.shape())<span class="question-mark">?</span>;
 <a href=#170 id=170 data-nosnippet>170</a>
-<a href=#171 id=171 data-nosnippet>171</a>            <span class="comment">// Convert vision features to embeddings using multimodal embedder
-<a href=#172 id=172 data-nosnippet>172</a>            </span><span class="kw">let </span>image_embeds = <span class="self">self</span>.embed_vision.forward_vision(<span class="kw-2">&amp;</span>vision_features)<span class="question-mark">?</span>;
-<a href=#173 id=173 data-nosnippet>173</a>
-<a href=#174 id=174 data-nosnippet>174</a>            <span class="comment">// Create mask specifically for the image soft tokens (not BOI/EOI)
-<a href=#175 id=175 data-nosnippet>175</a>            </span><span class="kw">let </span>image_token_mask = input_ids
-<a href=#176 id=176 data-nosnippet>176</a>                .to_dtype(DType::F32)<span class="question-mark">?
-<a href=#177 id=177 data-nosnippet>177</a>                </span>.eq(inputs_processor::IMAGE_TOKEN_ID <span class="kw">as </span>f64)<span class="question-mark">?
-<a href=#178 id=178 data-nosnippet>178</a>                </span>.unsqueeze(D::Minus1)<span class="question-mark">?
-<a href=#179 id=179 data-nosnippet>179</a>                </span>.broadcast_as(input_embeds.shape())<span class="question-mark">?
-<a href=#180 id=180 data-nosnippet>180</a>                </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
-<a href=#181 id=181 data-nosnippet>181</a>
-<a href=#182 id=182 data-nosnippet>182</a>            <span class="comment">// Flatten tensors for scatter operation
-<a href=#183 id=183 data-nosnippet>183</a>            </span><span class="kw">let </span>mask_flat = image_token_mask.flatten_all()<span class="question-mark">?</span>;
-<a href=#184 id=184 data-nosnippet>184</a>            <span class="kw">let </span>indices = mask_flat.nonzero()<span class="question-mark">?</span>.squeeze(<span class="number">1</span>)<span class="question-mark">?</span>;
+<a href=#171 id=171 data-nosnippet>171</a>            <span class="comment">// Process vision inputs through vision tower
+<a href=#172 id=172 data-nosnippet>172</a>            </span><span class="kw">let </span>vision_features = <span class="self">self
+<a href=#173 id=173 data-nosnippet>173</a>                </span>.vision_tower
+<a href=#174 id=174 data-nosnippet>174</a>                .forward(<span class="kw-2">&amp;</span>pixel_values.to_dtype(<span class="self">self</span>.vision_dtype)<span class="question-mark">?</span>)<span class="question-mark">?
+<a href=#175 id=175 data-nosnippet>175</a>                </span>.to_dtype(input_embeds.dtype())<span class="question-mark">?</span>;
+<a href=#176 id=176 data-nosnippet>176</a>
+<a href=#177 id=177 data-nosnippet>177</a>            <span class="comment">// Reshape vision features to (batch_size * num_images, soft_tokens_per_image, hidden_size)
+<a href=#178 id=178 data-nosnippet>178</a>            </span><span class="kw">let </span>(batch_size, channels, h, w) = vision_features.dims4()<span class="question-mark">?</span>;
+<a href=#179 id=179 data-nosnippet>179</a>            <span class="kw">let </span>vision_features = vision_features
+<a href=#180 id=180 data-nosnippet>180</a>                .permute((<span class="number">0</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">1</span>))<span class="question-mark">? </span><span class="comment">// NCHW -&gt; NHWC
+<a href=#181 id=181 data-nosnippet>181</a>                </span>.reshape((batch_size, h * w, channels))<span class="question-mark">?</span>;
+<a href=#182 id=182 data-nosnippet>182</a>
+<a href=#183 id=183 data-nosnippet>183</a>            <span class="comment">// Convert vision features to embeddings using multimodal embedder
+<a href=#184 id=184 data-nosnippet>184</a>            </span><span class="kw">let </span>image_embeds = <span class="self">self</span>.embed_vision.forward_vision(<span class="kw-2">&amp;</span>vision_features)<span class="question-mark">?</span>;
 <a href=#185 id=185 data-nosnippet>185</a>
 <a href=#186 id=186 data-nosnippet>186</a>            <span class="comment">// Only do the replacement if we have image tokens to replace
 <a href=#187 id=187 data-nosnippet>187</a>            </span><span class="kw">if </span>indices.dim(<span class="number">0</span>)<span class="question-mark">? </span>&gt; <span class="number">0 </span>{
@@ -208,66 +208,66 @@
 <a href=#208 id=208 data-nosnippet>208</a>                </span>.nonzero()<span class="question-mark">?
 <a href=#209 id=209 data-nosnippet>209</a>                </span>.squeeze(<span class="number">1</span>)<span class="question-mark">?</span>;
 <a href=#210 id=210 data-nosnippet>210</a>
-<a href=#211 id=211 data-nosnippet>211</a>            <span class="kw">let </span>audio_token_embeds = <span class="self">self
-<a href=#212 id=212 data-nosnippet>212</a>                </span>.embed_audio
-<a href=#213 id=213 data-nosnippet>213</a>                .forward_text(<span class="kw-2">&amp;</span>input_ids.flatten_all()<span class="question-mark">?</span>.index_select(<span class="kw-2">&amp;</span>audio_mask_idx, <span class="number">0</span>)<span class="question-mark">?</span>)<span class="question-mark">?
-<a href=#214 id=214 data-nosnippet>214</a>                </span>.reshape((input_ids.dim(<span class="number">0</span>)<span class="question-mark">?</span>, (), input_embeds.dim(D::Minus1)<span class="question-mark">?</span>))<span class="question-mark">?</span>;
-<a href=#215 id=215 data-nosnippet>215</a>
-<a href=#216 id=216 data-nosnippet>216</a>            <span class="kw">let </span><span class="kw-2">mut </span>x_flat = input_embeds.flatten_all()<span class="question-mark">?</span>;
-<a href=#217 id=217 data-nosnippet>217</a>            <span class="kw">let </span>src_flat = audio_token_embeds.flatten_all()<span class="question-mark">?</span>;
+<a href=#211 id=211 data-nosnippet>211</a>            <span class="comment">// Create mask for audio soft tokens
+<a href=#212 id=212 data-nosnippet>212</a>            </span><span class="kw">let </span>audio_token_mask = input_ids
+<a href=#213 id=213 data-nosnippet>213</a>                .to_dtype(DType::F32)<span class="question-mark">?
+<a href=#214 id=214 data-nosnippet>214</a>                </span>.eq(inputs_processor::AUDIO_TOKEN_ID <span class="kw">as </span>f64)<span class="question-mark">?
+<a href=#215 id=215 data-nosnippet>215</a>                </span>.unsqueeze(D::Minus1)<span class="question-mark">?
+<a href=#216 id=216 data-nosnippet>216</a>                </span>.broadcast_as(input_embeds.shape())<span class="question-mark">?
+<a href=#217 id=217 data-nosnippet>217</a>                </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
 <a href=#218 id=218 data-nosnippet>218</a>
-<a href=#219 id=219 data-nosnippet>219</a>            <span class="comment">// Replace image tokens with actual audio embeddings
-<a href=#220 id=220 data-nosnippet>220</a>            </span><span class="kw">let </span>current_vals = x_flat.gather(<span class="kw-2">&amp;</span>audio_mask_embed_idx, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#221 id=221 data-nosnippet>221</a>            <span class="kw">let </span>diff = (src_flat - current_vals)<span class="question-mark">?</span>;
-<a href=#222 id=222 data-nosnippet>222</a>            x_flat = x_flat.scatter_add(<span class="kw-2">&amp;</span>audio_mask_embed_idx, <span class="kw-2">&amp;</span>diff, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#223 id=223 data-nosnippet>223</a>
-<a href=#224 id=224 data-nosnippet>224</a>            input_embeds = x_flat.reshape(input_embeds.shape())<span class="question-mark">?</span>;
-<a href=#225 id=225 data-nosnippet>225</a>
-<a href=#226 id=226 data-nosnippet>226</a>            <span class="comment">// Process audio through audio tower
-<a href=#227 id=227 data-nosnippet>227</a>            </span><span class="kw">let </span>(audio_features, <span class="kw">_</span>) = <span class="self">self
-<a href=#228 id=228 data-nosnippet>228</a>                </span>.audio_tower
-<a href=#229 id=229 data-nosnippet>229</a>                .forward(<span class="kw-2">&amp;</span>audio_mel.to_dtype(input_embeds.dtype())<span class="question-mark">?</span>, audio_mel_mask)<span class="question-mark">?</span>;
+<a href=#219 id=219 data-nosnippet>219</a>            <span class="comment">// Flatten tensors for scatter operation
+<a href=#220 id=220 data-nosnippet>220</a>            </span><span class="kw">let </span>mask_flat = audio_token_mask.flatten_all()<span class="question-mark">?</span>;
+<a href=#221 id=221 data-nosnippet>221</a>            <span class="kw">let </span>indices = mask_flat.nonzero()<span class="question-mark">?</span>.squeeze(<span class="number">1</span>)<span class="question-mark">?</span>;
+<a href=#222 id=222 data-nosnippet>222</a>
+<a href=#223 id=223 data-nosnippet>223</a>            <span class="kw">let </span>audio_token_embeds = <span class="self">self
+<a href=#224 id=224 data-nosnippet>224</a>                </span>.embed_audio
+<a href=#225 id=225 data-nosnippet>225</a>                .forward_text(<span class="kw-2">&amp;</span>input_ids.flatten_all()<span class="question-mark">?</span>.index_select(<span class="kw-2">&amp;</span>audio_mask_idx, <span class="number">0</span>)<span class="question-mark">?</span>)<span class="question-mark">?
+<a href=#226 id=226 data-nosnippet>226</a>                </span>.reshape((input_ids.dim(<span class="number">0</span>)<span class="question-mark">?</span>, (), input_embeds.dim(D::Minus1)<span class="question-mark">?</span>))<span class="question-mark">?</span>;
+<a href=#227 id=227 data-nosnippet>227</a>
+<a href=#228 id=228 data-nosnippet>228</a>            <span class="kw">let </span><span class="kw-2">mut </span>x_flat = input_embeds.flatten_all()<span class="question-mark">?</span>;
+<a href=#229 id=229 data-nosnippet>229</a>            <span class="kw">let </span>src_flat = audio_token_embeds.flatten_all()<span class="question-mark">?</span>;
 <a href=#230 id=230 data-nosnippet>230</a>
-<a href=#231 id=231 data-nosnippet>231</a>            <span class="comment">// Convert audio features to embeddings
-<a href=#232 id=232 data-nosnippet>232</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>audio_embeds = <span class="self">self</span>.embed_audio.forward_vision(<span class="kw-2">&amp;</span>audio_features)<span class="question-mark">?</span>;
-<a href=#233 id=233 data-nosnippet>233</a>
-<a href=#234 id=234 data-nosnippet>234</a>            <span class="comment">// Pad audio embeddings to expected length (188) if needed
-<a href=#235 id=235 data-nosnippet>235</a>            // This matches the transformers implementation
-<a href=#236 id=236 data-nosnippet>236</a>            </span><span class="kw">let </span>expected_audio_tokens = <span class="self">self</span>.cfg.audio_soft_tokens_per_image;
-<a href=#237 id=237 data-nosnippet>237</a>            <span class="kw">let </span>num_audio_embeddings = audio_embeds.dim(<span class="number">1</span>)<span class="question-mark">?</span>;
-<a href=#238 id=238 data-nosnippet>238</a>
-<a href=#239 id=239 data-nosnippet>239</a>            <span class="kw">if </span>num_audio_embeddings &lt; expected_audio_tokens {
-<a href=#240 id=240 data-nosnippet>240</a>                <span class="comment">// Get the padding embedding (last token in audio vocabulary)
-<a href=#241 id=241 data-nosnippet>241</a>                </span><span class="kw">let </span>audio_vocab_size = <span class="self">self</span>.cfg.audio_config.vocab_size;
-<a href=#242 id=242 data-nosnippet>242</a>                <span class="kw">let </span>padding_token_id =
-<a href=#243 id=243 data-nosnippet>243</a>                    Tensor::new(<span class="kw-2">&amp;</span>[(audio_vocab_size - <span class="number">1</span>) <span class="kw">as </span>u32], audio_embeds.device())<span class="question-mark">?</span>;
-<a href=#244 id=244 data-nosnippet>244</a>
-<a href=#245 id=245 data-nosnippet>245</a>                <span class="comment">// Get the padding embedding
-<a href=#246 id=246 data-nosnippet>246</a>                </span><span class="kw">let </span>padding_embed = <span class="self">self</span>.embed_audio.forward_text(<span class="kw-2">&amp;</span>padding_token_id)<span class="question-mark">?</span>;
-<a href=#247 id=247 data-nosnippet>247</a>
-<a href=#248 id=248 data-nosnippet>248</a>                <span class="comment">// Calculate how many padding embeddings we need
-<a href=#249 id=249 data-nosnippet>249</a>                </span><span class="kw">let </span>num_padding = expected_audio_tokens - num_audio_embeddings;
+<a href=#231 id=231 data-nosnippet>231</a>            <span class="comment">// Replace image tokens with actual audio embeddings
+<a href=#232 id=232 data-nosnippet>232</a>            </span><span class="kw">let </span>current_vals = x_flat.gather(<span class="kw-2">&amp;</span>audio_mask_embed_idx, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#233 id=233 data-nosnippet>233</a>            <span class="kw">let </span>diff = (src_flat - current_vals)<span class="question-mark">?</span>;
+<a href=#234 id=234 data-nosnippet>234</a>            x_flat = x_flat.scatter_add(<span class="kw-2">&amp;</span>audio_mask_embed_idx, <span class="kw-2">&amp;</span>diff, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#235 id=235 data-nosnippet>235</a>
+<a href=#236 id=236 data-nosnippet>236</a>            input_embeds = x_flat.reshape(input_embeds.shape())<span class="question-mark">?</span>;
+<a href=#237 id=237 data-nosnippet>237</a>
+<a href=#238 id=238 data-nosnippet>238</a>            <span class="comment">// Process audio through audio tower
+<a href=#239 id=239 data-nosnippet>239</a>            </span><span class="kw">let </span>(audio_features, <span class="kw">_</span>) = <span class="self">self
+<a href=#240 id=240 data-nosnippet>240</a>                </span>.audio_tower
+<a href=#241 id=241 data-nosnippet>241</a>                .forward(<span class="kw-2">&amp;</span>audio_mel.to_dtype(input_embeds.dtype())<span class="question-mark">?</span>, audio_mel_mask)<span class="question-mark">?</span>;
+<a href=#242 id=242 data-nosnippet>242</a>
+<a href=#243 id=243 data-nosnippet>243</a>            <span class="comment">// Convert audio features to embeddings
+<a href=#244 id=244 data-nosnippet>244</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>audio_embeds = <span class="self">self</span>.embed_audio.forward_vision(<span class="kw-2">&amp;</span>audio_features)<span class="question-mark">?</span>;
+<a href=#245 id=245 data-nosnippet>245</a>
+<a href=#246 id=246 data-nosnippet>246</a>            <span class="comment">// Pad audio embeddings to expected length (188) if needed
+<a href=#247 id=247 data-nosnippet>247</a>            // This matches the transformers implementation
+<a href=#248 id=248 data-nosnippet>248</a>            </span><span class="kw">let </span>expected_audio_tokens = <span class="self">self</span>.cfg.audio_soft_tokens_per_image;
+<a href=#249 id=249 data-nosnippet>249</a>            <span class="kw">let </span>num_audio_embeddings = audio_embeds.dim(<span class="number">1</span>)<span class="question-mark">?</span>;
 <a href=#250 id=250 data-nosnippet>250</a>
-<a href=#251 id=251 data-nosnippet>251</a>                <span class="comment">// Repeat the padding embedding
-<a href=#252 id=252 data-nosnippet>252</a>                </span><span class="kw">let </span>padding_embeds = padding_embed
-<a href=#253 id=253 data-nosnippet>253</a>                    .unsqueeze(<span class="number">0</span>)<span class="question-mark">? </span><span class="comment">// Add batch dimension
-<a href=#254 id=254 data-nosnippet>254</a>                    </span>.repeat(<span class="kw-2">&amp;</span>[<span class="number">1</span>, num_padding, <span class="number">1</span>])<span class="question-mark">?</span>; <span class="comment">// [1, num_padding, embed_dim]
-<a href=#255 id=255 data-nosnippet>255</a>
-<a href=#256 id=256 data-nosnippet>256</a>                // Concatenate original embeddings with padding
-<a href=#257 id=257 data-nosnippet>257</a>                </span>audio_embeds = Tensor::cat(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>audio_embeds, <span class="kw-2">&amp;</span>padding_embeds], <span class="number">1</span>)<span class="question-mark">?</span>;
-<a href=#258 id=258 data-nosnippet>258</a>            }
+<a href=#251 id=251 data-nosnippet>251</a>            <span class="kw">if </span>num_audio_embeddings &lt; expected_audio_tokens {
+<a href=#252 id=252 data-nosnippet>252</a>                <span class="comment">// Get the padding embedding (last token in audio vocabulary)
+<a href=#253 id=253 data-nosnippet>253</a>                </span><span class="kw">let </span>audio_vocab_size = <span class="self">self</span>.cfg.audio_config.vocab_size;
+<a href=#254 id=254 data-nosnippet>254</a>                <span class="kw">let </span>padding_token_id =
+<a href=#255 id=255 data-nosnippet>255</a>                    Tensor::new(<span class="kw-2">&amp;</span>[(audio_vocab_size - <span class="number">1</span>) <span class="kw">as </span>u32], audio_embeds.device())<span class="question-mark">?</span>;
+<a href=#256 id=256 data-nosnippet>256</a>
+<a href=#257 id=257 data-nosnippet>257</a>                <span class="comment">// Get the padding embedding
+<a href=#258 id=258 data-nosnippet>258</a>                </span><span class="kw">let </span>padding_embed = <span class="self">self</span>.embed_audio.forward_text(<span class="kw-2">&amp;</span>padding_token_id)<span class="question-mark">?</span>;
 <a href=#259 id=259 data-nosnippet>259</a>
-<a href=#260 id=260 data-nosnippet>260</a>            <span class="comment">// Create mask for audio soft tokens
-<a href=#261 id=261 data-nosnippet>261</a>            </span><span class="kw">let </span>audio_token_mask = input_ids
-<a href=#262 id=262 data-nosnippet>262</a>                .to_dtype(DType::F32)<span class="question-mark">?
-<a href=#263 id=263 data-nosnippet>263</a>                </span>.eq(inputs_processor::AUDIO_TOKEN_ID <span class="kw">as </span>f64)<span class="question-mark">?
-<a href=#264 id=264 data-nosnippet>264</a>                </span>.unsqueeze(D::Minus1)<span class="question-mark">?
-<a href=#265 id=265 data-nosnippet>265</a>                </span>.broadcast_as(input_embeds.shape())<span class="question-mark">?
-<a href=#266 id=266 data-nosnippet>266</a>                </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
+<a href=#260 id=260 data-nosnippet>260</a>                <span class="comment">// Calculate how many padding embeddings we need
+<a href=#261 id=261 data-nosnippet>261</a>                </span><span class="kw">let </span>num_padding = expected_audio_tokens - num_audio_embeddings;
+<a href=#262 id=262 data-nosnippet>262</a>
+<a href=#263 id=263 data-nosnippet>263</a>                <span class="comment">// Repeat the padding embedding
+<a href=#264 id=264 data-nosnippet>264</a>                </span><span class="kw">let </span>padding_embeds = padding_embed
+<a href=#265 id=265 data-nosnippet>265</a>                    .unsqueeze(<span class="number">0</span>)<span class="question-mark">? </span><span class="comment">// Add batch dimension
+<a href=#266 id=266 data-nosnippet>266</a>                    </span>.repeat(<span class="kw-2">&amp;</span>[<span class="number">1</span>, num_padding, <span class="number">1</span>])<span class="question-mark">?</span>; <span class="comment">// [1, num_padding, embed_dim]
 <a href=#267 id=267 data-nosnippet>267</a>
-<a href=#268 id=268 data-nosnippet>268</a>            <span class="comment">// Flatten tensors for scatter operation
-<a href=#269 id=269 data-nosnippet>269</a>            </span><span class="kw">let </span>mask_flat = audio_token_mask.flatten_all()<span class="question-mark">?</span>;
-<a href=#270 id=270 data-nosnippet>270</a>            <span class="kw">let </span>indices = mask_flat.nonzero()<span class="question-mark">?</span>.squeeze(<span class="number">1</span>)<span class="question-mark">?</span>;
+<a href=#268 id=268 data-nosnippet>268</a>                // Concatenate original embeddings with padding
+<a href=#269 id=269 data-nosnippet>269</a>                </span>audio_embeds = Tensor::cat(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>audio_embeds, <span class="kw-2">&amp;</span>padding_embeds], <span class="number">1</span>)<span class="question-mark">?</span>;
+<a href=#270 id=270 data-nosnippet>270</a>            }
 <a href=#271 id=271 data-nosnippet>271</a>
 <a href=#272 id=272 data-nosnippet>272</a>            <span class="comment">// Only do the replacement if we have audio tokens to replace
 <a href=#273 id=273 data-nosnippet>273</a>            </span><span class="kw">if </span>indices.dim(<span class="number">0</span>)<span class="question-mark">? </span>&gt; <span class="number">0 </span>{
