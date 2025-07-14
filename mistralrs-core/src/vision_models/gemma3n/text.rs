@@ -1519,8 +1519,8 @@ impl IsqModel for TextModel {
 
             // Laurel block
             let laurel_uvb = layer_uvb.pp("laurel");
-            laurel_uvb.pp("left").add(&layer.laurel.left);
-            laurel_uvb.pp("right").add(&layer.laurel.right);
+            laurel_uvb.pp("linear_left").add(&layer.laurel.left);
+            laurel_uvb.pp("linear_right").add(&layer.laurel.right);
             laurel_uvb
                 .pp("post_laurel_norm")
                 .add(&layer.laurel.post_norm);
