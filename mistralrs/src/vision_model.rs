@@ -247,7 +247,16 @@ impl VisionModelBuilder {
         self
     }
 
-    /// Path to read a UQFF file from.
+    #[deprecated(
+        note = "Use `UqffTextModelBuilder` to load a UQFF model instead of the generic `from_uqff`",
+    )]
+    /// Path to read a `.uqff` file from. Other necessary configuration files must be present at this location.
+    /// 
+    /// For example, these include:
+    /// - `residual.safetensors`
+    /// - `tokenizer.json`
+    /// - `config.json`
+    /// - More depending on the model
     pub fn from_uqff(mut self, path: Vec<PathBuf>) -> Self {
         self.from_uqff = Some(path);
         self
@@ -260,14 +269,16 @@ impl VisionModelBuilder {
         self
     }
 
-    /// Path to write a UQFF file to.
+    /// Path to write a `.uqff` file to and serialize the other necessary files.
     ///
     /// The parent (part of the path excluding the filename) will determine where any other files
-    /// generated are written to. These can be used to load UQFF models standalone, and may include:
+    /// serialized are written to.
+    /// 
+    /// For example, these include:
     /// - `residual.safetensors`
     /// - `tokenizer.json`
     /// - `config.json`
-    /// - And others
+    /// - More depending on the model
     pub fn write_uqff(mut self, path: PathBuf) -> Self {
         self.write_uqff = Some(path);
         self
@@ -400,7 +411,7 @@ impl UqffVisionModelBuilder {
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
     pub fn new(model_id: impl ToString, uqff_file: Vec<PathBuf>) -> Self {
         let mut inner = VisionModelBuilder::new(model_id);
-        inner = inner.from_uqff(uqff_file);
+        inner.from_uqff = Some(uqff_file);
         Self(inner)
     }
 
