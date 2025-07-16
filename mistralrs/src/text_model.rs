@@ -328,10 +328,10 @@ impl TextModelBuilder {
     }
 
     #[deprecated(
-        note = "Use `UqffTextModelBuilder` to load a UQFF model instead of the generic `from_uqff`",
+        note = "Use `UqffTextModelBuilder` to load a UQFF model instead of the generic `from_uqff`"
     )]
     /// Path to read a `.uqff` file from. Other necessary configuration files must be present at this location.
-    /// 
+    ///
     /// For example, these include:
     /// - `residual.safetensors`
     /// - `tokenizer.json`
@@ -346,7 +346,7 @@ impl TextModelBuilder {
     ///
     /// The parent (part of the path excluding the filename) will determine where any other files
     /// serialized are written to.
-    /// 
+    ///
     /// For example, these include:
     /// - `residual.safetensors`
     /// - `tokenizer.json`
