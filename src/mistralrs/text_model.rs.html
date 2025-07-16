@@ -327,194 +327,205 @@
 <a href=#327 id=327 data-nosnippet>327</a>        <span class="self">self
 <a href=#328 id=328 data-nosnippet>328</a>    </span>}
 <a href=#329 id=329 data-nosnippet>329</a>
-<a href=#330 id=330 data-nosnippet>330</a>    <span class="doccomment">/// Path to read a UQFF file from.
-<a href=#331 id=331 data-nosnippet>331</a>    </span><span class="kw">pub fn </span>from_uqff(<span class="kw-2">mut </span><span class="self">self</span>, path: Vec&lt;PathBuf&gt;) -&gt; <span class="self">Self </span>{
-<a href=#332 id=332 data-nosnippet>332</a>        <span class="self">self</span>.from_uqff = <span class="prelude-val">Some</span>(path);
-<a href=#333 id=333 data-nosnippet>333</a>        <span class="self">self
-<a href=#334 id=334 data-nosnippet>334</a>    </span>}
-<a href=#335 id=335 data-nosnippet>335</a>
-<a href=#336 id=336 data-nosnippet>336</a>    <span class="doccomment">/// Path to write a UQFF file to.
-<a href=#337 id=337 data-nosnippet>337</a>    ///
-<a href=#338 id=338 data-nosnippet>338</a>    /// The parent (part of the path excluding the filename) will determine where any other files
-<a href=#339 id=339 data-nosnippet>339</a>    /// generated are written to. These can be used to load UQFF models standalone, and may include:
-<a href=#340 id=340 data-nosnippet>340</a>    /// - `residual.safetensors`
-<a href=#341 id=341 data-nosnippet>341</a>    /// - `tokenizer.json`
-<a href=#342 id=342 data-nosnippet>342</a>    /// - `config.json`
-<a href=#343 id=343 data-nosnippet>343</a>    /// - And others
-<a href=#344 id=344 data-nosnippet>344</a>    </span><span class="kw">pub fn </span>write_uqff(<span class="kw-2">mut </span><span class="self">self</span>, path: PathBuf) -&gt; <span class="self">Self </span>{
-<a href=#345 id=345 data-nosnippet>345</a>        <span class="self">self</span>.write_uqff = <span class="prelude-val">Some</span>(path);
-<a href=#346 id=346 data-nosnippet>346</a>        <span class="self">self
-<a href=#347 id=347 data-nosnippet>347</a>    </span>}
-<a href=#348 id=348 data-nosnippet>348</a>
-<a href=#349 id=349 data-nosnippet>349</a>    <span class="doccomment">/// Cache path for Hugging Face models downloaded locally
-<a href=#350 id=350 data-nosnippet>350</a>    </span><span class="kw">pub fn </span>from_hf_cache_pathf(<span class="kw-2">mut </span><span class="self">self</span>, hf_cache_path: PathBuf) -&gt; <span class="self">Self </span>{
-<a href=#351 id=351 data-nosnippet>351</a>        <span class="self">self</span>.hf_cache_path = <span class="prelude-val">Some</span>(hf_cache_path);
-<a href=#352 id=352 data-nosnippet>352</a>        <span class="self">self
-<a href=#353 id=353 data-nosnippet>353</a>    </span>}
-<a href=#354 id=354 data-nosnippet>354</a>
-<a href=#355 id=355 data-nosnippet>355</a>    <span class="doccomment">/// Set the main device to load this model onto. Automatic device mapping will be performed starting with this device.
-<a href=#356 id=356 data-nosnippet>356</a>    </span><span class="kw">pub fn </span>with_device(<span class="kw-2">mut </span><span class="self">self</span>, device: Device) -&gt; <span class="self">Self </span>{
-<a href=#357 id=357 data-nosnippet>357</a>        <span class="self">self</span>.device = <span class="prelude-val">Some</span>(device);
-<a href=#358 id=358 data-nosnippet>358</a>        <span class="self">self
-<a href=#359 id=359 data-nosnippet>359</a>    </span>}
-<a href=#360 id=360 data-nosnippet>360</a>
-<a href=#361 id=361 data-nosnippet>361</a>    <span class="doccomment">/// Path to a Matryoshka Transformer configuration CSV file.
-<a href=#362 id=362 data-nosnippet>362</a>    </span><span class="kw">pub fn </span>with_matformer_config_path(<span class="kw-2">mut </span><span class="self">self</span>, path: PathBuf) -&gt; <span class="self">Self </span>{
-<a href=#363 id=363 data-nosnippet>363</a>        <span class="self">self</span>.matformer_config_path = <span class="prelude-val">Some</span>(path);
-<a href=#364 id=364 data-nosnippet>364</a>        <span class="self">self
-<a href=#365 id=365 data-nosnippet>365</a>    </span>}
-<a href=#366 id=366 data-nosnippet>366</a>
-<a href=#367 id=367 data-nosnippet>367</a>    <span class="doccomment">/// Name of the slice to use from the Matryoshka Transformer configuration.
-<a href=#368 id=368 data-nosnippet>368</a>    </span><span class="kw">pub fn </span>with_matformer_slice_name(<span class="kw-2">mut </span><span class="self">self</span>, name: String) -&gt; <span class="self">Self </span>{
-<a href=#369 id=369 data-nosnippet>369</a>        <span class="self">self</span>.matformer_slice_name = <span class="prelude-val">Some</span>(name);
-<a href=#370 id=370 data-nosnippet>370</a>        <span class="self">self
-<a href=#371 id=371 data-nosnippet>371</a>    </span>}
-<a href=#372 id=372 data-nosnippet>372</a>
-<a href=#373 id=373 data-nosnippet>373</a>    <span class="kw">pub async fn </span>build(<span class="self">self</span>) -&gt; anyhow::Result&lt;Model&gt; {
-<a href=#374 id=374 data-nosnippet>374</a>        <span class="kw">let </span>config = NormalSpecificConfig {
-<a href=#375 id=375 data-nosnippet>375</a>            prompt_chunksize: <span class="self">self</span>.prompt_chunksize,
-<a href=#376 id=376 data-nosnippet>376</a>            topology: <span class="self">self</span>.topology,
-<a href=#377 id=377 data-nosnippet>377</a>            organization: <span class="self">self</span>.organization,
-<a href=#378 id=378 data-nosnippet>378</a>            write_uqff: <span class="self">self</span>.write_uqff,
-<a href=#379 id=379 data-nosnippet>379</a>            from_uqff: <span class="self">self</span>.from_uqff,
-<a href=#380 id=380 data-nosnippet>380</a>            imatrix: <span class="self">self</span>.imatrix,
-<a href=#381 id=381 data-nosnippet>381</a>            calibration_file: <span class="self">self</span>.calibration_file,
-<a href=#382 id=382 data-nosnippet>382</a>            hf_cache_path: <span class="self">self</span>.hf_cache_path,
-<a href=#383 id=383 data-nosnippet>383</a>            matformer_config_path: <span class="self">self</span>.matformer_config_path,
-<a href=#384 id=384 data-nosnippet>384</a>            matformer_slice_name: <span class="self">self</span>.matformer_slice_name,
-<a href=#385 id=385 data-nosnippet>385</a>        };
-<a href=#386 id=386 data-nosnippet>386</a>
-<a href=#387 id=387 data-nosnippet>387</a>        <span class="kw">if </span><span class="self">self</span>.with_logging {
-<a href=#388 id=388 data-nosnippet>388</a>            initialize_logging();
-<a href=#389 id=389 data-nosnippet>389</a>        }
-<a href=#390 id=390 data-nosnippet>390</a>
-<a href=#391 id=391 data-nosnippet>391</a>        <span class="kw">let </span>loader = NormalLoaderBuilder::new(
-<a href=#392 id=392 data-nosnippet>392</a>            config,
-<a href=#393 id=393 data-nosnippet>393</a>            <span class="self">self</span>.chat_template,
-<a href=#394 id=394 data-nosnippet>394</a>            <span class="self">self</span>.tokenizer_json,
-<a href=#395 id=395 data-nosnippet>395</a>            <span class="prelude-val">Some</span>(<span class="self">self</span>.model_id),
-<a href=#396 id=396 data-nosnippet>396</a>            <span class="self">self</span>.no_kv_cache,
-<a href=#397 id=397 data-nosnippet>397</a>            <span class="self">self</span>.jinja_explicit,
-<a href=#398 id=398 data-nosnippet>398</a>        )
-<a href=#399 id=399 data-nosnippet>399</a>        .build(<span class="self">self</span>.loader_type)<span class="question-mark">?</span>;
-<a href=#400 id=400 data-nosnippet>400</a>
-<a href=#401 id=401 data-nosnippet>401</a>        <span class="comment">// Load, into a Pipeline
-<a href=#402 id=402 data-nosnippet>402</a>        </span><span class="kw">let </span>pipeline = loader.load_model_from_hf(
-<a href=#403 id=403 data-nosnippet>403</a>            <span class="self">self</span>.hf_revision,
-<a href=#404 id=404 data-nosnippet>404</a>            <span class="self">self</span>.token_source,
-<a href=#405 id=405 data-nosnippet>405</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.dtype,
-<a href=#406 id=406 data-nosnippet>406</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.device.unwrap_or(best_device(<span class="self">self</span>.force_cpu).unwrap()),
-<a href=#407 id=407 data-nosnippet>407</a>            !<span class="self">self</span>.with_logging,
-<a href=#408 id=408 data-nosnippet>408</a>            <span class="self">self</span>.device_mapping
-<a href=#409 id=409 data-nosnippet>409</a>                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
-<a href=#410 id=410 data-nosnippet>410</a>            <span class="self">self</span>.isq,
-<a href=#411 id=411 data-nosnippet>411</a>            <span class="self">self</span>.paged_attn_cfg,
-<a href=#412 id=412 data-nosnippet>412</a>        )<span class="question-mark">?</span>;
-<a href=#413 id=413 data-nosnippet>413</a>
-<a href=#414 id=414 data-nosnippet>414</a>        <span class="kw">let </span>scheduler_method = <span class="kw">match </span><span class="self">self</span>.paged_attn_cfg {
-<a href=#415 id=415 data-nosnippet>415</a>            <span class="prelude-val">Some</span>(<span class="kw">_</span>) =&gt; {
-<a href=#416 id=416 data-nosnippet>416</a>                <span class="kw">let </span>config = pipeline
-<a href=#417 id=417 data-nosnippet>417</a>                    .lock()
-<a href=#418 id=418 data-nosnippet>418</a>                    .<span class="kw">await
-<a href=#419 id=419 data-nosnippet>419</a>                    </span>.get_metadata()
-<a href=#420 id=420 data-nosnippet>420</a>                    .cache_config
-<a href=#421 id=421 data-nosnippet>421</a>                    .as_ref()
-<a href=#422 id=422 data-nosnippet>422</a>                    .cloned();
-<a href=#423 id=423 data-nosnippet>423</a>
-<a href=#424 id=424 data-nosnippet>424</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(config) = config {
-<a href=#425 id=425 data-nosnippet>425</a>                    SchedulerConfig::PagedAttentionMeta {
-<a href=#426 id=426 data-nosnippet>426</a>                        max_num_seqs: <span class="self">self</span>.max_num_seqs,
-<a href=#427 id=427 data-nosnippet>427</a>                        config,
-<a href=#428 id=428 data-nosnippet>428</a>                    }
-<a href=#429 id=429 data-nosnippet>429</a>                } <span class="kw">else </span>{
-<a href=#430 id=430 data-nosnippet>430</a>                    SchedulerConfig::DefaultScheduler {
-<a href=#431 id=431 data-nosnippet>431</a>                        method: DefaultSchedulerMethod::Fixed(<span class="self">self</span>.max_num_seqs.try_into()<span class="question-mark">?</span>),
-<a href=#432 id=432 data-nosnippet>432</a>                    }
-<a href=#433 id=433 data-nosnippet>433</a>                }
-<a href=#434 id=434 data-nosnippet>434</a>            }
-<a href=#435 id=435 data-nosnippet>435</a>            <span class="prelude-val">None </span>=&gt; SchedulerConfig::DefaultScheduler {
-<a href=#436 id=436 data-nosnippet>436</a>                method: DefaultSchedulerMethod::Fixed(<span class="self">self</span>.max_num_seqs.try_into()<span class="question-mark">?</span>),
-<a href=#437 id=437 data-nosnippet>437</a>            },
-<a href=#438 id=438 data-nosnippet>438</a>        };
-<a href=#439 id=439 data-nosnippet>439</a>
-<a href=#440 id=440 data-nosnippet>440</a>        <span class="kw">let </span><span class="kw-2">mut </span>runner = MistralRsBuilder::new(
-<a href=#441 id=441 data-nosnippet>441</a>            pipeline,
-<a href=#442 id=442 data-nosnippet>442</a>            scheduler_method,
-<a href=#443 id=443 data-nosnippet>443</a>            <span class="self">self</span>.throughput_logging,
-<a href=#444 id=444 data-nosnippet>444</a>            <span class="self">self</span>.search_bert_model,
-<a href=#445 id=445 data-nosnippet>445</a>        );
-<a href=#446 id=446 data-nosnippet>446</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(cb) = <span class="self">self</span>.search_callback.clone() {
-<a href=#447 id=447 data-nosnippet>447</a>            runner = runner.with_search_callback(cb);
-<a href=#448 id=448 data-nosnippet>448</a>        }
-<a href=#449 id=449 data-nosnippet>449</a>        <span class="kw">for </span>(name, cb) <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.tool_callbacks {
-<a href=#450 id=450 data-nosnippet>450</a>            runner = runner.with_tool_callback(name.clone(), cb.clone());
-<a href=#451 id=451 data-nosnippet>451</a>        }
-<a href=#452 id=452 data-nosnippet>452</a>        <span class="kw">for </span>(name, callback_with_tool) <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.tool_callbacks_with_tools {
-<a href=#453 id=453 data-nosnippet>453</a>            runner = runner.with_tool_callback_and_tool(
-<a href=#454 id=454 data-nosnippet>454</a>                name.clone(),
-<a href=#455 id=455 data-nosnippet>455</a>                callback_with_tool.callback.clone(),
-<a href=#456 id=456 data-nosnippet>456</a>                callback_with_tool.tool.clone(),
-<a href=#457 id=457 data-nosnippet>457</a>            );
-<a href=#458 id=458 data-nosnippet>458</a>        }
-<a href=#459 id=459 data-nosnippet>459</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(mcp_config) = <span class="self">self</span>.mcp_client_config {
-<a href=#460 id=460 data-nosnippet>460</a>            runner = runner.with_mcp_client(mcp_config);
-<a href=#461 id=461 data-nosnippet>461</a>        }
-<a href=#462 id=462 data-nosnippet>462</a>        runner = runner
-<a href=#463 id=463 data-nosnippet>463</a>            .with_no_kv_cache(<span class="self">self</span>.no_kv_cache)
-<a href=#464 id=464 data-nosnippet>464</a>            .with_no_prefix_cache(<span class="self">self</span>.prefix_cache_n.is_none());
-<a href=#465 id=465 data-nosnippet>465</a>
-<a href=#466 id=466 data-nosnippet>466</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = <span class="self">self</span>.prefix_cache_n {
-<a href=#467 id=467 data-nosnippet>467</a>            runner = runner.with_prefix_cache_n(n)
-<a href=#468 id=468 data-nosnippet>468</a>        }
-<a href=#469 id=469 data-nosnippet>469</a>
-<a href=#470 id=470 data-nosnippet>470</a>        <span class="prelude-val">Ok</span>(Model::new(runner.build().<span class="kw">await</span>))
-<a href=#471 id=471 data-nosnippet>471</a>    }
-<a href=#472 id=472 data-nosnippet>472</a>}
-<a href=#473 id=473 data-nosnippet>473</a>
-<a href=#474 id=474 data-nosnippet>474</a><span class="attr">#[derive(Clone)]
-<a href=#475 id=475 data-nosnippet>475</a></span><span class="doccomment">/// Configure a UQFF text model with the various parameters for loading, running, and other inference behaviors.
-<a href=#476 id=476 data-nosnippet>476</a>/// This wraps and implements `DerefMut` for the TextModelBuilder, so users should take care to not call UQFF-related methods.
-<a href=#477 id=477 data-nosnippet>477</a></span><span class="kw">pub struct </span>UqffTextModelBuilder(TextModelBuilder);
-<a href=#478 id=478 data-nosnippet>478</a>
-<a href=#479 id=479 data-nosnippet>479</a><span class="kw">impl </span>UqffTextModelBuilder {
-<a href=#480 id=480 data-nosnippet>480</a>    <span class="doccomment">/// A few defaults are applied here:
-<a href=#481 id=481 data-nosnippet>481</a>    /// - MoQE ISQ organization
-<a href=#482 id=482 data-nosnippet>482</a>    /// - Token source is from the cache (.cache/huggingface/token)
-<a href=#483 id=483 data-nosnippet>483</a>    /// - Maximum number of sequences running is 32
-<a href=#484 id=484 data-nosnippet>484</a>    /// - Number of sequences to hold in prefix cache is 16.
-<a href=#485 id=485 data-nosnippet>485</a>    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
-<a href=#486 id=486 data-nosnippet>486</a>    </span><span class="kw">pub fn </span>new(model_id: <span class="kw">impl </span>ToString, uqff_file: Vec&lt;PathBuf&gt;) -&gt; <span class="self">Self </span>{
-<a href=#487 id=487 data-nosnippet>487</a>        <span class="kw">let </span><span class="kw-2">mut </span>inner = TextModelBuilder::new(model_id);
-<a href=#488 id=488 data-nosnippet>488</a>        inner = inner.from_uqff(uqff_file);
-<a href=#489 id=489 data-nosnippet>489</a>        <span class="self">Self</span>(inner)
-<a href=#490 id=490 data-nosnippet>490</a>    }
-<a href=#491 id=491 data-nosnippet>491</a>
-<a href=#492 id=492 data-nosnippet>492</a>    <span class="kw">pub async fn </span>build(<span class="self">self</span>) -&gt; anyhow::Result&lt;Model&gt; {
-<a href=#493 id=493 data-nosnippet>493</a>        <span class="self">self</span>.<span class="number">0</span>.build().<span class="kw">await
-<a href=#494 id=494 data-nosnippet>494</a>    </span>}
-<a href=#495 id=495 data-nosnippet>495</a>
-<a href=#496 id=496 data-nosnippet>496</a>    <span class="doccomment">/// This wraps the VisionModelBuilder, so users should take care to not call UQFF-related methods.
-<a href=#497 id=497 data-nosnippet>497</a>    </span><span class="kw">pub fn </span>into_inner(<span class="self">self</span>) -&gt; TextModelBuilder {
-<a href=#498 id=498 data-nosnippet>498</a>        <span class="self">self</span>.<span class="number">0
-<a href=#499 id=499 data-nosnippet>499</a>    </span>}
-<a href=#500 id=500 data-nosnippet>500</a>}
-<a href=#501 id=501 data-nosnippet>501</a>
-<a href=#502 id=502 data-nosnippet>502</a><span class="kw">impl </span>Deref <span class="kw">for </span>UqffTextModelBuilder {
-<a href=#503 id=503 data-nosnippet>503</a>    <span class="kw">type </span>Target = TextModelBuilder;
-<a href=#504 id=504 data-nosnippet>504</a>
-<a href=#505 id=505 data-nosnippet>505</a>    <span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Target {
-<a href=#506 id=506 data-nosnippet>506</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0
-<a href=#507 id=507 data-nosnippet>507</a>    </span>}
-<a href=#508 id=508 data-nosnippet>508</a>}
-<a href=#509 id=509 data-nosnippet>509</a>
-<a href=#510 id=510 data-nosnippet>510</a><span class="kw">impl </span>DerefMut <span class="kw">for </span>UqffTextModelBuilder {
-<a href=#511 id=511 data-nosnippet>511</a>    <span class="kw">fn </span>deref_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span><span class="self">Self</span>::Target {
-<a href=#512 id=512 data-nosnippet>512</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>.<span class="number">0
-<a href=#513 id=513 data-nosnippet>513</a>    </span>}
-<a href=#514 id=514 data-nosnippet>514</a>}
+<a href=#330 id=330 data-nosnippet>330</a>    <span class="attr">#[deprecated(
+<a href=#331 id=331 data-nosnippet>331</a>        note = <span class="string">"Use `UqffTextModelBuilder` to load a UQFF model instead of the generic `from_uqff`"
+<a href=#332 id=332 data-nosnippet>332</a>    </span>)]
+<a href=#333 id=333 data-nosnippet>333</a>    </span><span class="doccomment">/// Path to read a `.uqff` file from. Other necessary configuration files must be present at this location.
+<a href=#334 id=334 data-nosnippet>334</a>    ///
+<a href=#335 id=335 data-nosnippet>335</a>    /// For example, these include:
+<a href=#336 id=336 data-nosnippet>336</a>    /// - `residual.safetensors`
+<a href=#337 id=337 data-nosnippet>337</a>    /// - `tokenizer.json`
+<a href=#338 id=338 data-nosnippet>338</a>    /// - `config.json`
+<a href=#339 id=339 data-nosnippet>339</a>    /// - More depending on the model
+<a href=#340 id=340 data-nosnippet>340</a>    </span><span class="kw">pub fn </span>from_uqff(<span class="kw-2">mut </span><span class="self">self</span>, path: Vec&lt;PathBuf&gt;) -&gt; <span class="self">Self </span>{
+<a href=#341 id=341 data-nosnippet>341</a>        <span class="self">self</span>.from_uqff = <span class="prelude-val">Some</span>(path);
+<a href=#342 id=342 data-nosnippet>342</a>        <span class="self">self
+<a href=#343 id=343 data-nosnippet>343</a>    </span>}
+<a href=#344 id=344 data-nosnippet>344</a>
+<a href=#345 id=345 data-nosnippet>345</a>    <span class="doccomment">/// Path to write a `.uqff` file to and serialize the other necessary files.
+<a href=#346 id=346 data-nosnippet>346</a>    ///
+<a href=#347 id=347 data-nosnippet>347</a>    /// The parent (part of the path excluding the filename) will determine where any other files
+<a href=#348 id=348 data-nosnippet>348</a>    /// serialized are written to.
+<a href=#349 id=349 data-nosnippet>349</a>    ///
+<a href=#350 id=350 data-nosnippet>350</a>    /// For example, these include:
+<a href=#351 id=351 data-nosnippet>351</a>    /// - `residual.safetensors`
+<a href=#352 id=352 data-nosnippet>352</a>    /// - `tokenizer.json`
+<a href=#353 id=353 data-nosnippet>353</a>    /// - `config.json`
+<a href=#354 id=354 data-nosnippet>354</a>    /// - More depending on the model
+<a href=#355 id=355 data-nosnippet>355</a>    </span><span class="kw">pub fn </span>write_uqff(<span class="kw-2">mut </span><span class="self">self</span>, path: PathBuf) -&gt; <span class="self">Self </span>{
+<a href=#356 id=356 data-nosnippet>356</a>        <span class="self">self</span>.write_uqff = <span class="prelude-val">Some</span>(path);
+<a href=#357 id=357 data-nosnippet>357</a>        <span class="self">self
+<a href=#358 id=358 data-nosnippet>358</a>    </span>}
+<a href=#359 id=359 data-nosnippet>359</a>
+<a href=#360 id=360 data-nosnippet>360</a>    <span class="doccomment">/// Cache path for Hugging Face models downloaded locally
+<a href=#361 id=361 data-nosnippet>361</a>    </span><span class="kw">pub fn </span>from_hf_cache_pathf(<span class="kw-2">mut </span><span class="self">self</span>, hf_cache_path: PathBuf) -&gt; <span class="self">Self </span>{
+<a href=#362 id=362 data-nosnippet>362</a>        <span class="self">self</span>.hf_cache_path = <span class="prelude-val">Some</span>(hf_cache_path);
+<a href=#363 id=363 data-nosnippet>363</a>        <span class="self">self
+<a href=#364 id=364 data-nosnippet>364</a>    </span>}
+<a href=#365 id=365 data-nosnippet>365</a>
+<a href=#366 id=366 data-nosnippet>366</a>    <span class="doccomment">/// Set the main device to load this model onto. Automatic device mapping will be performed starting with this device.
+<a href=#367 id=367 data-nosnippet>367</a>    </span><span class="kw">pub fn </span>with_device(<span class="kw-2">mut </span><span class="self">self</span>, device: Device) -&gt; <span class="self">Self </span>{
+<a href=#368 id=368 data-nosnippet>368</a>        <span class="self">self</span>.device = <span class="prelude-val">Some</span>(device);
+<a href=#369 id=369 data-nosnippet>369</a>        <span class="self">self
+<a href=#370 id=370 data-nosnippet>370</a>    </span>}
+<a href=#371 id=371 data-nosnippet>371</a>
+<a href=#372 id=372 data-nosnippet>372</a>    <span class="doccomment">/// Path to a Matryoshka Transformer configuration CSV file.
+<a href=#373 id=373 data-nosnippet>373</a>    </span><span class="kw">pub fn </span>with_matformer_config_path(<span class="kw-2">mut </span><span class="self">self</span>, path: PathBuf) -&gt; <span class="self">Self </span>{
+<a href=#374 id=374 data-nosnippet>374</a>        <span class="self">self</span>.matformer_config_path = <span class="prelude-val">Some</span>(path);
+<a href=#375 id=375 data-nosnippet>375</a>        <span class="self">self
+<a href=#376 id=376 data-nosnippet>376</a>    </span>}
+<a href=#377 id=377 data-nosnippet>377</a>
+<a href=#378 id=378 data-nosnippet>378</a>    <span class="doccomment">/// Name of the slice to use from the Matryoshka Transformer configuration.
+<a href=#379 id=379 data-nosnippet>379</a>    </span><span class="kw">pub fn </span>with_matformer_slice_name(<span class="kw-2">mut </span><span class="self">self</span>, name: String) -&gt; <span class="self">Self </span>{
+<a href=#380 id=380 data-nosnippet>380</a>        <span class="self">self</span>.matformer_slice_name = <span class="prelude-val">Some</span>(name);
+<a href=#381 id=381 data-nosnippet>381</a>        <span class="self">self
+<a href=#382 id=382 data-nosnippet>382</a>    </span>}
+<a href=#383 id=383 data-nosnippet>383</a>
+<a href=#384 id=384 data-nosnippet>384</a>    <span class="kw">pub async fn </span>build(<span class="self">self</span>) -&gt; anyhow::Result&lt;Model&gt; {
+<a href=#385 id=385 data-nosnippet>385</a>        <span class="kw">let </span>config = NormalSpecificConfig {
+<a href=#386 id=386 data-nosnippet>386</a>            prompt_chunksize: <span class="self">self</span>.prompt_chunksize,
+<a href=#387 id=387 data-nosnippet>387</a>            topology: <span class="self">self</span>.topology,
+<a href=#388 id=388 data-nosnippet>388</a>            organization: <span class="self">self</span>.organization,
+<a href=#389 id=389 data-nosnippet>389</a>            write_uqff: <span class="self">self</span>.write_uqff,
+<a href=#390 id=390 data-nosnippet>390</a>            from_uqff: <span class="self">self</span>.from_uqff,
+<a href=#391 id=391 data-nosnippet>391</a>            imatrix: <span class="self">self</span>.imatrix,
+<a href=#392 id=392 data-nosnippet>392</a>            calibration_file: <span class="self">self</span>.calibration_file,
+<a href=#393 id=393 data-nosnippet>393</a>            hf_cache_path: <span class="self">self</span>.hf_cache_path,
+<a href=#394 id=394 data-nosnippet>394</a>            matformer_config_path: <span class="self">self</span>.matformer_config_path,
+<a href=#395 id=395 data-nosnippet>395</a>            matformer_slice_name: <span class="self">self</span>.matformer_slice_name,
+<a href=#396 id=396 data-nosnippet>396</a>        };
+<a href=#397 id=397 data-nosnippet>397</a>
+<a href=#398 id=398 data-nosnippet>398</a>        <span class="kw">if </span><span class="self">self</span>.with_logging {
+<a href=#399 id=399 data-nosnippet>399</a>            initialize_logging();
+<a href=#400 id=400 data-nosnippet>400</a>        }
+<a href=#401 id=401 data-nosnippet>401</a>
+<a href=#402 id=402 data-nosnippet>402</a>        <span class="kw">let </span>loader = NormalLoaderBuilder::new(
+<a href=#403 id=403 data-nosnippet>403</a>            config,
+<a href=#404 id=404 data-nosnippet>404</a>            <span class="self">self</span>.chat_template,
+<a href=#405 id=405 data-nosnippet>405</a>            <span class="self">self</span>.tokenizer_json,
+<a href=#406 id=406 data-nosnippet>406</a>            <span class="prelude-val">Some</span>(<span class="self">self</span>.model_id),
+<a href=#407 id=407 data-nosnippet>407</a>            <span class="self">self</span>.no_kv_cache,
+<a href=#408 id=408 data-nosnippet>408</a>            <span class="self">self</span>.jinja_explicit,
+<a href=#409 id=409 data-nosnippet>409</a>        )
+<a href=#410 id=410 data-nosnippet>410</a>        .build(<span class="self">self</span>.loader_type)<span class="question-mark">?</span>;
+<a href=#411 id=411 data-nosnippet>411</a>
+<a href=#412 id=412 data-nosnippet>412</a>        <span class="comment">// Load, into a Pipeline
+<a href=#413 id=413 data-nosnippet>413</a>        </span><span class="kw">let </span>pipeline = loader.load_model_from_hf(
+<a href=#414 id=414 data-nosnippet>414</a>            <span class="self">self</span>.hf_revision,
+<a href=#415 id=415 data-nosnippet>415</a>            <span class="self">self</span>.token_source,
+<a href=#416 id=416 data-nosnippet>416</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.dtype,
+<a href=#417 id=417 data-nosnippet>417</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.device.unwrap_or(best_device(<span class="self">self</span>.force_cpu).unwrap()),
+<a href=#418 id=418 data-nosnippet>418</a>            !<span class="self">self</span>.with_logging,
+<a href=#419 id=419 data-nosnippet>419</a>            <span class="self">self</span>.device_mapping
+<a href=#420 id=420 data-nosnippet>420</a>                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
+<a href=#421 id=421 data-nosnippet>421</a>            <span class="self">self</span>.isq,
+<a href=#422 id=422 data-nosnippet>422</a>            <span class="self">self</span>.paged_attn_cfg,
+<a href=#423 id=423 data-nosnippet>423</a>        )<span class="question-mark">?</span>;
+<a href=#424 id=424 data-nosnippet>424</a>
+<a href=#425 id=425 data-nosnippet>425</a>        <span class="kw">let </span>scheduler_method = <span class="kw">match </span><span class="self">self</span>.paged_attn_cfg {
+<a href=#426 id=426 data-nosnippet>426</a>            <span class="prelude-val">Some</span>(<span class="kw">_</span>) =&gt; {
+<a href=#427 id=427 data-nosnippet>427</a>                <span class="kw">let </span>config = pipeline
+<a href=#428 id=428 data-nosnippet>428</a>                    .lock()
+<a href=#429 id=429 data-nosnippet>429</a>                    .<span class="kw">await
+<a href=#430 id=430 data-nosnippet>430</a>                    </span>.get_metadata()
+<a href=#431 id=431 data-nosnippet>431</a>                    .cache_config
+<a href=#432 id=432 data-nosnippet>432</a>                    .as_ref()
+<a href=#433 id=433 data-nosnippet>433</a>                    .cloned();
+<a href=#434 id=434 data-nosnippet>434</a>
+<a href=#435 id=435 data-nosnippet>435</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(config) = config {
+<a href=#436 id=436 data-nosnippet>436</a>                    SchedulerConfig::PagedAttentionMeta {
+<a href=#437 id=437 data-nosnippet>437</a>                        max_num_seqs: <span class="self">self</span>.max_num_seqs,
+<a href=#438 id=438 data-nosnippet>438</a>                        config,
+<a href=#439 id=439 data-nosnippet>439</a>                    }
+<a href=#440 id=440 data-nosnippet>440</a>                } <span class="kw">else </span>{
+<a href=#441 id=441 data-nosnippet>441</a>                    SchedulerConfig::DefaultScheduler {
+<a href=#442 id=442 data-nosnippet>442</a>                        method: DefaultSchedulerMethod::Fixed(<span class="self">self</span>.max_num_seqs.try_into()<span class="question-mark">?</span>),
+<a href=#443 id=443 data-nosnippet>443</a>                    }
+<a href=#444 id=444 data-nosnippet>444</a>                }
+<a href=#445 id=445 data-nosnippet>445</a>            }
+<a href=#446 id=446 data-nosnippet>446</a>            <span class="prelude-val">None </span>=&gt; SchedulerConfig::DefaultScheduler {
+<a href=#447 id=447 data-nosnippet>447</a>                method: DefaultSchedulerMethod::Fixed(<span class="self">self</span>.max_num_seqs.try_into()<span class="question-mark">?</span>),
+<a href=#448 id=448 data-nosnippet>448</a>            },
+<a href=#449 id=449 data-nosnippet>449</a>        };
+<a href=#450 id=450 data-nosnippet>450</a>
+<a href=#451 id=451 data-nosnippet>451</a>        <span class="kw">let </span><span class="kw-2">mut </span>runner = MistralRsBuilder::new(
+<a href=#452 id=452 data-nosnippet>452</a>            pipeline,
+<a href=#453 id=453 data-nosnippet>453</a>            scheduler_method,
+<a href=#454 id=454 data-nosnippet>454</a>            <span class="self">self</span>.throughput_logging,
+<a href=#455 id=455 data-nosnippet>455</a>            <span class="self">self</span>.search_bert_model,
+<a href=#456 id=456 data-nosnippet>456</a>        );
+<a href=#457 id=457 data-nosnippet>457</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(cb) = <span class="self">self</span>.search_callback.clone() {
+<a href=#458 id=458 data-nosnippet>458</a>            runner = runner.with_search_callback(cb);
+<a href=#459 id=459 data-nosnippet>459</a>        }
+<a href=#460 id=460 data-nosnippet>460</a>        <span class="kw">for </span>(name, cb) <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.tool_callbacks {
+<a href=#461 id=461 data-nosnippet>461</a>            runner = runner.with_tool_callback(name.clone(), cb.clone());
+<a href=#462 id=462 data-nosnippet>462</a>        }
+<a href=#463 id=463 data-nosnippet>463</a>        <span class="kw">for </span>(name, callback_with_tool) <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.tool_callbacks_with_tools {
+<a href=#464 id=464 data-nosnippet>464</a>            runner = runner.with_tool_callback_and_tool(
+<a href=#465 id=465 data-nosnippet>465</a>                name.clone(),
+<a href=#466 id=466 data-nosnippet>466</a>                callback_with_tool.callback.clone(),
+<a href=#467 id=467 data-nosnippet>467</a>                callback_with_tool.tool.clone(),
+<a href=#468 id=468 data-nosnippet>468</a>            );
+<a href=#469 id=469 data-nosnippet>469</a>        }
+<a href=#470 id=470 data-nosnippet>470</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(mcp_config) = <span class="self">self</span>.mcp_client_config {
+<a href=#471 id=471 data-nosnippet>471</a>            runner = runner.with_mcp_client(mcp_config);
+<a href=#472 id=472 data-nosnippet>472</a>        }
+<a href=#473 id=473 data-nosnippet>473</a>        runner = runner
+<a href=#474 id=474 data-nosnippet>474</a>            .with_no_kv_cache(<span class="self">self</span>.no_kv_cache)
+<a href=#475 id=475 data-nosnippet>475</a>            .with_no_prefix_cache(<span class="self">self</span>.prefix_cache_n.is_none());
+<a href=#476 id=476 data-nosnippet>476</a>
+<a href=#477 id=477 data-nosnippet>477</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = <span class="self">self</span>.prefix_cache_n {
+<a href=#478 id=478 data-nosnippet>478</a>            runner = runner.with_prefix_cache_n(n)
+<a href=#479 id=479 data-nosnippet>479</a>        }
+<a href=#480 id=480 data-nosnippet>480</a>
+<a href=#481 id=481 data-nosnippet>481</a>        <span class="prelude-val">Ok</span>(Model::new(runner.build().<span class="kw">await</span>))
+<a href=#482 id=482 data-nosnippet>482</a>    }
+<a href=#483 id=483 data-nosnippet>483</a>}
+<a href=#484 id=484 data-nosnippet>484</a>
+<a href=#485 id=485 data-nosnippet>485</a><span class="attr">#[derive(Clone)]
+<a href=#486 id=486 data-nosnippet>486</a></span><span class="doccomment">/// Configure a UQFF text model with the various parameters for loading, running, and other inference behaviors.
+<a href=#487 id=487 data-nosnippet>487</a>/// This wraps and implements `DerefMut` for the TextModelBuilder, so users should take care to not call UQFF-related methods.
+<a href=#488 id=488 data-nosnippet>488</a></span><span class="kw">pub struct </span>UqffTextModelBuilder(TextModelBuilder);
+<a href=#489 id=489 data-nosnippet>489</a>
+<a href=#490 id=490 data-nosnippet>490</a><span class="kw">impl </span>UqffTextModelBuilder {
+<a href=#491 id=491 data-nosnippet>491</a>    <span class="doccomment">/// A few defaults are applied here:
+<a href=#492 id=492 data-nosnippet>492</a>    /// - MoQE ISQ organization
+<a href=#493 id=493 data-nosnippet>493</a>    /// - Token source is from the cache (.cache/huggingface/token)
+<a href=#494 id=494 data-nosnippet>494</a>    /// - Maximum number of sequences running is 32
+<a href=#495 id=495 data-nosnippet>495</a>    /// - Number of sequences to hold in prefix cache is 16.
+<a href=#496 id=496 data-nosnippet>496</a>    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+<a href=#497 id=497 data-nosnippet>497</a>    </span><span class="kw">pub fn </span>new(model_id: <span class="kw">impl </span>ToString, uqff_file: Vec&lt;PathBuf&gt;) -&gt; <span class="self">Self </span>{
+<a href=#498 id=498 data-nosnippet>498</a>        <span class="kw">let </span><span class="kw-2">mut </span>inner = TextModelBuilder::new(model_id);
+<a href=#499 id=499 data-nosnippet>499</a>        inner.from_uqff = <span class="prelude-val">Some</span>(uqff_file);
+<a href=#500 id=500 data-nosnippet>500</a>        <span class="self">Self</span>(inner)
+<a href=#501 id=501 data-nosnippet>501</a>    }
+<a href=#502 id=502 data-nosnippet>502</a>
+<a href=#503 id=503 data-nosnippet>503</a>    <span class="kw">pub async fn </span>build(<span class="self">self</span>) -&gt; anyhow::Result&lt;Model&gt; {
+<a href=#504 id=504 data-nosnippet>504</a>        <span class="self">self</span>.<span class="number">0</span>.build().<span class="kw">await
+<a href=#505 id=505 data-nosnippet>505</a>    </span>}
+<a href=#506 id=506 data-nosnippet>506</a>
+<a href=#507 id=507 data-nosnippet>507</a>    <span class="doccomment">/// This wraps the VisionModelBuilder, so users should take care to not call UQFF-related methods.
+<a href=#508 id=508 data-nosnippet>508</a>    </span><span class="kw">pub fn </span>into_inner(<span class="self">self</span>) -&gt; TextModelBuilder {
+<a href=#509 id=509 data-nosnippet>509</a>        <span class="self">self</span>.<span class="number">0
+<a href=#510 id=510 data-nosnippet>510</a>    </span>}
+<a href=#511 id=511 data-nosnippet>511</a>}
+<a href=#512 id=512 data-nosnippet>512</a>
+<a href=#513 id=513 data-nosnippet>513</a><span class="kw">impl </span>Deref <span class="kw">for </span>UqffTextModelBuilder {
+<a href=#514 id=514 data-nosnippet>514</a>    <span class="kw">type </span>Target = TextModelBuilder;
 <a href=#515 id=515 data-nosnippet>515</a>
-<a href=#516 id=516 data-nosnippet>516</a><span class="kw">impl </span>From&lt;UqffTextModelBuilder&gt; <span class="kw">for </span>TextModelBuilder {
-<a href=#517 id=517 data-nosnippet>517</a>    <span class="kw">fn </span>from(value: UqffTextModelBuilder) -&gt; <span class="self">Self </span>{
-<a href=#518 id=518 data-nosnippet>518</a>        value.<span class="number">0
-<a href=#519 id=519 data-nosnippet>519</a>    </span>}
-<a href=#520 id=520 data-nosnippet>520</a>}</code></pre></div></section></main></body></html>
+<a href=#516 id=516 data-nosnippet>516</a>    <span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Target {
+<a href=#517 id=517 data-nosnippet>517</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0
+<a href=#518 id=518 data-nosnippet>518</a>    </span>}
+<a href=#519 id=519 data-nosnippet>519</a>}
+<a href=#520 id=520 data-nosnippet>520</a>
+<a href=#521 id=521 data-nosnippet>521</a><span class="kw">impl </span>DerefMut <span class="kw">for </span>UqffTextModelBuilder {
+<a href=#522 id=522 data-nosnippet>522</a>    <span class="kw">fn </span>deref_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span><span class="self">Self</span>::Target {
+<a href=#523 id=523 data-nosnippet>523</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>.<span class="number">0
+<a href=#524 id=524 data-nosnippet>524</a>    </span>}
+<a href=#525 id=525 data-nosnippet>525</a>}
+<a href=#526 id=526 data-nosnippet>526</a>
+<a href=#527 id=527 data-nosnippet>527</a><span class="kw">impl </span>From&lt;UqffTextModelBuilder&gt; <span class="kw">for </span>TextModelBuilder {
+<a href=#528 id=528 data-nosnippet>528</a>    <span class="kw">fn </span>from(value: UqffTextModelBuilder) -&gt; <span class="self">Self </span>{
+<a href=#529 id=529 data-nosnippet>529</a>        value.<span class="number">0
+<a href=#530 id=530 data-nosnippet>530</a>    </span>}
+<a href=#531 id=531 data-nosnippet>531</a>}</code></pre></div></section></main></body></html>
