@@ -224,6 +224,9 @@ impl QuantMethod for BnbLinear {
                 params,
                 quant_ty,
             }),
+            QuantMethodConfig::CutlassFP8PTQ { .. } => {
+                unreachable!("Cannot create BnbLinear from CutlassFP8PTQ config")
+            }
         }
     }
 
@@ -264,6 +267,10 @@ impl QuantMethod for BnbLinear {
         _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         todo!()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

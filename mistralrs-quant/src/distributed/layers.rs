@@ -84,6 +84,9 @@ impl RowParallelLayer {
                 QuantizedConfig::Afq { .. } => {
                     AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
                 }
+                QuantizedConfig::CutlassHybridFP8 { .. } => {
+                    unreachable!("CutlassHybridFP8 not supported in RowParallelLayer directly via this config path")
+                }
             }
         } else {
             // Handle the case where the layer is dummy (no tensors)
@@ -263,6 +266,10 @@ impl QuantMethod for RowParallelLayer {
     fn is_distributed(&self) -> Option<DistributedKind> {
         Some(DistributedKind::RowParallel)
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl QuantizedSerde for RowParallelLayer {
@@ -357,6 +364,9 @@ impl ColumnParallelLayer {
                 }
                 QuantizedConfig::Afq { .. } => {
                     AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
+                QuantizedConfig::CutlassHybridFP8 { .. } => {
+                    unreachable!("CutlassHybridFP8 not supported in ColumnParallelLayer directly via this config path")
                 }
             }
         } else {
@@ -568,6 +578,10 @@ impl QuantMethod for ColumnParallelLayer {
     fn is_distributed(&self) -> Option<DistributedKind> {
         Some(DistributedKind::ColumnParallel)
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl QuantizedSerde for ColumnParallelLayer {
@@ -650,6 +664,9 @@ impl ReplicatedLayer {
                 QuantizedConfig::Afq { .. } => {
                     AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
                 }
+                QuantizedConfig::CutlassHybridFP8 { .. } => {
+                    unreachable!("CutlassHybridFP8 not supported in ReplicatedLayer directly via this config path")
+                }
             }
         } else {
             // Handle the case where the layer is dummy (no tensors)
@@ -716,6 +733,9 @@ impl ReplicatedLayer {
                 }
                 QuantizedConfig::Afq { .. } => {
                     AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
+                QuantizedConfig::CutlassHybridFP8 { .. } => {
+                    unreachable!("CutlassHybridFP8 not supported in ReplicatedLayer (matformer) directly via this config path")
                 }
             }
         } else {
@@ -817,6 +837,10 @@ impl QuantMethod for ReplicatedLayer {
 
     fn is_distributed(&self) -> Option<DistributedKind> {
         Some(DistributedKind::Replicated)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

@@ -37,7 +37,8 @@ impl QuantMethod for UnquantLinear {
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
             | QuantMethodConfig::BlockwiseFP8 { .. }
-            | QuantMethodConfig::Afq { .. } => unreachable!(),
+            | QuantMethodConfig::Afq { .. }
+            | QuantMethodConfig::CutlassFP8PTQ { .. } => unreachable!(),
             QuantMethodConfig::Unquantized(l) => Ok(Self {
                 w: l.weight().clone(),
                 b: l.bias().cloned(),
@@ -297,6 +298,10 @@ impl QuantMethod for UnquantLinear {
         } else {
             candle_core::bail!("`{}` does not support tracking stats.", self.name())
         }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

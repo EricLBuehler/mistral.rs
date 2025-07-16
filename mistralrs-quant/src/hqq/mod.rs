@@ -530,7 +530,8 @@ impl QuantMethod for HqqLayer {
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
             | QuantMethodConfig::BlockwiseFP8 { .. }
-            | QuantMethodConfig::Afq { .. } => {
+            | QuantMethodConfig::Afq { .. }
+            | QuantMethodConfig::CutlassFP8PTQ { .. } => {
                 unreachable!()
             }
             QuantMethodConfig::Hqq {
@@ -629,6 +630,10 @@ impl QuantMethod for HqqLayer {
         } else {
             Ok(Arc::new(res))
         }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

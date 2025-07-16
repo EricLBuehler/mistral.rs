@@ -41,7 +41,8 @@ impl QuantMethod for GgufMatMul {
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
             | QuantMethodConfig::BlockwiseFP8 { .. }
-            | QuantMethodConfig::Afq { .. } => unreachable!(),
+            | QuantMethodConfig::Afq { .. }
+            | QuantMethodConfig::CutlassFP8PTQ { .. } => unreachable!(),
         }
     }
 
@@ -153,6 +154,10 @@ impl QuantMethod for GgufMatMul {
             };
             Ok(Arc::new(GgufMatMul { w, b }))
         }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
