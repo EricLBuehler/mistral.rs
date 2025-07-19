@@ -269,13 +269,13 @@
 <a href=#269 id=269 data-nosnippet>269</a>
 <a href=#270 id=270 data-nosnippet>270</a><span class="kw">impl </span>QuantizedSerde <span class="kw">for </span>BnbLinear {
 <a href=#271 id=271 data-nosnippet>271</a>    <span class="kw">fn </span>isq_serde_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#272 id=272 data-nosnippet>272</a>        <span class="bool-val">true
+<a href=#272 id=272 data-nosnippet>272</a>        <span class="bool-val">false
 <a href=#273 id=273 data-nosnippet>273</a>    </span>}
 <a href=#274 id=274 data-nosnippet>274</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
 <a href=#275 id=275 data-nosnippet>275</a>        <span class="string">"bnb-linear"
 <a href=#276 id=276 data-nosnippet>276</a>    </span>}
 <a href=#277 id=277 data-nosnippet>277</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
-<a href=#278 id=278 data-nosnippet>278</a>        <span class="macro">todo!</span>()
+<a href=#278 id=278 data-nosnippet>278</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"BitsAndBytes quantization does not support UQFF serialization"</span>)
 <a href=#279 id=279 data-nosnippet>279</a>    }
 <a href=#280 id=280 data-nosnippet>280</a>
 <a href=#281 id=281 data-nosnippet>281</a>    <span class="kw">fn </span>deserialize(
@@ -287,6 +287,6 @@
 <a href=#287 id=287 data-nosnippet>287</a>    <span class="kw">where
 <a href=#288 id=288 data-nosnippet>288</a>        </span><span class="self">Self</span>: Sized,
 <a href=#289 id=289 data-nosnippet>289</a>    {
-<a href=#290 id=290 data-nosnippet>290</a>        <span class="macro">todo!</span>()
+<a href=#290 id=290 data-nosnippet>290</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"BitsAndBytes quantization does not support UQFF deserialization"</span>)
 <a href=#291 id=291 data-nosnippet>291</a>    }
 <a href=#292 id=292 data-nosnippet>292</a>}</code></pre></div></section></main></body></html>
