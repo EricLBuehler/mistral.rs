@@ -695,19 +695,45 @@ impl QuantizedSerde for HqqLayer {
         serialize_tensor(&mut buffer, &self.zeros)?;
 
         let w_shape = self.w_shape.dims();
-        buffer.extend((w_shape.len() as u32).to_le_bytes());
+        let shape_len = w_shape.len();
+        if shape_len > u32::MAX as usize {
+            candle_core::bail!(
+                "Weight tensor has too many dimensions for UQFF format: {} exceeds u32::MAX",
+                shape_len
+            );
+        }
+        buffer.extend((shape_len as u32).to_le_bytes());
         for dim in w_shape {
+            if *dim > u32::MAX as usize {
+                candle_core::bail!(
+                    "Weight tensor dimension too large for UQFF format: {} exceeds u32::MAX",
+                    dim
+                );
+            }
             buffer.extend((*dim as u32).to_le_bytes());
         }
 
         // Config
         buffer.push(self.cfg.bits as u8);
-        buffer.extend(
-            &(<NonZeroUsize as Into<usize>>::into(self.cfg.group_size) as u32).to_le_bytes(),
-        );
+        let group_size = <NonZeroUsize as Into<usize>>::into(self.cfg.group_size);
+        if group_size > u32::MAX as usize {
+            candle_core::bail!(
+                "HQQ group size too large for UQFF format: {} exceeds u32::MAX",
+                group_size
+            );
+        }
+        buffer.extend(&(group_size as u32).to_le_bytes());
         buffer.push(self.cfg.axis as u8);
-        // FIXME: using 0 as a sentinel for None is OK because it really should be.
-        buffer.extend(&(self.cfg.optimization_steps.unwrap_or(0) as u32).to_le_bytes());
+        // NOTE: using 0 as a sentinel for None. This means legitimate 0 values cannot be distinguished from None.
+        // This is acceptable because 0 optimization steps would be functionally equivalent to None.
+        let opt_steps = self.cfg.optimization_steps.unwrap_or(0);
+        if opt_steps > u32::MAX as usize {
+            candle_core::bail!(
+                "HQQ optimization steps too large for UQFF format: {} exceeds u32::MAX",
+                opt_steps
+            );
+        }
+        buffer.extend(&(opt_steps as u32).to_le_bytes());
         buffer.push(self.cfg.round_zeros as u8);
         buffer.push(self.cfg.channel_wise as u8);
 
