@@ -361,7 +361,7 @@ impl QuantizedSerde for AfqLayer {
     where
         Self: Sized,
     {
-        let mut buffer = Cursor::new(data.to_vec());
+        let mut buffer = Cursor::new(data);
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
@@ -411,7 +411,7 @@ impl QuantizedSerde for AfqLayer {
     where
         Self: Sized,
     {
-        let mut buffer = Cursor::new(data.to_vec());
+        let mut buffer = Cursor::new(data);
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
