@@ -27,10 +27,10 @@ license = "MIT"
 rust-version = "1.82"
 
 [workspace.dependencies]
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "1177dd09" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "1177dd09" }
-candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "1177dd09" }
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "1177dd09" }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "d158e8c2" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "d158e8c2" }
+candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "d158e8c2" }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "d158e8c2" }
 # candle-core = { path = "../candle/candle-core" }
 # candle-nn = { path = "../candle/candle-nn" }
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }
