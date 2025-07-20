@@ -16,11 +16,6 @@ impl MemoryUsage {
             Device::Cuda(dev) => {
                 use candle_core::cuda::cudarc::driver::result;
                 use candle_core::cuda_backend::WrapErr;
-                use candle_core::{backend::BackendDevice, DeviceLocation};
-
-                let DeviceLocation::Cuda { gpu_id } = dev.location() else {
-                    candle_core::bail!("device and location do match")
-                };
 
                 dev.cuda_stream().context().bind_to_thread().w()?;
 
@@ -60,11 +55,6 @@ impl MemoryUsage {
             Device::Cuda(dev) => {
                 use candle_core::cuda::cudarc::driver::result;
                 use candle_core::cuda_backend::WrapErr;
-                use candle_core::{backend::BackendDevice, DeviceLocation};
-
-                let DeviceLocation::Cuda { gpu_id } = dev.location() else {
-                    candle_core::bail!("device and location do match")
-                };
 
                 dev.cuda_stream().context().bind_to_thread().w()?;
 
