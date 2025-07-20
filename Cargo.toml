@@ -85,7 +85,7 @@ data-url = "0.3.1"
 float8 = "0.3.0"
 regex = "1.11.1"
 metal = { version = "0.27.0", features = ["mps"] }
-safetensors = "0.4.5"
+safetensors = "0.6.0"
 toml = "0.8.22"
 hf-hub = { version = "0.4.2", default-features = false, features = [
     "ureq",
