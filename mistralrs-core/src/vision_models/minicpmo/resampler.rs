@@ -325,7 +325,7 @@ impl MultiheadAttention {
                 }
                 None => att,
             };
-            candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
+            att = candle_nn::ops::softmax_last_dim(&att)?;
             MatMul.matmul(&att, &v)?
         };
 

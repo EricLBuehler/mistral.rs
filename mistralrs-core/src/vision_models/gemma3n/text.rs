@@ -158,7 +158,7 @@ impl Mlp {
             gate = self.gaussian_topk(&gate)?;
         }
         let up = self.up.forward(&xs)?;
-        // let mut res = self.down.forward(&candle_nn::ops::mul_and_act(
+        // let mut res = self.down.forward(&crate::ops::mul_and_act(
         //     &gate,
         //     &up,
         //     self.act.try_into()?,
