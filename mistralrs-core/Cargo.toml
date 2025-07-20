@@ -79,7 +79,7 @@ as-any.workspace = true
 float8.workspace = true
 llguidance.workspace = true
 toktrie_hf_tokenizers.workspace = true
-# candle-flash-attn-v3 = { workspace = true, optional = true }
+candle-flash-attn-v3 = { workspace = true, optional = true }
 safetensors.workspace = true
 serde-big-array.workspace = true
 interprocess.workspace = true
@@ -131,7 +131,7 @@ metal = [
     "dep:metal"
 ]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
-flash-attn-v3 = ["cuda"]#, "dep:candle-flash-attn-v3"]
+flash-attn-v3 = ["cuda", "dep:candle-flash-attn-v3"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "mistralrs-quant/accelerate"]
 mkl = ["candle-core/mkl", "candle-nn/mkl"]
 nccl = ["cuda", "mistralrs-quant/nccl"]

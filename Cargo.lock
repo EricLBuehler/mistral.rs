@@ -609,6 +609,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "candle-flash-attn-v3"
+version = "0.9.1"
+dependencies = [
+ "anyhow",
+ "candle-core",
+ "half",
+ "num_cpus",
+ "rayon",
+]
+
+[[package]]
 name = "candle-kernels"
 version = "0.9.1"
 dependencies = [
@@ -3005,6 +3016,7 @@ dependencies = [
  "bytemuck_derive",
  "candle-core",
  "candle-flash-attn",
+ "candle-flash-attn-v3",
  "candle-nn",
  "cfgrammar",
  "chrono",
