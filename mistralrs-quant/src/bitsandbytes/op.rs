@@ -208,20 +208,28 @@ impl DequantizeOp {
         dev: &CudaDevice,
         kernel: unsafe extern "C" fn(*const f32, *const u8, *const f32, *mut T, i32, i32, CUstream),
     ) -> Result<CudaSlice<T>> {
-        use candle_core::cuda::{cudarc::driver::DevicePtr, WrapErr};
+        use crate::utils::slice_ptr;
 
-        let out = unsafe { dev.alloc::<T>(self.shape.elem_count()).w()? };
+        let out = unsafe { dev.alloc::<T>(self.shape.elem_count())? };
+
+        let (code, _code_guard) = slice_ptr(code, 0);
+        let (input, _input_guard) = slice_ptr(input, 0);
+        let (absmax, _absmax_guard) = slice_ptr(absmax, 0);
+        let (out_ptr, out_guard) = slice_ptr(&out, 0);
+
         unsafe {
             kernel(
-                (*code.device_ptr()) as *const _,
-                (*input.device_ptr()) as *const _,
-                (*absmax.device_ptr()) as *const _,
-                (*out.device_ptr()) as *mut _,
+                code as *const _,
+                input as *const _,
+                absmax as *const _,
+                out_ptr as *mut _,
                 self.blocksize as i32,
                 self.shape.elem_count() as i32,
-                *dev.cu_stream(),
+                dev.cuda_stream().cu_stream(),
             )
         };
+
+        drop(out_guard);
 
         Ok(out)
     }
