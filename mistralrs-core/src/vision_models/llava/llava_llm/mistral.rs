@@ -306,7 +306,6 @@ impl Attention {
                     v,
                     attention_mask,
                     self.sliding_window,
-                    false,
                 )?;
 
                 Sdpa.run_attention(

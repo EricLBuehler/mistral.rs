@@ -286,7 +286,7 @@ impl Attention {
 
         let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
-        let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+        let (k, v) = Cache::update_kv_cache(kv_cache, k, v)?;
 
         let attn_output =
             Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?;

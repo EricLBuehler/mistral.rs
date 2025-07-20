@@ -106,8 +106,7 @@ impl CausalSelfAttention {
 
         let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
-        let (k, v) =
-            crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
+        let (k, v) = crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v)?;
 
         let y = Sdpa.run_attention(
             &q,

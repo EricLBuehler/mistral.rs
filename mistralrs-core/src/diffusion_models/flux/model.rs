@@ -314,10 +314,23 @@ impl SelfAttention {
         );
         self.norm = QkNorm {
             query_norm: RmsNorm::new(
-                self.norm.query_norm.inner().weight().to_device(device)?,
+                self.norm
+                    .query_norm
+                    .clone()
+                    .into_inner()
+                    .weight()
+                    .to_device(device)?,
                 1e-6,
             ),
-            key_norm: RmsNorm::new(self.norm.key_norm.inner().weight().to_device(device)?, 1e-6),
+            key_norm: RmsNorm::new(
+                self.norm
+                    .key_norm
+                    .clone()
+                    .into_inner()
+                    .weight()
+                    .to_device(device)?,
+                1e-6,
+            ),
         };
         Ok(())
     }
@@ -533,10 +546,23 @@ impl SingleStreamBlock {
         );
         self.norm = QkNorm {
             query_norm: RmsNorm::new(
-                self.norm.query_norm.inner().weight().to_device(device)?,
+                self.norm
+                    .query_norm
+                    .clone()
+                    .into_inner()
+                    .weight()
+                    .to_device(device)?,
                 1e-6,
             ),
-            key_norm: RmsNorm::new(self.norm.key_norm.inner().weight().to_device(device)?, 1e-6),
+            key_norm: RmsNorm::new(
+                self.norm
+                    .key_norm
+                    .clone()
+                    .into_inner()
+                    .weight()
+                    .to_device(device)?,
+                1e-6,
+            ),
         };
         self.pre_norm = LayerNorm::new_no_bias(self.pre_norm.weight().to_device(device)?, 1e-6);
         self.modulation.lin = Linear::new(
