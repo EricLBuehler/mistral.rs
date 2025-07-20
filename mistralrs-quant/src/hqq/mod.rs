@@ -158,7 +158,10 @@ impl HqqBits {
                     wq_in.device(),
                 )?;
                 let wq = wq
-                    .slice_assign(&[&(..wq_in.dims()[0]), &..], &wq_in.to_dtype(DType::U32)?)?
+                    .slice_assign(
+                        &[0..wq_in.dims()[0], 0..wq.dims()[1]],
+                        &wq_in.to_dtype(DType::U32)?,
+                    )?
                     .to_dtype(DType::I32)?;
                 let step = (wq.dims()[0] as f64 / 10.) as usize;
 
