@@ -39,7 +39,7 @@ cuda = [
     "candle-nn/cuda",
     "dep:bindgen_cuda"
 ]
-nccl = ["cuda", "candle-core/nccl"]
+nccl = ["cuda"]#, "candle-core/nccl"]
 metal = ["candle-core/metal", "candle-nn/metal", "dep:metal"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
 ring = []
