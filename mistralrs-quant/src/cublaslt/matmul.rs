@@ -2,7 +2,7 @@ use candle_core::cuda::cudarc::cublaslt::result::set_matrix_layout_attribute;
 use candle_core::cuda::cudarc::cublaslt::{result, result::CublasError, sys};
 use candle_core::cuda::cudarc::driver::sys::{CUdevice_attribute, CUdeviceptr, CUstream};
 use candle_core::cuda::cudarc::driver::{
-    CudaDevice, CudaSlice, DevicePtr, DevicePtrMut, DeviceRepr, DriverError,
+    CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr, DriverError,
 };
 use candle_core::cuda::CudaDType;
 use candle_core::DType;
@@ -18,13 +18,13 @@ use std::sync::Arc;
 /// 2. Execute matmul kernel with matmul. f32 is supported. f16 and bf16 are supported
 ///    if feature `half` is activated
 ///
-/// Note: This maintains a instance of [`Arc<CudaDevice>`], so will prevent the device
+/// Note: This maintains a instance of [`Arc<CudaStream>`], so will prevent the device
 /// from being dropped. Kernels will be launched on the device device default stream.
 #[derive(Debug)]
 pub struct CudaBlasLT {
     handle: sys::cublasLtHandle_t,
     workspace: Workspace,
-    device: Arc<CudaDevice>,
+    stream: Arc<CudaStream>,
 }
 
 unsafe impl Send for CudaBlasLT {}
@@ -33,14 +33,14 @@ unsafe impl Sync for CudaBlasLT {}
 
 impl CudaBlasLT {
     /// Creates a new cublasLt handle.
-    pub fn new(device: Arc<CudaDevice>) -> Result<Self, CublasError> {
+    pub fn new(stream: Arc<CudaStream>) -> Result<Self, CublasError> {
         let handle = result::create_handle()?;
-        let workspace = Workspace::new(device.clone()).unwrap();
+        let workspace = Workspace::new(stream.clone()).unwrap();
 
         Ok(Self {
             handle,
             workspace,
-            device,
+            stream,
         })
     }
 }
@@ -67,14 +67,15 @@ pub struct Workspace {
 
 impl Workspace {
     /// Creates a CublasLt workspace buffer on the provided device
-    pub fn new(device: Arc<CudaDevice>) -> Result<Self, DriverError> {
-        device.bind_to_thread()?;
+    pub fn new(stream: Arc<CudaStream>) -> Result<Self, DriverError> {
+        stream.context().bind_to_thread()?;
 
-        let major =
-            device.attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)?;
+        let major = stream
+            .context()
+            .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)?;
         let workspace_size = if major >= 9 { 33_554_432 } else { 4_194_304 };
 
-        let buffer = unsafe { device.alloc::<u8>(workspace_size)? };
+        let buffer = unsafe { stream.alloc::<u8>(workspace_size)? };
         Ok(Self {
             buffer,
             size: workspace_size,

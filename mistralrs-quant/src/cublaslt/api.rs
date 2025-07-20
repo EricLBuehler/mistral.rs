@@ -22,7 +22,7 @@ impl CublasLt {
             _ => candle_core::bail!("`device` must be a `cuda` device"),
         };
 
-        let inner = CudaBlasLT::new(dev.cuda_device()).unwrap();
+        let inner = CudaBlasLT::new(dev.cuda_stream()).unwrap();
 
         Ok(Self(Arc::new(inner)))
     }
@@ -154,17 +154,17 @@ impl CublasLTBatchMatmulF8 {
         } else {
             // Allocate out tensor
             (
-                unsafe { dev.alloc::<bf16>(out_shape.elem_count()).w()? },
+                unsafe { dev.alloc::<bf16>(out_shape.elem_count())? },
                 (n * m),
             )
         };
         let (mut out, stride_c) = match self.out_dtype {
             F8MatmulOutType::BF16 => (
-                OutSlice::BF16(unsafe { dev.alloc::<bf16>(out_shape.elem_count()).w()? }),
+                OutSlice::BF16(unsafe { dev.alloc::<bf16>(out_shape.elem_count())? }),
                 (n * m),
             ),
             F8MatmulOutType::F8 => (
-                OutSlice::F8(unsafe { dev.alloc::<F8E4M3>(out_shape.elem_count()).w()? }),
+                OutSlice::F8(unsafe { dev.alloc::<F8E4M3>(out_shape.elem_count())? }),
                 (n * m),
             ),
         };
@@ -432,10 +432,7 @@ impl CublasLTBatchMatmul {
             (c.clone(), c_l.stride()[0])
         } else {
             // Allocate out tensor
-            (
-                unsafe { dev.alloc::<T>(out_shape.elem_count()).w()? },
-                (n * m),
-            )
+            (unsafe { dev.alloc::<T>(out_shape.elem_count())? }, (n * m))
         };
 
         let config = MatmulConfig {
