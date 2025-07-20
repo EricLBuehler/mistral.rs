@@ -3,10 +3,11 @@ mod ffi;
 
 #[cfg(feature = "cuda")]
 mod cuda {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core::{DType, Result, Storage, Tensor};
     use half::{bf16, f16};
     use std::ffi::{c_int, c_long};
+
+    use crate::utils::slice_ptr;
 
     fn apply_rotary_<
         T: candle_core::cuda_backend::CudaDType
@@ -78,10 +79,10 @@ mod cuda {
         let sc = sc.as_cuda_slice::<T>()?;
 
         // Get cuda views for all tensors
-        let q = q.slice(q_l.start_offset()..);
-        let k = k.slice(k_l.start_offset()..);
-        let cc = cc.slice(cc_l.start_offset()..);
-        let sc = sc.slice(sc_l.start_offset()..);
+        let (q, _q_guard) = slice_ptr(q, q_l.start_offset());
+        let (k, _k_guard) = slice_ptr(k, k_l.start_offset());
+        let (cc, _cc_guard) = slice_ptr(cc, cc_l.start_offset());
+        let (sc, _sc_guard) = slice_ptr(sc, sc_l.start_offset());
 
         let (num_tokens, num_heads, head_size) = q_l.shape().dims3()?;
         let (num_tokens_kv, num_kv_heads, head_size_kv) = k_l.shape().dims3()?;
@@ -110,19 +111,14 @@ mod cuda {
         let query_stride = q_l.stride()[0];
         let key_stride = k_l.stride()[0];
 
-        let q_ptr = *q.device_ptr() as *const core::ffi::c_void;
-        let k_ptr = *k.device_ptr() as *const core::ffi::c_void;
-        let cc_ptr = *cc.device_ptr() as *const core::ffi::c_void;
-        let sc_ptr = *sc.device_ptr() as *const core::ffi::c_void;
-
         let neox = if is_neox { 1 } else { 0 };
 
         unsafe {
             super::ffi::rotary_embedding(
-                q_ptr,
-                k_ptr,
-                cc_ptr,
-                sc_ptr,
+                q as *const core::ffi::c_void,
+                k as *const core::ffi::c_void,
+                cc as *const core::ffi::c_void,
+                sc as *const core::ffi::c_void,
                 neox,
                 head_size as c_int,
                 num_tokens as c_long,
