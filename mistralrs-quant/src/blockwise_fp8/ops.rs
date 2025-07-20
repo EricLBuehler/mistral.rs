@@ -117,14 +117,10 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
         weight_s: &candle_core::CudaStorage,
         weight_l: &candle_core::Layout,
     ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
-        use candle_core::{
-            backend::BackendStorage,
-            cuda::{cudarc::driver::DevicePtr, WrapErr},
-            CudaStorage,
-        };
+        use candle_core::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
 
-        use crate::blockwise_fp8::ffi;
+        use crate::{blockwise_fp8::ffi, utils::slice_ptr};
 
         if !ffi::HAVE_BLOCKWISE_DEQUANT_KERNELS {
             candle_core::bail!("Do not have blockwise FP8 dequant kernels.");
@@ -145,12 +141,10 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
 
         let dev = weight_s.device();
 
-        let weight = weight_s
-            .as_cuda_slice::<F8E4M3>()?
-            .slice(weight_l.start_offset()..);
-        let scale = scale_s
-            .as_cuda_slice::<f32>()?
-            .slice(scale_l.start_offset()..);
+        let (weight, _weight_guard) =
+            slice_ptr(weight_s.as_cuda_slice::<F8E4M3>()?, weight_l.start_offset());
+        let (scale, _scale_guard) =
+            slice_ptr(scale_s.as_cuda_slice::<f32>()?, scale_l.start_offset());
 
         let weight_height = weight_l.dim(0)? as i32;
         let weight_block_size_x = self.weight_block_size[0] as i32;
@@ -163,64 +157,67 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
             DType::F32 => {
                 let output = weight_s
                     .device()
-                    .alloc_zeros::<f32>(weight_l.shape().elem_count())
-                    .w()?;
+                    .alloc_zeros::<f32>(weight_l.shape().elem_count())?;
+                let (output_ptr, output_guard) = slice_ptr(&output, 0);
                 unsafe {
                     ffi::launch_dequant_fp8_blockwise_kernel_f32(
-                        (*weight.device_ptr()) as *const _,
-                        (*scale.device_ptr()) as *const _,
-                        (*output.device_ptr()) as *mut _,
+                        weight as *const _,
+                        scale as *const _,
+                        output_ptr as *mut _,
                         weight_height,
                         weight_width,
                         weight_row_stride,
                         scale_stride,
                         weight_block_size_y,
                         weight_block_size_x,
-                        *dev.cu_stream(),
+                        dev.cuda_stream().cu_stream(),
                     )
                 };
+                drop(output_guard);
                 CudaStorage::wrap_cuda_slice(output, weight_s.device().clone())
             }
             DType::F16 => {
                 let output = weight_s
                     .device()
-                    .alloc_zeros::<f16>(weight_l.shape().elem_count())
-                    .w()?;
+                    .alloc_zeros::<f16>(weight_l.shape().elem_count())?;
+                let (output_ptr, output_guard) = slice_ptr(&output, 0);
                 unsafe {
                     ffi::launch_dequant_fp8_blockwise_kernel_f16(
-                        (*weight.device_ptr()) as *const _,
-                        (*scale.device_ptr()) as *const _,
-                        (*output.device_ptr()) as *mut _,
+                        weight as *const _,
+                        scale as *const _,
+                        output_ptr as *mut _,
                         weight_height,
                         weight_width,
                         weight_row_stride,
                         scale_stride,
                         weight_block_size_y,
                         weight_block_size_x,
-                        *dev.cu_stream(),
+                        dev.cuda_stream().cu_stream(),
                     )
                 };
+                drop(output_guard);
                 CudaStorage::wrap_cuda_slice(output, weight_s.device().clone())
             }
             DType::BF16 => {
                 let output = weight_s
                     .device()
-                    .alloc_zeros::<bf16>(weight_l.shape().elem_count())
-                    .w()?;
+                    .alloc_zeros::<bf16>(weight_l.shape().elem_count())?;
+                let (output_ptr, output_guard) = slice_ptr(&output, 0);
                 unsafe {
                     ffi::launch_dequant_fp8_blockwise_kernel_bf16(
-                        (*weight.device_ptr()) as *const _,
-                        (*scale.device_ptr()) as *const _,
-                        (*output.device_ptr()) as *mut _,
+                        weight as *const _,
+                        scale as *const _,
+                        output_ptr as *mut _,
                         weight_height,
                         weight_width,
                         weight_row_stride,
                         scale_stride,
                         weight_block_size_y,
                         weight_block_size_x,
-                        *dev.cu_stream(),
+                        dev.cuda_stream().cu_stream(),
                     )
                 };
+                drop(output_guard);
                 CudaStorage::wrap_cuda_slice(output, weight_s.device().clone())
             }
             other => candle_core::bail!("unexpected out type of fp8 blockwise dequant {other:?}"),
