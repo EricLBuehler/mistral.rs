@@ -810,8 +810,12 @@ impl DecoderLayer {
         let added = slice_f32
             .broadcast_add(&first_pred_f32)?
             .to_dtype(corrected_predictions.dtype())?;
-        corrected_predictions =
-            corrected_predictions.slice_assign(&[&(1..), &.., &.., &..], &added)?;
+        let cp_dim0 = corrected_predictions.dim(0)?;
+        let cp_dim1 = corrected_predictions.dim(1)?;
+        let cp_dim2 = corrected_predictions.dim(2)?;
+        let cp_dim3 = corrected_predictions.dim(3)?;
+        corrected_predictions = corrected_predictions
+            .slice_assign(&[1..cp_dim0, 0..cp_dim1, 0..cp_dim2, 0..cp_dim3], &added)?;
 
         Ok(corrected_predictions)
     }

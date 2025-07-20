@@ -939,7 +939,10 @@ impl Phi4MMInputsProcessor {
         )?;
         if padding_width >= 14 {
             attention_mask = attention_mask.slice_assign(
-                &[&.., &(attention_mask.dim(1)? - padding_width / 14..)],
+                &[
+                    ..,
+                    (attention_mask.dim(1)? - padding_width / 14)..attention_mask.dim(1)?,
+                ],
                 &Tensor::zeros(
                     (attention_mask.dim(0)?, padding_width / 14),
                     DType::U32,
@@ -949,7 +952,10 @@ impl Phi4MMInputsProcessor {
         }
         if padding_height >= 14 {
             attention_mask = attention_mask.slice_assign(
-                &[&(attention_mask.dim(0)? - padding_height / 14..), &..],
+                &[
+                    (attention_mask.dim(0)? - padding_height / 14)..attention_mask.dim(0)?,
+                    ..,
+                ],
                 &Tensor::zeros(
                     (padding_height / 14, attention_mask.dim(1)?),
                     DType::U32,

@@ -130,7 +130,7 @@ impl MiniCpmOModel {
             for (i, tgt_sizes_vec_i) in tgt_sizes_vec.iter().enumerate().take(b) {
                 let n = (tgt_sizes_vec_i[0] * tgt_sizes_vec_i[1]) as usize;
                 patch_attn_mask = patch_attn_mask.slice_assign(
-                    &[&i, &0, &(..n)],
+                    &[i..i + 1, 0..1, 0..n],
                     &Tensor::ones((1, 1, n), DType::U8, device)?,
                 )?;
             }

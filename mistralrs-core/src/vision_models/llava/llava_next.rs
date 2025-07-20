@@ -279,9 +279,9 @@ impl Model {
         for (i, image_index) in image_indexes.iter().enumerate() {
             result = result.slice_assign(
                 &[
-                    &(0usize..1usize),
-                    &(*image_index as usize..*image_index as usize + num_image_tokens[i]),
-                    &(..),
+                    0usize..1usize,
+                    *image_index as usize..*image_index as usize + num_image_tokens[i],
+                    0..result.dim(2)?,
                 ],
                 &image_features_vec[i],
             )?;

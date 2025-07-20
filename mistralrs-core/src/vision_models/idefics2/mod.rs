@@ -1065,7 +1065,11 @@ impl Idefics2 {
         for (i, v) in special_image_token_mask.iter().enumerate() {
             if *v != 0 {
                 new_inputs_embeds = new_inputs_embeds.slice_assign(
-                    &[&.., &i, &..],
+                    &[
+                        0..new_inputs_embeds.dim(0)?,
+                        i..i + 1,
+                        0..new_inputs_embeds.dim(2)?,
+                    ],
                     &reshaped_image_hidden_states
                         .i((.., image_hidden_state_i, ..))?
                         .unsqueeze(1)?,

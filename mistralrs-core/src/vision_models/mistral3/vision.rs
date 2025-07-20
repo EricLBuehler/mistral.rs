@@ -409,7 +409,7 @@ impl Mistral3VisionModel {
         };
         for (start, end) in block_start_idx.into_iter().zip(block_end_idx) {
             causal_mask = causal_mask.slice_assign(
-                &[&(start..end), &(start..end)],
+                &[start..end, start..end],
                 &Tensor::zeros(
                     (end - start, end - start),
                     causal_mask.dtype(),

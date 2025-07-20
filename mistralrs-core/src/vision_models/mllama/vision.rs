@@ -452,7 +452,7 @@ fn _prepare_aspect_ratio_attention_mask(
     let pad_patches = target_length - num_patches;
     let (bs, d1, d2, d3) = attention_mask.dims4()?;
     attention_mask = attention_mask.slice_assign(
-        &[&.., &.., &(d2 - pad_patches..), &..],
+        &[0..bs, 0..d1, (d2 - pad_patches)..d2, 0..d3],
         &Tensor::zeros(
             (bs, d1, pad_patches, d3),
             attention_mask.dtype(),
