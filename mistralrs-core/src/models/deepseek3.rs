@@ -426,9 +426,9 @@ impl Expert {
         }
         let lhs = self.gate.forward(&xs)?;
         let rhs = self.up.forward(&xs)?;
-        let mut res =
-            self.down
-                .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?)?;
+        let mut res = self
+            .down
+            .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?)?;
         if self.gate.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
