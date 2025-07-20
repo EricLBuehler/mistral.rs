@@ -87,33 +87,30 @@ impl QuantMethod for UnquantLinear {
                             )?
                             .t()
                     } else {
-                        let mut out = b.contiguous()?;
-                        a.matmul_with_alpha_beta(&w.t()?, &mut out, None)?;
-                        Ok(out)
+                        let matmul_result = a.matmul(&w.t()?)?;
+                        matmul_result.broadcast_add(&b)
                     }
                 }
                 DeviceLocation::Metal { .. } => {
-                    let mut out = b.contiguous()?;
-                    a.matmul_with_alpha_beta(&w.t()?, &mut out, None)?;
-                    Ok(out)
+                    let matmul_result = a.matmul(&w.t()?)?;
+                    matmul_result.broadcast_add(&b)
                 }
                 DeviceLocation::Cpu => {
                     #[cfg(feature = "accelerate")]
                     {
                         let original_dtype = a.dtype();
-                        let mut out = b.contiguous()?.to_dtype(DType::F32)?;
-                        a.to_dtype(DType::F32)?.matmul_with_alpha_beta(
-                            &w.t()?.to_dtype(DType::F32)?,
-                            &mut out,
-                            None,
-                        )?;
-                        out.to_dtype(original_dtype)
+                        let a_f32 = a.to_dtype(DType::F32)?;
+                        let w_f32 = w.t()?.to_dtype(DType::F32)?;
+                        let b_f32 = b.to_dtype(DType::F32)?;
+                        let matmul_result = a_f32.matmul(&w_f32)?;
+                        matmul_result
+                            .broadcast_add(&b_f32)?
+                            .to_dtype(original_dtype)
                     }
                     #[cfg(not(feature = "accelerate"))]
                     {
-                        let mut out = b.contiguous()?;
-                        a.matmul_with_alpha_beta(&w.t()?, &mut out, None)?;
-                        Ok(out)
+                        let matmul_result = a.matmul(&w.t()?)?;
+                        matmul_result.broadcast_add(&b)
                     }
                 }
             }
