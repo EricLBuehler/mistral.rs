@@ -29,7 +29,6 @@ impl MarlinMatMul {
         scale: &CudaStorage,
         scale_l: &Layout,
     ) -> Result<(CudaStorage, Shape)> {
-        use std::ffi::c_void;
         let dev = qweight.device();
         let x_shape = x_l.dims();
         let weight_shape = qweight_l.dims();
@@ -83,7 +82,7 @@ impl MarlinMatMul {
             let (qzeros_, _qzeros_guard) = slice_ptr(qzeros_, qzeros_l.start_offset());
             qzeros_ as *const core::ffi::c_void
         } else {
-            std::ptr::null() as *const c_void
+            std::ptr::null()
         };
 
         let groupsize: i32 = if scale_shape[0] == 1 {
@@ -236,7 +235,6 @@ impl MarlinRepack {
         qweight: &CudaStorage,
         qweight_l: &Layout,
     ) -> Result<(CudaStorage, Shape)> {
-        use std::ffi::c_void;
         let dev = qweight.device();
         let q_shape = qweight_l.dims();
         let mut out_shape: Vec<usize> = q_shape.to_vec();
@@ -270,7 +268,7 @@ impl MarlinRepack {
             let (perm_, _perm_guard) = slice_ptr(perm_, perm_l.start_offset());
             perm_ as *const core::ffi::c_void
         } else {
-            std::ptr::null() as *const c_void
+            std::ptr::null()
         };
 
         if HAVE_MARLIN_KERNELS {

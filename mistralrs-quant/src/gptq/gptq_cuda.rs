@@ -498,12 +498,12 @@ pub fn gptq_linear(
             use_exllama: false,
             q_weight: qweight,
             qzeros: None,
-            scales: scales,
+            scales,
             g_idx: None,
             bias,
             workspace: Some(workspace),
             is_marlin: true,
-            is_awq: is_awq,
+            is_awq,
         }
     } else {
         fn get_scale_perms() -> (Vec<u32>, Vec<u32>) {
@@ -590,12 +590,12 @@ pub fn gptq_linear(
             use_exllama: false,
             q_weight: qweight,
             qzeros: Some(qzeros),
-            scales: scales,
-            g_idx: g_idx,
+            scales,
+            g_idx,
             bias,
             workspace,
             is_marlin: marlin_compatible,
-            is_awq: is_awq,
+            is_awq,
         }
     };
     Ok(Arc::new(GptqLayer::new(config)?))
