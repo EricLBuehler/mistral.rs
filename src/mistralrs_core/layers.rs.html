@@ -2247,430 +2247,426 @@
 <a href=#2247 id=2247 data-nosnippet>2247</a>            stride: cfg.stride,
 <a href=#2248 id=2248 data-nosnippet>2248</a>            dilation: cfg.dilation,
 <a href=#2249 id=2249 data-nosnippet>2249</a>            groups: cfg.groups,
-<a href=#2250 id=2250 data-nosnippet>2250</a>        };
-<a href=#2251 id=2251 data-nosnippet>2251</a>
-<a href=#2252 id=2252 data-nosnippet>2252</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-<a href=#2253 id=2253 data-nosnippet>2253</a>            conv2d_1: Conv2d::new(w1.contiguous()<span class="question-mark">?</span>, <span class="prelude-val">None</span>, cfg),
-<a href=#2254 id=2254 data-nosnippet>2254</a>            conv2d_2: Conv2d::new(w2.contiguous()<span class="question-mark">?</span>, <span class="prelude-val">None</span>, cfg),
-<a href=#2255 id=2255 data-nosnippet>2255</a>        })
-<a href=#2256 id=2256 data-nosnippet>2256</a>    }
-<a href=#2257 id=2257 data-nosnippet>2257</a>}
-<a href=#2258 id=2258 data-nosnippet>2258</a>
-<a href=#2259 id=2259 data-nosnippet>2259</a><span class="kw">impl </span>Module <span class="kw">for </span>Conv3dNoBias {
-<a href=#2260 id=2260 data-nosnippet>2260</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#2261 id=2261 data-nosnippet>2261</a>        <span class="kw">let </span>xs1 = xs.i((.., .., <span class="number">0</span>, .., ..))<span class="question-mark">?</span>;
-<a href=#2262 id=2262 data-nosnippet>2262</a>        <span class="kw">let </span>xs2 = xs.i((.., .., <span class="number">1</span>, .., ..))<span class="question-mark">?</span>;
-<a href=#2263 id=2263 data-nosnippet>2263</a>
-<a href=#2264 id=2264 data-nosnippet>2264</a>        (<span class="self">self</span>.conv2d_1.forward(<span class="kw-2">&amp;</span>xs1)<span class="question-mark">? </span>+ <span class="self">self</span>.conv2d_2.forward(<span class="kw-2">&amp;</span>xs2)<span class="question-mark">?</span>)<span class="question-mark">?</span>.unsqueeze(<span class="number">2</span>)
-<a href=#2265 id=2265 data-nosnippet>2265</a>    }
-<a href=#2266 id=2266 data-nosnippet>2266</a>}
-<a href=#2267 id=2267 data-nosnippet>2267</a>
-<a href=#2268 id=2268 data-nosnippet>2268</a><span class="kw">pub trait </span>TensorInfExtend {
-<a href=#2269 id=2269 data-nosnippet>2269</a>    <span class="kw">fn </span>is_inf(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt;
-<a href=#2270 id=2270 data-nosnippet>2270</a>    <span class="kw">where
-<a href=#2271 id=2271 data-nosnippet>2271</a>        </span><span class="self">Self</span>: Sized;
-<a href=#2272 id=2272 data-nosnippet>2272</a>    <span class="kw">fn </span>any(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt;;
-<a href=#2273 id=2273 data-nosnippet>2273</a>}
-<a href=#2274 id=2274 data-nosnippet>2274</a>
-<a href=#2275 id=2275 data-nosnippet>2275</a><span class="kw">impl </span>TensorInfExtend <span class="kw">for </span>Tensor {
-<a href=#2276 id=2276 data-nosnippet>2276</a>    <span class="kw">fn </span>is_inf(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#2277 id=2277 data-nosnippet>2277</a>        <span class="self">self</span>.broadcast_eq(<span class="kw-2">&amp;</span>Tensor::new(f32::INFINITY, <span class="self">self</span>.device())<span class="question-mark">?</span>.to_dtype(<span class="self">self</span>.dtype())<span class="question-mark">?</span>)
-<a href=#2278 id=2278 data-nosnippet>2278</a>    }
-<a href=#2279 id=2279 data-nosnippet>2279</a>
-<a href=#2280 id=2280 data-nosnippet>2280</a>    <span class="kw">fn </span>any(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
-<a href=#2281 id=2281 data-nosnippet>2281</a>        <span class="kw">let </span>sum = <span class="self">self</span>.sum_all()<span class="question-mark">?</span>;
-<a href=#2282 id=2282 data-nosnippet>2282</a>        <span class="kw">match </span><span class="self">self</span>.dtype() {
-<a href=#2283 id=2283 data-nosnippet>2283</a>            DType::U8 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;u8&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
-<a href=#2284 id=2284 data-nosnippet>2284</a>            DType::U32 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;u32&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
-<a href=#2285 id=2285 data-nosnippet>2285</a>            DType::I16 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;i16&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
-<a href=#2286 id=2286 data-nosnippet>2286</a>            DType::I32 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;i32&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
-<a href=#2287 id=2287 data-nosnippet>2287</a>            DType::I64 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;i64&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
-<a href=#2288 id=2288 data-nosnippet>2288</a>            DType::F16 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;half::f16&gt;()<span class="question-mark">? </span>== half::f16::from_f32_const(<span class="number">0.</span>)),
-<a href=#2289 id=2289 data-nosnippet>2289</a>            DType::BF16 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;half::bf16&gt;()<span class="question-mark">? </span>== half::bf16::from_f32_const(<span class="number">0.</span>)),
-<a href=#2290 id=2290 data-nosnippet>2290</a>            DType::F32 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;f32&gt;()<span class="question-mark">? </span>== <span class="number">0.</span>),
-<a href=#2291 id=2291 data-nosnippet>2291</a>            DType::F64 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;f64&gt;()<span class="question-mark">? </span>== <span class="number">0.</span>),
-<a href=#2292 id=2292 data-nosnippet>2292</a>            DType::F8E4M3 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;F8E4M3&gt;()<span class="question-mark">? </span>== F8E4M3::ZERO),
-<a href=#2293 id=2293 data-nosnippet>2293</a>        }
-<a href=#2294 id=2294 data-nosnippet>2294</a>    }
-<a href=#2295 id=2295 data-nosnippet>2295</a>}
-<a href=#2296 id=2296 data-nosnippet>2296</a>
-<a href=#2297 id=2297 data-nosnippet>2297</a><span class="kw">pub fn </span>clamp_for_f16(xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#2298 id=2298 data-nosnippet>2298</a>    <span class="kw">let </span><span class="kw-2">mut </span>max = <span class="kw">match </span>xs.dtype() {
-<a href=#2299 id=2299 data-nosnippet>2299</a>        DType::U8 =&gt; u8::MAX <span class="kw">as </span>f32 - <span class="number">1000.</span>,
-<a href=#2300 id=2300 data-nosnippet>2300</a>        DType::U32 =&gt; u32::MAX <span class="kw">as </span>f32 - <span class="number">1000.</span>,
-<a href=#2301 id=2301 data-nosnippet>2301</a>        DType::I16 =&gt; i16::MAX <span class="kw">as </span>f32 - <span class="number">1000.</span>,
-<a href=#2302 id=2302 data-nosnippet>2302</a>        DType::I32 =&gt; i32::MAX <span class="kw">as </span>f32 - <span class="number">1000.</span>,
-<a href=#2303 id=2303 data-nosnippet>2303</a>        DType::I64 =&gt; i64::MAX <span class="kw">as </span>f32 - <span class="number">1000.</span>,
-<a href=#2304 id=2304 data-nosnippet>2304</a>        DType::F16 =&gt; half::f16::MAX.to_f32_const() - <span class="number">1000.</span>,
-<a href=#2305 id=2305 data-nosnippet>2305</a>        DType::BF16 =&gt; half::bf16::MAX.to_f32_const() - <span class="number">1000.</span>,
-<a href=#2306 id=2306 data-nosnippet>2306</a>        DType::F32 =&gt; f32::MAX - <span class="number">1000.</span>,
-<a href=#2307 id=2307 data-nosnippet>2307</a>        DType::F64 =&gt; f64::MAX <span class="kw">as </span>f32 - <span class="number">1000.</span>,
-<a href=#2308 id=2308 data-nosnippet>2308</a>        DType::F8E4M3 =&gt; F8E4M3::MAX.to_f32() - <span class="number">1000.</span>,
-<a href=#2309 id=2309 data-nosnippet>2309</a>    };
-<a href=#2310 id=2310 data-nosnippet>2310</a>    <span class="kw">if </span>xs.is_inf()<span class="question-mark">?</span>.any()<span class="question-mark">? </span>{
-<a href=#2311 id=2311 data-nosnippet>2311</a>        max -= <span class="number">1000.</span>;
-<a href=#2312 id=2312 data-nosnippet>2312</a>    }
-<a href=#2313 id=2313 data-nosnippet>2313</a>    xs.clamp(-max, max)
-<a href=#2314 id=2314 data-nosnippet>2314</a>}
-<a href=#2315 id=2315 data-nosnippet>2315</a>
-<a href=#2316 id=2316 data-nosnippet>2316</a><span class="kw">pub struct </span>FloatInfo {
-<a href=#2317 id=2317 data-nosnippet>2317</a>    <span class="doccomment">/// Minimum representable value.
-<a href=#2318 id=2318 data-nosnippet>2318</a>    </span><span class="kw">pub </span>min: f64,
-<a href=#2319 id=2319 data-nosnippet>2319</a>    <span class="doccomment">/// Maximum representable value.
-<a href=#2320 id=2320 data-nosnippet>2320</a>    </span><span class="kw">pub </span>max: f64,
-<a href=#2321 id=2321 data-nosnippet>2321</a>    <span class="doccomment">/// The difference between 1.0 and the next smallest representable float larger than 1.0.
-<a href=#2322 id=2322 data-nosnippet>2322</a>    </span><span class="kw">pub </span>eps: f64,
-<a href=#2323 id=2323 data-nosnippet>2323</a>    <span class="kw">pub </span>dtype: DType,
-<a href=#2324 id=2324 data-nosnippet>2324</a>}
-<a href=#2325 id=2325 data-nosnippet>2325</a>
-<a href=#2326 id=2326 data-nosnippet>2326</a><span class="kw">pub trait </span>GetFloatInfo {
-<a href=#2327 id=2327 data-nosnippet>2327</a>    <span class="kw">fn </span>finfo(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;FloatInfo&gt;;
-<a href=#2328 id=2328 data-nosnippet>2328</a>}
-<a href=#2329 id=2329 data-nosnippet>2329</a>
-<a href=#2330 id=2330 data-nosnippet>2330</a><span class="kw">impl </span>GetFloatInfo <span class="kw">for </span>DType {
-<a href=#2331 id=2331 data-nosnippet>2331</a>    <span class="kw">fn </span>finfo(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;FloatInfo&gt; {
-<a href=#2332 id=2332 data-nosnippet>2332</a>        <span class="kw">let </span>finfo = <span class="kw">match </span><span class="self">self </span>{
-<a href=#2333 id=2333 data-nosnippet>2333</a>            <span class="self">Self</span>::BF16 =&gt; FloatInfo {
-<a href=#2334 id=2334 data-nosnippet>2334</a>                min: bf16::MIN.to_f64(),
-<a href=#2335 id=2335 data-nosnippet>2335</a>                max: bf16::MAX.to_f64(),
-<a href=#2336 id=2336 data-nosnippet>2336</a>                eps: bf16::EPSILON.to_f64(),
-<a href=#2337 id=2337 data-nosnippet>2337</a>                dtype: DType::BF16,
-<a href=#2338 id=2338 data-nosnippet>2338</a>            },
-<a href=#2339 id=2339 data-nosnippet>2339</a>            <span class="self">Self</span>::F16 =&gt; FloatInfo {
-<a href=#2340 id=2340 data-nosnippet>2340</a>                min: f16::MIN.to_f64(),
-<a href=#2341 id=2341 data-nosnippet>2341</a>                max: f16::MAX.to_f64(),
-<a href=#2342 id=2342 data-nosnippet>2342</a>                eps: f16::EPSILON.to_f64(),
-<a href=#2343 id=2343 data-nosnippet>2343</a>                dtype: DType::F16,
-<a href=#2344 id=2344 data-nosnippet>2344</a>            },
-<a href=#2345 id=2345 data-nosnippet>2345</a>            <span class="self">Self</span>::F32 =&gt; FloatInfo {
-<a href=#2346 id=2346 data-nosnippet>2346</a>                min: f32::MIN <span class="kw">as </span>f64,
-<a href=#2347 id=2347 data-nosnippet>2347</a>                max: f32::MAX <span class="kw">as </span>f64,
-<a href=#2348 id=2348 data-nosnippet>2348</a>                eps: f32::EPSILON <span class="kw">as </span>f64,
-<a href=#2349 id=2349 data-nosnippet>2349</a>                dtype: DType::F32,
-<a href=#2350 id=2350 data-nosnippet>2350</a>            },
-<a href=#2351 id=2351 data-nosnippet>2351</a>            <span class="self">Self</span>::F64 =&gt; FloatInfo {
-<a href=#2352 id=2352 data-nosnippet>2352</a>                min: f64::MIN,
-<a href=#2353 id=2353 data-nosnippet>2353</a>                max: f64::MAX,
-<a href=#2354 id=2354 data-nosnippet>2354</a>                eps: f64::EPSILON,
-<a href=#2355 id=2355 data-nosnippet>2355</a>                dtype: DType::F64,
-<a href=#2356 id=2356 data-nosnippet>2356</a>            },
-<a href=#2357 id=2357 data-nosnippet>2357</a>            <span class="self">Self</span>::F8E4M3 =&gt; FloatInfo {
-<a href=#2358 id=2358 data-nosnippet>2358</a>                min: F8E4M3::MIN.to_f64(),
-<a href=#2359 id=2359 data-nosnippet>2359</a>                max: F8E4M3::MAX.to_f64(),
-<a href=#2360 id=2360 data-nosnippet>2360</a>                eps: F8E4M3::EPSILON.to_f64(),
-<a href=#2361 id=2361 data-nosnippet>2361</a>                dtype: DType::F8E4M3,
-<a href=#2362 id=2362 data-nosnippet>2362</a>            },
-<a href=#2363 id=2363 data-nosnippet>2363</a>            other =&gt; {
-<a href=#2364 id=2364 data-nosnippet>2364</a>                <span class="macro">candle_core::bail!</span>(<span class="string">"Expected a float type for `GetFloatInfo`, got {other:?}"</span>);
-<a href=#2365 id=2365 data-nosnippet>2365</a>            }
-<a href=#2366 id=2366 data-nosnippet>2366</a>        };
-<a href=#2367 id=2367 data-nosnippet>2367</a>        <span class="prelude-val">Ok</span>(finfo)
-<a href=#2368 id=2368 data-nosnippet>2368</a>    }
-<a href=#2369 id=2369 data-nosnippet>2369</a>}
-<a href=#2370 id=2370 data-nosnippet>2370</a>
-<a href=#2371 id=2371 data-nosnippet>2371</a><span class="attr">#[derive(Clone)]
-<a href=#2372 id=2372 data-nosnippet>2372</a></span><span class="kw">pub struct </span>Mlp {
-<a href=#2373 id=2373 data-nosnippet>2373</a>    <span class="kw">pub </span>gate: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-<a href=#2374 id=2374 data-nosnippet>2374</a>    <span class="kw">pub </span>up: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-<a href=#2375 id=2375 data-nosnippet>2375</a>    <span class="kw">pub </span>down: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-<a href=#2376 id=2376 data-nosnippet>2376</a>    act: Activation,
-<a href=#2377 id=2377 data-nosnippet>2377</a>    params: Vec&lt;usize&gt;,
-<a href=#2378 id=2378 data-nosnippet>2378</a>}
-<a href=#2379 id=2379 data-nosnippet>2379</a>
-<a href=#2380 id=2380 data-nosnippet>2380</a><span class="kw">impl </span>Mlp {
-<a href=#2381 id=2381 data-nosnippet>2381</a>    <span class="kw">pub fn </span>new(
-<a href=#2382 id=2382 data-nosnippet>2382</a>        vb: ShardedVarBuilder,
-<a href=#2383 id=2383 data-nosnippet>2383</a>        hidden_size: usize,
-<a href=#2384 id=2384 data-nosnippet>2384</a>        intermediate_size: usize,
-<a href=#2385 id=2385 data-nosnippet>2385</a>        quantization_config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
-<a href=#2386 id=2386 data-nosnippet>2386</a>        hidden_act: Activation,
-<a href=#2387 id=2387 data-nosnippet>2387</a>        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
-<a href=#2388 id=2388 data-nosnippet>2388</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#2389 id=2389 data-nosnippet>2389</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-<a href=#2390 id=2390 data-nosnippet>2390</a>            gate: ColumnParallelLayer::new(
-<a href=#2391 id=2391 data-nosnippet>2391</a>                hidden_size,
-<a href=#2392 id=2392 data-nosnippet>2392</a>                intermediate_size,
-<a href=#2393 id=2393 data-nosnippet>2393</a>                quantization_config,
-<a href=#2394 id=2394 data-nosnippet>2394</a>                <span class="bool-val">false</span>,
-<a href=#2395 id=2395 data-nosnippet>2395</a>                comm,
-<a href=#2396 id=2396 data-nosnippet>2396</a>                vb.pp(<span class="string">"gate_proj"</span>),
-<a href=#2397 id=2397 data-nosnippet>2397</a>            )<span class="question-mark">?</span>,
-<a href=#2398 id=2398 data-nosnippet>2398</a>            up: ColumnParallelLayer::new(
-<a href=#2399 id=2399 data-nosnippet>2399</a>                hidden_size,
-<a href=#2400 id=2400 data-nosnippet>2400</a>                intermediate_size,
-<a href=#2401 id=2401 data-nosnippet>2401</a>                quantization_config,
-<a href=#2402 id=2402 data-nosnippet>2402</a>                <span class="bool-val">false</span>,
-<a href=#2403 id=2403 data-nosnippet>2403</a>                comm,
-<a href=#2404 id=2404 data-nosnippet>2404</a>                vb.pp(<span class="string">"up_proj"</span>),
-<a href=#2405 id=2405 data-nosnippet>2405</a>            )<span class="question-mark">?</span>,
-<a href=#2406 id=2406 data-nosnippet>2406</a>            down: RowParallelLayer::new(
+<a href=#2250 id=2250 data-nosnippet>2250</a>            cudnn_fwd_algo: <span class="prelude-val">None</span>,
+<a href=#2251 id=2251 data-nosnippet>2251</a>        };
+<a href=#2252 id=2252 data-nosnippet>2252</a>
+<a href=#2253 id=2253 data-nosnippet>2253</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+<a href=#2254 id=2254 data-nosnippet>2254</a>            conv2d_1: Conv2d::new(w1.contiguous()<span class="question-mark">?</span>, <span class="prelude-val">None</span>, cfg),
+<a href=#2255 id=2255 data-nosnippet>2255</a>            conv2d_2: Conv2d::new(w2.contiguous()<span class="question-mark">?</span>, <span class="prelude-val">None</span>, cfg),
+<a href=#2256 id=2256 data-nosnippet>2256</a>        })
+<a href=#2257 id=2257 data-nosnippet>2257</a>    }
+<a href=#2258 id=2258 data-nosnippet>2258</a>}
+<a href=#2259 id=2259 data-nosnippet>2259</a>
+<a href=#2260 id=2260 data-nosnippet>2260</a><span class="kw">impl </span>Module <span class="kw">for </span>Conv3dNoBias {
+<a href=#2261 id=2261 data-nosnippet>2261</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#2262 id=2262 data-nosnippet>2262</a>        <span class="kw">let </span>xs1 = xs.i((.., .., <span class="number">0</span>, .., ..))<span class="question-mark">?</span>;
+<a href=#2263 id=2263 data-nosnippet>2263</a>        <span class="kw">let </span>xs2 = xs.i((.., .., <span class="number">1</span>, .., ..))<span class="question-mark">?</span>;
+<a href=#2264 id=2264 data-nosnippet>2264</a>
+<a href=#2265 id=2265 data-nosnippet>2265</a>        (<span class="self">self</span>.conv2d_1.forward(<span class="kw-2">&amp;</span>xs1)<span class="question-mark">? </span>+ <span class="self">self</span>.conv2d_2.forward(<span class="kw-2">&amp;</span>xs2)<span class="question-mark">?</span>)<span class="question-mark">?</span>.unsqueeze(<span class="number">2</span>)
+<a href=#2266 id=2266 data-nosnippet>2266</a>    }
+<a href=#2267 id=2267 data-nosnippet>2267</a>}
+<a href=#2268 id=2268 data-nosnippet>2268</a>
+<a href=#2269 id=2269 data-nosnippet>2269</a><span class="kw">pub trait </span>TensorInfExtend {
+<a href=#2270 id=2270 data-nosnippet>2270</a>    <span class="kw">fn </span>is_inf(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt;
+<a href=#2271 id=2271 data-nosnippet>2271</a>    <span class="kw">where
+<a href=#2272 id=2272 data-nosnippet>2272</a>        </span><span class="self">Self</span>: Sized;
+<a href=#2273 id=2273 data-nosnippet>2273</a>    <span class="kw">fn </span>any(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt;;
+<a href=#2274 id=2274 data-nosnippet>2274</a>}
+<a href=#2275 id=2275 data-nosnippet>2275</a>
+<a href=#2276 id=2276 data-nosnippet>2276</a><span class="kw">impl </span>TensorInfExtend <span class="kw">for </span>Tensor {
+<a href=#2277 id=2277 data-nosnippet>2277</a>    <span class="kw">fn </span>is_inf(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#2278 id=2278 data-nosnippet>2278</a>        <span class="self">self</span>.broadcast_eq(<span class="kw-2">&amp;</span>Tensor::new(f32::INFINITY, <span class="self">self</span>.device())<span class="question-mark">?</span>.to_dtype(<span class="self">self</span>.dtype())<span class="question-mark">?</span>)
+<a href=#2279 id=2279 data-nosnippet>2279</a>    }
+<a href=#2280 id=2280 data-nosnippet>2280</a>
+<a href=#2281 id=2281 data-nosnippet>2281</a>    <span class="kw">fn </span>any(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
+<a href=#2282 id=2282 data-nosnippet>2282</a>        <span class="kw">let </span>sum = <span class="self">self</span>.sum_all()<span class="question-mark">?</span>;
+<a href=#2283 id=2283 data-nosnippet>2283</a>        <span class="kw">match </span><span class="self">self</span>.dtype() {
+<a href=#2284 id=2284 data-nosnippet>2284</a>            DType::U8 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;u8&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
+<a href=#2285 id=2285 data-nosnippet>2285</a>            DType::U32 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;u32&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
+<a href=#2286 id=2286 data-nosnippet>2286</a>            DType::I16 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;i16&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
+<a href=#2287 id=2287 data-nosnippet>2287</a>            DType::I32 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;i32&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
+<a href=#2288 id=2288 data-nosnippet>2288</a>            DType::I64 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;i64&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
+<a href=#2289 id=2289 data-nosnippet>2289</a>            DType::F16 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;half::f16&gt;()<span class="question-mark">? </span>== half::f16::from_f32_const(<span class="number">0.</span>)),
+<a href=#2290 id=2290 data-nosnippet>2290</a>            DType::BF16 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;half::bf16&gt;()<span class="question-mark">? </span>== half::bf16::from_f32_const(<span class="number">0.</span>)),
+<a href=#2291 id=2291 data-nosnippet>2291</a>            DType::F32 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;f32&gt;()<span class="question-mark">? </span>== <span class="number">0.</span>),
+<a href=#2292 id=2292 data-nosnippet>2292</a>            DType::F64 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;f64&gt;()<span class="question-mark">? </span>== <span class="number">0.</span>),
+<a href=#2293 id=2293 data-nosnippet>2293</a>            DType::F8E4M3 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;F8E4M3&gt;()<span class="question-mark">? </span>== F8E4M3::ZERO),
+<a href=#2294 id=2294 data-nosnippet>2294</a>            DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 =&gt; {
+<a href=#2295 id=2295 data-nosnippet>2295</a>                <span class="macro">candle_core::bail!</span>(<span class="string">"f4/f6e3m2/f6e2m3/f8e8m0 tensors are not supported with .any"</span>)
+<a href=#2296 id=2296 data-nosnippet>2296</a>            }
+<a href=#2297 id=2297 data-nosnippet>2297</a>        }
+<a href=#2298 id=2298 data-nosnippet>2298</a>    }
+<a href=#2299 id=2299 data-nosnippet>2299</a>}
+<a href=#2300 id=2300 data-nosnippet>2300</a>
+<a href=#2301 id=2301 data-nosnippet>2301</a><span class="kw">pub fn </span>clamp_for_f16(xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#2302 id=2302 data-nosnippet>2302</a>    <span class="kw">let </span><span class="kw-2">mut </span>max = <span class="kw">match </span>xs.dtype() {
+<a href=#2303 id=2303 data-nosnippet>2303</a>        DType::U8 =&gt; u8::MAX <span class="kw">as </span>f32 - <span class="number">1000.</span>,
+<a href=#2304 id=2304 data-nosnippet>2304</a>        DType::U32 =&gt; u32::MAX <span class="kw">as </span>f32 - <span class="number">1000.</span>,
+<a href=#2305 id=2305 data-nosnippet>2305</a>        DType::I16 =&gt; i16::MAX <span class="kw">as </span>f32 - <span class="number">1000.</span>,
+<a href=#2306 id=2306 data-nosnippet>2306</a>        DType::I32 =&gt; i32::MAX <span class="kw">as </span>f32 - <span class="number">1000.</span>,
+<a href=#2307 id=2307 data-nosnippet>2307</a>        DType::I64 =&gt; i64::MAX <span class="kw">as </span>f32 - <span class="number">1000.</span>,
+<a href=#2308 id=2308 data-nosnippet>2308</a>        DType::F16 =&gt; half::f16::MAX.to_f32_const() - <span class="number">1000.</span>,
+<a href=#2309 id=2309 data-nosnippet>2309</a>        DType::BF16 =&gt; half::bf16::MAX.to_f32_const() - <span class="number">1000.</span>,
+<a href=#2310 id=2310 data-nosnippet>2310</a>        DType::F32 =&gt; f32::MAX - <span class="number">1000.</span>,
+<a href=#2311 id=2311 data-nosnippet>2311</a>        DType::F64 =&gt; f64::MAX <span class="kw">as </span>f32 - <span class="number">1000.</span>,
+<a href=#2312 id=2312 data-nosnippet>2312</a>        DType::F8E4M3 =&gt; F8E4M3::MAX.to_f32() - <span class="number">1000.</span>,
+<a href=#2313 id=2313 data-nosnippet>2313</a>        DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 =&gt; {
+<a href=#2314 id=2314 data-nosnippet>2314</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"f4/f6e3m2/f6e2m3/f8e8m0 tensors are not supported with .any"</span>)
+<a href=#2315 id=2315 data-nosnippet>2315</a>        }
+<a href=#2316 id=2316 data-nosnippet>2316</a>    };
+<a href=#2317 id=2317 data-nosnippet>2317</a>    <span class="kw">if </span>xs.is_inf()<span class="question-mark">?</span>.any()<span class="question-mark">? </span>{
+<a href=#2318 id=2318 data-nosnippet>2318</a>        max -= <span class="number">1000.</span>;
+<a href=#2319 id=2319 data-nosnippet>2319</a>    }
+<a href=#2320 id=2320 data-nosnippet>2320</a>    xs.clamp(-max, max)
+<a href=#2321 id=2321 data-nosnippet>2321</a>}
+<a href=#2322 id=2322 data-nosnippet>2322</a>
+<a href=#2323 id=2323 data-nosnippet>2323</a><span class="kw">pub struct </span>FloatInfo {
+<a href=#2324 id=2324 data-nosnippet>2324</a>    <span class="doccomment">/// Minimum representable value.
+<a href=#2325 id=2325 data-nosnippet>2325</a>    </span><span class="kw">pub </span>min: f64,
+<a href=#2326 id=2326 data-nosnippet>2326</a>    <span class="doccomment">/// Maximum representable value.
+<a href=#2327 id=2327 data-nosnippet>2327</a>    </span><span class="kw">pub </span>max: f64,
+<a href=#2328 id=2328 data-nosnippet>2328</a>    <span class="doccomment">/// The difference between 1.0 and the next smallest representable float larger than 1.0.
+<a href=#2329 id=2329 data-nosnippet>2329</a>    </span><span class="kw">pub </span>eps: f64,
+<a href=#2330 id=2330 data-nosnippet>2330</a>    <span class="kw">pub </span>dtype: DType,
+<a href=#2331 id=2331 data-nosnippet>2331</a>}
+<a href=#2332 id=2332 data-nosnippet>2332</a>
+<a href=#2333 id=2333 data-nosnippet>2333</a><span class="kw">pub trait </span>GetFloatInfo {
+<a href=#2334 id=2334 data-nosnippet>2334</a>    <span class="kw">fn </span>finfo(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;FloatInfo&gt;;
+<a href=#2335 id=2335 data-nosnippet>2335</a>}
+<a href=#2336 id=2336 data-nosnippet>2336</a>
+<a href=#2337 id=2337 data-nosnippet>2337</a><span class="kw">impl </span>GetFloatInfo <span class="kw">for </span>DType {
+<a href=#2338 id=2338 data-nosnippet>2338</a>    <span class="kw">fn </span>finfo(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;FloatInfo&gt; {
+<a href=#2339 id=2339 data-nosnippet>2339</a>        <span class="kw">let </span>finfo = <span class="kw">match </span><span class="self">self </span>{
+<a href=#2340 id=2340 data-nosnippet>2340</a>            <span class="self">Self</span>::BF16 =&gt; FloatInfo {
+<a href=#2341 id=2341 data-nosnippet>2341</a>                min: bf16::MIN.to_f64(),
+<a href=#2342 id=2342 data-nosnippet>2342</a>                max: bf16::MAX.to_f64(),
+<a href=#2343 id=2343 data-nosnippet>2343</a>                eps: bf16::EPSILON.to_f64(),
+<a href=#2344 id=2344 data-nosnippet>2344</a>                dtype: DType::BF16,
+<a href=#2345 id=2345 data-nosnippet>2345</a>            },
+<a href=#2346 id=2346 data-nosnippet>2346</a>            <span class="self">Self</span>::F16 =&gt; FloatInfo {
+<a href=#2347 id=2347 data-nosnippet>2347</a>                min: f16::MIN.to_f64(),
+<a href=#2348 id=2348 data-nosnippet>2348</a>                max: f16::MAX.to_f64(),
+<a href=#2349 id=2349 data-nosnippet>2349</a>                eps: f16::EPSILON.to_f64(),
+<a href=#2350 id=2350 data-nosnippet>2350</a>                dtype: DType::F16,
+<a href=#2351 id=2351 data-nosnippet>2351</a>            },
+<a href=#2352 id=2352 data-nosnippet>2352</a>            <span class="self">Self</span>::F32 =&gt; FloatInfo {
+<a href=#2353 id=2353 data-nosnippet>2353</a>                min: f32::MIN <span class="kw">as </span>f64,
+<a href=#2354 id=2354 data-nosnippet>2354</a>                max: f32::MAX <span class="kw">as </span>f64,
+<a href=#2355 id=2355 data-nosnippet>2355</a>                eps: f32::EPSILON <span class="kw">as </span>f64,
+<a href=#2356 id=2356 data-nosnippet>2356</a>                dtype: DType::F32,
+<a href=#2357 id=2357 data-nosnippet>2357</a>            },
+<a href=#2358 id=2358 data-nosnippet>2358</a>            <span class="self">Self</span>::F64 =&gt; FloatInfo {
+<a href=#2359 id=2359 data-nosnippet>2359</a>                min: f64::MIN,
+<a href=#2360 id=2360 data-nosnippet>2360</a>                max: f64::MAX,
+<a href=#2361 id=2361 data-nosnippet>2361</a>                eps: f64::EPSILON,
+<a href=#2362 id=2362 data-nosnippet>2362</a>                dtype: DType::F64,
+<a href=#2363 id=2363 data-nosnippet>2363</a>            },
+<a href=#2364 id=2364 data-nosnippet>2364</a>            <span class="self">Self</span>::F8E4M3 =&gt; FloatInfo {
+<a href=#2365 id=2365 data-nosnippet>2365</a>                min: F8E4M3::MIN.to_f64(),
+<a href=#2366 id=2366 data-nosnippet>2366</a>                max: F8E4M3::MAX.to_f64(),
+<a href=#2367 id=2367 data-nosnippet>2367</a>                eps: F8E4M3::EPSILON.to_f64(),
+<a href=#2368 id=2368 data-nosnippet>2368</a>                dtype: DType::F8E4M3,
+<a href=#2369 id=2369 data-nosnippet>2369</a>            },
+<a href=#2370 id=2370 data-nosnippet>2370</a>            other =&gt; {
+<a href=#2371 id=2371 data-nosnippet>2371</a>                <span class="macro">candle_core::bail!</span>(<span class="string">"Expected a float type for `GetFloatInfo`, got {other:?}"</span>);
+<a href=#2372 id=2372 data-nosnippet>2372</a>            }
+<a href=#2373 id=2373 data-nosnippet>2373</a>        };
+<a href=#2374 id=2374 data-nosnippet>2374</a>        <span class="prelude-val">Ok</span>(finfo)
+<a href=#2375 id=2375 data-nosnippet>2375</a>    }
+<a href=#2376 id=2376 data-nosnippet>2376</a>}
+<a href=#2377 id=2377 data-nosnippet>2377</a>
+<a href=#2378 id=2378 data-nosnippet>2378</a><span class="attr">#[derive(Clone)]
+<a href=#2379 id=2379 data-nosnippet>2379</a></span><span class="kw">pub struct </span>Mlp {
+<a href=#2380 id=2380 data-nosnippet>2380</a>    <span class="kw">pub </span>gate: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+<a href=#2381 id=2381 data-nosnippet>2381</a>    <span class="kw">pub </span>up: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+<a href=#2382 id=2382 data-nosnippet>2382</a>    <span class="kw">pub </span>down: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+<a href=#2383 id=2383 data-nosnippet>2383</a>    act: Activation,
+<a href=#2384 id=2384 data-nosnippet>2384</a>    params: Vec&lt;usize&gt;,
+<a href=#2385 id=2385 data-nosnippet>2385</a>}
+<a href=#2386 id=2386 data-nosnippet>2386</a>
+<a href=#2387 id=2387 data-nosnippet>2387</a><span class="kw">impl </span>Mlp {
+<a href=#2388 id=2388 data-nosnippet>2388</a>    <span class="kw">pub fn </span>new(
+<a href=#2389 id=2389 data-nosnippet>2389</a>        vb: ShardedVarBuilder,
+<a href=#2390 id=2390 data-nosnippet>2390</a>        hidden_size: usize,
+<a href=#2391 id=2391 data-nosnippet>2391</a>        intermediate_size: usize,
+<a href=#2392 id=2392 data-nosnippet>2392</a>        quantization_config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
+<a href=#2393 id=2393 data-nosnippet>2393</a>        hidden_act: Activation,
+<a href=#2394 id=2394 data-nosnippet>2394</a>        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
+<a href=#2395 id=2395 data-nosnippet>2395</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#2396 id=2396 data-nosnippet>2396</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+<a href=#2397 id=2397 data-nosnippet>2397</a>            gate: ColumnParallelLayer::new(
+<a href=#2398 id=2398 data-nosnippet>2398</a>                hidden_size,
+<a href=#2399 id=2399 data-nosnippet>2399</a>                intermediate_size,
+<a href=#2400 id=2400 data-nosnippet>2400</a>                quantization_config,
+<a href=#2401 id=2401 data-nosnippet>2401</a>                <span class="bool-val">false</span>,
+<a href=#2402 id=2402 data-nosnippet>2402</a>                comm,
+<a href=#2403 id=2403 data-nosnippet>2403</a>                vb.pp(<span class="string">"gate_proj"</span>),
+<a href=#2404 id=2404 data-nosnippet>2404</a>            )<span class="question-mark">?</span>,
+<a href=#2405 id=2405 data-nosnippet>2405</a>            up: ColumnParallelLayer::new(
+<a href=#2406 id=2406 data-nosnippet>2406</a>                hidden_size,
 <a href=#2407 id=2407 data-nosnippet>2407</a>                intermediate_size,
-<a href=#2408 id=2408 data-nosnippet>2408</a>                hidden_size,
-<a href=#2409 id=2409 data-nosnippet>2409</a>                quantization_config,
-<a href=#2410 id=2410 data-nosnippet>2410</a>                <span class="bool-val">false</span>,
-<a href=#2411 id=2411 data-nosnippet>2411</a>                comm,
-<a href=#2412 id=2412 data-nosnippet>2412</a>                vb.pp(<span class="string">"down_proj"</span>),
-<a href=#2413 id=2413 data-nosnippet>2413</a>            )<span class="question-mark">?</span>,
-<a href=#2414 id=2414 data-nosnippet>2414</a>            act: hidden_act,
-<a href=#2415 id=2415 data-nosnippet>2415</a>            params: <span class="macro">vec!</span>[hidden_size, intermediate_size],
-<a href=#2416 id=2416 data-nosnippet>2416</a>        })
-<a href=#2417 id=2417 data-nosnippet>2417</a>    }
-<a href=#2418 id=2418 data-nosnippet>2418</a>
-<a href=#2419 id=2419 data-nosnippet>2419</a>    <span class="kw">pub fn </span>new_merged(
-<a href=#2420 id=2420 data-nosnippet>2420</a>        vb: ShardedVarBuilder,
-<a href=#2421 id=2421 data-nosnippet>2421</a>        hidden_size: usize,
-<a href=#2422 id=2422 data-nosnippet>2422</a>        intermediate_size: usize,
-<a href=#2423 id=2423 data-nosnippet>2423</a>        chunks: usize,
-<a href=#2424 id=2424 data-nosnippet>2424</a>        quantization_config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
-<a href=#2425 id=2425 data-nosnippet>2425</a>        hidden_act: Activation,
-<a href=#2426 id=2426 data-nosnippet>2426</a>        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
-<a href=#2427 id=2427 data-nosnippet>2427</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#2428 id=2428 data-nosnippet>2428</a>        <span class="macro">assert!</span>(chunks == <span class="number">2</span>, <span class="string">"Only gate_up_proj merge is supported!"</span>);
-<a href=#2429 id=2429 data-nosnippet>2429</a>        <span class="kw">let </span>gate_up_projs = ColumnParallelLayer::new_merged(
-<a href=#2430 id=2430 data-nosnippet>2430</a>            hidden_size,
-<a href=#2431 id=2431 data-nosnippet>2431</a>            intermediate_size * <span class="number">2</span>,
-<a href=#2432 id=2432 data-nosnippet>2432</a>            <span class="number">2</span>,
-<a href=#2433 id=2433 data-nosnippet>2433</a>            quantization_config,
-<a href=#2434 id=2434 data-nosnippet>2434</a>            <span class="bool-val">false</span>,
-<a href=#2435 id=2435 data-nosnippet>2435</a>            comm,
-<a href=#2436 id=2436 data-nosnippet>2436</a>            vb.pp(<span class="string">"gate_up_proj"</span>),
-<a href=#2437 id=2437 data-nosnippet>2437</a>        )<span class="question-mark">?</span>;
-<a href=#2438 id=2438 data-nosnippet>2438</a>
-<a href=#2439 id=2439 data-nosnippet>2439</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-<a href=#2440 id=2440 data-nosnippet>2440</a>            gate: gate_up_projs[<span class="number">0</span>].to_owned(),
-<a href=#2441 id=2441 data-nosnippet>2441</a>            up: gate_up_projs[<span class="number">1</span>].to_owned(),
-<a href=#2442 id=2442 data-nosnippet>2442</a>            down: RowParallelLayer::new(
-<a href=#2443 id=2443 data-nosnippet>2443</a>                intermediate_size,
-<a href=#2444 id=2444 data-nosnippet>2444</a>                hidden_size,
-<a href=#2445 id=2445 data-nosnippet>2445</a>                quantization_config,
-<a href=#2446 id=2446 data-nosnippet>2446</a>                <span class="bool-val">false</span>,
-<a href=#2447 id=2447 data-nosnippet>2447</a>                comm,
-<a href=#2448 id=2448 data-nosnippet>2448</a>                vb.pp(<span class="string">"down_proj"</span>),
-<a href=#2449 id=2449 data-nosnippet>2449</a>            )<span class="question-mark">?</span>,
-<a href=#2450 id=2450 data-nosnippet>2450</a>            act: hidden_act,
-<a href=#2451 id=2451 data-nosnippet>2451</a>            params: <span class="macro">vec!</span>[hidden_size, intermediate_size],
-<a href=#2452 id=2452 data-nosnippet>2452</a>        })
-<a href=#2453 id=2453 data-nosnippet>2453</a>    }
-<a href=#2454 id=2454 data-nosnippet>2454</a>
-<a href=#2455 id=2455 data-nosnippet>2455</a>    <span class="kw">pub fn </span>replicate(
-<a href=#2456 id=2456 data-nosnippet>2456</a>        params: <span class="kw-2">&amp;</span>[usize],
-<a href=#2457 id=2457 data-nosnippet>2457</a>        vb: ShardedVarBuilder,
-<a href=#2458 id=2458 data-nosnippet>2458</a>        act: Activation,
-<a href=#2459 id=2459 data-nosnippet>2459</a>        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
-<a href=#2460 id=2460 data-nosnippet>2460</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#2461 id=2461 data-nosnippet>2461</a>        <span class="self">Self</span>::new(vb, params[<span class="number">0</span>], params[<span class="number">1</span>], <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, act, comm)
-<a href=#2462 id=2462 data-nosnippet>2462</a>    }
-<a href=#2463 id=2463 data-nosnippet>2463</a>
-<a href=#2464 id=2464 data-nosnippet>2464</a>    <span class="kw">pub fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#2465 id=2465 data-nosnippet>2465</a>        <span class="kw">let </span>original_dtype = xs.dtype();
-<a href=#2466 id=2466 data-nosnippet>2466</a>        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.clone();
-<a href=#2467 id=2467 data-nosnippet>2467</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.gate.quantized_act_type() {
-<a href=#2468 id=2468 data-nosnippet>2468</a>            xs = xs.to_dtype(t)<span class="question-mark">?</span>;
-<a href=#2469 id=2469 data-nosnippet>2469</a>        }
-<a href=#2470 id=2470 data-nosnippet>2470</a>        <span class="kw">let </span>lhs = <span class="self">self</span>.gate.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
-<a href=#2471 id=2471 data-nosnippet>2471</a>        <span class="kw">let </span>rhs = <span class="self">self</span>.up.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
-<a href=#2472 id=2472 data-nosnippet>2472</a>        <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self</span>.down.forward(<span class="kw-2">&amp;</span>candle_nn::ops::mul_and_act(
-<a href=#2473 id=2473 data-nosnippet>2473</a>            <span class="kw-2">&amp;</span>lhs,
-<a href=#2474 id=2474 data-nosnippet>2474</a>            <span class="kw-2">&amp;</span>rhs,
-<a href=#2475 id=2475 data-nosnippet>2475</a>            <span class="self">self</span>.act.try_into()<span class="question-mark">?</span>,
-<a href=#2476 id=2476 data-nosnippet>2476</a>        )<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-<a href=#2477 id=2477 data-nosnippet>2477</a>        <span class="kw">if </span><span class="self">self</span>.gate.quantized_act_type().is_some() {
-<a href=#2478 id=2478 data-nosnippet>2478</a>            res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
-<a href=#2479 id=2479 data-nosnippet>2479</a>        }
-<a href=#2480 id=2480 data-nosnippet>2480</a>        <span class="prelude-val">Ok</span>(res)
-<a href=#2481 id=2481 data-nosnippet>2481</a>    }
-<a href=#2482 id=2482 data-nosnippet>2482</a>}
-<a href=#2483 id=2483 data-nosnippet>2483</a>
-<a href=#2484 id=2484 data-nosnippet>2484</a><span class="kw">impl </span>AnyMoeTrainableLayer <span class="kw">for </span>Mlp {}
-<a href=#2485 id=2485 data-nosnippet>2485</a>
-<a href=#2486 id=2486 data-nosnippet>2486</a><span class="kw">impl </span>MlpLayer <span class="kw">for </span>Mlp {
-<a href=#2487 id=2487 data-nosnippet>2487</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#2488 id=2488 data-nosnippet>2488</a>        <span class="kw">let </span>original_dtype = xs.dtype();
-<a href=#2489 id=2489 data-nosnippet>2489</a>        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.clone();
-<a href=#2490 id=2490 data-nosnippet>2490</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.gate.quantized_act_type() {
-<a href=#2491 id=2491 data-nosnippet>2491</a>            xs = xs.to_dtype(t)<span class="question-mark">?</span>;
-<a href=#2492 id=2492 data-nosnippet>2492</a>        }
-<a href=#2493 id=2493 data-nosnippet>2493</a>        <span class="kw">let </span>lhs = MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>xs, <span class="kw-2">&amp;*</span><span class="self">self</span>.gate)<span class="question-mark">?</span>;
-<a href=#2494 id=2494 data-nosnippet>2494</a>        <span class="kw">let </span>rhs = MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>xs, <span class="kw-2">&amp;*</span><span class="self">self</span>.up)<span class="question-mark">?</span>;
-<a href=#2495 id=2495 data-nosnippet>2495</a>        <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="kw">if </span><span class="macro">matches!</span>(
-<a href=#2496 id=2496 data-nosnippet>2496</a>            <span class="self">self</span>.act,
-<a href=#2497 id=2497 data-nosnippet>2497</a>            Activation::Gelu | Activation::Silu | Activation::Relu
-<a href=#2498 id=2498 data-nosnippet>2498</a>        ) {
-<a href=#2499 id=2499 data-nosnippet>2499</a>            MatMul.qmethod_matmul(
-<a href=#2500 id=2500 data-nosnippet>2500</a>                <span class="kw-2">&amp;</span>candle_nn::ops::mul_and_act(<span class="kw-2">&amp;</span>lhs, <span class="kw-2">&amp;</span>rhs, <span class="self">self</span>.act.try_into()<span class="question-mark">?</span>)<span class="question-mark">?</span>,
-<a href=#2501 id=2501 data-nosnippet>2501</a>                <span class="kw-2">&amp;*</span><span class="self">self</span>.down,
-<a href=#2502 id=2502 data-nosnippet>2502</a>            )<span class="question-mark">?
-<a href=#2503 id=2503 data-nosnippet>2503</a>        </span>} <span class="kw">else </span>{
-<a href=#2504 id=2504 data-nosnippet>2504</a>            MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>(<span class="kw-2">&amp;</span>lhs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.act)<span class="question-mark">? </span>* <span class="kw-2">&amp;</span>rhs)<span class="question-mark">?</span>, <span class="kw-2">&amp;*</span><span class="self">self</span>.down)<span class="question-mark">?
-<a href=#2505 id=2505 data-nosnippet>2505</a>        </span>};
-<a href=#2506 id=2506 data-nosnippet>2506</a>        <span class="kw">if </span><span class="self">self</span>.gate.quantized_act_type().is_some() {
-<a href=#2507 id=2507 data-nosnippet>2507</a>            res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
-<a href=#2508 id=2508 data-nosnippet>2508</a>        }
-<a href=#2509 id=2509 data-nosnippet>2509</a>        <span class="prelude-val">Ok</span>(res)
-<a href=#2510 id=2510 data-nosnippet>2510</a>    }
-<a href=#2511 id=2511 data-nosnippet>2511</a>    <span class="kw">fn </span>get_isq_layers(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-<a href=#2512 id=2512 data-nosnippet>2512</a>        <span class="macro">vec!</span>[<span class="kw-2">&amp;mut </span><span class="self">self</span>.gate, <span class="kw-2">&amp;mut </span><span class="self">self</span>.up, <span class="kw-2">&amp;mut </span><span class="self">self</span>.down]
-<a href=#2513 id=2513 data-nosnippet>2513</a>    }
-<a href=#2514 id=2514 data-nosnippet>2514</a>    <span class="kw">fn </span>clone(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Box&lt;<span class="kw">dyn </span>MlpLayer&gt; {
-<a href=#2515 id=2515 data-nosnippet>2515</a>        Box::new(Clone::clone(<span class="self">self</span>))
-<a href=#2516 id=2516 data-nosnippet>2516</a>    }
-<a href=#2517 id=2517 data-nosnippet>2517</a>    <span class="kw">fn </span>get_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[usize] {
-<a href=#2518 id=2518 data-nosnippet>2518</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.params
-<a href=#2519 id=2519 data-nosnippet>2519</a>    }
-<a href=#2520 id=2520 data-nosnippet>2520</a>    <span class="kw">fn </span>hidden_act(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Activation {
-<a href=#2521 id=2521 data-nosnippet>2521</a>        <span class="self">self</span>.act
-<a href=#2522 id=2522 data-nosnippet>2522</a>    }
-<a href=#2523 id=2523 data-nosnippet>2523</a>    <span class="comment">// gate, up, down
-<a href=#2524 id=2524 data-nosnippet>2524</a>    </span><span class="kw">fn </span>new_added_delta(<span class="kw-2">&amp;</span><span class="self">self</span>, deltas: Vec&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>MlpLayer&gt;&gt; {
-<a href=#2525 id=2525 data-nosnippet>2525</a>        <span class="kw">let </span>gate = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>delta) = deltas[<span class="number">0</span>] {
-<a href=#2526 id=2526 data-nosnippet>2526</a>            <span class="self">self</span>.gate.add_delta_w(delta)<span class="question-mark">?
-<a href=#2527 id=2527 data-nosnippet>2527</a>        </span>} <span class="kw">else </span>{
-<a href=#2528 id=2528 data-nosnippet>2528</a>            <span class="self">self</span>.gate.clone()
-<a href=#2529 id=2529 data-nosnippet>2529</a>        };
-<a href=#2530 id=2530 data-nosnippet>2530</a>        <span class="kw">let </span>up = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>delta) = deltas[<span class="number">1</span>] {
-<a href=#2531 id=2531 data-nosnippet>2531</a>            <span class="self">self</span>.up.add_delta_w(delta)<span class="question-mark">?
-<a href=#2532 id=2532 data-nosnippet>2532</a>        </span>} <span class="kw">else </span>{
-<a href=#2533 id=2533 data-nosnippet>2533</a>            <span class="self">self</span>.up.clone()
-<a href=#2534 id=2534 data-nosnippet>2534</a>        };
-<a href=#2535 id=2535 data-nosnippet>2535</a>        <span class="kw">let </span>down = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>delta) = deltas[<span class="number">2</span>] {
-<a href=#2536 id=2536 data-nosnippet>2536</a>            <span class="self">self</span>.down.add_delta_w(delta)<span class="question-mark">?
-<a href=#2537 id=2537 data-nosnippet>2537</a>        </span>} <span class="kw">else </span>{
-<a href=#2538 id=2538 data-nosnippet>2538</a>            <span class="self">self</span>.down.clone()
-<a href=#2539 id=2539 data-nosnippet>2539</a>        };
-<a href=#2540 id=2540 data-nosnippet>2540</a>
-<a href=#2541 id=2541 data-nosnippet>2541</a>        <span class="prelude-val">Ok</span>(Box::new(<span class="self">Self </span>{
-<a href=#2542 id=2542 data-nosnippet>2542</a>            gate,
-<a href=#2543 id=2543 data-nosnippet>2543</a>            up,
-<a href=#2544 id=2544 data-nosnippet>2544</a>            down,
-<a href=#2545 id=2545 data-nosnippet>2545</a>            act: <span class="self">self</span>.act,
-<a href=#2546 id=2546 data-nosnippet>2546</a>            params: <span class="self">self</span>.params.clone(),
-<a href=#2547 id=2547 data-nosnippet>2547</a>        }))
+<a href=#2408 id=2408 data-nosnippet>2408</a>                quantization_config,
+<a href=#2409 id=2409 data-nosnippet>2409</a>                <span class="bool-val">false</span>,
+<a href=#2410 id=2410 data-nosnippet>2410</a>                comm,
+<a href=#2411 id=2411 data-nosnippet>2411</a>                vb.pp(<span class="string">"up_proj"</span>),
+<a href=#2412 id=2412 data-nosnippet>2412</a>            )<span class="question-mark">?</span>,
+<a href=#2413 id=2413 data-nosnippet>2413</a>            down: RowParallelLayer::new(
+<a href=#2414 id=2414 data-nosnippet>2414</a>                intermediate_size,
+<a href=#2415 id=2415 data-nosnippet>2415</a>                hidden_size,
+<a href=#2416 id=2416 data-nosnippet>2416</a>                quantization_config,
+<a href=#2417 id=2417 data-nosnippet>2417</a>                <span class="bool-val">false</span>,
+<a href=#2418 id=2418 data-nosnippet>2418</a>                comm,
+<a href=#2419 id=2419 data-nosnippet>2419</a>                vb.pp(<span class="string">"down_proj"</span>),
+<a href=#2420 id=2420 data-nosnippet>2420</a>            )<span class="question-mark">?</span>,
+<a href=#2421 id=2421 data-nosnippet>2421</a>            act: hidden_act,
+<a href=#2422 id=2422 data-nosnippet>2422</a>            params: <span class="macro">vec!</span>[hidden_size, intermediate_size],
+<a href=#2423 id=2423 data-nosnippet>2423</a>        })
+<a href=#2424 id=2424 data-nosnippet>2424</a>    }
+<a href=#2425 id=2425 data-nosnippet>2425</a>
+<a href=#2426 id=2426 data-nosnippet>2426</a>    <span class="kw">pub fn </span>new_merged(
+<a href=#2427 id=2427 data-nosnippet>2427</a>        vb: ShardedVarBuilder,
+<a href=#2428 id=2428 data-nosnippet>2428</a>        hidden_size: usize,
+<a href=#2429 id=2429 data-nosnippet>2429</a>        intermediate_size: usize,
+<a href=#2430 id=2430 data-nosnippet>2430</a>        chunks: usize,
+<a href=#2431 id=2431 data-nosnippet>2431</a>        quantization_config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
+<a href=#2432 id=2432 data-nosnippet>2432</a>        hidden_act: Activation,
+<a href=#2433 id=2433 data-nosnippet>2433</a>        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
+<a href=#2434 id=2434 data-nosnippet>2434</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#2435 id=2435 data-nosnippet>2435</a>        <span class="macro">assert!</span>(chunks == <span class="number">2</span>, <span class="string">"Only gate_up_proj merge is supported!"</span>);
+<a href=#2436 id=2436 data-nosnippet>2436</a>        <span class="kw">let </span>gate_up_projs = ColumnParallelLayer::new_merged(
+<a href=#2437 id=2437 data-nosnippet>2437</a>            hidden_size,
+<a href=#2438 id=2438 data-nosnippet>2438</a>            intermediate_size * <span class="number">2</span>,
+<a href=#2439 id=2439 data-nosnippet>2439</a>            <span class="number">2</span>,
+<a href=#2440 id=2440 data-nosnippet>2440</a>            quantization_config,
+<a href=#2441 id=2441 data-nosnippet>2441</a>            <span class="bool-val">false</span>,
+<a href=#2442 id=2442 data-nosnippet>2442</a>            comm,
+<a href=#2443 id=2443 data-nosnippet>2443</a>            vb.pp(<span class="string">"gate_up_proj"</span>),
+<a href=#2444 id=2444 data-nosnippet>2444</a>        )<span class="question-mark">?</span>;
+<a href=#2445 id=2445 data-nosnippet>2445</a>
+<a href=#2446 id=2446 data-nosnippet>2446</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+<a href=#2447 id=2447 data-nosnippet>2447</a>            gate: gate_up_projs[<span class="number">0</span>].to_owned(),
+<a href=#2448 id=2448 data-nosnippet>2448</a>            up: gate_up_projs[<span class="number">1</span>].to_owned(),
+<a href=#2449 id=2449 data-nosnippet>2449</a>            down: RowParallelLayer::new(
+<a href=#2450 id=2450 data-nosnippet>2450</a>                intermediate_size,
+<a href=#2451 id=2451 data-nosnippet>2451</a>                hidden_size,
+<a href=#2452 id=2452 data-nosnippet>2452</a>                quantization_config,
+<a href=#2453 id=2453 data-nosnippet>2453</a>                <span class="bool-val">false</span>,
+<a href=#2454 id=2454 data-nosnippet>2454</a>                comm,
+<a href=#2455 id=2455 data-nosnippet>2455</a>                vb.pp(<span class="string">"down_proj"</span>),
+<a href=#2456 id=2456 data-nosnippet>2456</a>            )<span class="question-mark">?</span>,
+<a href=#2457 id=2457 data-nosnippet>2457</a>            act: hidden_act,
+<a href=#2458 id=2458 data-nosnippet>2458</a>            params: <span class="macro">vec!</span>[hidden_size, intermediate_size],
+<a href=#2459 id=2459 data-nosnippet>2459</a>        })
+<a href=#2460 id=2460 data-nosnippet>2460</a>    }
+<a href=#2461 id=2461 data-nosnippet>2461</a>
+<a href=#2462 id=2462 data-nosnippet>2462</a>    <span class="kw">pub fn </span>replicate(
+<a href=#2463 id=2463 data-nosnippet>2463</a>        params: <span class="kw-2">&amp;</span>[usize],
+<a href=#2464 id=2464 data-nosnippet>2464</a>        vb: ShardedVarBuilder,
+<a href=#2465 id=2465 data-nosnippet>2465</a>        act: Activation,
+<a href=#2466 id=2466 data-nosnippet>2466</a>        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
+<a href=#2467 id=2467 data-nosnippet>2467</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#2468 id=2468 data-nosnippet>2468</a>        <span class="self">Self</span>::new(vb, params[<span class="number">0</span>], params[<span class="number">1</span>], <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, act, comm)
+<a href=#2469 id=2469 data-nosnippet>2469</a>    }
+<a href=#2470 id=2470 data-nosnippet>2470</a>
+<a href=#2471 id=2471 data-nosnippet>2471</a>    <span class="kw">pub fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#2472 id=2472 data-nosnippet>2472</a>        <span class="kw">let </span>original_dtype = xs.dtype();
+<a href=#2473 id=2473 data-nosnippet>2473</a>        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.clone();
+<a href=#2474 id=2474 data-nosnippet>2474</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.gate.quantized_act_type() {
+<a href=#2475 id=2475 data-nosnippet>2475</a>            xs = xs.to_dtype(t)<span class="question-mark">?</span>;
+<a href=#2476 id=2476 data-nosnippet>2476</a>        }
+<a href=#2477 id=2477 data-nosnippet>2477</a>        <span class="kw">let </span>lhs = <span class="self">self</span>.gate.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
+<a href=#2478 id=2478 data-nosnippet>2478</a>        <span class="kw">let </span>rhs = <span class="self">self</span>.up.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
+<a href=#2479 id=2479 data-nosnippet>2479</a>        <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self
+<a href=#2480 id=2480 data-nosnippet>2480</a>            </span>.down
+<a href=#2481 id=2481 data-nosnippet>2481</a>            .forward(<span class="kw-2">&amp;</span><span class="kw">crate</span>::ops::mul_and_act(<span class="kw-2">&amp;</span>lhs, <span class="kw-2">&amp;</span>rhs, <span class="self">self</span>.act)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+<a href=#2482 id=2482 data-nosnippet>2482</a>        <span class="kw">if </span><span class="self">self</span>.gate.quantized_act_type().is_some() {
+<a href=#2483 id=2483 data-nosnippet>2483</a>            res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
+<a href=#2484 id=2484 data-nosnippet>2484</a>        }
+<a href=#2485 id=2485 data-nosnippet>2485</a>        <span class="prelude-val">Ok</span>(res)
+<a href=#2486 id=2486 data-nosnippet>2486</a>    }
+<a href=#2487 id=2487 data-nosnippet>2487</a>}
+<a href=#2488 id=2488 data-nosnippet>2488</a>
+<a href=#2489 id=2489 data-nosnippet>2489</a><span class="kw">impl </span>AnyMoeTrainableLayer <span class="kw">for </span>Mlp {}
+<a href=#2490 id=2490 data-nosnippet>2490</a>
+<a href=#2491 id=2491 data-nosnippet>2491</a><span class="kw">impl </span>MlpLayer <span class="kw">for </span>Mlp {
+<a href=#2492 id=2492 data-nosnippet>2492</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#2493 id=2493 data-nosnippet>2493</a>        <span class="kw">let </span>original_dtype = xs.dtype();
+<a href=#2494 id=2494 data-nosnippet>2494</a>        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.clone();
+<a href=#2495 id=2495 data-nosnippet>2495</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.gate.quantized_act_type() {
+<a href=#2496 id=2496 data-nosnippet>2496</a>            xs = xs.to_dtype(t)<span class="question-mark">?</span>;
+<a href=#2497 id=2497 data-nosnippet>2497</a>        }
+<a href=#2498 id=2498 data-nosnippet>2498</a>        <span class="kw">let </span>lhs = MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>xs, <span class="kw-2">&amp;*</span><span class="self">self</span>.gate)<span class="question-mark">?</span>;
+<a href=#2499 id=2499 data-nosnippet>2499</a>        <span class="kw">let </span>rhs = MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>xs, <span class="kw-2">&amp;*</span><span class="self">self</span>.up)<span class="question-mark">?</span>;
+<a href=#2500 id=2500 data-nosnippet>2500</a>        <span class="kw">let </span><span class="kw-2">mut </span>res =
+<a href=#2501 id=2501 data-nosnippet>2501</a>            MatMul.qmethod_matmul(<span class="kw-2">&amp;</span><span class="kw">crate</span>::ops::mul_and_act(<span class="kw-2">&amp;</span>lhs, <span class="kw-2">&amp;</span>rhs, <span class="self">self</span>.act)<span class="question-mark">?</span>, <span class="kw-2">&amp;*</span><span class="self">self</span>.down)<span class="question-mark">?</span>;
+<a href=#2502 id=2502 data-nosnippet>2502</a>        <span class="kw">if </span><span class="self">self</span>.gate.quantized_act_type().is_some() {
+<a href=#2503 id=2503 data-nosnippet>2503</a>            res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
+<a href=#2504 id=2504 data-nosnippet>2504</a>        }
+<a href=#2505 id=2505 data-nosnippet>2505</a>        <span class="prelude-val">Ok</span>(res)
+<a href=#2506 id=2506 data-nosnippet>2506</a>    }
+<a href=#2507 id=2507 data-nosnippet>2507</a>    <span class="kw">fn </span>get_isq_layers(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+<a href=#2508 id=2508 data-nosnippet>2508</a>        <span class="macro">vec!</span>[<span class="kw-2">&amp;mut </span><span class="self">self</span>.gate, <span class="kw-2">&amp;mut </span><span class="self">self</span>.up, <span class="kw-2">&amp;mut </span><span class="self">self</span>.down]
+<a href=#2509 id=2509 data-nosnippet>2509</a>    }
+<a href=#2510 id=2510 data-nosnippet>2510</a>    <span class="kw">fn </span>clone(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Box&lt;<span class="kw">dyn </span>MlpLayer&gt; {
+<a href=#2511 id=2511 data-nosnippet>2511</a>        Box::new(Clone::clone(<span class="self">self</span>))
+<a href=#2512 id=2512 data-nosnippet>2512</a>    }
+<a href=#2513 id=2513 data-nosnippet>2513</a>    <span class="kw">fn </span>get_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[usize] {
+<a href=#2514 id=2514 data-nosnippet>2514</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.params
+<a href=#2515 id=2515 data-nosnippet>2515</a>    }
+<a href=#2516 id=2516 data-nosnippet>2516</a>    <span class="kw">fn </span>hidden_act(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Activation {
+<a href=#2517 id=2517 data-nosnippet>2517</a>        <span class="self">self</span>.act
+<a href=#2518 id=2518 data-nosnippet>2518</a>    }
+<a href=#2519 id=2519 data-nosnippet>2519</a>    <span class="comment">// gate, up, down
+<a href=#2520 id=2520 data-nosnippet>2520</a>    </span><span class="kw">fn </span>new_added_delta(<span class="kw-2">&amp;</span><span class="self">self</span>, deltas: Vec&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>MlpLayer&gt;&gt; {
+<a href=#2521 id=2521 data-nosnippet>2521</a>        <span class="kw">let </span>gate = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>delta) = deltas[<span class="number">0</span>] {
+<a href=#2522 id=2522 data-nosnippet>2522</a>            <span class="self">self</span>.gate.add_delta_w(delta)<span class="question-mark">?
+<a href=#2523 id=2523 data-nosnippet>2523</a>        </span>} <span class="kw">else </span>{
+<a href=#2524 id=2524 data-nosnippet>2524</a>            <span class="self">self</span>.gate.clone()
+<a href=#2525 id=2525 data-nosnippet>2525</a>        };
+<a href=#2526 id=2526 data-nosnippet>2526</a>        <span class="kw">let </span>up = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>delta) = deltas[<span class="number">1</span>] {
+<a href=#2527 id=2527 data-nosnippet>2527</a>            <span class="self">self</span>.up.add_delta_w(delta)<span class="question-mark">?
+<a href=#2528 id=2528 data-nosnippet>2528</a>        </span>} <span class="kw">else </span>{
+<a href=#2529 id=2529 data-nosnippet>2529</a>            <span class="self">self</span>.up.clone()
+<a href=#2530 id=2530 data-nosnippet>2530</a>        };
+<a href=#2531 id=2531 data-nosnippet>2531</a>        <span class="kw">let </span>down = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>delta) = deltas[<span class="number">2</span>] {
+<a href=#2532 id=2532 data-nosnippet>2532</a>            <span class="self">self</span>.down.add_delta_w(delta)<span class="question-mark">?
+<a href=#2533 id=2533 data-nosnippet>2533</a>        </span>} <span class="kw">else </span>{
+<a href=#2534 id=2534 data-nosnippet>2534</a>            <span class="self">self</span>.down.clone()
+<a href=#2535 id=2535 data-nosnippet>2535</a>        };
+<a href=#2536 id=2536 data-nosnippet>2536</a>
+<a href=#2537 id=2537 data-nosnippet>2537</a>        <span class="prelude-val">Ok</span>(Box::new(<span class="self">Self </span>{
+<a href=#2538 id=2538 data-nosnippet>2538</a>            gate,
+<a href=#2539 id=2539 data-nosnippet>2539</a>            up,
+<a href=#2540 id=2540 data-nosnippet>2540</a>            down,
+<a href=#2541 id=2541 data-nosnippet>2541</a>            act: <span class="self">self</span>.act,
+<a href=#2542 id=2542 data-nosnippet>2542</a>            params: <span class="self">self</span>.params.clone(),
+<a href=#2543 id=2543 data-nosnippet>2543</a>        }))
+<a href=#2544 id=2544 data-nosnippet>2544</a>    }
+<a href=#2545 id=2545 data-nosnippet>2545</a>
+<a href=#2546 id=2546 data-nosnippet>2546</a>    <span class="kw">fn </span>dtype_device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; (DType, Device) {
+<a href=#2547 id=2547 data-nosnippet>2547</a>        <span class="self">self</span>.gate.dtype_and_device()
 <a href=#2548 id=2548 data-nosnippet>2548</a>    }
-<a href=#2549 id=2549 data-nosnippet>2549</a>
-<a href=#2550 id=2550 data-nosnippet>2550</a>    <span class="kw">fn </span>dtype_device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; (DType, Device) {
-<a href=#2551 id=2551 data-nosnippet>2551</a>        <span class="self">self</span>.gate.dtype_and_device()
-<a href=#2552 id=2552 data-nosnippet>2552</a>    }
-<a href=#2553 id=2553 data-nosnippet>2553</a>}
-<a href=#2554 id=2554 data-nosnippet>2554</a>
-<a href=#2555 id=2555 data-nosnippet>2555</a><span class="kw">pub struct </span>AvgPool2d {
-<a href=#2556 id=2556 data-nosnippet>2556</a>    kernel_size: usize,
-<a href=#2557 id=2557 data-nosnippet>2557</a>    stride: usize,
-<a href=#2558 id=2558 data-nosnippet>2558</a>}
-<a href=#2559 id=2559 data-nosnippet>2559</a>
-<a href=#2560 id=2560 data-nosnippet>2560</a><span class="kw">impl </span>AvgPool2d {
-<a href=#2561 id=2561 data-nosnippet>2561</a>    <span class="kw">pub fn </span>new(kernel_size: usize, stride: usize) -&gt; <span class="self">Self </span>{
-<a href=#2562 id=2562 data-nosnippet>2562</a>        <span class="self">Self </span>{
-<a href=#2563 id=2563 data-nosnippet>2563</a>            kernel_size,
-<a href=#2564 id=2564 data-nosnippet>2564</a>            stride,
-<a href=#2565 id=2565 data-nosnippet>2565</a>        }
+<a href=#2549 id=2549 data-nosnippet>2549</a>}
+<a href=#2550 id=2550 data-nosnippet>2550</a>
+<a href=#2551 id=2551 data-nosnippet>2551</a><span class="kw">pub struct </span>AvgPool2d {
+<a href=#2552 id=2552 data-nosnippet>2552</a>    kernel_size: usize,
+<a href=#2553 id=2553 data-nosnippet>2553</a>    stride: usize,
+<a href=#2554 id=2554 data-nosnippet>2554</a>}
+<a href=#2555 id=2555 data-nosnippet>2555</a>
+<a href=#2556 id=2556 data-nosnippet>2556</a><span class="kw">impl </span>AvgPool2d {
+<a href=#2557 id=2557 data-nosnippet>2557</a>    <span class="kw">pub fn </span>new(kernel_size: usize, stride: usize) -&gt; <span class="self">Self </span>{
+<a href=#2558 id=2558 data-nosnippet>2558</a>        <span class="self">Self </span>{
+<a href=#2559 id=2559 data-nosnippet>2559</a>            kernel_size,
+<a href=#2560 id=2560 data-nosnippet>2560</a>            stride,
+<a href=#2561 id=2561 data-nosnippet>2561</a>        }
+<a href=#2562 id=2562 data-nosnippet>2562</a>    }
+<a href=#2563 id=2563 data-nosnippet>2563</a>
+<a href=#2564 id=2564 data-nosnippet>2564</a>    <span class="kw">pub fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#2565 id=2565 data-nosnippet>2565</a>        xs.avg_pool2d_with_stride(<span class="self">self</span>.kernel_size, <span class="self">self</span>.stride)
 <a href=#2566 id=2566 data-nosnippet>2566</a>    }
-<a href=#2567 id=2567 data-nosnippet>2567</a>
-<a href=#2568 id=2568 data-nosnippet>2568</a>    <span class="kw">pub fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#2569 id=2569 data-nosnippet>2569</a>        xs.avg_pool2d_with_stride(<span class="self">self</span>.kernel_size, <span class="self">self</span>.stride)
-<a href=#2570 id=2570 data-nosnippet>2570</a>    }
-<a href=#2571 id=2571 data-nosnippet>2571</a>}
-<a href=#2572 id=2572 data-nosnippet>2572</a>
-<a href=#2573 id=2573 data-nosnippet>2573</a><span class="doccomment">/// Applies 2D reflection padding to a tensor of shape (N, C, H, W).
-<a href=#2574 id=2574 data-nosnippet>2574</a>///
-<a href=#2575 id=2575 data-nosnippet>2575</a>/// The `padding` argument is a 4-tuple (pad_left, pad_right, pad_top, pad_bottom).
-<a href=#2576 id=2576 data-nosnippet>2576</a>/// For left padding, it reflects the values from column 1 up to pad_left (in reverse order);
-<a href=#2577 id=2577 data-nosnippet>2577</a>/// for right padding, it reflects from the second-to-last column backwards, and similarly for
-<a href=#2578 id=2578 data-nosnippet>2578</a>/// vertical (height) padding.
-<a href=#2579 id=2579 data-nosnippet>2579</a></span><span class="kw">pub struct </span>ReflectionPad2d {
-<a href=#2580 id=2580 data-nosnippet>2580</a>    padding: (usize, usize, usize, usize),
-<a href=#2581 id=2581 data-nosnippet>2581</a>}
-<a href=#2582 id=2582 data-nosnippet>2582</a>
-<a href=#2583 id=2583 data-nosnippet>2583</a><span class="kw">impl </span>ReflectionPad2d {
-<a href=#2584 id=2584 data-nosnippet>2584</a>    <span class="kw">pub fn </span>new(padding: (usize, usize, usize, usize)) -&gt; <span class="self">Self </span>{
-<a href=#2585 id=2585 data-nosnippet>2585</a>        <span class="self">Self </span>{ padding }
-<a href=#2586 id=2586 data-nosnippet>2586</a>    }
-<a href=#2587 id=2587 data-nosnippet>2587</a>}
+<a href=#2567 id=2567 data-nosnippet>2567</a>}
+<a href=#2568 id=2568 data-nosnippet>2568</a>
+<a href=#2569 id=2569 data-nosnippet>2569</a><span class="doccomment">/// Applies 2D reflection padding to a tensor of shape (N, C, H, W).
+<a href=#2570 id=2570 data-nosnippet>2570</a>///
+<a href=#2571 id=2571 data-nosnippet>2571</a>/// The `padding` argument is a 4-tuple (pad_left, pad_right, pad_top, pad_bottom).
+<a href=#2572 id=2572 data-nosnippet>2572</a>/// For left padding, it reflects the values from column 1 up to pad_left (in reverse order);
+<a href=#2573 id=2573 data-nosnippet>2573</a>/// for right padding, it reflects from the second-to-last column backwards, and similarly for
+<a href=#2574 id=2574 data-nosnippet>2574</a>/// vertical (height) padding.
+<a href=#2575 id=2575 data-nosnippet>2575</a></span><span class="kw">pub struct </span>ReflectionPad2d {
+<a href=#2576 id=2576 data-nosnippet>2576</a>    padding: (usize, usize, usize, usize),
+<a href=#2577 id=2577 data-nosnippet>2577</a>}
+<a href=#2578 id=2578 data-nosnippet>2578</a>
+<a href=#2579 id=2579 data-nosnippet>2579</a><span class="kw">impl </span>ReflectionPad2d {
+<a href=#2580 id=2580 data-nosnippet>2580</a>    <span class="kw">pub fn </span>new(padding: (usize, usize, usize, usize)) -&gt; <span class="self">Self </span>{
+<a href=#2581 id=2581 data-nosnippet>2581</a>        <span class="self">Self </span>{ padding }
+<a href=#2582 id=2582 data-nosnippet>2582</a>    }
+<a href=#2583 id=2583 data-nosnippet>2583</a>}
+<a href=#2584 id=2584 data-nosnippet>2584</a>
+<a href=#2585 id=2585 data-nosnippet>2585</a><span class="kw">impl </span>Module <span class="kw">for </span>ReflectionPad2d {
+<a href=#2586 id=2586 data-nosnippet>2586</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#2587 id=2587 data-nosnippet>2587</a>        <span class="kw">let </span>(pad_left, pad_right, pad_top, pad_bottom) = <span class="self">self</span>.padding;
 <a href=#2588 id=2588 data-nosnippet>2588</a>
-<a href=#2589 id=2589 data-nosnippet>2589</a><span class="kw">impl </span>Module <span class="kw">for </span>ReflectionPad2d {
-<a href=#2590 id=2590 data-nosnippet>2590</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#2591 id=2591 data-nosnippet>2591</a>        <span class="kw">let </span>(pad_left, pad_right, pad_top, pad_bottom) = <span class="self">self</span>.padding;
-<a href=#2592 id=2592 data-nosnippet>2592</a>
-<a href=#2593 id=2593 data-nosnippet>2593</a>        <span class="kw">let </span>(_n, _c, h, w) = xs.dims4()<span class="question-mark">?</span>;
-<a href=#2594 id=2594 data-nosnippet>2594</a>
-<a href=#2595 id=2595 data-nosnippet>2595</a>        <span class="comment">// --- Horizontal Padding (along width, axis = 3) ---
-<a href=#2596 id=2596 data-nosnippet>2596</a>        // For left padding, we reflect columns 1..=pad_left (in reverse order).
-<a href=#2597 id=2597 data-nosnippet>2597</a>        </span><span class="kw">let </span>left_pad = <span class="kw">if </span>pad_left &gt; <span class="number">0 </span>{
-<a href=#2598 id=2598 data-nosnippet>2598</a>            <span class="comment">// Create indices: [pad_left, pad_left-1, ..., 1]
-<a href=#2599 id=2599 data-nosnippet>2599</a>            </span><span class="kw">let </span>indices: Vec&lt;i64&gt; = (<span class="number">1</span>..=pad_left <span class="kw">as </span>i64).rev().collect();
-<a href=#2600 id=2600 data-nosnippet>2600</a>            <span class="prelude-val">Some</span>(xs.index_select(<span class="kw-2">&amp;</span>Tensor::new(indices, <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>, <span class="number">3</span>)<span class="question-mark">?</span>)
-<a href=#2601 id=2601 data-nosnippet>2601</a>        } <span class="kw">else </span>{
-<a href=#2602 id=2602 data-nosnippet>2602</a>            <span class="prelude-val">None
-<a href=#2603 id=2603 data-nosnippet>2603</a>        </span>};
-<a href=#2604 id=2604 data-nosnippet>2604</a>
-<a href=#2605 id=2605 data-nosnippet>2605</a>        <span class="comment">// For right padding, we reflect from the right side (excluding the last column).
-<a href=#2606 id=2606 data-nosnippet>2606</a>        </span><span class="kw">let </span>right_pad = <span class="kw">if </span>pad_right &gt; <span class="number">0 </span>{
-<a href=#2607 id=2607 data-nosnippet>2607</a>            <span class="comment">// For pad_right == 2, generate indices: [w-2, w-3, ... , w-1-pad_right]
-<a href=#2608 id=2608 data-nosnippet>2608</a>            </span><span class="kw">let </span>start = w <span class="kw">as </span>i64 - <span class="number">2</span>;
-<a href=#2609 id=2609 data-nosnippet>2609</a>            <span class="kw">let </span>indices: Vec&lt;i64&gt; = (<span class="number">0</span>..pad_right <span class="kw">as </span>i64).map(|i| start - i).collect();
-<a href=#2610 id=2610 data-nosnippet>2610</a>            <span class="prelude-val">Some</span>(xs.index_select(<span class="kw-2">&amp;</span>Tensor::new(indices, <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>, <span class="number">3</span>)<span class="question-mark">?</span>)
-<a href=#2611 id=2611 data-nosnippet>2611</a>        } <span class="kw">else </span>{
-<a href=#2612 id=2612 data-nosnippet>2612</a>            <span class="prelude-val">None
-<a href=#2613 id=2613 data-nosnippet>2613</a>        </span>};
-<a href=#2614 id=2614 data-nosnippet>2614</a>
-<a href=#2615 id=2615 data-nosnippet>2615</a>        <span class="comment">// Concatenate horizontally (along width, dim=3)
-<a href=#2616 id=2616 data-nosnippet>2616</a>        </span><span class="kw">let </span>x_padded_width = <span class="kw">match </span>(left_pad, right_pad) {
-<a href=#2617 id=2617 data-nosnippet>2617</a>            (<span class="prelude-val">Some</span>(l), <span class="prelude-val">Some</span>(r)) =&gt; Tensor::cat(<span class="kw-2">&amp;</span>[l, xs.clone(), r], <span class="number">3</span>)<span class="question-mark">?</span>,
-<a href=#2618 id=2618 data-nosnippet>2618</a>            (<span class="prelude-val">Some</span>(l), <span class="prelude-val">None</span>) =&gt; Tensor::cat(<span class="kw-2">&amp;</span>[l, xs.clone()], <span class="number">3</span>)<span class="question-mark">?</span>,
-<a href=#2619 id=2619 data-nosnippet>2619</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(r)) =&gt; Tensor::cat(<span class="kw-2">&amp;</span>[xs.clone(), r], <span class="number">3</span>)<span class="question-mark">?</span>,
-<a href=#2620 id=2620 data-nosnippet>2620</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; xs.clone(),
-<a href=#2621 id=2621 data-nosnippet>2621</a>        };
-<a href=#2622 id=2622 data-nosnippet>2622</a>
-<a href=#2623 id=2623 data-nosnippet>2623</a>        <span class="comment">// --- Vertical Padding (along height, axis = 2) ---
-<a href=#2624 id=2624 data-nosnippet>2624</a>        // For top padding, reflect rows 1..=pad_top (in reverse order)
-<a href=#2625 id=2625 data-nosnippet>2625</a>        </span><span class="kw">let </span>top_pad = <span class="kw">if </span>pad_top &gt; <span class="number">0 </span>{
-<a href=#2626 id=2626 data-nosnippet>2626</a>            <span class="kw">let </span>indices: Vec&lt;i64&gt; = (<span class="number">1</span>..=pad_top <span class="kw">as </span>i64).rev().collect();
-<a href=#2627 id=2627 data-nosnippet>2627</a>            <span class="prelude-val">Some</span>(x_padded_width.index_select(<span class="kw-2">&amp;</span>Tensor::new(indices, <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>, <span class="number">2</span>)<span class="question-mark">?</span>)
-<a href=#2628 id=2628 data-nosnippet>2628</a>        } <span class="kw">else </span>{
-<a href=#2629 id=2629 data-nosnippet>2629</a>            <span class="prelude-val">None
-<a href=#2630 id=2630 data-nosnippet>2630</a>        </span>};
-<a href=#2631 id=2631 data-nosnippet>2631</a>
-<a href=#2632 id=2632 data-nosnippet>2632</a>        <span class="comment">// For bottom padding, reflect from the bottom (excluding the last row)
-<a href=#2633 id=2633 data-nosnippet>2633</a>        </span><span class="kw">let </span>bottom_pad = <span class="kw">if </span>pad_bottom &gt; <span class="number">0 </span>{
-<a href=#2634 id=2634 data-nosnippet>2634</a>            <span class="kw">let </span>start = h <span class="kw">as </span>i64 - <span class="number">2</span>;
-<a href=#2635 id=2635 data-nosnippet>2635</a>            <span class="kw">let </span>indices: Vec&lt;i64&gt; = (<span class="number">0</span>..pad_bottom <span class="kw">as </span>i64).map(|i| start - i).collect();
-<a href=#2636 id=2636 data-nosnippet>2636</a>            <span class="prelude-val">Some</span>(x_padded_width.index_select(<span class="kw-2">&amp;</span>Tensor::new(indices, <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>, <span class="number">2</span>)<span class="question-mark">?</span>)
-<a href=#2637 id=2637 data-nosnippet>2637</a>        } <span class="kw">else </span>{
-<a href=#2638 id=2638 data-nosnippet>2638</a>            <span class="prelude-val">None
-<a href=#2639 id=2639 data-nosnippet>2639</a>        </span>};
-<a href=#2640 id=2640 data-nosnippet>2640</a>
-<a href=#2641 id=2641 data-nosnippet>2641</a>        <span class="comment">// Concatenate vertically (along height, dim=2)
-<a href=#2642 id=2642 data-nosnippet>2642</a>        </span><span class="kw">let </span>x_padded = <span class="kw">match </span>(top_pad, bottom_pad) {
-<a href=#2643 id=2643 data-nosnippet>2643</a>            (<span class="prelude-val">Some</span>(t), <span class="prelude-val">Some</span>(b)) =&gt; Tensor::cat(<span class="kw-2">&amp;</span>[t, x_padded_width, b], <span class="number">2</span>)<span class="question-mark">?</span>,
-<a href=#2644 id=2644 data-nosnippet>2644</a>            (<span class="prelude-val">Some</span>(t), <span class="prelude-val">None</span>) =&gt; Tensor::cat(<span class="kw-2">&amp;</span>[t, x_padded_width], <span class="number">2</span>)<span class="question-mark">?</span>,
-<a href=#2645 id=2645 data-nosnippet>2645</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(b)) =&gt; Tensor::cat(<span class="kw-2">&amp;</span>[x_padded_width, b], <span class="number">2</span>)<span class="question-mark">?</span>,
-<a href=#2646 id=2646 data-nosnippet>2646</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; x_padded_width,
-<a href=#2647 id=2647 data-nosnippet>2647</a>        };
+<a href=#2589 id=2589 data-nosnippet>2589</a>        <span class="kw">let </span>(_n, _c, h, w) = xs.dims4()<span class="question-mark">?</span>;
+<a href=#2590 id=2590 data-nosnippet>2590</a>
+<a href=#2591 id=2591 data-nosnippet>2591</a>        <span class="comment">// --- Horizontal Padding (along width, axis = 3) ---
+<a href=#2592 id=2592 data-nosnippet>2592</a>        // For left padding, we reflect columns 1..=pad_left (in reverse order).
+<a href=#2593 id=2593 data-nosnippet>2593</a>        </span><span class="kw">let </span>left_pad = <span class="kw">if </span>pad_left &gt; <span class="number">0 </span>{
+<a href=#2594 id=2594 data-nosnippet>2594</a>            <span class="comment">// Create indices: [pad_left, pad_left-1, ..., 1]
+<a href=#2595 id=2595 data-nosnippet>2595</a>            </span><span class="kw">let </span>indices: Vec&lt;i64&gt; = (<span class="number">1</span>..=pad_left <span class="kw">as </span>i64).rev().collect();
+<a href=#2596 id=2596 data-nosnippet>2596</a>            <span class="prelude-val">Some</span>(xs.index_select(<span class="kw-2">&amp;</span>Tensor::new(indices, <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>, <span class="number">3</span>)<span class="question-mark">?</span>)
+<a href=#2597 id=2597 data-nosnippet>2597</a>        } <span class="kw">else </span>{
+<a href=#2598 id=2598 data-nosnippet>2598</a>            <span class="prelude-val">None
+<a href=#2599 id=2599 data-nosnippet>2599</a>        </span>};
+<a href=#2600 id=2600 data-nosnippet>2600</a>
+<a href=#2601 id=2601 data-nosnippet>2601</a>        <span class="comment">// For right padding, we reflect from the right side (excluding the last column).
+<a href=#2602 id=2602 data-nosnippet>2602</a>        </span><span class="kw">let </span>right_pad = <span class="kw">if </span>pad_right &gt; <span class="number">0 </span>{
+<a href=#2603 id=2603 data-nosnippet>2603</a>            <span class="comment">// For pad_right == 2, generate indices: [w-2, w-3, ... , w-1-pad_right]
+<a href=#2604 id=2604 data-nosnippet>2604</a>            </span><span class="kw">let </span>start = w <span class="kw">as </span>i64 - <span class="number">2</span>;
+<a href=#2605 id=2605 data-nosnippet>2605</a>            <span class="kw">let </span>indices: Vec&lt;i64&gt; = (<span class="number">0</span>..pad_right <span class="kw">as </span>i64).map(|i| start - i).collect();
+<a href=#2606 id=2606 data-nosnippet>2606</a>            <span class="prelude-val">Some</span>(xs.index_select(<span class="kw-2">&amp;</span>Tensor::new(indices, <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>, <span class="number">3</span>)<span class="question-mark">?</span>)
+<a href=#2607 id=2607 data-nosnippet>2607</a>        } <span class="kw">else </span>{
+<a href=#2608 id=2608 data-nosnippet>2608</a>            <span class="prelude-val">None
+<a href=#2609 id=2609 data-nosnippet>2609</a>        </span>};
+<a href=#2610 id=2610 data-nosnippet>2610</a>
+<a href=#2611 id=2611 data-nosnippet>2611</a>        <span class="comment">// Concatenate horizontally (along width, dim=3)
+<a href=#2612 id=2612 data-nosnippet>2612</a>        </span><span class="kw">let </span>x_padded_width = <span class="kw">match </span>(left_pad, right_pad) {
+<a href=#2613 id=2613 data-nosnippet>2613</a>            (<span class="prelude-val">Some</span>(l), <span class="prelude-val">Some</span>(r)) =&gt; Tensor::cat(<span class="kw-2">&amp;</span>[l, xs.clone(), r], <span class="number">3</span>)<span class="question-mark">?</span>,
+<a href=#2614 id=2614 data-nosnippet>2614</a>            (<span class="prelude-val">Some</span>(l), <span class="prelude-val">None</span>) =&gt; Tensor::cat(<span class="kw-2">&amp;</span>[l, xs.clone()], <span class="number">3</span>)<span class="question-mark">?</span>,
+<a href=#2615 id=2615 data-nosnippet>2615</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(r)) =&gt; Tensor::cat(<span class="kw-2">&amp;</span>[xs.clone(), r], <span class="number">3</span>)<span class="question-mark">?</span>,
+<a href=#2616 id=2616 data-nosnippet>2616</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; xs.clone(),
+<a href=#2617 id=2617 data-nosnippet>2617</a>        };
+<a href=#2618 id=2618 data-nosnippet>2618</a>
+<a href=#2619 id=2619 data-nosnippet>2619</a>        <span class="comment">// --- Vertical Padding (along height, axis = 2) ---
+<a href=#2620 id=2620 data-nosnippet>2620</a>        // For top padding, reflect rows 1..=pad_top (in reverse order)
+<a href=#2621 id=2621 data-nosnippet>2621</a>        </span><span class="kw">let </span>top_pad = <span class="kw">if </span>pad_top &gt; <span class="number">0 </span>{
+<a href=#2622 id=2622 data-nosnippet>2622</a>            <span class="kw">let </span>indices: Vec&lt;i64&gt; = (<span class="number">1</span>..=pad_top <span class="kw">as </span>i64).rev().collect();
+<a href=#2623 id=2623 data-nosnippet>2623</a>            <span class="prelude-val">Some</span>(x_padded_width.index_select(<span class="kw-2">&amp;</span>Tensor::new(indices, <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>, <span class="number">2</span>)<span class="question-mark">?</span>)
+<a href=#2624 id=2624 data-nosnippet>2624</a>        } <span class="kw">else </span>{
+<a href=#2625 id=2625 data-nosnippet>2625</a>            <span class="prelude-val">None
+<a href=#2626 id=2626 data-nosnippet>2626</a>        </span>};
+<a href=#2627 id=2627 data-nosnippet>2627</a>
+<a href=#2628 id=2628 data-nosnippet>2628</a>        <span class="comment">// For bottom padding, reflect from the bottom (excluding the last row)
+<a href=#2629 id=2629 data-nosnippet>2629</a>        </span><span class="kw">let </span>bottom_pad = <span class="kw">if </span>pad_bottom &gt; <span class="number">0 </span>{
+<a href=#2630 id=2630 data-nosnippet>2630</a>            <span class="kw">let </span>start = h <span class="kw">as </span>i64 - <span class="number">2</span>;
+<a href=#2631 id=2631 data-nosnippet>2631</a>            <span class="kw">let </span>indices: Vec&lt;i64&gt; = (<span class="number">0</span>..pad_bottom <span class="kw">as </span>i64).map(|i| start - i).collect();
+<a href=#2632 id=2632 data-nosnippet>2632</a>            <span class="prelude-val">Some</span>(x_padded_width.index_select(<span class="kw-2">&amp;</span>Tensor::new(indices, <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>, <span class="number">2</span>)<span class="question-mark">?</span>)
+<a href=#2633 id=2633 data-nosnippet>2633</a>        } <span class="kw">else </span>{
+<a href=#2634 id=2634 data-nosnippet>2634</a>            <span class="prelude-val">None
+<a href=#2635 id=2635 data-nosnippet>2635</a>        </span>};
+<a href=#2636 id=2636 data-nosnippet>2636</a>
+<a href=#2637 id=2637 data-nosnippet>2637</a>        <span class="comment">// Concatenate vertically (along height, dim=2)
+<a href=#2638 id=2638 data-nosnippet>2638</a>        </span><span class="kw">let </span>x_padded = <span class="kw">match </span>(top_pad, bottom_pad) {
+<a href=#2639 id=2639 data-nosnippet>2639</a>            (<span class="prelude-val">Some</span>(t), <span class="prelude-val">Some</span>(b)) =&gt; Tensor::cat(<span class="kw-2">&amp;</span>[t, x_padded_width, b], <span class="number">2</span>)<span class="question-mark">?</span>,
+<a href=#2640 id=2640 data-nosnippet>2640</a>            (<span class="prelude-val">Some</span>(t), <span class="prelude-val">None</span>) =&gt; Tensor::cat(<span class="kw-2">&amp;</span>[t, x_padded_width], <span class="number">2</span>)<span class="question-mark">?</span>,
+<a href=#2641 id=2641 data-nosnippet>2641</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(b)) =&gt; Tensor::cat(<span class="kw-2">&amp;</span>[x_padded_width, b], <span class="number">2</span>)<span class="question-mark">?</span>,
+<a href=#2642 id=2642 data-nosnippet>2642</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; x_padded_width,
+<a href=#2643 id=2643 data-nosnippet>2643</a>        };
+<a href=#2644 id=2644 data-nosnippet>2644</a>
+<a href=#2645 id=2645 data-nosnippet>2645</a>        <span class="prelude-val">Ok</span>(x_padded)
+<a href=#2646 id=2646 data-nosnippet>2646</a>    }
+<a href=#2647 id=2647 data-nosnippet>2647</a>}
 <a href=#2648 id=2648 data-nosnippet>2648</a>
-<a href=#2649 id=2649 data-nosnippet>2649</a>        <span class="prelude-val">Ok</span>(x_padded)
-<a href=#2650 id=2650 data-nosnippet>2650</a>    }
-<a href=#2651 id=2651 data-nosnippet>2651</a>}
-<a href=#2652 id=2652 data-nosnippet>2652</a>
-<a href=#2653 id=2653 data-nosnippet>2653</a><span class="kw">pub struct </span>ScaledEmbedding {
-<a href=#2654 id=2654 data-nosnippet>2654</a>    scale: f64,
-<a href=#2655 id=2655 data-nosnippet>2655</a>    <span class="kw">pub </span>embedding: Tensor,
-<a href=#2656 id=2656 data-nosnippet>2656</a>}
-<a href=#2657 id=2657 data-nosnippet>2657</a>
-<a href=#2658 id=2658 data-nosnippet>2658</a><span class="kw">impl </span>ScaledEmbedding {
-<a href=#2659 id=2659 data-nosnippet>2659</a>    <span class="kw">pub fn </span>new(scale: f64, embedding: Embedding) -&gt; <span class="self">Self </span>{
-<a href=#2660 id=2660 data-nosnippet>2660</a>        <span class="self">Self </span>{
-<a href=#2661 id=2661 data-nosnippet>2661</a>            scale,
-<a href=#2662 id=2662 data-nosnippet>2662</a>            embedding: embedding.embeddings().clone(),
-<a href=#2663 id=2663 data-nosnippet>2663</a>        }
+<a href=#2649 id=2649 data-nosnippet>2649</a><span class="kw">pub struct </span>ScaledEmbedding {
+<a href=#2650 id=2650 data-nosnippet>2650</a>    scale: f64,
+<a href=#2651 id=2651 data-nosnippet>2651</a>    <span class="kw">pub </span>embedding: Tensor,
+<a href=#2652 id=2652 data-nosnippet>2652</a>}
+<a href=#2653 id=2653 data-nosnippet>2653</a>
+<a href=#2654 id=2654 data-nosnippet>2654</a><span class="kw">impl </span>ScaledEmbedding {
+<a href=#2655 id=2655 data-nosnippet>2655</a>    <span class="kw">pub fn </span>new(scale: f64, embedding: Embedding) -&gt; <span class="self">Self </span>{
+<a href=#2656 id=2656 data-nosnippet>2656</a>        <span class="self">Self </span>{
+<a href=#2657 id=2657 data-nosnippet>2657</a>            scale,
+<a href=#2658 id=2658 data-nosnippet>2658</a>            embedding: embedding.embeddings().clone(),
+<a href=#2659 id=2659 data-nosnippet>2659</a>        }
+<a href=#2660 id=2660 data-nosnippet>2660</a>    }
+<a href=#2661 id=2661 data-nosnippet>2661</a>
+<a href=#2662 id=2662 data-nosnippet>2662</a>    <span class="kw">pub fn </span>embeddings(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Tensor {
+<a href=#2663 id=2663 data-nosnippet>2663</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.embedding
 <a href=#2664 id=2664 data-nosnippet>2664</a>    }
-<a href=#2665 id=2665 data-nosnippet>2665</a>
-<a href=#2666 id=2666 data-nosnippet>2666</a>    <span class="kw">pub fn </span>embeddings(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Tensor {
-<a href=#2667 id=2667 data-nosnippet>2667</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.embedding
-<a href=#2668 id=2668 data-nosnippet>2668</a>    }
-<a href=#2669 id=2669 data-nosnippet>2669</a>}
-<a href=#2670 id=2670 data-nosnippet>2670</a>
-<a href=#2671 id=2671 data-nosnippet>2671</a><span class="kw">impl </span>Module <span class="kw">for </span>ScaledEmbedding {
-<a href=#2672 id=2672 data-nosnippet>2672</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#2673 id=2673 data-nosnippet>2673</a>        <span class="kw">let </span>embedding = Embedding::new(<span class="self">self</span>.embedding.clone(), <span class="self">self</span>.embedding.dim(D::Minus1)<span class="question-mark">?</span>);
-<a href=#2674 id=2674 data-nosnippet>2674</a>        xs.apply(<span class="kw-2">&amp;</span>embedding)<span class="question-mark">? </span>* <span class="self">self</span>.scale
-<a href=#2675 id=2675 data-nosnippet>2675</a>    }
-<a href=#2676 id=2676 data-nosnippet>2676</a>}</code></pre></div></section></main></body></html>
+<a href=#2665 id=2665 data-nosnippet>2665</a>}
+<a href=#2666 id=2666 data-nosnippet>2666</a>
+<a href=#2667 id=2667 data-nosnippet>2667</a><span class="kw">impl </span>Module <span class="kw">for </span>ScaledEmbedding {
+<a href=#2668 id=2668 data-nosnippet>2668</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#2669 id=2669 data-nosnippet>2669</a>        <span class="kw">let </span>embedding = Embedding::new(<span class="self">self</span>.embedding.clone(), <span class="self">self</span>.embedding.dim(D::Minus1)<span class="question-mark">?</span>);
+<a href=#2670 id=2670 data-nosnippet>2670</a>        xs.apply(<span class="kw-2">&amp;</span>embedding)<span class="question-mark">? </span>* <span class="self">self</span>.scale
+<a href=#2671 id=2671 data-nosnippet>2671</a>    }
+<a href=#2672 id=2672 data-nosnippet>2672</a>}</code></pre></div></section></main></body></html>

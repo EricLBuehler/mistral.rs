@@ -205,9 +205,9 @@
 <a href=#205 id=205 data-nosnippet>205</a>        <span class="kw">for </span>(i, image_index) <span class="kw">in </span>image_indexes.iter().enumerate() {
 <a href=#206 id=206 data-nosnippet>206</a>            result = result.slice_assign(
 <a href=#207 id=207 data-nosnippet>207</a>                <span class="kw-2">&amp;</span>[
-<a href=#208 id=208 data-nosnippet>208</a>                    <span class="kw-2">&amp;</span>(<span class="number">0usize</span>..<span class="number">1usize</span>),
-<a href=#209 id=209 data-nosnippet>209</a>                    <span class="kw-2">&amp;</span>(<span class="kw-2">*</span>image_index <span class="kw">as </span>usize..<span class="kw-2">*</span>image_index <span class="kw">as </span>usize + num_image_tokens),
-<a href=#210 id=210 data-nosnippet>210</a>                    <span class="kw-2">&amp;</span>(..),
+<a href=#208 id=208 data-nosnippet>208</a>                    <span class="number">0usize</span>..<span class="number">1usize</span>,
+<a href=#209 id=209 data-nosnippet>209</a>                    <span class="kw-2">*</span>image_index <span class="kw">as </span>usize..<span class="kw-2">*</span>image_index <span class="kw">as </span>usize + num_image_tokens,
+<a href=#210 id=210 data-nosnippet>210</a>                    <span class="number">0</span>..result.dim(<span class="number">2</span>)<span class="question-mark">?</span>,
 <a href=#211 id=211 data-nosnippet>211</a>                ],
 <a href=#212 id=212 data-nosnippet>212</a>                <span class="kw-2">&amp;</span>image_features_vec[i],
 <a href=#213 id=213 data-nosnippet>213</a>            )<span class="question-mark">?</span>;

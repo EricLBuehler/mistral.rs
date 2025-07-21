@@ -383,7 +383,7 @@
 <a href=#383 id=383 data-nosnippet>383</a>                    <span class="kw">let </span>a = cu_seqlens[i - <span class="number">1</span>] <span class="kw">as </span>usize;
 <a href=#384 id=384 data-nosnippet>384</a>                    <span class="kw">let </span>b = cu_seqlens[i] <span class="kw">as </span>usize;
 <a href=#385 id=385 data-nosnippet>385</a>                    attention_mask = attention_mask.slice_assign(
-<a href=#386 id=386 data-nosnippet>386</a>                        <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>(a..b), <span class="kw-2">&amp;</span>(a..b)],
+<a href=#386 id=386 data-nosnippet>386</a>                        <span class="kw-2">&amp;</span>[<span class="number">0</span>..attention_mask.dim(<span class="number">0</span>)<span class="question-mark">?</span>, a..b, a..b],
 <a href=#387 id=387 data-nosnippet>387</a>                        <span class="kw-2">&amp;</span>Tensor::zeros((<span class="number">1</span>, b - a, b - a), xs.dtype(), xs.device())<span class="question-mark">?</span>,
 <a href=#388 id=388 data-nosnippet>388</a>                    )<span class="question-mark">?</span>;
 <a href=#389 id=389 data-nosnippet>389</a>                }

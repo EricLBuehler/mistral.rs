@@ -315,7 +315,7 @@
 <a href=#315 id=315 data-nosnippet>315</a>        <span class="comment">// logits_CxV[:, audio_eos_value + 1 :] = -torch.inf
 <a href=#316 id=316 data-nosnippet>316</a>        // logits_CxV[1:, audio_eos_value:] = -torch.inf
 <a href=#317 id=317 data-nosnippet>317</a>        </span>logits = logits.slice_assign(
-<a href=#318 id=318 data-nosnippet>318</a>            <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>(audio_eos_value + <span class="number">1</span>..)],
+<a href=#318 id=318 data-nosnippet>318</a>            <span class="kw-2">&amp;</span>[<span class="number">0</span>..logits.dim(<span class="number">0</span>)<span class="question-mark">?</span>, audio_eos_value + <span class="number">1</span>..logits.dim(<span class="number">1</span>)<span class="question-mark">?</span>],
 <a href=#319 id=319 data-nosnippet>319</a>            <span class="kw-2">&amp;</span>(Tensor::ones(
 <a href=#320 id=320 data-nosnippet>320</a>                (logits.dim(<span class="number">0</span>)<span class="question-mark">?</span>, logits.dim(<span class="number">1</span>)<span class="question-mark">? </span>- (audio_eos_value + <span class="number">1</span>)),
 <a href=#321 id=321 data-nosnippet>321</a>                logits.dtype(),
@@ -323,7 +323,7 @@
 <a href=#323 id=323 data-nosnippet>323</a>            )<span class="question-mark">? </span>* f64::NEG_INFINITY)<span class="question-mark">?</span>,
 <a href=#324 id=324 data-nosnippet>324</a>        )<span class="question-mark">?</span>;
 <a href=#325 id=325 data-nosnippet>325</a>        logits = logits.slice_assign(
-<a href=#326 id=326 data-nosnippet>326</a>            <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>(<span class="number">1</span>..), <span class="kw-2">&amp;</span>(audio_eos_value..)],
+<a href=#326 id=326 data-nosnippet>326</a>            <span class="kw-2">&amp;</span>[<span class="number">1</span>..logits.dim(<span class="number">0</span>)<span class="question-mark">?</span>, audio_eos_value..logits.dim(<span class="number">1</span>)<span class="question-mark">?</span>],
 <a href=#327 id=327 data-nosnippet>327</a>            <span class="kw-2">&amp;</span>(Tensor::ones(
 <a href=#328 id=328 data-nosnippet>328</a>                (logits.dim(<span class="number">0</span>)<span class="question-mark">? </span>- <span class="number">1</span>, logits.dim(<span class="number">1</span>)<span class="question-mark">? </span>- audio_eos_value),
 <a href=#329 id=329 data-nosnippet>329</a>                logits.dtype(),
@@ -478,7 +478,7 @@
 <a href=#478 id=478 data-nosnippet>478</a>                    .i((dec_step + <span class="number">1</span>..dec_step + <span class="number">2</span>, ..))<span class="question-mark">?
 <a href=#479 id=479 data-nosnippet>479</a>                    </span>.eq(-<span class="number">1.</span>)<span class="question-mark">?</span>;
 <a href=#480 id=480 data-nosnippet>480</a>                generated_tokens = generated_tokens.slice_assign(
-<a href=#481 id=481 data-nosnippet>481</a>                    <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>(dec_step + <span class="number">1</span>..dec_step + <span class="number">2</span>), <span class="kw-2">&amp;</span>..],
+<a href=#481 id=481 data-nosnippet>481</a>                    <span class="kw-2">&amp;</span>[dec_step + <span class="number">1</span>..dec_step + <span class="number">2</span>, <span class="number">0</span>..generated_tokens.dim(<span class="number">1</span>)<span class="question-mark">?</span>],
 <a href=#482 id=482 data-nosnippet>482</a>                    <span class="kw-2">&amp;</span>mask.where_cond(
 <a href=#483 id=483 data-nosnippet>483</a>                        <span class="kw-2">&amp;</span>dec_out.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>,
 <a href=#484 id=484 data-nosnippet>484</a>                        <span class="kw-2">&amp;</span>generated_tokens.i((dec_step + <span class="number">1</span>..dec_step + <span class="number">2</span>, ..))<span class="question-mark">?</span>,

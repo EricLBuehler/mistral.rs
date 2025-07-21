@@ -286,7 +286,7 @@
 <a href=#286 id=286 data-nosnippet>286</a>
 <a href=#287 id=287 data-nosnippet>287</a>        <span class="kw">let </span>(q, k) = <span class="self">self</span>.rotary_emb.forward(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, seqlen_offsets)<span class="question-mark">?</span>;
 <a href=#288 id=288 data-nosnippet>288</a>
-<a href=#289 id=289 data-nosnippet>289</a>        <span class="kw">let </span>(k, v) = Cache::update_kv_cache(kv_cache, k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+<a href=#289 id=289 data-nosnippet>289</a>        <span class="kw">let </span>(k, v) = Cache::update_kv_cache(kv_cache, k, v)<span class="question-mark">?</span>;
 <a href=#290 id=290 data-nosnippet>290</a>
 <a href=#291 id=291 data-nosnippet>291</a>        <span class="kw">let </span>attn_output =
 <a href=#292 id=292 data-nosnippet>292</a>            Sdpa.run_attention(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, <span class="prelude-val">Some</span>(flash_params), <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params)<span class="question-mark">?</span>;

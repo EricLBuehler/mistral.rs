@@ -231,7 +231,7 @@
 <a href=#231 id=231 data-nosnippet>231</a>
 <a href=#232 id=232 data-nosnippet>232</a>        <span class="kw">let </span>(q, k) = <span class="self">self</span>.rotary.forward(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, start_offsets)<span class="question-mark">?</span>;
 <a href=#233 id=233 data-nosnippet>233</a>
-<a href=#234 id=234 data-nosnippet>234</a>        <span class="kw">let </span>(k, v) = Cache::update_kv_cache(kv_cache, k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+<a href=#234 id=234 data-nosnippet>234</a>        <span class="kw">let </span>(k, v) = Cache::update_kv_cache(kv_cache, k, v)<span class="question-mark">?</span>;
 <a href=#235 id=235 data-nosnippet>235</a>
 <a href=#236 id=236 data-nosnippet>236</a>        <span class="kw">let </span>y = Sdpa.run_attention(
 <a href=#237 id=237 data-nosnippet>237</a>            <span class="kw-2">&amp;</span>q,

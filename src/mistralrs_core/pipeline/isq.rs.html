@@ -679,7 +679,7 @@
 <a href=#679 id=679 data-nosnippet>679</a>                            shard_index,
 <a href=#680 id=680 data-nosnippet>680</a>                            shard_path.display()
 <a href=#681 id=681 data-nosnippet>681</a>                        );
-<a href=#682 id=682 data-nosnippet>682</a>                        safetensors::serialize_to_file(current_chunk.clone(), <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>shard_path)<span class="question-mark">?</span>;
+<a href=#682 id=682 data-nosnippet>682</a>                        safetensors::serialize_to_file(current_chunk.clone(), <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>shard_path)<span class="question-mark">?</span>;
 <a href=#683 id=683 data-nosnippet>683</a>                        shard_index += <span class="number">1</span>;
 <a href=#684 id=684 data-nosnippet>684</a>                        current_chunk.clear();
 <a href=#685 id=685 data-nosnippet>685</a>                        current_bytes = <span class="number">0</span>;
@@ -696,7 +696,7 @@
 <a href=#696 id=696 data-nosnippet>696</a>                        shard_index,
 <a href=#697 id=697 data-nosnippet>697</a>                        shard_path.display()
 <a href=#698 id=698 data-nosnippet>698</a>                    );
-<a href=#699 id=699 data-nosnippet>699</a>                    safetensors::serialize_to_file(current_chunk.clone(), <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>shard_path)<span class="question-mark">?</span>;
+<a href=#699 id=699 data-nosnippet>699</a>                    safetensors::serialize_to_file(current_chunk.clone(), <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>shard_path)<span class="question-mark">?</span>;
 <a href=#700 id=700 data-nosnippet>700</a>                }
 <a href=#701 id=701 data-nosnippet>701</a>
 <a href=#702 id=702 data-nosnippet>702</a>                <span class="kw">let </span>residual = <span class="kw">match </span>organization {
@@ -721,7 +721,7 @@
 <a href=#721 id=721 data-nosnippet>721</a>                    residual_out.display()
 <a href=#722 id=722 data-nosnippet>722</a>                );
 <a href=#723 id=723 data-nosnippet>723</a>
-<a href=#724 id=724 data-nosnippet>724</a>                safetensors::serialize_to_file(residual, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>residual_out)<span class="question-mark">?</span>;
+<a href=#724 id=724 data-nosnippet>724</a>                safetensors::serialize_to_file(residual, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>residual_out)<span class="question-mark">?</span>;
 <a href=#725 id=725 data-nosnippet>725</a>
 <a href=#726 id=726 data-nosnippet>726</a>                <span class="kw">let </span>UqffFullSer {
 <a href=#727 id=727 data-nosnippet>727</a>                    tokenizer,

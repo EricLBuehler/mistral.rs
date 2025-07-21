@@ -409,7 +409,7 @@
 <a href=#409 id=409 data-nosnippet>409</a>        };
 <a href=#410 id=410 data-nosnippet>410</a>        <span class="kw">for </span>(start, end) <span class="kw">in </span>block_start_idx.into_iter().zip(block_end_idx) {
 <a href=#411 id=411 data-nosnippet>411</a>            causal_mask = causal_mask.slice_assign(
-<a href=#412 id=412 data-nosnippet>412</a>                <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>(start..end), <span class="kw-2">&amp;</span>(start..end)],
+<a href=#412 id=412 data-nosnippet>412</a>                <span class="kw-2">&amp;</span>[start..end, start..end],
 <a href=#413 id=413 data-nosnippet>413</a>                <span class="kw-2">&amp;</span>Tensor::zeros(
 <a href=#414 id=414 data-nosnippet>414</a>                    (end - start, end - start),
 <a href=#415 id=415 data-nosnippet>415</a>                    causal_mask.dtype(),

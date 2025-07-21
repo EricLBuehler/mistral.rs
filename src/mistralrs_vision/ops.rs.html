@@ -4,7 +4,7 @@
 <a href=#4 id=4 data-nosnippet>4</a></span><span class="kw">pub fn </span>pad(image: <span class="kw-2">&amp;</span>Tensor, max_h: usize, max_w: usize) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
 <a href=#5 id=5 data-nosnippet>5</a>    <span class="kw">let </span>(c, h, w) = image.dims3()<span class="question-mark">?</span>;
 <a href=#6 id=6 data-nosnippet>6</a>    <span class="kw">let </span>new_image = Tensor::zeros((c, max_h, max_w), image.dtype(), image.device())<span class="question-mark">?</span>;
-<a href=#7 id=7 data-nosnippet>7</a>    new_image.slice_assign(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>(..c), <span class="kw-2">&amp;</span>(..h), <span class="kw-2">&amp;</span>(..w)], image)
+<a href=#7 id=7 data-nosnippet>7</a>    new_image.slice_assign(<span class="kw-2">&amp;</span>[<span class="number">0</span>..c, <span class="number">0</span>..h, <span class="number">0</span>..w], image)
 <a href=#8 id=8 data-nosnippet>8</a>}
 <a href=#9 id=9 data-nosnippet>9</a>
 <a href=#10 id=10 data-nosnippet>10</a><span class="doccomment">/// Generate pixel mask of shape (c, max_h, max_w). 1 indicates valid pixel, 0 indicates padding.
@@ -16,7 +16,7 @@
 <a href=#16 id=16 data-nosnippet>16</a>    <span class="kw">let </span>mask = Tensor::ones((h, w), image.dtype(), image.device())<span class="question-mark">?</span>;
 <a href=#17 id=17 data-nosnippet>17</a>    <span class="kw">let </span>zeros = Tensor::zeros((max_h, max_w), image.dtype(), image.device())<span class="question-mark">?</span>;
 <a href=#18 id=18 data-nosnippet>18</a>    <span class="comment">// TODO(EricLBuehler): https://github.com/huggingface/candle/pull/2223 will make this nicer
-<a href=#19 id=19 data-nosnippet>19</a>    </span>zeros.slice_assign(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>(..h), <span class="kw-2">&amp;</span>(..w)], <span class="kw-2">&amp;</span>mask)
+<a href=#19 id=19 data-nosnippet>19</a>    </span>zeros.slice_assign(<span class="kw-2">&amp;</span>[<span class="number">0</span>..h, <span class="number">0</span>..w], <span class="kw-2">&amp;</span>mask)
 <a href=#20 id=20 data-nosnippet>20</a>}
 <a href=#21 id=21 data-nosnippet>21</a>
 <a href=#22 id=22 data-nosnippet>22</a><span class="doccomment">/// Given the image sizes (h, w) and the minimum and maximum lengths, calculate the image dimensions

@@ -173,7 +173,7 @@
 <a href=#173 id=173 data-nosnippet>173</a>            <span class="kw">let </span>n = patch_len[i] <span class="kw">as </span>usize;
 <a href=#174 id=174 data-nosnippet>174</a>            <span class="kw">if </span>n != max_patch_len {
 <a href=#175 id=175 data-nosnippet>175</a>                key_padding_mask = key_padding_mask.slice_assign(
-<a href=#176 id=176 data-nosnippet>176</a>                    <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>i, <span class="kw-2">&amp;</span>(n..)],
+<a href=#176 id=176 data-nosnippet>176</a>                    <span class="kw-2">&amp;</span>[i..i + <span class="number">1</span>, n..max_patch_len],
 <a href=#177 id=177 data-nosnippet>177</a>                    <span class="kw-2">&amp;</span>Tensor::ones((<span class="number">1</span>, max_patch_len - n), DType::U8, device)<span class="question-mark">?</span>,
 <a href=#178 id=178 data-nosnippet>178</a>                )<span class="question-mark">?</span>;
 <a href=#179 id=179 data-nosnippet>179</a>            }
@@ -325,7 +325,7 @@
 <a href=#325 id=325 data-nosnippet>325</a>                </span>}
 <a href=#326 id=326 data-nosnippet>326</a>                <span class="prelude-val">None </span>=&gt; att,
 <a href=#327 id=327 data-nosnippet>327</a>            };
-<a href=#328 id=328 data-nosnippet>328</a>            candle_nn::ops::inplace_softmax_last_dim(<span class="kw-2">&amp;mut </span>att)<span class="question-mark">?</span>;
+<a href=#328 id=328 data-nosnippet>328</a>            att = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>att)<span class="question-mark">?</span>;
 <a href=#329 id=329 data-nosnippet>329</a>            MatMul.matmul(<span class="kw-2">&amp;</span>att, <span class="kw-2">&amp;</span>v)<span class="question-mark">?
 <a href=#330 id=330 data-nosnippet>330</a>        </span>};
 <a href=#331 id=331 data-nosnippet>331</a>

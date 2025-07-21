@@ -221,7 +221,7 @@
 <a href=#221 id=221 data-nosnippet>221</a>                    </span>.repeat((<span class="number">3</span>, <span class="number">1</span>))<span class="question-mark">?</span>;
 <a href=#222 id=222 data-nosnippet>222</a>
 <a href=#223 id=223 data-nosnippet>223</a>                position_ids = position_ids.slice_assign(
-<a href=#224 id=224 data-nosnippet>224</a>                    <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>i, <span class="kw-2">&amp;</span>..],
+<a href=#224 id=224 data-nosnippet>224</a>                    <span class="kw-2">&amp;</span>[<span class="number">0</span>..position_ids.dim(<span class="number">0</span>)<span class="question-mark">?</span>, i..i + <span class="number">1</span>, <span class="number">0</span>..position_ids.dim(<span class="number">2</span>)<span class="question-mark">?</span>],
 <a href=#225 id=225 data-nosnippet>225</a>                    <span class="kw-2">&amp;</span>positions_mask
 <a href=#226 id=226 data-nosnippet>226</a>                        .where_cond(<span class="kw-2">&amp;</span>llm_positions, <span class="kw-2">&amp;</span>position_ids.i((.., i, ..))<span class="question-mark">?</span>)<span class="question-mark">?
 <a href=#227 id=227 data-nosnippet>227</a>                        </span>.unsqueeze(<span class="number">1</span>)<span class="question-mark">?</span>,
@@ -306,7 +306,7 @@
 <a href=#306 id=306 data-nosnippet>306</a>                    <span class="kw">let </span><span class="kw-2">mut </span>last_end = <span class="number">0</span>;
 <a href=#307 id=307 data-nosnippet>307</a>                    <span class="kw">for </span>(start, end) <span class="kw">in </span>batch_ids {
 <a href=#308 id=308 data-nosnippet>308</a>                        xs = xs.slice_assign(
-<a href=#309 id=309 data-nosnippet>309</a>                            <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>batch, <span class="kw-2">&amp;</span>(start..end), <span class="kw-2">&amp;</span>..],
+<a href=#309 id=309 data-nosnippet>309</a>                            <span class="kw-2">&amp;</span>[batch..batch + <span class="number">1</span>, start..end, <span class="number">0</span>..xs.dim(<span class="number">2</span>)<span class="question-mark">?</span>],
 <a href=#310 id=310 data-nosnippet>310</a>                            <span class="kw-2">&amp;</span>image_embeds
 <a href=#311 id=311 data-nosnippet>311</a>                                .i((last_end..last_end + (end - start), ..))<span class="question-mark">?
 <a href=#312 id=312 data-nosnippet>312</a>                                </span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>,
@@ -328,7 +328,7 @@
 <a href=#328 id=328 data-nosnippet>328</a>                    <span class="kw">let </span><span class="kw-2">mut </span>last_end = <span class="number">0</span>;
 <a href=#329 id=329 data-nosnippet>329</a>                    <span class="kw">for </span>(start, end) <span class="kw">in </span>batch_ids {
 <a href=#330 id=330 data-nosnippet>330</a>                        xs = xs.slice_assign(
-<a href=#331 id=331 data-nosnippet>331</a>                            <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>batch, <span class="kw-2">&amp;</span>(start..end), <span class="kw-2">&amp;</span>..],
+<a href=#331 id=331 data-nosnippet>331</a>                            <span class="kw-2">&amp;</span>[batch..batch + <span class="number">1</span>, start..end, <span class="number">0</span>..xs.dim(<span class="number">2</span>)<span class="question-mark">?</span>],
 <a href=#332 id=332 data-nosnippet>332</a>                            <span class="kw-2">&amp;</span>video_embeds
 <a href=#333 id=333 data-nosnippet>333</a>                                .i((last_end..last_end + (end - start), ..))<span class="question-mark">?
 <a href=#334 id=334 data-nosnippet>334</a>                                </span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>,

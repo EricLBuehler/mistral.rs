@@ -511,7 +511,7 @@
 <a href=#511 id=511 data-nosnippet>511</a>                    <span class="kw">let </span>a = cu_seqlens[i - <span class="number">1</span>] <span class="kw">as </span>usize;
 <a href=#512 id=512 data-nosnippet>512</a>                    <span class="kw">let </span>b = cu_seqlens[i] <span class="kw">as </span>usize;
 <a href=#513 id=513 data-nosnippet>513</a>                    attention_mask = attention_mask.slice_assign(
-<a href=#514 id=514 data-nosnippet>514</a>                        <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>(a..b), <span class="kw-2">&amp;</span>(a..b)],
+<a href=#514 id=514 data-nosnippet>514</a>                        <span class="kw-2">&amp;</span>[<span class="number">0</span>..attention_mask.dim(<span class="number">0</span>)<span class="question-mark">?</span>, a..b, a..b],
 <a href=#515 id=515 data-nosnippet>515</a>                        <span class="kw-2">&amp;</span>Tensor::zeros((<span class="number">1</span>, b - a, b - a), xs.dtype(), xs.device())<span class="question-mark">?</span>,
 <a href=#516 id=516 data-nosnippet>516</a>                    )<span class="question-mark">?</span>;
 <a href=#517 id=517 data-nosnippet>517</a>                }
@@ -528,7 +528,7 @@
 <a href=#528 id=528 data-nosnippet>528</a>                    <span class="kw">let </span>a = cu_seqlens[i - <span class="number">1</span>] <span class="kw">as </span>usize;
 <a href=#529 id=529 data-nosnippet>529</a>                    <span class="kw">let </span>b = cu_seqlens[i] <span class="kw">as </span>usize;
 <a href=#530 id=530 data-nosnippet>530</a>                    attention_mask = attention_mask.slice_assign(
-<a href=#531 id=531 data-nosnippet>531</a>                        <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>(a..b), <span class="kw-2">&amp;</span>(a..b)],
+<a href=#531 id=531 data-nosnippet>531</a>                        <span class="kw-2">&amp;</span>[<span class="number">0</span>..attention_mask.dim(<span class="number">0</span>)<span class="question-mark">?</span>, a..b, a..b],
 <a href=#532 id=532 data-nosnippet>532</a>                        <span class="kw-2">&amp;</span>Tensor::zeros((<span class="number">1</span>, b - a, b - a), xs.dtype(), xs.device())<span class="question-mark">?</span>,
 <a href=#533 id=533 data-nosnippet>533</a>                    )<span class="question-mark">?</span>;
 <a href=#534 id=534 data-nosnippet>534</a>                }

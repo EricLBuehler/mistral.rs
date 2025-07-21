@@ -889,7 +889,7 @@
 <a href=#889 id=889 data-nosnippet>889</a>                        </span><span class="kw">let </span>p_0 = positions.i((idx, <span class="number">0</span>))<span class="question-mark">?</span>.to_scalar::&lt;u32&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
 <a href=#890 id=890 data-nosnippet>890</a>                        <span class="kw">let </span>p_1 = positions.i((idx, <span class="number">1</span>))<span class="question-mark">?</span>.to_scalar::&lt;u32&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
 <a href=#891 id=891 data-nosnippet>891</a>                        hidden_states = hidden_states.slice_assign(
-<a href=#892 id=892 data-nosnippet>892</a>                            <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>p_0, <span class="kw-2">&amp;</span>(p_1..p_1 + cnt), <span class="kw-2">&amp;</span>(..img_set_tensor.dims()[<span class="number">2</span>])],
+<a href=#892 id=892 data-nosnippet>892</a>                            <span class="kw-2">&amp;</span>[p_0..p_0 + <span class="number">1</span>, p_1..p_1 + cnt, <span class="number">0</span>..img_set_tensor.dims()[<span class="number">2</span>]],
 <a href=#893 id=893 data-nosnippet>893</a>                            <span class="kw-2">&amp;</span>img_set_tensor,
 <a href=#894 id=894 data-nosnippet>894</a>                        )<span class="question-mark">?</span>;
 <a href=#895 id=895 data-nosnippet>895</a>                        idx += cnt;
@@ -909,7 +909,7 @@
 <a href=#909 id=909 data-nosnippet>909</a>                        <span class="kw">let </span>p_1 = positions.i((idx, <span class="number">1</span>))<span class="question-mark">?</span>.to_scalar::&lt;u32&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
 <a href=#910 id=910 data-nosnippet>910</a>                        <span class="comment">// hidden_states[positions[idx, 0], positions[idx, 1] : positions[idx, 1] + cnt] = ...
 <a href=#911 id=911 data-nosnippet>911</a>                        </span>hidden_states = hidden_states.slice_assign(
-<a href=#912 id=912 data-nosnippet>912</a>                            <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>p_0, <span class="kw-2">&amp;</span>(p_1..p_1 + cnt), <span class="kw-2">&amp;</span>(..img_set_tensor.dims()[<span class="number">2</span>])],
+<a href=#912 id=912 data-nosnippet>912</a>                            <span class="kw-2">&amp;</span>[p_0..p_0 + <span class="number">1</span>, p_1..p_1 + cnt, <span class="number">0</span>..img_set_tensor.dims()[<span class="number">2</span>]],
 <a href=#913 id=913 data-nosnippet>913</a>                            <span class="kw-2">&amp;</span>img_set_tensor,
 <a href=#914 id=914 data-nosnippet>914</a>                        )<span class="question-mark">?</span>;
 <a href=#915 id=915 data-nosnippet>915</a>                        idx += cnt;

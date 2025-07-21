@@ -130,7 +130,7 @@
 <a href=#130 id=130 data-nosnippet>130</a>            <span class="kw">for </span>(i, tgt_sizes_vec_i) <span class="kw">in </span>tgt_sizes_vec.iter().enumerate().take(b) {
 <a href=#131 id=131 data-nosnippet>131</a>                <span class="kw">let </span>n = (tgt_sizes_vec_i[<span class="number">0</span>] * tgt_sizes_vec_i[<span class="number">1</span>]) <span class="kw">as </span>usize;
 <a href=#132 id=132 data-nosnippet>132</a>                patch_attn_mask = patch_attn_mask.slice_assign(
-<a href=#133 id=133 data-nosnippet>133</a>                    <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>i, <span class="kw-2">&amp;</span><span class="number">0</span>, <span class="kw-2">&amp;</span>(..n)],
+<a href=#133 id=133 data-nosnippet>133</a>                    <span class="kw-2">&amp;</span>[i..i + <span class="number">1</span>, <span class="number">0</span>..<span class="number">1</span>, <span class="number">0</span>..n],
 <a href=#134 id=134 data-nosnippet>134</a>                    <span class="kw-2">&amp;</span>Tensor::ones((<span class="number">1</span>, <span class="number">1</span>, n), DType::U8, device)<span class="question-mark">?</span>,
 <a href=#135 id=135 data-nosnippet>135</a>                )<span class="question-mark">?</span>;
 <a href=#136 id=136 data-nosnippet>136</a>            }

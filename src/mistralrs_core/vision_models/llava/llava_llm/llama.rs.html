@@ -125,7 +125,7 @@
 <a href=#125 id=125 data-nosnippet>125</a>            },
 <a href=#126 id=126 data-nosnippet>126</a>            <span class="prelude-val">None </span>=&gt; {
 <a href=#127 id=127 data-nosnippet>127</a>                <span class="kw">let </span>(k, v) =
-<a href=#128 id=128 data-nosnippet>128</a>                    <span class="kw">crate</span>::pipeline::Cache::update_kv_cache(<span class="kw-2">&amp;mut </span>kv_cache[block_idx], k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+<a href=#128 id=128 data-nosnippet>128</a>                    <span class="kw">crate</span>::pipeline::Cache::update_kv_cache(<span class="kw-2">&amp;mut </span>kv_cache[block_idx], k, v)<span class="question-mark">?</span>;
 <a href=#129 id=129 data-nosnippet>129</a>
 <a href=#130 id=130 data-nosnippet>130</a>                Sdpa.run_attention(
 <a href=#131 id=131 data-nosnippet>131</a>                    <span class="kw-2">&amp;</span>q,
