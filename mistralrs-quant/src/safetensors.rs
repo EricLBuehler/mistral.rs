@@ -1,4 +1,6 @@
-use candle_core::{DType, Device, Error, IndexOp, Result, Shape, Tensor, WithDType};
+use candle_core::{
+    from_storage_no_op, DType, Device, Error, IndexOp, Result, Shape, Storage, Tensor, WithDType,
+};
 use candle_nn::var_builder::{Backend, SimpleBackend, VarBuilderArgs};
 use float8::F8E4M3;
 use regex::Regex;
@@ -132,8 +134,87 @@ fn convert(
         (st::Dtype::F32, _) => convert_::<f32>(view, device),
         (st::Dtype::F64, _) => convert_::<f64>(view, device),
         (st::Dtype::F8_E4M3, _) => convert_::<F8E4M3>(view, device),
+        (st::Dtype::F6_E2M3, _)
+        | (st::Dtype::F6_E3M2, _)
+        | (st::Dtype::F4, _)
+        | (st::Dtype::F8_E8M0, _) => {
+            // For dummy types, we need to handle loading by creating a dummy tensor
+            // Since these types don't have actual data representation, we'll create
+            // a tensor that indicates it's a dummy type
+            convert_dummy(view, device)
+        }
         (dtype, _) => Err(Error::UnsupportedSafeTensorDtype(dtype)),
     }
+}
+
+fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
+    // For dummy types, we'll create the appropriate storage variant that preserves
+    // both the raw data and the correct dtype
+    let (dtype, _dtype_name) = match view.dtype() {
+        st::Dtype::F6_E2M3 => (DType::F6E2M3, "F6_E2M3 (MX6)"),
+        st::Dtype::F6_E3M2 => (DType::F6E3M2, "F6_E3M2 (MX6)"),
+        st::Dtype::F4 => (DType::F4, "F4 (MX4)"),
+        st::Dtype::F8_E8M0 => (DType::F8E8M0, "F8_E8M0"),
+        _ => unreachable!("convert_dummy called with non-dummy dtype"),
+    };
+
+    // Load the raw bytes
+    let data = view.data();
+    let shape = view.shape();
+
+    // Create storage with the appropriate dummy type variant
+    let storage = match device {
+        Device::Cpu => {
+            let cpu_storage = match dtype {
+                DType::F6E2M3 => candle_core::cpu_backend::CpuStorage::F6E2M3(data.to_vec()),
+                DType::F6E3M2 => candle_core::cpu_backend::CpuStorage::F6E3M2(data.to_vec()),
+                DType::F4 => candle_core::cpu_backend::CpuStorage::F4(data.to_vec()),
+                DType::F8E8M0 => candle_core::cpu_backend::CpuStorage::F8E8M0(data.to_vec()),
+                _ => unreachable!(),
+            };
+            Storage::Cpu(cpu_storage)
+        }
+        #[cfg(feature = "cuda")]
+        Device::Cuda(device) => {
+            let mut slice = unsafe { device.alloc::<u8>(data.len())? };
+            device.memcpy_htod(data, &mut slice)?;
+
+            let slice = match dtype {
+                DType::F6E2M3 => candle_core::cuda_backend::CudaStorageSlice::F6E2M3(slice),
+                DType::F6E3M2 => candle_core::cuda_backend::CudaStorageSlice::F6E3M2(slice),
+                DType::F4 => candle_core::cuda_backend::CudaStorageSlice::F4(slice),
+                DType::F8E8M0 => candle_core::cuda_backend::CudaStorageSlice::F8E8M0(slice),
+                _ => unreachable!(),
+            };
+            let storage = candle_core::cuda_backend::CudaStorage {
+                slice,
+                device: device.clone(),
+            };
+            Storage::Cuda(storage)
+        }
+        #[cfg(not(feature = "cuda"))]
+        Device::Cuda(_) => {
+            return Err(Error::Msg("CUDA support not compiled".to_string()));
+        }
+        #[cfg(feature = "metal")]
+        Device::Metal(device) => {
+            let buffer = device.new_buffer_with_data(data)?;
+
+            let storage = candle_core::metal_backend::MetalStorage::new(
+                buffer,
+                device.clone(),
+                data.len(),
+                dtype,
+            );
+            Storage::Metal(storage)
+        }
+        #[cfg(not(feature = "metal"))]
+        Device::Metal(_) => {
+            return Err(Error::Msg("Metal support not compiled".to_string()));
+        }
+    };
+
+    Ok(from_storage_no_op(storage, shape, false))
 }
 
 #[derive(yoke::Yokeable)]
