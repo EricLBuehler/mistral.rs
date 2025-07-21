@@ -122,9 +122,9 @@ impl Kernels {
             include_stack.push(current_file.to_string());
 
             let mut result = String::new();
-            let mut lines = content.lines();
+            let lines = content.lines();
 
-            while let Some(line) = lines.next() {
+            for line in lines {
                 let trimmed = line.trim();
 
                 // Check for #include directive
@@ -150,13 +150,11 @@ impl Kernels {
                                     )?;
 
                                     result.push_str(&format!(
-                                        "\n// ===== Start of {} =====\n",
-                                        include_file
+                                        "\n// ===== Start of {include_file} =====\n"
                                     ));
                                     result.push_str(&processed);
                                     result.push_str(&format!(
-                                        "\n// ===== End of {} =====\n",
-                                        include_file
+                                        "\n// ===== End of {include_file} =====\n"
                                     ));
                                 }
                                 // Skip the original #include line
@@ -229,13 +227,12 @@ impl Kernels {
                         &mut include_stack,
                     ) {
                         Ok(processed) => {
-                            main_source.push_str(&format!("\n// ===== {} =====\n", file));
+                            main_source.push_str(&format!("\n// ===== {file} =====\n"));
                             main_source.push_str(&processed);
                         }
                         Err(e) => {
                             return Err(MetalKernelError::CompilationError(format!(
-                                "Failed to preprocess {}: {}",
-                                file, e
+                                "Failed to preprocess {file}: {e}"
                             )));
                         }
                     }
@@ -811,8 +808,8 @@ pub fn call_paged_attention_v2(
         let mut name = name.to_string();
         name.push_str(&format!("_hs{head_size}"));
         name.push_str(&format!("_nt{NUM_THREADS}"));
-        name.push_str(&format!("_nsl{}", NUM_SIMD_LANES));
-        name.push_str(&format!("_ps{}", PARTITION_SIZE));
+        name.push_str(&format!("_nsl{NUM_SIMD_LANES}"));
+        name.push_str(&format!("_ps{PARTITION_SIZE}"));
 
         let pipeline = kernels.load_pipeline(device, name)?;
 

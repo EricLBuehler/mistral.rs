@@ -99,7 +99,7 @@ impl MemoryUsage {
                 };
 
                 let metal_cap_mb = match metal_cap_mb {
-                    Some(x) if x == 0 => default_cap,
+                    Some(0) => default_cap,
                     Some(x) => x,
                     None => default_cap,
                 };

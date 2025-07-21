@@ -126,9 +126,9 @@ impl Kernels {
             include_stack.push(current_file.to_string());
 
             let mut result = String::new();
-            let mut lines = content.lines();
+            let lines = content.lines();
 
-            while let Some(line) = lines.next() {
+            for line in lines {
                 let trimmed = line.trim();
 
                 // Check for #include directive
@@ -154,13 +154,11 @@ impl Kernels {
                                     )?;
 
                                     result.push_str(&format!(
-                                        "\n// ===== Start of {} =====\n",
-                                        include_file
+                                        "\n// ===== Start of {include_file} =====\n"
                                     ));
                                     result.push_str(&processed);
                                     result.push_str(&format!(
-                                        "\n// ===== End of {} =====\n",
-                                        include_file
+                                        "\n// ===== End of {include_file} =====\n"
                                     ));
                                 }
                                 // Skip the original #include line
@@ -241,13 +239,12 @@ impl Kernels {
                         &mut include_stack,
                     ) {
                         Ok(processed) => {
-                            main_source.push_str(&format!("\n// ===== {} =====\n", file));
+                            main_source.push_str(&format!("\n// ===== {file} =====\n"));
                             main_source.push_str(&processed);
                         }
                         Err(e) => {
                             return Err(MetalKernelError::CompilationError(format!(
-                                "Failed to preprocess {}: {}",
-                                file, e
+                                "Failed to preprocess {file}: {e}"
                             )));
                         }
                     }
@@ -1716,7 +1713,7 @@ fn call_copy_gpu_inplace(
         if shape.len() <= MAX_COPY_SPECIALIZED_DIMS {
             kernel_name.push_str(&shape.len().to_string());
         } else {
-            kernel_name.push_str(&format!("n{}", work_per_thread));
+            kernel_name.push_str(&format!("n{work_per_thread}"));
         }
         if large {
             kernel_name.push_str("large");
