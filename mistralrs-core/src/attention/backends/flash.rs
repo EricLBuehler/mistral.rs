@@ -15,6 +15,9 @@ pub(crate) fn flash_attn(
 
     use crate::pipeline::text_models_inputs_processor::FlashParams;
 
+    let window_size_left = sdpa_params.sliding_window;
+    let window_size_right = if causal { Some(0) } else { None };
+
     if let Some(FlashParams {
         max_q,
         max_k,
@@ -27,35 +30,62 @@ pub(crate) fn flash_attn(
         let k = k.flatten_to(1)?;
         let v = v.flatten_to(1)?;
 
-        let window_size_left = sdpa_params.sliding_window;
-        let window_size_right = if causal { Some(0) } else { None };
-
         let cumulative_seqlens_q = &cumulative_seqlens_q[&q.device().location()];
         let cumulative_seqlens_k = &cumulative_seqlens_k[&q.device().location()];
 
-        candle_flash_attn::flash_attn_varlen_windowed_softcap(
-            &q,
-            &k,
-            &v,
-            cumulative_seqlens_q,
-            cumulative_seqlens_k,
-            *max_q as usize,
-            *max_k as usize,
-            sdpa_params.softmax_scale,
-            sdpa_params.softcap,
-            window_size_left,
-            window_size_right,
-        )?
-        .reshape(qshape)
+        if let Some(softcap) = sdpa_params.softcap {
+            candle_flash_attn::flash_attn_varlen_alibi_windowed_softcap(
+                &q,
+                &k,
+                &v,
+                None,
+                cumulative_seqlens_q,
+                cumulative_seqlens_k,
+                *max_q as usize,
+                *max_k as usize,
+                sdpa_params.softmax_scale,
+                window_size_left,
+                window_size_right,
+                softcap,
+            )?
+            .reshape(qshape)
+        } else {
+            candle_flash_attn::flash_attn_varlen_windowed(
+                &q,
+                &k,
+                &v,
+                cumulative_seqlens_q,
+                cumulative_seqlens_k,
+                *max_q as usize,
+                *max_k as usize,
+                sdpa_params.softmax_scale,
+                window_size_left,
+                window_size_right,
+            )?
+            .reshape(qshape)
+        }
     } else {
-        candle_flash_attn::flash_attn_softcap(
-            q,
-            k,
-            v,
-            sdpa_params.softmax_scale,
-            sdpa_params.softcap,
-            causal,
-        )
+        if let Some(softcap) = sdpa_params.softcap {
+            candle_flash_attn::flash_attn_alibi_windowed_softcap(
+                q,
+                k,
+                v,
+                None,
+                sdpa_params.softmax_scale,
+                window_size_left,
+                window_size_right,
+                softcap,
+            )
+        } else {
+            candle_flash_attn::flash_attn_windowed(
+                q,
+                k,
+                v,
+                sdpa_params.softmax_scale,
+                window_size_left,
+                window_size_right,
+            )
+        }
     }
 }
 
