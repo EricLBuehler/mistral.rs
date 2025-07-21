@@ -2,6 +2,7 @@ use candle_core::{shape::Dim, DType, Result, Tensor, D};
 
 #[cfg(feature = "cuda")]
 use crate::cuda::ffi;
+use crate::layers::Activation;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -34,28 +35,29 @@ impl candle_core::CustomOp1 for ArgSort {
         use candle_core::backend::BackendStorage;
         use candle_core::cuda_backend::cudarc::driver::DevicePtr;
         use candle_core::cuda_backend::CudaStorageSlice;
-        use candle_core::cuda_backend::WrapErr;
+
         let dev = storage.device();
         let elem_count = layout.shape().elem_count();
         let ncols = self.last_dim as i32;
         let nrows = elem_count as i32 / ncols;
-        let dst = unsafe { dev.alloc::<u32>(elem_count) }.w()?;
+        let dst = unsafe { dev.alloc::<u32>(elem_count) }?;
 
         use std::ffi::c_void;
 
-        let src = match &storage.slice {
-            CudaStorageSlice::U8(inp) => inp.device_ptr(),
-            CudaStorageSlice::U32(inp) => inp.device_ptr(),
-            CudaStorageSlice::I64(inp) => inp.device_ptr(),
-            CudaStorageSlice::BF16(inp) => inp.device_ptr(),
-            CudaStorageSlice::F16(inp) => inp.device_ptr(),
-            CudaStorageSlice::F32(inp) => inp.device_ptr(),
-            CudaStorageSlice::F64(inp) => inp.device_ptr(),
+        let (src, _src_guard) = match &storage.slice {
+            CudaStorageSlice::U8(inp) => inp.device_ptr(inp.stream()),
+            CudaStorageSlice::U32(inp) => inp.device_ptr(inp.stream()),
+            CudaStorageSlice::I64(inp) => inp.device_ptr(inp.stream()),
+            CudaStorageSlice::BF16(inp) => inp.device_ptr(inp.stream()),
+            CudaStorageSlice::F16(inp) => inp.device_ptr(inp.stream()),
+            CudaStorageSlice::F32(inp) => inp.device_ptr(inp.stream()),
+            CudaStorageSlice::F64(inp) => inp.device_ptr(inp.stream()),
             _ => candle_core::bail!("Unexpected dtype in asort"),
         };
-        let src_ptr = *src as *const c_void;
-        let dst_ptr = *dst.device_ptr() as *mut c_void;
-        let stream = *dev.cu_stream() as i64;
+        let src_ptr = src as *const c_void;
+        let (dst_ptr, dst_guard) = dst.device_ptr(dst.stream());
+        let dst_ptr = dst_ptr as *mut c_void;
+        let stream = dev.cuda_stream().cu_stream() as i64;
         unsafe {
             if self.asc {
                 match storage.dtype() {
@@ -109,6 +111,7 @@ impl candle_core::CustomOp1 for ArgSort {
                 }
             }
         }
+        drop(dst_guard);
         let dst_ret = candle_core::cuda_backend::CudaStorage {
             slice: CudaStorageSlice::U32(dst),
             device: dev.clone(),
@@ -369,6 +372,17 @@ pub fn apply_triangular(xs: &Tensor, diagonal: isize, upper: bool) -> Result<Ten
         }
     }
     xs * Tensor::from_vec(xs_tri, (l, s), device)?.to_dtype(xs.dtype())?
+}
+
+/// Elementwise multiply and activation. The following activations are supported:
+/// - `gelu`
+/// - `silu`
+/// - `relu`
+///
+/// This is equivalent to:
+/// `act(a) * b`
+pub fn mul_and_act(a: &Tensor, b: &Tensor, act: Activation) -> Result<Tensor> {
+    a.apply(&act)? * b
 }
 
 mod tests {

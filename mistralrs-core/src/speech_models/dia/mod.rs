@@ -315,7 +315,7 @@ impl DiaPipeline {
         // logits_CxV[:, audio_eos_value + 1 :] = -torch.inf
         // logits_CxV[1:, audio_eos_value:] = -torch.inf
         logits = logits.slice_assign(
-            &[&.., &(audio_eos_value + 1..)],
+            &[0..logits.dim(0)?, audio_eos_value + 1..logits.dim(1)?],
             &(Tensor::ones(
                 (logits.dim(0)?, logits.dim(1)? - (audio_eos_value + 1)),
                 logits.dtype(),
@@ -323,7 +323,7 @@ impl DiaPipeline {
             )? * f64::NEG_INFINITY)?,
         )?;
         logits = logits.slice_assign(
-            &[&(1..), &(audio_eos_value..)],
+            &[1..logits.dim(0)?, audio_eos_value..logits.dim(1)?],
             &(Tensor::ones(
                 (logits.dim(0)? - 1, logits.dim(1)? - audio_eos_value),
                 logits.dtype(),
@@ -478,7 +478,7 @@ impl DiaPipeline {
                     .i((dec_step + 1..dec_step + 2, ..))?
                     .eq(-1.)?;
                 generated_tokens = generated_tokens.slice_assign(
-                    &[&(dec_step + 1..dec_step + 2), &..],
+                    &[dec_step + 1..dec_step + 2, 0..generated_tokens.dim(1)?],
                     &mask.where_cond(
                         &dec_out.unsqueeze(0)?,
                         &generated_tokens.i((dec_step + 1..dec_step + 2, ..))?,

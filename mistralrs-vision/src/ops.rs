@@ -4,7 +4,7 @@ use candle_core::{Result, Tensor};
 pub fn pad(image: &Tensor, max_h: usize, max_w: usize) -> Result<Tensor> {
     let (c, h, w) = image.dims3()?;
     let new_image = Tensor::zeros((c, max_h, max_w), image.dtype(), image.device())?;
-    new_image.slice_assign(&[&(..c), &(..h), &(..w)], image)
+    new_image.slice_assign(&[0..c, 0..h, 0..w], image)
 }
 
 /// Generate pixel mask of shape (c, max_h, max_w). 1 indicates valid pixel, 0 indicates padding.
@@ -16,7 +16,7 @@ pub fn make_pixel_mask(image: &Tensor, h: usize, w: usize) -> Result<Tensor> {
     let mask = Tensor::ones((h, w), image.dtype(), image.device())?;
     let zeros = Tensor::zeros((max_h, max_w), image.dtype(), image.device())?;
     // TODO(EricLBuehler): https://github.com/huggingface/candle/pull/2223 will make this nicer
-    zeros.slice_assign(&[&(..h), &(..w)], &mask)
+    zeros.slice_assign(&[0..h, 0..w], &mask)
 }
 
 /// Given the image sizes (h, w) and the minimum and maximum lengths, calculate the image dimensions

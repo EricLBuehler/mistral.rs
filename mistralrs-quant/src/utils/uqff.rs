@@ -8,10 +8,11 @@ use half::{bf16, f16};
 // v0.1.1: add i16 dtype
 // v0.1.2: add F8E4M3
 // v0.1.3: add AFQ
+// v0.2.0: add f4/f6e3m2/f6e2m3/f8e8m0 type handling
 
 const UQFF_VERSION_MAJOR: u32 = 0;
-const UQFF_VERSION_MINOR: u32 = 1;
-const UQFF_VERSION_PATCH: u32 = 3;
+const UQFF_VERSION_MINOR: u32 = 2;
+const UQFF_VERSION_PATCH: u32 = 0;
 
 /// Format 4 bytes, little endian: [ UNSPECIFIED ] [ MAJOR ] [ MINOR ] [ PATCH ]
 pub(crate) const UQFF_VERSION: u32 =
@@ -52,6 +53,10 @@ pub(crate) fn write_dtype(dtype: DType, buffer: &mut Vec<u8>) {
         DType::F64 => 7,
         DType::I16 => 8,
         DType::F8E4M3 => 9,
+        DType::F6E2M3 => 10,
+        DType::F6E3M2 => 11,
+        DType::F4 => 12,
+        DType::F8E8M0 => 13,
     };
     buffer.extend(&dtype.to_le_bytes());
 }
@@ -69,6 +74,10 @@ pub(crate) fn read_dtype<R: std::io::Read>(buffer: &mut R) -> Result<DType> {
         7 => DType::F64,
         8 => DType::I16,
         9 => DType::F8E4M3,
+        10 => DType::F6E2M3,
+        11 => DType::F6E3M2,
+        12 => DType::F4,
+        13 => DType::F8E8M0,
         _ => candle_core::bail!("unknown dtype for quantized tensor {dtype}"),
     };
     Ok(dtype)
@@ -105,6 +114,9 @@ pub(crate) fn serialize_tensor(buffer: &mut Vec<u8>, tensor: &Tensor) -> Result<
         DType::F32 => data_to_bytes::<f32>(tensor.to_vec1()?),
         DType::F64 => data_to_bytes::<f64>(tensor.to_vec1()?),
         DType::F8E4M3 => data_to_bytes::<F8E4M3>(tensor.to_vec1()?),
+        DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 => {
+            candle_core::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors cannot be serialized.")
+        }
     };
 
     // Check for potential overflow when converting usize to u32
@@ -174,6 +186,9 @@ pub(crate) fn deserialize_tensor<R: std::io::Read>(
         DType::U32 => bytes_to_data::<u32>(&tensor_data, &dims, device),
         DType::U8 => bytes_to_data::<u8>(&tensor_data, &dims, device),
         DType::F8E4M3 => bytes_to_data::<F8E4M3>(&tensor_data, &dims, device),
+        DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 => {
+            candle_core::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors cannot be deserialized.")
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{layer_norm::RmsNormNonQuantized, LayerNorm, Linear, RmsNorm};
+use candle_nn::{LayerNorm, Linear, RmsNorm};
 use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 
@@ -162,16 +162,16 @@ impl candle_core::Module for MlpEmbedder {
 
 #[derive(Debug, Clone)]
 pub struct QkNorm {
-    query_norm: RmsNorm<RmsNormNonQuantized>,
-    key_norm: RmsNorm<RmsNormNonQuantized>,
+    query_norm: RmsNorm,
+    key_norm: RmsNorm,
 }
 
 impl QkNorm {
     fn new(dim: usize, vb: ShardedVarBuilder) -> Result<Self> {
         let query_norm = vb.get(dim, "query_norm.scale")?;
-        let query_norm = RmsNorm::<RmsNormNonQuantized>::new(query_norm, 1e-6);
+        let query_norm = RmsNorm::new(query_norm, 1e-6);
         let key_norm = vb.get(dim, "key_norm.scale")?;
-        let key_norm = RmsNorm::<RmsNormNonQuantized>::new(key_norm, 1e-6);
+        let key_norm = RmsNorm::new(key_norm, 1e-6);
         Ok(Self {
             query_norm,
             key_norm,
@@ -313,12 +313,22 @@ impl SelfAttention {
             self.proj.bias().map(|x| x.to_device(device).unwrap()),
         );
         self.norm = QkNorm {
-            query_norm: RmsNorm::<RmsNormNonQuantized>::new(
-                self.norm.query_norm.inner().weight().to_device(device)?,
+            query_norm: RmsNorm::new(
+                self.norm
+                    .query_norm
+                    .clone()
+                    .into_inner()
+                    .weight()
+                    .to_device(device)?,
                 1e-6,
             ),
-            key_norm: RmsNorm::<RmsNormNonQuantized>::new(
-                self.norm.key_norm.inner().weight().to_device(device)?,
+            key_norm: RmsNorm::new(
+                self.norm
+                    .key_norm
+                    .clone()
+                    .into_inner()
+                    .weight()
+                    .to_device(device)?,
                 1e-6,
             ),
         };
@@ -535,12 +545,22 @@ impl SingleStreamBlock {
             self.linear2.bias().map(|x| x.to_device(device).unwrap()),
         );
         self.norm = QkNorm {
-            query_norm: RmsNorm::<RmsNormNonQuantized>::new(
-                self.norm.query_norm.inner().weight().to_device(device)?,
+            query_norm: RmsNorm::new(
+                self.norm
+                    .query_norm
+                    .clone()
+                    .into_inner()
+                    .weight()
+                    .to_device(device)?,
                 1e-6,
             ),
-            key_norm: RmsNorm::<RmsNormNonQuantized>::new(
-                self.norm.key_norm.inner().weight().to_device(device)?,
+            key_norm: RmsNorm::new(
+                self.norm
+                    .key_norm
+                    .clone()
+                    .into_inner()
+                    .weight()
+                    .to_device(device)?,
                 1e-6,
             ),
         };

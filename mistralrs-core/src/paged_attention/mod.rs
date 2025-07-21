@@ -141,7 +141,7 @@ pub fn calculate_cache_config(
     // Cap Metal GPU memory to the wired (non‑paged) allocation limit reported by the kernel (`iogpu.wired_limit_mb`).
     // Users can raise this limit with `sudo sysctl -w iogpu.wired_limit_mb=<desired_mb>`.
     let mem_gpu = if matches!(device, Device::Metal(_)) {
-        let metal_cap_mb = MemoryUsage.get_total_memory(device)? as usize / SIZE_IN_MB;
+        let metal_cap_mb = MemoryUsage.get_total_memory(device)? / SIZE_IN_MB;
 
         info!("Metal GPU wired limit is {metal_cap_mb} MB.");
 

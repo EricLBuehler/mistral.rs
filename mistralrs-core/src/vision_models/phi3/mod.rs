@@ -889,7 +889,7 @@ impl ImageEmbedding {
                         let p_0 = positions.i((idx, 0))?.to_scalar::<u32>()? as usize;
                         let p_1 = positions.i((idx, 1))?.to_scalar::<u32>()? as usize;
                         hidden_states = hidden_states.slice_assign(
-                            &[&p_0, &(p_1..p_1 + cnt), &(..img_set_tensor.dims()[2])],
+                            &[p_0..p_0 + 1, p_1..p_1 + cnt, 0..img_set_tensor.dims()[2]],
                             &img_set_tensor,
                         )?;
                         idx += cnt;
@@ -909,7 +909,7 @@ impl ImageEmbedding {
                         let p_1 = positions.i((idx, 1))?.to_scalar::<u32>()? as usize;
                         // hidden_states[positions[idx, 0], positions[idx, 1] : positions[idx, 1] + cnt] = ...
                         hidden_states = hidden_states.slice_assign(
-                            &[&p_0, &(p_1..p_1 + cnt), &(..img_set_tensor.dims()[2])],
+                            &[p_0..p_0 + 1, p_1..p_1 + cnt, 0..img_set_tensor.dims()[2]],
                             &img_set_tensor,
                         )?;
                         idx += cnt;

@@ -10,9 +10,9 @@ use std::{
 };
 
 #[cfg(feature = "cuda")]
-use crate::utils::ffi;
+use crate::utils::{ffi, slice_ptr};
 #[cfg(feature = "cuda")]
-use candle_core::cuda::{cudarc::driver::DevicePtr, CudaStorage, WrapErr};
+use candle_core::cuda::{cudarc::driver::DevicePtr, CudaStorage};
 #[cfg(feature = "cuda")]
 use std::ffi::c_void;
 
@@ -85,92 +85,65 @@ impl CustomOp1 for Leftshift {
                 let result = CpuStorage::I32(result);
                 Ok((result, l1.shape().clone()))
             }
-            CpuStorage::BF16(_) => Err(Error::UnsupportedDTypeForOp(DType::BF16, "leftshifr")),
-            CpuStorage::F16(_) => Err(Error::UnsupportedDTypeForOp(DType::F16, "leftshifr")),
-            CpuStorage::F32(_) => Err(Error::UnsupportedDTypeForOp(DType::F32, "leftshifr")),
-            CpuStorage::F64(_) => Err(Error::UnsupportedDTypeForOp(DType::F64, "leftshifr")),
-            CpuStorage::F8E4M3(_) => Err(Error::UnsupportedDTypeForOp(DType::F8E4M3, "leftshifr")),
+            _ => Err(Error::UnsupportedDTypeForOp(s1.dtype(), "leftshift")),
         }
     }
+
     #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, s1: &CudaStorage, l1: &Layout) -> Result<(CudaStorage, Shape)> {
         if !l1.is_contiguous() {
             candle_core::bail!("Input tensor s1 must be contiguous");
         }
         let dev = s1.device().clone();
-        let (d_in1_ptr, elem_count) = match s1.dtype() {
+        let (d_in1_ptr, _d_guard, elem_count) = match s1.dtype() {
             DType::U8 => {
-                let d_in1_ptr = *s1
-                    .as_cuda_slice::<u8>()?
-                    .slice(l1.start_offset()..)
-                    .device_ptr() as *const c_void;
+                let (d_in1, d_in1_guard) = slice_ptr(s1.as_cuda_slice::<u8>()?, l1.start_offset());
                 let elem_count = l1.shape().elem_count();
-                (d_in1_ptr, elem_count)
-            }
-            DType::I16 => {
-                return Err(Error::UnsupportedDTypeForOp(DType::I16, "leftshift"));
-            }
-            DType::U32 => {
-                return Err(Error::UnsupportedDTypeForOp(DType::U32, "leftshift"));
-            }
-            DType::I64 => {
-                return Err(Error::UnsupportedDTypeForOp(DType::I64, "leftshift"));
+                (d_in1 as *const c_void, d_in1_guard, elem_count)
             }
             DType::I32 => {
-                let d_in1_ptr = *s1
-                    .as_cuda_slice::<i32>()?
-                    .slice(l1.start_offset()..)
-                    .device_ptr() as *const c_void;
+                let (d_in1, d_in1_guard) = slice_ptr(s1.as_cuda_slice::<i32>()?, l1.start_offset());
                 let elem_count = l1.shape().elem_count();
-                (d_in1_ptr, elem_count)
+                (d_in1 as *const c_void, d_in1_guard, elem_count)
             }
-            DType::BF16 => {
-                return Err(Error::UnsupportedDTypeForOp(DType::BF16, "leftshift"));
-            }
-            DType::F16 => {
-                return Err(Error::UnsupportedDTypeForOp(DType::F16, "leftshift"));
-            }
-            DType::F32 => {
-                return Err(Error::UnsupportedDTypeForOp(DType::F32, "leftshift"));
-            }
-            DType::F64 => {
-                return Err(Error::UnsupportedDTypeForOp(DType::F64, "leftshift"));
-            }
-            DType::F8E4M3 => {
-                return Err(Error::UnsupportedDTypeForOp(DType::F8E4M3, "leftshift"));
+            other => {
+                return Err(Error::UnsupportedDTypeForOp(other, "leftshift"));
             }
         };
         let dst = match s1.dtype() {
             DType::U8 => {
-                let d_out = unsafe { dev.alloc::<u8>(elem_count) }.w()?;
-                let d_out_ptr = *d_out.device_ptr() as *mut c_void;
+                let d_out = unsafe { dev.alloc::<u8>(elem_count) }?;
+                let (d_out_ptr, d_out_guard) = d_out.device_ptr(d_out.stream());
                 unsafe {
                     ffi::leftshift_u8(
                         d_in1_ptr,
-                        d_out_ptr,
+                        d_out_ptr as *mut std::ffi::c_void,
                         u32::try_from(elem_count)?,
                         self.0 as i32,
                     )
                 };
+                drop(d_out_guard);
                 CudaStorage::wrap_cuda_slice(d_out, dev)
             }
             DType::I32 => {
-                let d_out = unsafe { dev.alloc::<i32>(elem_count) }.w()?;
-                let d_out_ptr = *d_out.device_ptr() as *mut c_void;
+                let d_out = unsafe { dev.alloc::<i32>(elem_count) }?;
+                let (d_out_ptr, d_out_guard) = d_out.device_ptr(d_out.stream());
                 unsafe {
                     ffi::leftshift_i32(
                         d_in1_ptr,
-                        d_out_ptr,
+                        d_out_ptr as *mut std::ffi::c_void,
                         u32::try_from(elem_count)?,
                         self.0 as i32,
                     )
                 };
+                drop(d_out_guard);
                 CudaStorage::wrap_cuda_slice(d_out, dev)
             }
             _ => unreachable!(),
         };
         Ok((dst, l1.shape().clone()))
     }
+
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
@@ -381,11 +354,7 @@ impl CustomOp2 for BitWise {
                 let result = CpuStorage::I32(result);
                 Ok((result, l1.shape().clone()))
             }
-            CpuStorage::BF16(_) => Err(Error::UnsupportedDTypeForOp(DType::BF16, "bitwise")),
-            CpuStorage::F16(_) => Err(Error::UnsupportedDTypeForOp(DType::F16, "bitwise")),
-            CpuStorage::F32(_) => Err(Error::UnsupportedDTypeForOp(DType::F32, "bitwise")),
-            CpuStorage::F64(_) => Err(Error::UnsupportedDTypeForOp(DType::F64, "bitwise")),
-            CpuStorage::F8E4M3(_) => Err(Error::UnsupportedDTypeForOp(DType::F8E4M3, "bitwise")),
+            _ => Err(Error::UnsupportedDTypeForOp(s1.dtype(), "bitwise")),
         }
     }
 
@@ -419,190 +388,182 @@ impl CustomOp2 for BitWise {
         }
 
         let dev = s1.device().clone();
-        let (d_in1_ptr, d_in2_ptr, elem_count) = match s1.dtype() {
+        let (d_in1_ptr, d_in2_ptr, _d_in1_guard, _d_in2_guard, elem_count) = match s1.dtype() {
             DType::U8 => {
-                let d_in1_ptr = *s1
-                    .as_cuda_slice::<u8>()?
-                    .slice(l1.start_offset()..)
-                    .device_ptr() as *const c_void;
-                let d_in2_ptr = *s2
-                    .as_cuda_slice::<u8>()?
-                    .slice(l2.start_offset()..)
-                    .device_ptr() as *const c_void;
+                let (d_in1, d_in1_guard) = slice_ptr(s1.as_cuda_slice::<u8>()?, l1.start_offset());
+                let (d_in2, d_in2_guard) = slice_ptr(s2.as_cuda_slice::<u8>()?, l2.start_offset());
                 let elem_count = l1.shape().elem_count();
-                (d_in1_ptr, d_in2_ptr, elem_count)
+                (
+                    d_in1 as *const std::ffi::c_void,
+                    d_in2 as *const std::ffi::c_void,
+                    d_in1_guard,
+                    d_in2_guard,
+                    elem_count,
+                )
             }
             DType::U32 => {
-                let d_in1_ptr = *s1
-                    .as_cuda_slice::<u32>()?
-                    .slice(l1.start_offset()..)
-                    .device_ptr() as *const c_void;
-                let d_in2_ptr = *s2
-                    .as_cuda_slice::<u32>()?
-                    .slice(l2.start_offset()..)
-                    .device_ptr() as *const c_void;
+                let (d_in1, d_in1_guard) = slice_ptr(s1.as_cuda_slice::<u32>()?, l1.start_offset());
+                let (d_in2, d_in2_guard) = slice_ptr(s2.as_cuda_slice::<u32>()?, l2.start_offset());
                 let elem_count = l1.shape().elem_count();
-                (d_in1_ptr, d_in2_ptr, elem_count)
+                (
+                    d_in1 as *const std::ffi::c_void,
+                    d_in2 as *const std::ffi::c_void,
+                    d_in1_guard,
+                    d_in2_guard,
+                    elem_count,
+                )
             }
             DType::I64 => {
-                let d_in1_ptr = *s1
-                    .as_cuda_slice::<i64>()?
-                    .slice(l1.start_offset()..)
-                    .device_ptr() as *const c_void;
-                let d_in2_ptr = *s2
-                    .as_cuda_slice::<i64>()?
-                    .slice(l2.start_offset()..)
-                    .device_ptr() as *const c_void;
+                let (d_in1, d_in1_guard) = slice_ptr(s1.as_cuda_slice::<i64>()?, l1.start_offset());
+                let (d_in2, d_in2_guard) = slice_ptr(s2.as_cuda_slice::<i64>()?, l2.start_offset());
                 let elem_count = l1.shape().elem_count();
-                (d_in1_ptr, d_in2_ptr, elem_count)
+                (
+                    d_in1 as *const std::ffi::c_void,
+                    d_in2 as *const std::ffi::c_void,
+                    d_in1_guard,
+                    d_in2_guard,
+                    elem_count,
+                )
             }
             DType::I32 => {
-                let d_in1_ptr = *s1
-                    .as_cuda_slice::<i32>()?
-                    .slice(l1.start_offset()..)
-                    .device_ptr() as *const c_void;
-                let d_in2_ptr = *s2
-                    .as_cuda_slice::<i32>()?
-                    .slice(l2.start_offset()..)
-                    .device_ptr() as *const c_void;
+                let (d_in1, d_in1_guard) = slice_ptr(s1.as_cuda_slice::<i32>()?, l1.start_offset());
+                let (d_in2, d_in2_guard) = slice_ptr(s2.as_cuda_slice::<i32>()?, l2.start_offset());
                 let elem_count = l1.shape().elem_count();
-                (d_in1_ptr, d_in2_ptr, elem_count)
+                (
+                    d_in1 as *const std::ffi::c_void,
+                    d_in2 as *const std::ffi::c_void,
+                    d_in1_guard,
+                    d_in2_guard,
+                    elem_count,
+                )
             }
             DType::I16 => {
-                let d_in1_ptr = *s1
-                    .as_cuda_slice::<i16>()?
-                    .slice(l1.start_offset()..)
-                    .device_ptr() as *const c_void;
-                let d_in2_ptr = *s2
-                    .as_cuda_slice::<i16>()?
-                    .slice(l2.start_offset()..)
-                    .device_ptr() as *const c_void;
+                let (d_in1, d_in1_guard) = slice_ptr(s1.as_cuda_slice::<i16>()?, l1.start_offset());
+                let (d_in2, d_in2_guard) = slice_ptr(s2.as_cuda_slice::<i16>()?, l2.start_offset());
                 let elem_count = l1.shape().elem_count();
-                (d_in1_ptr, d_in2_ptr, elem_count)
+                (
+                    d_in1 as *const std::ffi::c_void,
+                    d_in2 as *const std::ffi::c_void,
+                    d_in1_guard,
+                    d_in2_guard,
+                    elem_count,
+                )
             }
-            DType::BF16 => {
-                return Err(Error::UnsupportedDTypeForOp(DType::BF16, "bitwise"));
-            }
-            DType::F16 => {
-                return Err(Error::UnsupportedDTypeForOp(DType::F16, "bitwise"));
-            }
-            DType::F32 => {
-                return Err(Error::UnsupportedDTypeForOp(DType::F32, "bitwise"));
-            }
-            DType::F64 => {
-                return Err(Error::UnsupportedDTypeForOp(DType::F64, "bitwise"));
-            }
-            DType::F8E4M3 => {
-                return Err(Error::UnsupportedDTypeForOp(DType::F8E4M3, "bitwise"));
+            other => {
+                return Err(Error::UnsupportedDTypeForOp(other, "bitwise"));
             }
         };
         let dst = match s1.dtype() {
             DType::U8 => {
-                let d_out = unsafe { dev.alloc::<u8>(elem_count) }.w()?;
-                let d_out_ptr = *d_out.device_ptr() as *mut c_void;
+                let d_out = unsafe { dev.alloc::<u8>(elem_count) }?;
+                let (d_out_ptr, d_out_guard) = d_out.device_ptr(d_out.stream());
                 unsafe {
                     match self.op {
                         BitWiseBinaryOpEnum::And => ffi::bitwise_and_u8(
                             d_in1_ptr,
                             d_in2_ptr,
-                            d_out_ptr,
+                            d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
                         ),
                         BitWiseBinaryOpEnum::Or => ffi::bitwise_or_u8(
                             d_in1_ptr,
                             d_in2_ptr,
-                            d_out_ptr,
+                            d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
                         ),
                         BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_u8(
                             d_in1_ptr,
                             d_in2_ptr,
-                            d_out_ptr,
+                            d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
                         ),
                     }
                 };
+                drop(d_out_guard);
                 CudaStorage::wrap_cuda_slice(d_out, dev)
             }
             DType::U32 => {
-                let d_out = unsafe { dev.alloc::<u32>(elem_count) }.w()?;
-                let d_out_ptr = *d_out.device_ptr() as *mut c_void;
+                let d_out = unsafe { dev.alloc::<u32>(elem_count) }?;
+                let (d_out_ptr, d_out_guard) = d_out.device_ptr(d_out.stream());
                 unsafe {
                     match self.op {
                         BitWiseBinaryOpEnum::And => ffi::bitwise_and_u32(
                             d_in1_ptr,
                             d_in2_ptr,
-                            d_out_ptr,
+                            d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
                         ),
                         BitWiseBinaryOpEnum::Or => ffi::bitwise_or_u32(
                             d_in1_ptr,
                             d_in2_ptr,
-                            d_out_ptr,
+                            d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
                         ),
                         BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_u32(
                             d_in1_ptr,
                             d_in2_ptr,
-                            d_out_ptr,
+                            d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
                         ),
                     }
                 };
+                drop(d_out_guard);
                 CudaStorage::wrap_cuda_slice(d_out, dev)
             }
             DType::I64 => {
-                let d_out = unsafe { dev.alloc::<i64>(elem_count) }.w()?;
-                let d_out_ptr = *d_out.device_ptr() as *mut c_void;
+                let d_out = unsafe { dev.alloc::<i64>(elem_count) }?;
+                let (d_out_ptr, d_out_guard) = d_out.device_ptr(d_out.stream());
                 unsafe {
                     match self.op {
                         BitWiseBinaryOpEnum::And => ffi::bitwise_and_i64(
                             d_in1_ptr,
                             d_in2_ptr,
-                            d_out_ptr,
+                            d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
                         ),
                         BitWiseBinaryOpEnum::Or => ffi::bitwise_or_i64(
                             d_in1_ptr,
                             d_in2_ptr,
-                            d_out_ptr,
+                            d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
                         ),
                         BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_i64(
                             d_in1_ptr,
                             d_in2_ptr,
-                            d_out_ptr,
+                            d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
                         ),
                     }
                 };
+                drop(d_out_guard);
                 CudaStorage::wrap_cuda_slice(d_out, dev)
             }
             DType::I32 => {
-                let d_out = unsafe { dev.alloc::<i32>(elem_count) }.w()?;
-                let d_out_ptr = *d_out.device_ptr() as *mut c_void;
+                let d_out = unsafe { dev.alloc::<i64>(elem_count) }?;
+                let (d_out_ptr, d_out_guard) = d_out.device_ptr(d_out.stream());
                 unsafe {
                     match self.op {
                         BitWiseBinaryOpEnum::And => ffi::bitwise_and_i32(
                             d_in1_ptr,
                             d_in2_ptr,
-                            d_out_ptr,
+                            d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
                         ),
                         BitWiseBinaryOpEnum::Or => ffi::bitwise_or_i32(
                             d_in1_ptr,
                             d_in2_ptr,
-                            d_out_ptr,
+                            d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
                         ),
                         BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_i32(
                             d_in1_ptr,
                             d_in2_ptr,
-                            d_out_ptr,
+                            d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
                         ),
                     }
                 };
+                drop(d_out_guard);
                 CudaStorage::wrap_cuda_slice(d_out, dev)
             }
             _ => unreachable!(),
@@ -774,11 +735,7 @@ impl CustomOp1 for BitWiseUnary {
                 let result = CpuStorage::I32(result);
                 Ok((result, l1.shape().clone()))
             }
-            CpuStorage::BF16(_) => Err(Error::UnsupportedDTypeForOp(DType::BF16, "bitwise")),
-            CpuStorage::F16(_) => Err(Error::UnsupportedDTypeForOp(DType::F16, "bitwise")),
-            CpuStorage::F32(_) => Err(Error::UnsupportedDTypeForOp(DType::F32, "bitwise")),
-            CpuStorage::F64(_) => Err(Error::UnsupportedDTypeForOp(DType::F64, "bitwise")),
-            CpuStorage::F8E4M3(_) => Err(Error::UnsupportedDTypeForOp(DType::F8E4M3, "bitwise")),
+            _ => Err(Error::UnsupportedDTypeForOp(s1.dtype(), "bitwise")),
         }
     }
 
@@ -1149,7 +1106,7 @@ fn count_nonzero_cuda(
             candle_core::DType::F16 => ffi::count_nonzero_f16(d_in, n, stream),
             candle_core::DType::F32 => ffi::count_nonzero_f32(d_in, n, stream),
             candle_core::DType::F64 => ffi::count_nonzero_f64(d_in, n, stream),
-            candle_core::DType::F8E4M3 => todo!(),
+            _ => unreachable!(),
         }
     }
 }
@@ -1195,7 +1152,7 @@ fn nonzero_cuda(
             candle_core::DType::F64 => {
                 ffi::nonzero_f64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
-            candle_core::DType::F8E4M3 => todo!(),
+            _ => unreachable!(),
         }
     }
 }
@@ -1219,7 +1176,7 @@ impl CustomOp1 for NonZero {
             candle_core::CpuStorage::F16(vs) => self.nonzero(vs, layout),
             candle_core::CpuStorage::F32(vs) => self.nonzero(vs, layout),
             candle_core::CpuStorage::F64(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::F8E4M3(_vs) => todo!(),
+            _ => unreachable!(),
         };
         let index_len = layout.dims().len();
         let result_len = result.len() / index_len;
@@ -1227,6 +1184,7 @@ impl CustomOp1 for NonZero {
         let shape = Shape::from_dims(&[result_len, index_len]);
         Ok((result, shape))
     }
+
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
@@ -1237,44 +1195,83 @@ impl CustomOp1 for NonZero {
             return Err(candle_core::Error::RequiresContiguous { op: "nonzero" });
         }
         let dev = storage.device().clone();
-        let d_in = match storage.dtype() {
-            candle_core::DType::U8 => *storage.as_cuda_slice::<u8>()?.device_ptr(),
-            candle_core::DType::U32 => *storage.as_cuda_slice::<u32>()?.device_ptr(),
-            candle_core::DType::I32 => *storage.as_cuda_slice::<i32>()?.device_ptr(),
-            candle_core::DType::I16 => *storage.as_cuda_slice::<i16>()?.device_ptr(),
-            candle_core::DType::I64 => *storage.as_cuda_slice::<i64>()?.device_ptr(),
-            candle_core::DType::BF16 => *storage.as_cuda_slice::<half::bf16>()?.device_ptr(),
-            candle_core::DType::F16 => *storage.as_cuda_slice::<half::f16>()?.device_ptr(),
-            candle_core::DType::F32 => *storage.as_cuda_slice::<f32>()?.device_ptr(),
-            candle_core::DType::F64 => *storage.as_cuda_slice::<f64>()?.device_ptr(),
-            candle_core::DType::F8E4M3 => todo!(),
-        } as *const c_void;
+        let (d_in, _d_in_guard) = match storage.dtype() {
+            candle_core::DType::U8 => {
+                let slice = storage.as_cuda_slice::<u8>()?;
+                let (d_in, d_in_guard) = slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            candle_core::DType::U32 => {
+                let slice = storage.as_cuda_slice::<u32>()?;
+                let (d_in, d_in_guard) = slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            candle_core::DType::I32 => {
+                let slice = storage.as_cuda_slice::<i32>()?;
+                let (d_in, d_in_guard) = slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            candle_core::DType::I16 => {
+                let slice = storage.as_cuda_slice::<i16>()?;
+                let (d_in, d_in_guard) = slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            candle_core::DType::I64 => {
+                let slice = storage.as_cuda_slice::<i64>()?;
+                let (d_in, d_in_guard) = slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            candle_core::DType::BF16 => {
+                let slice = storage.as_cuda_slice::<half::bf16>()?;
+                let (d_in, d_in_guard) = slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            candle_core::DType::F16 => {
+                let slice = storage.as_cuda_slice::<half::f16>()?;
+                let (d_in, d_in_guard) = slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            candle_core::DType::F32 => {
+                let slice = storage.as_cuda_slice::<f32>()?;
+                let (d_in, d_in_guard) = slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            candle_core::DType::F64 => {
+                let slice = storage.as_cuda_slice::<f64>()?;
+                let (d_in, d_in_guard) = slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            _ => unreachable!(),
+        };
         let n = layout.shape().elem_count();
 
-        let num_nonzero =
-            count_nonzero_cuda(storage.dtype(), d_in, u32::try_from(n)?, *dev.cu_stream());
+        let num_nonzero = count_nonzero_cuda(
+            storage.dtype(),
+            d_in,
+            u32::try_from(n)?,
+            dev.cuda_stream().cu_stream(),
+        );
         let d_out = unsafe { dev.alloc::<u32>(num_nonzero as usize * layout.dims().len()) }
             .map_err(|_| Error::Msg("Failed to allocate memory for nonzero result".to_string()))?;
         if num_nonzero != 0 {
-            let d_out_ptr = *d_out.device_ptr() as *mut c_void;
+            let (d_out, _d_out_guard) = d_out.device_ptr(d_out.stream());
             let dims = layout
                 .dims()
                 .iter()
                 .map(|&x| u32::try_from(x).unwrap())
                 .collect::<Vec<u32>>();
-            let d_dims = dev
-                .htod_copy(dims)
-                .map_err(|_| Error::Msg("Failed to copy dims to device".to_string()))?;
-            let d_dims_ptr = *d_dims.device_ptr() as *const c_void;
+            let mut d_dims = unsafe { dev.alloc::<u32>(dims.len()) }?;
+            dev.memcpy_htod(&dims, &mut d_dims)?;
+            let (d_dims_ptr, _d_dims_guard) = d_dims.device_ptr(d_dims.stream());
             nonzero_cuda(
                 storage.dtype(),
                 d_in,
                 u32::try_from(n)?,
                 num_nonzero,
-                d_dims_ptr,
+                d_dims_ptr as *const c_void,
                 u32::try_from(layout.dims().len())?,
-                d_out_ptr,
-                *dev.cu_stream(),
+                d_out as *mut c_void,
+                dev.cuda_stream().cu_stream(),
             );
         }
         let shape = Shape::from_dims(&[num_nonzero as usize, layout.dims().len()]);

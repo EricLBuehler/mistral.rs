@@ -488,8 +488,8 @@ impl Llama4VisionRotaryEmbedding {
         // Insert ID_CLS_TOKEN in the bottom right
         img_idx = img_idx.slice_assign(
             &[
-                &(img_idx.dim(0)? - 1..img_idx.dim(0)?),
-                &(img_idx.dim(1)? - 1..img_idx.dim(1)?),
+                img_idx.dim(0)? - 1..img_idx.dim(0)?,
+                img_idx.dim(1)? - 1..img_idx.dim(1)?,
             ],
             &Tensor::new(-2f32, device)?.reshape((1, 1))?,
         )?;

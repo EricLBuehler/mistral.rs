@@ -177,6 +177,7 @@ impl DepthWiseSeperableConv1d {
                 stride: 1,
                 groups: cfg.attention_dim,
                 dilation: 1,
+                cudnn_fwd_algo: None,
             },
             vb.pp("dw_conv").set_dtype(DType::F32),
         )?;
@@ -191,6 +192,7 @@ impl DepthWiseSeperableConv1d {
                     stride: 1,
                     dilation: 1,
                     groups: 1,
+                    cudnn_fwd_algo: None,
                 },
                 vb.pp("pw_conv").set_dtype(DType::F32),
             )?)
@@ -235,6 +237,7 @@ impl GLUPointWiseConv {
                     stride: 1,
                     dilation: 1,
                     groups: 1,
+                    cudnn_fwd_algo: None,
                 },
                 vb.pp("ext_pw_conv_1d").set_dtype(DType::F32),
             )?
@@ -248,6 +251,7 @@ impl GLUPointWiseConv {
                     stride: 1,
                     dilation: 1,
                     groups: 1,
+                    cudnn_fwd_algo: None,
                 },
                 vb.pp("ext_pw_conv_1d").set_dtype(DType::F32),
             )?
@@ -361,6 +365,7 @@ impl ConvModule {
                     stride: 1,
                     dilation: 1,
                     groups: 1,
+                    cudnn_fwd_algo: None,
                 },
                 vb.pp("ext_pw_conv_1d").set_dtype(DType::F32),
             )?
@@ -375,6 +380,7 @@ impl ConvModule {
                     stride: 1,
                     dilation: 1,
                     groups: 1,
+                    cudnn_fwd_algo: None,
                 },
                 vb.pp("ext_pw_conv_1d").set_dtype(DType::F32),
             )?

@@ -638,20 +638,13 @@ impl Cache {
         cache: &mut Option<(Tensor, Tensor)>,
         k: Tensor,
         v: Tensor,
-        slow_cat: bool,
     ) -> Result<(Tensor, Tensor)> {
         let (k, v) = match &*cache {
             None => (k, v),
             Some((k_cache, v_cache)) => {
-                if !slow_cat {
-                    let k = candle_nn::ops::kvconcat(k_cache, &k, 2)?.contiguous()?;
-                    let v = candle_nn::ops::kvconcat(v_cache, &v, 2)?.contiguous()?;
-                    (k, v)
-                } else {
-                    let k = Tensor::cat(&[k_cache, &k], 2)?.contiguous()?;
-                    let v = Tensor::cat(&[v_cache, &v], 2)?.contiguous()?;
-                    (k, v)
-                }
+                let k = Tensor::cat(&[k_cache, &k], 2)?.contiguous()?;
+                let v = Tensor::cat(&[v_cache, &v], 2)?.contiguous()?;
+                (k, v)
             }
         };
         *cache = Some((k.clone(), v.clone()));
@@ -665,7 +658,6 @@ impl Cache {
         v: Tensor,
         attention_mask: Option<&Tensor>,
         sliding_window: Option<usize>,
-        slow_cat: bool,
     ) -> Result<(Tensor, Tensor, Option<Tensor>)> {
         let (k, v, attention_mask) = match cache.clone() {
             None => (k, v, attention_mask.cloned()),
@@ -698,11 +690,7 @@ impl Cache {
                         }
                     }
                 }
-                let (k, v) = if !slow_cat {
-                    let k = candle_nn::ops::kvconcat(&prev_k, &k, 2)?;
-                    let v = candle_nn::ops::kvconcat(&prev_v, &v, 2)?;
-                    (k, v)
-                } else {
+                let (k, v) = {
                     let k = Tensor::cat(&[prev_k, k], 2)?.contiguous()?;
                     let v = Tensor::cat(&[prev_v, v], 2)?.contiguous()?;
                     (k, v)

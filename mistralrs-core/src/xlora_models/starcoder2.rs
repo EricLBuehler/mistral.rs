@@ -276,7 +276,6 @@ impl Attention {
             v,
             attention_mask,
             self.sliding_window,
-            false,
         )?;
 
         let mut attn_output = Sdpa.run_attention(

@@ -173,7 +173,7 @@ impl Resampler {
             let n = patch_len[i] as usize;
             if n != max_patch_len {
                 key_padding_mask = key_padding_mask.slice_assign(
-                    &[&i, &(n..)],
+                    &[i..i + 1, n..max_patch_len],
                     &Tensor::ones((1, max_patch_len - n), DType::U8, device)?,
                 )?;
             }
@@ -325,7 +325,7 @@ impl MultiheadAttention {
                 }
                 None => att,
             };
-            candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
+            att = candle_nn::ops::softmax_last_dim(&att)?;
             MatMul.matmul(&att, &v)?
         };
 

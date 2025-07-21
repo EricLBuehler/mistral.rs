@@ -231,7 +231,7 @@ impl LayerWeights {
 
         let (q, k) = self.rotary.forward(&q, &k, start_offsets)?;
 
-        let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+        let (k, v) = Cache::update_kv_cache(kv_cache, k, v)?;
 
         let y = Sdpa.run_attention(
             &q,

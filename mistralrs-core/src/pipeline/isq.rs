@@ -679,7 +679,7 @@ pub trait IsqModel {
                             shard_index,
                             shard_path.display()
                         );
-                        safetensors::serialize_to_file(current_chunk.clone(), &None, &shard_path)?;
+                        safetensors::serialize_to_file(current_chunk.clone(), None, &shard_path)?;
                         shard_index += 1;
                         current_chunk.clear();
                         current_bytes = 0;
@@ -696,7 +696,7 @@ pub trait IsqModel {
                         shard_index,
                         shard_path.display()
                     );
-                    safetensors::serialize_to_file(current_chunk.clone(), &None, &shard_path)?;
+                    safetensors::serialize_to_file(current_chunk.clone(), None, &shard_path)?;
                 }
 
                 let residual = match organization {
@@ -721,7 +721,7 @@ pub trait IsqModel {
                     residual_out.display()
                 );
 
-                safetensors::serialize_to_file(residual, &None, &residual_out)?;
+                safetensors::serialize_to_file(residual, None, &residual_out)?;
 
                 let UqffFullSer {
                     tokenizer,

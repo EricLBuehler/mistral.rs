@@ -125,7 +125,7 @@ impl CausalSelfAttention {
             },
             None => {
                 let (k, v) =
-                    crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
+                    crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v)?;
 
                 Sdpa.run_attention(
                     &q,

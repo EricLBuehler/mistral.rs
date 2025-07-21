@@ -14,22 +14,12 @@ pub(crate) use uqff::{
 
 #[cfg(feature = "cuda")]
 use candle_core::{
-    cuda::{cudarc::driver::DevicePtr, CudaDType},
-    CudaDevice, Device, Storage, Tensor, WithDType,
+    cuda::cudarc::{
+        self,
+        driver::{CudaSlice, DevicePtr, DeviceRepr},
+    },
+    CudaDevice, Device, Tensor,
 };
-
-#[cfg(feature = "cuda")]
-pub(crate) fn get_cuda_slice<T: WithDType + CudaDType>(
-    x: &Tensor,
-) -> candle_core::Result<*const T> {
-    let offset = x.layout().start_offset();
-    match &*x.storage_and_layout().0 {
-        Storage::Cuda(a_storage) => {
-            Ok(*a_storage.as_cuda_slice::<T>()?.slice(offset..).device_ptr() as *const T)
-        }
-        _ => candle_core::bail!("Expected CUDA storage."),
-    }
-}
 
 #[cfg(feature = "cuda")]
 pub(crate) fn get_cuda_device(x: &Tensor) -> candle_core::Result<&CudaDevice> {
@@ -37,4 +27,14 @@ pub(crate) fn get_cuda_device(x: &Tensor) -> candle_core::Result<&CudaDevice> {
         Device::Cuda(dev) => Ok(dev),
         _ => candle_core::bail!("Expected CUDA device"),
     }
+}
+
+#[cfg(feature = "cuda")]
+pub fn slice_ptr<T: DeviceRepr>(
+    v: &CudaSlice<T>,
+    lo: usize,
+) -> (u64, cudarc::driver::SyncOnDrop<'_>) {
+    let (_, guard) = v.device_ptr(v.stream());
+    let (ptr, _) = v.slice(lo..).device_ptr(v.stream());
+    (ptr, guard)
 }

@@ -148,10 +148,10 @@ fn convert_sparse_cross_attention_mask_to_dense(
             }
             cross_attention_mask = cross_attention_mask.slice_assign(
                 &[
-                    &sample_idx,
-                    &(start as usize..end as usize),
-                    &mask_idx,
-                    &(..mask_num_tiles),
+                    sample_idx..sample_idx + 1,
+                    start as usize..end as usize,
+                    mask_idx..mask_idx + 1,
+                    0..mask_num_tiles,
                 ],
                 &Tensor::ones(
                     (1, end as usize - start as usize, 1, mask_num_tiles),
@@ -712,8 +712,10 @@ impl MLlamaImageProcessor {
         let mut num_sample_tiles = Vec::new();
         for (i, image) in images.into_iter().enumerate() {
             let num_tiles = image.dim(0)?;
-            stacked_images = stacked_images
-                .slice_assign(&[&i, &(..num_tiles), &.., &.., &..], &image.unsqueeze(0)?)?;
+            stacked_images = stacked_images.slice_assign(
+                &[i..i + 1, 0..num_tiles, 0..ch, 0..tile_h, 0..tile_w],
+                &image.unsqueeze(0)?,
+            )?;
             num_sample_tiles.push(num_tiles)
         }
         Ok((stacked_images, num_sample_tiles))
@@ -757,13 +759,13 @@ impl MLlamaImageProcessor {
         // because in the original implementation, aspect ratios are apdded with (1,1)
 
         aspect_ratio_mask = aspect_ratio_mask.slice_assign(
-            &[&.., &0],
+            &[0..max_num_images, 0..1],
             &Tensor::ones((max_num_images, 1), DType::I64, device)?,
         )?;
 
         for (i, (num_tiles_h, num_tiles_w)) in aspect_ratios.iter().enumerate() {
             aspect_ratio_mask = aspect_ratio_mask.slice_assign(
-                &[&i, &(..*num_tiles_h * *num_tiles_w)],
+                &[i..i + 1, 0..*num_tiles_h * *num_tiles_w],
                 &Tensor::ones((1, *num_tiles_h * *num_tiles_w), DType::I64, device)?,
             )?;
         }

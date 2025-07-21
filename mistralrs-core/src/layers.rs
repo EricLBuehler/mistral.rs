@@ -2247,6 +2247,7 @@ impl Conv3dNoBias {
             stride: cfg.stride,
             dilation: cfg.dilation,
             groups: cfg.groups,
+            cudnn_fwd_algo: None,
         };
 
         Ok(Self {
@@ -2290,6 +2291,9 @@ impl TensorInfExtend for Tensor {
             DType::F32 => Ok(sum.to_scalar::<f32>()? == 0.),
             DType::F64 => Ok(sum.to_scalar::<f64>()? == 0.),
             DType::F8E4M3 => Ok(sum.to_scalar::<F8E4M3>()? == F8E4M3::ZERO),
+            DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 => {
+                candle_core::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors are not supported with .any")
+            }
         }
     }
 }
@@ -2306,6 +2310,9 @@ pub fn clamp_for_f16(xs: &Tensor) -> Result<Tensor> {
         DType::F32 => f32::MAX - 1000.,
         DType::F64 => f64::MAX as f32 - 1000.,
         DType::F8E4M3 => F8E4M3::MAX.to_f32() - 1000.,
+        DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 => {
+            candle_core::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors are not supported with .any")
+        }
     };
     if xs.is_inf()?.any()? {
         max -= 1000.;
@@ -2469,11 +2476,9 @@ impl Mlp {
         }
         let lhs = self.gate.forward(&xs)?;
         let rhs = self.up.forward(&xs)?;
-        let mut res = self.down.forward(&candle_nn::ops::mul_and_act(
-            &lhs,
-            &rhs,
-            self.act.try_into()?,
-        )?)?;
+        let mut res = self
+            .down
+            .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?)?;
         if self.gate.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
@@ -2492,17 +2497,8 @@ impl MlpLayer for Mlp {
         }
         let lhs = MatMul.qmethod_matmul(&xs, &*self.gate)?;
         let rhs = MatMul.qmethod_matmul(&xs, &*self.up)?;
-        let mut res = if matches!(
-            self.act,
-            Activation::Gelu | Activation::Silu | Activation::Relu
-        ) {
-            MatMul.qmethod_matmul(
-                &candle_nn::ops::mul_and_act(&lhs, &rhs, self.act.try_into()?)?,
-                &*self.down,
-            )?
-        } else {
-            MatMul.qmethod_matmul(&(&lhs.apply(&self.act)? * &rhs)?, &*self.down)?
-        };
+        let mut res =
+            MatMul.qmethod_matmul(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?, &*self.down)?;
         if self.gate.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }

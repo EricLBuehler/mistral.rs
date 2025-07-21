@@ -383,7 +383,7 @@ impl Qwen2VLVisionModel {
                     let a = cu_seqlens[i - 1] as usize;
                     let b = cu_seqlens[i] as usize;
                     attention_mask = attention_mask.slice_assign(
-                        &[&.., &(a..b), &(a..b)],
+                        &[0..attention_mask.dim(0)?, a..b, a..b],
                         &Tensor::zeros((1, b - a, b - a), xs.dtype(), xs.device())?,
                     )?;
                 }

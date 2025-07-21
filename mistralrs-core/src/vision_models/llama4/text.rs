@@ -292,11 +292,8 @@ impl Mlp {
         let lhs = self.gate.forward_autocast(xs)?;
         let rhs = self.up.forward_autocast(xs)?;
 
-        self.down.forward_autocast(&candle_nn::ops::mul_and_act(
-            &lhs,
-            &rhs,
-            self.act.try_into()?,
-        )?)
+        self.down
+            .forward_autocast(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?)
     }
 }
 

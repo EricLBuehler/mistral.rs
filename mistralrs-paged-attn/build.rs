@@ -156,8 +156,8 @@ fn main() -> Result<(), String> {
         );
         // Write a dummy metallib file to satisfy the include_bytes! macro
         let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
-        std::fs::write(out_dir.join("mistralrs_paged_attention.metallib"), &[]).unwrap();
-        std::fs::write(out_dir.join("mistralrs_paged_attention_ios.metallib"), &[]).unwrap();
+        std::fs::write(out_dir.join("mistralrs_paged_attention.metallib"), []).unwrap();
+        std::fs::write(out_dir.join("mistralrs_paged_attention_ios.metallib"), []).unwrap();
         return Ok(());
     }
 
@@ -209,10 +209,7 @@ fn main() -> Result<(), String> {
         match child.try_wait() {
             Ok(Some(status)) => {
                 if !status.success() {
-                    panic!(
-                        "Compiling metal -> air failed. Exit with status: {}",
-                        status
-                    )
+                    panic!("Compiling metal -> air failed. Exit with status: {status}")
                 }
             }
             Ok(None) => {
@@ -220,13 +217,10 @@ fn main() -> Result<(), String> {
                     .wait()
                     .expect("Compiling metal -> air failed while waiting for result");
                 if !status.success() {
-                    panic!(
-                        "Compiling metal -> air failed. Exit with status: {}",
-                        status
-                    )
+                    panic!("Compiling metal -> air failed. Exit with status: {status}")
                 }
             }
-            Err(e) => panic!("Compiling metal -> air failed: {:?}", e),
+            Err(e) => panic!("Compiling metal -> air failed: {e:?}"),
         }
 
         // Compile air to metallib
@@ -251,10 +245,7 @@ fn main() -> Result<(), String> {
         match child.try_wait() {
             Ok(Some(status)) => {
                 if !status.success() {
-                    panic!(
-                        "Compiling air -> metallib failed. Exit with status: {}",
-                        status
-                    )
+                    panic!("Compiling air -> metallib failed. Exit with status: {status}")
                 }
             }
             Ok(None) => {
@@ -262,13 +253,10 @@ fn main() -> Result<(), String> {
                     .wait()
                     .expect("Compiling air -> metallib failed while waiting for result");
                 if !status.success() {
-                    panic!(
-                        "Compiling air -> metallib failed. Exit with status: {}",
-                        status
-                    )
+                    panic!("Compiling air -> metallib failed. Exit with status: {status}")
                 }
             }
-            Err(e) => panic!("Compiling air -> metallib failed: {:?}", e),
+            Err(e) => panic!("Compiling air -> metallib failed: {e:?}"),
         }
 
         Ok(())

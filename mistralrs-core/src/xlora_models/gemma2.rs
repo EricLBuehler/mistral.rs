@@ -305,14 +305,8 @@ impl Attention {
         };
 
         // self.sliding_window is None if !self.use_sliding_window
-        let (k, v, mask) = Cache::update_kv_cache_sliding_window(
-            kv_cache,
-            k,
-            v,
-            mask,
-            self.sliding_window,
-            false,
-        )?;
+        let (k, v, mask) =
+            Cache::update_kv_cache_sliding_window(kv_cache, k, v, mask, self.sliding_window)?;
 
         let mut attn_output = Sdpa.run_attention(
             &q,

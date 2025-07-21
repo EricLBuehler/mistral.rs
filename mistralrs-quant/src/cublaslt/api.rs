@@ -9,6 +9,8 @@ use candle_core::{CpuStorage, DType, Device, Layout, Result, Shape, Storage, Ten
 use half::{bf16, f16};
 use std::sync::Arc;
 
+use crate::cublaslt::matmul::MatmulShared;
+
 use super::matmul::{Activation, CublasLTDType, CudaBlasLT, Matmul, MatmulConfig, OutSlice};
 use super::F8MatmulOutType;
 
@@ -22,7 +24,7 @@ impl CublasLt {
             _ => candle_core::bail!("`device` must be a `cuda` device"),
         };
 
-        let inner = CudaBlasLT::new(dev.cuda_device()).unwrap();
+        let inner = CudaBlasLT::new(dev.cuda_stream()).unwrap();
 
         Ok(Self(Arc::new(inner)))
     }
@@ -154,17 +156,17 @@ impl CublasLTBatchMatmulF8 {
         } else {
             // Allocate out tensor
             (
-                unsafe { dev.alloc::<bf16>(out_shape.elem_count()).w()? },
+                unsafe { dev.alloc::<bf16>(out_shape.elem_count())? },
                 (n * m),
             )
         };
         let (mut out, stride_c) = match self.out_dtype {
             F8MatmulOutType::BF16 => (
-                OutSlice::BF16(unsafe { dev.alloc::<bf16>(out_shape.elem_count()).w()? }),
+                OutSlice::BF16(unsafe { dev.alloc::<bf16>(out_shape.elem_count())? }),
                 (n * m),
             ),
             F8MatmulOutType::F8 => (
-                OutSlice::F8(unsafe { dev.alloc::<F8E4M3>(out_shape.elem_count()).w()? }),
+                OutSlice::F8(unsafe { dev.alloc::<F8E4M3>(out_shape.elem_count())? }),
                 (n * m),
             ),
         };
@@ -176,12 +178,12 @@ impl CublasLTBatchMatmulF8 {
             lda * std::mem::size_of::<F8E4M3>(), // A type size
             ldb * std::mem::size_of::<F8E4M3>(), // B type size
             ldc * std::mem::size_of::<F8E4M3>(), // C type size
-            *a.device_ptr() as usize,
-            *b.device_ptr() as usize,
-            *c.device_ptr() as usize,
-            *a_scale.device_ptr() as usize,
-            *b_scale.device_ptr() as usize,
-            *d_scale.device_ptr() as usize,
+            a.device_ptr(self.cublaslt.stream()).0 as usize,
+            b.device_ptr(self.cublaslt.stream()).0 as usize,
+            c.device_ptr(self.cublaslt.stream()).0 as usize,
+            a_scale.device_ptr(self.cublaslt.stream()).0 as usize,
+            b_scale.device_ptr(self.cublaslt.stream()).0 as usize,
+            d_scale.device_ptr(self.cublaslt.stream()).0 as usize,
         ];
 
         for case in cases {
@@ -432,10 +434,7 @@ impl CublasLTBatchMatmul {
             (c.clone(), c_l.stride()[0])
         } else {
             // Allocate out tensor
-            (
-                unsafe { dev.alloc::<T>(out_shape.elem_count()).w()? },
-                (n * m),
-            )
+            (unsafe { dev.alloc::<T>(out_shape.elem_count())? }, (n * m))
         };
 
         let config = MatmulConfig {

@@ -43,7 +43,7 @@ impl KvScaleCalculator {
                 *k_scale = k_scale.clone().maximum(k_scale_new)?;
                 *v_scale = v_scale.clone().maximum(v_scale_new)?;
                 *n += 1;
-                return Ok(*n);
+                Ok(*n)
             }
             Self::Done { .. } => {
                 candle_core::bail!("KvScaleCalculator::collect requires InProgress scales");

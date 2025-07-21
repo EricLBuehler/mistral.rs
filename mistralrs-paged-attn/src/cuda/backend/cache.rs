@@ -1,12 +1,12 @@
 use std::{collections::HashMap, iter::zip};
 
+use crate::cuda::backend::slice_ptr;
 use crate::cuda::ffi::{copy_blocks_bf16, copy_blocks_f16, copy_blocks_f32};
-use candle_core::cuda::WrapErr;
+use candle_core::backend::BackendDevice;
 use candle_core::cuda_backend::CudaStorageSlice;
 use candle_core::Result;
 use candle_core::{
-    cuda_backend::cudarc::driver::{CudaSlice, DevicePtr},
-    DType, Device, IndexOp, Storage, Tensor,
+    cuda_backend::cudarc::driver::CudaSlice, DType, Device, IndexOp, Storage, Tensor,
 };
 
 pub fn copy_blocks(
@@ -69,20 +69,20 @@ pub fn copy_blocks(
 
         let (key_ptr, value_ptr) = match (&key_storage.slice, &value_storage.slice) {
             (CudaStorageSlice::BF16(slice_key), CudaStorageSlice::BF16(slice_value)) => {
-                let ptr_key = *slice_key.slice(0..).device_ptr();
-                let ptr_value = *slice_value.slice(0..).device_ptr();
+                let (ptr_key, _key_guard) = slice_ptr(slice_key, 0);
+                let (ptr_value, _value_guard) = slice_ptr(slice_value, 0);
                 dtype = DType::BF16;
                 (ptr_key, ptr_value)
             }
             (CudaStorageSlice::F16(slice_key), CudaStorageSlice::F16(slice_value)) => {
-                let ptr_key = *slice_key.slice(0..).device_ptr();
-                let ptr_value = *slice_value.slice(0..).device_ptr();
+                let (ptr_key, _key_guard) = slice_ptr(slice_key, 0);
+                let (ptr_value, _value_guard) = slice_ptr(slice_value, 0);
                 dtype = DType::F16;
                 (ptr_key, ptr_value)
             }
             (CudaStorageSlice::F32(slice_key), CudaStorageSlice::F32(slice_value)) => {
-                let ptr_key = *slice_key.slice(0..).device_ptr();
-                let ptr_value = *slice_value.slice(0..).device_ptr();
+                let (ptr_key, _key_guard) = slice_ptr(slice_key, 0);
+                let (ptr_value, _value_guard) = slice_ptr(slice_value, 0);
                 (ptr_key, ptr_value)
             }
             _ => {
@@ -126,7 +126,7 @@ pub fn copy_blocks(
                 num_layers as i32,
                 num_pairs as i32,
                 numel_per_block as i32,
-                *dev.cu_stream() as i64,
+                dev.cuda_stream().cu_stream() as i64,
             );
         },
         candle_core::DType::F16 => unsafe {
@@ -137,7 +137,7 @@ pub fn copy_blocks(
                 num_layers as i32,
                 num_pairs as i32,
                 numel_per_block as i32,
-                *dev.cu_stream() as i64,
+                dev.cuda_stream().cu_stream() as i64,
             );
         },
         candle_core::DType::F32 => unsafe {
@@ -148,7 +148,7 @@ pub fn copy_blocks(
                 num_layers as i32,
                 num_pairs as i32,
                 numel_per_block as i32,
-                *dev.cu_stream() as i64,
+                dev.cuda_stream().cu_stream() as i64,
             );
         },
         _ => {}
@@ -168,8 +168,8 @@ pub unsafe fn swap_blocks(
     let block_size_in_bytes = src.dtype().size_in_bytes() * src.dims()[0];
     match (src.device(), dst.device()) {
         (Device::Cuda(src_dev), Device::Cuda(dst_dev)) => {
-            if src_dev.ordinal() != dst_dev.ordinal() {
-                candle_core::bail!("Tensors must be on the same device to copy, got ordinals {} (src) and {} (dst).", src_dev.ordinal(), dst_dev.ordinal());
+            if src_dev.location() != dst_dev.location() {
+                candle_core::bail!("Tensors must be on the same device to copy, got locations {:?} (src) and {:?} (dst).", src_dev.location(), dst_dev.location());
             }
             let (src_storage, src_layout) = src.storage_and_layout();
             let (dst_storage, dst_layout) = dst.storage_and_layout();
@@ -183,18 +183,18 @@ pub unsafe fn swap_blocks(
             };
             let (src_ptr, dst_ptr) = match (&src_storage.slice, &dst_storage.slice) {
                 (CudaStorageSlice::BF16(slice_src), CudaStorageSlice::BF16(slice_dst)) => {
-                    let ptr_src = *slice_src.slice(src_layout.start_offset()..).device_ptr();
-                    let ptr_dst = *slice_dst.slice(dst_layout.start_offset()..).device_ptr();
+                    let (ptr_src, _src_guard) = slice_ptr(slice_src, src_layout.start_offset());
+                    let (ptr_dst, _dst_guard) = slice_ptr(slice_dst, dst_layout.start_offset());
                     (ptr_src, ptr_dst)
                 }
                 (CudaStorageSlice::F16(slice_src), CudaStorageSlice::F16(slice_dst)) => {
-                    let ptr_src = *slice_src.slice(src_layout.start_offset()..).device_ptr();
-                    let ptr_dst = *slice_dst.slice(dst_layout.start_offset()..).device_ptr();
+                    let (ptr_src, _src_guard) = slice_ptr(slice_src, src_layout.start_offset());
+                    let (ptr_dst, _dst_guard) = slice_ptr(slice_dst, dst_layout.start_offset());
                     (ptr_src, ptr_dst)
                 }
                 (CudaStorageSlice::F32(slice_src), CudaStorageSlice::F32(slice_dst)) => {
-                    let ptr_src = *slice_src.slice(src_layout.start_offset()..).device_ptr();
-                    let ptr_dst = *slice_dst.slice(dst_layout.start_offset()..).device_ptr();
+                    let (ptr_src, _src_guard) = slice_ptr(slice_src, src_layout.start_offset());
+                    let (ptr_dst, _dst_guard) = slice_ptr(slice_dst, dst_layout.start_offset());
                     (ptr_src, ptr_dst)
                 }
                 _ => {
@@ -207,13 +207,17 @@ pub unsafe fn swap_blocks(
                 let dst_offset: u64 = (dst_block_number * block_size_in_bytes).try_into().unwrap();
                 // u8s because we copy by bytes
                 let src_slice: CudaSlice<u8> = unsafe {
-                    src_dev.upgrade_device_ptr(src_ptr + src_offset, block_size_in_bytes)
+                    src_dev
+                        .cuda_stream()
+                        .upgrade_device_ptr(src_ptr + src_offset, block_size_in_bytes)
                 };
                 let mut dst_slice = unsafe {
-                    dst_dev.upgrade_device_ptr(dst_ptr + dst_offset, block_size_in_bytes)
+                    dst_dev
+                        .cuda_stream()
+                        .upgrade_device_ptr(dst_ptr + dst_offset, block_size_in_bytes)
                 };
 
-                src_dev.dtod_copy(&src_slice, &mut dst_slice).w()?;
+                src_dev.memcpy_dtod(&src_slice, &mut dst_slice)?;
             }
         }
         (Device::Cpu, Device::Cuda(dst_dev)) => {
@@ -227,24 +231,26 @@ pub unsafe fn swap_blocks(
             let Storage::Cuda(dst_storage) = &*dst_storage else {
                 unreachable!()
             };
-            let dst_ptr = dst_storage.as_cuda_slice::<u8>()?.device_ptr()
-                + TryInto::<u64>::try_into(dst_layout.start_offset()).unwrap();
-            let src_slice = src_storage.as_slice()?;
+            let (dst_ptr, _guard_dst) = slice_ptr(
+                dst_storage.as_cuda_slice::<u8>()?,
+                dst_layout.start_offset(),
+            );
+            let src_slice = src_storage.as_slice::<u8>()?;
 
             for (src_block_number, dst_block_number) in block_mapping {
                 let src_offset = src_block_number * block_size_in_bytes;
                 let dst_offset: u64 = (dst_block_number * block_size_in_bytes).try_into().unwrap();
                 // u8s because we copy by bytes
                 let mut dst_slice: CudaSlice<u8> = unsafe {
-                    dst_dev.upgrade_device_ptr(dst_ptr + dst_offset, block_size_in_bytes)
+                    dst_dev
+                        .cuda_stream()
+                        .upgrade_device_ptr(dst_ptr + dst_offset, block_size_in_bytes)
                 };
 
-                dst_dev
-                    .htod_sync_copy_into(
-                        &src_slice[src_offset..src_offset + block_size_in_bytes],
-                        &mut dst_slice,
-                    )
-                    .w()?;
+                dst_dev.memcpy_htod(
+                    &src_slice[src_offset..src_offset + block_size_in_bytes],
+                    &mut dst_slice,
+                )?;
             }
         }
         (src, dst) => {

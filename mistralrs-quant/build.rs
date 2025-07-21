@@ -1,3 +1,43 @@
+#[cfg(feature = "cuda")]
+#[allow(unused)]
+fn cuda_version_from_build_system() -> (usize, usize) {
+    let output = std::process::Command::new("nvcc")
+        .arg("--version")
+        .output()
+        .expect("Failed to execute `nvcc`");
+
+    if !output.status.success() {
+        panic!(
+            "`nvcc --version` failed.\nstdout:\n{}\n\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let version_line = stdout.lines().nth(3).unwrap();
+    let release_section = version_line.split(", ").nth(1).unwrap();
+    let version_number = release_section.split(' ').nth(1).unwrap();
+
+    match version_number {
+        "12.9" => (12, 9),
+        "12.8" => (12, 8),
+        "12.6" => (12, 6),
+        "12.5" => (12, 5),
+        "12.4" => (12, 4),
+        "12.3" => (12, 3),
+        "12.2" => (12, 2),
+        "12.1" => (12, 1),
+        "12.0" => (12, 0),
+        "11.8" => (11, 8),
+        "11.7" => (11, 7),
+        "11.6" => (11, 6),
+        "11.5" => (11, 5),
+        "11.4" => (11, 4),
+        v => panic!("Unsupported cuda toolkit version: `{v}`. Please raise a github issue."),
+    }
+}
+
 fn main() -> Result<(), String> {
     #[cfg(feature = "cuda")]
     {
@@ -150,6 +190,9 @@ fn main() -> Result<(), String> {
             println!("cargo:rustc-link-lib=dylib=stdc++");
         }
 
+        let (major, minor) = cuda_version_from_build_system();
+        println!("cargo:rustc-cfg=feature=\"cuda-{major}0{minor}0\"");
+
         Ok(())
     }
 
@@ -191,8 +234,8 @@ fn main() -> Result<(), String> {
             );
             // Write a dummy metallib file to satisfy the include_bytes! macro
             let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
-            std::fs::write(out_dir.join("mistralrs_quant.metallib"), &[]).unwrap();
-            std::fs::write(out_dir.join("mistralrs_quant_ios.metallib"), &[]).unwrap();
+            std::fs::write(out_dir.join("mistralrs_quant.metallib"), []).unwrap();
+            std::fs::write(out_dir.join("mistralrs_quant_ios.metallib"), []).unwrap();
             return Ok(());
         }
 
@@ -245,10 +288,7 @@ fn main() -> Result<(), String> {
             match child.try_wait() {
                 Ok(Some(status)) => {
                     if !status.success() {
-                        panic!(
-                            "Compiling metal -> air failed. Exit with status: {}",
-                            status
-                        )
+                        panic!("Compiling metal -> air failed. Exit with status: {status}")
                     }
                 }
                 Ok(None) => {
@@ -256,13 +296,10 @@ fn main() -> Result<(), String> {
                         .wait()
                         .expect("Compiling metal -> air failed while waiting for result");
                     if !status.success() {
-                        panic!(
-                            "Compiling metal -> air failed. Exit with status: {}",
-                            status
-                        )
+                        panic!("Compiling metal -> air failed. Exit with status: {status}")
                     }
                 }
-                Err(e) => panic!("Compiling metal -> air failed: {:?}", e),
+                Err(e) => panic!("Compiling metal -> air failed: {e:?}"),
             }
 
             // Compile air to metallib
@@ -288,10 +325,7 @@ fn main() -> Result<(), String> {
             match child.try_wait() {
                 Ok(Some(status)) => {
                     if !status.success() {
-                        panic!(
-                            "Compiling air -> metallib failed. Exit with status: {}",
-                            status
-                        )
+                        panic!("Compiling air -> metallib failed. Exit with status: {status}")
                     }
                 }
                 Ok(None) => {
@@ -299,13 +333,10 @@ fn main() -> Result<(), String> {
                         .wait()
                         .expect("Compiling air -> metallib failed while waiting for result");
                     if !status.success() {
-                        panic!(
-                            "Compiling air -> metallib failed. Exit with status: {}",
-                            status
-                        )
+                        panic!("Compiling air -> metallib failed. Exit with status: {status}")
                     }
                 }
-                Err(e) => panic!("Compiling air -> metallib failed: {:?}", e),
+                Err(e) => panic!("Compiling air -> metallib failed: {e:?}"),
             }
 
             Ok(())

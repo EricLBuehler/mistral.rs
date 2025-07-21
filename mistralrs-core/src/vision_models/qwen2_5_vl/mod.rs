@@ -221,7 +221,7 @@ impl Qwen2_5VLModel {
                     .repeat((3, 1))?;
 
                 position_ids = position_ids.slice_assign(
-                    &[&.., &i, &..],
+                    &[0..position_ids.dim(0)?, i..i + 1, 0..position_ids.dim(2)?],
                     &positions_mask
                         .where_cond(&llm_positions, &position_ids.i((.., i, ..))?)?
                         .unsqueeze(1)?,
@@ -306,7 +306,7 @@ impl Qwen2_5VLModel {
                     let mut last_end = 0;
                     for (start, end) in batch_ids {
                         xs = xs.slice_assign(
-                            &[&batch, &(start..end), &..],
+                            &[batch..batch + 1, start..end, 0..xs.dim(1)?],
                             &image_embeds
                                 .i((last_end..last_end + (end - start), ..))?
                                 .unsqueeze(0)?,
@@ -328,7 +328,7 @@ impl Qwen2_5VLModel {
                     let mut last_end = 0;
                     for (start, end) in batch_ids {
                         xs = xs.slice_assign(
-                            &[&batch, &(start..end), &..],
+                            &[batch..batch + 1, start..end, 0..xs.dim(1)?],
                             &video_embeds
                                 .i((last_end..last_end + (end - start), ..))?
                                 .unsqueeze(0)?,

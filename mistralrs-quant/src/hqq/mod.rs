@@ -3,7 +3,7 @@ use candle_core::{DType, Device, Result, Shape, Tensor};
 
 #[cfg(feature = "cuda")]
 use candle_core::{
-    cuda::{cudarc::driver::DevicePtr, CudaStorageSlice, WrapErr},
+    cuda::{cudarc::driver::DevicePtr, CudaStorageSlice},
     from_storage_no_op, CudaStorage, Storage,
 };
 
@@ -27,7 +27,7 @@ use crate::{
 };
 
 #[cfg(feature = "cuda")]
-use crate::utils::{get_cuda_device, get_cuda_slice};
+use crate::utils::get_cuda_device;
 
 #[cfg(feature = "cuda")]
 use ffi::{eight_bit, four_bit, one_bit, three_bit, two_bit};
@@ -49,26 +49,44 @@ pub(crate) const OPTIMIZER_HQQ_DEFAULT_STEPS: usize = 20;
 macro_rules! dequant_for_dtype {
     ($this:expr, w=$wq_t:ty, sz=$scale_t:ty, $dtype:ident, pack=$pack:expr, $dev:expr, $bit_thing:ident, $postfix:tt) => {{
         paste::paste! {
-            let w_slice = get_cuda_slice::<$wq_t>(&$this.w_q)?;
-            let scale_slice = get_cuda_slice::<$scale_t>(&$this.scales)?;
-            let zero_slice = get_cuda_slice::<$scale_t>(&$this.zeros)?;
+            let (wq, _) = $this.w_q.storage_and_layout();
+            let wq = match &*wq {
+                candle_core::Storage::Cuda(s) => s,
+                _ => candle_core::bail!("wq must be a cuda tensor"),
+            };
+            let (w_slice, _w_guard) = crate::utils::slice_ptr(wq.as_cuda_slice::<$wq_t>()?, $this.w_q.layout().start_offset());
+
+            let (scale, _) = $this.scales.storage_and_layout();
+            let scale = match &*scale {
+                candle_core::Storage::Cuda(s) => s,
+                _ => candle_core::bail!("scale must be a cuda tensor"),
+            };
+            let (scale_slice, _scale_guard) = crate::utils::slice_ptr(scale.as_cuda_slice::<$scale_t>()?, $this.scales.layout().start_offset());
+
+            let (zero, _) = $this.zeros.storage_and_layout();
+            let zero = match &*zero {
+                candle_core::Storage::Cuda(s) => s,
+                _ => candle_core::bail!("zero must be a cuda tensor"),
+            };
+            let (zero_slice, _zero_guard) = crate::utils::slice_ptr(zero.as_cuda_slice::<$scale_t>()?, $this.zeros.layout().start_offset());
 
             let (h, w) = $this.w_q.dims2()?;
             let num_packed_elems = $pack;
             let out_shape = Shape::from_dims(&[num_packed_elems * h, w]);
 
-            let out = unsafe { $dev.alloc::<$scale_t>(out_shape.elem_count()).w()? };
-            let out_ptr = *out.device_ptr() as *mut $scale_t;
+            let out = unsafe { $dev.alloc::<$scale_t>(out_shape.elem_count())? };
+            let (out_ptr, out_guard) = out.device_ptr(out.stream());
             unsafe {
                 $bit_thing::[< dequantize_ $postfix >](
-                    w_slice,
-                    scale_slice,
-                    zero_slice,
-                    out_ptr,
+                    w_slice as *const $wq_t,
+                    scale_slice as *const $scale_t,
+                    zero_slice as *const $scale_t,
+                    out_ptr as *mut $scale_t,
                     h as i32,
                     w as i32,
                 );
             }
+            drop(out_guard);
 
             let storage = CudaStorage {
                 slice: CudaStorageSlice::$dtype(out),
@@ -158,7 +176,10 @@ impl HqqBits {
                     wq_in.device(),
                 )?;
                 let wq = wq
-                    .slice_assign(&[&(..wq_in.dims()[0]), &..], &wq_in.to_dtype(DType::U32)?)?
+                    .slice_assign(
+                        &[0..wq_in.dims()[0], 0..wq.dims()[1]],
+                        &wq_in.to_dtype(DType::U32)?,
+                    )?
                     .to_dtype(DType::I32)?;
                 let step = (wq.dims()[0] as f64 / 10.) as usize;
 

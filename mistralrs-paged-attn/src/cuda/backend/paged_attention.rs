@@ -1,3 +1,4 @@
+use crate::cuda::backend::slice_ptr;
 use crate::cuda::ffi;
 use crate::cuda::ffi::{
     paged_attention_v1_bf16, paged_attention_v1_f16, paged_attention_v1_f32,
@@ -5,9 +6,9 @@ use crate::cuda::ffi::{
 };
 use candle::backend::BackendStorage;
 use candle::cuda_backend::cudarc::driver::DevicePtr;
-use candle::cuda_backend::WrapErr;
 use candle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
 use candle_core as candle;
+use candle_core::cuda::cudarc::driver::DeviceSlice;
 use float8::F8E4M3;
 use half::{bf16, f16};
 use std::ffi::c_int;
@@ -96,23 +97,15 @@ impl PagedAttention {
 
         // Get cuda slices for all tensors
         let q = q.as_cuda_slice::<T>()?;
-        let kc_ptr = if cache_dtype == 3 {
-            *kc.as_cuda_slice::<F8E4M3>()?
-                .slice(kc_l.start_offset()..)
-                .device_ptr() as *const core::ffi::c_void
+        let (kc_ptr, _kc_guard) = if cache_dtype == 3 {
+            slice_ptr(kc.as_cuda_slice::<F8E4M3>()?, kc_l.start_offset())
         } else {
-            *kc.as_cuda_slice::<T>()?
-                .slice(kc_l.start_offset()..)
-                .device_ptr() as *const core::ffi::c_void
+            slice_ptr(kc.as_cuda_slice::<T>()?, kc_l.start_offset())
         };
-        let vc_ptr = if cache_dtype == 3 {
-            *vc.as_cuda_slice::<F8E4M3>()?
-                .slice(kc_l.start_offset()..)
-                .device_ptr() as *const core::ffi::c_void
+        let (vc_ptr, _vc_guard) = if cache_dtype == 3 {
+            slice_ptr(vc.as_cuda_slice::<F8E4M3>()?, vc_l.start_offset())
         } else {
-            *vc.as_cuda_slice::<T>()?
-                .slice(kc_l.start_offset()..)
-                .device_ptr() as *const core::ffi::c_void
+            slice_ptr(vc.as_cuda_slice::<T>()?, vc_l.start_offset())
         };
         let cl = cl.as_cuda_slice::<u32>()?; // Should be i32!
         let bt = bt.as_cuda_slice::<u32>()?; // Should be i32!
@@ -129,8 +122,8 @@ impl PagedAttention {
                 _ => candle::bail!("context_lens must be a cuda tensor"),
             };
             let alibi_s = alibi_s.as_cuda_slice::<f32>()?;
-            let alibi_s = alibi_s.slice(alibi_s_l.start_offset()..);
-            *alibi_s.device_ptr() as *const core::ffi::c_void
+            let (alibi_s_ptr, _alibi_s_guard) = slice_ptr(alibi_s, alibi_s_l.start_offset());
+            alibi_s_ptr as *const std::ffi::c_void
         } else {
             std::ptr::null()
         };
@@ -146,7 +139,7 @@ impl PagedAttention {
                 _ => candle::bail!("k_scale must be a cuda tensor"),
             };
             let ks = ks.as_cuda_slice::<f32>()?;
-            let ks = ks.slice(ks_l.start_offset()..);
+            let (ks, _ks_guard) = slice_ptr(ks, ks_l.start_offset());
 
             let (vs, vs_l) = v_scale.storage_and_layout();
             let vs = match &*vs {
@@ -154,12 +147,9 @@ impl PagedAttention {
                 _ => candle::bail!("v_scale must be a cuda tensor"),
             };
             let vs = vs.as_cuda_slice::<f32>()?;
-            let vs = vs.slice(vs_l.start_offset()..);
+            let (vs, _vs_guard) = slice_ptr(vs, vs_l.start_offset());
 
-            (
-                *ks.device_ptr() as *const f32,
-                *vs.device_ptr() as *const f32,
-            )
+            (ks as *const f32, vs as *const f32)
         } else {
             (std::ptr::null(), std::ptr::null())
         };
@@ -221,12 +211,12 @@ impl PagedAttention {
             && partition_size % block_size == 0;
 
         let elem_count = out_shape.elem_count();
-        let out = unsafe { dev.alloc::<T>(elem_count) }.w()?;
+        let out = unsafe { dev.alloc::<T>(elem_count) }?;
 
-        let out_ptr = *out.device_ptr() as *const core::ffi::c_void;
-        let q_ptr = *q.device_ptr() as *const core::ffi::c_void;
-        let bt_ptr = *bt.device_ptr() as *const core::ffi::c_int;
-        let cl_ptr = *cl.device_ptr() as *const core::ffi::c_int;
+        let (out_ptr, out_guard) = out.device_ptr(out.stream());
+        let (q_ptr, _q_guard) = q.device_ptr(q.stream());
+        let (bt_ptr, _bt_guard) = bt.device_ptr(bt.stream());
+        let (cl_ptr, _cl_guard) = cl.device_ptr(cl.stream());
 
         if use_v1 {
             let paged_attention_v1_func = match dtype {
@@ -237,16 +227,16 @@ impl PagedAttention {
             };
             unsafe {
                 paged_attention_v1_func(
-                    out_ptr,
-                    q_ptr,
-                    kc_ptr,
-                    vc_ptr,
+                    out_ptr as *const std::ffi::c_void,
+                    q_ptr as *const std::ffi::c_void,
+                    kc_ptr as *const std::ffi::c_void,
+                    vc_ptr as *const std::ffi::c_void,
                     alibi_s_ptr,
                     num_kv_heads as c_int,
                     self.softmax_scale,
                     self.softcapping,
-                    bt_ptr,
-                    cl_ptr,
+                    bt_ptr as *const i32,
+                    cl_ptr as *const i32,
                     block_size as c_int,
                     self.max_context_len as c_int,
                     num_seqs as c_int,
@@ -256,7 +246,7 @@ impl PagedAttention {
                     q_stride as c_int,
                     kv_block_stride as c_int,
                     kv_head_stride as c_int,
-                    *dev.cu_stream(),
+                    dev.cuda_stream().cu_stream(),
                     cache_dtype,
                     k_scale_ptr,
                     v_scale_ptr,
@@ -265,13 +255,13 @@ impl PagedAttention {
         } else {
             let tmp_out_shape = Shape::from((num_seqs, num_heads, max_num_partitions, head_size));
             let exp_sums_shape = Shape::from((num_seqs, num_heads, max_num_partitions));
-            let tmp_out = unsafe { dev.alloc::<T>(tmp_out_shape.elem_count()) }.w()?;
-            let exp_sums = unsafe { dev.alloc::<f32>(exp_sums_shape.elem_count()) }.w()?;
-            let max_logits = unsafe { dev.alloc::<f32>(exp_sums_shape.elem_count()) }.w()?;
+            let tmp_out = unsafe { dev.alloc::<T>(tmp_out_shape.elem_count()) }?;
+            let exp_sums = unsafe { dev.alloc::<f32>(exp_sums_shape.elem_count()) }?;
+            let max_logits = unsafe { dev.alloc::<f32>(exp_sums_shape.elem_count()) }?;
 
-            let tmp_out_ptr = *tmp_out.device_ptr() as *const core::ffi::c_void;
-            let exp_sums_ptr = *exp_sums.device_ptr() as *const f32;
-            let max_logits_ptr = *max_logits.device_ptr() as *const f32;
+            let (tmp_out_ptr, _tmp_out_guard) = tmp_out.device_ptr(tmp_out.stream());
+            let (exp_sums_ptr, _exp_sums_guard) = exp_sums.device_ptr(exp_sums.stream());
+            let (max_logits_ptr, _max_logits_guard) = max_logits.device_ptr(max_logits.stream());
 
             let paged_attention_v2_func = match dtype {
                 DType::F16 => paged_attention_v2_f16,
@@ -281,19 +271,19 @@ impl PagedAttention {
             };
             unsafe {
                 paged_attention_v2_func(
-                    out_ptr,
-                    exp_sums_ptr,
-                    max_logits_ptr,
-                    tmp_out_ptr,
-                    q_ptr,
-                    kc_ptr,
-                    vc_ptr,
+                    out_ptr as *const std::ffi::c_void,
+                    exp_sums_ptr as *const f32,
+                    max_logits_ptr as *const f32,
+                    tmp_out_ptr as *const std::ffi::c_void,
+                    q_ptr as *const std::ffi::c_void,
+                    kc_ptr as *const std::ffi::c_void,
+                    vc_ptr as *const std::ffi::c_void,
                     alibi_s_ptr,
                     num_kv_heads as c_int,
                     self.softmax_scale,
                     self.softcapping,
-                    bt_ptr,
-                    cl_ptr,
+                    bt_ptr as *const i32,
+                    cl_ptr as *const i32,
                     block_size as c_int,
                     self.max_context_len as c_int,
                     num_seqs as c_int,
@@ -303,13 +293,15 @@ impl PagedAttention {
                     q_stride as c_int,
                     kv_block_stride as c_int,
                     kv_head_stride as c_int,
-                    *dev.cu_stream(),
+                    dev.cuda_stream().cu_stream(),
                     cache_dtype,
                     k_scale_ptr,
                     v_scale_ptr,
                 )
             }
         }
+
+        drop(out_guard);
 
         let out = CudaStorage::wrap_cuda_slice(out, dev.clone());
         Ok((out, out_shape))
@@ -462,35 +454,31 @@ fn update_cache<
         )
     }
 
+    let dev = k.device();
+
     // Get cuda slices for all tensors
     let k = k.as_cuda_slice::<T>()?;
     let v = v.as_cuda_slice::<T>()?;
     let s = s.as_cuda_slice::<i64>()?;
 
-    let dev = k.device();
-
     // For FP8 cache, we need to get as u8 slices instead
-    let (kc_ptr, vc_ptr) = if cache_dtype == 3 {
+    let ((kc_ptr, _kc_guard), (vc_ptr, _vc_guard)) = if cache_dtype == 3 {
         if !crate::cuda::USE_FP8 {
             candle::bail!("FP8 is not supported on this system.");
         }
 
         let kc = kc.as_cuda_slice::<F8E4M3>()?;
         let vc = vc.as_cuda_slice::<F8E4M3>()?;
-        let kc = kc.slice(kc_l.start_offset()..);
-        let vc = vc.slice(vc_l.start_offset()..);
         (
-            *kc.device_ptr() as *const core::ffi::c_void,
-            *vc.device_ptr() as *const core::ffi::c_void,
+            slice_ptr(kc, kc_l.start_offset()),
+            slice_ptr(vc, vc_l.start_offset()),
         )
     } else {
         let kc = kc.as_cuda_slice::<T>()?;
         let vc = vc.as_cuda_slice::<T>()?;
-        let kc = kc.slice(kc_l.start_offset()..);
-        let vc = vc.slice(vc_l.start_offset()..);
         (
-            *kc.device_ptr() as *const core::ffi::c_void,
-            *vc.device_ptr() as *const core::ffi::c_void,
+            slice_ptr(kc, kc_l.start_offset()),
+            slice_ptr(vc, vc_l.start_offset()),
         )
     };
 
@@ -499,14 +487,18 @@ fn update_cache<
     let v = v.slice(v_l.start_offset()..);
     let s = s.slice(s_l.start_offset()..);
 
-    let (k_scale_ptr, v_scale_ptr) = if let Some((k_scale, v_scale)) = k_v_scale {
+    let (k_scale_ptr, v_scale_ptr) = if let Some((k_scale, v_scale)) = k_v_scale.as_ref() {
+        if !crate::cuda::USE_FP8 {
+            candle::bail!("FP8 is not supported on this system.");
+        }
+
         let (ks, ks_l) = k_scale.storage_and_layout();
         let ks = match &*ks {
             Storage::Cuda(ks) => ks,
             _ => candle::bail!("k_scale must be a cuda tensor"),
         };
         let ks = ks.as_cuda_slice::<f32>()?;
-        let ks = ks.slice(ks_l.start_offset()..);
+        let (ks, _ks_guard) = slice_ptr(ks, ks_l.start_offset());
 
         let (vs, vs_l) = v_scale.storage_and_layout();
         let vs = match &*vs {
@@ -514,12 +506,9 @@ fn update_cache<
             _ => candle::bail!("v_scale must be a cuda tensor"),
         };
         let vs = vs.as_cuda_slice::<f32>()?;
-        let vs = vs.slice(vs_l.start_offset()..);
+        let (vs, _vs_guard) = slice_ptr(vs, vs_l.start_offset());
 
-        (
-            *ks.device_ptr() as *const f32,
-            *vs.device_ptr() as *const f32,
-        )
+        (ks as *const f32, vs as *const f32)
     } else {
         (std::ptr::null(), std::ptr::null())
     };
@@ -557,17 +546,17 @@ fn update_cache<
     let key_stride = k_l.stride()[0] as c_int;
     let value_stride = v_l.stride()[0] as c_int;
 
-    let k_ptr = *k.device_ptr() as *const core::ffi::c_void;
-    let v_ptr = *v.device_ptr() as *const core::ffi::c_void;
-    let s_ptr = *s.device_ptr() as *const core::ffi::c_long;
+    let (k_ptr, _k_guard) = k.device_ptr(k.stream());
+    let (v_ptr, _v_guard) = v.device_ptr(v.stream());
+    let (s_ptr, _s_guard) = s.device_ptr(s.stream());
 
     unsafe {
         ffi::reshape_and_cache(
-            k_ptr,
-            v_ptr,
-            kc_ptr,
-            vc_ptr,
-            s_ptr,
+            k_ptr as *const core::ffi::c_void,
+            v_ptr as *const core::ffi::c_void,
+            kc_ptr as *const core::ffi::c_void,
+            vc_ptr as *const core::ffi::c_void,
+            s_ptr as *const core::ffi::c_long,
             num_tokens as c_int,
             num_heads as c_int,
             head_size as c_int,
@@ -575,7 +564,7 @@ fn update_cache<
             x as c_int,
             key_stride,
             value_stride,
-            *dev.cu_stream(),
+            dev.cuda_stream().cu_stream(),
             internal_type,
             cache_dtype,
             k_scale_ptr,
