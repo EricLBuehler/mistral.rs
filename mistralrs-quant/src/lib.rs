@@ -14,7 +14,6 @@ use candle_core::{
 #[cfg(feature = "metal")]
 mod metal_kernels;
 
-mod moe;
 mod afq;
 mod bitsandbytes;
 mod blockwise_fp8;
@@ -27,6 +26,7 @@ mod gptq;
 mod hqq;
 mod imatrix;
 mod lora;
+mod moe;
 pub mod rotary;
 pub mod safetensors;
 mod unquantized;
