@@ -9,6 +9,8 @@ use candle_core::{CpuStorage, DType, Device, Layout, Result, Shape, Storage, Ten
 use half::{bf16, f16};
 use std::sync::Arc;
 
+use crate::cublaslt::matmul::MatmulShared;
+
 use super::matmul::{Activation, CublasLTDType, CudaBlasLT, Matmul, MatmulConfig, OutSlice};
 use super::F8MatmulOutType;
 
@@ -176,12 +178,12 @@ impl CublasLTBatchMatmulF8 {
             lda * std::mem::size_of::<F8E4M3>(), // A type size
             ldb * std::mem::size_of::<F8E4M3>(), // B type size
             ldc * std::mem::size_of::<F8E4M3>(), // C type size
-            *a.device_ptr() as usize,
-            *b.device_ptr() as usize,
-            *c.device_ptr() as usize,
-            *a_scale.device_ptr() as usize,
-            *b_scale.device_ptr() as usize,
-            *d_scale.device_ptr() as usize,
+            a.device_ptr(self.cublaslt.stream()).0 as usize,
+            b.device_ptr(self.cublaslt.stream()).0 as usize,
+            c.device_ptr(self.cublaslt.stream()).0 as usize,
+            a_scale.device_ptr(self.cublaslt.stream()).0 as usize,
+            b_scale.device_ptr(self.cublaslt.stream()).0 as usize,
+            d_scale.device_ptr(self.cublaslt.stream()).0 as usize,
         ];
 
         for case in cases {
