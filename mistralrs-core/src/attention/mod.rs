@@ -158,7 +158,7 @@ impl Sdpa {
                 if let Some(softcap) = sdpa_params.softcap {
                     attention_scores = (attention_scores.tanh()? * softcap as f64)?;
                 }
-                candle_nn::ops::inplace_softmax_last_dim(&mut attention_scores)?;
+                attention_scores = candle_nn::ops::softmax_last_dim(&attention_scores)?;
 
                 let context_layer = cublaslt.batch_matmul(
                     &v.t()?.contiguous()?,
