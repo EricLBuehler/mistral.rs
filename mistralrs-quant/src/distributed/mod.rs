@@ -211,14 +211,14 @@ mod nccl {
                     world_size
                 );
             }
-            let device = dev.as_cuda_device()?.cuda_device();
-            assert_eq!(rank, device.ordinal());
+            let stream = dev.as_cuda_device()?.cuda_stream();
+            assert_eq!(rank, stream.context().ordinal());
             let nccl_id = match id {
                 super::Id::Nccl(id) => id,
                 _ => panic!("Expected NCCL Id variant"),
             };
             Ok(Self {
-                comm: cudarc::nccl::Comm::from_rank(device, rank, world_size, nccl_id)
+                comm: cudarc::nccl::Comm::from_rank(stream, rank, world_size, nccl_id)
                     .map_err(|e| e.0)
                     .expect("Failed to create `Comm`, error code"),
             })
@@ -440,8 +440,8 @@ mod nccl_ops {
     use std::{fmt::Debug, sync::Arc};
 
     use candle_core::{
-        backend::BackendStorage, cuda::cudarc, cuda_backend::WrapErr, CpuStorage, CustomOp1, DType,
-        Layout, Result, Shape, Tensor,
+        backend::BackendStorage, cuda::cudarc, CpuStorage, CustomOp1, DType, Layout, Result, Shape,
+        Tensor,
     };
 
     #[derive(Clone, Debug)]
@@ -475,7 +475,7 @@ mod nccl_ops {
             s: &candle_core::CudaStorage,
             l: &Layout,
         ) -> Result<(candle_core::CudaStorage, Shape)> {
-            use cudarc::{driver::DeviceSlice, nccl::ReduceOp};
+            use cudarc::nccl::ReduceOp;
             use half::{bf16, f16};
 
             let elem_count = l.shape().elem_count();
@@ -490,9 +490,9 @@ mod nccl_ops {
                                 Some((0, l)) if l == s.len() => s,
                                 Some(_) | None => candle_core::bail!("input has to be contiguous"),
                             };
-                            assert_eq!(dev.ordinal(), nccl_comm.rank());
                             assert!(elem_count > 0);
-                            let mut dst = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
+                            assert_eq!(dev.cuda_stream().context().ordinal(), nccl_comm.rank());
+                            let mut dst = unsafe { dev.alloc::<bf16>(elem_count) }?;
                             nccl_comm
                                 .inner()
                                 .all_reduce(s, &mut dst, &ReduceOp::Sum)
@@ -505,7 +505,9 @@ mod nccl_ops {
                                 Some((0, l)) if l == s.len() => s,
                                 Some(_) | None => candle_core::bail!("input has to be contiguous"),
                             };
-                            let mut dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
+                            assert!(elem_count > 0);
+                            assert_eq!(dev.cuda_stream().context().ordinal(), nccl_comm.rank());
+                            let mut dst = unsafe { dev.alloc::<f16>(elem_count) }?;
                             nccl_comm
                                 .inner()
                                 .all_reduce(s, &mut dst, &ReduceOp::Sum)
@@ -518,7 +520,9 @@ mod nccl_ops {
                                 Some((0, l)) if l == s.len() => s,
                                 Some(_) | None => candle_core::bail!("input has to be contiguous"),
                             };
-                            let mut dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
+                            assert!(elem_count > 0);
+                            assert_eq!(dev.cuda_stream().context().ordinal(), nccl_comm.rank());
+                            let mut dst = unsafe { dev.alloc::<f32>(elem_count) }?;
                             nccl_comm
                                 .inner()
                                 .all_reduce(s, &mut dst, &ReduceOp::Sum)
@@ -569,7 +573,6 @@ mod nccl_ops {
             s: &candle_core::CudaStorage,
             l: &Layout,
         ) -> Result<(candle_core::CudaStorage, Shape)> {
-            use cudarc::driver::DeviceSlice;
             use half::{bf16, f16};
 
             let mut out_shape = l.shape().dims().to_vec();
@@ -588,9 +591,9 @@ mod nccl_ops {
                                 Some((0, l)) if l == s.len() => s,
                                 Some(_) | None => candle_core::bail!("input has to be contiguous"),
                             };
-                            assert_eq!(dev.ordinal(), nccl_comm.rank());
                             assert!(elem_count > 0);
-                            let mut dst = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
+                            assert_eq!(dev.cuda_stream().context().ordinal(), nccl_comm.rank());
+                            let mut dst = unsafe { dev.alloc::<bf16>(elem_count) }?;
                             nccl_comm
                                 .inner()
                                 .all_gather(s, &mut dst)
@@ -603,7 +606,9 @@ mod nccl_ops {
                                 Some((0, l)) if l == s.len() => s,
                                 Some(_) | None => candle_core::bail!("input has to be contiguous"),
                             };
-                            let mut dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
+                            assert!(elem_count > 0);
+                            assert_eq!(dev.cuda_stream().context().ordinal(), nccl_comm.rank());
+                            let mut dst = unsafe { dev.alloc::<f16>(elem_count) }?;
                             nccl_comm
                                 .inner()
                                 .all_gather(s, &mut dst)
@@ -616,7 +621,9 @@ mod nccl_ops {
                                 Some((0, l)) if l == s.len() => s,
                                 Some(_) | None => candle_core::bail!("input has to be contiguous"),
                             };
-                            let mut dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
+                            assert!(elem_count > 0);
+                            assert_eq!(dev.cuda_stream().context().ordinal(), nccl_comm.rank());
+                            let mut dst = unsafe { dev.alloc::<f32>(elem_count) }?;
                             nccl_comm
                                 .inner()
                                 .all_gather(s, &mut dst)
