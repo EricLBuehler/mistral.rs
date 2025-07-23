@@ -27,6 +27,7 @@ use tokio::sync::mpsc::{channel, Sender};
 use tracing::info;
 use tracing::warn;
 
+#[cfg(feature = "cuda")]
 mod cuda;
 mod device_map;
 mod engine;
