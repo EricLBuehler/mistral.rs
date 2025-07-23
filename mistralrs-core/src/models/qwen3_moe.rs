@@ -603,7 +603,12 @@ impl DecoderLayer {
         {
             let vb = mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq);
 
-            if vb.device().is_metal() {
+            if vb.device().is_metal()
+                && cfg
+                    .quantization_config
+                    .as_ref()
+                    .is_some_and(|cfg| matches!(cfg, QuantizedConfig::Afq { .. }))
+            {
                 MoeOrMlp::FastMoe(FastMoeMlp::new(
                     cfg,
                     vb,
