@@ -316,4 +316,32 @@ void fused_moe_forward_f16(
     );
 }
 
+
+void fused_moe_forward_bf16(
+    const __nv_bfloat16* input,
+    const __nv_bfloat16* gate_weights,
+    const __nv_bfloat16* up_weights,
+    const __nv_bfloat16* down_weights,
+    const float* routing_weights,
+    const uint32_t* expert_indices,
+    __nv_bfloat16* output,
+    int num_tokens,
+    int hidden_dim,
+    int intermediate_dim,
+    int num_selected_experts,
+    int num_experts,
+    int activation_type,
+    cudaStream_t stream
+) {
+    const int threads = 256;
+    const int shared_mem_size = (hidden_dim + intermediate_dim) * sizeof(__nv_bfloat16);
+    
+    fused_moe_kernel<__nv_bfloat16><<<num_tokens, threads, shared_mem_size, stream>>>(
+        input, gate_weights, up_weights, down_weights,
+        routing_weights, expert_indices, output,
+        num_tokens, hidden_dim, intermediate_dim,
+        num_selected_experts, activation_type
+    );
+}
+
 } // extern "C"

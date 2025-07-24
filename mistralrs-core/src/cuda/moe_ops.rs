@@ -436,7 +436,7 @@ impl FusedMoeForward {
         let stream = device.cuda_stream().cu_stream() as i64;
 
         match (input.dtype(), expert_indices.dtype()) {
-            (DType::F32, DType::I32) => {
+            (DType::F32, DType::U32) => {
                 let input_slice = input_cuda
                     .as_cuda_slice::<f32>()?
                     .slice(input_layout.start_offset()..);
@@ -489,7 +489,7 @@ impl FusedMoeForward {
                     );
                 }
             }
-            (DType::F16, DType::I32) => {
+            (DType::F16, DType::U32) => {
                 let input_slice = input_cuda
                     .as_cuda_slice::<half::f16>()?
                     .slice(input_layout.start_offset()..);
@@ -525,6 +525,59 @@ impl FusedMoeForward {
                         output_slice.device_ptr(output_slice.stream());
 
                     ffi::fused_moe_forward_f16(
+                        input_ptr as *const c_void,
+                        gate_ptr as *const c_void,
+                        up_ptr as *const c_void,
+                        down_ptr as *const c_void,
+                        routing_ptr as *const c_void,
+                        indices_ptr as *const c_void,
+                        output_ptr as *mut c_void,
+                        num_tokens as i32,
+                        hidden_dim as i32,
+                        intermediate_dim as i32,
+                        self.num_selected_experts as i32,
+                        self.num_experts as i32,
+                        self.activation.to_int(),
+                        stream,
+                    );
+                }
+            }
+            (DType::BF16, DType::U32) => {
+                let input_slice = input_cuda
+                    .as_cuda_slice::<half::bf16>()?
+                    .slice(input_layout.start_offset()..);
+                let gate_slice = gate_cuda
+                    .as_cuda_slice::<half::bf16>()?
+                    .slice(gate_layout.start_offset()..);
+                let up_slice = up_cuda
+                    .as_cuda_slice::<half::bf16>()?
+                    .slice(up_layout.start_offset()..);
+                let down_slice = down_cuda
+                    .as_cuda_slice::<half::bf16>()?
+                    .slice(down_layout.start_offset()..);
+                let routing_slice = routing_cuda
+                    .as_cuda_slice::<f32>()?
+                    .slice(routing_layout.start_offset()..);
+                let indices_slice = indices_cuda
+                    .as_cuda_slice::<u32>()?
+                    .slice(indices_layout.start_offset()..);
+                let output_slice = output_cuda
+                    .as_cuda_slice::<half::bf16>()?
+                    .slice(output_layout.start_offset()..);
+
+                unsafe {
+                    let (input_ptr, _input_guard) = input_slice.device_ptr(input_slice.stream());
+                    let (gate_ptr, _gate_guard) = gate_slice.device_ptr(gate_slice.stream());
+                    let (up_ptr, _up_guard) = up_slice.device_ptr(up_slice.stream());
+                    let (down_ptr, _down_guard) = down_slice.device_ptr(down_slice.stream());
+                    let (routing_ptr, _routing_guard) =
+                        routing_slice.device_ptr(routing_slice.stream());
+                    let (indices_ptr, _indices_guard) =
+                        indices_slice.device_ptr(indices_slice.stream());
+                    let (output_ptr, _output_guard) =
+                        output_slice.device_ptr(output_slice.stream());
+
+                    ffi::fused_moe_forward_bf16(
                         input_ptr as *const c_void,
                         gate_ptr as *const c_void,
                         up_ptr as *const c_void,
