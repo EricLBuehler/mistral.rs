@@ -632,10 +632,10 @@ impl CudaMoeMlp {
             scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
         }
 
-        // Get the fused expert weights
-        let gate_weights = self.fused_gate_proj.dequantize_w()?;
-        let up_weights = self.fused_up_proj.dequantize_w()?;
-        let down_weights = self.fused_down_proj.dequantize_w()?;
+        // Get the fused expert weights and convert to input dtype
+        let gate_weights = self.fused_gate_proj.dequantize_w()?.to_dtype(xs.dtype())?;
+        let up_weights = self.fused_up_proj.dequantize_w()?.to_dtype(xs.dtype())?;
+        let down_weights = self.fused_down_proj.dequantize_w()?.to_dtype(xs.dtype())?;
 
         // Map activation function
         let activation = match self.act {
@@ -651,7 +651,7 @@ impl CudaMoeMlp {
             activation,
         );
 
-        let output = fused_op.forward(
+        let output = fused_op.forward_optimized(
             &xs.contiguous()?,
             &gate_weights.contiguous()?,
             &up_weights.contiguous()?,
