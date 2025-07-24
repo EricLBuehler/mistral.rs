@@ -328,9 +328,9 @@ impl FusedMoeForward {
 
         // Validate inputs
         let (num_tokens, hidden_dim) = input.dims2()?;
-        let (ne_g, hd_g, intermediate_dim) = gate_weights.dims3()?;
-        let (ne_u, hd_u, id_u) = up_weights.dims3()?;
-        let (ne_d, id_d, hd_d) = down_weights.dims3()?;
+        let (ne_g, intermediate_dim, hd_g) = gate_weights.dims3()?;
+        let (ne_u, id_u, hd_u) = up_weights.dims3()?;
+        let (ne_d, hd_d, id_d) = down_weights.dims3()?;
         let (nt, nse) = routing_weights.dims2()?;
         let (nt2, nse2) = expert_indices.dims2()?;
 
@@ -392,7 +392,7 @@ impl FusedMoeForward {
         use std::ffi::c_void;
 
         let (num_tokens, hidden_dim) = input.dims2()?;
-        let (_, intermediate_dim) = gate_weights.dims2()?;
+        let (_, _, intermediate_dim) = gate_weights.dims3()?;
 
         // Get storage and layouts
         let (input_storage, input_layout) = input.storage_and_layout();
