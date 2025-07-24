@@ -12,7 +12,7 @@ __global__ void indexed_matmul_kernel(
     const T* input,           // Input tensor [num_tokens, hidden_dim]
     const T* expert_weights,  // All expert weights [num_experts, in_dim, out_dim]
     const float* routing_weights, // Routing weights [num_tokens, num_selected_experts]
-    const int32_t* expert_indices, // Expert indices [num_tokens, num_selected_experts]
+    const uint32_t* expert_indices, // Expert indices [num_tokens, num_selected_experts]
     T* output,                // Output tensor [num_tokens, out_dim]
     int num_tokens,
     int hidden_dim,
@@ -55,7 +55,7 @@ __global__ void indexed_matmul_kernel_optimized(
     const T* input,
     const T* expert_weights,
     const float* routing_weights,
-    const int32_t* expert_indices,
+    const uint32_t* expert_indices,
     T* output,
     int num_tokens,
     int hidden_dim,
@@ -110,7 +110,7 @@ __global__ void fused_moe_kernel(
     const T* up_weights,         // [num_experts, hidden_dim, intermediate_dim]
     const T* down_weights,       // [num_experts, intermediate_dim, hidden_dim]
     const float* routing_weights,// [num_tokens, num_selected_experts]
-    const int32_t* expert_indices,// [num_tokens, num_selected_experts]
+    const uint32_t* expert_indices,// [num_tokens, num_selected_experts]
     T* output,                   // [num_tokens, hidden_dim]
     int num_tokens,
     int hidden_dim,
@@ -197,7 +197,7 @@ void indexed_matmul_f32(
     const float* input,
     const float* expert_weights,
     const float* routing_weights,
-    const int32_t* expert_indices,
+    const uint32_t* expert_indices,
     float* output,
     int num_tokens,
     int hidden_dim,
@@ -220,7 +220,7 @@ void indexed_matmul_f16(
     const half* input,
     const half* expert_weights,
     const float* routing_weights,
-    const int32_t* expert_indices,
+    const uint32_t* expert_indices,
     half* output,
     int num_tokens,
     int hidden_dim,
@@ -243,7 +243,7 @@ void indexed_matmul_bf16(
     const __nv_bfloat16* input,
     const __nv_bfloat16* expert_weights,
     const float* routing_weights,
-    const int32_t* expert_indices,
+    const uint32_t* expert_indices,
     __nv_bfloat16* output,
     int num_tokens,
     int hidden_dim,
@@ -268,7 +268,7 @@ void fused_moe_forward_f32(
     const float* up_weights,
     const float* down_weights,
     const float* routing_weights,
-    const int32_t* expert_indices,
+    const uint32_t* expert_indices,
     float* output,
     int num_tokens,
     int hidden_dim,
@@ -295,7 +295,7 @@ void fused_moe_forward_f16(
     const half* up_weights,
     const half* down_weights,
     const float* routing_weights,
-    const int32_t* expert_indices,
+    const uint32_t* expert_indices,
     half* output,
     int num_tokens,
     int hidden_dim,

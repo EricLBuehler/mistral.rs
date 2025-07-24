@@ -147,7 +147,7 @@ impl IndexedMatmul {
                     .as_cuda_slice::<f32>()?
                     .slice(routing_weights_layout.start_offset()..);
                 let expert_indices_slice = expert_indices_cuda
-                    .as_cuda_slice::<i32>()?
+                    .as_cuda_slice::<u32>()?
                     .slice(expert_indices_layout.start_offset()..);
                 let output_slice = output_cuda
                     .as_cuda_slice::<f32>()?
@@ -190,7 +190,7 @@ impl IndexedMatmul {
                     .as_cuda_slice::<f32>()?
                     .slice(routing_weights_layout.start_offset()..);
                 let expert_indices_slice = expert_indices_cuda
-                    .as_cuda_slice::<i32>()?
+                    .as_cuda_slice::<u32>()?
                     .slice(expert_indices_layout.start_offset()..);
                 let output_slice = output_cuda
                     .as_cuda_slice::<half::f16>()?
@@ -233,7 +233,7 @@ impl IndexedMatmul {
                     .as_cuda_slice::<f32>()?
                     .slice(routing_weights_layout.start_offset()..);
                 let expert_indices_slice = expert_indices_cuda
-                    .as_cuda_slice::<i32>()?
+                    .as_cuda_slice::<u32>()?
                     .slice(expert_indices_layout.start_offset()..);
                 let output_slice = output_cuda
                     .as_cuda_slice::<half::bf16>()?
@@ -453,7 +453,7 @@ impl FusedMoeForward {
                     .as_cuda_slice::<f32>()?
                     .slice(routing_layout.start_offset()..);
                 let indices_slice = indices_cuda
-                    .as_cuda_slice::<i32>()?
+                    .as_cuda_slice::<u32>()?
                     .slice(indices_layout.start_offset()..);
                 let output_slice = output_cuda
                     .as_cuda_slice::<f32>()?
@@ -506,7 +506,7 @@ impl FusedMoeForward {
                     .as_cuda_slice::<f32>()?
                     .slice(routing_layout.start_offset()..);
                 let indices_slice = indices_cuda
-                    .as_cuda_slice::<i32>()?
+                    .as_cuda_slice::<u32>()?
                     .slice(indices_layout.start_offset()..);
                 let output_slice = output_cuda
                     .as_cuda_slice::<half::f16>()?

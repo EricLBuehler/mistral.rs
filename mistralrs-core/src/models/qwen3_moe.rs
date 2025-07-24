@@ -629,7 +629,6 @@ impl CudaMoeMlp {
 
         // CUDA implementation using our custom kernels
         let xs_flat = xs.reshape((b_size * seq_len, hidden_dim))?;
-        let indices_i32 = indices.to_dtype(DType::I32)?;
 
         // Get the fused expert weights
         let gate_weights = self.fused_gate_proj.dequantize_w()?;
@@ -656,7 +655,7 @@ impl CudaMoeMlp {
             &up_weights,
             &down_weights,
             &scores,
-            &indices_i32,
+            &indices,
         )?;
 
         output
