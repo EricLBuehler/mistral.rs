@@ -571,7 +571,7 @@ impl CudaMoeMlp {
         layer_device: Device,
         _comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        if !vb.device().is_cuda() {
+        if !layer_device.is_cuda() {
             candle_core::bail!("CudaMoeMlp requires CUDA device");
         }
 
@@ -725,7 +725,7 @@ impl DecoderLayer {
                 .cloned()
                 .unwrap_or(real_device);
 
-            if vb.device().is_metal()
+            if layer_device.is_metal()
                 && cfg
                     .quantization_config
                     .as_ref()
@@ -734,7 +734,7 @@ impl DecoderLayer {
                 MoeOrMlp::FastMoe(FastMoeMlp::new(cfg, vb, layer_device, comm)?)
             } else {
                 #[cfg(feature = "cuda")]
-                if vb.device().is_cuda() {
+                if layer_device.is_cuda() {
                     MoeOrMlp::CudaMoe(CudaMoeMlp::new(cfg, vb, layer_device, comm)?)
                 } else {
                     MoeOrMlp::SlowMoe(SlowMoeMlp::new(cfg, vb, layer_device, comm)?)
