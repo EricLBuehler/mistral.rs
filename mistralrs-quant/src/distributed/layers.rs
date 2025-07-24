@@ -1089,12 +1089,12 @@ impl FusedExperts {
         quantization_config: &Option<QuantizedConfig>,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
-        if !vb.device().is_metal() {
-            candle_core::bail!("FastMoeMlp requires Metal.");
-        }
-
         let (fused_gate_proj, fused_up_proj, fused_down_proj) =
             if matches!(&quantization_config, Some(QuantizedConfig::Afq { .. })) {
+                if !vb.device().is_metal() {
+                    candle_core::bail!("FusedExperts requires Metal when used with Afq.");
+                }
+
                 let quantization_config = quantization_config.as_ref().unwrap();
 
                 let fused_gate_proj = AfqLayer::afq_packed_linear_b(

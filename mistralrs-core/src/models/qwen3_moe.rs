@@ -608,7 +608,7 @@ impl CudaMoeMlp {
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         use crate::cuda::moe_ops::FusedMoeForward;
-        
+
         let original_dtype = xs.dtype();
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
 
@@ -630,12 +630,12 @@ impl CudaMoeMlp {
         // CUDA implementation using our custom kernels
         let xs_flat = xs.reshape((b_size * seq_len, hidden_dim))?;
         let indices_i32 = indices.to_dtype(DType::I32)?;
-        
+
         // Get the fused expert weights
         let gate_weights = self.fused_gate_proj.dequantize_w()?;
         let up_weights = self.fused_up_proj.dequantize_w()?;
         let down_weights = self.fused_down_proj.dequantize_w()?;
-        
+
         // Map activation function
         let activation = match self.act {
             Activation::Silu => crate::cuda::moe_ops::Activation::Silu,
@@ -643,13 +643,13 @@ impl CudaMoeMlp {
             Activation::Relu => crate::cuda::moe_ops::Activation::Relu,
             _ => candle_core::bail!("Unsupported activation for CUDA MoE"),
         };
-        
+
         let fused_op = FusedMoeForward::new(
             gate_weights.dim(0)?, // num_experts
             self.num_experts_per_tok,
             activation,
         );
-        
+
         let output = fused_op.forward(
             &xs_flat,
             &gate_weights,
@@ -658,8 +658,9 @@ impl CudaMoeMlp {
             &scores,
             &indices_i32,
         )?;
-        
-        output.reshape((b_size, seq_len, hidden_dim))?
+
+        output
+            .reshape((b_size, seq_len, hidden_dim))?
             .to_dtype(original_dtype)
     }
 }
@@ -723,7 +724,7 @@ impl DecoderLayer {
                 .device_for(layer_idx, false)
                 .cloned()
                 .unwrap_or(real_device);
-                
+
             if vb.device().is_metal()
                 && cfg
                     .quantization_config
@@ -738,7 +739,7 @@ impl DecoderLayer {
                 } else {
                     MoeOrMlp::SlowMoe(SlowMoeMlp::new(cfg, vb, layer_device, comm)?)
                 }
-                
+
                 #[cfg(not(feature = "cuda"))]
                 MoeOrMlp::SlowMoe(SlowMoeMlp::new(cfg, vb, layer_device, comm)?)
             }
