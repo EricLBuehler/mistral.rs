@@ -2,6 +2,17 @@
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
 #include <cstdint>
+#include <stdio.h>
+
+#define CUDA_CHECK(call)                                                       \
+  do {                                                                         \
+    cudaError_t err = call;                                                    \
+    if (err != cudaSuccess) {                                                  \
+      fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__,         \
+              cudaGetErrorString(err));                                        \
+      exit(err);                                                               \
+    }                                                                          \
+  } while (0)
 
 // CUDA kernel for indexed matrix multiplication (MoE)
 // This performs: C[indices[i]] += A[i] * B[expert_id] * weights[i]
@@ -287,6 +298,8 @@ void fused_moe_forward_f32(
         num_tokens, hidden_dim, intermediate_dim,
         num_selected_experts, activation_type
     );
+
+    CUDA_CHECK(cudaGetLastError());
 }
 
 void fused_moe_forward_f16(
@@ -314,6 +327,8 @@ void fused_moe_forward_f16(
         num_tokens, hidden_dim, intermediate_dim,
         num_selected_experts, activation_type
     );
+
+    CUDA_CHECK(cudaGetLastError());
 }
 
 
@@ -342,6 +357,8 @@ void fused_moe_forward_bf16(
         num_tokens, hidden_dim, intermediate_dim,
         num_selected_experts, activation_type
     );
+
+    CUDA_CHECK(cudaGetLastError());
 }
 
 } // extern "C"

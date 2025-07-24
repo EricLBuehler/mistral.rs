@@ -425,7 +425,8 @@ impl FastMoeMlp {
             D::Minus1,
             0,
             self.num_experts_per_tok,
-        )?;
+        )?
+        .to_dtype(DType::U32)?;
         let mut scores = routing_weights.gather(&indices.contiguous()?, D::Minus1)?;
 
         if self.norm_topk_prob {
@@ -614,7 +615,7 @@ impl CudaMoeMlp {
 
         let router_logits = self.gate.forward_autocast(&xs)?;
         let routing_weights =
-            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
+            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?.contiguous()?)?;
 
         let routing_weights = routing_weights.reshape((b_size * seq_len, ()))?;
         let xs = xs.reshape((b_size * seq_len, hidden_dim))?;
@@ -623,7 +624,8 @@ impl CudaMoeMlp {
             D::Minus1,
             0,
             self.num_experts_per_tok,
-        )?;
+        )?
+        .to_dtype(DType::U32)?;
         let mut scores = routing_weights.gather(&indices.contiguous()?, D::Minus1)?;
 
         if self.norm_topk_prob {
@@ -650,12 +652,12 @@ impl CudaMoeMlp {
         );
 
         let output = fused_op.forward(
-            &xs,
-            &gate_weights,
-            &up_weights,
-            &down_weights,
-            &scores,
-            &indices,
+            &xs.contiguous()?,
+            &gate_weights.contiguous()?,
+            &up_weights.contiguous()?,
+            &down_weights.contiguous()?,
+            &scores.contiguous()?,
+            &indices.contiguous()?,
         )?;
 
         output
