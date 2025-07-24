@@ -1,4 +1,4 @@
-use candle_core::{CudaDevice, DType, Device, Result, Storage, Tensor};
+use candle_core::{cuda::cudarc::driver::DeviceSlice, CudaDevice, DType, Device, Result, Storage, Tensor};
 
 use super::ffi;
 use crate::ops::mul_and_act;
