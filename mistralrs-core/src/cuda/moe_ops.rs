@@ -392,7 +392,7 @@ impl FusedMoeForward {
         use std::ffi::c_void;
 
         let (num_tokens, hidden_dim) = input.dims2()?;
-        let (_, _, intermediate_dim) = gate_weights.dims3()?;
+        let (_, intermediate_dim) = gate_weights.dims2()?;
 
         // Get storage and layouts
         let (input_storage, input_layout) = input.storage_and_layout();

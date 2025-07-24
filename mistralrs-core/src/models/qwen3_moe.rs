@@ -612,9 +612,12 @@ impl CudaMoeMlp {
         let original_dtype = xs.dtype();
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
 
-        let router_logits = self.gate.forward_autocast(xs)?;
+        let router_logits = self.gate.forward_autocast(&xs)?;
         let routing_weights =
             candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
+
+        let routing_weights = routing_weights.reshape((b_size * seq_len, ()))?;
+        let xs = xs.reshape((b_size * seq_len, hidden_dim))?;
 
         let indices = routing_weights.arg_sort_last_dim(false)?.narrow(
             D::Minus1,
@@ -626,9 +629,6 @@ impl CudaMoeMlp {
         if self.norm_topk_prob {
             scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
         }
-
-        // CUDA implementation using our custom kernels
-        let xs_flat = xs.reshape((b_size * seq_len, hidden_dim))?;
 
         // Get the fused expert weights
         let gate_weights = self.fused_gate_proj.dequantize_w()?;
@@ -650,7 +650,7 @@ impl CudaMoeMlp {
         );
 
         let output = fused_op.forward(
-            &xs_flat,
+            &xs,
             &gate_weights,
             &up_weights,
             &down_weights,
