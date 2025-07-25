@@ -102,15 +102,16 @@ mod tests {
         let response = ResponsesObject {
             id: "test-id".to_string(),
             object: "response",
-            created: 1234567890,
+            created_at: 1234567890.0,
             model: "test-model".to_string(),
-            service_tier: None,
-            system_fingerprint: None,
+            status: "completed".to_string(),
+            output: vec![],
+            output_text: None,
             usage: None,
             error: None,
             metadata: None,
-            choices: vec![],
-            prompt_details: None,
+            instructions: None,
+            incomplete_details: None,
         };
 
         // Store and retrieve
