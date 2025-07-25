@@ -190,7 +190,6 @@ fn chat_response_to_responses_object(
     chat_resp: ChatCompletionResponse,
     request_id: String,
     metadata: Option<Value>,
-    instructions: Option<String>,
 ) -> ResponsesObject {
     let mut outputs = Vec::new();
     let mut output_text_parts = Vec::new();
@@ -259,7 +258,7 @@ fn chat_response_to_responses_object(
         }),
         error: None,
         metadata,
-        instructions,
+        instructions: None,
         incomplete_details: None,
     }
 }
@@ -270,6 +269,11 @@ async fn parse_responses_request(
     state: SharedMistralRsState,
     tx: Sender<Response>,
 ) -> Result<(Request, bool, Option<Vec<Message>>)> {
+    if oairequest.instructions.is_some() {
+        return Err(anyhow::anyhow!(
+            "The 'instructions' field is not supported in the Responses API"
+        ));
+    }
     // If previous_response_id is provided, try to get cached messages from output
     let previous_messages = if let Some(prev_id) = &oairequest.previous_response_id {
         let cache = get_response_cache();
@@ -338,33 +342,6 @@ async fn parse_responses_request(
         enable_thinking: oairequest.enable_thinking,
     };
 
-    // Handle instructions by prepending as a system message
-    if let Some(instructions) = &oairequest.instructions {
-        let system_msg = Message {
-            content: Some(MessageContent::from_text(instructions.clone())),
-            role: "system".to_string(),
-            name: None,
-            tool_calls: None,
-        };
-
-        match &mut chat_request.messages {
-            Either::Left(msgs) => {
-                let mut new_msgs = vec![system_msg];
-                new_msgs.extend(msgs.clone());
-                chat_request.messages = Either::Left(new_msgs);
-            }
-            Either::Right(prompt) => {
-                // Convert prompt to user message and prepend system message
-                let user_msg = Message {
-                    content: Some(MessageContent::from_text(prompt.clone())),
-                    role: "user".to_string(),
-                    name: None,
-                    tool_calls: None,
-                };
-                chat_request.messages = Either::Left(vec![system_msg, user_msg]);
-            }
-        }
-    }
 
     // Prepend previous messages if available
     if let Some(prev_msgs) = previous_messages {
@@ -420,7 +397,6 @@ pub async fn create_response(
     let request_id = format!("resp_{}", Uuid::new_v4());
     let metadata = oairequest.metadata.clone();
     let store = oairequest.store.unwrap_or(true);
-    let instructions = oairequest.instructions.clone();
 
     // Extract model_id for routing
     let model_id = if oairequest.model == "default" {
@@ -473,7 +449,6 @@ pub async fn create_response(
                     chat_resp,
                     request_id.clone(),
                     metadata,
-                    instructions,
                 );
 
                 // Store if requested
@@ -489,7 +464,6 @@ pub async fn create_response(
                     partial_resp,
                     request_id.clone(),
                     metadata,
-                    instructions,
                 );
                 response_obj.error = Some(ResponsesError {
                     error_type: "model_error".to_string(),
