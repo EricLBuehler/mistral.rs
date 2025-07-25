@@ -7,6 +7,7 @@ use mistralrs_core::{
     ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice, ToolType, WebSearchOptions,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use utoipa::{
     openapi::{schema::SchemaType, ArrayBuilder, ObjectBuilder, OneOfBuilder, RefOr, Schema, Type},
     PartialSchema, ToSchema,
@@ -95,6 +96,13 @@ impl ToSchema for MessageContent {
         )>,
     ) {
         schemas.push((MessageContent::name().into(), MessageContent::schema()));
+    }
+}
+
+impl MessageContent {
+    /// Create a new MessageContent from a string
+    pub fn from_text(text: String) -> Self {
+        MessageContent(Either::Left(text))
     }
 }
 
@@ -693,4 +701,252 @@ pub struct SpeechGenerationRequest {
     /// The desired audio format for the generated speech.
     #[schema(example = "mp3")]
     pub response_format: AudioResponseFormat,
+}
+
+/// Response creation request
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct ResponsesCreateRequest {
+    #[schema(example = "mistral")]
+    #[serde(default = "default_model")]
+    pub model: String,
+    #[schema(
+        schema_with = messages_schema,
+        example = json!(vec![Message{content:Some(MessageContent{0: either::Left(("What's the capital of France?".to_string()))}), role:"user".to_string(), name: None, tool_calls: None}])
+    )]
+    #[serde(with = "either::serde_untagged")]
+    pub messages: Either<Vec<Message>, String>,
+    #[schema(example = json!(Option::None::<String>))]
+    pub previous_response_id: Option<String>,
+    #[schema(example = json!(Option::None::<HashMap<u32, f32>>))]
+    pub logit_bias: Option<HashMap<u32, f32>>,
+    #[serde(default = "default_false")]
+    #[schema(example = false)]
+    pub logprobs: bool,
+    #[schema(example = json!(Option::None::<usize>))]
+    pub top_logprobs: Option<usize>,
+    #[schema(example = 256)]
+    #[serde(alias = "max_completion_tokens")]
+    pub max_tokens: Option<usize>,
+    #[serde(rename = "n")]
+    #[serde(default = "default_1usize")]
+    #[schema(example = 1)]
+    pub n_choices: usize,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub presence_penalty: Option<f32>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub frequency_penalty: Option<f32>,
+    #[serde(rename = "stop")]
+    #[schema(example = json!(Option::None::<StopTokens>))]
+    pub stop_seqs: Option<StopTokens>,
+    #[schema(example = 0.7)]
+    pub temperature: Option<f64>,
+    #[schema(example = json!(Option::None::<f64>))]
+    pub top_p: Option<f64>,
+    #[schema(example = false)]
+    pub stream: Option<bool>,
+    #[schema(example = json!(Option::None::<Vec<Tool>>))]
+    pub tools: Option<Vec<Tool>>,
+    #[schema(example = json!(Option::None::<ToolChoice>))]
+    pub tool_choice: Option<ToolChoice>,
+    #[schema(example = json!(Option::None::<ResponseFormat>))]
+    pub response_format: Option<ResponseFormat>,
+    #[schema(example = json!(Option::None::<WebSearchOptions>))]
+    pub web_search_options: Option<WebSearchOptions>,
+    #[schema(example = json!(Option::None::<Value>))]
+    pub metadata: Option<Value>,
+    #[schema(example = json!(Option::None::<bool>))]
+    pub output_token_details: Option<bool>,
+    #[schema(example = json!(Option::None::<bool>))]
+    pub parallel_tool_calls: Option<bool>,
+    #[schema(example = json!(Option::None::<bool>))]
+    pub store: Option<bool>,
+    #[schema(example = json!(Option::None::<usize>))]
+    pub max_tool_calls: Option<usize>,
+    #[schema(example = json!(Option::None::<bool>))]
+    pub reasoning_enabled: Option<bool>,
+    #[schema(example = json!(Option::None::<usize>))]
+    pub reasoning_max_tokens: Option<usize>,
+    #[schema(example = json!(Option::None::<usize>))]
+    pub reasoning_top_logprobs: Option<usize>,
+    #[schema(example = json!(Option::None::<Vec<String>>))]
+    pub modalities: Option<Vec<String>>,
+    #[schema(example = json!(Option::None::<Vec<String>>))]
+    pub truncation: Option<HashMap<String, Value>>,
+
+    // mistral.rs additional
+    #[schema(example = json!(Option::None::<usize>))]
+    pub top_k: Option<usize>,
+    #[schema(example = json!(Option::None::<Grammar>))]
+    pub grammar: Option<Grammar>,
+    #[schema(example = json!(Option::None::<f64>))]
+    pub min_p: Option<f64>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub dry_multiplier: Option<f32>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub dry_base: Option<f32>,
+    #[schema(example = json!(Option::None::<usize>))]
+    pub dry_allowed_length: Option<usize>,
+    #[schema(example = json!(Option::None::<String>))]
+    pub dry_sequence_breakers: Option<Vec<String>>,
+    #[schema(example = json!(Option::None::<bool>))]
+    pub enable_thinking: Option<bool>,
+}
+
+/// Response object
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesObject {
+    pub id: String,
+    pub object: &'static str,
+    pub created: u64,
+    pub model: String,
+    pub service_tier: Option<String>,
+    pub system_fingerprint: Option<String>,
+    pub usage: Option<ResponsesUsage>,
+    pub error: Option<ResponsesError>,
+    pub metadata: Option<Value>,
+    pub choices: Vec<ResponsesChoice>,
+    pub prompt_details: Option<ResponsesPromptDetails>,
+}
+
+/// Response usage information
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesUsage {
+    pub prompt_tokens: usize,
+    pub completion_tokens: usize,
+    pub total_tokens: usize,
+    pub prompt_tokens_details: Option<ResponsesPromptTokensDetails>,
+    pub completion_tokens_details: Option<ResponsesCompletionTokensDetails>,
+}
+
+/// Prompt tokens details
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesPromptTokensDetails {
+    pub audio_tokens: Option<usize>,
+    pub cached_tokens: Option<usize>,
+    pub image_tokens: Option<usize>,
+    pub reasoning_tokens: Option<usize>,
+}
+
+/// Completion tokens details
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesCompletionTokensDetails {
+    pub audio_tokens: Option<usize>,
+    pub reasoning_tokens: Option<usize>,
+}
+
+/// Response error
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesError {
+    #[serde(rename = "type")]
+    pub error_type: String,
+    pub message: String,
+}
+
+/// Response choice
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesChoice {
+    pub index: usize,
+    pub message: ResponsesMessage,
+    pub finish_reason: Option<String>,
+    pub logprobs: Option<ResponsesLogprobs>,
+}
+
+/// Response message
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesMessage {
+    pub content: Option<MessageContent>,
+    pub refusal: Option<String>,
+    pub role: String,
+    pub name: Option<String>,
+    pub tool_calls: Option<Vec<ToolCall>>,
+    pub audio: Option<ResponsesAudio>,
+}
+
+/// Response audio data
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesAudio {
+    pub id: String,
+    pub data: String,
+    pub transcript: String,
+}
+
+/// Response logprobs
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesLogprobs {
+    pub content: Option<Vec<ResponsesLogprobsContent>>,
+    pub refusal: Option<Vec<ResponsesLogprobsContent>>,
+}
+
+/// Response logprobs content
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesLogprobsContent {
+    pub token: String,
+    pub logprob: f32,
+    pub bytes: Option<Vec<u8>>,
+    pub top_logprobs: Vec<ResponsesTopLogprob>,
+}
+
+/// Response top logprob
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesTopLogprob {
+    pub token: String,
+    pub logprob: f32,
+    pub bytes: Option<Vec<u8>>,
+}
+
+/// Response prompt details
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesPromptDetails {
+    pub messages: Vec<Message>,
+}
+
+/// Response streaming chunk
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesChunk {
+    pub id: String,
+    pub object: &'static str,
+    pub created: u64,
+    pub model: String,
+    pub service_tier: Option<String>,
+    pub system_fingerprint: Option<String>,
+    pub usage: Option<ResponsesUsage>,
+    pub metadata: Option<Value>,
+    pub choices: Vec<ResponsesChunkChoice>,
+}
+
+/// Response streaming chunk choice
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesChunkChoice {
+    pub index: usize,
+    pub delta: ResponsesDelta,
+    pub finish_reason: Option<String>,
+    pub logprobs: Option<ResponsesLogprobs>,
+}
+
+/// Response delta for streaming
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesDelta {
+    pub content: Option<String>,
+    pub refusal: Option<String>,
+    pub role: Option<String>,
+    pub name: Option<String>,
+    pub tool_calls: Option<Vec<ResponsesDeltaToolCall>>,
+    pub audio: Option<ResponsesAudio>,
+}
+
+/// Response delta tool call for streaming
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesDeltaToolCall {
+    pub index: usize,
+    pub id: Option<String>,
+    #[serde(rename = "type")]
+    pub tool_type: Option<String>,
+    pub function: Option<ResponsesDeltaFunction>,
+}
+
+/// Response delta function for streaming
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesDeltaFunction {
+    pub name: Option<String>,
+    pub arguments: Option<String>,
 }

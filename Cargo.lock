@@ -3242,6 +3242,7 @@ dependencies = [
  "url",
  "utoipa",
  "utoipa-swagger-ui",
+ "uuid 1.17.0",
 ]
 
 [[package]]
