@@ -30,7 +30,7 @@ def log_response(response: httpx.Response):
 
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
-# Enable this to log requests and responses
+# # Enable this to log requests and responses
 # client._client = httpx.Client(
 #     event_hooks={"request": [print], "response": [log_response]}
 # )
@@ -38,11 +38,15 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 # first turn
 resp1 = client.responses.create(
-    model="gpt-4o-mini",
+    model="default",
     input="Plan a weekend in Montreal")
+
+print(resp1)
 
 # follow‑up: no need to resend the first question
 resp2 = client.responses.create(
-    model="gpt-4o-mini",
+    model="default",
     previous_response_id=resp1.id,
     input="Add a kid‑friendly science museum, please")
+
+print(resp2)

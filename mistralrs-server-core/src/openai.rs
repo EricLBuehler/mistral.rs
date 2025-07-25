@@ -703,18 +703,51 @@ pub struct SpeechGenerationRequest {
     pub response_format: AudioResponseFormat,
 }
 
+/// Helper type for messages field in ResponsesCreateRequest
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ResponsesMessages {
+    Messages(Vec<Message>),
+    String(String),
+}
+
+impl ResponsesMessages {
+    pub fn into_either(self) -> Either<Vec<Message>, String> {
+        match self {
+            ResponsesMessages::Messages(msgs) => Either::Left(msgs),
+            ResponsesMessages::String(s) => Either::Right(s),
+        }
+    }
+}
+
+impl PartialSchema for ResponsesMessages {
+    fn schema() -> RefOr<Schema> {
+        RefOr::T(messages_schema())
+    }
+}
+
+impl ToSchema for ResponsesMessages {
+    fn schemas(
+        schemas: &mut Vec<(
+            String,
+            utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+        )>,
+    ) {
+        schemas.push((ResponsesMessages::name().into(), ResponsesMessages::schema()));
+    }
+}
+
+
 /// Response creation request
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ResponsesCreateRequest {
     #[schema(example = "mistral")]
     #[serde(default = "default_model")]
     pub model: String,
-    #[schema(
-        schema_with = messages_schema,
-        example = json!(vec![Message{content:Some(MessageContent{0: either::Left(("What's the capital of France?".to_string()))}), role:"user".to_string(), name: None, tool_calls: None}])
-    )]
-    #[serde(with = "either::serde_untagged")]
-    pub messages: Either<Vec<Message>, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messages: Option<ResponsesMessages>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
     #[schema(example = json!(Option::None::<String>))]
     pub previous_response_id: Option<String>,
     #[schema(example = json!(Option::None::<HashMap<u32, f32>>))]

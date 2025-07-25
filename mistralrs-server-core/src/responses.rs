@@ -286,9 +286,18 @@ async fn parse_responses_request(
         None
     };
 
+    // Get messages from either messages or input field
+    let messages = if let Some(messages) = oairequest.messages.clone() {
+        messages.into_either()
+    } else if let Some(input) = oairequest.input.clone() {
+        Either::Right(input)
+    } else {
+        return Err(anyhow::anyhow!("Either 'messages' or 'input' field must be provided"));
+    };
+
     // Convert to ChatCompletionRequest for reuse
     let mut chat_request = ChatCompletionRequest {
-        messages: oairequest.messages.clone(),
+        messages,
         model: oairequest.model,
         logit_bias: oairequest.logit_bias,
         logprobs: oairequest.logprobs,
