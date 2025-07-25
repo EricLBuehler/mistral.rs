@@ -47,6 +47,6 @@ print(resp1)
 resp2 = client.responses.create(
     model="default",
     previous_response_id=resp1.id,
-    input="Add a kid‑friendly science museum, please")
+    input="Add a kid-friendly science museum, please")
 
 print(resp2)

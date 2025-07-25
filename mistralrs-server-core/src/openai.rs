@@ -733,10 +733,12 @@ impl ToSchema for ResponsesMessages {
             utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
         )>,
     ) {
-        schemas.push((ResponsesMessages::name().into(), ResponsesMessages::schema()));
+        schemas.push((
+            ResponsesMessages::name().into(),
+            ResponsesMessages::schema(),
+        ));
     }
 }
-
 
 /// Response creation request
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]

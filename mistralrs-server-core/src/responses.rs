@@ -12,9 +12,7 @@ use axum::{
     },
 };
 use either::Either;
-use mistralrs_core::{
-    ChatCompletionResponse, MistralRs, Request, Response,
-};
+use mistralrs_core::{ChatCompletionResponse, MistralRs, Request, Response};
 use serde_json::Value;
 use tokio::sync::mpsc::Sender;
 use uuid::Uuid;
@@ -22,17 +20,13 @@ use uuid::Uuid;
 use crate::{
     cached_responses::get_response_cache,
     chat_completion::parse_request as parse_chat_request,
-    completion_core::{
-        handle_completion_error,
-        BaseCompletionResponder,
-    },
+    completion_core::{handle_completion_error, BaseCompletionResponder},
     handler_core::{
-        create_response_channel, send_request_with_model,
-        BaseJsonModelError, ErrorToResponse, JsonError, ModelErrorMessage,
+        create_response_channel, send_request_with_model, BaseJsonModelError, ErrorToResponse,
+        JsonError, ModelErrorMessage,
     },
     openai::{
-        ChatCompletionRequest, Message, MessageContent,
-        ResponsesChoice, ResponsesChunk,
+        ChatCompletionRequest, Message, MessageContent, ResponsesChoice, ResponsesChunk,
         ResponsesChunkChoice, ResponsesCreateRequest, ResponsesDelta, ResponsesDeltaFunction,
         ResponsesDeltaToolCall, ResponsesError, ResponsesLogprobs, ResponsesLogprobsContent,
         ResponsesMessage, ResponsesObject, ResponsesPromptDetails, ResponsesTopLogprob,
@@ -43,11 +37,8 @@ use crate::{
 };
 
 /// Response streamer for the Responses API
-pub type ResponsesStreamer = BaseStreamer<
-    ResponsesChunk,
-    OnChunkCallback<ResponsesChunk>,
-    OnDoneCallback<ResponsesChunk>,
->;
+pub type ResponsesStreamer =
+    BaseStreamer<ResponsesChunk, OnChunkCallback<ResponsesChunk>, OnDoneCallback<ResponsesChunk>>;
 
 impl futures::Stream for ResponsesStreamer {
     type Item = Result<Event, axum::Error>;
@@ -177,10 +168,8 @@ impl IntoResponse for ResponsesResponder {
             ResponsesResponder::ValidationError(e) => {
                 JsonError::new(e.to_string()).to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
             }
-            ResponsesResponder::ModelError(msg, response) => {
-                JsonModelError::new(msg, response)
-                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
-            }
+            ResponsesResponder::ModelError(msg, response) => JsonModelError::new(msg, response)
+                .to_response(http::StatusCode::INTERNAL_SERVER_ERROR),
         }
     }
 }
@@ -192,7 +181,7 @@ fn chat_response_to_responses_object(
     metadata: Option<Value>,
 ) -> ResponsesObject {
     let mut choices = Vec::new();
-    
+
     for choice in chat_resp.choices {
         let message = ResponsesMessage {
             content: choice.message.content.map(MessageContent::from_text),
@@ -276,9 +265,7 @@ async fn parse_responses_request(
     let previous_messages = if let Some(prev_id) = &oairequest.previous_response_id {
         let cache = get_response_cache();
         if let Some(prev_response) = cache.get_response(prev_id)? {
-            prev_response
-                .prompt_details
-                .map(|pd| pd.messages)
+            prev_response.prompt_details.map(|pd| pd.messages)
         } else {
             None
         }
@@ -292,7 +279,9 @@ async fn parse_responses_request(
     } else if let Some(input) = oairequest.input.clone() {
         Either::Right(input)
     } else {
-        return Err(anyhow::anyhow!("Either 'messages' or 'input' field must be provided"));
+        return Err(anyhow::anyhow!(
+            "Either 'messages' or 'input' field must be provided"
+        ));
     };
 
     // Convert to ChatCompletionRequest for reuse
@@ -412,7 +401,7 @@ pub async fn create_response(
             let cache = get_response_cache();
             let id = request_id.clone();
             let chunks_cache = cache.clone();
-            
+
             // Create a wrapper that stores chunks
             let on_done: OnDoneCallback<ResponsesChunk> = Box::new(move |chunks| {
                 let _ = chunks_cache.store_chunks(id.clone(), chunks.to_vec());
@@ -428,11 +417,10 @@ pub async fn create_response(
             Some(Response::Done(chat_resp)) => {
                 let mut response_obj =
                     chat_response_to_responses_object(chat_resp, request_id.clone(), metadata);
-                
+
                 // Add prompt details
-                response_obj.prompt_details = prompt_messages.map(|msgs| ResponsesPromptDetails {
-                    messages: msgs,
-                });
+                response_obj.prompt_details =
+                    prompt_messages.map(|msgs| ResponsesPromptDetails { messages: msgs });
 
                 // Store if requested
                 if store {
@@ -444,17 +432,19 @@ pub async fn create_response(
             }
             Some(Response::ModelError(msg, partial_resp)) => {
                 {
-                    let mut response_obj =
-                        chat_response_to_responses_object(partial_resp, request_id.clone(), metadata);
+                    let mut response_obj = chat_response_to_responses_object(
+                        partial_resp,
+                        request_id.clone(),
+                        metadata,
+                    );
                     response_obj.error = Some(ResponsesError {
                         error_type: "model_error".to_string(),
                         message: msg.to_string(),
                     });
-                    
+
                     // Add prompt details
-                    response_obj.prompt_details = prompt_messages.map(|msgs| ResponsesPromptDetails {
-                        messages: msgs,
-                    });
+                    response_obj.prompt_details =
+                        prompt_messages.map(|msgs| ResponsesPromptDetails { messages: msgs });
 
                     if store {
                         let cache = get_response_cache();
@@ -485,7 +475,7 @@ pub async fn get_response(
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
     let cache = get_response_cache();
-    
+
     match cache.get_response(&response_id) {
         Ok(Some(response)) => (StatusCode::OK, Json(response)).into_response(),
         Ok(None) => JsonError::new(format!("Response with ID '{response_id}' not found"))
@@ -508,7 +498,7 @@ pub async fn delete_response(
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
     let cache = get_response_cache();
-    
+
     match cache.delete_response(&response_id) {
         Ok(true) => (
             StatusCode::OK,
@@ -540,12 +530,12 @@ fn create_streamer(
     on_done: Option<OnDoneCallback<ResponsesChunk>>,
 ) -> Sse<ResponsesStreamer> {
     let keep_alive_interval = get_keep_alive_interval();
-    
+
     let streamer_with_callback = ResponsesStreamer {
         on_done,
         ..streamer
     };
-    
+
     Sse::new(streamer_with_callback)
         .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval)))
 }
