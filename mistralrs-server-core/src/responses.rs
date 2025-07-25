@@ -26,11 +26,9 @@ use crate::{
         JsonError, ModelErrorMessage,
     },
     openai::{
-        ChatCompletionRequest, Message, MessageContent, ResponsesChoice, ResponsesChunk,
-        ResponsesChunkChoice, ResponsesCreateRequest, ResponsesDelta, ResponsesDeltaFunction,
-        ResponsesDeltaToolCall, ResponsesError, ResponsesLogprobs, ResponsesLogprobsContent,
-        ResponsesMessage, ResponsesObject, ResponsesPromptDetails, ResponsesTopLogprob,
-        ResponsesUsage, ToolCall,
+        ChatCompletionRequest, Message, MessageContent, ResponsesChunk, ResponsesContent,
+        ResponsesCreateRequest, ResponsesDelta, ResponsesDeltaContent, ResponsesDeltaOutput,
+        ResponsesError, ResponsesObject, ResponsesOutput, ResponsesUsage,
     },
     streaming::{get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
@@ -80,55 +78,68 @@ impl futures::Stream for ResponsesStreamer {
                 }
                 Response::Chunk(chat_chunk) => {
                     // Convert ChatCompletionChunkResponse to ResponsesChunk
+                    let mut delta_outputs = vec![];
+
+                    // Check if all choices are finished
+                    let all_finished = chat_chunk.choices.iter().all(|c| c.finish_reason.is_some());
+
+                    for choice in &chat_chunk.choices {
+                        let mut delta_content_items = Vec::new();
+
+                        // Handle text content in delta
+                        if let Some(content) = &choice.delta.content {
+                            delta_content_items.push(ResponsesDeltaContent {
+                                content_type: "output_text".to_string(),
+                                text: Some(content.clone()),
+                            });
+                        }
+
+                        // Handle tool calls in delta
+                        if let Some(tool_calls) = &choice.delta.tool_calls {
+                            for tool_call in tool_calls {
+                                let tool_text = format!(
+                                    "Tool: {} args: {}",
+                                    tool_call.function.name, tool_call.function.arguments
+                                );
+                                delta_content_items.push(ResponsesDeltaContent {
+                                    content_type: "tool_use".to_string(),
+                                    text: Some(tool_text),
+                                });
+                            }
+                        }
+
+                        if !delta_content_items.is_empty() {
+                            delta_outputs.push(ResponsesDeltaOutput {
+                                id: format!("msg_{}", Uuid::new_v4()),
+                                output_type: "message".to_string(),
+                                content: Some(delta_content_items),
+                            });
+                        }
+                    }
+
                     let mut response_chunk = ResponsesChunk {
                         id: chat_chunk.id.clone(),
                         object: "response.chunk",
-                        created: chat_chunk.created as u64,
+                        created_at: chat_chunk.created as f64,
                         model: chat_chunk.model.clone(),
-                        service_tier: None,
-                        system_fingerprint: Some(chat_chunk.system_fingerprint.clone()),
+                        chunk_type: "delta".to_string(),
+                        delta: Some(ResponsesDelta {
+                            output: if delta_outputs.is_empty() {
+                                None
+                            } else {
+                                Some(delta_outputs)
+                            },
+                            status: if all_finished {
+                                Some("completed".to_string())
+                            } else {
+                                None
+                            },
+                        }),
                         usage: None,
                         metadata: None,
-                        choices: vec![],
                     };
 
-                    for (idx, choice) in chat_chunk.choices.iter().enumerate() {
-                        let delta = ResponsesDelta {
-                            content: choice.delta.content.clone(),
-                            refusal: None,
-                            role: Some(choice.delta.role.clone()),
-                            name: None,
-                            tool_calls: choice.delta.tool_calls.as_ref().map(|calls| {
-                                calls
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(i, call)| ResponsesDeltaToolCall {
-                                        index: i,
-                                        id: Some(format!("call_{}", Uuid::new_v4())),
-                                        tool_type: Some("function".to_string()),
-                                        function: Some(ResponsesDeltaFunction {
-                                            name: Some(call.function.name.clone()),
-                                            arguments: Some(call.function.arguments.clone()),
-                                        }),
-                                    })
-                                    .collect()
-                            }),
-                            audio: None,
-                        };
-
-                        response_chunk.choices.push(ResponsesChunkChoice {
-                            index: idx,
-                            delta,
-                            finish_reason: choice.finish_reason.clone(),
-                            logprobs: None,
-                        });
-                    }
-
-                    if response_chunk
-                        .choices
-                        .iter()
-                        .all(|x| x.finish_reason.is_some())
-                    {
+                    if all_finished {
                         self.done_state = DoneState::SendingDone;
                     }
 
@@ -179,79 +190,77 @@ fn chat_response_to_responses_object(
     chat_resp: ChatCompletionResponse,
     request_id: String,
     metadata: Option<Value>,
+    instructions: Option<String>,
 ) -> ResponsesObject {
-    let mut choices = Vec::new();
+    let mut outputs = Vec::new();
+    let mut output_text_parts = Vec::new();
 
     for choice in chat_resp.choices {
-        let message = ResponsesMessage {
-            content: choice.message.content.map(MessageContent::from_text),
-            refusal: None,
-            role: choice.message.role,
-            name: None,
-            tool_calls: choice.message.tool_calls.map(|calls| {
-                calls
-                    .into_iter()
-                    .map(|call| ToolCall {
-                        tp: mistralrs_core::ToolType::Function,
-                        function: crate::openai::FunctionCalled {
-                            name: call.function.name,
-                            parameters: call.function.arguments,
-                        },
-                    })
-                    .collect()
-            }),
-            audio: None,
-        };
+        let mut content_items = Vec::new();
+        let mut has_content = false;
 
-        let logprobs = choice.logprobs.map(|lp| ResponsesLogprobs {
-            content: lp.content.map(|content| {
-                content
-                    .into_iter()
-                    .map(|c| ResponsesLogprobsContent {
-                        token: c.token,
-                        logprob: c.logprob,
-                        bytes: c.bytes,
-                        top_logprobs: c
-                            .top_logprobs
-                            .into_iter()
-                            .map(|tlp| ResponsesTopLogprob {
-                                token: tlp.token.to_string(),
-                                logprob: tlp.logprob,
-                                bytes: tlp.bytes.map(|s| s.into_bytes()),
-                            })
-                            .collect(),
-                    })
-                    .collect()
-            }),
-            refusal: None,
-        });
+        // Handle text content
+        if let Some(text) = &choice.message.content {
+            output_text_parts.push(text.clone());
+            content_items.push(ResponsesContent {
+                content_type: "output_text".to_string(),
+                text: Some(text.clone()),
+                annotations: None,
+            });
+            has_content = true;
+        }
 
-        choices.push(ResponsesChoice {
-            index: choice.index,
-            message,
-            finish_reason: Some(choice.finish_reason),
-            logprobs,
-        });
+        // Handle tool calls
+        if let Some(tool_calls) = &choice.message.tool_calls {
+            for tool_call in tool_calls {
+                let tool_text = format!(
+                    "Tool call: {} with args: {}",
+                    tool_call.function.name, tool_call.function.arguments
+                );
+                content_items.push(ResponsesContent {
+                    content_type: "tool_use".to_string(),
+                    text: Some(tool_text),
+                    annotations: None,
+                });
+                has_content = true;
+            }
+        }
+
+        // Only add output if we have content
+        if has_content {
+            outputs.push(ResponsesOutput {
+                id: format!("msg_{}", Uuid::new_v4()),
+                output_type: "message".to_string(),
+                role: choice.message.role,
+                status: None,
+                content: content_items,
+            });
+        }
     }
 
     ResponsesObject {
         id: request_id,
         object: "response",
-        created: chat_resp.created,
+        created_at: chat_resp.created as f64,
         model: chat_resp.model,
-        service_tier: None,
-        system_fingerprint: Some(chat_resp.system_fingerprint),
+        status: "completed".to_string(),
+        output: outputs,
+        output_text: if output_text_parts.is_empty() {
+            None
+        } else {
+            Some(output_text_parts.join(" "))
+        },
         usage: Some(ResponsesUsage {
-            prompt_tokens: chat_resp.usage.prompt_tokens,
-            completion_tokens: chat_resp.usage.completion_tokens,
+            input_tokens: chat_resp.usage.prompt_tokens,
+            output_tokens: chat_resp.usage.completion_tokens,
             total_tokens: chat_resp.usage.total_tokens,
-            prompt_tokens_details: None,
-            completion_tokens_details: None,
+            input_tokens_details: None,
+            output_tokens_details: None,
         }),
         error: None,
         metadata,
-        choices,
-        prompt_details: None,
+        instructions,
+        incomplete_details: None,
     }
 }
 
@@ -261,11 +270,27 @@ async fn parse_responses_request(
     state: SharedMistralRsState,
     tx: Sender<Response>,
 ) -> Result<(Request, bool, Option<Vec<Message>>)> {
-    // If previous_response_id is provided, try to get cached messages
+    // If previous_response_id is provided, try to get cached messages from output
     let previous_messages = if let Some(prev_id) = &oairequest.previous_response_id {
         let cache = get_response_cache();
         if let Some(prev_response) = cache.get_response(prev_id)? {
-            prev_response.prompt_details.map(|pd| pd.messages)
+            // Extract messages from previous response output
+            let mut messages = Vec::new();
+            for output in &prev_response.output {
+                if let Some(text) = output.content.first().and_then(|c| c.text.as_ref()) {
+                    messages.push(Message {
+                        content: Some(MessageContent::from_text(text.clone())),
+                        role: output.role.clone(),
+                        name: None,
+                        tool_calls: None,
+                    });
+                }
+            }
+            if messages.is_empty() {
+                None
+            } else {
+                Some(messages)
+            }
         } else {
             None
         }
@@ -286,7 +311,7 @@ async fn parse_responses_request(
 
     // Convert to ChatCompletionRequest for reuse
     let mut chat_request = ChatCompletionRequest {
-        messages,
+        messages: messages.clone(),
         model: oairequest.model,
         logit_bias: oairequest.logit_bias,
         logprobs: oairequest.logprobs,
@@ -312,6 +337,34 @@ async fn parse_responses_request(
         dry_sequence_breakers: oairequest.dry_sequence_breakers,
         enable_thinking: oairequest.enable_thinking,
     };
+
+    // Handle instructions by prepending as a system message
+    if let Some(instructions) = &oairequest.instructions {
+        let system_msg = Message {
+            content: Some(MessageContent::from_text(instructions.clone())),
+            role: "system".to_string(),
+            name: None,
+            tool_calls: None,
+        };
+
+        match &mut chat_request.messages {
+            Either::Left(msgs) => {
+                let mut new_msgs = vec![system_msg];
+                new_msgs.extend(msgs.clone());
+                chat_request.messages = Either::Left(new_msgs);
+            }
+            Either::Right(prompt) => {
+                // Convert prompt to user message and prepend system message
+                let user_msg = Message {
+                    content: Some(MessageContent::from_text(prompt.clone())),
+                    role: "user".to_string(),
+                    name: None,
+                    tool_calls: None,
+                };
+                chat_request.messages = Either::Left(vec![system_msg, user_msg]);
+            }
+        }
+    }
 
     // Prepend previous messages if available
     if let Some(prev_msgs) = previous_messages {
@@ -367,6 +420,7 @@ pub async fn create_response(
     let request_id = format!("resp_{}", Uuid::new_v4());
     let metadata = oairequest.metadata.clone();
     let store = oairequest.store.unwrap_or(true);
+    let instructions = oairequest.instructions.clone();
 
     // Extract model_id for routing
     let model_id = if oairequest.model == "default" {
@@ -375,7 +429,7 @@ pub async fn create_response(
         Some(oairequest.model.clone())
     };
 
-    let (request, is_streaming, prompt_messages) =
+    let (request, is_streaming, _prompt_messages) =
         match parse_responses_request(oairequest, state.clone(), tx).await {
             Ok(x) => x,
             Err(e) => return handle_error(state, e.into()),
@@ -415,12 +469,12 @@ pub async fn create_response(
         // Non-streaming response
         match rx.recv().await {
             Some(Response::Done(chat_resp)) => {
-                let mut response_obj =
-                    chat_response_to_responses_object(chat_resp, request_id.clone(), metadata);
-
-                // Add prompt details
-                response_obj.prompt_details =
-                    prompt_messages.map(|msgs| ResponsesPromptDetails { messages: msgs });
+                let response_obj = chat_response_to_responses_object(
+                    chat_resp,
+                    request_id.clone(),
+                    metadata,
+                    instructions,
+                );
 
                 // Store if requested
                 if store {
@@ -431,27 +485,23 @@ pub async fn create_response(
                 ResponsesResponder::Json(response_obj)
             }
             Some(Response::ModelError(msg, partial_resp)) => {
-                {
-                    let mut response_obj = chat_response_to_responses_object(
-                        partial_resp,
-                        request_id.clone(),
-                        metadata,
-                    );
-                    response_obj.error = Some(ResponsesError {
-                        error_type: "model_error".to_string(),
-                        message: msg.to_string(),
-                    });
+                let mut response_obj = chat_response_to_responses_object(
+                    partial_resp,
+                    request_id.clone(),
+                    metadata,
+                    instructions,
+                );
+                response_obj.error = Some(ResponsesError {
+                    error_type: "model_error".to_string(),
+                    message: msg.to_string(),
+                });
+                response_obj.status = "failed".to_string();
 
-                    // Add prompt details
-                    response_obj.prompt_details =
-                        prompt_messages.map(|msgs| ResponsesPromptDetails { messages: msgs });
-
-                    if store {
-                        let cache = get_response_cache();
-                        let _ = cache.store_response(request_id, response_obj.clone());
-                    }
-                    ResponsesResponder::ModelError(msg.to_string(), response_obj)
+                if store {
+                    let cache = get_response_cache();
+                    let _ = cache.store_response(request_id, response_obj.clone());
                 }
+                ResponsesResponder::ModelError(msg.to_string(), response_obj)
             }
             Some(Response::ValidationError(e)) => ResponsesResponder::ValidationError(e),
             Some(Response::InternalError(e)) => ResponsesResponder::InternalError(e),

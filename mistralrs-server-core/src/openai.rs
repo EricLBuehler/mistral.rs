@@ -104,6 +104,31 @@ impl MessageContent {
     pub fn from_text(text: String) -> Self {
         MessageContent(Either::Left(text))
     }
+
+    /// Extract text from MessageContent
+    pub fn to_text(&self) -> Option<String> {
+        match &self.0 {
+            Either::Left(text) => Some(text.clone()),
+            Either::Right(parts) => {
+                // For complex content, try to extract text from parts
+                let mut text_parts = Vec::new();
+                for part in parts {
+                    for (key, value) in part {
+                        if key == "text" {
+                            if let Either::Left(text) = &**value {
+                                text_parts.push(text.clone());
+                            }
+                        }
+                    }
+                }
+                if text_parts.is_empty() {
+                    None
+                } else {
+                    Some(text_parts.join(" "))
+                }
+            }
+        }
+    }
 }
 
 impl Deref for MessageContent {
@@ -751,6 +776,10 @@ pub struct ResponsesCreateRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
     #[schema(example = json!(Option::None::<String>))]
+    pub instructions: Option<String>,
+    #[schema(example = json!(Option::None::<Vec<String>>))]
+    pub modalities: Option<Vec<String>>,
+    #[schema(example = json!(Option::None::<String>))]
     pub previous_response_id: Option<String>,
     #[schema(example = json!(Option::None::<HashMap<u32, f32>>))]
     pub logit_bias: Option<HashMap<u32, f32>>,
@@ -760,7 +789,7 @@ pub struct ResponsesCreateRequest {
     #[schema(example = json!(Option::None::<usize>))]
     pub top_logprobs: Option<usize>,
     #[schema(example = 256)]
-    #[serde(alias = "max_completion_tokens")]
+    #[serde(alias = "max_completion_tokens", alias = "max_output_tokens")]
     pub max_tokens: Option<usize>,
     #[serde(rename = "n")]
     #[serde(default = "default_1usize")]
@@ -804,8 +833,6 @@ pub struct ResponsesCreateRequest {
     #[schema(example = json!(Option::None::<usize>))]
     pub reasoning_top_logprobs: Option<usize>,
     #[schema(example = json!(Option::None::<Vec<String>>))]
-    pub modalities: Option<Vec<String>>,
-    #[schema(example = json!(Option::None::<Vec<String>>))]
     pub truncation: Option<HashMap<String, Value>>,
 
     // mistral.rs additional
@@ -832,40 +859,42 @@ pub struct ResponsesCreateRequest {
 pub struct ResponsesObject {
     pub id: String,
     pub object: &'static str,
-    pub created: u64,
+    pub created_at: f64,
     pub model: String,
-    pub service_tier: Option<String>,
-    pub system_fingerprint: Option<String>,
+    pub status: String,
+    pub output: Vec<ResponsesOutput>,
+    pub output_text: Option<String>,
     pub usage: Option<ResponsesUsage>,
     pub error: Option<ResponsesError>,
     pub metadata: Option<Value>,
-    pub choices: Vec<ResponsesChoice>,
-    pub prompt_details: Option<ResponsesPromptDetails>,
+    pub instructions: Option<String>,
+    pub incomplete_details: Option<ResponsesIncompleteDetails>,
 }
 
 /// Response usage information
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ResponsesUsage {
-    pub prompt_tokens: usize,
-    pub completion_tokens: usize,
+    pub input_tokens: usize,
+    pub output_tokens: usize,
     pub total_tokens: usize,
-    pub prompt_tokens_details: Option<ResponsesPromptTokensDetails>,
-    pub completion_tokens_details: Option<ResponsesCompletionTokensDetails>,
+    pub input_tokens_details: Option<ResponsesInputTokensDetails>,
+    pub output_tokens_details: Option<ResponsesOutputTokensDetails>,
 }
 
-/// Prompt tokens details
+/// Input tokens details
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ResponsesPromptTokensDetails {
+pub struct ResponsesInputTokensDetails {
     pub audio_tokens: Option<usize>,
     pub cached_tokens: Option<usize>,
     pub image_tokens: Option<usize>,
-    pub reasoning_tokens: Option<usize>,
+    pub text_tokens: Option<usize>,
 }
 
-/// Completion tokens details
+/// Output tokens details
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ResponsesCompletionTokensDetails {
+pub struct ResponsesOutputTokensDetails {
     pub audio_tokens: Option<usize>,
+    pub text_tokens: Option<usize>,
     pub reasoning_tokens: Option<usize>,
 }
 
@@ -877,62 +906,40 @@ pub struct ResponsesError {
     pub message: String,
 }
 
-/// Response choice
+/// Incomplete details for incomplete responses
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ResponsesChoice {
-    pub index: usize,
-    pub message: ResponsesMessage,
-    pub finish_reason: Option<String>,
-    pub logprobs: Option<ResponsesLogprobs>,
+pub struct ResponsesIncompleteDetails {
+    pub reason: String,
 }
 
-/// Response message
+/// Response output item
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ResponsesMessage {
-    pub content: Option<MessageContent>,
-    pub refusal: Option<String>,
-    pub role: String,
-    pub name: Option<String>,
-    pub tool_calls: Option<Vec<ToolCall>>,
-    pub audio: Option<ResponsesAudio>,
-}
-
-/// Response audio data
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ResponsesAudio {
+pub struct ResponsesOutput {
     pub id: String,
-    pub data: String,
-    pub transcript: String,
+    #[serde(rename = "type")]
+    pub output_type: String,
+    pub role: String,
+    pub status: Option<String>,
+    pub content: Vec<ResponsesContent>,
 }
 
-/// Response logprobs
+/// Response content item
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ResponsesLogprobs {
-    pub content: Option<Vec<ResponsesLogprobsContent>>,
-    pub refusal: Option<Vec<ResponsesLogprobsContent>>,
+pub struct ResponsesContent {
+    #[serde(rename = "type")]
+    pub content_type: String,
+    pub text: Option<String>,
+    pub annotations: Option<Vec<ResponsesAnnotation>>,
 }
 
-/// Response logprobs content
+/// Response annotation
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ResponsesLogprobsContent {
-    pub token: String,
-    pub logprob: f32,
-    pub bytes: Option<Vec<u8>>,
-    pub top_logprobs: Vec<ResponsesTopLogprob>,
-}
-
-/// Response top logprob
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ResponsesTopLogprob {
-    pub token: String,
-    pub logprob: f32,
-    pub bytes: Option<Vec<u8>>,
-}
-
-/// Response prompt details
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ResponsesPromptDetails {
-    pub messages: Vec<Message>,
+pub struct ResponsesAnnotation {
+    #[serde(rename = "type")]
+    pub annotation_type: String,
+    pub text: String,
+    pub start_index: usize,
+    pub end_index: usize,
 }
 
 /// Response streaming chunk
@@ -940,48 +947,34 @@ pub struct ResponsesPromptDetails {
 pub struct ResponsesChunk {
     pub id: String,
     pub object: &'static str,
-    pub created: u64,
+    pub created_at: f64,
     pub model: String,
-    pub service_tier: Option<String>,
-    pub system_fingerprint: Option<String>,
+    pub chunk_type: String,
+    pub delta: Option<ResponsesDelta>,
     pub usage: Option<ResponsesUsage>,
     pub metadata: Option<Value>,
-    pub choices: Vec<ResponsesChunkChoice>,
-}
-
-/// Response streaming chunk choice
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ResponsesChunkChoice {
-    pub index: usize,
-    pub delta: ResponsesDelta,
-    pub finish_reason: Option<String>,
-    pub logprobs: Option<ResponsesLogprobs>,
 }
 
 /// Response delta for streaming
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ResponsesDelta {
-    pub content: Option<String>,
-    pub refusal: Option<String>,
-    pub role: Option<String>,
-    pub name: Option<String>,
-    pub tool_calls: Option<Vec<ResponsesDeltaToolCall>>,
-    pub audio: Option<ResponsesAudio>,
+    pub output: Option<Vec<ResponsesDeltaOutput>>,
+    pub status: Option<String>,
 }
 
-/// Response delta tool call for streaming
+/// Response delta output item
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ResponsesDeltaToolCall {
-    pub index: usize,
-    pub id: Option<String>,
+pub struct ResponsesDeltaOutput {
+    pub id: String,
     #[serde(rename = "type")]
-    pub tool_type: Option<String>,
-    pub function: Option<ResponsesDeltaFunction>,
+    pub output_type: String,
+    pub content: Option<Vec<ResponsesDeltaContent>>,
 }
 
-/// Response delta function for streaming
+/// Response delta content item
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ResponsesDeltaFunction {
-    pub name: Option<String>,
-    pub arguments: Option<String>,
+pub struct ResponsesDeltaContent {
+    #[serde(rename = "type")]
+    pub content_type: String,
+    pub text: Option<String>,
 }
