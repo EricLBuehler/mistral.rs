@@ -126,6 +126,9 @@ fn main() -> Result<(), String> {
             "kernels/ops/ops.cu",
             "kernels/bitsandbytes/dequant.cu",
             "kernels/rotary/rotary.cu",
+            "kernels/moe/moe_align_sum_kernels.cu",
+            "kernels/moe/topk_softmax_kernels.cu",
+            "kernels/moe/moe_wna16.cu",
         ];
         if cc_over_800 {
             lib_files.push("kernels/marlin/marlin_matmul_f16.cu");
