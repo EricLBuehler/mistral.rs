@@ -49,7 +49,7 @@ resp1 = client.responses.create(
                 },
                 {
                     "type": "text",
-                    "text": "Can you plesae transcribe this?",
+                    "text": "Can you please transcribe this?",
                 },
             ],
         }
