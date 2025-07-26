@@ -283,15 +283,7 @@ async fn parse_responses_request(
     };
 
     // Get messages from either messages or input field
-    let messages = if let Some(messages) = oairequest.messages.clone() {
-        messages.into_either()
-    } else if let Some(input) = oairequest.input.clone() {
-        Either::Right(input)
-    } else {
-        return Err(anyhow::anyhow!(
-            "Either 'messages' or 'input' field must be provided"
-        ));
-    };
+    let messages = oairequest.input.into_either();
 
     // Convert to ChatCompletionRequest for reuse
     let mut chat_request = ChatCompletionRequest {
@@ -321,7 +313,6 @@ async fn parse_responses_request(
         dry_sequence_breakers: oairequest.dry_sequence_breakers,
         enable_thinking: oairequest.enable_thinking,
     };
-
 
     // Prepend previous messages if available
     if let Some(prev_msgs) = previous_messages {
@@ -416,12 +407,12 @@ pub async fn create_response(
             let history_for_streaming = conversation_history.clone();
             let on_done: OnDoneCallback<ResponsesChunk> = Box::new(move |chunks| {
                 let _ = chunks_cache.store_chunks(id.clone(), chunks.to_vec());
-                
+
                 // Reconstruct the assistant's message from chunks and store conversation history
                 if let Some(history) = history_for_streaming.clone() {
                     let mut history = history;
                     let mut assistant_message = String::new();
-                    
+
                     // Collect all text from chunks
                     for chunk in chunks {
                         if let Some(delta) = &chunk.delta {
@@ -438,7 +429,7 @@ pub async fn create_response(
                             }
                         }
                     }
-                    
+
                     // Add the complete assistant message to history
                     if !assistant_message.is_empty() {
                         history.push(Message {
@@ -448,7 +439,7 @@ pub async fn create_response(
                             tool_calls: None,
                         });
                     }
-                    
+
                     let _ = chunks_cache.store_conversation_history(id.clone(), history);
                 }
             });
@@ -461,17 +452,14 @@ pub async fn create_response(
         // Non-streaming response
         match rx.recv().await {
             Some(Response::Done(chat_resp)) => {
-                let response_obj = chat_response_to_responses_object(
-                    &chat_resp,
-                    request_id.clone(),
-                    metadata,
-                );
+                let response_obj =
+                    chat_response_to_responses_object(&chat_resp, request_id.clone(), metadata);
 
                 // Store if requested
                 if store {
                     let cache = get_response_cache();
                     let _ = cache.store_response(request_id.clone(), response_obj.clone());
-                    
+
                     // Create complete conversation history including the assistant's response
                     if let Some(mut history) = conversation_history.clone() {
                         // Add the assistant's response to the conversation history
@@ -492,11 +480,8 @@ pub async fn create_response(
                 ResponsesResponder::Json(response_obj)
             }
             Some(Response::ModelError(msg, partial_resp)) => {
-                let mut response_obj = chat_response_to_responses_object(
-                    &partial_resp,
-                    request_id.clone(),
-                    metadata,
-                );
+                let mut response_obj =
+                    chat_response_to_responses_object(&partial_resp, request_id.clone(), metadata);
                 response_obj.error = Some(ResponsesError {
                     error_type: "model_error".to_string(),
                     message: msg.to_string(),
@@ -506,7 +491,7 @@ pub async fn create_response(
                 if store {
                     let cache = get_response_cache();
                     let _ = cache.store_response(request_id.clone(), response_obj.clone());
-                    
+
                     // Even on error, store conversation history with partial response
                     if let Some(mut history) = conversation_history.clone() {
                         // Add any partial response to the conversation history

@@ -771,10 +771,7 @@ pub struct ResponsesCreateRequest {
     #[schema(example = "mistral")]
     #[serde(default = "default_model")]
     pub model: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub messages: Option<ResponsesMessages>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input: Option<String>,
+    pub input: ResponsesMessages,
     #[schema(example = json!(Option::None::<String>))]
     pub instructions: Option<String>,
     #[schema(example = json!(Option::None::<Vec<String>>))]

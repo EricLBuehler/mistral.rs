@@ -37,16 +37,13 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 
 # first turn
-resp1 = client.responses.create(
-    model="default",
-    input="Plan a weekend in Montreal")
+resp1 = client.responses.create(model="default", input="Apples are delicous!")
 
 print(resp1.output_text)
 
 # follow‑up: no need to resend the first question
 resp2 = client.responses.create(
-    model="default",
-    previous_response_id=resp1.id,
-    input="Add a kid-friendly science museum, please")
+    model="default", previous_response_id=resp1.id, input="Can you eat them?"
+)
 
 print(resp2.output_text)
