@@ -10,9 +10,14 @@ use crate::{
     openai::{
         AudioResponseFormat, ChatCompletionRequest, CompletionRequest, FunctionCalled, Grammar,
         ImageGenerationRequest, JsonSchemaResponseFormat, Message, MessageContent,
-        MessageInnerContent, ModelObject, ModelObjects, ResponseFormat, SpeechGenerationRequest,
-        StopTokens, ToolCall,
+        MessageInnerContent, ModelObject, ModelObjects, ResponseFormat, ResponsesAnnotation,
+        ResponsesChunk, ResponsesContent, ResponsesCreateRequest, ResponsesDelta,
+        ResponsesDeltaContent, ResponsesDeltaOutput, ResponsesError, ResponsesIncompleteDetails,
+        ResponsesInputTokensDetails, ResponsesMessages, ResponsesObject, ResponsesOutput,
+        ResponsesOutputTokensDetails, ResponsesUsage, SpeechGenerationRequest, StopTokens,
+        ToolCall,
     },
+    responses::{__path_create_response, __path_delete_response, __path_get_response},
     speech_generation::__path_speech_generation,
 };
 use mistralrs_core::{
@@ -62,7 +67,7 @@ use mistralrs_core::{
 pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
     #[openapi(
-        paths(models, health, chatcompletions, completions, re_isq, image_generation, speech_generation),
+        paths(models, health, chatcompletions, completions, re_isq, image_generation, speech_generation, create_response, get_response, delete_response),
         components(schemas(
             ApproximateUserLocation,
             AudioResponseFormat,
@@ -81,6 +86,21 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             ModelObjects,
             ReIsqRequest,
             ResponseFormat,
+            ResponsesAnnotation,
+            ResponsesChunk,
+            ResponsesContent,
+            ResponsesCreateRequest,
+            ResponsesDelta,
+            ResponsesDeltaContent,
+            ResponsesDeltaOutput,
+            ResponsesError,
+            ResponsesIncompleteDetails,
+            ResponsesInputTokensDetails,
+            ResponsesMessages,
+            ResponsesObject,
+            ResponsesOutput,
+            ResponsesOutputTokensDetails,
+            ResponsesUsage,
             SearchContextSize,
             SpeechGenerationRequest,
             StopTokens,

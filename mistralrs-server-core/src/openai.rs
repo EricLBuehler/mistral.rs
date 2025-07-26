@@ -7,6 +7,7 @@ use mistralrs_core::{
     ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice, ToolType, WebSearchOptions,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use utoipa::{
     openapi::{schema::SchemaType, ArrayBuilder, ObjectBuilder, OneOfBuilder, RefOr, Schema, Type},
     PartialSchema, ToSchema,
@@ -95,6 +96,38 @@ impl ToSchema for MessageContent {
         )>,
     ) {
         schemas.push((MessageContent::name().into(), MessageContent::schema()));
+    }
+}
+
+impl MessageContent {
+    /// Create a new MessageContent from a string
+    pub fn from_text(text: String) -> Self {
+        MessageContent(Either::Left(text))
+    }
+
+    /// Extract text from MessageContent
+    pub fn to_text(&self) -> Option<String> {
+        match &self.0 {
+            Either::Left(text) => Some(text.clone()),
+            Either::Right(parts) => {
+                // For complex content, try to extract text from parts
+                let mut text_parts = Vec::new();
+                for part in parts {
+                    for (key, value) in part {
+                        if key == "text" {
+                            if let Either::Left(text) = &**value {
+                                text_parts.push(text.clone());
+                            }
+                        }
+                    }
+                }
+                if text_parts.is_empty() {
+                    None
+                } else {
+                    Some(text_parts.join(" "))
+                }
+            }
+        }
     }
 }
 
@@ -693,4 +726,252 @@ pub struct SpeechGenerationRequest {
     /// The desired audio format for the generated speech.
     #[schema(example = "mp3")]
     pub response_format: AudioResponseFormat,
+}
+
+/// Helper type for messages field in ResponsesCreateRequest
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ResponsesMessages {
+    Messages(Vec<Message>),
+    String(String),
+}
+
+impl ResponsesMessages {
+    pub fn into_either(self) -> Either<Vec<Message>, String> {
+        match self {
+            ResponsesMessages::Messages(msgs) => Either::Left(msgs),
+            ResponsesMessages::String(s) => Either::Right(s),
+        }
+    }
+}
+
+impl PartialSchema for ResponsesMessages {
+    fn schema() -> RefOr<Schema> {
+        RefOr::T(messages_schema())
+    }
+}
+
+impl ToSchema for ResponsesMessages {
+    fn schemas(
+        schemas: &mut Vec<(
+            String,
+            utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+        )>,
+    ) {
+        schemas.push((
+            ResponsesMessages::name().into(),
+            ResponsesMessages::schema(),
+        ));
+    }
+}
+
+/// Response creation request
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct ResponsesCreateRequest {
+    #[schema(example = "mistral")]
+    #[serde(default = "default_model")]
+    pub model: String,
+    pub input: ResponsesMessages,
+    #[schema(example = json!(Option::None::<String>))]
+    pub instructions: Option<String>,
+    #[schema(example = json!(Option::None::<Vec<String>>))]
+    pub modalities: Option<Vec<String>>,
+    #[schema(example = json!(Option::None::<String>))]
+    pub previous_response_id: Option<String>,
+    #[schema(example = json!(Option::None::<HashMap<u32, f32>>))]
+    pub logit_bias: Option<HashMap<u32, f32>>,
+    #[serde(default = "default_false")]
+    #[schema(example = false)]
+    pub logprobs: bool,
+    #[schema(example = json!(Option::None::<usize>))]
+    pub top_logprobs: Option<usize>,
+    #[schema(example = 256)]
+    #[serde(alias = "max_completion_tokens", alias = "max_output_tokens")]
+    pub max_tokens: Option<usize>,
+    #[serde(rename = "n")]
+    #[serde(default = "default_1usize")]
+    #[schema(example = 1)]
+    pub n_choices: usize,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub presence_penalty: Option<f32>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub frequency_penalty: Option<f32>,
+    #[serde(rename = "stop")]
+    #[schema(example = json!(Option::None::<StopTokens>))]
+    pub stop_seqs: Option<StopTokens>,
+    #[schema(example = 0.7)]
+    pub temperature: Option<f64>,
+    #[schema(example = json!(Option::None::<f64>))]
+    pub top_p: Option<f64>,
+    #[schema(example = false)]
+    pub stream: Option<bool>,
+    #[schema(example = json!(Option::None::<Vec<Tool>>))]
+    pub tools: Option<Vec<Tool>>,
+    #[schema(example = json!(Option::None::<ToolChoice>))]
+    pub tool_choice: Option<ToolChoice>,
+    #[schema(example = json!(Option::None::<ResponseFormat>))]
+    pub response_format: Option<ResponseFormat>,
+    #[schema(example = json!(Option::None::<WebSearchOptions>))]
+    pub web_search_options: Option<WebSearchOptions>,
+    #[schema(example = json!(Option::None::<Value>))]
+    pub metadata: Option<Value>,
+    #[schema(example = json!(Option::None::<bool>))]
+    pub output_token_details: Option<bool>,
+    #[schema(example = json!(Option::None::<bool>))]
+    pub parallel_tool_calls: Option<bool>,
+    #[schema(example = json!(Option::None::<bool>))]
+    pub store: Option<bool>,
+    #[schema(example = json!(Option::None::<usize>))]
+    pub max_tool_calls: Option<usize>,
+    #[schema(example = json!(Option::None::<bool>))]
+    pub reasoning_enabled: Option<bool>,
+    #[schema(example = json!(Option::None::<usize>))]
+    pub reasoning_max_tokens: Option<usize>,
+    #[schema(example = json!(Option::None::<usize>))]
+    pub reasoning_top_logprobs: Option<usize>,
+    #[schema(example = json!(Option::None::<Vec<String>>))]
+    pub truncation: Option<HashMap<String, Value>>,
+
+    // mistral.rs additional
+    #[schema(example = json!(Option::None::<usize>))]
+    pub top_k: Option<usize>,
+    #[schema(example = json!(Option::None::<Grammar>))]
+    pub grammar: Option<Grammar>,
+    #[schema(example = json!(Option::None::<f64>))]
+    pub min_p: Option<f64>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub dry_multiplier: Option<f32>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub dry_base: Option<f32>,
+    #[schema(example = json!(Option::None::<usize>))]
+    pub dry_allowed_length: Option<usize>,
+    #[schema(example = json!(Option::None::<String>))]
+    pub dry_sequence_breakers: Option<Vec<String>>,
+    #[schema(example = json!(Option::None::<bool>))]
+    pub enable_thinking: Option<bool>,
+}
+
+/// Response object
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesObject {
+    pub id: String,
+    pub object: &'static str,
+    pub created_at: f64,
+    pub model: String,
+    pub status: String,
+    pub output: Vec<ResponsesOutput>,
+    pub output_text: Option<String>,
+    pub usage: Option<ResponsesUsage>,
+    pub error: Option<ResponsesError>,
+    pub metadata: Option<Value>,
+    pub instructions: Option<String>,
+    pub incomplete_details: Option<ResponsesIncompleteDetails>,
+}
+
+/// Response usage information
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesUsage {
+    pub input_tokens: usize,
+    pub output_tokens: usize,
+    pub total_tokens: usize,
+    pub input_tokens_details: Option<ResponsesInputTokensDetails>,
+    pub output_tokens_details: Option<ResponsesOutputTokensDetails>,
+}
+
+/// Input tokens details
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesInputTokensDetails {
+    pub audio_tokens: Option<usize>,
+    pub cached_tokens: Option<usize>,
+    pub image_tokens: Option<usize>,
+    pub text_tokens: Option<usize>,
+}
+
+/// Output tokens details
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesOutputTokensDetails {
+    pub audio_tokens: Option<usize>,
+    pub text_tokens: Option<usize>,
+    pub reasoning_tokens: Option<usize>,
+}
+
+/// Response error
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesError {
+    #[serde(rename = "type")]
+    pub error_type: String,
+    pub message: String,
+}
+
+/// Incomplete details for incomplete responses
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesIncompleteDetails {
+    pub reason: String,
+}
+
+/// Response output item
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesOutput {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub output_type: String,
+    pub role: String,
+    pub status: Option<String>,
+    pub content: Vec<ResponsesContent>,
+}
+
+/// Response content item
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesContent {
+    #[serde(rename = "type")]
+    pub content_type: String,
+    pub text: Option<String>,
+    pub annotations: Option<Vec<ResponsesAnnotation>>,
+}
+
+/// Response annotation
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesAnnotation {
+    #[serde(rename = "type")]
+    pub annotation_type: String,
+    pub text: String,
+    pub start_index: usize,
+    pub end_index: usize,
+}
+
+/// Response streaming chunk
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesChunk {
+    pub id: String,
+    pub object: &'static str,
+    pub created_at: f64,
+    pub model: String,
+    pub chunk_type: String,
+    pub delta: Option<ResponsesDelta>,
+    pub usage: Option<ResponsesUsage>,
+    pub metadata: Option<Value>,
+}
+
+/// Response delta for streaming
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesDelta {
+    pub output: Option<Vec<ResponsesDeltaOutput>>,
+    pub status: Option<String>,
+}
+
+/// Response delta output item
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesDeltaOutput {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub output_type: String,
+    pub content: Option<Vec<ResponsesDeltaContent>>,
+}
+
+/// Response delta content item
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesDeltaContent {
+    #[serde(rename = "type")]
+    pub content_type: String,
+    pub text: Option<String>,
 }
