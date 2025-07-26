@@ -35,7 +35,7 @@ use crate::{
     openai::{CompletionRequest, Grammar},
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
-    util::validate_model_name,
+    util::{sanitize_error_message, validate_model_name},
 };
 
 /// A callback function that processes streaming response chunks before they are sent to the client.
@@ -119,12 +119,14 @@ impl futures::Stream for CompletionStreamer {
                     self.done_state = DoneState::SendingDone;
                     Poll::Ready(Some(Ok(Event::default().data(msg))))
                 }
-                Response::ValidationError(e) => {
-                    Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
-                }
+                Response::ValidationError(e) => Poll::Ready(Some(Ok(
+                    Event::default().data(sanitize_error_message(e.as_ref()))
+                ))),
                 Response::InternalError(e) => {
                     MistralRs::maybe_log_error(self.state.clone(), &*e);
-                    Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
+                    Poll::Ready(Some(Ok(
+                        Event::default().data(sanitize_error_message(e.as_ref()))
+                    )))
                 }
                 Response::CompletionChunk(mut response) => {
                     if response.choices.iter().all(|x| x.finish_reason.is_some()) {
@@ -170,10 +172,12 @@ impl IntoResponse for CompletionResponder {
             CompletionResponder::Sse(s) => s.into_response(),
             CompletionResponder::Json(s) => Json(s).into_response(),
             CompletionResponder::InternalError(e) => {
-                JsonError::new(e.to_string()).to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+                JsonError::new(sanitize_error_message(e.as_ref()))
+                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
             }
             CompletionResponder::ValidationError(e) => {
-                JsonError::new(e.to_string()).to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+                JsonError::new(sanitize_error_message(e.as_ref()))
+                    .to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
             }
             CompletionResponder::ModelError(msg, response) => JsonModelError::new(msg, response)
                 .to_response(http::StatusCode::INTERNAL_SERVER_ERROR),

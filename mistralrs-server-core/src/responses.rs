@@ -32,6 +32,7 @@ use crate::{
     },
     streaming::{get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
+    util::sanitize_error_message,
 };
 
 /// Response streamer for the Responses API
@@ -69,12 +70,14 @@ impl futures::Stream for ResponsesStreamer {
                     self.done_state = DoneState::SendingDone;
                     Poll::Ready(Some(Ok(Event::default().data(msg))))
                 }
-                Response::ValidationError(e) => {
-                    Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
-                }
+                Response::ValidationError(e) => Poll::Ready(Some(Ok(
+                    Event::default().data(sanitize_error_message(e.as_ref()))
+                ))),
                 Response::InternalError(e) => {
                     MistralRs::maybe_log_error(self.state.clone(), &*e);
-                    Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
+                    Poll::Ready(Some(Ok(
+                        Event::default().data(sanitize_error_message(e.as_ref()))
+                    )))
                 }
                 Response::Chunk(chat_chunk) => {
                     // Convert ChatCompletionChunkResponse to ResponsesChunk
@@ -174,10 +177,12 @@ impl IntoResponse for ResponsesResponder {
             ResponsesResponder::Sse(s) => s.into_response(),
             ResponsesResponder::Json(s) => Json(s).into_response(),
             ResponsesResponder::InternalError(e) => {
-                JsonError::new(e.to_string()).to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+                JsonError::new(sanitize_error_message(e.as_ref()))
+                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
             }
             ResponsesResponder::ValidationError(e) => {
-                JsonError::new(e.to_string()).to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+                JsonError::new(sanitize_error_message(e.as_ref()))
+                    .to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
             }
             ResponsesResponder::ModelError(msg, response) => JsonModelError::new(msg, response)
                 .to_response(http::StatusCode::INTERNAL_SERVER_ERROR),
@@ -537,8 +542,11 @@ pub async fn get_response(
         Ok(Some(response)) => (StatusCode::OK, Json(response)).into_response(),
         Ok(None) => JsonError::new(format!("Response with ID '{response_id}' not found"))
             .to_response(StatusCode::NOT_FOUND),
-        Err(e) => JsonError::new(format!("Error retrieving response: {e}"))
-            .to_response(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(e) => JsonError::new(format!(
+            "Error retrieving response: {}",
+            sanitize_error_message(&*e)
+        ))
+        .to_response(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
 
@@ -568,8 +576,11 @@ pub async fn delete_response(
             .into_response(),
         Ok(false) => JsonError::new(format!("Response with ID '{response_id}' not found"))
             .to_response(StatusCode::NOT_FOUND),
-        Err(e) => JsonError::new(format!("Error deleting response: {e}"))
-            .to_response(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(e) => JsonError::new(format!(
+            "Error deleting response: {}",
+            sanitize_error_message(&*e)
+        ))
+        .to_response(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
 

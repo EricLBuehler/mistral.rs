@@ -21,7 +21,7 @@ use crate::{
     },
     openai::ImageGenerationRequest,
     types::{ExtractedMistralRsState, SharedMistralRsState},
-    util::validate_model_name,
+    util::{sanitize_error_message, validate_model_name},
 };
 
 /// Represents different types of image generation responses.
@@ -37,10 +37,12 @@ impl IntoResponse for ImageGenerationResponder {
         match self {
             ImageGenerationResponder::Json(s) => Json(s).into_response(),
             ImageGenerationResponder::InternalError(e) => {
-                JsonError::new(e.to_string()).to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+                JsonError::new(sanitize_error_message(e.as_ref()))
+                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
             }
             ImageGenerationResponder::ValidationError(e) => {
-                JsonError::new(e.to_string()).to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+                JsonError::new(sanitize_error_message(e.as_ref()))
+                    .to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
             }
         }
     }
@@ -121,7 +123,8 @@ pub fn handle_error(
     state: SharedMistralRsState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> ImageGenerationResponder {
-    let e = anyhow::Error::msg(e.to_string());
+    let sanitized_msg = sanitize_error_message(&*e);
+    let e = anyhow::Error::msg(sanitized_msg);
     MistralRs::maybe_log_error(state, &*e);
     ImageGenerationResponder::InternalError(e.into())
 }
