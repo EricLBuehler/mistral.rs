@@ -276,7 +276,7 @@ pub struct McpServerConfig {
     pub resources: Option<Vec<String>>,
     /// Optional Bearer token for authentication
     ///
-    /// Automatically included as "Authorization: Bearer <token>" header
+    /// Automatically included as `Authorization: Bearer <token>` header
     /// for HTTP and WebSocket connections. Process connections typically
     /// don't require authentication tokens.
     pub bearer_token: Option<String>,
