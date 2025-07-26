@@ -8,7 +8,7 @@ assignees: ''
 ---
 
 ## Minimum reproducible example
-The minium example to reproduce the error. Simpler examples make it easier and faster to fix!
+The minimum example to reproduce the error. Simpler examples make it easier and faster to fix!
 
 ## Error
 What is the error? If the error is very long, please try to extract an excerpt of it and post a link to a [Gist](https://gist.github.com/)
