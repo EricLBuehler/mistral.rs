@@ -187,14 +187,14 @@ impl IntoResponse for ResponsesResponder {
 
 /// Convert chat completion response to responses object
 fn chat_response_to_responses_object(
-    chat_resp: ChatCompletionResponse,
+    chat_resp: &ChatCompletionResponse,
     request_id: String,
     metadata: Option<Value>,
 ) -> ResponsesObject {
     let mut outputs = Vec::new();
     let mut output_text_parts = Vec::new();
 
-    for choice in chat_resp.choices {
+    for choice in &chat_resp.choices {
         let mut content_items = Vec::new();
         let mut has_content = false;
 
@@ -230,7 +230,7 @@ fn chat_response_to_responses_object(
             outputs.push(ResponsesOutput {
                 id: format!("msg_{}", Uuid::new_v4()),
                 output_type: "message".to_string(),
-                role: choice.message.role,
+                role: choice.message.role.clone(),
                 status: None,
                 content: content_items,
             });
@@ -241,7 +241,7 @@ fn chat_response_to_responses_object(
         id: request_id,
         object: "response",
         created_at: chat_resp.created as f64,
-        model: chat_resp.model,
+        model: chat_resp.model.clone(),
         status: "completed".to_string(),
         output: outputs,
         output_text: if output_text_parts.is_empty() {
@@ -274,30 +274,10 @@ async fn parse_responses_request(
             "The 'instructions' field is not supported in the Responses API"
         ));
     }
-    // If previous_response_id is provided, try to get cached messages from output
+    // If previous_response_id is provided, get the full conversation history from cache
     let previous_messages = if let Some(prev_id) = &oairequest.previous_response_id {
         let cache = get_response_cache();
-        if let Some(prev_response) = cache.get_response(prev_id)? {
-            // Extract messages from previous response output
-            let mut messages = Vec::new();
-            for output in &prev_response.output {
-                if let Some(text) = output.content.first().and_then(|c| c.text.as_ref()) {
-                    messages.push(Message {
-                        content: Some(MessageContent::from_text(text.clone())),
-                        role: output.role.clone(),
-                        name: None,
-                        tool_calls: None,
-                    });
-                }
-            }
-            if messages.is_empty() {
-                None
-            } else {
-                Some(messages)
-            }
-        } else {
-            None
-        }
+        cache.get_conversation_history(prev_id)?
     } else {
         None
     };
@@ -405,7 +385,7 @@ pub async fn create_response(
         Some(oairequest.model.clone())
     };
 
-    let (request, is_streaming, _prompt_messages) =
+    let (request, is_streaming, conversation_history) =
         match parse_responses_request(oairequest, state.clone(), tx).await {
             Ok(x) => x,
             Err(e) => return handle_error(state, e.into()),
@@ -432,9 +412,45 @@ pub async fn create_response(
             let id = request_id.clone();
             let chunks_cache = cache.clone();
 
-            // Create a wrapper that stores chunks
+            // Create a wrapper that stores chunks and conversation history
+            let history_for_streaming = conversation_history.clone();
             let on_done: OnDoneCallback<ResponsesChunk> = Box::new(move |chunks| {
                 let _ = chunks_cache.store_chunks(id.clone(), chunks.to_vec());
+                
+                // Reconstruct the assistant's message from chunks and store conversation history
+                if let Some(history) = history_for_streaming.clone() {
+                    let mut history = history;
+                    let mut assistant_message = String::new();
+                    
+                    // Collect all text from chunks
+                    for chunk in chunks {
+                        if let Some(delta) = &chunk.delta {
+                            if let Some(outputs) = &delta.output {
+                                for output in outputs {
+                                    if let Some(contents) = &output.content {
+                                        for content in contents {
+                                            if let Some(text) = &content.text {
+                                                assistant_message.push_str(text);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Add the complete assistant message to history
+                    if !assistant_message.is_empty() {
+                        history.push(Message {
+                            content: Some(MessageContent::from_text(assistant_message)),
+                            role: "assistant".to_string(),
+                            name: None,
+                            tool_calls: None,
+                        });
+                    }
+                    
+                    let _ = chunks_cache.store_conversation_history(id.clone(), history);
+                }
             });
 
             ResponsesResponder::Sse(create_streamer(streamer, Some(on_done)))
@@ -446,7 +462,7 @@ pub async fn create_response(
         match rx.recv().await {
             Some(Response::Done(chat_resp)) => {
                 let response_obj = chat_response_to_responses_object(
-                    chat_resp,
+                    &chat_resp,
                     request_id.clone(),
                     metadata,
                 );
@@ -454,14 +470,30 @@ pub async fn create_response(
                 // Store if requested
                 if store {
                     let cache = get_response_cache();
-                    let _ = cache.store_response(request_id, response_obj.clone());
+                    let _ = cache.store_response(request_id.clone(), response_obj.clone());
+                    
+                    // Create complete conversation history including the assistant's response
+                    if let Some(mut history) = conversation_history.clone() {
+                        // Add the assistant's response to the conversation history
+                        for choice in &chat_resp.choices {
+                            if let Some(content) = &choice.message.content {
+                                history.push(Message {
+                                    content: Some(MessageContent::from_text(content.clone())),
+                                    role: choice.message.role.clone(),
+                                    name: None,
+                                    tool_calls: None, // TODO: Convert ToolCallResponse to ToolCall if needed
+                                });
+                            }
+                        }
+                        let _ = cache.store_conversation_history(request_id, history);
+                    }
                 }
 
                 ResponsesResponder::Json(response_obj)
             }
             Some(Response::ModelError(msg, partial_resp)) => {
                 let mut response_obj = chat_response_to_responses_object(
-                    partial_resp,
+                    &partial_resp,
                     request_id.clone(),
                     metadata,
                 );
@@ -473,7 +505,23 @@ pub async fn create_response(
 
                 if store {
                     let cache = get_response_cache();
-                    let _ = cache.store_response(request_id, response_obj.clone());
+                    let _ = cache.store_response(request_id.clone(), response_obj.clone());
+                    
+                    // Even on error, store conversation history with partial response
+                    if let Some(mut history) = conversation_history.clone() {
+                        // Add any partial response to the conversation history
+                        for choice in &partial_resp.choices {
+                            if let Some(content) = &choice.message.content {
+                                history.push(Message {
+                                    content: Some(MessageContent::from_text(content.clone())),
+                                    role: choice.message.role.clone(),
+                                    name: None,
+                                    tool_calls: None, // TODO: Convert ToolCallResponse to ToolCall if needed
+                                });
+                            }
+                        }
+                        let _ = cache.store_conversation_history(request_id, history);
+                    }
                 }
                 ResponsesResponder::ModelError(msg.to_string(), response_obj)
             }

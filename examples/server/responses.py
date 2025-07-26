@@ -41,7 +41,7 @@ resp1 = client.responses.create(
     model="default",
     input="Plan a weekend in Montreal")
 
-print(resp1)
+print(resp1.output_text)
 
 # follow‑up: no need to resend the first question
 resp2 = client.responses.create(
@@ -49,4 +49,4 @@ resp2 = client.responses.create(
     previous_response_id=resp1.id,
     input="Add a kid-friendly science museum, please")
 
-print(resp2)
+print(resp2.output_text)

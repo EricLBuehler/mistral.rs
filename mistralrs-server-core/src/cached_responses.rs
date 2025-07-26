@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::sync::{Arc, RwLock};
 
-use crate::openai::{ResponsesChunk, ResponsesObject};
+use crate::openai::{Message, ResponsesChunk, ResponsesObject};
 
 /// Trait for caching responses
 pub trait ResponseCache: Send + Sync {
@@ -23,12 +23,19 @@ pub trait ResponseCache: Send + Sync {
 
     /// Retrieve streaming chunks for a response
     fn get_chunks(&self, id: &str) -> Result<Option<Vec<ResponsesChunk>>>;
+
+    /// Store conversation history for a response
+    fn store_conversation_history(&self, id: String, messages: Vec<Message>) -> Result<()>;
+
+    /// Retrieve conversation history for a response
+    fn get_conversation_history(&self, id: &str) -> Result<Option<Vec<Message>>>;
 }
 
 /// In-memory implementation of ResponseCache
 pub struct InMemoryResponseCache {
     responses: Arc<RwLock<HashMap<String, ResponsesObject>>>,
     chunks: Arc<RwLock<HashMap<String, Vec<ResponsesChunk>>>>,
+    conversation_histories: Arc<RwLock<HashMap<String, Vec<Message>>>>,
 }
 
 impl InMemoryResponseCache {
@@ -37,6 +44,7 @@ impl InMemoryResponseCache {
         Self {
             responses: Arc::new(RwLock::new(HashMap::new())),
             chunks: Arc::new(RwLock::new(HashMap::new())),
+            conversation_histories: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -62,11 +70,13 @@ impl ResponseCache for InMemoryResponseCache {
     fn delete_response(&self, id: &str) -> Result<bool> {
         let mut responses = self.responses.write().unwrap();
         let mut chunks = self.chunks.write().unwrap();
+        let mut histories = self.conversation_histories.write().unwrap();
 
         let response_removed = responses.remove(id).is_some();
         let chunks_removed = chunks.remove(id).is_some();
+        let history_removed = histories.remove(id).is_some();
 
-        Ok(response_removed || chunks_removed)
+        Ok(response_removed || chunks_removed || history_removed)
     }
 
     fn store_chunks(&self, id: String, chunks: Vec<ResponsesChunk>) -> Result<()> {
@@ -78,6 +88,17 @@ impl ResponseCache for InMemoryResponseCache {
     fn get_chunks(&self, id: &str) -> Result<Option<Vec<ResponsesChunk>>> {
         let chunks = self.chunks.read().unwrap();
         Ok(chunks.get(id).cloned())
+    }
+
+    fn store_conversation_history(&self, id: String, messages: Vec<Message>) -> Result<()> {
+        let mut histories = self.conversation_histories.write().unwrap();
+        histories.insert(id, messages);
+        Ok(())
+    }
+
+    fn get_conversation_history(&self, id: &str) -> Result<Option<Vec<Message>>> {
+        let histories = self.conversation_histories.read().unwrap();
+        Ok(histories.get(id).cloned())
     }
 }
 
