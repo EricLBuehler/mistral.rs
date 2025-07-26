@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["create_response","delete_response","get_response"],"type":["ResponsesResponder","ResponsesStreamer"]};
