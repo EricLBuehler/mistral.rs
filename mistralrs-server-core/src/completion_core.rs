@@ -6,7 +6,7 @@ use anyhow::Result;
 use axum::response::Sse;
 use mistralrs_core::{DrySamplingParams, MistralRs, StopTokens as InternalStopTokens};
 
-use crate::{openai::StopTokens, types::SharedMistralRsState};
+use crate::{openai::StopTokens, types::SharedMistralRsState, util::sanitize_error_message};
 
 /// Generic responder enum for different completion types.
 #[derive(Debug)]
@@ -28,9 +28,14 @@ pub(crate) fn handle_completion_error<R, S>(
     state: SharedMistralRsState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> BaseCompletionResponder<R, S> {
-    let error = anyhow::Error::msg(e.to_string());
-    MistralRs::maybe_log_error(state, &*error);
-    BaseCompletionResponder::InternalError(error.into())
+    // Log the full error internally
+    let full_error = anyhow::Error::msg(e.to_string());
+    MistralRs::maybe_log_error(state, &*full_error);
+
+    // But return sanitized error to the user
+    let sanitized_msg = sanitize_error_message(&*e);
+    let sanitized_error = anyhow::Error::msg(sanitized_msg);
+    BaseCompletionResponder::InternalError(sanitized_error.into())
 }
 
 /// Helper function to convert from the OpenAI stop tokens to the mistral.rs

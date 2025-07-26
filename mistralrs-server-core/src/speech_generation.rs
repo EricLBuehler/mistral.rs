@@ -19,7 +19,7 @@ use crate::{
     handler_core::{create_response_channel, send_request, ErrorToResponse, JsonError},
     openai::{AudioResponseFormat, SpeechGenerationRequest},
     types::SharedMistralRsState,
-    util::validate_model_name,
+    util::{sanitize_error_message, validate_model_name},
 };
 
 /// Represents different types of speech generation responses.
@@ -34,10 +34,12 @@ impl IntoResponse for SpeechGenerationResponder {
     fn into_response(self) -> axum::response::Response {
         match self {
             SpeechGenerationResponder::InternalError(e) => {
-                JsonError::new(e.to_string()).to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+                JsonError::new(sanitize_error_message(e.as_ref()))
+                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
             }
             SpeechGenerationResponder::ValidationError(e) => {
-                JsonError::new(e.to_string()).to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+                JsonError::new(sanitize_error_message(e.as_ref()))
+                    .to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
             }
             SpeechGenerationResponder::RawResponse(resp) => resp,
         }
@@ -126,7 +128,8 @@ pub fn handle_error(
     state: SharedMistralRsState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> SpeechGenerationResponder {
-    let e = anyhow::Error::msg(e.to_string());
+    let sanitized_msg = sanitize_error_message(&*e);
+    let e = anyhow::Error::msg(sanitized_msg);
     MistralRs::maybe_log_error(state, &*e);
     SpeechGenerationResponder::InternalError(e.into())
 }
