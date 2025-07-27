@@ -7,8 +7,10 @@ use crate::tokenizer::TokenizerImpl;
 use crate::Constraint;
 
 pub fn build_llg_factory(tokenizer: TokenizerImpl) -> Result<Arc<ParserFactory>> {
-    // Get the base tokenizer - all variants have the same underlying tokenizer
-    let base_tokenizer = tokenizer.get_base_tokenizer().clone();
+    // Get the HuggingFace tokenizer if available
+    let base_tokenizer = tokenizer.get_hf_tokenizer()
+        .ok_or_else(|| anyhow::anyhow!("LLG factory requires a HuggingFace-compatible tokenizer"))?
+        .clone();
     let env =
         toktrie_hf_tokenizers::ByteTokenizer::from_tokenizer(base_tokenizer)?.into_tok_env(None)?;
     let factory = ParserFactory::new_simple(&env)?;

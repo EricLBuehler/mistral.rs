@@ -108,8 +108,10 @@ pub fn calculate_eos_tokens(
     let mut bos_tok_ids = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
 
     for alternate in SUPPORTED_ALTERNATE_EOS {
-        if tokenizer.get_vocab(true).contains_key(*alternate) {
-            eos_tok_ids.push(alternate.to_string())
+        if let Some(vocab) = tokenizer.get_vocab(true) {
+            if vocab.contains_key(*alternate) {
+                eos_tok_ids.push(alternate.to_string())
+            }
         }
     }
 
@@ -166,13 +168,16 @@ pub fn calculate_eos_tokens(
 
     let mut eos_toks = Vec::new();
     for eos_tok in eos_tok_ids {
-        eos_toks.push(
-            tokenizer
-                .get_vocab(true)
-                .get(&eos_tok)
-                .copied()
-                .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token.")),
-        )
+        if let Some(vocab) = tokenizer.get_vocab(true) {
+            eos_toks.push(
+                vocab
+                    .get(&eos_tok)
+                    .copied()
+                    .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token.")),
+            )
+        } else {
+            panic!("Unable to get vocabulary to extract `{eos_tok}` EOS token.");
+        }
     }
     eos_toks
 }
