@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::tokenizer::TokenizerImpl;
 use anyhow::Result;
 use either::Either;
 use indexmap::IndexMap;
@@ -7,7 +8,6 @@ use itertools::Itertools;
 use minijinja::{context, value::Kwargs, Environment, Error, ErrorKind, Value};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tokenizers::Tokenizer;
 use tracing::info;
 
 use crate::{MessageContent, Tool};
@@ -102,7 +102,7 @@ impl ChatTemplate {
 pub fn calculate_eos_tokens(
     chat_template: &ChatTemplate,
     gen_conf: Option<GenerationConfig>,
-    tokenizer: &Tokenizer,
+    tokenizer: &TokenizerImpl,
 ) -> Vec<u32> {
     let mut eos_tok_ids = chat_template.eos_tok().map(|x| vec![x]).unwrap_or_default();
     let mut bos_tok_ids = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();

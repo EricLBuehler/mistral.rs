@@ -1,10 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::tokenizer::TokenizerImpl;
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{embedding, layer_norm, linear, Embedding, LayerNorm, Linear, Module, VarBuilder};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use serde::Deserialize;
-use tokenizers::Tokenizer;
 
 use crate::{engine::BertEmbeddingModel, layers::Activation, GLOBAL_HF_CACHE};
 use mistralrs_quant::log::once_log_info;
@@ -400,7 +400,7 @@ impl BertModel {
 
 pub struct BertPipeline {
     pub model: BertModel,
-    pub tokenizer: Tokenizer,
+    pub tokenizer: TokenizerImpl,
 }
 
 impl BertPipeline {
@@ -428,8 +428,9 @@ impl BertPipeline {
         };
         let config = std::fs::read_to_string(config_filename)?;
         let config: Config = serde_json::from_str(&config)?;
-        let tokenizer =
-            Tokenizer::from_file(tokenizer_filename).map_err(candle_core::Error::msg)?;
+        let base_tokenizer = tokenizers::Tokenizer::from_file(tokenizer_filename)
+            .map_err(candle_core::Error::msg)?;
+        let tokenizer = TokenizerImpl::new_huggingface(base_tokenizer);
 
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&[weights_filename], DType::F32, device)?

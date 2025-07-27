@@ -2,10 +2,10 @@
 
 use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
+use crate::tokenizer::TokenizerImpl;
 use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use mistralrs_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};
-use tokenizers::Tokenizer;
 use tracing::warn;
 
 use crate::{
@@ -83,7 +83,7 @@ impl InputsProcessor for Mistral3ImageProcessor {
     }
     fn process_inputs(
         &self,
-        tokenizer: Option<Arc<Tokenizer>>,
+        tokenizer: Option<Arc<TokenizerImpl>>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,

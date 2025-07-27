@@ -2,10 +2,10 @@
 
 use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
+use crate::tokenizer::TokenizerImpl;
 use anyhow::Result;
 use candle_core::Device;
 use text_models_inputs_processor::PagedAttentionMeta;
-use tokenizers::Tokenizer;
 
 use crate::{device_map::DeviceMapper, sequence::Sequence};
 
@@ -31,7 +31,7 @@ pub trait InputsProcessor {
     #[allow(clippy::too_many_arguments)]
     fn process_inputs(
         &self,
-        tokenizer: Option<Arc<Tokenizer>>,
+        tokenizer: Option<Arc<TokenizerImpl>>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,
@@ -53,9 +53,9 @@ pub trait InputsProcessor {
 pub mod text_models_inputs_processor {
     use std::{any::Any, collections::HashMap, fmt::Debug, num::NonZeroUsize, sync::Arc};
 
+    use crate::tokenizer::TokenizerImpl;
     use anyhow::Result;
     use candle_core::{DType, Device, DeviceLocation, Tensor, WithDType};
-    use tokenizers::Tokenizer;
 
     use crate::{
         device_map::DeviceMapper,
@@ -645,7 +645,7 @@ pub mod text_models_inputs_processor {
     impl InputsProcessor for TextInputsProcessor {
         fn process_inputs(
             &self,
-            _: Option<Arc<Tokenizer>>,
+            _: Option<Arc<TokenizerImpl>>,
             input_seqs: &mut [&mut Sequence],
             is_prompt: bool,
             is_xlora: bool,

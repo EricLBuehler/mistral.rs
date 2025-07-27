@@ -1,3 +1,4 @@
+use crate::tokenizer::TokenizerImpl;
 use crate::{
     device_map::DeviceMapper,
     pipeline::{
@@ -20,7 +21,6 @@ use mistralrs_vision::{
     ApplyTensorTransforms, ApplyTransforms, Normalize, TensorTransforms, ToTensor, Transforms,
 };
 use std::{any::Any, num::NonZeroUsize, sync::Arc};
-use tokenizers::Tokenizer;
 use tracing::warn;
 
 use super::Qwen2_5VLVisionSpecificArgs;
@@ -114,7 +114,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
     }
     fn process_inputs(
         &self,
-        tokenizer: Option<Arc<Tokenizer>>,
+        tokenizer: Option<Arc<TokenizerImpl>>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,

@@ -23,6 +23,7 @@ use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTr
 use crate::device_map::DeviceMapper;
 use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
 use crate::prefix_cacher::PrefixCacheManagerV2;
+use crate::tokenizer::TokenizerImpl;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 pub use auto::{AutoLoader, AutoLoaderBuilder};
 use chat_template::ChatTemplate;
@@ -62,7 +63,6 @@ use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokenizers::Tokenizer;
 pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
 
 use anyhow::Result;
@@ -178,7 +178,7 @@ pub trait CacheManagerMixin {
 pub trait MetadataMixin {
     fn device(&self) -> Device;
     /// Only None if it doesnt make sense for the model
-    fn tokenizer(&self) -> Option<Arc<Tokenizer>>;
+    fn tokenizer(&self) -> Option<Arc<TokenizerImpl>>;
     fn name(&self) -> String;
     fn reset_non_granular_state(&self);
     fn get_metadata(&self) -> Arc<GeneralMetadata>;

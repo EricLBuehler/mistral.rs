@@ -1,9 +1,9 @@
 use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
+use crate::tokenizer::TokenizerImpl;
 use anyhow::{Context, Result};
 use candle_core::Device;
 use indexmap::IndexMap;
-use tokenizers::Tokenizer;
 
 use crate::{
     device_map::DeviceMapper,
@@ -60,7 +60,7 @@ impl InputsProcessor for DiffusionInputsProcessor {
 
     fn process_inputs(
         &self,
-        _tokenizer: Option<Arc<Tokenizer>>,
+        _tokenizer: Option<Arc<TokenizerImpl>>,
         input_seqs: &mut [&mut Sequence],
         _is_prompt: bool,
         _is_xlora: bool,

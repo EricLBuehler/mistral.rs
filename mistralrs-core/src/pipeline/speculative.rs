@@ -4,11 +4,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::tokenizer::TokenizerImpl;
 use anyhow::Result as anyhowResult;
 use candle_core::{Device, IndexOp, Result, Tensor};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
-use tokenizers::Tokenizer;
 use tracing::warn;
 
 use crate::{
@@ -287,7 +287,7 @@ impl MetadataMixin for SpeculativePipeline {
     fn device(&self) -> Device {
         get_mut_arcmutex!(self.target).device()
     }
-    fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
+    fn tokenizer(&self) -> Option<Arc<TokenizerImpl>> {
         get_mut_arcmutex!(self.target).tokenizer()
     }
     fn name(&self) -> String {

@@ -2,13 +2,15 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use llguidance::{api::TopLevelGrammar, ParserFactory};
-use tokenizers::Tokenizer;
 
+use crate::tokenizer::TokenizerImpl;
 use crate::Constraint;
 
-pub fn build_llg_factory(tokenizer: Tokenizer) -> Result<Arc<ParserFactory>> {
+pub fn build_llg_factory(tokenizer: TokenizerImpl) -> Result<Arc<ParserFactory>> {
+    // Get the base tokenizer - all variants have the same underlying tokenizer
+    let base_tokenizer = tokenizer.get_base_tokenizer().clone();
     let env =
-        toktrie_hf_tokenizers::ByteTokenizer::from_tokenizer(tokenizer)?.into_tok_env(None)?;
+        toktrie_hf_tokenizers::ByteTokenizer::from_tokenizer(base_tokenizer)?.into_tok_env(None)?;
     let factory = ParserFactory::new_simple(&env)?;
     Ok(Arc::new(factory))
 }

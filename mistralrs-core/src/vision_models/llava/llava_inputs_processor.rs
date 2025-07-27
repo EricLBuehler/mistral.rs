@@ -3,13 +3,13 @@ use std::any::Any;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use crate::tokenizer::TokenizerImpl;
 use candle_core::Result;
 use candle_core::{DType, Device, Tensor};
 use image::GenericImageView;
 use image::Rgb;
 use itertools::Itertools;
 use regex_automata::meta::Regex;
-use tokenizers::Tokenizer;
 use tracing::warn;
 
 use super::llava15::LLaVAVisionSpecificArgs;
@@ -77,7 +77,7 @@ impl InputsProcessor for LLaVAInputProcessor {
     }
     fn process_inputs(
         &self,
-        tokenizer: Option<Arc<Tokenizer>>,
+        tokenizer: Option<Arc<TokenizerImpl>>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,

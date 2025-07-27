@@ -2,6 +2,7 @@
 
 use std::sync::atomic::Ordering;
 
+use crate::tokenizer::TokenizerImpl;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::DEBUG;
 use ahash::AHashMap;
@@ -27,10 +28,7 @@ use tracing::info;
 use super::Content;
 
 pub(crate) struct GgufTokenizerConversion {
-    pub tokenizer: Tokenizer,
-    pub bos: Option<String>,
-    pub eos: Option<String>,
-    pub unk: Option<String>,
+    pub tokenizer: TokenizerImpl,
 }
 
 struct PropsGGUF {
@@ -130,11 +128,11 @@ pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
         _ => None,
     };
 
+    let bos = Some(props.tokens[props.bos as usize].clone());
+    let eos = Some(props.tokens[props.eos as usize].clone());
+
     Ok(GgufTokenizerConversion {
-        tokenizer,
-        bos: Some(props.tokens[props.bos as usize].clone()),
-        eos: Some(props.tokens[props.eos as usize].clone()),
-        unk,
+        tokenizer: TokenizerImpl::new_gguf(tokenizer, bos, eos, unk),
     })
 }
 

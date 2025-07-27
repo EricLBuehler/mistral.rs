@@ -1,11 +1,12 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{borrow::Cow, cmp::Ordering};
+use std::cmp::Ordering;
 
+use crate::tokenizer::TokenizerImpl;
 use anyhow::Result;
 use candle_core::{DType, Device, Error as E, Tensor};
 use itertools::Itertools;
-use tokenizers::{InputSequence, PaddingParams, PaddingStrategy, Tokenizer};
+use tokenizers::{PaddingParams, PaddingStrategy};
 
 use crate::embedding::bert::{BertModel, BertPipeline};
 
@@ -74,19 +75,14 @@ pub fn compute_most_similar(
 
 fn compute_similarities(
     model: &BertModel,
-    tokenizer: &Tokenizer,
+    tokenizer: &TokenizerImpl,
     device: &Device,
     sentences: Vec<String>,
     normalize_embeddings: bool,
 ) -> Result<Vec<f32>> {
     let n_sentences = sentences.len();
-    let sentences_batched = sentences
-        .iter()
-        .map(|s| InputSequence::Raw(Cow::from(s)))
-        .collect::<Vec<_>>();
-
     let tokens = tokenizer
-        .encode_batch(sentences_batched.to_vec(), true)
+        .encode_batch(sentences.iter().map(|s| s.as_str()), true)
         .map_err(E::msg)?;
     let mut embeddings_all = Vec::new();
     for tokens in tokens.chunks(2) {
