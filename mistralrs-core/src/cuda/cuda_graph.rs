@@ -11,6 +11,14 @@ use std::sync::{Arc, Mutex};
 #[cfg(feature = "cuda")]
 type CudaGraph = candle_core::cuda::cudarc::driver::safe::CudaGraph;
 
+/// Information about a captured graph
+#[cfg(feature = "cuda")]
+pub struct CapturedGraph {
+    graph: Arc<CudaGraph>,
+    /// Pre-allocated output tensor that will be populated by graph execution
+    output_tensor: candle_core::Tensor,
+}
+
 /// Global state for CUDA graph capture
 pub struct CudaGraphState {
     /// Whether we're currently capturing
@@ -20,10 +28,13 @@ pub struct CudaGraphState {
     capture_stream: Option<Arc<CudaStream>>,
     /// Cached graphs by (batch_size, seq_len) for decode
     #[cfg(feature = "cuda")]
-    cached_graphs: HashMap<(usize, usize), Arc<CudaGraph>>,
-    /// Output tensors for cached graphs
+    cached_graphs: HashMap<(usize, usize), CapturedGraph>,
+    /// Temporary output tensor used during capture
     #[cfg(feature = "cuda")]
-    cached_outputs: HashMap<(usize, usize), candle_core::Tensor>,
+    capture_output: Option<candle_core::Tensor>,
+    /// Configuration for current capture
+    #[cfg(feature = "cuda")]
+    capture_config: Option<(usize, usize, usize)>, // (batch_size, seq_len, vocab_size)
 }
 
 impl CudaGraphState {
@@ -35,7 +46,9 @@ impl CudaGraphState {
             #[cfg(feature = "cuda")]
             cached_graphs: HashMap::new(),
             #[cfg(feature = "cuda")]
-            cached_outputs: HashMap::new(),
+            capture_output: None,
+            #[cfg(feature = "cuda")]
+            capture_config: None,
         }
     }
 
@@ -68,12 +81,28 @@ impl CudaGraphState {
 
     /// Start capturing a CUDA graph
     #[cfg(feature = "cuda")]
-    pub fn start_capture(&mut self, device: &Device) -> Result<()> {
+    pub fn start_capture(
+        &mut self,
+        device: &Device,
+        batch_size: usize,
+        seq_len: usize,
+        vocab_size: usize,
+    ) -> Result<()> {
         if let Device::Cuda(cuda_device) = device {
             let stream = cuda_device.cuda_stream();
+            
+            // Pre-allocate output tensor
+            let output_tensor = candle_core::Tensor::zeros(
+                &[batch_size, seq_len, vocab_size],
+                candle_core::DType::F32,
+                device,
+            )?;
+            
             stream.begin_capture()?;
             self.capturing = true;
             self.capture_stream = Some(stream.clone());
+            self.capture_output = Some(output_tensor);
+            self.capture_config = Some((batch_size, seq_len, vocab_size));
             Ok(())
         } else {
             candle_core::bail!("CUDA graph capture requested on non-CUDA device")
@@ -81,7 +110,13 @@ impl CudaGraphState {
     }
 
     #[cfg(not(feature = "cuda"))]
-    pub fn start_capture(&mut self, _device: &Device) -> Result<()> {
+    pub fn start_capture(
+        &mut self,
+        _device: &Device,
+        _batch_size: usize,
+        _seq_len: usize,
+        _vocab_size: usize,
+    ) -> Result<()> {
         candle_core::bail!("CUDA graphs not available without cuda feature")
     }
 
@@ -90,10 +125,20 @@ impl CudaGraphState {
     pub fn end_capture(&mut self, batch_size: usize, seq_len: usize) -> Result<()> {
         if let Some(stream) = &self.capture_stream {
             let graph = stream.end_capture()?;
-            self.cached_graphs
-                .insert((batch_size, seq_len), Arc::new(graph));
+            
+            if let Some(output_tensor) = self.capture_output.take() {
+                self.cached_graphs.insert(
+                    (batch_size, seq_len),
+                    CapturedGraph {
+                        graph: Arc::new(graph),
+                        output_tensor,
+                    },
+                );
+            }
+            
             self.capturing = false;
             self.capture_stream = None;
+            self.capture_config = None;
             Ok(())
         } else {
             candle_core::bail!("No active CUDA graph capture")
@@ -105,20 +150,30 @@ impl CudaGraphState {
         candle_core::bail!("CUDA graphs not available without cuda feature")
     }
 
-    /// Launch a cached graph
+    /// Launch a cached graph and return the output tensor
     #[cfg(feature = "cuda")]
-    pub fn launch_graph(&self, batch_size: usize, seq_len: usize) -> Result<bool> {
-        if let Some(graph) = self.cached_graphs.get(&(batch_size, seq_len)) {
-            graph.launch()?;
-            Ok(true)
+    pub fn launch_graph(
+        &self,
+        batch_size: usize,
+        seq_len: usize,
+    ) -> Result<Option<candle_core::Tensor>> {
+        if let Some(captured) = self.cached_graphs.get(&(batch_size, seq_len)) {
+            captured.graph.launch()?;
+            // Return a clone of the output tensor reference
+            // The graph execution will populate this tensor with the results
+            Ok(Some(captured.output_tensor.clone()))
         } else {
-            Ok(false)
+            Ok(None)
         }
     }
 
     #[cfg(not(feature = "cuda"))]
-    pub fn launch_graph(&self, _batch_size: usize, _seq_len: usize) -> Result<bool> {
-        Ok(false)
+    pub fn launch_graph(
+        &self,
+        _batch_size: usize,
+        _seq_len: usize,
+    ) -> Result<Option<candle_core::Tensor>> {
+        Ok(None)
     }
 
     /// Clear all cached graphs (e.g., when model config changes)
@@ -132,6 +187,17 @@ impl CudaGraphState {
     /// Check if we're currently capturing
     pub fn is_capturing(&self) -> bool {
         self.capturing
+    }
+    
+    /// Get the output tensor being used for capture
+    #[cfg(feature = "cuda")]
+    pub fn get_capture_output(&self) -> Option<&candle_core::Tensor> {
+        self.capture_output.as_ref()
+    }
+    
+    #[cfg(not(feature = "cuda"))]
+    pub fn get_capture_output(&self) -> Option<&candle_core::Tensor> {
+        None
     }
 }
 
