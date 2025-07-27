@@ -6,6 +6,8 @@ use super::{
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
     TokenSource,
 };
+#[cfg(feature = "cuda")]
+use crate::cuda::cuda_graph::CUDA_GRAPH_STATE;
 use super::{
     AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqOrganization,
     IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
@@ -1072,6 +1074,33 @@ impl Pipeline for NormalPipeline {
             flash_meta,
             flash_meta_full,
         } = *inputs.downcast().expect("Downcast failed.");
+        
+        // CUDA graph integration
+        // NOTE: This is a simplified implementation that captures at the pipeline level.
+        // For production use, consider capturing at the model level where tensor allocation
+        // can be better controlled and outputs properly managed.
+        #[cfg(feature = "cuda")]
+        {
+            // Detect batch size and sequence length
+            let batch_size = input_ids.dims()[0];
+            let seq_len = input_ids.dims()[1];
+            
+            // Check if this is a decode pass (seq_len == 1) and we're on CUDA
+            let is_decode = seq_len == 1;
+            let is_cuda = matches!(self.device(), Device::Cuda(_));
+            
+            if is_cuda && is_decode {
+                let mut graph_state = CUDA_GRAPH_STATE.lock().unwrap();
+                
+                // Check if we should capture
+                if graph_state.should_capture(false, batch_size, seq_len) {
+                    // Start capture
+                    info!("Starting CUDA graph capture for batch_size={}, seq_len={}", batch_size, seq_len);
+                    graph_state.start_capture(&self.device())?;
+                }
+            }
+        }
+        
         let metadata = self.get_metadata();
         let paged_attn_meta = match (&metadata.cache_engine, &paged_attn_meta) {
             (Some(cache_engine), Some(meta)) => Some((cache_engine, meta)),
@@ -1113,6 +1142,26 @@ impl Pipeline for NormalPipeline {
                 flash_meta_full.as_ref().unwrap_or(&flash_meta),
             )?,
         };
+        
+        // End CUDA graph capture if we were capturing
+        #[cfg(feature = "cuda")]
+        {
+            let mut graph_state = CUDA_GRAPH_STATE.lock().unwrap();
+            if graph_state.is_capturing() {
+                let batch_size = input_ids.dims()[0];
+                let seq_len = input_ids.dims()[1];
+                graph_state.end_capture(batch_size, seq_len)?;
+                info!("Completed CUDA graph capture for batch_size={}, seq_len={}", batch_size, seq_len);
+                
+                // NOTE: To fully utilize CUDA graphs, the following would be needed:
+                // 1. Modify model forward pass to use cudaMallocAsync for all allocations
+                // 2. Store output tensor pointers during capture
+                // 3. On replay, reuse the same output tensors
+                // 4. Ensure all operations in the forward pass are graph-compatible
+                // This implementation provides the infrastructure for future optimization.
+            }
+        }
+        
         if return_raw_logits {
             Ok(ForwardInputsResult::RawLogits { logits })
         } else {
