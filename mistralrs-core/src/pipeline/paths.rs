@@ -18,7 +18,7 @@ use crate::{
     api_dir_list, api_get_file,
     lora::LoraConfig,
     pipeline::{
-        chat_template::{ChatTemplate, ChatTemplateValue},
+        chat_template::{BeginEndUnkPadTok, ChatTemplate, ChatTemplateValue},
         isq::UQFF_RESIDUAL_SAFETENSORS,
     },
     utils::tokens::get_token,
@@ -461,6 +461,10 @@ pub(crate) fn get_chat_template(
             // Use embedded Mistral chat template for tekken
             let mut template = ChatTemplate::default();
             template.chat_template = Some(ChatTemplateValue(Either::Left(MISTRAL_TEKKEN_CHAT_TEMPLATE.to_string())));
+            // Set common tokens for Mistral models using Tekken
+            template.bos_token = Some(BeginEndUnkPadTok(Either::Left("<s>".to_string())));
+            template.eos_token = Some(BeginEndUnkPadTok(Either::Left("</s>".to_string())));
+            template.unk_token = Some(BeginEndUnkPadTok(Either::Left("<unk>".to_string())));
             template
         }
         None => {
