@@ -20,13 +20,11 @@ pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(
 ) -> Result<TokenizerImpl> {
     // Check if this is a Tekken tokenizer by trying to detect its format
     let path_str = p.as_ref().to_string_lossy();
-    if path_str.ends_with(".tekken.json") || path_str.contains("tekken") {
+    if path_str.ends_with("tekken.json") || path_str.contains("tekken") {
         // Try to load as Tekken tokenizer
         match Tekkenizer::from_file(p.as_ref()) {
             Ok(tekken) => return TokenizerImpl::new_tekken(tekken),
-            Err(_) => {
-                // Fall back to HuggingFace tokenizer
-            }
+            Err(e) => ()
         }
     }
 

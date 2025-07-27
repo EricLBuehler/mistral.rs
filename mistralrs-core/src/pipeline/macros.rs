@@ -134,12 +134,18 @@ macro_rules! get_paths {
             revision.clone(),
         ));
         let model_id = std::path::Path::new(&$this.model_id);
+        let dir_list = $crate::api_dir_list!(api, model_id, false).collect::<Vec<_>>();
         let tokenizer_filename = if let Some(ref p) = $this.tokenizer_json {
             info!("Using tokenizer.json at `{p}`");
             PathBuf::from_str(p)?
         } else {
-            info!("Loading `tokenizer.json` at `{}`", $this.model_id);
-            $crate::api_get_file!(api, "tokenizer.json", model_id)
+            if dir_list.contains(&"tekken.json".to_string()) {
+                info!("Loading `tekken.json` at `{}`", $this.model_id);
+                $crate::api_get_file!(api, "tekken.json", model_id)
+            } else {
+                info!("Loading `tokenizer.json` at `{}`", $this.model_id);
+                $crate::api_get_file!(api, "tokenizer.json", model_id)
+            }
         };
         info!("Loading `config.json` at `{}`", $this.model_id);
         let config_filename = $crate::api_get_file!(api, "config.json", model_id);
@@ -160,7 +166,6 @@ macro_rules! get_paths {
             revision.clone(),
             $this.xlora_order.as_ref(),
         )?;
-        let dir_list = $crate::api_dir_list!(api, model_id, false).collect::<Vec<_>>();
 
         let gen_conf = if dir_list.contains(&"generation_config.json".to_string()) {
             info!("Loading `generation_config.json` at `{}`", $this.model_id);
@@ -387,9 +392,16 @@ macro_rules! get_paths_gguf {
             None
         };
 
-        let tokenizer_filename = if $this.model_id.is_some() && dir_list.contains(&"tokenizer.json".to_string()) {
-            info!("Loading `tokenizer.json` at `{}`", this_model_id);
-            $crate::api_get_file!(api, "tokenizer.json", model_id)
+        let tokenizer_filename = if $this.model_id.is_some() {
+            if dir_list.contains(&"tekken.json".to_string()) {
+                info!("Loading `tekken.json` at `{}`", this_model_id);
+                $crate::api_get_file!(api, "tekken.json", model_id)
+            } else if dir_list.contains(&"tokenizer.json".to_string()) {
+                info!("Loading `tokenizer.json` at `{}`", this_model_id);
+                $crate::api_get_file!(api, "tokenizer.json", model_id)
+            } else {
+                PathBuf::from_str("")?
+            }
         } else {
             PathBuf::from_str("")?
         };
