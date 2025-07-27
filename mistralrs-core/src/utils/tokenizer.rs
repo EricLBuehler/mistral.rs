@@ -24,7 +24,7 @@ pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(
         // Try to load as Tekken tokenizer
         match Tekkenizer::from_file(p.as_ref()) {
             Ok(tekken) => return TokenizerImpl::new_tekken(tekken),
-            Err(e) => ()
+            Err(_e) => ()
         }
     }
 

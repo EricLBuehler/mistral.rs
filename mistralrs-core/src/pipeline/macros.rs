@@ -203,6 +203,10 @@ macro_rules! get_paths {
         } else if dir_list.contains(&"chat_template.jinja".to_string()) {
             info!("Loading `chat_template.jinja` at `{}`", $this.model_id);
             Some($crate::api_get_file!(api, "chat_template.jinja", model_id))
+        } else if dir_list.contains(&"tekken.json".to_string()) {
+            // For tekken tokenizer, skip tokenizer_config.json
+            info!("Detected tekken tokenizer, skipping tokenizer_config.json");
+            None
         } else {
             info!("Loading `tokenizer_config.json` at `{}`", $this.model_id);
             Some($crate::api_get_file!(
