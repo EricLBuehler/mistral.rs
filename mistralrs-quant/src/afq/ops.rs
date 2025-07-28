@@ -455,15 +455,72 @@ mod metal_tests {
 
         let (w_q, scales, biases) = afq_quantize_op(&xs, group_size, bits)?;
 
-        // println!("w_q = {w_q}");
-        // println!("scales = {scales}");
-        // println!("biases = {biases}");
+        println!("w_q shape = {:?}, dtype = {:?}", w_q.shape(), w_q.dtype());
+        println!(
+            "scales shape = {:?}, dtype = {:?}",
+            scales.shape(),
+            scales.dtype()
+        );
+        println!(
+            "biases shape = {:?}, dtype = {:?}",
+            biases.shape(),
+            biases.dtype()
+        );
+        println!(
+            "First few w_q values: {:?}",
+            w_q.flatten_all()?
+                .to_vec1::<u32>()?
+                .iter()
+                .take(10)
+                .collect::<Vec<_>>()
+        );
+        println!(
+            "First few scales: {:?}",
+            scales
+                .flatten_all()?
+                .to_vec1::<f32>()?
+                .iter()
+                .take(5)
+                .collect::<Vec<_>>()
+        );
+        println!(
+            "First few biases: {:?}",
+            biases
+                .flatten_all()?
+                .to_vec1::<f32>()?
+                .iter()
+                .take(5)
+                .collect::<Vec<_>>()
+        );
 
         let ys = afq_dequantize_op(&w_q, &scales, &biases, group_size, bits)?;
 
-        // println!("xs = {xs}");
-        // println!("ys = {ys}");
-        // println!("delta = {}", (xs - ys)?);
+        println!(
+            "xs min/max: {:?}/{:?}",
+            xs.min(D::Minus1)?.min_all()?.to_scalar::<f32>()?,
+            xs.max(D::Minus1)?.max_all()?.to_scalar::<f32>()?
+        );
+        println!(
+            "ys min/max: {:?}/{:?}",
+            ys.min(D::Minus1)?.min_all()?.to_scalar::<f32>()?,
+            ys.max(D::Minus1)?.max_all()?.to_scalar::<f32>()?
+        );
+        println!(
+            "First few xs values: {:?}",
+            xs.flatten_all()?
+                .to_vec1::<f32>()?
+                .iter()
+                .take(5)
+                .collect::<Vec<_>>()
+        );
+        println!(
+            "First few ys values: {:?}",
+            ys.flatten_all()?
+                .to_vec1::<f32>()?
+                .iter()
+                .take(5)
+                .collect::<Vec<_>>()
+        );
 
         let rmse = (xs - ys)?
             .sqr()?
