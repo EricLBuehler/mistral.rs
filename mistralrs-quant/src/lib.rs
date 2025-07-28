@@ -28,6 +28,7 @@ mod imatrix;
 mod lora;
 pub mod rotary;
 pub mod safetensors;
+mod scalar_fp8;
 mod unquantized;
 mod utils;
 

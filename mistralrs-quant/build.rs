@@ -44,6 +44,7 @@ fn main() -> Result<(), String> {
         use std::{fs::read_to_string, path::PathBuf, process::Command, vec};
         const MARLIN_FFI_PATH: &str = "src/gptq/marlin_ffi.rs";
         const BLOCKWISE_FP8_FFI_PATH: &str = "src/blockwise_fp8/ffi.rs";
+        const SCALAR_FP8_FFI_PATH: &str = "src/scalar_fp8/ffi.rs";
         const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
         println!("cargo:rerun-if-changed=build.rs");
@@ -132,6 +133,22 @@ fn main() -> Result<(), String> {
         }
 
         std::fs::write(BLOCKWISE_FP8_FFI_PATH, blockwise_fp8_ffi_ct).unwrap();
+        
+        let mut scalar_fp8_ffi_ct = read_to_string(SCALAR_FP8_FFI_PATH).unwrap();
+        if scalar_fp8_ffi_ct
+            .contains("pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = true;")
+        {
+            scalar_fp8_ffi_ct = scalar_fp8_ffi_ct.replace(
+                "pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = true;",
+                &format!("pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = {cc_is_over_800};"),
+            );
+        } else {
+            scalar_fp8_ffi_ct = scalar_fp8_ffi_ct.replace(
+                "pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = false;",
+                &format!("pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = {cc_is_over_800};"),
+            );
+        }
+        std::fs::write(SCALAR_FP8_FFI_PATH, scalar_fp8_ffi_ct).unwrap();
         // ========
 
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
@@ -149,9 +166,11 @@ fn main() -> Result<(), String> {
             lib_files.push("kernels/marlin/marlin_matmul_awq_bf16.cu");
             lib_files.push("kernels/marlin/marlin_repack.cu");
             lib_files.push("kernels/blockwise_fp8/blockwise_fp8.cu");
+            lib_files.push("kernels/scalar_fp8/scalar_fp8.cu");
         } else {
             lib_files.push("kernels/marlin/dummy_marlin_kernel.cu");
             lib_files.push("kernels/blockwise_fp8/blockwise_fp8_dummy.cu");
+            lib_files.push("kernels/scalar_fp8/scalar_fp8_dummy.cu");
         }
         for lib_file in lib_files.iter() {
             println!("cargo:rerun-if-changed={lib_file}");
