@@ -16,6 +16,15 @@
     }                                                                          \
   } while (0)
 
+// Custom atomicMax for float
+__device__ __forceinline__ float atomicMaxFloat(float* addr, float value) {
+    float old;
+    old = (value >= 0) ? __int_as_float(atomicMax((int*)addr, __float_as_int(value))) :
+         __uint_as_float(atomicMin((unsigned int*)addr, __float_as_uint(value)));
+
+    return old;
+}
+
 template <typename T>
 __global__ void dequant_fp8_blockwise_kernel(
     const __nv_fp8_e4m3 *__restrict__ weight, const float *__restrict__ scale,
@@ -70,7 +79,9 @@ __global__ void quant_fp8_blockwise_kernel(
 
   // Find max absolute value in the block
   __shared__ float block_absmax;
-  block_absmax = 0.0f;
+  if (threadIdx.x == 0 && threadIdx.y == 0) {
+    block_absmax = 0.0f;
+  }
   __syncthreads();
 
   // First pass: find maximum absolute value in the block
@@ -84,7 +95,8 @@ __global__ void quant_fp8_blockwise_kernel(
         int pos = weight_y * weight_row_stride + weight_x;
         float val = static_cast<float>(input[pos]);
         float absval = fabsf(val);
-        atomicMax(&block_absmax, absval);
+        // Use custom atomicMax for float
+        atomicMaxFloat(&block_absmax, absval);
       }
     }
   }
