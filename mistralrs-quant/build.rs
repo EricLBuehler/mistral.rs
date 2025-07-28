@@ -235,11 +235,12 @@ fn main() -> Result<(), String> {
         use std::process::Command;
         use std::{env, str};
 
-        const METAL_SOURCES: [&str; 8] = [
+        const METAL_SOURCES: [&str; 9] = [
             "bitwise",
             "blockwise_fp8",
             "bnb_dequantize",
             "hqq_dequantize",
+            "hqq_bitpack",
             "quantized",
             "scan",
             "sort",

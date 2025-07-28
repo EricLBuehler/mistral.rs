@@ -33,16 +33,7 @@ impl FP8Linear {
             .clamp(F8E4M3::MIN.to_f32(), F8E4M3::MAX.to_f32())?
             .to_dtype(DType::F32)?;
         let to_cast = data.broadcast_mul(&scale.to_dtype(data.dtype())?)?;
-        let qw = if data.device().is_metal() {
-            // Evil hack to allow metal shader to get the double value!
-            let transmute_data = to_cast
-                .flatten_all()?
-                .to_vec1::<bf16>()?
-                .into_iter()
-                .map(|x| x.to_f64_const().to_bits() as i64)
-                .collect::<Vec<_>>();
-            Tensor::from_vec(transmute_data, data.shape(), data.device())?.to_dtype(dtype)?
-        } else if dtype == DType::F8E4M3 {
+        let qw = if dtype == DType::F8E4M3 {
             crate::scalar_fp8::ops::dtype_to_fp8(&to_cast)?
         } else {
             to_cast.to_dtype(dtype)?

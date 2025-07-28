@@ -7,6 +7,9 @@ use candle_core::{
     from_storage_no_op, CudaStorage, Storage,
 };
 
+#[cfg(feature = "metal")]
+use candle_core::{from_storage_no_op, Storage};
+
 use candle_nn::Linear;
 #[cfg(feature = "cuda")]
 use half::{bf16, f16};
@@ -182,11 +185,52 @@ impl HqqBits {
 
                     let storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
                     let storage = Storage::Cuda(storage);
-                    Ok(from_storage_no_op(storage, output_shape, false))
-                } else {
-                    wq.to_dtype(DType::U8)
+                    return Ok(from_storage_no_op(storage, output_shape, false));
                 }
-                #[cfg(not(feature = "cuda"))]
+
+                #[cfg(feature = "metal")]
+                if device.is_metal() {
+                    use candle_core::backend::BackendStorage;
+                    use candle_core::MetalStorage;
+
+                    let dev = device.as_metal_device()?;
+                    let command_buffer = dev.command_buffer()?;
+                    command_buffer.set_label("hqq_pack_8bit");
+
+                    let (wq_storage, wq_layout) = wq.storage_and_layout();
+                    let wq_storage = match &*wq_storage {
+                        Storage::Metal(s) => s,
+                        _ => candle_core::bail!("Expected Metal storage"),
+                    };
+
+                    let output_shape = wq.shape().clone();
+                    let output = dev.new_buffer(
+                        output_shape.elem_count(),
+                        DType::U8,
+                        "hqq_pack_8bit_output",
+                    )?;
+
+                    crate::metal_kernels::call_hqq_pack_8bit(
+                        dev.device(),
+                        &command_buffer,
+                        &crate::metal_kernels::Kernels::new(),
+                        wq_storage.buffer(),
+                        &output,
+                        output_shape.elem_count(),
+                    )
+                    .map_err(candle_core::Error::wrap)?;
+
+                    let storage = MetalStorage::new(
+                        output,
+                        dev.clone(),
+                        output_shape.elem_count(),
+                        DType::U8,
+                    );
+                    let storage = Storage::Metal(storage);
+
+                    return Ok(from_storage_no_op(storage, output_shape, false));
+                }
+
                 wq.to_dtype(DType::U8)
             },
             Self::Four => |wq_in: Tensor| -> Result<Tensor> {
@@ -227,25 +271,62 @@ impl HqqBits {
 
                     let storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
                     let storage = Storage::Cuda(storage);
-                    Ok(from_storage_no_op(storage, output_shape, false))
-                } else {
-                    // CPU fallback
-                    let wq = wq_in.to_dtype(DType::U8)?;
-                    let step = (wq.dims()[0] as f64 / 2.) as usize;
-
-                    let a = wq.narrow(0, 0, step)?;
-                    let b = wq.narrow(0, step, step)?;
-                    a.leftshift(4)?.bitwise_or(&b)
+                    return Ok(from_storage_no_op(storage, output_shape, false));
                 }
-                #[cfg(not(feature = "cuda"))]
-                {
-                    let wq = wq_in.to_dtype(DType::U8)?;
-                    let step = (wq.dims()[0] as f64 / 2.) as usize;
 
-                    let a = wq.narrow(0, 0, step)?;
-                    let b = wq.narrow(0, step, step)?;
-                    a.leftshift(4)?.bitwise_or(&b)
+                #[cfg(feature = "metal")]
+                if device.is_metal() {
+                    use candle_core::backend::BackendStorage;
+                    use candle_core::MetalStorage;
+
+                    let dev = device.as_metal_device()?;
+                    let command_buffer = dev.command_buffer()?;
+                    command_buffer.set_label("hqq_pack_4bit");
+
+                    let wq = wq_in.to_dtype(DType::U8)?;
+                    let (wq_storage, wq_layout) = wq.storage_and_layout();
+                    let wq_storage = match &*wq_storage {
+                        Storage::Metal(s) => s,
+                        _ => candle_core::bail!("Expected Metal storage"),
+                    };
+
+                    let output_height = wq.dims()[0] / 2;
+                    let output_shape = Shape::from_dims(&[output_height, wq.dims()[1]]);
+                    let output = dev.new_buffer(
+                        output_shape.elem_count(),
+                        DType::U8,
+                        "hqq_pack_4bit_output",
+                    )?;
+
+                    crate::metal_kernels::call_hqq_pack_4bit(
+                        dev.device(),
+                        &command_buffer,
+                        &crate::metal_kernels::Kernels::new(),
+                        wq_storage.buffer(),
+                        &output,
+                        wq.dims()[0],
+                        wq.dims()[1],
+                    )
+                    .map_err(candle_core::Error::wrap)?;
+
+                    let storage = MetalStorage::new(
+                        output,
+                        dev.clone(),
+                        output_shape.elem_count(),
+                        DType::U8,
+                    );
+                    let storage = Storage::Metal(storage);
+
+                    return Ok(from_storage_no_op(storage, output_shape, false));
                 }
+
+                // CPU fallback
+                let wq = wq_in.to_dtype(DType::U8)?;
+                let step = (wq.dims()[0] as f64 / 2.) as usize;
+
+                let a = wq.narrow(0, 0, step)?;
+                let b = wq.narrow(0, step, step)?;
+                a.leftshift(4)?.bitwise_or(&b)
             },
             Self::Two => |wq_in: Tensor| -> Result<Tensor> {
                 #[allow(unused_variables)]
@@ -365,7 +446,13 @@ impl HqqBits {
                 }
 
                 // CPU fallback implementation
-                let wq = wq.to_dtype(DType::I32)?;
+                let wq = if wq.device().is_metal() {
+                    // Metal doesn't support direct U32 to I32 conversion, use CPU as intermediate
+                    let cpu_wq = wq.to_device(&Device::Cpu)?;
+                    cpu_wq.to_dtype(DType::I32)?.to_device(wq.device())?
+                } else {
+                    wq.to_dtype(DType::I32)?
+                };
                 let step = (wq.dims()[0] as f64 / 10.) as usize;
 
                 let a = wq.narrow(0, 0, step)?;
