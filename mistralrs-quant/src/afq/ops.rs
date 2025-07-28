@@ -476,11 +476,21 @@ mod metal_tests {
         );
         println!(
             "First few scales: {:?}",
-            scales.flatten_all()?.to_vec1::<f32>()?.iter().take(5).collect::<Vec<_>>()
+            scales
+                .flatten_all()?
+                .to_vec1::<f32>()?
+                .iter()
+                .take(5)
+                .collect::<Vec<_>>()
         );
         println!(
             "First few biases: {:?}",
-            biases.flatten_all()?.to_vec1::<f32>()?.iter().take(5).collect::<Vec<_>>()
+            biases
+                .flatten_all()?
+                .to_vec1::<f32>()?
+                .iter()
+                .take(5)
+                .collect::<Vec<_>>()
         );
 
         let ys = afq_dequantize_op(&w_q, &scales, &biases, group_size, bits)?;
