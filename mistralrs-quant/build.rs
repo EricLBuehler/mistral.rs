@@ -116,6 +116,21 @@ fn main() -> Result<(), String> {
                 ),
             );
         }
+
+        if blockwise_fp8_ffi_ct
+            .contains("pub(crate) const HAVE_BLOCKWISE_QUANT_KERNELS: bool = true;")
+        {
+            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
+                "pub(crate) const HAVE_BLOCKWISE_QUANT_KERNELS: bool = true;",
+                &format!("pub(crate) const HAVE_BLOCKWISE_QUANT_KERNELS: bool = {cc_is_over_800};"),
+            );
+        } else {
+            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
+                "pub(crate) const HAVE_BLOCKWISE_QUANT_KERNELS: bool = false;",
+                &format!("pub(crate) const HAVE_BLOCKWISE_QUANT_KERNELS: bool = {cc_is_over_800};"),
+            );
+        }
+
         std::fs::write(BLOCKWISE_FP8_FFI_PATH, blockwise_fp8_ffi_ct).unwrap();
         // ========
 

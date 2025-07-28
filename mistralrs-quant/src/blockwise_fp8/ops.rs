@@ -1,6 +1,6 @@
-use candle_core::{CpuStorage, CustomOp1, CustomOp2, DType, Result, Tensor, WithDType};
 #[cfg(feature = "cuda")]
 use candle_core::from_storage_no_op;
+use candle_core::{CpuStorage, CustomOp1, CustomOp2, DType, Result, Tensor, WithDType};
 use float8::F8E4M3;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
@@ -447,7 +447,7 @@ impl CustomOp1 for Fp8BlockwiseQuantize {
         // We'll need to unpack them after the op
         let mut packed = Vec::with_capacity(weight.len() + scale.len());
         packed.extend_from_slice(&weight);
-        
+
         // Convert scale to F8E4M3 for storage (will convert back when unpacking)
         for &s in &scale {
             packed.push(F8E4M3::from_f32(s));
@@ -566,7 +566,7 @@ impl CustomOp1 for Fp8BlockwiseQuantize {
 
         drop(weight_guard);
         drop(scale_guard);
-        
+
         // Return just the weight tensor - we'll handle scale separately
         let res = CudaStorage::wrap_cuda_slice(weight_output, input_s.device().clone());
         Ok((res, input_l.shape().clone()))
@@ -717,11 +717,8 @@ pub fn fp8_blockwise_quantize(
 
         // Create weight tensor by wrapping the CUDA storage
         let weight_storage = CudaStorage::wrap_cuda_slice(weight_output, dev.clone());
-        let weight = from_storage_no_op(
-            Storage::Cuda(weight_storage),
-            input.shape().clone(),
-            false,
-        );
+        let weight =
+            from_storage_no_op(Storage::Cuda(weight_storage), input.shape().clone(), false);
 
         // Create scale tensor
         let scale_storage = CudaStorage::wrap_cuda_slice(scale_output, dev.clone());
@@ -733,7 +730,7 @@ pub fn fp8_blockwise_quantize(
 
         Ok((weight, scale))
     }
-    
+
     #[cfg(not(feature = "cuda"))]
     {
         candle_core::bail!("FP8 blockwise quantization requires CUDA feature");
@@ -958,34 +955,30 @@ mod tests {
     #[test]
     fn test_fp8_blockwise_quant_dequant_roundtrip() -> Result<()> {
         let dev = &Device::new_cuda(0)?;
-        
+
         // Create test input
         let input = Tensor::randn(0f32, 2f32, (8, 8), dev)?;
         let weight_block_size = vec![4, 4];
-        
+
         // Quantize
         let (quantized, scales) = ops::fp8_blockwise_quantize(&input, weight_block_size.clone())?;
-        
+
         // Verify shapes
         assert_eq!(quantized.shape(), input.shape());
         assert_eq!(scales.dims2()?, (2, 2)); // 8/4 = 2 blocks in each dimension
-        
+
         // Dequantize
-        let dequantized = ops::fp8_blockwise_dequantize(
-            &quantized,
-            &scales,
-            weight_block_size,
-            input.dtype(),
-        )?;
-        
+        let dequantized =
+            ops::fp8_blockwise_dequantize(&quantized, &scales, weight_block_size, input.dtype())?;
+
         // Check that shapes match
         assert_eq!(dequantized.shape(), input.shape());
-        
+
         // The values won't be exactly the same due to quantization loss,
         // but they should be reasonably close
         let input_vec = input.to_vec2::<f32>()?;
         let dequant_vec = dequantized.to_vec2::<f32>()?;
-        
+
         let mut max_error = 0f32;
         for (row_in, row_out) in input_vec.iter().zip(dequant_vec.iter()) {
             for (val_in, val_out) in row_in.iter().zip(row_out.iter()) {
@@ -993,11 +986,11 @@ mod tests {
                 max_error = max_error.max(error);
             }
         }
-        
+
         // FP8 E4M3 has limited precision, so we expect some error
         // but it should be reasonable
         assert!(max_error < 0.5, "Max error {} is too large", max_error);
-        
+
         Ok(())
     }
 
