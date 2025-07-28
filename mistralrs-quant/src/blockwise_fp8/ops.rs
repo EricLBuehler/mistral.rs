@@ -7,6 +7,10 @@ struct Fp8BlockwiseDequantize {
     out_ty: DType,
 }
 
+struct Fp8BlockwiseGemm {
+    weight_block_size: Vec<usize>,
+}
+
 impl Fp8BlockwiseDequantize {
     fn dispatch_dequant_blockwise<T: WithDType>(
         &self,
@@ -300,6 +304,145 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
     }
 }
 
+impl CustomOp3 for Fp8BlockwiseGemm {
+    fn name(&self) -> &'static str {
+        "fp8-blockwise-gemm"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _x: &CpuStorage,
+        _x_l: &candle_core::Layout,
+        _w: &CpuStorage,
+        _w_l: &candle_core::Layout,
+        _scale: &CpuStorage,
+        _scale_l: &candle_core::Layout,
+    ) -> candle_core::Result<(CpuStorage, candle_core::Shape)> {
+        candle_core::bail!("no cpu support for fp8 blockwise gemm")
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        x_s: &candle_core::CudaStorage,
+        x_l: &candle_core::Layout,
+        w_s: &candle_core::CudaStorage,
+        w_l: &candle_core::Layout,
+        scale_s: &candle_core::CudaStorage,
+        scale_l: &candle_core::Layout,
+    ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
+        use candle_core::{backend::BackendStorage, cuda::{cudarc::driver::DevicePtr, WrapErr}, CudaStorage};
+        use half::{bf16, f16};
+
+        use crate::blockwise_fp8::ffi;
+
+        if !ffi::HAVE_BLOCKWISE_GEMM_KERNELS {
+            candle_core::bail!("Do not have blockwise FP8 gemm kernels.");
+        }
+
+        if !(x_l.is_contiguous() && w_l.is_contiguous() && scale_l.is_contiguous()) {
+            candle_core::bail!("All inputs must be contiguous");
+        }
+
+        if w_l.dims().len() != 2 || scale_l.dims().len() != 2 || self.weight_block_size.len() != 2 {
+            candle_core::bail!("Unexpected dims");
+        }
+
+        if x_l.dims().len() != 2 {
+            candle_core::bail!("Expected x to be rank 2");
+        }
+
+        if x_l.dims()[1] != w_l.dims()[1] {
+            candle_core::bail!("Input dim mismatch");
+        }
+
+        let dev = x_s.device();
+
+        let x = x_s.as_cuda_slice::<f32>()?; // will cast later based on dtype
+        let w = w_s.as_cuda_slice::<F8E4M3>()?.slice(w_l.start_offset()..);
+        let scale = scale_s.as_cuda_slice::<f32>()?.slice(scale_l.start_offset()..);
+
+        let batch = x_l.dim(0)? as i32;
+        let in_dim = x_l.dim(1)? as i32;
+        let out_dim = w_l.dim(0)? as i32;
+        let weight_row_stride = w_l.stride()[0] as i32;
+        let scale_stride = scale_l.stride()[0] as i32;
+        let block_y = self.weight_block_size[0] as i32;
+        let block_x = self.weight_block_size[1] as i32;
+
+        let out_shape = candle_core::Shape::from_dims(&[batch as usize, out_dim as usize]);
+
+        let res = match x_s.dtype() {
+            DType::F16 => {
+                let x = x_s.as_cuda_slice::<f16>()?.slice(x_l.start_offset()..);
+                let output = dev.alloc_zeros::<f16>(out_shape.elem_count()).w()?;
+                unsafe {
+                    ffi::launch_gemm_fp8_blockwise_kernel_f16(
+                        (*w.device_ptr()) as *const _,
+                        (*scale.device_ptr()) as *const _,
+                        (*x.device_ptr()) as *const _,
+                        (*output.device_ptr()) as *mut _,
+                        batch,
+                        in_dim,
+                        out_dim,
+                        weight_row_stride,
+                        scale_stride,
+                        block_y,
+                        block_x,
+                        *dev.cu_stream(),
+                    )
+                };
+                CudaStorage::wrap_cuda_slice(output, dev.clone())
+            }
+            DType::BF16 => {
+                let x = x_s.as_cuda_slice::<bf16>()?.slice(x_l.start_offset()..);
+                let output = dev.alloc_zeros::<bf16>(out_shape.elem_count()).w()?;
+                unsafe {
+                    ffi::launch_gemm_fp8_blockwise_kernel_bf16(
+                        (*w.device_ptr()) as *const _,
+                        (*scale.device_ptr()) as *const _,
+                        (*x.device_ptr()) as *const _,
+                        (*output.device_ptr()) as *mut _,
+                        batch,
+                        in_dim,
+                        out_dim,
+                        weight_row_stride,
+                        scale_stride,
+                        block_y,
+                        block_x,
+                        *dev.cu_stream(),
+                    )
+                };
+                CudaStorage::wrap_cuda_slice(output, dev.clone())
+            }
+            DType::F32 => {
+                let x = x_s.as_cuda_slice::<f32>()?.slice(x_l.start_offset()..);
+                let output = dev.alloc_zeros::<f32>(out_shape.elem_count()).w()?;
+                unsafe {
+                    ffi::launch_gemm_fp8_blockwise_kernel_f32(
+                        (*w.device_ptr()) as *const _,
+                        (*scale.device_ptr()) as *const _,
+                        (*x.device_ptr()) as *const _,
+                        (*output.device_ptr()) as *mut _,
+                        batch,
+                        in_dim,
+                        out_dim,
+                        weight_row_stride,
+                        scale_stride,
+                        block_y,
+                        block_x,
+                        *dev.cu_stream(),
+                    )
+                };
+                CudaStorage::wrap_cuda_slice(output, dev.clone())
+            }
+            dt => candle_core::bail!("Unsupported dtype {dt:?} for fp8 blockwise gemm"),
+        };
+
+        Ok((res, out_shape))
+    }
+}
+
 /// FP8 blockwise dequantize.
 /// - Expects weight to be fp8
 /// - Expects inv_scales to be f32
@@ -316,6 +459,19 @@ pub fn fp8_blockwise_dequantize(
             weight_block_size,
             out_ty,
         },
+    )
+}
+
+pub fn fp8_blockwise_gemm(
+    x: &Tensor,
+    weight: &Tensor,
+    scales: &Tensor,
+    weight_block_size: Vec<usize>,
+) -> Result<Tensor> {
+    x.apply_op3(
+        weight,
+        scales,
+        Fp8BlockwiseGemm { weight_block_size },
     )
 }
 
@@ -559,14 +715,17 @@ mod tests {
 
         let truth = {
             let weight_dq =
-                ops::fp8_blockwise_dequantize(&weight, &scale, weight_block_size, DType::BF16)?;
+                ops::fp8_blockwise_dequantize(&weight, &scale, weight_block_size.clone(), DType::BF16)?;
 
             let lin_dq = Linear::new(weight_dq, None);
             lin_dq.forward(&xs)?
         };
 
-        // TODO: will be adding real blockwise fp8 gemm shortly ;)
-        assert_eq!((32, 7168), truth.dims2()?);
+        let test = ops::fp8_blockwise_gemm(&xs, &weight, &scale, weight_block_size)?;
+
+        assert_eq!(test.dims(), truth.dims());
+        let test = test.to_dtype(DType::BF16)?;
+        candle_core::test_util::assert_all_close(&test, &truth, 1e-2, 1e-2)?;
 
         Ok(())
     }
