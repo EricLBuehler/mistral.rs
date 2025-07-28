@@ -4,6 +4,7 @@ use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
 use candle_nn::Linear;
 
 mod ops;
+pub use ops::{fp8_blockwise_dequantize, fp8_blockwise_quantize};
 
 #[cfg(feature = "cuda")]
 mod ffi;

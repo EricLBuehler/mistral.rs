@@ -38,6 +38,7 @@ pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
 pub use afq::{AfqBits, AfqGroupSize, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
+pub use blockwise_fp8::{fp8_blockwise_dequantize, fp8_blockwise_quantize};
 pub use distributed::{
     layers::{
         compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, FusedExperts, PackedExperts,
