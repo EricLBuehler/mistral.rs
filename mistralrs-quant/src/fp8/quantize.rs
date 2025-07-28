@@ -43,7 +43,7 @@ impl FP8Linear {
                 .collect::<Vec<_>>();
             Tensor::from_vec(transmute_data, data.shape(), data.device())?.to_dtype(dtype)?
         } else if dtype == DType::F8E4M3 {
-            crate::scalar_fp8::dtype_to_fp8(&to_cast)?
+            crate::scalar_fp8::ops::dtype_to_fp8(&to_cast)?
         } else {
             to_cast.to_dtype(dtype)?
         };
@@ -91,7 +91,7 @@ mod tests {
         } = FP8Linear::quantize(&data, DType::F8E4M3)?;
 
         let dequant =
-            crate::scalar_fp8::fp8_to_dtype(&qw, DType::F32)?.broadcast_mul(&dequantize_scale)?;
+            crate::scalar_fp8::ops::fp8_to_dtype(&qw, DType::F32)?.broadcast_mul(&dequantize_scale)?;
 
         let diff1 = (&data - dequant)?.abs()?.mean_all()?;
 

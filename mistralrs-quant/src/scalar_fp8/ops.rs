@@ -267,7 +267,8 @@ impl CustomOp1 for DtypeToFp8 {
 }
 
 /// Convert an FP8 tensor to another dtype.
-pub fn fp8_to_dtype(input: &Tensor, target_dtype: DType) -> Result<Tensor> {
+#[allow(dead_code)]
+pub(crate) fn fp8_to_dtype(input: &Tensor, target_dtype: DType) -> Result<Tensor> {
     if input.dtype() != DType::F8E4M3 {
         candle_core::bail!("Input tensor must be F8E4M3, got {:?}", input.dtype());
     }
@@ -275,7 +276,7 @@ pub fn fp8_to_dtype(input: &Tensor, target_dtype: DType) -> Result<Tensor> {
 }
 
 /// Convert a tensor to FP8.
-pub fn dtype_to_fp8(input: &Tensor) -> Result<Tensor> {
+pub(crate) fn dtype_to_fp8(input: &Tensor) -> Result<Tensor> {
     let source_dtype = input.dtype();
     if !matches!(source_dtype, DType::F32 | DType::F16 | DType::BF16) {
         candle_core::bail!(
