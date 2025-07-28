@@ -133,11 +133,9 @@ fn main() -> Result<(), String> {
         }
 
         std::fs::write(BLOCKWISE_FP8_FFI_PATH, blockwise_fp8_ffi_ct).unwrap();
-        
+
         let mut scalar_fp8_ffi_ct = read_to_string(SCALAR_FP8_FFI_PATH).unwrap();
-        if scalar_fp8_ffi_ct
-            .contains("pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = true;")
-        {
+        if scalar_fp8_ffi_ct.contains("pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = true;") {
             scalar_fp8_ffi_ct = scalar_fp8_ffi_ct.replace(
                 "pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = true;",
                 &format!("pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = {cc_is_over_800};"),
@@ -155,6 +153,7 @@ fn main() -> Result<(), String> {
         let mut lib_files = vec![
             "kernels/gptq/q_gemm.cu",
             "kernels/hqq/hqq.cu",
+            "kernels/hqq/hqq_bitpack.cu",
             "kernels/ops/ops.cu",
             "kernels/bitsandbytes/dequant.cu",
             "kernels/rotary/rotary.cu",

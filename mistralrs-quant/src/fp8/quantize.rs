@@ -90,7 +90,8 @@ mod tests {
             dequantize_scale,
         } = FP8Linear::quantize(&data, DType::F8E4M3)?;
 
-        let dequant = crate::scalar_fp8::fp8_to_dtype(&qw, DType::F32)?.broadcast_mul(&dequantize_scale)?;
+        let dequant =
+            crate::scalar_fp8::fp8_to_dtype(&qw, DType::F32)?.broadcast_mul(&dequantize_scale)?;
 
         let diff1 = (&data - dequant)?.abs()?.mean_all()?;
 
