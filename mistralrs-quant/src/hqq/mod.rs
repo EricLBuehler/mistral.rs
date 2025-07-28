@@ -147,6 +147,7 @@ impl HqqBits {
     pub(crate) fn bitpack_type(&self) -> impl Fn(Tensor) -> Result<Tensor> {
         match self {
             Self::Eight => |wq: Tensor| -> Result<Tensor> {
+                #[allow(unused_variables)]
                 let device = wq.device();
 
                 #[cfg(feature = "cuda")]
@@ -189,6 +190,7 @@ impl HqqBits {
                 wq.to_dtype(DType::U8)
             },
             Self::Four => |wq_in: Tensor| -> Result<Tensor> {
+                #[allow(unused_variables)]
                 let device = wq_in.device();
 
                 #[cfg(feature = "cuda")]
@@ -246,6 +248,7 @@ impl HqqBits {
                 }
             },
             Self::Two => |wq_in: Tensor| -> Result<Tensor> {
+                #[allow(unused_variables)]
                 let device = wq_in.device();
 
                 #[cfg(feature = "cuda")]
@@ -358,68 +361,37 @@ impl HqqBits {
 
                     let storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
                     let storage = Storage::Cuda(storage);
-                    Ok(from_storage_no_op(storage, output_shape, false))
-                } else {
-                    // Fallback to CPU implementation
-                    #[cfg(not(feature = "cuda"))]
-                    {
-                        // CPU implementation using the original approach
-                        let wq = wq.to_dtype(DType::I32)?;
-                        let step = (wq.dims()[0] as f64 / 10.) as usize;
-
-                        let a = wq.narrow(0, 0, step)?;
-                        let b = wq.narrow(0, step, step)?;
-                        let c = wq.narrow(0, step * 2, step)?;
-                        let d = wq.narrow(0, step * 3, step)?;
-                        let e = wq.narrow(0, step * 4, step)?;
-                        let f = wq.narrow(0, step * 5, step)?;
-                        let g = wq.narrow(0, step * 6, step)?;
-                        let h = wq.narrow(0, step * 7, step)?;
-                        let i = wq.narrow(0, step * 8, step)?;
-                        let j = wq.narrow(0, step * 9, step)?;
-
-                        a.leftshift(27)?
-                            .bitwise_or(&b.leftshift(24)?)?
-                            .bitwise_or(&c.leftshift(21)?)?
-                            .bitwise_or(&d.leftshift(18)?)?
-                            .bitwise_or(&e.leftshift(15)?)?
-                            .bitwise_or(&f.leftshift(12)?)?
-                            .bitwise_or(&g.leftshift(9)?)?
-                            .bitwise_or(&h.leftshift(6)?)?
-                            .bitwise_or(&i.leftshift(3)?)?
-                            .bitwise_or(&j)
-                    }
-                    #[cfg(feature = "cuda")]
-                    {
-                        // CPU implementation using the old approach
-                        let wq = wq.to_dtype(DType::I32)?;
-                        let step = (wq.dims()[0] as f64 / 10.) as usize;
-
-                        let a = wq.narrow(0, 0, step)?;
-                        let b = wq.narrow(0, step, step)?;
-                        let c = wq.narrow(0, step * 2, step)?;
-                        let d = wq.narrow(0, step * 3, step)?;
-                        let e = wq.narrow(0, step * 4, step)?;
-                        let f = wq.narrow(0, step * 5, step)?;
-                        let g = wq.narrow(0, step * 6, step)?;
-                        let h = wq.narrow(0, step * 7, step)?;
-                        let i = wq.narrow(0, step * 8, step)?;
-                        let j = wq.narrow(0, step * 9, step)?;
-
-                        a.leftshift(27)?
-                            .bitwise_or(&b.leftshift(24)?)?
-                            .bitwise_or(&c.leftshift(21)?)?
-                            .bitwise_or(&d.leftshift(18)?)?
-                            .bitwise_or(&e.leftshift(15)?)?
-                            .bitwise_or(&f.leftshift(12)?)?
-                            .bitwise_or(&g.leftshift(9)?)?
-                            .bitwise_or(&h.leftshift(6)?)?
-                            .bitwise_or(&i.leftshift(3)?)?
-                            .bitwise_or(&j)
-                    }
+                    return Ok(from_storage_no_op(storage, output_shape, false));
                 }
+                
+                // CPU fallback implementation
+                let wq = wq.to_dtype(DType::I32)?;
+                let step = (wq.dims()[0] as f64 / 10.) as usize;
+
+                let a = wq.narrow(0, 0, step)?;
+                let b = wq.narrow(0, step, step)?;
+                let c = wq.narrow(0, step * 2, step)?;
+                let d = wq.narrow(0, step * 3, step)?;
+                let e = wq.narrow(0, step * 4, step)?;
+                let f = wq.narrow(0, step * 5, step)?;
+                let g = wq.narrow(0, step * 6, step)?;
+                let h = wq.narrow(0, step * 7, step)?;
+                let i = wq.narrow(0, step * 8, step)?;
+                let j = wq.narrow(0, step * 9, step)?;
+
+                a.leftshift(27)?
+                    .bitwise_or(&b.leftshift(24)?)?
+                    .bitwise_or(&c.leftshift(21)?)?
+                    .bitwise_or(&d.leftshift(18)?)?
+                    .bitwise_or(&e.leftshift(15)?)?
+                    .bitwise_or(&f.leftshift(12)?)?
+                    .bitwise_or(&g.leftshift(9)?)?
+                    .bitwise_or(&h.leftshift(6)?)?
+                    .bitwise_or(&i.leftshift(3)?)?
+                    .bitwise_or(&j)
             },
             Self::One => |wq_in: Tensor| -> Result<Tensor> {
+                #[allow(unused_variables)]
                 let device = wq_in.device();
 
                 #[cfg(feature = "cuda")]
