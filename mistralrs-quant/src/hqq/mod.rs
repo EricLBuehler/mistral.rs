@@ -363,7 +363,7 @@ impl HqqBits {
                     let storage = Storage::Cuda(storage);
                     return Ok(from_storage_no_op(storage, output_shape, false));
                 }
-                
+
                 // CPU fallback implementation
                 let wq = wq.to_dtype(DType::I32)?;
                 let step = (wq.dims()[0] as f64 / 10.) as usize;
