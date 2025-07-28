@@ -1,7 +1,6 @@
 use candle_core::{DType, Result, Tensor};
 use candle_nn::Linear;
 use float8::F8E4M3;
-use half::bf16;
 
 use super::FP8Linear;
 
@@ -57,21 +56,22 @@ impl FP8Linear {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(feature = "metal"))]
     use candle_core::{
         quantized::{GgmlDType, QTensor},
         DType, Device, Result, Tensor,
     };
 
+    #[cfg(not(feature = "metal"))]
     use crate::fp8::FP8Linear;
 
+    #[cfg(not(feature = "metal"))]
     use super::QuantizationResult;
 
     #[test]
+    #[cfg(not(feature = "metal"))]
     fn test_roundtrip_f8e4m3() -> Result<()> {
-        #[cfg(not(feature = "metal"))]
         let dev = Device::cuda_if_available(0)?;
-        #[cfg(feature = "metal")]
-        let dev = Device::new_metal(0)?;
 
         let data = Tensor::rand(0f32, 1f32, (32, 32), &dev)?;
 

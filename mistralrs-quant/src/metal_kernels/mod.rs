@@ -2270,7 +2270,7 @@ pub fn call_hqq_pack_8bit(
     let pipeline = kernels.load_pipeline(device, "pack_8bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, (num_elements as u64)));
+    set_params!(encoder, (input, output, num_elements as u64));
 
     let grid_size = MTLSize {
         width: ((num_elements + 255) / 256) as u64,
@@ -2301,7 +2301,7 @@ pub fn call_hqq_pack_4bit(
     let pipeline = kernels.load_pipeline(device, "pack_4bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, (height as u64), (width as u64)));
+    set_params!(encoder, (input, output, height as u64, width as u64));
 
     let step = height / 2;
     let grid_size = MTLSize {
@@ -2319,6 +2319,7 @@ pub fn call_hqq_pack_4bit(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn call_hqq_pack_2bit(
     device: &Device,
     ep: impl EncoderProvider,
@@ -2333,7 +2334,7 @@ pub fn call_hqq_pack_2bit(
     let pipeline = kernels.load_pipeline(device, "pack_2bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, (height as u64), (width as u64)));
+    set_params!(encoder, (input, output, height as u64, width as u64));
 
     let step = height / 4;
     let grid_size = MTLSize {
@@ -2351,6 +2352,7 @@ pub fn call_hqq_pack_2bit(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn call_hqq_pack_3bit(
     device: &Device,
     ep: impl EncoderProvider,
@@ -2365,7 +2367,7 @@ pub fn call_hqq_pack_3bit(
     let pipeline = kernels.load_pipeline(device, "pack_3bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, (height as u64), (width as u64)));
+    set_params!(encoder, (input, output, height as u64, width as u64));
 
     let step = height / 10;
     let grid_size = MTLSize {
@@ -2383,6 +2385,7 @@ pub fn call_hqq_pack_3bit(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn call_hqq_pack_1bit(
     device: &Device,
     ep: impl EncoderProvider,
@@ -2397,7 +2400,7 @@ pub fn call_hqq_pack_1bit(
     let pipeline = kernels.load_pipeline(device, "pack_1bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, (height as u64), (width as u64)));
+    set_params!(encoder, (input, output, height as u64, width as u64));
 
     let step = height / 8;
     let grid_size = MTLSize {

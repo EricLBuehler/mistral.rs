@@ -469,31 +469,31 @@ mod metal_tests {
         println!(
             "First few w_q values: {:?}",
             w_q.flatten_all()?
-                .to_vec1::<u8>()?
+                .to_vec1::<u32>()?
                 .iter()
                 .take(10)
                 .collect::<Vec<_>>()
         );
         println!(
             "First few scales: {:?}",
-            scales.to_vec1::<f32>()?.iter().take(5).collect::<Vec<_>>()
+            scales.flatten_all()?.to_vec1::<f32>()?.iter().take(5).collect::<Vec<_>>()
         );
         println!(
             "First few biases: {:?}",
-            biases.to_vec1::<f32>()?.iter().take(5).collect::<Vec<_>>()
+            biases.flatten_all()?.to_vec1::<f32>()?.iter().take(5).collect::<Vec<_>>()
         );
 
         let ys = afq_dequantize_op(&w_q, &scales, &biases, group_size, bits)?;
 
         println!(
             "xs min/max: {:?}/{:?}",
-            xs.min(D::Minus1)?.to_scalar::<f32>()?,
-            xs.max(D::Minus1)?.to_scalar::<f32>()?
+            xs.min(D::Minus1)?.min_all()?.to_scalar::<f32>()?,
+            xs.max(D::Minus1)?.max_all()?.to_scalar::<f32>()?
         );
         println!(
             "ys min/max: {:?}/{:?}",
-            ys.min(D::Minus1)?.to_scalar::<f32>()?,
-            ys.max(D::Minus1)?.to_scalar::<f32>()?
+            ys.min(D::Minus1)?.min_all()?.to_scalar::<f32>()?,
+            ys.max(D::Minus1)?.max_all()?.to_scalar::<f32>()?
         );
         println!(
             "First few xs values: {:?}",

@@ -190,14 +190,13 @@ impl HqqBits {
 
                 #[cfg(feature = "metal")]
                 if device.is_metal() {
-                    use candle_core::backend::BackendStorage;
                     use candle_core::MetalStorage;
 
                     let dev = device.as_metal_device()?;
                     let command_buffer = dev.command_buffer()?;
                     command_buffer.set_label("hqq_pack_8bit");
 
-                    let (wq_storage, wq_layout) = wq.storage_and_layout();
+                    let (wq_storage, _wq_layout) = wq.storage_and_layout();
                     let wq_storage = match &*wq_storage {
                         Storage::Metal(s) => s,
                         _ => candle_core::bail!("Expected Metal storage"),
@@ -276,7 +275,6 @@ impl HqqBits {
 
                 #[cfg(feature = "metal")]
                 if device.is_metal() {
-                    use candle_core::backend::BackendStorage;
                     use candle_core::MetalStorage;
 
                     let dev = device.as_metal_device()?;
@@ -284,7 +282,7 @@ impl HqqBits {
                     command_buffer.set_label("hqq_pack_4bit");
 
                     let wq = wq_in.to_dtype(DType::U8)?;
-                    let (wq_storage, wq_layout) = wq.storage_and_layout();
+                    let (wq_storage, _wq_layout) = wq.storage_and_layout();
                     let wq_storage = match &*wq_storage {
                         Storage::Metal(s) => s,
                         _ => candle_core::bail!("Expected Metal storage"),
