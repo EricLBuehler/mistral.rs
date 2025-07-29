@@ -8,8 +8,8 @@ use mistralrs_core::{
     MistralRsBuilder, ModelSelected, NormalRequest, PagedAttentionConfig, PagedCacheType, Request,
     RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
+use std::fmt::Display;
 use std::sync::Arc;
-use std::{fmt::Display, num::NonZeroUsize};
 use tokio::sync::mpsc::channel;
 use tracing::info;
 
