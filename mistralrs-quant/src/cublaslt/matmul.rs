@@ -200,10 +200,10 @@ impl MatmulDesc {
 
     fn set_scale_type_block(&self, matrix: Matrix) -> Result<(), CublasError> {
         let attr = match matrix {
-            Matrix::A => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER,
-            Matrix::B => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER,
-            Matrix::C => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_C_SCALE_POINTER,
-            Matrix::D => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_D_SCALE_POINTER,
+            Matrix::A => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_A_SCALE_MODE,
+            Matrix::B => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_B_SCALE_MODE,
+            Matrix::C => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_C_SCALE_MODE,
+            Matrix::D => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_D_SCALE_MODE,
         };
 
         let buf = sys::cublasLtMatmulMatrixScale_t::CUBLASLT_MATMUL_MATRIX_SCALE_BLK128x128_32F;
@@ -487,9 +487,8 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
                 let (scale_b, _scale_b_guard) = scale_b.device_ptr(self.stream());
                 matmul_desc.set_scale_ptr(&scale_a, Matrix::A)?;
                 matmul_desc.set_scale_ptr(&scale_b, Matrix::B)?;
-                // TODO: set_scale_type_block is not working correctly
-                // matmul_desc.set_scale_type_block(Matrix::A)?;
-                // matmul_desc.set_scale_type_block(Matrix::B)?;
+                matmul_desc.set_scale_type_block(Matrix::A)?;
+                matmul_desc.set_scale_type_block(Matrix::B)?;
             }
         }
 
