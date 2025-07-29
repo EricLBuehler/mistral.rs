@@ -389,17 +389,21 @@ impl CublasLTBatchMatmulF8Blockwise {
         if self.block_size != vec![128, 128] {
             candle_core::bail!("Expected block size to be 128x128.");
         }
-        let a_scale_shape_case = self.a_scale.dim(0)? * self.block_size[0] == a_l.dim(0)?
-            && self.a_scale.dim(1)? * self.block_size[1] == a_l.dim(1)?;
+        let a_scale_shape_case = self.a_scale.dim(0)? * self.block_size[0] == a_l.dim(1)?
+            && self.a_scale.dim(1)? * self.block_size[1] == a_l.dim(2)?;
         if !a_scale_shape_case
             || self.a_scale.dtype() != DType::F32
             || !self.a_scale.is_contiguous()
         {
-            candle_core::bail!("`a_scale` must be a f32 contiguous blockwise tensor.");
+            candle_core::bail!("`a_scale` must be a f32 contiguous blockwise tensor. Expected dims: ({}, {}), got: ({}, {}), a_l dims: {:?}", 
+                a_l.dim(1)? / self.block_size[0], a_l.dim(2)? / self.block_size[1],
+                self.a_scale.dim(0)?, self.a_scale.dim(1)?, a_l.dims());
         }
-        let b_scale_shape_case = self.b_scale.dim(0)? * self.block_size[0] == b_l.dim(0)?
-            && self.b_scale.dim(1)? * self.block_size[1] == b_l.dim(1)?;
-        if b_scale_shape_case || self.b_scale.dtype() != DType::F32 || !self.b_scale.is_contiguous()
+        let b_scale_shape_case = self.b_scale.dim(0)? * self.block_size[0] == b_l.dim(1)?
+            && self.b_scale.dim(1)? * self.block_size[1] == b_l.dim(2)?;
+        if !b_scale_shape_case
+            || self.b_scale.dtype() != DType::F32
+            || !self.b_scale.is_contiguous()
         {
             candle_core::bail!("`b_scale` must be a f32 contiguous blockwise tensor.");
         }

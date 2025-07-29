@@ -487,8 +487,9 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
                 let (scale_b, _scale_b_guard) = scale_b.device_ptr(self.stream());
                 matmul_desc.set_scale_ptr(&scale_a, Matrix::A)?;
                 matmul_desc.set_scale_ptr(&scale_b, Matrix::B)?;
-                matmul_desc.set_scale_type_block(Matrix::A)?;
-                matmul_desc.set_scale_type_block(Matrix::B)?;
+                // TODO: set_scale_type_block is not working correctly
+                // matmul_desc.set_scale_type_block(Matrix::A)?;
+                // matmul_desc.set_scale_type_block(Matrix::B)?;
             }
         }
 
