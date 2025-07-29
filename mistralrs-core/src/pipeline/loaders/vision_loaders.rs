@@ -3660,7 +3660,7 @@ impl DeviceMappedModelLoader for Gemma3Loader {
 
         match cfg {
             Gemma3Config::Text(text_config) => {
-                Ok(max_batch_size * text_config.num_attention_heads * 1)
+                Ok(max_batch_size * text_config.num_attention_heads * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2))
             }
             Gemma3Config::WithVision {
                 text_config,
