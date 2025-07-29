@@ -1020,18 +1020,48 @@ mod tests {
         let weight_block_size = vec![128, 128];
 
         // in dim is 2048.
-        let xs = Tensor::randn(0f32, 1f32, (32, 2048), &dev)?.to_dtype(DType::BF16)?;
+        let xs = Tensor::randn(0f32, 1f32, (128, 2048), &dev)?.to_dtype(DType::BF16)?;
 
         let truth = {
-            let weight_dq =
-                ops::fp8_blockwise_dequantize(&weight, &scale, weight_block_size, DType::BF16)?;
+            let weight_dq = ops::fp8_blockwise_dequantize(
+                &weight,
+                &scale,
+                weight_block_size.clone(),
+                DType::BF16,
+            )?;
 
             let lin_dq = Linear::new(weight_dq, None);
             lin_dq.forward(&xs)?
         };
 
-        // TODO: will be adding real blockwise fp8 gemm shortly ;)
-        assert_eq!((32, 7168), truth.dims2()?);
+        let test = {
+            use crate::cublaslt::{self, CublasLt};
+
+            let (xs_weight, xs_scale) =
+                ops::fp8_blockwise_quantize(&xs, weight_block_size.clone())?;
+
+            let cublaslt = CublasLt::new(&dev)?;
+
+            cublaslt::fused_batch_matmul_f8_blockwise(
+                &xs_weight.unsqueeze(0)?,
+                &weight.unsqueeze(0)?,
+                &xs_scale,
+                &scale,
+                None,
+                None,
+                None,
+                None,
+                None,
+                weight_block_size.clone(),
+                cublaslt,
+            )?
+        };
+
+        println!("{truth}");
+        println!("{test}");
+        todo!();
+        // // TODO: will be adding real blockwise fp8 gemm shortly ;)
+        // assert_eq!((32, 7168), truth.dims2()?);
 
         Ok(())
     }
