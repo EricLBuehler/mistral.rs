@@ -989,7 +989,7 @@ mod tests {
 
         // FP8 E4M3 has limited precision, so we expect some error
         // but it should be reasonable
-        assert!(max_error < 0.5, "Max error {} is too large", max_error);
+        assert!(max_error < 0.16, "Max error {} is too large", max_error);
 
         Ok(())
     }
