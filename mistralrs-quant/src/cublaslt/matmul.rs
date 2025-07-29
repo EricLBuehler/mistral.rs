@@ -198,6 +198,27 @@ impl MatmulDesc {
         Ok(())
     }
 
+    fn set_scale_type_block(&self, matrix: Matrix) -> Result<(), CublasError> {
+        let attr = match matrix {
+            Matrix::A => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER,
+            Matrix::B => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER,
+            Matrix::C => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_C_SCALE_POINTER,
+            Matrix::D => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_D_SCALE_POINTER,
+        };
+
+        let buf = sys::cublasLtMatmulMatrixScale_t::CUBLASLT_MATMUL_MATRIX_SCALE_BLK128x128_32F;
+
+        unsafe {
+            result::set_matmul_desc_attribute(
+                self.handle,
+                attr,
+                &buf as *const sys::cublasLtMatmulMatrixScale_t as *const _,
+                mem::size_of::<sys::cublasLtMatmulMatrixScale_t>(),
+            )?;
+        }
+        Ok(())
+    }
+
     // Epilogue system can be leveraged to fuse add and activation operations
     fn set_epilogue(
         &self,
@@ -337,6 +358,18 @@ pub enum CublasLTInternalDType {
     F8E4M3,
 }
 
+pub enum F8Scale<'a, S: DevicePtr<f32>> {
+    Scalar {
+        scale_a: &'a S,
+        scale_b: &'a S,
+        scale_d: &'a S,
+    },
+    Block {
+        scale_a: &'a S,
+        scale_b: &'a S,
+    },
+}
+
 pub trait CublasLTDType: CudaDType + DeviceRepr {
     const T: CublasLTInternalDType;
 }
@@ -390,9 +423,7 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
         cfg: MatmulConfig,
         a: &I,
         b: &I,
-        scale_a: &S,
-        scale_b: &S,
-        scale_d: &S,
+        scale: F8Scale<'_, S>,
         c: &C,
         out: &mut OB,
         // amax_d: &mut A,
@@ -438,12 +469,28 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
         }
 
         // Set scale factors
-        let (scale_a, _scale_a_guard) = scale_a.device_ptr(self.stream());
-        let (scale_b, _scale_b_guard) = scale_b.device_ptr(self.stream());
-        let (scale_d, _scale_d_guard) = scale_d.device_ptr(self.stream());
-        matmul_desc.set_scale_ptr(&scale_a, Matrix::A)?;
-        matmul_desc.set_scale_ptr(&scale_b, Matrix::B)?;
-        matmul_desc.set_scale_ptr(&scale_d, Matrix::D)?;
+        match scale {
+            F8Scale::Scalar {
+                scale_a,
+                scale_b,
+                scale_d,
+            } => {
+                let (scale_a, _scale_a_guard) = scale_a.device_ptr(self.stream());
+                let (scale_b, _scale_b_guard) = scale_b.device_ptr(self.stream());
+                let (scale_d, _scale_d_guard) = scale_d.device_ptr(self.stream());
+                matmul_desc.set_scale_ptr(&scale_a, Matrix::A)?;
+                matmul_desc.set_scale_ptr(&scale_b, Matrix::B)?;
+                matmul_desc.set_scale_ptr(&scale_d, Matrix::D)?;
+            }
+            F8Scale::Block { scale_a, scale_b } => {
+                let (scale_a, _scale_a_guard) = scale_a.device_ptr(self.stream());
+                let (scale_b, _scale_b_guard) = scale_b.device_ptr(self.stream());
+                matmul_desc.set_scale_ptr(&scale_a, Matrix::A)?;
+                matmul_desc.set_scale_ptr(&scale_b, Matrix::B)?;
+                matmul_desc.set_scale_type_block(Matrix::A)?;
+                matmul_desc.set_scale_type_block(Matrix::B)?;
+            }
+        }
 
         // Pass amaxd ptr
         // unsafe {
