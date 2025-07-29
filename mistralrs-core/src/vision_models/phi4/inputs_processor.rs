@@ -113,25 +113,23 @@ impl InputsProcessor for Phi4MMInputsProcessor {
         mut paged_attn_metadata: Option<PagedAttentionMeta>,
         prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
-    ) -> Box<dyn Iterator<Item = anyhow::Result<InputProcessorOutput>>> {
+    ) -> anyhow::Result<InputProcessorOutput> {
         if is_xlora {
-            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+            return Err(anyhow::Error::msg(
                 "Cannot make inputs for X-LoRA vision model.",
-            ))));
+            ));
         }
         if no_kv_cache {
-            return Box::new(std::iter::once(Err(anyhow::Error::msg(
-                "Vision model must have kv cache.",
-            ))));
+            return Err(anyhow::Error::msg("Vision model must have kv cache."));
         }
         // TODO(EricLBuehler): support this? Would require some handling of image tokens.
         if prompt_chunksize.is_some() {
             warn!("`prompt_chunksize` is set. Idefics 2 does not support prompt batching.");
         }
         let Some(tokenizer) = tokenizer else {
-            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+            return Err(anyhow::Error::msg(
                 "Phi4MMInputProcessor requires a specified tokenizer.",
-            ))));
+            ));
         };
 
         let config = other_config
@@ -193,65 +191,63 @@ impl InputsProcessor for Phi4MMInputsProcessor {
         } else if has_audios {
             (None, None, None, Some(vec![vec![]; input_seqs.len()]))
         } else {
-            return Box::new(
-                text_models_inputs_processor::TextInputsProcessor
-                    .process_inputs(
-                        Some(tokenizer),
-                        input_seqs,
-                        is_prompt,
-                        is_xlora,
-                        device,
-                        no_kv_cache,
-                        last_n_context_len,
-                        return_raw_logits,
-                        other_config,
-                        paged_attn_metadata,
-                        None, // TODO
-                        mapper,
-                    )
-                    .map(|metadata| {
-                        let InputProcessorOutput {
-                            inputs,
-                            seq_indices,
-                        } = metadata?;
+            return text_models_inputs_processor::TextInputsProcessor
+                .process_inputs(
+                    Some(tokenizer),
+                    input_seqs,
+                    is_prompt,
+                    is_xlora,
+                    device,
+                    no_kv_cache,
+                    last_n_context_len,
+                    return_raw_logits,
+                    other_config,
+                    paged_attn_metadata,
+                    None, // TODO
+                    mapper,
+                )
+                .and_then(|metadata| {
+                    let InputProcessorOutput {
+                        inputs,
+                        seq_indices,
+                    } = metadata;
 
-                        let text_models_inputs_processor::ModelInputs {
-                            input_ids,
-                            input_ids_full: _,
-                            seqlen_offsets,
-                            seqlen_offsets_full: _,
-                            context_lens,
-                            position_ids,
-                            paged_attn_meta,
-                            flash_meta,
-                            flash_meta_full: _,
-                        } = *inputs
-                            .downcast::<text_models_inputs_processor::ModelInputs>()
-                            .expect("Downcast failed.");
+                    let text_models_inputs_processor::ModelInputs {
+                        input_ids,
+                        input_ids_full: _,
+                        seqlen_offsets,
+                        seqlen_offsets_full: _,
+                        context_lens,
+                        position_ids,
+                        paged_attn_meta,
+                        flash_meta,
+                        flash_meta_full: _,
+                    } = *inputs
+                        .downcast::<text_models_inputs_processor::ModelInputs>()
+                        .expect("Downcast failed.");
 
-                        let inputs: Box<dyn Any> = Box::new(ModelInputs {
-                            input_ids,
-                            seqlen_offsets,
-                            context_lens,
-                            position_ids,
-                            pixel_values: None,
-                            model_specific_args: Box::new(Phi4MMVisionSpecificArgs {
-                                input_image_embeds: None,
-                                image_attention_mask: None,
-                                image_sizes: None,
-                                input_audio_embeds: None,
-                                audio_embed_sizes: None,
-                                audio_attention_mask: None,
-                            }),
-                            paged_attn_meta,
-                            flash_meta,
-                        });
-                        Ok(InputProcessorOutput {
-                            inputs,
-                            seq_indices,
-                        })
-                    }),
-            );
+                    let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                        input_ids,
+                        seqlen_offsets,
+                        context_lens,
+                        position_ids,
+                        pixel_values: None,
+                        model_specific_args: Box::new(Phi4MMVisionSpecificArgs {
+                            input_image_embeds: None,
+                            image_attention_mask: None,
+                            image_sizes: None,
+                            input_audio_embeds: None,
+                            audio_embed_sizes: None,
+                            audio_attention_mask: None,
+                        }),
+                        paged_attn_meta,
+                        flash_meta,
+                    });
+                    Ok(InputProcessorOutput {
+                        inputs,
+                        seq_indices,
+                    })
+                });
         };
 
         let detokenized = tokenizer
@@ -293,7 +289,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
         let (input_audio_embeds, audio_embed_sizes, audio_attention_mask) =
             match self.process_audio_for_sequences(input_seqs, device) {
                 Ok(result) => result,
-                Err(e) => return Box::new(std::iter::once(Err(anyhow::Error::new(e)))),
+                Err(e) => return Err(anyhow::Error::new(e)),
             };
 
         let mut toks = Vec::new();
@@ -330,7 +326,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             toks.push(seq.get_toks().to_vec());
         }
 
-        let iter = if is_prompt {
+        let result = if is_prompt {
             get_prompt_input(
                 toks.iter().map(Vec::as_slice).collect(),
                 input_seqs,
@@ -355,7 +351,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             )
         };
 
-        Box::new(iter.into_iter().map(move |metadata| {
+        result.map(move |metadata| {
             let pixel_values = pixel_values.clone();
             let pixel_attention_mask = pixel_attention_mask.clone();
             let text_models_inputs_processor::InnerInputProcessorOutput {
@@ -369,7 +365,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                         flash_meta,
                     },
                 seq_indices,
-            } = metadata?;
+            } = metadata;
             let inputs: Box<dyn Any> = Box::new(ModelInputs {
                 input_ids: input,
                 seqlen_offsets: positions,
@@ -387,11 +383,11 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 paged_attn_meta,
                 flash_meta,
             });
-            Ok(InputProcessorOutput {
+            InputProcessorOutput {
                 inputs,
                 seq_indices,
-            })
-        }))
+            }
+        })
     }
 }
 

@@ -122,26 +122,22 @@ impl InputsProcessor for SpeechInputsProcessor {
         _paged_attn_metadata: Option<PagedAttentionMeta>,
         prompt_chunksize: Option<NonZeroUsize>,
         _mapper: Option<&dyn DeviceMapper>,
-    ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>> {
-        let make_value = if prompt_chunksize.is_some() {
-            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+    ) -> Result<InputProcessorOutput> {
+        if prompt_chunksize.is_some() {
+            return Err(anyhow::Error::msg(
                 "Prompt batching is unsupported for speech models",
-            ))));
-        } else {
-            || {
-                let inputs = ModelInputs {
-                    prompts: input_seqs
-                        .iter()
-                        .map(|seq| seq.get_initial_prompt().to_string())
-                        .collect(),
-                };
-                Ok(InputProcessorOutput {
-                    inputs: Box::new(inputs),
-                    seq_indices: (0..input_seqs.len()).collect::<Vec<_>>(),
-                })
-            }
+            ));
+        }
+        let inputs = ModelInputs {
+            prompts: input_seqs
+                .iter()
+                .map(|seq| seq.get_initial_prompt().to_string())
+                .collect(),
         };
-        Box::new(std::iter::once(make_value()))
+        Ok(InputProcessorOutput {
+            inputs: Box::new(inputs),
+            seq_indices: (0..input_seqs.len()).collect::<Vec<_>>(),
+        })
     }
 }
 

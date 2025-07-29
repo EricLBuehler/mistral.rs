@@ -183,25 +183,23 @@ impl InputsProcessor for MLlamaImageProcessor {
         mut paged_attn_metadata: Option<PagedAttentionMeta>,
         prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
-    ) -> Box<dyn Iterator<Item = anyhow::Result<InputProcessorOutput>>> {
+    ) -> anyhow::Result<InputProcessorOutput> {
         if is_xlora {
-            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+            return Err(anyhow::Error::msg(
                 "Cannot make inputs for X-LoRA vision model.",
-            ))));
+            ));
         }
         if no_kv_cache {
-            return Box::new(std::iter::once(Err(anyhow::Error::msg(
-                "Vision model must have kv cache.",
-            ))));
+            return Err(anyhow::Error::msg("Vision model must have kv cache."));
         }
         // TODO(EricLBuehler): support this? Would require some handling of image tokens.
         if prompt_chunksize.is_some() {
             warn!("`prompt_chunksize` is set. MLlama does not support prompt batching.");
         }
         let Some(tokenizer) = tokenizer else {
-            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+            return Err(anyhow::Error::msg(
                 "MLlamaInputProcessor requires a specified tokenizer.",
-            ))));
+            ));
         };
 
         let text_models_inputs_processor::InnerInputProcessorOutput {
@@ -229,8 +227,6 @@ impl InputsProcessor for MLlamaImageProcessor {
                 None, // TODO: evaluate if it is possible to batch this
                 mapper,
             )
-            .nth(0)
-            .unwrap()
             .unwrap()
         } else {
             get_completion_input(
@@ -247,8 +243,6 @@ impl InputsProcessor for MLlamaImageProcessor {
                 None, // TODO: evaluate if it is possible to batch this
                 mapper,
             )
-            .nth(0)
-            .unwrap()
             .unwrap()
         };
         let config = other_config.expect("Need a PreProcessorConfig config.");
@@ -282,9 +276,9 @@ impl InputsProcessor for MLlamaImageProcessor {
                 .collect::<Vec<_>>();
 
             if n_images_in_text != n_images_in_images {
-                return Box::new(std::iter::once(Err(anyhow::Error::msg(format!(
+                return Err(anyhow::Error::msg(format!(
                     "The number of images in each batch {n_images_in_text:?} should be the same as the number of images {n_images_in_images:?}. The model cannot support a different number of images per patch. Perhaps you forgot a `<|image|>` tag?"
-                )))));
+                )));
             }
 
             let max_num_images = *n_images_in_images
@@ -366,7 +360,7 @@ impl InputsProcessor for MLlamaImageProcessor {
 
             let cross_attn_mask = match cross_attn_mask {
                 Ok(v) => v,
-                Err(e) => return Box::new(std::iter::once(Err(anyhow::Error::msg(e.to_string())))),
+                Err(e) => return Err(anyhow::Error::msg(e.to_string())),
             };
 
             (
@@ -404,8 +398,6 @@ impl InputsProcessor for MLlamaImageProcessor {
                 None, // TODO: evaluate if it is possible to batch this
                 mapper,
             )
-            .nth(0)
-            .unwrap()
             .unwrap()
         } else {
             get_completion_input(
@@ -422,8 +414,6 @@ impl InputsProcessor for MLlamaImageProcessor {
                 None, // TODO: evaluate if it is possible to batch this
                 mapper,
             )
-            .nth(0)
-            .unwrap()
             .unwrap()
         };
 
@@ -441,10 +431,10 @@ impl InputsProcessor for MLlamaImageProcessor {
             paged_attn_meta,
             flash_meta,
         });
-        Box::new(std::iter::once(Ok(InputProcessorOutput {
+        Ok(InputProcessorOutput {
             inputs,
             seq_indices,
-        })))
+        })
     }
 }
 

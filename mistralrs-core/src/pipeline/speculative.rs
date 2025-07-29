@@ -385,8 +385,6 @@ impl Pipeline for SpeculativePipeline {
                             None, // TODO: do we support???
                             get_mut_arcmutex!(self.draft).device_mapper(),
                         )
-                        .nth(0)
-                        .unwrap()
                         .unwrap()
                         .inputs;
                     let logits = get_mut_arcmutex!(self.draft).forward_inputs(inputs, false)?;
@@ -458,8 +456,6 @@ impl Pipeline for SpeculativePipeline {
                         None, // TODO: do we support???
                         get_mut_arcmutex!(self.target).device_mapper(),
                     )
-                    .nth(0)
-                    .unwrap()
                     .unwrap()
                     .inputs;
 
