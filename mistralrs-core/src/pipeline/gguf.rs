@@ -8,6 +8,7 @@ use super::{
     AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqPipelineMixin,
     MetadataMixin, ModelCategory, PreProcessingMixin,
 };
+use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
 use crate::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
@@ -19,7 +20,6 @@ use crate::paged_attention::{
     calculate_cache_config, AttentionImplementation, CacheEngine, ModelConfigLike,
 };
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
-use crate::pipeline::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 use crate::pipeline::loaders::DeviceMappedModelLoader;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::ChatTemplate;
@@ -306,10 +306,7 @@ impl Loader for GGUFLoader {
             );
         }
 
-        // Apply default prompt size here
-        let prompt_chunksize = DEFAULT_PROMPT_CHUNK_SIZE;
-
-        info!("Prompt chunk size is {prompt_chunksize}.",);
+        info!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         let mut readers = Vec::new();
         for filename in paths.get_weight_filenames() {

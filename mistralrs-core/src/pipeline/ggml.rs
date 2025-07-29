@@ -7,11 +7,11 @@ use super::{
     AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqPipelineMixin,
     MetadataMixin, ModelCategory, PreProcessingMixin,
 };
+use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::DeviceMapper;
 use crate::kv_cache::FullCacheManager;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
-use crate::pipeline::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::{get_chat_template, Modalities, SupportedModality};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
@@ -266,10 +266,7 @@ impl Loader for GGMLLoader {
             paged_attn_config = None;
         }
 
-        // Apply default prompt size here
-        let prompt_chunksize = DEFAULT_PROMPT_CHUNK_SIZE;
-
-        info!("Prompt chunk size is {prompt_chunksize}.",);
+        info!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         info!(
             "Loading model `{}` on {}.",

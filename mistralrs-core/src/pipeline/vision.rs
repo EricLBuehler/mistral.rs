@@ -11,6 +11,7 @@ use super::{
     Gemma3nLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader,
     Phi3VLoader, Qwen2_5VLLoader, VisionLoaderType,
 };
+use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
 use crate::kv_cache::{FullCacheManager, NormalCacheManager};
@@ -257,6 +258,8 @@ impl Loader for VisionLoader {
         if !self.inner.supports_paged_attention(&config) {
             paged_attn_config = None;
         }
+
+        info!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
 

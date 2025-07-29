@@ -1,4 +1,3 @@
-use super::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 use super::isq::ImatrixDataSource;
 use super::llg::build_llg_factory;
 use super::{
@@ -16,6 +15,7 @@ use super::{
     Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader, SmolLm3Loader, Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
+use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
 use crate::kv_cache::{FullCacheManager, NormalCacheManager};
@@ -314,10 +314,7 @@ impl Loader for NormalLoader {
             paged_attn_config = None;
         }
 
-        // Apply default prompt size here
-        let prompt_chunksize = DEFAULT_PROMPT_CHUNK_SIZE;
-
-        info!("Prompt chunk size is {prompt_chunksize}.",);
+        info!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
 
