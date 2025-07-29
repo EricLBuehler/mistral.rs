@@ -51,7 +51,6 @@ use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::borrow::Cow;
-use std::num::{NonZero, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
@@ -120,7 +119,6 @@ pub struct NormalLoaderBuilder {
 #[derive(Clone, Default)]
 /// Config specific to loading a normal model.
 pub struct NormalSpecificConfig {
-    pub prompt_chunksize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
     pub organization: IsqOrganization,
     pub write_uqff: Option<PathBuf>,
@@ -317,11 +315,7 @@ impl Loader for NormalLoader {
         }
 
         // Apply default prompt size here
-        let prompt_chunksize = self
-            .config
-            .prompt_chunksize
-            .unwrap_or(DEFAULT_PROMPT_CHUNK_SIZE.try_into().unwrap())
-            .get();
+        let prompt_chunksize = DEFAULT_PROMPT_CHUNK_SIZE;
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
@@ -465,7 +459,6 @@ impl Loader for NormalLoader {
                 &available_devices,
                 dtype,
                 &params,
-                prompt_chunksize,
                 paged_attn_config.as_ref(),
             )?;
             mapper = DeviceMapSetting::Map(new);
@@ -927,7 +920,6 @@ impl Loader for NormalLoader {
                 sliding_window,
                 cache_config,
                 cache_engine,
-                prompt_chunksize: Some(NonZero::new(prompt_chunksize).unwrap()),
                 model_metadata: Some(model_metadata),
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],

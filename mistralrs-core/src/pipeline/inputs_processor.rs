@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation)]
 
-use std::{any::Any, num::NonZeroUsize, sync::Arc};
+use std::{any::Any, sync::Arc};
 
 use anyhow::Result;
 use candle_core::Device;
@@ -41,7 +41,6 @@ pub trait InputsProcessor {
         return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
         paged_attn_metadata: Option<PagedAttentionMeta>,
-        prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Result<InputProcessorOutput>;
 
@@ -51,7 +50,7 @@ pub trait InputsProcessor {
 // ========================= Test models input processor
 
 pub mod text_models_inputs_processor {
-    use std::{any::Any, collections::HashMap, fmt::Debug, num::NonZeroUsize, sync::Arc};
+    use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
 
     use anyhow::Result;
     use candle_core::{DType, Device, DeviceLocation, Tensor, WithDType};
@@ -527,7 +526,6 @@ pub mod text_models_inputs_processor {
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
         paged_attn_metadata: Option<&mut PagedAttentionMeta>,
-        _prompt_chunksize: Option<NonZeroUsize>, // Kept for API compatibility but unused
         mapper: Option<&dyn DeviceMapper>,
     ) -> Result<InnerInputProcessorOutput> {
         let offset = input_seqs[0].token_offset();
@@ -556,7 +554,6 @@ pub mod text_models_inputs_processor {
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
         paged_attn_metadata: Option<&mut PagedAttentionMeta>,
-        prompt_chunksize: Option<NonZeroUsize>, // Kept for API compatibility
         mapper: Option<&dyn DeviceMapper>,
     ) -> Result<InnerInputProcessorOutput> {
         if no_kv_cache {
@@ -567,7 +564,6 @@ pub mod text_models_inputs_processor {
                 last_n_context_len,
                 return_raw_logits,
                 paged_attn_metadata,
-                prompt_chunksize,
                 mapper,
             );
         }
@@ -608,7 +604,6 @@ pub mod text_models_inputs_processor {
             return_raw_logits: bool,
             _: Option<Arc<dyn Any>>,
             mut paged_attn_metadata: Option<PagedAttentionMeta>,
-            prompt_chunksize: Option<NonZeroUsize>,
             mapper: Option<&dyn DeviceMapper>,
         ) -> Result<InputProcessorOutput> {
             if is_xlora && !is_prompt {
@@ -622,7 +617,6 @@ pub mod text_models_inputs_processor {
                     last_n_context_len,
                     return_raw_logits,
                     paged_attn_metadata.as_mut(),
-                    prompt_chunksize,
                     mapper,
                 )?;
                 let completion = get_completion_input(
@@ -636,7 +630,6 @@ pub mod text_models_inputs_processor {
                     last_n_context_len,
                     return_raw_logits,
                     paged_attn_metadata.as_mut(),
-                    prompt_chunksize,
                     mapper,
                 )?;
                 let InnerInputProcessorOutput {
@@ -689,7 +682,6 @@ pub mod text_models_inputs_processor {
                     last_n_context_len,
                     return_raw_logits,
                     paged_attn_metadata.as_mut(),
-                    prompt_chunksize,
                     mapper,
                 )?;
                 let InnerInputProcessorOutput {
@@ -730,7 +722,6 @@ pub mod text_models_inputs_processor {
                     last_n_context_len,
                     return_raw_logits,
                     paged_attn_metadata.as_mut(),
-                    prompt_chunksize,
                     mapper,
                 )?;
                 let InnerInputProcessorOutput {
@@ -772,7 +763,6 @@ pub mod text_models_inputs_processor {
                     last_n_context_len,
                     return_raw_logits,
                     paged_attn_metadata.as_mut(),
-                    prompt_chunksize,
                     mapper,
                 )?;
                 let InnerInputProcessorOutput {

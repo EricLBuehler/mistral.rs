@@ -1,6 +1,5 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use std::any::Any;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use candle_core::Result;
@@ -10,7 +9,6 @@ use image::Rgb;
 use itertools::Itertools;
 use regex_automata::meta::Regex;
 use tokenizers::Tokenizer;
-use tracing::warn;
 
 use super::llava15::LLaVAVisionSpecificArgs;
 use super::utils::{expand2square, LLaVAImageProcessor};
@@ -87,7 +85,6 @@ impl InputsProcessor for LLaVAInputProcessor {
         return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta>,
-        prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> anyhow::Result<InputProcessorOutput> {
         if is_xlora {
@@ -97,10 +94,6 @@ impl InputsProcessor for LLaVAInputProcessor {
         }
         if no_kv_cache {
             return Err(anyhow::Error::msg("Vision model must have kv cache."));
-        }
-        // TODO(EricLBuehler): support this? Would require some handling of image tokens.
-        if prompt_chunksize.is_some() {
-            warn!("`prompt_chunksize` is set. Idefics 2 does not support prompt batching.");
         }
         let Some(tokenizer) = tokenizer else {
             return Err(anyhow::Error::msg(
@@ -167,7 +160,6 @@ impl InputsProcessor for LLaVAInputProcessor {
                     return_raw_logits,
                     other_config,
                     paged_attn_metadata,
-                    None, // TODO
                     mapper,
                 )
                 .map(|metadata| {
@@ -279,7 +271,6 @@ impl InputsProcessor for LLaVAInputProcessor {
                 last_n_context_len,
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
-                None, // TODO: evaluate if it is possible to batch this
                 mapper,
             )
         } else {
@@ -291,7 +282,6 @@ impl InputsProcessor for LLaVAInputProcessor {
                 last_n_context_len,
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
-                None, // TODO: evaluate if it is possible to batch this
                 mapper,
             )
         };

@@ -470,7 +470,6 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                     false,
                     input_processor_cfg.clone(),
                     None, // TODO: get block tables/handle it for PagedAttention
-                    None, // TODO: prompt chunking doesn't work.
                     None,
                 );
 

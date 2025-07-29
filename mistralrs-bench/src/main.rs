@@ -346,10 +346,6 @@ struct Args {
     /// Enable PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
     #[arg(long = "paged-attn", default_value_t = false)]
     paged_attn: bool,
-
-    /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
-    #[arg(long = "prompt-batchsize")]
-    prompt_chunksize: Option<usize>,
 }
 
 #[tokio::main]
@@ -359,22 +355,12 @@ async fn main() -> anyhow::Result<()> {
 
     args.concurrency = Some(args.concurrency.unwrap_or(vec![1]));
 
-    let prompt_chunksize = match args.prompt_chunksize {
-        Some(0) => {
-            anyhow::bail!("`prompt_chunksize` must be a strictly positive integer, got 0.",)
-        }
-        Some(x) => Some(NonZeroUsize::new(x).unwrap()),
-        None => None,
-    };
-
     let dtype = get_model_dtype(&args.model)?;
     let auto_device_map_params = get_auto_device_map_params(&args.model)?;
 
     let max_seq_len = auto_device_map_params.max_seq_len();
 
-    let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
-        .with_prompt_chunksize(prompt_chunksize)
-        .build()?;
+    let loader: Box<dyn Loader> = LoaderBuilder::new(args.model).build()?;
     let model_name = loader.get_id();
 
     #[cfg(feature = "metal")]

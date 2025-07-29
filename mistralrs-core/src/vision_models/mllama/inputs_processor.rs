@@ -3,7 +3,6 @@
 use std::{
     any::Any,
     collections::HashMap,
-    num::NonZeroUsize,
     sync::{Arc, RwLock},
 };
 
@@ -15,7 +14,6 @@ use mistralrs_vision::{
     Transforms,
 };
 use tokenizers::Tokenizer;
-use tracing::warn;
 
 use crate::{
     device_map::DeviceMapper,
@@ -181,7 +179,6 @@ impl InputsProcessor for MLlamaImageProcessor {
         return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta>,
-        prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> anyhow::Result<InputProcessorOutput> {
         if is_xlora {
@@ -191,10 +188,6 @@ impl InputsProcessor for MLlamaImageProcessor {
         }
         if no_kv_cache {
             return Err(anyhow::Error::msg("Vision model must have kv cache."));
-        }
-        // TODO(EricLBuehler): support this? Would require some handling of image tokens.
-        if prompt_chunksize.is_some() {
-            warn!("`prompt_chunksize` is set. MLlama does not support prompt batching.");
         }
         let Some(tokenizer) = tokenizer else {
             return Err(anyhow::Error::msg(
@@ -224,7 +217,6 @@ impl InputsProcessor for MLlamaImageProcessor {
                 last_n_context_len,
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
-                None, // TODO: evaluate if it is possible to batch this
                 mapper,
             )
             .unwrap()
@@ -240,7 +232,6 @@ impl InputsProcessor for MLlamaImageProcessor {
                 last_n_context_len,
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
-                None, // TODO: evaluate if it is possible to batch this
                 mapper,
             )
             .unwrap()
@@ -395,7 +386,6 @@ impl InputsProcessor for MLlamaImageProcessor {
                 last_n_context_len,
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
-                None, // TODO: evaluate if it is possible to batch this
                 mapper,
             )
             .unwrap()
@@ -411,7 +401,6 @@ impl InputsProcessor for MLlamaImageProcessor {
                 last_n_context_len,
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
-                None, // TODO: evaluate if it is possible to batch this
                 mapper,
             )
             .unwrap()

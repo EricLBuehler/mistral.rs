@@ -2,7 +2,6 @@ use candle_core::Device;
 use mistralrs_core::*;
 use mistralrs_core::{SearchCallback, Tool, ToolCallback};
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
 
 use crate::{best_device, Model};
 use std::sync::Arc;
@@ -33,7 +32,6 @@ pub struct GgufModelBuilder {
     pub(crate) device: Option<Device>,
 
     // Model running
-    pub(crate) prompt_chunksize: Option<NonZeroUsize>,
     pub(crate) force_cpu: bool,
     pub(crate) topology: Option<Topology>,
     pub(crate) throughput_logging: bool,
@@ -57,7 +55,6 @@ impl GgufModelBuilder {
         Self {
             model_id: model_id.to_string(),
             files: files.into_iter().map(|f| f.to_string()).collect::<Vec<_>>(),
-            prompt_chunksize: None,
             chat_template: None,
             tokenizer_json: None,
             force_cpu: false,
@@ -131,12 +128,6 @@ impl GgufModelBuilder {
     /// Source the tokenizer and chat template from this model ID (must contain `tokenizer.json` and `tokenizer_config.json`).
     pub fn with_tok_model_id(mut self, tok_model_id: impl ToString) -> Self {
         self.tok_model_id = Some(tok_model_id.to_string());
-        self
-    }
-
-    /// Set the prompt batchsize to use for inference.
-    pub fn with_prompt_chunksize(mut self, prompt_chunksize: NonZeroUsize) -> Self {
-        self.prompt_chunksize = Some(prompt_chunksize);
         self
     }
 
@@ -232,7 +223,6 @@ impl GgufModelBuilder {
 
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = GGUFSpecificConfig {
-            prompt_chunksize: self.prompt_chunksize,
             topology: self.topology,
         };
 

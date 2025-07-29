@@ -52,7 +52,6 @@ use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
-use std::num::{NonZero, NonZeroUsize};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -101,7 +100,6 @@ pub struct GGUFLoader {
 #[derive(Clone, Default)]
 /// Config for a GGUF loader.
 pub struct GGUFSpecificConfig {
-    pub prompt_chunksize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
 }
 
@@ -309,11 +307,7 @@ impl Loader for GGUFLoader {
         }
 
         // Apply default prompt size here
-        let prompt_chunksize = self
-            .config
-            .prompt_chunksize
-            .unwrap_or(DEFAULT_PROMPT_CHUNK_SIZE.try_into().unwrap())
-            .get();
+        let prompt_chunksize = DEFAULT_PROMPT_CHUNK_SIZE;
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
@@ -357,7 +351,6 @@ impl Loader for GGUFLoader {
                 &devices,
                 dtype,
                 &params,
-                prompt_chunksize,
                 paged_attn_config.as_ref(),
             )?;
             mapper = DeviceMapSetting::Map(new);
@@ -566,7 +559,6 @@ impl Loader for GGUFLoader {
                 sliding_window: None,
                 cache_config,
                 cache_engine,
-                prompt_chunksize: Some(NonZero::new(prompt_chunksize).unwrap()),
                 model_metadata: Some(Arc::new(model_config_metadata)),
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],

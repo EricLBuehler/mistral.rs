@@ -362,9 +362,8 @@ impl DeviceMappedModelLoader for AutoVisionLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
     ) -> Result<usize> {
-        Self::get_loader(config)?.mapped_max_act_size_elems(config, params, prompt_chunksize)
+        Self::get_loader(config)?.mapped_max_act_size_elems(config, params)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -556,7 +555,6 @@ impl DeviceMappedModelLoader for Phi3VLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         // NOTE: we ignore max_num_images although it can only be one...
         let AutoDeviceMapParams::Vision {
@@ -850,7 +848,6 @@ impl DeviceMappedModelLoader for Idefics2Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -1196,7 +1193,6 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -1466,7 +1462,6 @@ impl DeviceMappedModelLoader for LLaVALoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -1770,7 +1765,6 @@ impl DeviceMappedModelLoader for VLlamaLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -2109,7 +2103,6 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -2432,7 +2425,6 @@ impl DeviceMappedModelLoader for Idefics3Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -2722,7 +2714,6 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -3017,7 +3008,6 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         // NOTE: we ignore max_num_images although it can only be one...
         let AutoDeviceMapParams::Vision {
@@ -3349,7 +3339,6 @@ impl DeviceMappedModelLoader for Qwen2_5VLLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -3655,7 +3644,6 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -3670,10 +3658,9 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         let cfg: Gemma3Config = serde_json::from_str(config)?;
 
         match cfg {
-            Gemma3Config::Text(text_config) => Ok(max_batch_size
-                * text_config.num_attention_heads
-                * prompt_chunksize
-                * prompt_chunksize),
+            Gemma3Config::Text(text_config) => {
+                Ok(max_batch_size * text_config.num_attention_heads * 1)
+            }
             Gemma3Config::WithVision {
                 text_config,
                 vision_config,
@@ -3991,7 +3978,6 @@ impl DeviceMappedModelLoader for Mistral3Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let cfg: Mistral3Config = serde_json::from_str(config)?;
         let vcfg = &cfg.vision_config;
@@ -4397,7 +4383,6 @@ impl DeviceMappedModelLoader for VLlama4Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -4792,7 +4777,6 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,

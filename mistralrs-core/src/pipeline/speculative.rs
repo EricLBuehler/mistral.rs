@@ -382,7 +382,6 @@ impl Pipeline for SpeculativePipeline {
                             false,
                             None,
                             None, // TODO: get block tables/handle it
-                            None, // TODO: do we support???
                             get_mut_arcmutex!(self.draft).device_mapper(),
                         )
                         .unwrap()
@@ -453,7 +452,6 @@ impl Pipeline for SpeculativePipeline {
                         false,
                         None,
                         None, // TODO: get block tables/handle it
-                        None, // TODO: do we support???
                         get_mut_arcmutex!(self.target).device_mapper(),
                     )
                     .unwrap()

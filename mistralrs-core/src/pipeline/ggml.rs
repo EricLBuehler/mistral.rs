@@ -37,7 +37,6 @@ use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
-use std::num::{NonZero, NonZeroUsize};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -81,7 +80,6 @@ pub struct GGMLLoader {
 /// Config for a GGML loader.
 pub struct GGMLSpecificConfig {
     pub gqa: usize,
-    pub prompt_chunksize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
 }
 
@@ -269,11 +267,7 @@ impl Loader for GGMLLoader {
         }
 
         // Apply default prompt size here
-        let prompt_chunksize = self
-            .config
-            .prompt_chunksize
-            .unwrap_or(DEFAULT_PROMPT_CHUNK_SIZE.try_into().unwrap())
-            .get();
+        let prompt_chunksize = DEFAULT_PROMPT_CHUNK_SIZE;
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
@@ -393,7 +387,6 @@ impl Loader for GGMLLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
-                prompt_chunksize: Some(NonZero::new(prompt_chunksize).unwrap()),
                 model_metadata: None,
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],

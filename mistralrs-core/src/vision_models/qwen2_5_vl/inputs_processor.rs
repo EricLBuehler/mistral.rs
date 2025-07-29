@@ -19,9 +19,8 @@ use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use mistralrs_vision::{
     ApplyTensorTransforms, ApplyTransforms, Normalize, TensorTransforms, ToTensor, Transforms,
 };
-use std::{any::Any, num::NonZeroUsize, sync::Arc};
+use std::{any::Any, sync::Arc};
 use tokenizers::Tokenizer;
-use tracing::warn;
 
 use super::Qwen2_5VLVisionSpecificArgs;
 
@@ -124,7 +123,6 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
         return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta>,
-        prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Result<InputProcessorOutput> {
         if is_xlora {
@@ -134,10 +132,6 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
         }
         if no_kv_cache {
             return Err(anyhow::Error::msg("Vision model must have kv cache."));
-        }
-        // TODO(EricLBuehler): support this? Would require some handling of image tokens.
-        if prompt_chunksize.is_some() {
-            warn!("`prompt_chunksize` is set. MLlama does not support prompt batching.");
         }
         if input_seqs.len() != 1 {
             return Err(anyhow::Error::msg("Qwen2-VL only supports batch size = 1"));
@@ -434,7 +428,6 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 last_n_context_len,
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
-                None, // TODO: evaluate if it is possible to batch this
                 mapper,
             )
             .unwrap()
@@ -450,7 +443,6 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 last_n_context_len,
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
-                None, // TODO: evaluate if it is possible to batch this
                 mapper,
             )
             .unwrap()

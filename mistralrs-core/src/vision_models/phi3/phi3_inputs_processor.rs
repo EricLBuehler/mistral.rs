@@ -1,6 +1,6 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
-use std::{any::Any, num::NonZeroUsize, sync::Arc};
+use std::{any::Any, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImage, GenericImageView, Rgba};
@@ -8,7 +8,6 @@ use itertools::Itertools;
 use mistralrs_vision::{ApplyTransforms, Normalize, ToTensor, Transforms};
 use regex_automata::meta::Regex;
 use tokenizers::Tokenizer;
-use tracing::warn;
 
 use crate::{
     device_map::DeviceMapper,
@@ -81,7 +80,6 @@ impl InputsProcessor for Phi3InputsProcessor {
         return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta>,
-        prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> anyhow::Result<InputProcessorOutput> {
         if is_xlora {
@@ -91,10 +89,6 @@ impl InputsProcessor for Phi3InputsProcessor {
         }
         if no_kv_cache {
             return Err(anyhow::Error::msg("Vision model must have kv cache."));
-        }
-        // TODO(EricLBuehler): support this? Would require some handling of image tokens.
-        if prompt_chunksize.is_some() {
-            warn!("`prompt_chunksize` is set. Idefics 2 does not support prompt batching.");
         }
         let Some(tokenizer) = tokenizer else {
             return Err(anyhow::Error::msg(
@@ -169,7 +163,6 @@ impl InputsProcessor for Phi3InputsProcessor {
                     return_raw_logits,
                     other_config,
                     paged_attn_metadata,
-                    None, // TODO
                     mapper,
                 )
                 .map(|metadata| {
@@ -318,7 +311,6 @@ impl InputsProcessor for Phi3InputsProcessor {
                 last_n_context_len,
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
-                None, // TODO: evaluate if it is possible to batch this
                 mapper,
             )
         } else {
@@ -330,7 +322,6 @@ impl InputsProcessor for Phi3InputsProcessor {
                 last_n_context_len,
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
-                None, // TODO: evaluate if it is possible to batch this
                 mapper,
             )
         };

@@ -25,7 +25,6 @@ use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use regex::Regex;
 use std::any::Any;
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
@@ -120,14 +119,8 @@ impl InputsProcessor for SpeechInputsProcessor {
         _return_raw_logits: bool,
         _other_config: Option<Arc<dyn Any>>,
         _paged_attn_metadata: Option<PagedAttentionMeta>,
-        prompt_chunksize: Option<NonZeroUsize>,
         _mapper: Option<&dyn DeviceMapper>,
     ) -> Result<InputProcessorOutput> {
-        if prompt_chunksize.is_some() {
-            return Err(anyhow::Error::msg(
-                "Prompt batching is unsupported for speech models",
-            ));
-        }
         let inputs = ModelInputs {
             prompts: input_seqs
                 .iter()
@@ -300,7 +293,6 @@ impl Loader for SpeechLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
-                prompt_chunksize: None,
                 model_metadata: None,
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],

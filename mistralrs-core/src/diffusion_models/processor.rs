@@ -1,4 +1,4 @@
-use std::{any::Any, num::NonZeroUsize, sync::Arc};
+use std::{any::Any, sync::Arc};
 
 use anyhow::{Context, Result};
 use candle_core::Device;
@@ -70,14 +70,8 @@ impl InputsProcessor for DiffusionInputsProcessor {
         _return_raw_logits: bool,
         _other_config: Option<Arc<dyn Any>>,
         _paged_attn_metadata: Option<PagedAttentionMeta>,
-        prompt_chunksize: Option<NonZeroUsize>,
         _mapper: Option<&dyn DeviceMapper>,
     ) -> Result<InputProcessorOutput> {
-        if prompt_chunksize.is_some() {
-            return Err(anyhow::Error::msg(
-                "Prompt batching is unsupported for diffusion models",
-            ));
-        }
         let inputs = ModelInputs {
             prompts: input_seqs
                 .iter_mut()

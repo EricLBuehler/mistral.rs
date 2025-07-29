@@ -40,7 +40,6 @@ impl TextSpeculativeBuilder {
 
     fn build_pipeline(builder: TextModelBuilder) -> anyhow::Result<Arc<Mutex<dyn Pipeline>>> {
         let config = NormalSpecificConfig {
-            prompt_chunksize: builder.prompt_chunksize,
             topology: builder.topology,
             organization: builder.organization,
             write_uqff: builder.write_uqff,

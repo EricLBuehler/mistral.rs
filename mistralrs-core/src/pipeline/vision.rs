@@ -46,7 +46,6 @@ use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::borrow::Cow;
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
@@ -112,7 +111,6 @@ pub struct VisionLoaderBuilder {
 #[derive(Clone, Default)]
 /// Config specific to loading a vision model.
 pub struct VisionSpecificConfig {
-    pub prompt_chunksize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
     pub write_uqff: Option<PathBuf>,
     pub from_uqff: Option<Vec<PathBuf>>,
@@ -424,7 +422,6 @@ impl Loader for VisionLoader {
                 &available_devices,
                 dtype,
                 &params,
-                params.max_seq_len(),
                 paged_attn_config.as_ref(),
             )?;
             mapper = DeviceMapSetting::Map(new);
@@ -763,7 +760,6 @@ impl Loader for VisionLoader {
                 sliding_window,
                 cache_config,
                 cache_engine,
-                prompt_chunksize: self.config.prompt_chunksize,
                 model_metadata: Some(model_metadata),
                 modalities: self.inner.modalities(&config)?,
             }),
