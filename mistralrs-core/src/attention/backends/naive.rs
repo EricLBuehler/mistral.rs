@@ -5,7 +5,7 @@ use crate::MemoryUsage;
 use candle_core::{DType, Device, Result, Tensor};
 use mistralrs_quant::MatMul;
 
-use crate::attention::SdpaParams;
+use crate::attention::{chunked_attention, SdpaParams};
 
 use super::cpu;
 
@@ -40,76 +40,23 @@ pub(crate) fn naive_sdpa(
     } else {
         maybe_synchronize(q.device())?;
 
-        // Check if we need to chunk the attention computation
-        let seq_len = q.dim(2)?;
-        const CHUNK_SIZE: usize = 1024;
+        // Use chunked attention with a closure that captures the necessary parameters
+        chunked_attention(q, k, v, mask, |q_chunk, k, v, mask_chunk| {
+            let mut att =
+                MatMul.matmul_affine_mul(q_chunk, &k.t()?, sdpa_params.softmax_scale.into())?;
 
-        if seq_len > CHUNK_SIZE {
-            // Chunk the query to avoid OOM on long sequences
-            let num_chunks = seq_len.div_ceil(CHUNK_SIZE);
-            let mut attn_chunks = Vec::with_capacity(num_chunks);
-
-            for chunk_idx in 0..num_chunks {
-                let offset = chunk_idx * CHUNK_SIZE;
-                let chunk_len = CHUNK_SIZE.min(seq_len - offset);
-
-                // Extract query chunk
-                let q_chunk = q.narrow(2, offset, chunk_len)?;
-
-                // Compute attention for this chunk
-                let mut att = MatMul.matmul_affine_mul(
-                    &q_chunk,
-                    &k.t()?,
-                    sdpa_params.softmax_scale.into(),
-                )?;
-                if let Some(softcap) = sdpa_params.softcap {
-                    att = (att / softcap as f64)?;
-                    att = att.tanh()?;
-                    att = (att * softcap as f64)?;
-                }
-
-                // Apply mask if present
-                if let Some(mask) = mask {
-                    // Extract the corresponding mask chunk
-                    let mask_chunk = mask.narrow(2, offset, chunk_len)?;
-                    att = att.broadcast_add(&mask_chunk)?;
-                }
-
-                att = candle_nn::ops::softmax_last_dim(&att)?;
-                let att_chunk = MatMul.matmul(&att, v)?;
-
-                attn_chunks.push(att_chunk);
+            if let Some(softcap) = sdpa_params.softcap {
+                att = (att / softcap as f64)?;
+                att = att.tanh()?;
+                att = (att * softcap as f64)?;
             }
 
-            // Concatenate all chunks along the sequence dimension
-            Tensor::cat(&attn_chunks, 2)
-        } else {
-            // Original implementation for shorter sequences
-            if let Some(mask) = mask {
-                let mut att =
-                    MatMul.matmul_affine_mul(q, &k.t()?, sdpa_params.softmax_scale.into())?;
-                if let Some(softcap) = sdpa_params.softcap {
-                    att = (att / softcap as f64)?;
-                    att = att.tanh()?;
-                    att = (att * softcap as f64)?;
-                }
-
+            if let Some(mask) = mask_chunk {
                 att = att.broadcast_add(mask)?;
-                att = candle_nn::ops::softmax_last_dim(&att)?;
-
-                MatMul.matmul(&att, v)
-            } else {
-                let mut att =
-                    MatMul.matmul_affine_mul(q, &k.t()?, sdpa_params.softmax_scale.into())?;
-                if let Some(softcap) = sdpa_params.softcap {
-                    att = (att / softcap as f64)?;
-                    att = att.tanh()?;
-                    att = (att * softcap as f64)?;
-                }
-
-                att = candle_nn::ops::softmax_last_dim(&att)?;
-                MatMul.matmul(&att, v)
             }
-        }
+
+            att = candle_nn::ops::softmax_last_dim(&att)?;
+            MatMul.matmul(&att, v)
+        })
     }
 }
