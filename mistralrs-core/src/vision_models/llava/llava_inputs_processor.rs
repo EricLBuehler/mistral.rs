@@ -170,7 +170,7 @@ impl InputsProcessor for LLaVAInputProcessor {
                     None, // TODO
                     mapper,
                 )
-                .and_then(|metadata| {
+                .map(|metadata| {
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
@@ -200,10 +200,10 @@ impl InputsProcessor for LLaVAInputProcessor {
                         paged_attn_meta,
                         flash_meta,
                     });
-                    Ok(InputProcessorOutput {
+                    InputProcessorOutput {
                         inputs,
                         seq_indices,
-                    })
+                    }
                 });
         };
 
