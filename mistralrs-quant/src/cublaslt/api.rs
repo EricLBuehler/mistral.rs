@@ -11,8 +11,7 @@ use std::sync::Arc;
 
 use crate::cublaslt::matmul::MatmulShared;
 
-use super::matmul::{Activation, CublasLTDType, CudaBlasLT, Matmul, MatmulConfig, OutSlice};
-use super::F8MatmulOutType;
+use super::matmul::{Activation, CublasLTDType, CudaBlasLT, Matmul, MatmulConfig};
 
 #[derive(Debug, Clone)]
 pub struct CublasLt(Arc<CudaBlasLT>);
@@ -41,7 +40,6 @@ pub struct CublasLTBatchMatmulF8 {
     pub b_scale: Tensor,
     // Quantize
     pub d_scale: Tensor,
-    pub out_dtype: F8MatmulOutType,
 }
 
 impl CublasLTBatchMatmulF8 {
@@ -160,16 +158,10 @@ impl CublasLTBatchMatmulF8 {
                 (n * m),
             )
         };
-        let (mut out, stride_c) = match self.out_dtype {
-            F8MatmulOutType::BF16 => (
-                OutSlice::BF16(unsafe { dev.alloc::<bf16>(out_shape.elem_count())? }),
-                (n * m),
-            ),
-            F8MatmulOutType::F8 => (
-                OutSlice::F8(unsafe { dev.alloc::<F8E4M3>(out_shape.elem_count())? }),
-                (n * m),
-            ),
-        };
+        let (mut out, stride_c) = (
+            unsafe { dev.alloc::<bf16>(out_shape.elem_count())? },
+            (n * m),
+        );
 
         let cases = [
             k * std::mem::size_of::<F8E4M3>(),
@@ -230,10 +222,7 @@ impl CublasLTBatchMatmulF8 {
                 .map_err(|e| candle_core::Error::Cuda(Box::new(e)))?;
         }
 
-        let out = match out {
-            OutSlice::BF16(s) => candle_core::CudaStorage::wrap_cuda_slice(s, dev.clone()),
-            OutSlice::F8(s) => candle_core::CudaStorage::wrap_cuda_slice(s, dev.clone()),
-        };
+        let out = candle_core::CudaStorage::wrap_cuda_slice(out, dev.clone());
 
         Ok((out, out_shape))
     }
@@ -269,7 +258,6 @@ pub fn fused_batch_matmul_f8(
     beta: Option<f32>,
     bias: Option<&Tensor>,
     act: Option<Activation>,
-    out_dtype: F8MatmulOutType,
     cublaslt: CublasLt,
 ) -> Result<Tensor> {
     let op = CublasLTBatchMatmulF8 {
@@ -281,7 +269,6 @@ pub fn fused_batch_matmul_f8(
         a_scale: dequant_a_scale.clone(),
         b_scale: dequant_b_scale.clone(),
         d_scale: quantize_scale.clone(),
-        out_dtype,
     };
 
     if let Some(bias) = bias {

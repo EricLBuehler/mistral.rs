@@ -12,7 +12,7 @@ use quantize::QuantizationResult;
 mod quantize;
 
 use crate::{
-    cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_CONTROLLER},
+    cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_CONTROLLER},
     utils::{
         deserialize_tensor, read_dtype, serialize_tensor, version_is_compatible, write_dtype,
         UQFF_VERSION,
@@ -117,7 +117,6 @@ impl QuantMethod for FP8Linear {
                         beta,
                         None,
                         None,
-                        F8MatmulOutType::BF16, // Output in bf16 to avoid manual dequant
                     )?
                     .reshape(tgt_shape)
             }
