@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::matformer::MatformerSliceConfig;
+use crate::{attention::ATTENTION_CHUNK_SIZE, matformer::MatformerSliceConfig};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -490,7 +490,7 @@ impl DeviceMappedModelLoader for MistralLoader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
         } = params
         else {
@@ -499,7 +499,11 @@ impl DeviceMappedModelLoader for MistralLoader {
 
         let cfg: crate::models::mistral::Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * 1)
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -682,7 +686,7 @@ impl DeviceMappedModelLoader for GemmaLoader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
         } = params
         else {
@@ -691,7 +695,11 @@ impl DeviceMappedModelLoader for GemmaLoader {
 
         let cfg: crate::models::gemma::Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * 1)
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -878,7 +886,7 @@ impl DeviceMappedModelLoader for LlamaLoader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
         } = params
         else {
@@ -887,7 +895,11 @@ impl DeviceMappedModelLoader for LlamaLoader {
 
         let cfg: crate::models::llama::Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * 1)
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -1069,7 +1081,7 @@ impl DeviceMappedModelLoader for MixtralLoader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
         } = params
         else {
@@ -1078,7 +1090,11 @@ impl DeviceMappedModelLoader for MixtralLoader {
 
         let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * 1)
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -1265,7 +1281,7 @@ impl DeviceMappedModelLoader for Phi2Loader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
         } = params
         else {
@@ -1274,7 +1290,11 @@ impl DeviceMappedModelLoader for Phi2Loader {
 
         let cfg: crate::models::phi2::Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * 1)
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -1452,7 +1472,7 @@ impl DeviceMappedModelLoader for Phi3Loader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
         } = params
         else {
@@ -1461,7 +1481,11 @@ impl DeviceMappedModelLoader for Phi3Loader {
 
         let cfg: crate::models::phi3::Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * 1)
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -1631,7 +1655,7 @@ impl DeviceMappedModelLoader for Qwen2Loader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
         } = params
         else {
@@ -1640,7 +1664,11 @@ impl DeviceMappedModelLoader for Qwen2Loader {
 
         let cfg: crate::models::qwen2::Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * 1)
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -1825,7 +1853,7 @@ impl DeviceMappedModelLoader for Gemma2Loader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
         } = params
         else {
@@ -1834,7 +1862,11 @@ impl DeviceMappedModelLoader for Gemma2Loader {
 
         let cfg: crate::models::gemma2::Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * 1)
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -2021,7 +2053,7 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
         } = params
         else {
@@ -2030,7 +2062,11 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
 
         let cfg: crate::models::starcoder2::Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * 1)
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -2226,7 +2262,7 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
         } = params
         else {
@@ -2235,7 +2271,11 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
 
         let cfg: crate::models::phi3_5_moe::Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * 1)
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -2515,7 +2555,7 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
         } = params
         else {
@@ -2524,7 +2564,11 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
 
         let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * 1)
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -2841,7 +2885,7 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
         } = params
         else {
@@ -2850,7 +2894,11 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
 
         let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * 1)
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -3067,7 +3115,7 @@ impl DeviceMappedModelLoader for Qwen3Loader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
         } = params
         else {
@@ -3076,7 +3124,11 @@ impl DeviceMappedModelLoader for Qwen3Loader {
 
         let cfg: models::qwen3::Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * 1)
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -3250,7 +3302,7 @@ impl DeviceMappedModelLoader for GLM4Loader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
         } = params
         else {
@@ -3259,7 +3311,11 @@ impl DeviceMappedModelLoader for GLM4Loader {
 
         let cfg: models::glm4::Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * 1)
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -3435,7 +3491,7 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
         } = params
         else {
@@ -3444,7 +3500,11 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
 
         let cfg: models::qwen3_moe::Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * 1)
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -3636,7 +3696,7 @@ impl DeviceMappedModelLoader for SmolLm3Loader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
         } = params
         else {
@@ -3645,7 +3705,11 @@ impl DeviceMappedModelLoader for SmolLm3Loader {
 
         let cfg: crate::models::smollm3::Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * 1)
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
