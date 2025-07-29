@@ -42,7 +42,25 @@ where
         let q_chunk = q.narrow(2, offset, chunk_len)?;
 
         // Extract mask chunk if present
-        let mask_chunk = mask.map(|m| m.narrow(2, offset, chunk_len)).transpose()?;
+        let mask_chunk = mask
+            .map(|m| {
+                match m.rank() {
+                    2 => {
+                        // For 2D masks (seq_len, seq_len), narrow along dimension 0
+                        m.narrow(0, offset, chunk_len)
+                    }
+                    3 => {
+                        // For 3D masks (batch, seq_len, seq_len), narrow along dimension 1
+                        m.narrow(1, offset, chunk_len)
+                    }
+                    4 => {
+                        // For 4D masks (batch, heads, seq_len, seq_len), narrow along dimension 2
+                        m.narrow(2, offset, chunk_len)
+                    }
+                    _ => m.narrow(2, offset, chunk_len), // Default to dimension 2
+                }
+            })
+            .transpose()?;
 
         // Compute attention for this chunk
         let att_chunk = attention_fn(&q_chunk, k, v, mask_chunk.as_ref())?;
