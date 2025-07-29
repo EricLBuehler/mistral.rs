@@ -29,7 +29,7 @@ impl CublasLt {
     }
 }
 
-pub struct CublasLTBatchMatmulF8 {
+pub struct CublasLTBatchMatmulF8Scalar {
     pub cublaslt: Arc<CudaBlasLT>,
     pub act: Option<Activation>,
     pub c: Option<Tensor>,
@@ -42,8 +42,8 @@ pub struct CublasLTBatchMatmulF8 {
     pub d_scale: Tensor,
 }
 
-impl CublasLTBatchMatmulF8 {
-    pub fn fwd_f8e4m3(
+impl CublasLTBatchMatmulF8Scalar {
+    pub fn fwd_f8e4m3_scalar(
         &self,
         a: &candle_core::CudaStorage,
         a_l: &Layout,
@@ -260,7 +260,7 @@ pub fn fused_batch_matmul_f8(
     act: Option<Activation>,
     cublaslt: CublasLt,
 ) -> Result<Tensor> {
-    let op = CublasLTBatchMatmulF8 {
+    let op = CublasLTBatchMatmulF8Scalar {
         act,
         cublaslt: cublaslt.0,
         c: out.cloned(),
@@ -278,7 +278,7 @@ pub fn fused_batch_matmul_f8(
     }
 }
 
-impl candle_core::CustomOp2 for CublasLTBatchMatmulF8 {
+impl candle_core::CustomOp2 for CublasLTBatchMatmulF8Scalar {
     fn name(&self) -> &'static str {
         "cublaslt-batch-matmul-f8"
     }
@@ -301,7 +301,7 @@ impl candle_core::CustomOp2 for CublasLTBatchMatmulF8 {
         b_l: &Layout,
     ) -> Result<(candle_core::CudaStorage, Shape)> {
         match a.dtype() {
-            candle_core::DType::F8E4M3 => self.fwd_f8e4m3(a, a_l, b, b_l, None, None),
+            candle_core::DType::F8E4M3 => self.fwd_f8e4m3_scalar(a, a_l, b, b_l, None, None),
             dt => {
                 candle_core::bail!("cublaslt-batch-matmul is only supported for f8e4m3 ({dt:?})")
             }
@@ -309,7 +309,7 @@ impl candle_core::CustomOp2 for CublasLTBatchMatmulF8 {
     }
 }
 
-impl candle_core::CustomOp3 for CublasLTBatchMatmulF8 {
+impl candle_core::CustomOp3 for CublasLTBatchMatmulF8Scalar {
     fn name(&self) -> &'static str {
         "cublaslt-batch-matmul-add-f8"
     }
@@ -336,7 +336,9 @@ impl candle_core::CustomOp3 for CublasLTBatchMatmulF8 {
         bias_l: &Layout,
     ) -> Result<(candle_core::CudaStorage, Shape)> {
         match a.dtype() {
-            candle_core::DType::F8E4M3 => self.fwd_f8e4m3(a, a_l, b, b_l, Some(bias), Some(bias_l)),
+            candle_core::DType::F8E4M3 => {
+                self.fwd_f8e4m3_scalar(a, a_l, b, b_l, Some(bias), Some(bias_l))
+            }
             dt => candle_core::bail!(
                 "cublaslt-batch-matmul-add is only supported for f8e4m3 ({dt:?})"
             ),
