@@ -3659,9 +3659,9 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         let cfg: Gemma3Config = serde_json::from_str(config)?;
 
         match cfg {
-            Gemma3Config::Text(text_config) => {
-                Ok(max_batch_size * text_config.num_attention_heads * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2))
-            }
+            Gemma3Config::Text(text_config) => Ok(max_batch_size
+                * text_config.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2)),
             Gemma3Config::WithVision {
                 text_config,
                 vision_config,
