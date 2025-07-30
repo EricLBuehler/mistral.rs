@@ -35,7 +35,7 @@ use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::vision_models::clip::ClipConfig;
 use crate::vision_models::gemma3::config::Gemma3Config;
 use crate::vision_models::gemma3::{Gemma3Model, Gemma3Processor};
-use crate::vision_models::gemma3n::config::Gemma3nConfig;
+use crate::vision_models::gemma3n::config::{Gemma3nConfig, IntermediateSize};
 use crate::vision_models::gemma3n::{Gemma3nModel, Gemma3nProcessor};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
@@ -5396,12 +5396,11 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                 let v_norm = text_cfg.head_dim; // No bias for v_norm
 
                 // MLP components - use the adjusted intermediate sizes from matformer
-                let intermediate_size = text_cfg
-                    .intermediate_size
-                    .0
-                    .clone()
-                    .map_left(|left| left[layer_idx])
-                    .left_or_else(|(sizes, _)| sizes[layer_idx]);
+                let intermediate_size = match &text_cfg.intermediate_size {
+                    IntermediateSize::Single(size) => *size,
+                    IntermediateSize::PerLayer(sizes) => sizes[layer_idx],
+                    IntermediateSize::Matformer(sizes, _) => sizes[layer_idx],
+                };
                 let gate_proj = text_cfg.hidden_size * intermediate_size / weight_pack_factor;
                 let up_proj = text_cfg.hidden_size * intermediate_size / weight_pack_factor;
                 let down_proj = intermediate_size * text_cfg.hidden_size / weight_pack_factor;
