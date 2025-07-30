@@ -1,6 +1,7 @@
 use candle_core::{Result, Tensor};
 use candle_nn::{Activation, Conv2d, Conv2dConfig, Module};
 use mistralrs_quant::ShardedVarBuilder;
+use tracing::warn;
 
 use crate::{
     attention::SdpaParams,
@@ -1050,21 +1051,34 @@ pub struct VisionTower {
     blocks: Vec<Vec<Block>>,
     msfa: MobileNetV5MultiScaleFusionAdapter,
     msfa_indices: Vec<usize>,
+    old_vision_tower: bool,
 }
 
 impl VisionTower {
     pub fn new(vb: ShardedVarBuilder) -> Result<Self> {
+        // Some models have invalid vision tower weights from the old gemma 3n upload
+        // https://github.com/EricLBuehler/mistral.rs/issues/1592
+        let old_vision_tower = !vb.contains_tensor("conv_stem.conv.bias");
+        if old_vision_tower {
+            warn!(
+                "This model contains invalid vision tower weights from an old Gemma 3n upload.
+See: https://github.com/EricLBuehler/mistral.rs/issues/1592
+
+The vision tower for this model will still be loaded, but you might experience degraded quality."
+            );
+        }
+        let conv_stem_bias = if old_vision_tower { false } else { true };
         // Initial stem convolution
         let conv_stem = ConvNormAct::new(
-            3,    // in_chs
-            64,   // out_chs
-            3,    // kernel_size
-            2,    // stride
-            1,    // padding
-            1,    // groups
-            true, // apply_act
-            1e-5, // eps
-            true, // bias
+            3,              // in_chs
+            64,             // out_chs
+            3,              // kernel_size
+            2,              // stride
+            1,              // padding
+            1,              // groups
+            true,           // apply_act
+            1e-5,           // eps
+            conv_stem_bias, // bias
             vb.pp("conv_stem"),
         )?;
 
@@ -1160,12 +1174,23 @@ impl VisionTower {
             blocks,
             msfa,
             msfa_indices: vec![3, 4], // Indices for multi-scale features
+            old_vision_tower,
         })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let mut x = if self.old_vision_tower {
+            // Some models have invalid vision tower weights from the old gemma 3n upload
+            // https://github.com/EricLBuehler/mistral.rs/issues/1592
+
+            // This is a hack necessary because the weights for Gemma 3n are broken and require the image to be rotated.
+            x.t()?
+        } else {
+            x.clone()
+        };
+
         // Apply stem
-        let mut x = self.conv_stem.forward(x)?;
+        x = self.conv_stem.forward(&x)?;
 
         let mut intermediates = Vec::new();
 

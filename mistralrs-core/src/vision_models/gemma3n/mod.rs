@@ -6,7 +6,6 @@ use candle_core::{DType, Device, Result, Tensor, D};
 use config::Gemma3nConfig;
 use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use text::TextModel;
-use tracing::warn;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -32,7 +31,7 @@ pub(crate) use inputs_processor::Gemma3nProcessor;
 
 pub struct Gemma3nModel {
     language_model: TextModel,
-    vision_tower: Option<vision::VisionTower>,
+    vision_tower: vision::VisionTower,
     audio_tower: audio::AudioModel,
     embed_vision: Gemma3nMultimodalEmbedder,
     embed_audio: Gemma3nMultimodalEmbedder,
@@ -57,28 +56,12 @@ impl Gemma3nModel {
         } else {
             vb.dtype()
         };
-        // Some models have invalid vision tower weights from the old gemma 3n upload
-        // https://github.com/EricLBuehler/mistral.rs/issues/1592
-        let old_vision_tower =
-            !vb.contains_tensor("model.vision_tower.timm_model.conv_stem.conv.bias");
-        if old_vision_tower {
-            warn!(
-                "This model contains invalid vision tower weights from an old Gemma 3n upload.
-                See: https://github.com/EricLBuehler/mistral.rs/issues/1592
-                
-                The vision tower for this model will not be loaded."
-            );
-        }
-        let vision_tower = if !old_vision_tower {
-            Some(vision::VisionTower::new(
-                normal_loading_metadata
-                    .mapper
-                    .set_nm_device(vb.pp("vision_tower").pp("timm_model"), false)
-                    .set_dtype(vision_dtype),
-            )?)
-        } else {
-            None
-        };
+        let vision_tower = vision::VisionTower::new(
+            normal_loading_metadata
+                .mapper
+                .set_nm_device(vb.pp("vision_tower").pp("timm_model"), false)
+                .set_dtype(vision_dtype),
+        )?;
 
         // Initialize audio tower and embedder
         let audio_cfg = &cfg.audio_config;
@@ -185,11 +168,9 @@ impl Gemma3nModel {
 
             input_embeds = x_flat.reshape(input_embeds.shape())?;
 
-            let Some(vision_tower) = &self.vision_tower else {
-                candle_core::bail!("Vision inputs provided but no vision tower. This model contains invalid vision tower weights from an old Gemma 3n upload, so the vision tower was ignored.");
-            };
             // Process vision inputs through vision tower
-            let vision_features = vision_tower
+            let vision_features = self
+                .vision_tower
                 .forward(&pixel_values.to_dtype(self.vision_dtype)?)?
                 .to_dtype(input_embeds.dtype())?;
 
@@ -374,10 +355,7 @@ impl IsqModel for Gemma3nModel {
         // Add vision tower residual tensors (conv layers, norms, etc.)
         // Vision tower uses Conv2d layers which are not quantized
         let uvb_vision = uvb_model.pp("vision_tower").pp("timm_model");
-        let Some(vision_tower) = &self.vision_tower else {
-            panic!("This model contains invalid vision tower weights from an old Gemma 3n upload, so the vision tower was ignored. A UQFF serialization cannot be created from this model.");
-        };
-        uvb_vision.extend(vision_tower.residual_tensors());
+        uvb_vision.extend(self.vision_tower.residual_tensors());
 
         // Add audio tower residual tensors (norms, conv layers, etc.)
         let uvb_audio = uvb_model.pp("audio_tower");
