@@ -35,7 +35,7 @@
 <a href=#35 id=35 data-nosnippet>35</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::clip::ClipConfig;
 <a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::gemma3::config::Gemma3Config;
 <a href=#37 id=37 data-nosnippet>37</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::gemma3::{Gemma3Model, Gemma3Processor};
-<a href=#38 id=38 data-nosnippet>38</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::gemma3n::config::Gemma3nConfig;
+<a href=#38 id=38 data-nosnippet>38</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::gemma3n::config::{Gemma3nConfig, IntermediateSize};
 <a href=#39 id=39 data-nosnippet>39</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::gemma3n::{Gemma3nModel, Gemma3nProcessor};
 <a href=#40 id=40 data-nosnippet>40</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics2::{Config <span class="kw">as </span>Idefics2Config, Idefics2};
 <a href=#41 id=41 data-nosnippet>41</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics2_input_processor::Idefics2Processor;
@@ -5396,98 +5396,97 @@
 <a href=#5396 id=5396 data-nosnippet>5396</a>                <span class="kw">let </span>v_norm = text_cfg.head_dim; <span class="comment">// No bias for v_norm
 <a href=#5397 id=5397 data-nosnippet>5397</a>
 <a href=#5398 id=5398 data-nosnippet>5398</a>                // MLP components - use the adjusted intermediate sizes from matformer
-<a href=#5399 id=5399 data-nosnippet>5399</a>                </span><span class="kw">let </span>intermediate_size = text_cfg
-<a href=#5400 id=5400 data-nosnippet>5400</a>                    .intermediate_size
-<a href=#5401 id=5401 data-nosnippet>5401</a>                    .<span class="number">0
-<a href=#5402 id=5402 data-nosnippet>5402</a>                    </span>.clone()
-<a href=#5403 id=5403 data-nosnippet>5403</a>                    .map_left(|left| left[layer_idx])
-<a href=#5404 id=5404 data-nosnippet>5404</a>                    .left_or_else(|(sizes, <span class="kw">_</span>)| sizes[layer_idx]);
-<a href=#5405 id=5405 data-nosnippet>5405</a>                <span class="kw">let </span>gate_proj = text_cfg.hidden_size * intermediate_size / weight_pack_factor;
-<a href=#5406 id=5406 data-nosnippet>5406</a>                <span class="kw">let </span>up_proj = text_cfg.hidden_size * intermediate_size / weight_pack_factor;
-<a href=#5407 id=5407 data-nosnippet>5407</a>                <span class="kw">let </span>down_proj = intermediate_size * text_cfg.hidden_size / weight_pack_factor;
-<a href=#5408 id=5408 data-nosnippet>5408</a>
-<a href=#5409 id=5409 data-nosnippet>5409</a>                <span class="comment">// AltUp components (per layer)
-<a href=#5410 id=5410 data-nosnippet>5410</a>                </span><span class="kw">let </span>altup_elems = {
-<a href=#5411 id=5411 data-nosnippet>5411</a>                    <span class="kw">let </span>correct_output_scale = text_cfg.hidden_size;
-<a href=#5412 id=5412 data-nosnippet>5412</a>                    <span class="kw">let </span>correction_coefs = text_cfg.altup_num_inputs * text_cfg.altup_num_inputs;
-<a href=#5413 id=5413 data-nosnippet>5413</a>                    <span class="kw">let </span>prediction_coefs =
-<a href=#5414 id=5414 data-nosnippet>5414</a>                        text_cfg.altup_num_inputs * text_cfg.altup_num_inputs.pow(<span class="number">2</span>);
-<a href=#5415 id=5415 data-nosnippet>5415</a>                    <span class="kw">let </span>modality_router = text_cfg.hidden_size * text_cfg.altup_num_inputs;
-<a href=#5416 id=5416 data-nosnippet>5416</a>                    <span class="kw">let </span>router_norm = text_cfg.hidden_size;
-<a href=#5417 id=5417 data-nosnippet>5417</a>
-<a href=#5418 id=5418 data-nosnippet>5418</a>                    correct_output_scale
-<a href=#5419 id=5419 data-nosnippet>5419</a>                        + correction_coefs
-<a href=#5420 id=5420 data-nosnippet>5420</a>                        + prediction_coefs
-<a href=#5421 id=5421 data-nosnippet>5421</a>                        + modality_router
-<a href=#5422 id=5422 data-nosnippet>5422</a>                        + router_norm
-<a href=#5423 id=5423 data-nosnippet>5423</a>                };
-<a href=#5424 id=5424 data-nosnippet>5424</a>
-<a href=#5425 id=5425 data-nosnippet>5425</a>                <span class="comment">// Laurel block components
-<a href=#5426 id=5426 data-nosnippet>5426</a>                </span><span class="kw">let </span>laurel_elems = {
-<a href=#5427 id=5427 data-nosnippet>5427</a>                    <span class="kw">let </span>left = text_cfg.hidden_size * text_cfg.laurel_rank;
-<a href=#5428 id=5428 data-nosnippet>5428</a>                    <span class="kw">let </span>right = text_cfg.laurel_rank * text_cfg.hidden_size;
-<a href=#5429 id=5429 data-nosnippet>5429</a>                    <span class="kw">let </span>post_norm = text_cfg.hidden_size;
-<a href=#5430 id=5430 data-nosnippet>5430</a>
-<a href=#5431 id=5431 data-nosnippet>5431</a>                    left + right + post_norm
-<a href=#5432 id=5432 data-nosnippet>5432</a>                };
-<a href=#5433 id=5433 data-nosnippet>5433</a>
-<a href=#5434 id=5434 data-nosnippet>5434</a>                <span class="comment">// Per-layer input components
-<a href=#5435 id=5435 data-nosnippet>5435</a>                </span><span class="kw">let </span>per_layer_input_gate =
-<a href=#5436 id=5436 data-nosnippet>5436</a>                    text_cfg.hidden_size * text_cfg.hidden_size_per_layer_input;
-<a href=#5437 id=5437 data-nosnippet>5437</a>                <span class="kw">let </span>per_layer_projection =
-<a href=#5438 id=5438 data-nosnippet>5438</a>                    text_cfg.hidden_size_per_layer_input * text_cfg.hidden_size;
-<a href=#5439 id=5439 data-nosnippet>5439</a>
-<a href=#5440 id=5440 data-nosnippet>5440</a>                input_layernorm
-<a href=#5441 id=5441 data-nosnippet>5441</a>                    + post_attention_layernorm
-<a href=#5442 id=5442 data-nosnippet>5442</a>                    + pre_feedforward_layernorm
-<a href=#5443 id=5443 data-nosnippet>5443</a>                    + post_feedforward_layernorm
-<a href=#5444 id=5444 data-nosnippet>5444</a>                    + post_per_layer_input_norm
-<a href=#5445 id=5445 data-nosnippet>5445</a>                    + q_proj
-<a href=#5446 id=5446 data-nosnippet>5446</a>                    + k_proj
-<a href=#5447 id=5447 data-nosnippet>5447</a>                    + v_proj
-<a href=#5448 id=5448 data-nosnippet>5448</a>                    + o_proj
-<a href=#5449 id=5449 data-nosnippet>5449</a>                    + q_norm
-<a href=#5450 id=5450 data-nosnippet>5450</a>                    + k_norm
-<a href=#5451 id=5451 data-nosnippet>5451</a>                    + v_norm
-<a href=#5452 id=5452 data-nosnippet>5452</a>                    + gate_proj
-<a href=#5453 id=5453 data-nosnippet>5453</a>                    + up_proj
-<a href=#5454 id=5454 data-nosnippet>5454</a>                    + down_proj
-<a href=#5455 id=5455 data-nosnippet>5455</a>                    + altup_elems
-<a href=#5456 id=5456 data-nosnippet>5456</a>                    + laurel_elems
-<a href=#5457 id=5457 data-nosnippet>5457</a>                    + per_layer_input_gate
-<a href=#5458 id=5458 data-nosnippet>5458</a>                    + per_layer_projection
-<a href=#5459 id=5459 data-nosnippet>5459</a>            };
-<a href=#5460 id=5460 data-nosnippet>5460</a>
-<a href=#5461 id=5461 data-nosnippet>5461</a>            layer_sizes.push(per_layer_elems * dtype.size_in_bytes());
-<a href=#5462 id=5462 data-nosnippet>5462</a>        }
-<a href=#5463 id=5463 data-nosnippet>5463</a>
-<a href=#5464 id=5464 data-nosnippet>5464</a>        <span class="prelude-val">Ok</span>(layer_sizes)
-<a href=#5465 id=5465 data-nosnippet>5465</a>    }
-<a href=#5466 id=5466 data-nosnippet>5466</a>
-<a href=#5467 id=5467 data-nosnippet>5467</a>    <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#5468 id=5468 data-nosnippet>5468</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#5469 id=5469 data-nosnippet>5469</a>        <span class="prelude-val">Ok</span>(cfg.text_config.num_hidden_layers)
-<a href=#5470 id=5470 data-nosnippet>5470</a>    }
-<a href=#5471 id=5471 data-nosnippet>5471</a>
-<a href=#5472 id=5472 data-nosnippet>5472</a>    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
-<a href=#5473 id=5473 data-nosnippet>5473</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#5474 id=5474 data-nosnippet>5474</a>        <span class="kw">let </span>cfg = cfg.text_config;
-<a href=#5475 id=5475 data-nosnippet>5475</a>
-<a href=#5476 id=5476 data-nosnippet>5476</a>        <span class="kw">let </span>cfg = ModelConfigMetadata {
-<a href=#5477 id=5477 data-nosnippet>5477</a>            max_seq_len: cfg.max_position_embeddings,
-<a href=#5478 id=5478 data-nosnippet>5478</a>            num_layers: cfg.num_hidden_layers,
-<a href=#5479 id=5479 data-nosnippet>5479</a>            hidden_size: cfg.hidden_size,
-<a href=#5480 id=5480 data-nosnippet>5480</a>            num_kv_heads: cfg.num_key_value_heads,
-<a href=#5481 id=5481 data-nosnippet>5481</a>            num_attn_heads: cfg.num_attention_heads,
-<a href=#5482 id=5482 data-nosnippet>5482</a>            sliding_window: <span class="prelude-val">None</span>, <span class="comment">// None to be more forgiving, some do not
-<a href=#5483 id=5483 data-nosnippet>5483</a>            </span>k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-<a href=#5484 id=5484 data-nosnippet>5484</a>            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-<a href=#5485 id=5485 data-nosnippet>5485</a>        };
-<a href=#5486 id=5486 data-nosnippet>5486</a>
-<a href=#5487 id=5487 data-nosnippet>5487</a>        <span class="prelude-val">Ok</span>(Box::new(cfg))
-<a href=#5488 id=5488 data-nosnippet>5488</a>    }
-<a href=#5489 id=5489 data-nosnippet>5489</a>
-<a href=#5490 id=5490 data-nosnippet>5490</a>    <span class="kw">fn </span>non_mapped_sub_models(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;NonMappedSubModel&gt;&gt; {
-<a href=#5491 id=5491 data-nosnippet>5491</a>        <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[NonMappedSubModel::Vision, NonMappedSubModel::Audio])
-<a href=#5492 id=5492 data-nosnippet>5492</a>    }
-<a href=#5493 id=5493 data-nosnippet>5493</a>}</code></pre></div></section></main></body></html>
+<a href=#5399 id=5399 data-nosnippet>5399</a>                </span><span class="kw">let </span>intermediate_size = <span class="kw">match </span><span class="kw-2">&amp;</span>text_cfg.intermediate_size {
+<a href=#5400 id=5400 data-nosnippet>5400</a>                    IntermediateSize::Single(size) =&gt; <span class="kw-2">*</span>size,
+<a href=#5401 id=5401 data-nosnippet>5401</a>                    IntermediateSize::PerLayer(sizes) =&gt; sizes[layer_idx],
+<a href=#5402 id=5402 data-nosnippet>5402</a>                    IntermediateSize::Matformer(sizes, <span class="kw">_</span>) =&gt; sizes[layer_idx],
+<a href=#5403 id=5403 data-nosnippet>5403</a>                };
+<a href=#5404 id=5404 data-nosnippet>5404</a>                <span class="kw">let </span>gate_proj = text_cfg.hidden_size * intermediate_size / weight_pack_factor;
+<a href=#5405 id=5405 data-nosnippet>5405</a>                <span class="kw">let </span>up_proj = text_cfg.hidden_size * intermediate_size / weight_pack_factor;
+<a href=#5406 id=5406 data-nosnippet>5406</a>                <span class="kw">let </span>down_proj = intermediate_size * text_cfg.hidden_size / weight_pack_factor;
+<a href=#5407 id=5407 data-nosnippet>5407</a>
+<a href=#5408 id=5408 data-nosnippet>5408</a>                <span class="comment">// AltUp components (per layer)
+<a href=#5409 id=5409 data-nosnippet>5409</a>                </span><span class="kw">let </span>altup_elems = {
+<a href=#5410 id=5410 data-nosnippet>5410</a>                    <span class="kw">let </span>correct_output_scale = text_cfg.hidden_size;
+<a href=#5411 id=5411 data-nosnippet>5411</a>                    <span class="kw">let </span>correction_coefs = text_cfg.altup_num_inputs * text_cfg.altup_num_inputs;
+<a href=#5412 id=5412 data-nosnippet>5412</a>                    <span class="kw">let </span>prediction_coefs =
+<a href=#5413 id=5413 data-nosnippet>5413</a>                        text_cfg.altup_num_inputs * text_cfg.altup_num_inputs.pow(<span class="number">2</span>);
+<a href=#5414 id=5414 data-nosnippet>5414</a>                    <span class="kw">let </span>modality_router = text_cfg.hidden_size * text_cfg.altup_num_inputs;
+<a href=#5415 id=5415 data-nosnippet>5415</a>                    <span class="kw">let </span>router_norm = text_cfg.hidden_size;
+<a href=#5416 id=5416 data-nosnippet>5416</a>
+<a href=#5417 id=5417 data-nosnippet>5417</a>                    correct_output_scale
+<a href=#5418 id=5418 data-nosnippet>5418</a>                        + correction_coefs
+<a href=#5419 id=5419 data-nosnippet>5419</a>                        + prediction_coefs
+<a href=#5420 id=5420 data-nosnippet>5420</a>                        + modality_router
+<a href=#5421 id=5421 data-nosnippet>5421</a>                        + router_norm
+<a href=#5422 id=5422 data-nosnippet>5422</a>                };
+<a href=#5423 id=5423 data-nosnippet>5423</a>
+<a href=#5424 id=5424 data-nosnippet>5424</a>                <span class="comment">// Laurel block components
+<a href=#5425 id=5425 data-nosnippet>5425</a>                </span><span class="kw">let </span>laurel_elems = {
+<a href=#5426 id=5426 data-nosnippet>5426</a>                    <span class="kw">let </span>left = text_cfg.hidden_size * text_cfg.laurel_rank;
+<a href=#5427 id=5427 data-nosnippet>5427</a>                    <span class="kw">let </span>right = text_cfg.laurel_rank * text_cfg.hidden_size;
+<a href=#5428 id=5428 data-nosnippet>5428</a>                    <span class="kw">let </span>post_norm = text_cfg.hidden_size;
+<a href=#5429 id=5429 data-nosnippet>5429</a>
+<a href=#5430 id=5430 data-nosnippet>5430</a>                    left + right + post_norm
+<a href=#5431 id=5431 data-nosnippet>5431</a>                };
+<a href=#5432 id=5432 data-nosnippet>5432</a>
+<a href=#5433 id=5433 data-nosnippet>5433</a>                <span class="comment">// Per-layer input components
+<a href=#5434 id=5434 data-nosnippet>5434</a>                </span><span class="kw">let </span>per_layer_input_gate =
+<a href=#5435 id=5435 data-nosnippet>5435</a>                    text_cfg.hidden_size * text_cfg.hidden_size_per_layer_input;
+<a href=#5436 id=5436 data-nosnippet>5436</a>                <span class="kw">let </span>per_layer_projection =
+<a href=#5437 id=5437 data-nosnippet>5437</a>                    text_cfg.hidden_size_per_layer_input * text_cfg.hidden_size;
+<a href=#5438 id=5438 data-nosnippet>5438</a>
+<a href=#5439 id=5439 data-nosnippet>5439</a>                input_layernorm
+<a href=#5440 id=5440 data-nosnippet>5440</a>                    + post_attention_layernorm
+<a href=#5441 id=5441 data-nosnippet>5441</a>                    + pre_feedforward_layernorm
+<a href=#5442 id=5442 data-nosnippet>5442</a>                    + post_feedforward_layernorm
+<a href=#5443 id=5443 data-nosnippet>5443</a>                    + post_per_layer_input_norm
+<a href=#5444 id=5444 data-nosnippet>5444</a>                    + q_proj
+<a href=#5445 id=5445 data-nosnippet>5445</a>                    + k_proj
+<a href=#5446 id=5446 data-nosnippet>5446</a>                    + v_proj
+<a href=#5447 id=5447 data-nosnippet>5447</a>                    + o_proj
+<a href=#5448 id=5448 data-nosnippet>5448</a>                    + q_norm
+<a href=#5449 id=5449 data-nosnippet>5449</a>                    + k_norm
+<a href=#5450 id=5450 data-nosnippet>5450</a>                    + v_norm
+<a href=#5451 id=5451 data-nosnippet>5451</a>                    + gate_proj
+<a href=#5452 id=5452 data-nosnippet>5452</a>                    + up_proj
+<a href=#5453 id=5453 data-nosnippet>5453</a>                    + down_proj
+<a href=#5454 id=5454 data-nosnippet>5454</a>                    + altup_elems
+<a href=#5455 id=5455 data-nosnippet>5455</a>                    + laurel_elems
+<a href=#5456 id=5456 data-nosnippet>5456</a>                    + per_layer_input_gate
+<a href=#5457 id=5457 data-nosnippet>5457</a>                    + per_layer_projection
+<a href=#5458 id=5458 data-nosnippet>5458</a>            };
+<a href=#5459 id=5459 data-nosnippet>5459</a>
+<a href=#5460 id=5460 data-nosnippet>5460</a>            layer_sizes.push(per_layer_elems * dtype.size_in_bytes());
+<a href=#5461 id=5461 data-nosnippet>5461</a>        }
+<a href=#5462 id=5462 data-nosnippet>5462</a>
+<a href=#5463 id=5463 data-nosnippet>5463</a>        <span class="prelude-val">Ok</span>(layer_sizes)
+<a href=#5464 id=5464 data-nosnippet>5464</a>    }
+<a href=#5465 id=5465 data-nosnippet>5465</a>
+<a href=#5466 id=5466 data-nosnippet>5466</a>    <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+<a href=#5467 id=5467 data-nosnippet>5467</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#5468 id=5468 data-nosnippet>5468</a>        <span class="prelude-val">Ok</span>(cfg.text_config.num_hidden_layers)
+<a href=#5469 id=5469 data-nosnippet>5469</a>    }
+<a href=#5470 id=5470 data-nosnippet>5470</a>
+<a href=#5471 id=5471 data-nosnippet>5471</a>    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+<a href=#5472 id=5472 data-nosnippet>5472</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#5473 id=5473 data-nosnippet>5473</a>        <span class="kw">let </span>cfg = cfg.text_config;
+<a href=#5474 id=5474 data-nosnippet>5474</a>
+<a href=#5475 id=5475 data-nosnippet>5475</a>        <span class="kw">let </span>cfg = ModelConfigMetadata {
+<a href=#5476 id=5476 data-nosnippet>5476</a>            max_seq_len: cfg.max_position_embeddings,
+<a href=#5477 id=5477 data-nosnippet>5477</a>            num_layers: cfg.num_hidden_layers,
+<a href=#5478 id=5478 data-nosnippet>5478</a>            hidden_size: cfg.hidden_size,
+<a href=#5479 id=5479 data-nosnippet>5479</a>            num_kv_heads: cfg.num_key_value_heads,
+<a href=#5480 id=5480 data-nosnippet>5480</a>            num_attn_heads: cfg.num_attention_heads,
+<a href=#5481 id=5481 data-nosnippet>5481</a>            sliding_window: <span class="prelude-val">None</span>, <span class="comment">// None to be more forgiving, some do not
+<a href=#5482 id=5482 data-nosnippet>5482</a>            </span>k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+<a href=#5483 id=5483 data-nosnippet>5483</a>            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+<a href=#5484 id=5484 data-nosnippet>5484</a>        };
+<a href=#5485 id=5485 data-nosnippet>5485</a>
+<a href=#5486 id=5486 data-nosnippet>5486</a>        <span class="prelude-val">Ok</span>(Box::new(cfg))
+<a href=#5487 id=5487 data-nosnippet>5487</a>    }
+<a href=#5488 id=5488 data-nosnippet>5488</a>
+<a href=#5489 id=5489 data-nosnippet>5489</a>    <span class="kw">fn </span>non_mapped_sub_models(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;NonMappedSubModel&gt;&gt; {
+<a href=#5490 id=5490 data-nosnippet>5490</a>        <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[NonMappedSubModel::Vision, NonMappedSubModel::Audio])
+<a href=#5491 id=5491 data-nosnippet>5491</a>    }
+<a href=#5492 id=5492 data-nosnippet>5492</a>}</code></pre></div></section></main></body></html>
