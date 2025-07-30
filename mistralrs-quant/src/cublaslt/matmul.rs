@@ -202,11 +202,14 @@ impl MatmulDesc {
         let attr = match matrix {
             Matrix::A => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_A_SCALE_MODE,
             Matrix::B => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_B_SCALE_MODE,
-            Matrix::C => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_C_SCALE_MODE,
-            Matrix::D => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_D_SCALE_MODE,
+            Matrix::C | Matrix::D => unimplemented!(),
         };
 
-        let buf = sys::cublasLtMatmulMatrixScale_t::CUBLASLT_MATMUL_MATRIX_SCALE_BLK128x128_32F;
+        let buf = match matrix {
+            Matrix::A => sys::cublasLtMatmulMatrixScale_t::CUBLASLT_MATMUL_MATRIX_SCALE_VEC128_32F,
+            Matrix::B => sys::cublasLtMatmulMatrixScale_t::CUBLASLT_MATMUL_MATRIX_SCALE_BLK128x128_32F,
+            Matrix::C | Matrix::D => unimplemented!(),
+        };
 
         unsafe {
             result::set_matmul_desc_attribute(
@@ -435,7 +438,7 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
         assert!(cfg.transa);
         assert!(!cfg.transb);
 
-        // Matmul description
+        // Matmul description - for FP8 blockwise, we might need a specific compute type
         let matmul_desc = MatmulDesc::new(
             sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
             sys::cudaDataType_t::CUDA_R_32F,
