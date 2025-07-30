@@ -521,4 +521,79 @@ mod tests {
 
         Ok(())
     }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fp8_vector_cpu_cuda_equivalence() -> Result<()> {
+        let cpu_dev = &Device::Cpu;
+        let cuda_dev = &Device::new_cuda(0)?;
+        
+        // Create the same input data on both devices
+        let input_data: Vec<f32> = (0..256).map(|i| ((i as f32) - 128.0) / 10.0).collect();
+        let cpu_input = Tensor::from_vec(input_data.clone(), 256, cpu_dev)?;
+        let cuda_input = Tensor::from_vec(input_data, 256, cuda_dev)?;
+        
+        // Quantize on CPU
+        let (cpu_quantized, cpu_scales) = fp8_vector_quantize(&cpu_input)?;
+        
+        // Quantize on CUDA
+        let (cuda_quantized, cuda_scales) = fp8_vector_quantize(&cuda_input)?;
+        
+        // Move CUDA results to CPU for comparison
+        let cuda_quantized_cpu = cuda_quantized.to_device(cpu_dev)?;
+        let cuda_scales_cpu = cuda_scales.to_device(cpu_dev)?;
+        
+        // Compare quantized weights
+        let cpu_quant_vec = cpu_quantized.to_vec1::<F8E4M3>()?;
+        let cuda_quant_vec = cuda_quantized_cpu.to_vec1::<F8E4M3>()?;
+        
+        assert_eq!(cpu_quant_vec.len(), cuda_quant_vec.len());
+        
+        let mut num_differences = 0;
+        for (i, (cpu_val, cuda_val)) in cpu_quant_vec.iter().zip(cuda_quant_vec.iter()).enumerate() {
+            if cpu_val.to_f32() != cuda_val.to_f32() {
+                // Allow small differences due to floating point precision
+                let diff = (cpu_val.to_f32() - cuda_val.to_f32()).abs();
+                if diff > 1e-6 {
+                    num_differences += 1;
+                    if num_differences < 10 {
+                        println!("Difference at index {}: CPU={}, CUDA={}, diff={}", 
+                                i, cpu_val.to_f32(), cuda_val.to_f32(), diff);
+                    }
+                }
+            }
+        }
+        
+        // FP8 quantization should be deterministic, so we expect very few differences
+        assert!(num_differences < 5, "Too many differences between CPU and CUDA quantization: {}", num_differences);
+        
+        // Compare scales
+        let cpu_scales_vec = cpu_scales.to_vec1::<f32>()?;
+        let cuda_scales_vec = cuda_scales_cpu.to_vec1::<f32>()?;
+        
+        assert_eq!(cpu_scales_vec.len(), cuda_scales_vec.len());
+        
+        for (i, (cpu_scale, cuda_scale)) in cpu_scales_vec.iter().zip(cuda_scales_vec.iter()).enumerate() {
+            let scale_diff = (cpu_scale - cuda_scale).abs();
+            assert!(scale_diff < 1e-6, "Scale difference at index {}: CPU={}, CUDA={}, diff={}", 
+                    i, cpu_scale, cuda_scale, scale_diff);
+        }
+        
+        // Also test that dequantization gives the same results
+        let cpu_dequant = fp8_vector_dequantize(&cpu_quantized, &cpu_scales, DType::F32)?;
+        let cuda_dequant = fp8_vector_dequantize(&cuda_quantized_cpu, &cuda_scales_cpu, DType::F32)?;
+        
+        let cpu_dequant_vec = cpu_dequant.to_vec1::<f32>()?;
+        let cuda_dequant_vec = cuda_dequant.to_vec1::<f32>()?;
+        
+        let mut max_dequant_diff = 0f32;
+        for (cpu_val, cuda_val) in cpu_dequant_vec.iter().zip(cuda_dequant_vec.iter()) {
+            let diff = (cpu_val - cuda_val).abs();
+            max_dequant_diff = max_dequant_diff.max(diff);
+        }
+        
+        assert!(max_dequant_diff < 1e-5, "Max dequantization difference too large: {}", max_dequant_diff);
+        
+        Ok(())
+    }
 }
