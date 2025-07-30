@@ -31,6 +31,7 @@ pub mod safetensors;
 mod scalar_fp8;
 mod unquantized;
 mod utils;
+mod vector_fp8;
 
 use gptq::gptq_linear;
 use lora::merge_lora_weights;
@@ -61,6 +62,7 @@ pub use lora::{
 pub use unquantized::UnquantLinear;
 pub use utils::isq::apply_immediate_isq;
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
+pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 
 use candle_nn::{Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
