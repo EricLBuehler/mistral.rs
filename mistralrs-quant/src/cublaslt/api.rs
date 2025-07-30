@@ -54,26 +54,59 @@ impl CublasLTBatchMatmulF8Scalar {
     ) -> Result<(candle_core::CudaStorage, Shape)> {
         let dev = a.device();
 
-        // Assume TN
+        // Validate input tensor dimensions
         let (batch_size, m, k) = a_l.shape().dims3()?;
         let (b_0, n, b_2) = b_l.shape().dims3()?;
 
+        // Check matrix dimensions compatibility for GEMM (A: m×k, B: k×n -> C: m×n)
         if b_2 != k {
-            candle_core::bail!("This layer only supports TN layout");
+            candle_core::bail!(
+                "Matrix dimension mismatch: A has k={} but B has k={} (TN layout required)",
+                k,
+                b_2
+            );
         }
 
+        // Validate batch dimensions consistency
         if b_0 != batch_size {
-            candle_core::bail!("`b` must have the same batch size as `a`")
+            candle_core::bail!(
+                "Batch size mismatch: A has batch_size={} but B has batch_size={}",
+                batch_size,
+                b_0
+            )
         }
 
+        // Validate dimension sizes for tensor core requirements
+        if m == 0 || n == 0 || k == 0 {
+            candle_core::bail!(
+                "Invalid matrix dimensions: m={}, n={}, k={} (all must be > 0)",
+                m,
+                n,
+                k
+            );
+        }
+
+        // Validate scaling tensor requirements for scalar scaling mode
         if !self.a_scale.dims().is_empty() || self.a_scale.dtype() != DType::F32 {
-            candle_core::bail!("`a_scale` must be a f32 scalar.");
+            candle_core::bail!(
+                "`a_scale` must be a f32 scalar. Got dims: {:?}, dtype: {:?}",
+                self.a_scale.dims(),
+                self.a_scale.dtype()
+            );
         }
         if !self.b_scale.dims().is_empty() || self.b_scale.dtype() != DType::F32 {
-            candle_core::bail!("`b_scale` must be a f32 scalar.");
+            candle_core::bail!(
+                "`b_scale` must be a f32 scalar. Got dims: {:?}, dtype: {:?}",
+                self.b_scale.dims(),
+                self.b_scale.dtype()
+            );
         }
         if !self.d_scale.dims().is_empty() || self.d_scale.dtype() != DType::F32 {
-            candle_core::bail!("`d_scale` must be a f32 scalar.");
+            candle_core::bail!(
+                "`d_scale` must be a f32 scalar. Got dims: {:?}, dtype: {:?}",
+                self.d_scale.dims(),
+                self.d_scale.dtype()
+            );
         }
         let (a_s, _) = self.a_scale.storage_and_layout();
         let (b_s, _) = self.b_scale.storage_and_layout();
@@ -92,9 +125,20 @@ impl CublasLTBatchMatmulF8Scalar {
             _ => candle_core::bail!("`d_scale` must be a cuda tensor"),
         };
 
-        let lda = k;
-        let ldb = k;
-        let ldc = m;
+        // Set leading dimensions - must be at least as large as the corresponding dimension
+        let lda = k.max(1); // Leading dimension of A (k for TN layout)
+        let ldb = k.max(1); // Leading dimension of B (k for TN layout)
+        let ldc = m.max(1); // Leading dimension of C (m for row-major output)
+
+        // Validate leading dimensions
+        if lda == 0 || ldb == 0 || ldc == 0 {
+            candle_core::bail!(
+                "Leading dimensions must be positive: lda={}, ldb={}, ldc={}",
+                lda,
+                ldb,
+                ldc
+            );
+        }
 
         let out_shape = Shape::from((batch_size, n, m));
 
@@ -102,26 +146,48 @@ impl CublasLTBatchMatmulF8Scalar {
         let b = b.as_cuda_slice::<F8E4M3>()?.slice(b_l.start_offset()..);
 
         let (bias, bias_stride) = if let (Some(bias), Some(bias_l)) = (bias, bias_l) {
+            // Validate bias data type
+            if bias.dtype() != candle_core::DType::BF16 {
+                candle_core::bail!(
+                    "Bias must be BF16 dtype for FP8 operations. Got: {:?}",
+                    bias.dtype()
+                );
+            }
+
             if bias_l.dims().len() == 1 {
-                if bias_l.shape().dims1()? != m {
-                    candle_core::bail!("Bias does not have the correct shape");
+                // 1D bias case - must match output dimension m
+                let bias_dim = bias_l.shape().dims1()?;
+                if bias_dim != m {
+                    candle_core::bail!(
+                        "Bias dimension mismatch: expected {} (output dimension m), got {}",
+                        m,
+                        bias_dim
+                    );
                 }
                 (
                     Some(bias.as_cuda_slice::<bf16>()?.slice(bias_l.start_offset()..)),
                     None,
                 )
-            } else {
-                if bias_l.shape().dims2()?.1 != m {
-                    candle_core::bail!("Bias does not have the correct shape");
+            } else if bias_l.dims().len() == 2 {
+                // 2D bias case - must match batch_size x m
+                let (bias_batch, bias_m) = bias_l.shape().dims2()?;
+                if bias_m != m {
+                    candle_core::bail!("Bias dimension mismatch: expected m={}, got {}", m, bias_m);
                 }
-                if bias_l.shape().dims2()?.0 != batch_size {
-                    candle_core::bail!("Bias batch size must match batch size of `a`");
+                if bias_batch != batch_size {
+                    candle_core::bail!(
+                        "Bias batch size mismatch: expected {}, got {}",
+                        batch_size,
+                        bias_batch
+                    );
                 }
                 let bias_stride = bias_l.stride()[0] as i64;
                 (
                     Some(bias.as_cuda_slice::<bf16>()?.slice(bias_l.start_offset()..)),
                     Some(bias_stride),
                 )
+            } else {
+                candle_core::bail!("Bias must be 1D or 2D tensor, got {}D", bias_l.dims().len());
             }
         } else {
             (None, None)
@@ -129,59 +195,155 @@ impl CublasLTBatchMatmulF8Scalar {
 
         let (c, stride_c) = if let Some(c) = &self.c {
             let (c, c_l) = c.storage_and_layout();
+
+            // Validate C tensor data type
+            if c.dtype() != DType::BF16 {
+                candle_core::bail!(
+                    "C tensor must be BF16 dtype for FP8 operations. Got: {:?}",
+                    c.dtype()
+                );
+            }
+
             let c = match &*c {
                 Storage::Cuda(storage) => storage.as_cuda_slice::<bf16>()?,
                 _ => candle_core::bail!("`c` must be a cuda tensor"),
             };
+
+            // Validate C tensor is contiguous
             match c_l.contiguous_offsets() {
                 Some((o1, o2)) => {
                     if o1 != 0 {
-                        candle_core::bail!("`c` start offset must be 0");
+                        candle_core::bail!(
+                            "`c` tensor must start at offset 0 for cuBLASLt. Got offset: {}",
+                            o1
+                        );
                     }
                     if o2 != out_shape.elem_count() {
-                        candle_core::bail!("`c` end offset must be {}", out_shape.elem_count())
+                        candle_core::bail!(
+                            "`c` tensor size mismatch: expected {} elements, got {}",
+                            out_shape.elem_count(),
+                            o2
+                        )
                     }
                 }
-                None => candle_core::bail!("`c` has to be contiguous"),
+                None => candle_core::bail!("`c` tensor must be contiguous for cuBLASLt operations"),
             };
 
-            if c_l.shape().dims3()? != (batch_size, n, m) {
-                candle_core::bail!("`c` does not have the correct shape");
+            // Validate C tensor shape matches output shape
+            let c_shape = c_l.shape().dims3()?;
+            if c_shape != (batch_size, n, m) {
+                candle_core::bail!(
+                    "`c` shape mismatch: expected ({}, {}, {}), got ({}, {}, {})",
+                    batch_size,
+                    n,
+                    m,
+                    c_shape.0,
+                    c_shape.1,
+                    c_shape.2
+                );
             }
 
-            // Set beta to 0.0 if it is not set
-            (c.clone(), c_l.stride()[0])
+            // Validate stride
+            let expected_stride = (n * m) as i64;
+            let actual_stride = c_l.stride()[0] as i64;
+            if actual_stride < expected_stride {
+                candle_core::bail!(
+                    "C tensor stride {} is less than minimum required {}",
+                    actual_stride,
+                    expected_stride
+                );
+            }
+
+            (c.clone(), actual_stride)
         } else {
             // Allocate out tensor
             (
                 unsafe { dev.alloc::<bf16>(out_shape.elem_count())? },
-                (n * m),
+                (n * m) as i64,
             )
         };
-        let (mut out, stride_c) = (
+        let (mut out, _stride_c_out) = (
             unsafe { dev.alloc::<bf16>(out_shape.elem_count())? },
-            (n * m),
+            (n * m) as i64,
         );
 
-        let cases = [
-            k * std::mem::size_of::<F8E4M3>(),
-            k * std::mem::size_of::<F8E4M3>(),
-            m * std::mem::size_of::<F8E4M3>(),   // C type size
-            lda * std::mem::size_of::<F8E4M3>(), // A type size
-            ldb * std::mem::size_of::<F8E4M3>(), // B type size
-            ldc * std::mem::size_of::<F8E4M3>(), // C type size
-            a.device_ptr(self.cublaslt.stream()).0 as usize,
-            b.device_ptr(self.cublaslt.stream()).0 as usize,
-            c.device_ptr(self.cublaslt.stream()).0 as usize,
-            a_scale.device_ptr(self.cublaslt.stream()).0 as usize,
-            b_scale.device_ptr(self.cublaslt.stream()).0 as usize,
-            d_scale.device_ptr(self.cublaslt.stream()).0 as usize,
+        // Check alignment requirements for FP8 tensor core usage
+        // FP8 requires 16-byte alignment for dimensions and 256-byte for pointers
+        let dimension_cases = [
+            ("k", k * std::mem::size_of::<F8E4M3>()),
+            ("m", m * std::mem::size_of::<F8E4M3>()),
+            ("n", n * std::mem::size_of::<F8E4M3>()),
+            ("lda", lda * std::mem::size_of::<F8E4M3>()),
+            ("ldb", ldb * std::mem::size_of::<F8E4M3>()),
+            ("ldc", ldc * std::mem::size_of::<F8E4M3>()),
         ];
 
-        for case in cases {
-            if case % 16 != 0 {
-                candle_core::bail!("F8 cuBLASlt matmul must match all cases described here: https://docs.nvidia.com/cuda/cublas/#tensor-core-usage");
+        for (name, value) in dimension_cases {
+            if value % 16 != 0 {
+                candle_core::bail!("F8 cuBLASlt dimension {} has byte size {} which is not 16-byte aligned. All dimensions must be divisible by 16 bytes for tensor core usage.", name, value);
             }
+        }
+
+        // Check pointer alignment (256-byte requirement for FP8)
+        let pointer_cases = [
+            ("a", a.device_ptr(self.cublaslt.stream()).0 as usize),
+            ("b", b.device_ptr(self.cublaslt.stream()).0 as usize),
+            ("c", c.device_ptr(self.cublaslt.stream()).0 as usize),
+            (
+                "a_scale",
+                a_scale.device_ptr(self.cublaslt.stream()).0 as usize,
+            ),
+            (
+                "b_scale",
+                b_scale.device_ptr(self.cublaslt.stream()).0 as usize,
+            ),
+            (
+                "d_scale",
+                d_scale.device_ptr(self.cublaslt.stream()).0 as usize,
+            ),
+        ];
+
+        for (name, ptr) in pointer_cases {
+            if ptr % 256 != 0 {
+                candle_core::bail!("F8 cuBLASlt pointer {} has address {:#x} which is not 256-byte aligned. FP8 operations require 256-byte alignment.", name, ptr);
+            }
+        }
+
+        // Validate strides for batch operations
+        let stride_a = a_l.stride()[0] as i64;
+        let stride_b = b_l.stride()[0] as i64;
+
+        // Strides must be at least the size of one matrix
+        let min_stride_a = (m * k) as i64;
+        let min_stride_b = (n * k) as i64;
+        let min_stride_c = (n * m) as i64;
+
+        if stride_a < min_stride_a {
+            candle_core::bail!(
+                "Stride A ({}) is less than minimum required {} for matrix of size {}x{}",
+                stride_a,
+                min_stride_a,
+                m,
+                k
+            );
+        }
+        if stride_b < min_stride_b {
+            candle_core::bail!(
+                "Stride B ({}) is less than minimum required {} for matrix of size {}x{}",
+                stride_b,
+                min_stride_b,
+                n,
+                k
+            );
+        }
+        if stride_c < min_stride_c {
+            candle_core::bail!(
+                "Stride C ({}) is less than minimum required {} for matrix of size {}x{}",
+                stride_c,
+                min_stride_c,
+                n,
+                m
+            );
         }
 
         let config = MatmulConfig {
@@ -195,9 +357,9 @@ impl CublasLTBatchMatmulF8Scalar {
             ldb: ldb as i64,
             beta: self.beta.unwrap_or(0.0),
             ldc: ldc as i64,
-            stride_a: Some(a_l.stride()[0] as i64),
-            stride_b: Some(b_l.stride()[0] as i64),
-            stride_c: Some(stride_c as i64),
+            stride_a: Some(stride_a),
+            stride_b: Some(stride_b),
+            stride_c: Some(stride_c),
             stride_bias: bias_stride,
             batch_size: Some(c_int::try_from(batch_size)?),
         };
@@ -419,9 +581,20 @@ impl CublasLTBatchMatmulF8Blockwise {
             _ => candle_core::bail!("`b_scale` must be a cuda tensor"),
         };
 
-        let lda = k;
-        let ldb = k;
-        let ldc = m;
+        // Set leading dimensions - must be at least as large as the corresponding dimension
+        let lda = k.max(1); // Leading dimension of A (k for TN layout)
+        let ldb = k.max(1); // Leading dimension of B (k for TN layout)
+        let ldc = m.max(1); // Leading dimension of C (m for row-major output)
+
+        // Validate leading dimensions
+        if lda == 0 || ldb == 0 || ldc == 0 {
+            candle_core::bail!(
+                "Leading dimensions must be positive: lda={}, ldb={}, ldc={}",
+                lda,
+                ldb,
+                ldc
+            );
+        }
 
         let out_shape = Shape::from((batch_size, n, m));
 
@@ -429,26 +602,48 @@ impl CublasLTBatchMatmulF8Blockwise {
         let b = b.as_cuda_slice::<F8E4M3>()?.slice(b_l.start_offset()..);
 
         let (bias, bias_stride) = if let (Some(bias), Some(bias_l)) = (bias, bias_l) {
+            // Validate bias data type
+            if bias.dtype() != candle_core::DType::BF16 {
+                candle_core::bail!(
+                    "Bias must be BF16 dtype for FP8 operations. Got: {:?}",
+                    bias.dtype()
+                );
+            }
+
             if bias_l.dims().len() == 1 {
-                if bias_l.shape().dims1()? != m {
-                    candle_core::bail!("Bias does not have the correct shape");
+                // 1D bias case - must match output dimension m
+                let bias_dim = bias_l.shape().dims1()?;
+                if bias_dim != m {
+                    candle_core::bail!(
+                        "Bias dimension mismatch: expected {} (output dimension m), got {}",
+                        m,
+                        bias_dim
+                    );
                 }
                 (
                     Some(bias.as_cuda_slice::<bf16>()?.slice(bias_l.start_offset()..)),
                     None,
                 )
-            } else {
-                if bias_l.shape().dims2()?.1 != m {
-                    candle_core::bail!("Bias does not have the correct shape");
+            } else if bias_l.dims().len() == 2 {
+                // 2D bias case - must match batch_size x m
+                let (bias_batch, bias_m) = bias_l.shape().dims2()?;
+                if bias_m != m {
+                    candle_core::bail!("Bias dimension mismatch: expected m={}, got {}", m, bias_m);
                 }
-                if bias_l.shape().dims2()?.0 != batch_size {
-                    candle_core::bail!("Bias batch size must match batch size of `a`");
+                if bias_batch != batch_size {
+                    candle_core::bail!(
+                        "Bias batch size mismatch: expected {}, got {}",
+                        batch_size,
+                        bias_batch
+                    );
                 }
                 let bias_stride = bias_l.stride()[0] as i64;
                 (
                     Some(bias.as_cuda_slice::<bf16>()?.slice(bias_l.start_offset()..)),
                     Some(bias_stride),
                 )
+            } else {
+                candle_core::bail!("Bias must be 1D or 2D tensor, got {}D", bias_l.dims().len());
             }
         } else {
             (None, None)
@@ -456,38 +651,76 @@ impl CublasLTBatchMatmulF8Blockwise {
 
         let (c, stride_c) = if let Some(c) = &self.c {
             let (c, c_l) = c.storage_and_layout();
+
+            // Validate C tensor data type
+            if c.dtype() != DType::BF16 {
+                candle_core::bail!(
+                    "C tensor must be BF16 dtype for FP8 operations. Got: {:?}",
+                    c.dtype()
+                );
+            }
+
             let c = match &*c {
                 Storage::Cuda(storage) => storage.as_cuda_slice::<bf16>()?,
                 _ => candle_core::bail!("`c` must be a cuda tensor"),
             };
+
+            // Validate C tensor is contiguous
             match c_l.contiguous_offsets() {
                 Some((o1, o2)) => {
                     if o1 != 0 {
-                        candle_core::bail!("`c` start offset must be 0");
+                        candle_core::bail!(
+                            "`c` tensor must start at offset 0 for cuBLASLt. Got offset: {}",
+                            o1
+                        );
                     }
                     if o2 != out_shape.elem_count() {
-                        candle_core::bail!("`c` end offset must be {}", out_shape.elem_count())
+                        candle_core::bail!(
+                            "`c` tensor size mismatch: expected {} elements, got {}",
+                            out_shape.elem_count(),
+                            o2
+                        )
                     }
                 }
-                None => candle_core::bail!("`c` has to be contiguous"),
+                None => candle_core::bail!("`c` tensor must be contiguous for cuBLASLt operations"),
             };
 
-            if c_l.shape().dims3()? != (batch_size, n, m) {
-                candle_core::bail!("`c` does not have the correct shape");
+            // Validate C tensor shape matches output shape
+            let c_shape = c_l.shape().dims3()?;
+            if c_shape != (batch_size, n, m) {
+                candle_core::bail!(
+                    "`c` shape mismatch: expected ({}, {}, {}), got ({}, {}, {})",
+                    batch_size,
+                    n,
+                    m,
+                    c_shape.0,
+                    c_shape.1,
+                    c_shape.2
+                );
             }
 
-            // Set beta to 0.0 if it is not set
-            (c.clone(), c_l.stride()[0])
+            // Validate stride
+            let expected_stride = (n * m) as i64;
+            let actual_stride = c_l.stride()[0] as i64;
+            if actual_stride < expected_stride {
+                candle_core::bail!(
+                    "C tensor stride {} is less than minimum required {}",
+                    actual_stride,
+                    expected_stride
+                );
+            }
+
+            (c.clone(), actual_stride)
         } else {
             // Allocate out tensor
             (
                 unsafe { dev.alloc::<bf16>(out_shape.elem_count())? },
-                (n * m),
+                (n * m) as i64,
             )
         };
-        let (mut out, stride_c) = (
+        let (mut out, _stride_c_out) = (
             unsafe { dev.alloc::<bf16>(out_shape.elem_count())? },
-            (n * m),
+            (n * m) as i64,
         );
 
         let cases = [
@@ -708,9 +941,20 @@ impl CublasLTBatchMatmul {
             candle_core::bail!("`b` must have the same batch size as `a`")
         }
 
-        let lda = k;
-        let ldb = k;
-        let ldc = m;
+        // Set leading dimensions - must be at least as large as the corresponding dimension
+        let lda = k.max(1); // Leading dimension of A (k for TN layout)
+        let ldb = k.max(1); // Leading dimension of B (k for TN layout)
+        let ldc = m.max(1); // Leading dimension of C (m for row-major output)
+
+        // Validate leading dimensions
+        if lda == 0 || ldb == 0 || ldc == 0 {
+            candle_core::bail!(
+                "Leading dimensions must be positive: lda={}, ldb={}, ldc={}",
+                lda,
+                ldb,
+                ldc
+            );
+        }
 
         let out_shape = Shape::from((batch_size, n, m));
 

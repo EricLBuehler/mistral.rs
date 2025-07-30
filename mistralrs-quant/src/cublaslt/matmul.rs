@@ -73,9 +73,20 @@ impl Workspace {
         let major = stream
             .context()
             .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)?;
-        let workspace_size = if major >= 9 { 33_554_432 } else { 4_194_304 };
+
+        // Workspace recommendations:
+        // - Hopper (SM90+): 32 MiB for optimal performance
+        // - Other architectures: 4 MiB minimum
+        let workspace_size = if major >= 9 {
+            33_554_432 // 32 MiB for Hopper
+        } else {
+            4_194_304 // 4 MiB for other architectures
+        };
 
         let buffer = unsafe { stream.alloc::<u8>(workspace_size)? };
+
+        // Buffer allocation is already validated by the driver
+
         Ok(Self {
             buffer,
             size: workspace_size,
@@ -207,7 +218,9 @@ impl MatmulDesc {
 
         let buf = match matrix {
             Matrix::A => sys::cublasLtMatmulMatrixScale_t::CUBLASLT_MATMUL_MATRIX_SCALE_VEC128_32F,
-            Matrix::B => sys::cublasLtMatmulMatrixScale_t::CUBLASLT_MATMUL_MATRIX_SCALE_BLK128x128_32F,
+            Matrix::B => {
+                sys::cublasLtMatmulMatrixScale_t::CUBLASLT_MATMUL_MATRIX_SCALE_BLK128x128_32F
+            }
             Matrix::C | Matrix::D => unimplemented!(),
         };
 
@@ -433,16 +446,36 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
         bias: Option<&B>,
         act: Option<&Activation>,
     ) -> Result<(), CublasError> {
+        // Validate transpose requirements for FP8
+        assert!(cfg.transa, "FP8 operations require transa=true");
+        assert!(!cfg.transb, "FP8 operations require transb=false");
+
         let (a_rows, a_cols) = (cfg.k, cfg.m);
         let (b_rows, b_cols) = (cfg.k, cfg.n);
-        assert!(cfg.transa);
-        assert!(!cfg.transb);
 
-        // Matmul description - for FP8 blockwise, we might need a specific compute type
-        let matmul_desc = MatmulDesc::new(
-            sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
-            sys::cudaDataType_t::CUDA_R_32F,
-        )?;
+        // Validate matrix dimensions for transpose operations
+        assert!(
+            cfg.lda >= a_rows as i64,
+            "lda must be >= number of rows in A"
+        );
+        assert!(
+            cfg.ldb >= b_rows as i64,
+            "ldb must be >= number of rows in B"
+        );
+        assert!(cfg.ldc >= cfg.m as i64, "ldc must be >= m");
+
+        // Matmul description - FP8 operations must use FP32 compute and scale types
+        let compute_type = sys::cublasComputeType_t::CUBLAS_COMPUTE_32F;
+        let scale_type = sys::cudaDataType_t::CUDA_R_32F;
+
+        // Validate compute type for FP8
+        debug_assert!(
+            Self::matrix_type() != sys::cudaDataType_t::CUDA_R_8F_E4M3
+                || compute_type == sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+            "FP8 operations require CUBLAS_COMPUTE_32F compute type"
+        );
+
+        let matmul_desc = MatmulDesc::new(compute_type, scale_type)?;
 
         // Set transa
         matmul_desc.set_transpose(cfg.transa, Matrix::A)?;
@@ -461,29 +494,41 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
         }
 
         // --- Ensure COL32 memory order for FP8 inputs ---
+        // FP8 tensor core operations require COL32 layout for optimal performance
         let order = sys::cublasLtOrder_t::CUBLASLT_ORDER_COL32;
-        unsafe {
-            set_matrix_layout_attribute(
-                a_layout.handle,
-                sys::cublasLtMatrixLayoutAttribute_t::CUBLASLT_MATRIX_LAYOUT_ORDER,
-                &order as *const _ as *const _,
-                mem::size_of::<sys::cublasLtOrder_t>(),
-            )?;
-            set_matrix_layout_attribute(
-                b_layout.handle,
-                sys::cublasLtMatrixLayoutAttribute_t::CUBLASLT_MATRIX_LAYOUT_ORDER,
-                &order as *const _ as *const _,
-                mem::size_of::<sys::cublasLtOrder_t>(),
-            )?;
+
+        // Validate that we're using the correct layout for FP8
+        if Self::matrix_type() == sys::cudaDataType_t::CUDA_R_8F_E4M3 {
+            unsafe {
+                set_matrix_layout_attribute(
+                    a_layout.handle,
+                    sys::cublasLtMatrixLayoutAttribute_t::CUBLASLT_MATRIX_LAYOUT_ORDER,
+                    &order as *const _ as *const _,
+                    mem::size_of::<sys::cublasLtOrder_t>(),
+                )?;
+                set_matrix_layout_attribute(
+                    b_layout.handle,
+                    sys::cublasLtMatrixLayoutAttribute_t::CUBLASLT_MATRIX_LAYOUT_ORDER,
+                    &order as *const _ as *const _,
+                    mem::size_of::<sys::cublasLtOrder_t>(),
+                )?;
+            }
         }
 
-        let c_layout = MatrixLayout::new(sys::cudaDataType_t::CUDA_R_16BF, cfg.m, cfg.n, cfg.ldc)?;
+        // Validate output data type - FP8 operations output to BF16
+        let out_dtype = sys::cudaDataType_t::CUDA_R_16BF;
+        debug_assert!(
+            Self::matrix_type() != sys::cudaDataType_t::CUDA_R_8F_E4M3
+                || out_dtype == sys::cudaDataType_t::CUDA_R_16BF,
+            "FP8 operations must output to BF16 data type"
+        );
+
+        let c_layout = MatrixLayout::new(out_dtype, cfg.m, cfg.n, cfg.ldc)?;
         if let (Some(batch_size), Some(stride_c)) = (cfg.batch_size, cfg.stride_c) {
             c_layout.set_batch(batch_size, stride_c)?;
         }
 
-        let out_ty = sys::cudaDataType_t::CUDA_R_16BF;
-        let d_layout = MatrixLayout::new(out_ty, cfg.m, cfg.n, cfg.ldc)?;
+        let d_layout = MatrixLayout::new(out_dtype, cfg.m, cfg.n, cfg.ldc)?;
         if let (Some(batch_size), Some(stride_c)) = (cfg.batch_size, cfg.stride_c) {
             d_layout.set_batch(batch_size, stride_c)?;
         }
@@ -532,6 +577,27 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
 
         // Set workspace size
         matmul_pref.set_workspace_size(self.workspace().size)?;
+
+        // Validate workspace size is adequate
+        let workspace_size = self.workspace().size;
+        assert!(
+            workspace_size > 0,
+            "Workspace size cannot be 0 for cuBLASLt operations"
+        );
+
+        // Workspace should be at least 4MB for non-Hopper, 32MB for Hopper
+        let min_workspace = if cfg.m * cfg.n * cfg.k > 1024 * 1024 {
+            4_194_304 // 4MB minimum for large operations
+        } else {
+            1_048_576 // 1MB for smaller operations
+        };
+
+        debug_assert!(
+            workspace_size >= min_workspace,
+            "Workspace size {} is less than recommended minimum {} for operation size",
+            workspace_size,
+            min_workspace
+        );
 
         // Get heuristic given Config, bias, act and workspace size
         let heuristic = result::get_matmul_algo_heuristic(
@@ -695,6 +761,9 @@ impl<T: CublasLTDType> Matmul<T> for CudaBlasLT {
     }
 
     fn compute_type() -> sys::cublasComputeType_t {
+        // Validate compute type matches data type requirements
+        // FP8, FP16, and BF16 must use FP32 compute type
+        // FP32 can use TF32 for better performance
         match T::T {
             CublasLTInternalDType::F32 => sys::cublasComputeType_t::CUBLAS_COMPUTE_32F_FAST_TF32,
             CublasLTInternalDType::BF16
