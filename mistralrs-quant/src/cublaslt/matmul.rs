@@ -460,6 +460,23 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
             b_layout.set_batch(batch_size, stride_b)?;
         }
 
+        // --- Ensure COL32 memory order for FP8 inputs ---
+        let order = sys::cublasLtOrder_t::CUBLASLT_ORDER_COL32;
+        unsafe {
+            set_matrix_layout_attribute(
+                a_layout.handle,
+                sys::cublasLtMatrixLayoutAttribute_t::CUBLASLT_MATRIX_LAYOUT_ORDER,
+                &order as *const _ as *const _,
+                mem::size_of::<sys::cublasLtOrder_t>(),
+            )?;
+            set_matrix_layout_attribute(
+                b_layout.handle,
+                sys::cublasLtMatrixLayoutAttribute_t::CUBLASLT_MATRIX_LAYOUT_ORDER,
+                &order as *const _ as *const _,
+                mem::size_of::<sys::cublasLtOrder_t>(),
+            )?;
+        }
+
         let c_layout = MatrixLayout::new(sys::cudaDataType_t::CUDA_R_16BF, cfg.m, cfg.n, cfg.ldc)?;
         if let (Some(batch_size), Some(stride_c)) = (cfg.batch_size, cfg.stride_c) {
             c_layout.set_batch(batch_size, stride_c)?;
