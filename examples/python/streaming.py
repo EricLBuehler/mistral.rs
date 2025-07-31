@@ -22,4 +22,4 @@ res = runner.send_chat_completion_request(
     )
 )
 for chunk in res:
-    print(chunk)
+    print(chunk.choices[0].delta.content, end="", flush=True)
