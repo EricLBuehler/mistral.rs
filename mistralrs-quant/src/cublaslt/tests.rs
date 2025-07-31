@@ -40,7 +40,6 @@ fn test_fused_batch_matmul_f8e4m3_nobias() -> Result<()> {
         Some(1.),
         None,
         None,
-        F8MatmulOutType::BF16,
         cublaslt,
     )?
     .i((0..2, 0..2, 0..2))?;
@@ -91,7 +90,6 @@ fn test_fused_batch_matmul_f8e4m3_out_bf16() -> Result<()> {
         Some(1.),
         None,
         None,
-        F8MatmulOutType::BF16,
         cublaslt,
     )?
     .i((0..2, 0..2, 0..2))?;

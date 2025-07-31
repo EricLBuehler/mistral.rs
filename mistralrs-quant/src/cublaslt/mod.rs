@@ -45,12 +45,9 @@ mod matmul;
 mod tests;
 
 #[cfg(feature = "cuda")]
-pub use api::{fused_batch_matmul, fused_batch_matmul_f8, CublasLt};
-
-pub enum F8MatmulOutType {
-    F8,
-    BF16,
-}
+pub use api::{
+    fused_batch_matmul, fused_batch_matmul_f8, fused_batch_matmul_f8_blockwise, CublasLt,
+};
 
 pub fn maybe_init_cublas_lt_wrapper(device: Device) {
     static INIT: Once = Once::new();
@@ -120,7 +117,6 @@ impl CublasLtWrapper {
         beta: Option<f32>,
         bias: Option<&Tensor>,
         act: Option<CandleActivation>,
-        out_dtype: F8MatmulOutType,
     ) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         {
@@ -140,7 +136,68 @@ impl CublasLtWrapper {
                 beta,
                 bias,
                 inner_act,
-                out_dtype,
+                self.cublaslt.clone(),
+            )?;
+
+            if Some(CandleActivation::Swiglu) == act {
+                result = candle_nn::ops::swiglu(&result)?;
+            }
+            Ok(result)
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            candle_core::bail!("`cuda` feature is not enabled")
+        }
+    }
+
+    /// Fused batch matmul + add + Relu/Gelu activation using CublasLt for F8 dtypes with blockwise.
+    ///
+    /// # Arguments
+    ///
+    /// * `a` - Input tensor of size BxMxK
+    /// * `b` - Input tensor of size BxNxK
+    /// * `dequant_a_scale` - F32 blockwise tensor, used to `a` the out tensor.
+    /// * `dequant_b_scale` - F32 blockwise tensor, used to `b` the out tensor.
+    /// * `block_size` - block size for the scaling tensors
+    /// * `out` - Optional Output tensor of size BxNxK. If set and beta != 0, will be added to the end result of A*B before `act`
+    /// * `alpha` - Optional scaling factor for A*B
+    /// * `beta` - Optional scaling factor for C
+    /// * `bias` - Optional bias tensor of size M
+    /// * `act` - Optional Gelu or Relu activation. If set, will be added to the end result
+    ///
+    /// The resulting tensor is of shape NxM
+    #[allow(clippy::too_many_arguments)]
+    pub fn batch_matmul_f8_blockwise(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        dequant_a_scale: &Tensor,
+        dequant_b_scale: &Tensor,
+        block_size: Vec<usize>,
+        out: Option<&Tensor>,
+        alpha: Option<f32>,
+        beta: Option<f32>,
+        bias: Option<&Tensor>,
+        act: Option<CandleActivation>,
+    ) -> Result<Tensor> {
+        #[cfg(feature = "cuda")]
+        {
+            let inner_act = act.map(|a| match a {
+                CandleActivation::Relu => matmul::Activation::Relu,
+                CandleActivation::Gelu => matmul::Activation::Gelu,
+                _ => unreachable!("Unsupported activation in cublaslt matmul"),
+            });
+            let mut result = fused_batch_matmul_f8_blockwise(
+                a,
+                b,
+                dequant_a_scale,
+                dequant_b_scale,
+                out,
+                alpha,
+                beta,
+                bias,
+                inner_act,
+                block_size,
                 self.cublaslt.clone(),
             )?;
 
