@@ -1067,7 +1067,7 @@
 <a href=#1067 id=1067 data-nosnippet>1067</a>The vision tower for this model will still be loaded, but you might experience degraded quality."
 <a href=#1068 id=1068 data-nosnippet>1068</a>            </span>);
 <a href=#1069 id=1069 data-nosnippet>1069</a>        }
-<a href=#1070 id=1070 data-nosnippet>1070</a>        <span class="kw">let </span>conv_stem_bias = <span class="kw">if </span>old_vision_tower { <span class="bool-val">false </span>} <span class="kw">else </span>{ <span class="bool-val">true </span>};
+<a href=#1070 id=1070 data-nosnippet>1070</a>        <span class="kw">let </span>conv_stem_bias = !old_vision_tower;
 <a href=#1071 id=1071 data-nosnippet>1071</a>        <span class="comment">// Initial stem convolution
 <a href=#1072 id=1072 data-nosnippet>1072</a>        </span><span class="kw">let </span>conv_stem = ConvNormAct::new(
 <a href=#1073 id=1073 data-nosnippet>1073</a>            <span class="number">3</span>,              <span class="comment">// in_chs
