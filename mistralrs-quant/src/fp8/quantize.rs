@@ -98,7 +98,7 @@ mod tests {
     #[test]
     #[cfg(feature = "cuda")]
     fn test_cublaslt_matmul() -> Result<()> {
-        use crate::cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_CONTROLLER};
+        use crate::cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_CONTROLLER};
         let dev = Device::new_cuda(0)?;
 
         let w = Tensor::rand(0., 1., (1, 16, 32), &dev)?.to_dtype(DType::F32)?;
@@ -141,7 +141,6 @@ mod tests {
             None,
             None,
             None,
-            F8MatmulOutType::BF16,
         )?;
 
         Ok(())
