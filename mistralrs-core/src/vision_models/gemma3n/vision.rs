@@ -1067,7 +1067,7 @@ See: https://github.com/EricLBuehler/mistral.rs/issues/1592
 The vision tower for this model will still be loaded, but you might experience degraded quality."
             );
         }
-        let conv_stem_bias = if old_vision_tower { false } else { true };
+        let conv_stem_bias = !old_vision_tower;
         // Initial stem convolution
         let conv_stem = ConvNormAct::new(
             3,              // in_chs
