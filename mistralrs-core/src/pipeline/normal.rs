@@ -31,6 +31,7 @@ use crate::pipeline::{get_chat_template, Modalities, SupportedModality};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
+use crate::tokenizer::TokenizerImpl;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
@@ -57,13 +58,12 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{env, fs};
-use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 pub struct NormalPipeline {
     model: Box<dyn NormalModel + Send + Sync>,
-    tokenizer: Arc<Tokenizer>,
+    tokenizer: Arc<TokenizerImpl>,
     no_kv_cache: bool,
     chat_template: Arc<ChatTemplate>,
     non_granular_state: Option<NonGranularState>,
@@ -1034,7 +1034,7 @@ impl MetadataMixin for NormalPipeline {
     fn device(&self) -> Device {
         self.model.device().clone()
     }
-    fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
+    fn tokenizer(&self) -> Option<Arc<TokenizerImpl>> {
         Some(self.tokenizer.clone())
     }
     fn name(&self) -> String {

@@ -2,10 +2,10 @@
 
 use std::{any::Any, cmp, collections::HashMap, num::NonZeroUsize, sync::Arc};
 
+use crate::tokenizer::TokenizerImpl;
 use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use mistralrs_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};
-use tokenizers::Tokenizer;
 use tracing::warn;
 
 use crate::{
@@ -102,7 +102,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
     }
     fn process_inputs(
         &self,
-        tokenizer: Option<Arc<Tokenizer>>,
+        tokenizer: Option<Arc<TokenizerImpl>>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,

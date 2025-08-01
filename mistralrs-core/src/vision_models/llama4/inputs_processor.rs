@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+use crate::tokenizer::TokenizerImpl;
 use candle_core::{Context, Device, IndexOp, Result, Tensor, D};
 use image::DynamicImage;
 use itertools::Itertools;
@@ -15,7 +16,6 @@ use mistralrs_vision::{
     Transforms,
 };
 use ordered_float::NotNan;
-use tokenizers::Tokenizer;
 use tracing::warn;
 
 use crate::{
@@ -128,7 +128,7 @@ impl InputsProcessor for Llama4ImageProcessor {
     }
     fn process_inputs(
         &self,
-        tokenizer: Option<Arc<Tokenizer>>,
+        tokenizer: Option<Arc<TokenizerImpl>>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,

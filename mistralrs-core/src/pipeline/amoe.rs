@@ -237,7 +237,7 @@ impl MetadataMixin for AnyMoePipeline {
     fn reset_non_granular_state(&self) {
         get_mut_arcmutex!(self.target).reset_non_granular_state()
     }
-    fn tokenizer(&self) -> Option<Arc<tokenizers::Tokenizer>> {
+    fn tokenizer(&self) -> Option<Arc<crate::tokenizer::TokenizerImpl>> {
         get_mut_arcmutex!(self.target).tokenizer()
     }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper> {

@@ -7,6 +7,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use crate::tokenizer::TokenizerImpl;
 use candle_core::{Context, DType, Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage};
 use itertools::Itertools;
@@ -14,7 +15,6 @@ use mistralrs_vision::{
     ApplyTensorTransforms, ApplyTransforms, Normalize, Rescale, TensorTransforms, ToTensorNoNorm,
     Transforms,
 };
-use tokenizers::Tokenizer;
 use tracing::warn;
 
 use crate::{
@@ -171,7 +171,7 @@ impl InputsProcessor for MLlamaImageProcessor {
     }
     fn process_inputs(
         &self,
-        tokenizer: Option<Arc<Tokenizer>>,
+        tokenizer: Option<Arc<TokenizerImpl>>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,

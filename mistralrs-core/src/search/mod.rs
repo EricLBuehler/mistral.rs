@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 pub mod rag;
 
+use crate::tokenizer::TokenizerImpl;
 use anyhow::Result;
 use html2text::{config, render::PlainDecorator};
 use rayon::prelude::*;
@@ -10,7 +11,6 @@ use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::env::consts::{ARCH, FAMILY, OS};
-use tokenizers::Tokenizer;
 
 use crate::{Function, Tool, ToolType, WebSearchOptions, WebSearchUserLocation};
 
@@ -78,7 +78,7 @@ pub struct ExtractResult {
 }
 
 impl SearchResult {
-    pub fn cap_content_len(self, tokenizer: &Tokenizer, size: usize) -> Result<Self> {
+    pub fn cap_content_len(self, tokenizer: &TokenizerImpl, size: usize) -> Result<Self> {
         let tokenized_content = tokenizer
             .encode_fast(self.content, false)
             .map_err(anyhow::Error::msg)?;
@@ -97,7 +97,7 @@ impl SearchResult {
 }
 
 impl ExtractResult {
-    pub fn cap_content_len(self, tokenizer: &Tokenizer, size: usize) -> Result<Self> {
+    pub fn cap_content_len(self, tokenizer: &TokenizerImpl, size: usize) -> Result<Self> {
         let tokenized_content = tokenizer
             .encode_fast(self.content, false)
             .map_err(anyhow::Error::msg)?;

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::tokenizer::TokenizerImpl;
 use anyhow::Result;
 use either::Either;
 use indexmap::IndexMap;
@@ -7,7 +8,6 @@ use itertools::Itertools;
 use minijinja::{context, value::Kwargs, Environment, Error, ErrorKind, Value};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tokenizers::Tokenizer;
 use tracing::info;
 
 use crate::{MessageContent, Tool};
@@ -102,13 +102,15 @@ impl ChatTemplate {
 pub fn calculate_eos_tokens(
     chat_template: &ChatTemplate,
     gen_conf: Option<GenerationConfig>,
-    tokenizer: &Tokenizer,
+    tokenizer: &TokenizerImpl,
 ) -> Vec<u32> {
     let mut eos_tok_ids = chat_template.eos_tok().map(|x| vec![x]).unwrap_or_default();
     let mut bos_tok_ids = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
 
+    let vocab = tokenizer.get_vocab(true);
+
     for alternate in SUPPORTED_ALTERNATE_EOS {
-        if tokenizer.get_vocab(true).contains_key(*alternate) {
+        if vocab.contains_key(*alternate) {
             eos_tok_ids.push(alternate.to_string())
         }
     }
@@ -167,13 +169,13 @@ pub fn calculate_eos_tokens(
     let mut eos_toks = Vec::new();
     for eos_tok in eos_tok_ids {
         eos_toks.push(
-            tokenizer
-                .get_vocab(true)
+            vocab
                 .get(&eos_tok)
                 .copied()
                 .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token.")),
         )
     }
+
     eos_toks
 }
 

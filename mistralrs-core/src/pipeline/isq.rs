@@ -50,6 +50,7 @@ impl safetensors::tensor::View for CowBytesView<'_> {
     }
 }
 
+use crate::tokenizer::TokenizerImpl;
 use anyhow::Result;
 use candle_core::{quantized, Context, Device, Tensor};
 use indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
@@ -62,7 +63,6 @@ use mistralrs_quant::{
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use regex::Regex;
 use serde::Deserialize;
-use tokenizers::Tokenizer;
 use tracing::{info, warn};
 
 use crate::{device_map::DeviceMapper, topology::LayerTopology, Topology};
@@ -190,7 +190,7 @@ impl FromStr for IsqOrganization {
 }
 
 pub struct UqffFullSer<'a> {
-    pub tokenizer: &'a Tokenizer,
+    pub tokenizer: &'a TokenizerImpl,
     pub template_filename: &'a Option<PathBuf>,
     pub generation_config: Option<&'a PathBuf>,
     pub config: String,
@@ -738,7 +738,8 @@ pub trait IsqModel {
 
                 info!("Serializing tokenizer to `{}`.", tokenizer_out.display());
 
-                serde_json::to_writer_pretty(File::create(&tokenizer_out)?, tokenizer)
+                let tokenizer_ref = tokenizer.get_tokenizer();
+                serde_json::to_writer_pretty(File::create(&tokenizer_out)?, tokenizer_ref)
                     .map_err(candle_core::Error::msg)?;
 
                 if let Some(template_filename) = template_filename {

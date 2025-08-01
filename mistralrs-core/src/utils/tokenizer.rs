@@ -1,5 +1,6 @@
 use std::{collections::HashMap, path::Path};
 
+use crate::tokenizer::TokenizerImpl;
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::Value;
@@ -15,7 +16,7 @@ struct AddedToken {
 pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(
     p: P,
     processor_added_tokens: Option<&[&str]>,
-) -> Result<Tokenizer> {
+) -> Result<TokenizerImpl> {
     let mut tokenizer = {
         let raw = std::fs::read(p.clone()).map_err(anyhow::Error::msg)?;
         let mut tokenizer: Value = serde_json::from_slice(&raw).unwrap();
@@ -44,5 +45,10 @@ pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(
                 .collect::<Vec<_>>(),
         );
     }
-    Ok(tokenizer)
+    Ok(TokenizerImpl::Tokenizer {
+        tokenizer,
+        bos: None,
+        eos: None,
+        unk: None,
+    })
 }

@@ -24,6 +24,7 @@ use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
 use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
+use crate::tokenizer::TokenizerImpl;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
@@ -52,13 +53,12 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{env, fs};
-use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 pub struct VisionPipeline {
     model: Box<dyn VisionModel + Send + Sync>,
-    tokenizer: Arc<Tokenizer>,
+    tokenizer: Arc<TokenizerImpl>,
     chat_template: Arc<ChatTemplate>,
     model_id: String,
     metadata: Arc<GeneralMetadata>,
@@ -882,7 +882,7 @@ impl MetadataMixin for VisionPipeline {
         self.model_id.clone()
     }
     fn reset_non_granular_state(&self) {}
-    fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
+    fn tokenizer(&self) -> Option<Arc<TokenizerImpl>> {
         Some(self.tokenizer.clone())
     }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper> {

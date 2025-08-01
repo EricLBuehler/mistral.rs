@@ -1,12 +1,12 @@
 use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
+use crate::tokenizer::TokenizerImpl;
 use anyhow::Result;
 use candle_core::{Context, Device, IndexOp, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use mistralrs_vision::{
     ApplyTensorTransforms, ApplyTransforms, Normalize, TensorTransforms, ToTensor, Transforms,
 };
-use tokenizers::Tokenizer;
 use tracing::warn;
 
 use crate::{
@@ -116,7 +116,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
     }
     fn process_inputs(
         &self,
-        tokenizer: Option<Arc<Tokenizer>>,
+        tokenizer: Option<Arc<TokenizerImpl>>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,

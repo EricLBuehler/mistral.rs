@@ -10,12 +10,12 @@ use mistralrs_quant::{CumSumOp, SortOp};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
+use crate::tokenizer::TokenizerImpl;
 use once_cell::sync::Lazy;
 use rand::distr::{weighted::WeightedIndex, Distribution};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
-use tokenizers::Tokenizer;
 
 static DRY_SEQUENCE_BREAKERS: Lazy<Vec<String>> =
     Lazy::new(|| ["\n", ":", "\"", "*"].map(String::from).to_vec());
@@ -111,7 +111,7 @@ struct DrySamplingParamsInner {
 }
 
 impl DrySamplingParamsInner {
-    pub fn from(other: DrySamplingParams, tokenizer: &Tokenizer) -> anyhow::Result<Self> {
+    pub fn from(other: DrySamplingParams, tokenizer: &TokenizerImpl) -> anyhow::Result<Self> {
         Ok(Self {
             base: other.base,
             allowed_length: other.allowed_length,
@@ -182,7 +182,7 @@ impl<T: Fn(&Tensor, &[u32]) -> Result<Tensor> + Send + Sync> CustomLogitsProcess
 pub struct Sampler {
     temperature: Option<f64>,
     top_n_logprobs: usize,
-    tokenizer: Option<Arc<Tokenizer>>,
+    tokenizer: Option<Arc<TokenizerImpl>>,
     frequency_penalty: Option<f32>,
     presence_penalty: Option<f32>,
     dry_params: Option<DrySamplingParamsInner>,
@@ -221,7 +221,7 @@ impl Sampler {
     pub fn new(
         temperature: Option<f64>,
         top_n_logprobs: usize,
-        tokenizer: Option<Arc<Tokenizer>>,
+        tokenizer: Option<Arc<TokenizerImpl>>,
         frequency_penalty: Option<f32>,
         presence_penalty: Option<f32>,
         dry_params: Option<DrySamplingParams>,

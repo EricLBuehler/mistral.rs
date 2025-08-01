@@ -10,6 +10,7 @@ use crate::pipeline::{ChatTemplate, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::speech_models::{DiaConfig, DiaPipeline, SpeechGenerationOutput, SpeechLoaderType};
+use crate::tokenizer::TokenizerImpl;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::{
@@ -28,7 +29,6 @@ use std::any::Any;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::info;
 
@@ -110,7 +110,7 @@ impl InputsProcessor for SpeechInputsProcessor {
 
     fn process_inputs(
         &self,
-        _tokenizer: Option<Arc<Tokenizer>>,
+        _tokenizer: Option<Arc<TokenizerImpl>>,
         input_seqs: &mut [&mut Sequence],
         _is_prompt: bool,
         _is_xlora: bool,
@@ -372,7 +372,7 @@ impl MetadataMixin for SpeechPipeline {
         self.model_id.clone()
     }
     fn reset_non_granular_state(&self) {}
-    fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
+    fn tokenizer(&self) -> Option<Arc<TokenizerImpl>> {
         None
     }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper> {

@@ -26,6 +26,7 @@ use crate::pipeline::ChatTemplate;
 use crate::pipeline::{get_chat_template, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
+use crate::tokenizer::TokenizerImpl;
 use crate::utils::gguf_metadata::{ContentConfig, GgufDeviceMapLoaderInner};
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
@@ -56,7 +57,6 @@ use std::num::{NonZero, NonZeroUsize};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
@@ -73,7 +73,7 @@ enum Model {
 
 pub struct GGUFPipeline {
     model: Model,
-    tokenizer: Arc<Tokenizer>,
+    tokenizer: Arc<TokenizerImpl>,
     no_kv_cache: bool,
     chat_template: Arc<ChatTemplate>,
     model_id: String,
@@ -380,21 +380,14 @@ impl Loader for GGUFLoader {
             paged_attn_config = None;
         }
 
-        let GgufTokenizerConversion {
-            tokenizer,
-            bos,
-            eos,
-            unk,
-        } = if paths.get_tokenizer_filename().to_string_lossy().is_empty() {
-            convert_gguf_to_hf_tokenizer(&model)?
-        } else {
-            GgufTokenizerConversion {
-                tokenizer: get_tokenizer(paths.get_tokenizer_filename(), None)?,
-                bos: None,
-                eos: None,
-                unk: None,
-            }
-        };
+        let GgufTokenizerConversion { tokenizer } =
+            if paths.get_tokenizer_filename().to_string_lossy().is_empty() {
+                convert_gguf_to_hf_tokenizer(&model)?
+            } else {
+                GgufTokenizerConversion {
+                    tokenizer: get_tokenizer(paths.get_tokenizer_filename(), None)?,
+                }
+            };
 
         // Only load gguf chat template if there is nothing else
         let gguf_chat_template =
@@ -527,14 +520,20 @@ impl Loader for GGUFLoader {
             Model::Qwen3(ref model) => model.cache.normal().0.len(),
         };
 
-        if chat_template.bos_token.is_none() && bos.is_some() {
-            chat_template.bos_token = Some(BeginEndUnkPadTok(Either::Left(bos.unwrap())));
+        if chat_template.bos_token.is_none() {
+            if let Some(bos) = tokenizer.bos_token() {
+                chat_template.bos_token = Some(BeginEndUnkPadTok(Either::Left(bos.to_string())));
+            }
         }
-        if chat_template.eos_token.is_none() && eos.is_some() {
-            chat_template.eos_token = Some(BeginEndUnkPadTok(Either::Left(eos.unwrap())));
+        if chat_template.eos_token.is_none() {
+            if let Some(eos) = tokenizer.eos_token() {
+                chat_template.eos_token = Some(BeginEndUnkPadTok(Either::Left(eos.to_string())));
+            }
         }
-        if chat_template.unk_token.is_none() && unk.is_some() {
-            chat_template.unk_token = Some(BeginEndUnkPadTok(Either::Left(unk.unwrap())));
+        if chat_template.unk_token.is_none() {
+            if let Some(unk) = tokenizer.unk_token() {
+                chat_template.unk_token = Some(BeginEndUnkPadTok(Either::Left(unk.to_string())));
+            }
         }
 
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
@@ -669,7 +668,7 @@ impl MetadataMixin for GGUFPipeline {
             Model::Qwen3(ref model) => model.device.clone(),
         }
     }
-    fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
+    fn tokenizer(&self) -> Option<Arc<TokenizerImpl>> {
         Some(self.tokenizer.clone())
     }
     fn name(&self) -> String {

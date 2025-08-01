@@ -11,6 +11,7 @@ use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::{ChatTemplate, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
+use crate::tokenizer::TokenizerImpl;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::{DeviceMapSetting, PagedAttentionConfig, Pipeline, TryIntoDType};
@@ -25,7 +26,6 @@ use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::io;
 use std::sync::Arc;
-use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::warn;
 
@@ -286,7 +286,7 @@ impl MetadataMixin for DiffusionPipeline {
         self.model_id.clone()
     }
     fn reset_non_granular_state(&self) {}
-    fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
+    fn tokenizer(&self) -> Option<Arc<TokenizerImpl>> {
         None
     }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
