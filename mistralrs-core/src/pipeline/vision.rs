@@ -752,7 +752,7 @@ impl Loader for VisionLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                llg_factory,
+                llg_factory: Some(llg_factory),
                 is_xlora: false,
                 num_hidden_layers,
                 eos_tok: eos,

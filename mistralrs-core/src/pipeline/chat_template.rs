@@ -107,11 +107,11 @@ pub fn calculate_eos_tokens(
     let mut eos_tok_ids = chat_template.eos_tok().map(|x| vec![x]).unwrap_or_default();
     let mut bos_tok_ids = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
 
+    let vocab = tokenizer.get_vocab(true);
+
     for alternate in SUPPORTED_ALTERNATE_EOS {
-        if let Some(vocab) = tokenizer.get_vocab(true) {
-            if vocab.contains_key(*alternate) {
-                eos_tok_ids.push(alternate.to_string())
-            }
+        if vocab.contains_key(*alternate) {
+            eos_tok_ids.push(alternate.to_string())
         }
     }
 
@@ -167,24 +167,13 @@ pub fn calculate_eos_tokens(
     );
 
     let mut eos_toks = Vec::new();
-
-    // Handle tokenizers that don't expose vocabulary (e.g., Tekken)
-    if let Some(vocab) = tokenizer.get_vocab(true) {
-        for eos_tok in eos_tok_ids {
-            eos_toks.push(
-                vocab
-                    .get(&eos_tok)
-                    .copied()
-                    .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token.")),
-            )
-        }
-    } else {
-        // For tokenizers without vocabulary access (like Tekken), use hardcoded common EOS token IDs
-        // These are common EOS token IDs for models like Mistral
-        if eos_tok_ids.contains(&"</s>".to_string()) {
-            eos_toks.push(2); // Common EOS token ID for </s>
-        }
-        info!("Using default EOS token IDs for tokenizer without vocabulary access");
+    for eos_tok in eos_tok_ids {
+        eos_toks.push(
+            vocab
+                .get(&eos_tok)
+                .copied()
+                .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token.")),
+        )
     }
 
     eos_toks

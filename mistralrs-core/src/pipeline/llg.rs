@@ -6,13 +6,13 @@ use llguidance::{api::TopLevelGrammar, ParserFactory};
 use crate::tokenizer::TokenizerImpl;
 use crate::Constraint;
 
-pub fn build_llg_factory(tokenizer: TokenizerImpl) -> Result<Option<Arc<ParserFactory>>> {
+pub fn build_llg_factory(tokenizer: TokenizerImpl) -> Result<Arc<ParserFactory>> {
     // Get the tokenizer
     let base_tokenizer = tokenizer.get_tokenizer().clone();
     let env =
         toktrie_hf_tokenizers::ByteTokenizer::from_tokenizer(base_tokenizer)?.into_tok_env(None)?;
     let factory = ParserFactory::new_simple(&env)?;
-    Ok(Some(Arc::new(factory)))
+    Ok(Arc::new(factory))
 }
 
 pub fn llg_grammar_from_constraint(constraint: &Constraint) -> Result<Option<TopLevelGrammar>> {

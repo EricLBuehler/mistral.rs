@@ -96,9 +96,9 @@ impl TokenizerImpl {
     }
 
     /// Get the vocabulary
-    pub fn get_vocab(&self, with_added_tokens: bool) -> Option<HashMap<String, u32>> {
+    pub fn get_vocab(&self, with_added_tokens: bool) -> HashMap<String, u32> {
         match self {
-            Self::Tokenizer { tokenizer, .. } => Some(tokenizer.get_vocab(with_added_tokens)),
+            Self::Tokenizer { tokenizer, .. } => tokenizer.get_vocab(with_added_tokens),
         }
     }
 
