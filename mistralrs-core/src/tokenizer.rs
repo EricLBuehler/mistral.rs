@@ -1,6 +1,10 @@
 use anyhow::Result;
 use std::collections::HashMap;
-use tokenizers::{AddedToken, Tokenizer};
+use tiktoken_rs::CoreBPE;
+use tokenizers::{
+    tokenizer::{EncodeInput, InputSequence},
+    AddedToken, Tokenizer,
+};
 
 /// A simple Encoding type that holds token IDs
 #[derive(Clone, Debug)]
@@ -44,7 +48,14 @@ impl Encoding {
 pub enum TokenizerImpl {
     /// Tokenizer instance with optional special tokens
     Tokenizer {
-        tokenizer: Tokenizer,
+        tokenizer: Box<Tokenizer>,
+        bos: Option<String>,
+        eos: Option<String>,
+        unk: Option<String>,
+    },
+    /// tiktoken-rs CoreBPE tokenizer
+    TikToken {
+        tokenizer: Box<CoreBPE>,
         bos: Option<String>,
         eos: Option<String>,
         unk: Option<String>,
@@ -63,6 +74,15 @@ impl TokenizerImpl {
                     encoding.get_ids().to_vec(),
                     encoding.get_attention_mask().to_vec(),
                 ))
+            }
+            Self::TikToken { tokenizer, .. } => {
+                let ids = if add_special_tokens {
+                    tokenizer.encode_with_special_tokens(text)
+                } else {
+                    tokenizer.encode_ordinary(text)
+                };
+                let attention_mask = vec![1u32; ids.len()];
+                Ok(Encoding::new(ids, attention_mask))
             }
         }
     }
@@ -83,6 +103,22 @@ impl TokenizerImpl {
                     encoding.get_attention_mask().to_vec(),
                 ))
             }
+            Self::TikToken { tokenizer, .. } => {
+                // tiktoken expects raw string input
+                let enc_input: EncodeInput = text.into();
+                let s = if let EncodeInput::Single(InputSequence::Raw(cow)) = enc_input {
+                    cow.into_owned()
+                } else {
+                    return Err(anyhow::anyhow!("Unsupported input for tiktoken"));
+                };
+                let ids = if add_special_tokens {
+                    tokenizer.encode_with_special_tokens(&s)
+                } else {
+                    tokenizer.encode_ordinary(&s)
+                };
+                let attention_mask = vec![1u32; ids.len()];
+                Ok(Encoding::new(ids, attention_mask))
+            }
         }
     }
 
@@ -92,6 +128,10 @@ impl TokenizerImpl {
             Self::Tokenizer { tokenizer, .. } => tokenizer
                 .decode(ids, skip_special_tokens)
                 .map_err(anyhow::Error::msg),
+            Self::TikToken { tokenizer, .. } => {
+                let ranks: Vec<tiktoken_rs::Rank> = ids.to_vec();
+                tokenizer.decode(ranks).map_err(anyhow::Error::msg)
+            }
         }
     }
 
@@ -99,6 +139,7 @@ impl TokenizerImpl {
     pub fn get_vocab(&self, with_added_tokens: bool) -> HashMap<String, u32> {
         match self {
             Self::Tokenizer { tokenizer, .. } => tokenizer.get_vocab(with_added_tokens),
+            Self::TikToken { .. } => HashMap::new(),
         }
     }
 
@@ -106,6 +147,7 @@ impl TokenizerImpl {
     pub fn get_vocab_size(&self, with_added_tokens: bool) -> usize {
         match self {
             Self::Tokenizer { tokenizer, .. } => tokenizer.get_vocab_size(with_added_tokens),
+            Self::TikToken { .. } => 0,
         }
     }
 
@@ -113,6 +155,7 @@ impl TokenizerImpl {
     pub fn add_special_tokens(&mut self, tokens: &[AddedToken]) -> usize {
         match self {
             Self::Tokenizer { tokenizer, .. } => tokenizer.add_special_tokens(tokens),
+            Self::TikToken { .. } => 0,
         }
     }
 
@@ -120,6 +163,7 @@ impl TokenizerImpl {
     pub fn get_tokenizer(&self) -> &Tokenizer {
         match self {
             Self::Tokenizer { tokenizer, .. } => tokenizer,
+            Self::TikToken { .. } => panic!("Token access not supported for tiktoken"),
         }
     }
 
@@ -127,6 +171,7 @@ impl TokenizerImpl {
     pub fn bos_token(&self) -> Option<&str> {
         match self {
             Self::Tokenizer { bos, .. } => bos.as_deref(),
+            Self::TikToken { bos, .. } => bos.as_deref(),
         }
     }
 
@@ -134,6 +179,7 @@ impl TokenizerImpl {
     pub fn eos_token(&self) -> Option<&str> {
         match self {
             Self::Tokenizer { eos, .. } => eos.as_deref(),
+            Self::TikToken { eos, .. } => eos.as_deref(),
         }
     }
 
@@ -141,6 +187,7 @@ impl TokenizerImpl {
     pub fn unk_token(&self) -> Option<&str> {
         match self {
             Self::Tokenizer { unk, .. } => unk.as_deref(),
+            Self::TikToken { unk, .. } => unk.as_deref(),
         }
     }
 
@@ -148,6 +195,14 @@ impl TokenizerImpl {
     pub fn token_to_id(&self, token: &str) -> Option<u32> {
         match self {
             Self::Tokenizer { tokenizer, .. } => tokenizer.token_to_id(token),
+            Self::TikToken { tokenizer, .. } => {
+                let ids = tokenizer.encode_with_special_tokens(token);
+                if ids.len() == 1 {
+                    Some(ids[0])
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -157,6 +212,7 @@ impl TokenizerImpl {
             Self::Tokenizer { tokenizer, .. } => {
                 tokenizer.with_padding(padding);
             }
+            Self::TikToken { .. } => {}
         }
         self
     }
@@ -181,6 +237,19 @@ impl TokenizerImpl {
                     .map(|e| Encoding::new(e.get_ids().to_vec(), e.get_attention_mask().to_vec()))
                     .collect())
             }
+            Self::TikToken { tokenizer, .. } => {
+                let mut result = Vec::new();
+                for text in input_strings {
+                    let ids = if add_special_tokens {
+                        tokenizer.encode_with_special_tokens(&text)
+                    } else {
+                        tokenizer.encode_ordinary(&text)
+                    };
+                    let attention_mask = vec![1u32; ids.len()];
+                    result.push(Encoding::new(ids, attention_mask));
+                }
+                Ok(result)
+            }
         }
     }
 
@@ -194,6 +263,14 @@ impl TokenizerImpl {
             Self::Tokenizer { tokenizer, .. } => tokenizer
                 .decode_batch(token_sequences, skip_special_tokens)
                 .map_err(anyhow::Error::msg),
+            Self::TikToken { tokenizer, .. } => {
+                let mut res = Vec::new();
+                for seq in token_sequences {
+                    let ranks: Vec<_> = seq.to_vec();
+                    res.push(tokenizer.decode(ranks).map_err(anyhow::Error::msg)?);
+                }
+                Ok(res)
+            }
         }
     }
 }

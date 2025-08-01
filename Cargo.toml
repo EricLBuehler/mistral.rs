@@ -99,6 +99,7 @@ cli-table = "0.5.0"
 dirs = "6.0.0"
 thiserror = "2.0.12"
 tokenizers = { version = "0.21.2", default-features = false }
+tiktoken-rs = "0.7.0"
 tokio-tungstenite = "0.24.0"
 tqdm = "0.7.0"
 chrono = "0.4.41"

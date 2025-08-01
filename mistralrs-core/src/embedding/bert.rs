@@ -431,7 +431,7 @@ impl BertPipeline {
         let base_tokenizer = tokenizers::Tokenizer::from_file(tokenizer_filename)
             .map_err(candle_core::Error::msg)?;
         let tokenizer = TokenizerImpl::Tokenizer {
-            tokenizer: base_tokenizer,
+            tokenizer: Box::new(base_tokenizer),
             bos: None,
             eos: None,
             unk: None,

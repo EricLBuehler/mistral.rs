@@ -133,7 +133,7 @@ pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
 
     Ok(GgufTokenizerConversion {
         tokenizer: TokenizerImpl::Tokenizer {
-            tokenizer,
+            tokenizer: Box::new(tokenizer),
             bos,
             eos,
             unk,

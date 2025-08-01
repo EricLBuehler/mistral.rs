@@ -46,7 +46,7 @@ pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(
         );
     }
     Ok(TokenizerImpl::Tokenizer {
-        tokenizer,
+        tokenizer: Box::new(tokenizer),
         bos: None,
         eos: None,
         unk: None,

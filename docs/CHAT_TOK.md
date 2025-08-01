@@ -34,6 +34,10 @@ Enter model ID: microsoft/Orca-2-13b
 $ ./mistralrs-server --port 1234 --log output.log plain -m microsoft/Orca-2-13b --tokenizer-json tokenizer.json
 ```
 
+Alternatively, you may construct a tokenizer directly using the
+[`tiktoken-rs`](https://crates.io/crates/tiktoken-rs) crate and pass the
+resulting `CoreBPE` instance to `TokenizerImpl`.
+
 Putting it all together, to run, for example, an [Orca](https://huggingface.co/microsoft/Orca-2-13b) model (which does not come with a `tokenizer.json` or chat template):
 1) Generate the `tokenizer.json` by running the script at `scripts/get_tokenizers_json.py`. This will output some files including `tokenizer.json` in the working directory.
 2) Find and copy the correct chat template from `chat-templates` to the working directory (eg., `cp chat_templates/chatml.json .`)
