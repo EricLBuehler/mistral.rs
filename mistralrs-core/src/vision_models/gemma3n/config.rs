@@ -1,4 +1,3 @@
-use either::Either;
 use mistralrs_quant::QuantizedConfig;
 
 use crate::{
@@ -19,11 +18,34 @@ serde_default_fn!(usize, sliding_window_pattern, 6);
 serde_default_fn!(usize, num_attention_heads, 8);
 serde_default_fn!(usize, num_key_value_heads, 4);
 
-/// Left is normal, Right is (per layer, orig per layer)
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct IntermediateSize(
-    #[serde(with = "either::serde_untagged")] pub Either<Vec<usize>, (Vec<usize>, Vec<usize>)>,
-);
+#[derive(Debug, Clone)]
+pub enum IntermediateSize {
+    /// Single size that applies to all layers
+    Single(usize),
+    /// Per-layer sizes
+    PerLayer(Vec<usize>),
+    /// Matformer format: (per layer, orig per layer)
+    Matformer(Vec<usize>, Vec<usize>),
+}
+
+impl<'de> serde::Deserialize<'de> for IntermediateSize {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum IntermediateSizeHelper {
+            Single(usize),
+            PerLayer(Vec<usize>),
+        }
+
+        match IntermediateSizeHelper::deserialize(deserializer)? {
+            IntermediateSizeHelper::Single(size) => Ok(IntermediateSize::Single(size)),
+            IntermediateSizeHelper::PerLayer(sizes) => Ok(IntermediateSize::PerLayer(sizes)),
+        }
+    }
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Gemma3nTextConfig {

@@ -47,11 +47,6 @@ mod tests;
 #[cfg(feature = "cuda")]
 pub use api::{fused_batch_matmul, fused_batch_matmul_f8, CublasLt};
 
-pub enum F8MatmulOutType {
-    F8,
-    BF16,
-}
-
 pub fn maybe_init_cublas_lt_wrapper(device: Device) {
     static INIT: Once = Once::new();
 
@@ -120,7 +115,6 @@ impl CublasLtWrapper {
         beta: Option<f32>,
         bias: Option<&Tensor>,
         act: Option<CandleActivation>,
-        out_dtype: F8MatmulOutType,
     ) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         {
@@ -140,7 +134,6 @@ impl CublasLtWrapper {
                 beta,
                 bias,
                 inner_act,
-                out_dtype,
                 self.cublaslt.clone(),
             )?;
 

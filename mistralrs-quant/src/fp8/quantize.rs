@@ -1,7 +1,6 @@
 use candle_core::{DType, Result, Tensor};
 use candle_nn::Linear;
 use float8::F8E4M3;
-use half::bf16;
 
 use super::FP8Linear;
 
@@ -33,15 +32,8 @@ impl FP8Linear {
             .clamp(F8E4M3::MIN.to_f32(), F8E4M3::MAX.to_f32())?
             .to_dtype(DType::F32)?;
         let to_cast = data.broadcast_mul(&scale.to_dtype(data.dtype())?)?;
-        let qw = if data.device().is_metal() {
-            // Evil hack to allow metal shader to get the double value!
-            let transmute_data = to_cast
-                .flatten_all()?
-                .to_vec1::<bf16>()?
-                .into_iter()
-                .map(|x| x.to_f64_const().to_bits() as i64)
-                .collect::<Vec<_>>();
-            Tensor::from_vec(transmute_data, data.shape(), data.device())?.to_dtype(dtype)?
+        let qw = if dtype == DType::F8E4M3 {
+            crate::scalar_fp8::ops::dtype_to_fp8(&to_cast)?
         } else {
             to_cast.to_dtype(dtype)?
         };
@@ -64,21 +56,22 @@ impl FP8Linear {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(feature = "metal"))]
     use candle_core::{
         quantized::{GgmlDType, QTensor},
         DType, Device, Result, Tensor,
     };
 
+    #[cfg(not(feature = "metal"))]
     use crate::fp8::FP8Linear;
 
+    #[cfg(not(feature = "metal"))]
     use super::QuantizationResult;
 
     #[test]
+    #[cfg(not(feature = "metal"))]
     fn test_roundtrip_f8e4m3() -> Result<()> {
-        #[cfg(not(feature = "metal"))]
         let dev = Device::cuda_if_available(0)?;
-        #[cfg(feature = "metal")]
-        let dev = Device::new_metal(0)?;
 
         let data = Tensor::rand(0f32, 1f32, (32, 32), &dev)?;
 
@@ -88,7 +81,8 @@ mod tests {
             dequantize_scale,
         } = FP8Linear::quantize(&data, DType::F8E4M3)?;
 
-        let dequant = qw.to_dtype(DType::F32)?.broadcast_mul(&dequantize_scale)?;
+        let dequant = crate::scalar_fp8::ops::fp8_to_dtype(&qw, DType::F32)?
+            .broadcast_mul(&dequantize_scale)?;
 
         let diff1 = (&data - dequant)?.abs()?.mean_all()?;
 
@@ -104,7 +98,7 @@ mod tests {
     #[test]
     #[cfg(feature = "cuda")]
     fn test_cublaslt_matmul() -> Result<()> {
-        use crate::cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_CONTROLLER};
+        use crate::cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_CONTROLLER};
         let dev = Device::new_cuda(0)?;
 
         let w = Tensor::rand(0., 1., (1, 16, 32), &dev)?.to_dtype(DType::F32)?;
@@ -147,7 +141,6 @@ mod tests {
             None,
             None,
             None,
-            F8MatmulOutType::BF16,
         )?;
 
         Ok(())

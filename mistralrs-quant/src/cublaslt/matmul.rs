@@ -330,11 +330,6 @@ pub struct MatmulConfig {
     pub batch_size: Option<c_int>,
 }
 
-pub enum OutSlice<A: DevicePtrMut<F8E4M3>, B: DevicePtrMut<bf16>> {
-    F8(A),
-    BF16(B),
-}
-
 pub enum CublasLTInternalDType {
     F32,
     BF16,
@@ -387,7 +382,6 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
     unsafe fn matmul_fp8_like<
         I: DevicePtr<T>,
         C: DevicePtr<bf16>,
-        OA: DevicePtrMut<F8E4M3>,
         OB: DevicePtrMut<bf16>,
         S: DevicePtr<f32>,
         B: DevicePtr<bf16>,
@@ -400,7 +394,7 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
         scale_b: &S,
         scale_d: &S,
         c: &C,
-        out: &mut OutSlice<OA, OB>,
+        out: &mut OB,
         // amax_d: &mut A,
         bias: Option<&B>,
         act: Option<&Activation>,
@@ -437,10 +431,7 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
             c_layout.set_batch(batch_size, stride_c)?;
         }
 
-        let out_ty = match &out {
-            OutSlice::F8(_) => Self::matrix_type(),
-            OutSlice::BF16(_) => sys::cudaDataType_t::CUDA_R_16BF,
-        };
+        let out_ty = sys::cudaDataType_t::CUDA_R_16BF;
         let d_layout = MatrixLayout::new(out_ty, cfg.m, cfg.n, cfg.ldc)?;
         if let (Some(batch_size), Some(stride_c)) = (cfg.batch_size, cfg.stride_c) {
             d_layout.set_batch(batch_size, stride_c)?;
@@ -486,10 +477,7 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
             matmul_pref.handle,
         )?;
 
-        let (out_ptr, _out_guard) = match out {
-            OutSlice::BF16(s) => s.device_ptr_mut(self.stream()),
-            OutSlice::F8(s) => s.device_ptr_mut(self.stream()),
-        };
+        let (out_ptr, _out_guard) = out.device_ptr_mut(self.stream());
 
         let (a, _a_guard) = a.device_ptr(self.stream());
         let (b, _b_guard) = b.device_ptr(self.stream());

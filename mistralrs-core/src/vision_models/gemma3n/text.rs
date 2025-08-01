@@ -2,7 +2,6 @@ use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Linear;
-use either::Either;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
@@ -55,14 +54,13 @@ impl Mlp {
         layer_idx: usize,
     ) -> Result<Self> {
         let std_multiplier = Self::std_multiplier(cfg.activation_sparsity_pattern[layer_idx]);
-        let (intermediate_size, orig_intermediate_size) = cfg
-            .intermediate_size
-            .0
-            .clone()
-            .map_left(|left| (left[layer_idx], None))
-            .left_or_else(|(sizes, orig_intermediate_size)| {
-                (sizes[layer_idx], Some(orig_intermediate_size[layer_idx]))
-            });
+        let (intermediate_size, orig_intermediate_size) = match &cfg.intermediate_size {
+            IntermediateSize::Single(size) => (*size, None),
+            IntermediateSize::PerLayer(sizes) => (sizes[layer_idx], None),
+            IntermediateSize::Matformer(sizes, orig_sizes) => {
+                (sizes[layer_idx], Some(orig_sizes[layer_idx]))
+            }
+        };
 
         if let Some(orig_intermediate_size) = orig_intermediate_size {
             Ok(Self {
@@ -908,11 +906,15 @@ pub(crate) fn handle_matformer_slicing(
             cfg.activation_sparsity_pattern = activation_sparsity_list;
 
             cfg.num_hidden_layers = final_num_layers;
-            let orig_intermediate_size = cfg.intermediate_size.0.unwrap_left();
-            cfg.intermediate_size = IntermediateSize(Either::Right((
+            let orig_intermediate_size = match &cfg.intermediate_size {
+                IntermediateSize::Single(size) => vec![*size; orig_num_hidden_layers],
+                IntermediateSize::PerLayer(sizes) => sizes.clone(),
+                IntermediateSize::Matformer(_, orig) => orig.clone(),
+            };
+            cfg.intermediate_size = IntermediateSize::Matformer(
                 matformer_slice.ffn_hidden_dimensions.clone(),
                 orig_intermediate_size,
-            )));
+            );
 
             Ok((
                 cfg,

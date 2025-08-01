@@ -20,7 +20,7 @@ fn test_fused_batch_matmul_f8e4m3_nobias() -> Result<()> {
         }
         let max_v = F8E4M3::MAX.to_f64().round();
         let scale = (max_v / absmax)?.clamp(1e-12, f64::INFINITY)?;
-        let qw = data.broadcast_mul(&scale)?.to_dtype(DType::F8E4M3)?;
+        let qw = crate::scalar_fp8::ops::dtype_to_fp8(&data.broadcast_mul(&scale)?)?;
         Ok((qw, scale))
     }
     let (qa, a_scale) = quantize(&a, DType::F8E4M3)?;
@@ -40,7 +40,6 @@ fn test_fused_batch_matmul_f8e4m3_nobias() -> Result<()> {
         Some(1.),
         None,
         None,
-        F8MatmulOutType::BF16,
         cublaslt,
     )?
     .i((0..2, 0..2, 0..2))?;
@@ -72,7 +71,7 @@ fn test_fused_batch_matmul_f8e4m3_out_bf16() -> Result<()> {
         }
         let max_v = F8E4M3::MAX.to_f64().round();
         let scale = (max_v / absmax)?.clamp(1e-12, f64::INFINITY)?;
-        let qw = data.broadcast_mul(&scale)?.to_dtype(DType::F8E4M3)?;
+        let qw = crate::scalar_fp8::ops::dtype_to_fp8(&data.broadcast_mul(&scale)?)?;
         Ok((qw, scale))
     }
     let (qa, a_scale) = quantize(&a, DType::F8E4M3)?;
@@ -91,7 +90,6 @@ fn test_fused_batch_matmul_f8e4m3_out_bf16() -> Result<()> {
         Some(1.),
         None,
         None,
-        F8MatmulOutType::BF16,
         cublaslt,
     )?
     .i((0..2, 0..2, 0..2))?;
