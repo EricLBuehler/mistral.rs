@@ -17,31 +17,31 @@
 <a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, LocalModelPaths};
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManagerV2;
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
-<a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span><span class="kw">crate</span>::utils::debug::DeviceRepr;
-<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
-<a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
-<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
-<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use crate</span>::{
-<a href=#25 id=25 data-nosnippet>25</a>    get_mut_arcmutex, get_paths, DeviceMapSetting, PagedAttentionConfig, Pipeline, Topology,
-<a href=#26 id=26 data-nosnippet>26</a>    TryIntoDType, DEBUG,
-<a href=#27 id=27 data-nosnippet>27</a>};
-<a href=#28 id=28 data-nosnippet>28</a><span class="kw">use crate</span>::{
-<a href=#29 id=29 data-nosnippet>29</a>    models::quantized_llama::ModelWeights <span class="kw">as </span>QLlama, utils::tokens::get_token,
-<a href=#30 id=30 data-nosnippet>30</a>    xlora_models::XLoraQLlama,
-<a href=#31 id=31 data-nosnippet>31</a>};
-<a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>anyhow::Result;
-<a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>candle_core::quantized::ggml_file;
-<a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span>candle_core::{Device, Tensor};
-<a href=#35 id=35 data-nosnippet>35</a><span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-<a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>mistralrs_quant::IsqType;
-<a href=#37 id=37 data-nosnippet>37</a><span class="kw">use </span>rand_isaac::Isaac64Rng;
-<a href=#38 id=38 data-nosnippet>38</a><span class="kw">use </span>std::any::Any;
-<a href=#39 id=39 data-nosnippet>39</a><span class="kw">use </span>std::fs;
-<a href=#40 id=40 data-nosnippet>40</a><span class="kw">use </span>std::num::{NonZero, NonZeroUsize};
-<a href=#41 id=41 data-nosnippet>41</a><span class="kw">use </span>std::path::PathBuf;
-<a href=#42 id=42 data-nosnippet>42</a><span class="kw">use </span>std::str::FromStr;
-<a href=#43 id=43 data-nosnippet>43</a><span class="kw">use </span>std::sync::Arc;
-<a href=#44 id=44 data-nosnippet>44</a><span class="kw">use </span>tokenizers::Tokenizer;
+<a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span><span class="kw">crate</span>::tokenizer::TokenizerImpl;
+<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span><span class="kw">crate</span>::utils::debug::DeviceRepr;
+<a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
+<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use crate</span>::{
+<a href=#26 id=26 data-nosnippet>26</a>    get_mut_arcmutex, get_paths, DeviceMapSetting, PagedAttentionConfig, Pipeline, Topology,
+<a href=#27 id=27 data-nosnippet>27</a>    TryIntoDType, DEBUG,
+<a href=#28 id=28 data-nosnippet>28</a>};
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">use crate</span>::{
+<a href=#30 id=30 data-nosnippet>30</a>    models::quantized_llama::ModelWeights <span class="kw">as </span>QLlama, utils::tokens::get_token,
+<a href=#31 id=31 data-nosnippet>31</a>    xlora_models::XLoraQLlama,
+<a href=#32 id=32 data-nosnippet>32</a>};
+<a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>anyhow::Result;
+<a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span>candle_core::quantized::ggml_file;
+<a href=#35 id=35 data-nosnippet>35</a><span class="kw">use </span>candle_core::{Device, Tensor};
+<a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+<a href=#37 id=37 data-nosnippet>37</a><span class="kw">use </span>mistralrs_quant::IsqType;
+<a href=#38 id=38 data-nosnippet>38</a><span class="kw">use </span>rand_isaac::Isaac64Rng;
+<a href=#39 id=39 data-nosnippet>39</a><span class="kw">use </span>std::any::Any;
+<a href=#40 id=40 data-nosnippet>40</a><span class="kw">use </span>std::fs;
+<a href=#41 id=41 data-nosnippet>41</a><span class="kw">use </span>std::num::{NonZero, NonZeroUsize};
+<a href=#42 id=42 data-nosnippet>42</a><span class="kw">use </span>std::path::PathBuf;
+<a href=#43 id=43 data-nosnippet>43</a><span class="kw">use </span>std::str::FromStr;
+<a href=#44 id=44 data-nosnippet>44</a><span class="kw">use </span>std::sync::Arc;
 <a href=#45 id=45 data-nosnippet>45</a><span class="kw">use </span>tokio::sync::Mutex;
 <a href=#46 id=46 data-nosnippet>46</a><span class="kw">use </span>tracing::{info, warn};
 <a href=#47 id=47 data-nosnippet>47</a>
@@ -52,7 +52,7 @@
 <a href=#52 id=52 data-nosnippet>52</a>
 <a href=#53 id=53 data-nosnippet>53</a><span class="kw">pub struct </span>GGMLPipeline {
 <a href=#54 id=54 data-nosnippet>54</a>    model: Model,
-<a href=#55 id=55 data-nosnippet>55</a>    tokenizer: Arc&lt;Tokenizer&gt;,
+<a href=#55 id=55 data-nosnippet>55</a>    tokenizer: Arc&lt;TokenizerImpl&gt;,
 <a href=#56 id=56 data-nosnippet>56</a>    no_kv_cache: bool,
 <a href=#57 id=57 data-nosnippet>57</a>    chat_template: Arc&lt;ChatTemplate&gt;,
 <a href=#58 id=58 data-nosnippet>58</a>    model_id: String,
@@ -500,7 +500,7 @@
 <a href=#500 id=500 data-nosnippet>500</a>            Model::XLoraLlama(<span class="kw-2">ref </span>model) =&gt; model.device.clone(),
 <a href=#501 id=501 data-nosnippet>501</a>        }
 <a href=#502 id=502 data-nosnippet>502</a>    }
-<a href=#503 id=503 data-nosnippet>503</a>    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt; {
+<a href=#503 id=503 data-nosnippet>503</a>    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;TokenizerImpl&gt;&gt; {
 <a href=#504 id=504 data-nosnippet>504</a>        <span class="prelude-val">Some</span>(<span class="self">self</span>.tokenizer.clone())
 <a href=#505 id=505 data-nosnippet>505</a>    }
 <a href=#506 id=506 data-nosnippet>506</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {

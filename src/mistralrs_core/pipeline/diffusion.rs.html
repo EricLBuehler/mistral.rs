@@ -11,21 +11,21 @@
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, Modalities, SupportedModality};
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManagerV2;
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
-<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span><span class="kw">crate</span>::utils::varbuilder_utils::DeviceForLoadTensor;
-<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
-<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use crate</span>::{DeviceMapSetting, PagedAttentionConfig, Pipeline, TryIntoDType};
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>anyhow::Result;
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>candle_core::{DType, Device, Tensor};
-<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-<a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>image::{DynamicImage, RgbImage};
-<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>indicatif::MultiProgress;
-<a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>mistralrs_quant::log::once_log_info;
-<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>mistralrs_quant::IsqType;
-<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>rand_isaac::Isaac64Rng;
-<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>std::any::Any;
-<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>std::io;
-<a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>std::sync::Arc;
-<a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>tokenizers::Tokenizer;
+<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span><span class="kw">crate</span>::tokenizer::TokenizerImpl;
+<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span><span class="kw">crate</span>::utils::varbuilder_utils::DeviceForLoadTensor;
+<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
+<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use crate</span>::{DeviceMapSetting, PagedAttentionConfig, Pipeline, TryIntoDType};
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>anyhow::Result;
+<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>candle_core::{DType, Device, Tensor};
+<a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>image::{DynamicImage, RgbImage};
+<a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>indicatif::MultiProgress;
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>mistralrs_quant::log::once_log_info;
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>mistralrs_quant::IsqType;
+<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>rand_isaac::Isaac64Rng;
+<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>std::any::Any;
+<a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>std::io;
+<a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>std::sync::Arc;
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>tokio::sync::Mutex;
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>tracing::warn;
 <a href=#31 id=31 data-nosnippet>31</a>
@@ -286,7 +286,7 @@
 <a href=#286 id=286 data-nosnippet>286</a>        <span class="self">self</span>.model_id.clone()
 <a href=#287 id=287 data-nosnippet>287</a>    }
 <a href=#288 id=288 data-nosnippet>288</a>    <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {}
-<a href=#289 id=289 data-nosnippet>289</a>    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt; {
+<a href=#289 id=289 data-nosnippet>289</a>    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;TokenizerImpl&gt;&gt; {
 <a href=#290 id=290 data-nosnippet>290</a>        <span class="prelude-val">None
 <a href=#291 id=291 data-nosnippet>291</a>    </span>}
 <a href=#292 id=292 data-nosnippet>292</a>    <span class="kw">fn </span>device_mapper(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt; {

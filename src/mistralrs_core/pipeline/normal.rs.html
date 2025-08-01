@@ -31,39 +31,39 @@
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, LocalModelPaths};
 <a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManagerV2;
 <a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
-<a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
-<a href=#35 id=35 data-nosnippet>35</a><span class="kw">use </span><span class="kw">crate</span>::utils::varbuilder_utils::DeviceForLoadTensor;
-<a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
-<a href=#37 id=37 data-nosnippet>37</a><span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
-<a href=#38 id=38 data-nosnippet>38</a><span class="kw">use crate</span>::{
-<a href=#39 id=39 data-nosnippet>39</a>    api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
-<a href=#40 id=40 data-nosnippet>40</a>    normal_model_loader, normal_model_loader_sharded, xlora_model_loader, DeviceMapSetting,
-<a href=#41 id=41 data-nosnippet>41</a>    PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
-<a href=#42 id=42 data-nosnippet>42</a>};
-<a href=#43 id=43 data-nosnippet>43</a><span class="kw">use </span>anyhow::Result;
-<a href=#44 id=44 data-nosnippet>44</a><span class="kw">use </span>candle_core::{Device, Tensor, Var};
-<a href=#45 id=45 data-nosnippet>45</a><span class="kw">use </span>hf_hub::Cache;
-<a href=#46 id=46 data-nosnippet>46</a><span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-<a href=#47 id=47 data-nosnippet>47</a><span class="kw">use </span>indicatif::MultiProgress;
-<a href=#48 id=48 data-nosnippet>48</a><span class="kw">use </span>mistralrs_quant::log::once_log_info;
-<a href=#49 id=49 data-nosnippet>49</a><span class="kw">use </span>mistralrs_quant::{AfqLayer, GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
-<a href=#50 id=50 data-nosnippet>50</a><span class="kw">use </span>rand_isaac::Isaac64Rng;
-<a href=#51 id=51 data-nosnippet>51</a><span class="kw">use </span>regex_automata::meta::Regex;
-<a href=#52 id=52 data-nosnippet>52</a><span class="kw">use </span>std::any::Any;
-<a href=#53 id=53 data-nosnippet>53</a><span class="kw">use </span>std::borrow::Cow;
-<a href=#54 id=54 data-nosnippet>54</a><span class="kw">use </span>std::num::{NonZero, NonZeroUsize};
-<a href=#55 id=55 data-nosnippet>55</a><span class="kw">use </span>std::path::{Path, PathBuf};
-<a href=#56 id=56 data-nosnippet>56</a><span class="kw">use </span>std::str::FromStr;
-<a href=#57 id=57 data-nosnippet>57</a><span class="kw">use </span>std::sync::{Arc, RwLock};
-<a href=#58 id=58 data-nosnippet>58</a><span class="kw">use </span>std::time::Instant;
-<a href=#59 id=59 data-nosnippet>59</a><span class="kw">use </span>std::{env, fs};
-<a href=#60 id=60 data-nosnippet>60</a><span class="kw">use </span>tokenizers::Tokenizer;
+<a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span><span class="kw">crate</span>::tokenizer::TokenizerImpl;
+<a href=#35 id=35 data-nosnippet>35</a><span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
+<a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span><span class="kw">crate</span>::utils::varbuilder_utils::DeviceForLoadTensor;
+<a href=#37 id=37 data-nosnippet>37</a><span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
+<a href=#38 id=38 data-nosnippet>38</a><span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
+<a href=#39 id=39 data-nosnippet>39</a><span class="kw">use crate</span>::{
+<a href=#40 id=40 data-nosnippet>40</a>    api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
+<a href=#41 id=41 data-nosnippet>41</a>    normal_model_loader, normal_model_loader_sharded, xlora_model_loader, DeviceMapSetting,
+<a href=#42 id=42 data-nosnippet>42</a>    PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
+<a href=#43 id=43 data-nosnippet>43</a>};
+<a href=#44 id=44 data-nosnippet>44</a><span class="kw">use </span>anyhow::Result;
+<a href=#45 id=45 data-nosnippet>45</a><span class="kw">use </span>candle_core::{Device, Tensor, Var};
+<a href=#46 id=46 data-nosnippet>46</a><span class="kw">use </span>hf_hub::Cache;
+<a href=#47 id=47 data-nosnippet>47</a><span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+<a href=#48 id=48 data-nosnippet>48</a><span class="kw">use </span>indicatif::MultiProgress;
+<a href=#49 id=49 data-nosnippet>49</a><span class="kw">use </span>mistralrs_quant::log::once_log_info;
+<a href=#50 id=50 data-nosnippet>50</a><span class="kw">use </span>mistralrs_quant::{AfqLayer, GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
+<a href=#51 id=51 data-nosnippet>51</a><span class="kw">use </span>rand_isaac::Isaac64Rng;
+<a href=#52 id=52 data-nosnippet>52</a><span class="kw">use </span>regex_automata::meta::Regex;
+<a href=#53 id=53 data-nosnippet>53</a><span class="kw">use </span>std::any::Any;
+<a href=#54 id=54 data-nosnippet>54</a><span class="kw">use </span>std::borrow::Cow;
+<a href=#55 id=55 data-nosnippet>55</a><span class="kw">use </span>std::num::{NonZero, NonZeroUsize};
+<a href=#56 id=56 data-nosnippet>56</a><span class="kw">use </span>std::path::{Path, PathBuf};
+<a href=#57 id=57 data-nosnippet>57</a><span class="kw">use </span>std::str::FromStr;
+<a href=#58 id=58 data-nosnippet>58</a><span class="kw">use </span>std::sync::{Arc, RwLock};
+<a href=#59 id=59 data-nosnippet>59</a><span class="kw">use </span>std::time::Instant;
+<a href=#60 id=60 data-nosnippet>60</a><span class="kw">use </span>std::{env, fs};
 <a href=#61 id=61 data-nosnippet>61</a><span class="kw">use </span>tokio::sync::Mutex;
 <a href=#62 id=62 data-nosnippet>62</a><span class="kw">use </span>tracing::{info, warn};
 <a href=#63 id=63 data-nosnippet>63</a>
 <a href=#64 id=64 data-nosnippet>64</a><span class="kw">pub struct </span>NormalPipeline {
 <a href=#65 id=65 data-nosnippet>65</a>    model: Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;,
-<a href=#66 id=66 data-nosnippet>66</a>    tokenizer: Arc&lt;Tokenizer&gt;,
+<a href=#66 id=66 data-nosnippet>66</a>    tokenizer: Arc&lt;TokenizerImpl&gt;,
 <a href=#67 id=67 data-nosnippet>67</a>    no_kv_cache: bool,
 <a href=#68 id=68 data-nosnippet>68</a>    chat_template: Arc&lt;ChatTemplate&gt;,
 <a href=#69 id=69 data-nosnippet>69</a>    non_granular_state: <span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
@@ -1034,7 +1034,7 @@
 <a href=#1034 id=1034 data-nosnippet>1034</a>    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device {
 <a href=#1035 id=1035 data-nosnippet>1035</a>        <span class="self">self</span>.model.device().clone()
 <a href=#1036 id=1036 data-nosnippet>1036</a>    }
-<a href=#1037 id=1037 data-nosnippet>1037</a>    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt; {
+<a href=#1037 id=1037 data-nosnippet>1037</a>    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;TokenizerImpl&gt;&gt; {
 <a href=#1038 id=1038 data-nosnippet>1038</a>        <span class="prelude-val">Some</span>(<span class="self">self</span>.tokenizer.clone())
 <a href=#1039 id=1039 data-nosnippet>1039</a>    }
 <a href=#1040 id=1040 data-nosnippet>1040</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {

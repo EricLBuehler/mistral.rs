@@ -50,19 +50,19 @@
 <a href=#50 id=50 data-nosnippet>50</a>    }
 <a href=#51 id=51 data-nosnippet>51</a>}
 <a href=#52 id=52 data-nosnippet>52</a>
-<a href=#53 id=53 data-nosnippet>53</a><span class="kw">use </span>anyhow::Result;
-<a href=#54 id=54 data-nosnippet>54</a><span class="kw">use </span>candle_core::{quantized, Context, Device, Tensor};
-<a href=#55 id=55 data-nosnippet>55</a><span class="kw">use </span>indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
-<a href=#56 id=56 data-nosnippet>56</a><span class="kw">use </span>itertools::Itertools;
-<a href=#57 id=57 data-nosnippet>57</a><span class="kw">use </span>mistralrs_quant::{
-<a href=#58 id=58 data-nosnippet>58</a>    AfqLayer, CollectedImatrixData, ColumnParallelLayer, DistributedKind, FP8Linear, GgufMatMul,
-<a href=#59 id=59 data-nosnippet>59</a>    HqqLayer, IsqType, QuantMethod, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
-<a href=#60 id=60 data-nosnippet>60</a>    ReplicatedLayer, RowParallelLayer, UnquantLinear,
-<a href=#61 id=61 data-nosnippet>61</a>};
-<a href=#62 id=62 data-nosnippet>62</a><span class="kw">use </span>rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-<a href=#63 id=63 data-nosnippet>63</a><span class="kw">use </span>regex::Regex;
-<a href=#64 id=64 data-nosnippet>64</a><span class="kw">use </span>serde::Deserialize;
-<a href=#65 id=65 data-nosnippet>65</a><span class="kw">use </span>tokenizers::Tokenizer;
+<a href=#53 id=53 data-nosnippet>53</a><span class="kw">use </span><span class="kw">crate</span>::tokenizer::TokenizerImpl;
+<a href=#54 id=54 data-nosnippet>54</a><span class="kw">use </span>anyhow::Result;
+<a href=#55 id=55 data-nosnippet>55</a><span class="kw">use </span>candle_core::{quantized, Context, Device, Tensor};
+<a href=#56 id=56 data-nosnippet>56</a><span class="kw">use </span>indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
+<a href=#57 id=57 data-nosnippet>57</a><span class="kw">use </span>itertools::Itertools;
+<a href=#58 id=58 data-nosnippet>58</a><span class="kw">use </span>mistralrs_quant::{
+<a href=#59 id=59 data-nosnippet>59</a>    AfqLayer, CollectedImatrixData, ColumnParallelLayer, DistributedKind, FP8Linear, GgufMatMul,
+<a href=#60 id=60 data-nosnippet>60</a>    HqqLayer, IsqType, QuantMethod, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
+<a href=#61 id=61 data-nosnippet>61</a>    ReplicatedLayer, RowParallelLayer, UnquantLinear,
+<a href=#62 id=62 data-nosnippet>62</a>};
+<a href=#63 id=63 data-nosnippet>63</a><span class="kw">use </span>rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+<a href=#64 id=64 data-nosnippet>64</a><span class="kw">use </span>regex::Regex;
+<a href=#65 id=65 data-nosnippet>65</a><span class="kw">use </span>serde::Deserialize;
 <a href=#66 id=66 data-nosnippet>66</a><span class="kw">use </span>tracing::{info, warn};
 <a href=#67 id=67 data-nosnippet>67</a>
 <a href=#68 id=68 data-nosnippet>68</a><span class="kw">use crate</span>::{device_map::DeviceMapper, topology::LayerTopology, Topology};
@@ -190,7 +190,7 @@
 <a href=#190 id=190 data-nosnippet>190</a>}
 <a href=#191 id=191 data-nosnippet>191</a>
 <a href=#192 id=192 data-nosnippet>192</a><span class="kw">pub struct </span>UqffFullSer&lt;<span class="lifetime">'a</span>&gt; {
-<a href=#193 id=193 data-nosnippet>193</a>    <span class="kw">pub </span>tokenizer: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>Tokenizer,
+<a href=#193 id=193 data-nosnippet>193</a>    <span class="kw">pub </span>tokenizer: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>TokenizerImpl,
 <a href=#194 id=194 data-nosnippet>194</a>    <span class="kw">pub </span>template_filename: <span class="kw-2">&amp;</span><span class="lifetime">'a </span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 <a href=#195 id=195 data-nosnippet>195</a>    <span class="kw">pub </span>generation_config: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'a </span>PathBuf&gt;,
 <a href=#196 id=196 data-nosnippet>196</a>    <span class="kw">pub </span>config: String,
@@ -738,323 +738,324 @@
 <a href=#738 id=738 data-nosnippet>738</a>
 <a href=#739 id=739 data-nosnippet>739</a>                <span class="macro">info!</span>(<span class="string">"Serializing tokenizer to `{}`."</span>, tokenizer_out.display());
 <a href=#740 id=740 data-nosnippet>740</a>
-<a href=#741 id=741 data-nosnippet>741</a>                serde_json::to_writer_pretty(File::create(<span class="kw-2">&amp;</span>tokenizer_out)<span class="question-mark">?</span>, tokenizer)
-<a href=#742 id=742 data-nosnippet>742</a>                    .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
-<a href=#743 id=743 data-nosnippet>743</a>
-<a href=#744 id=744 data-nosnippet>744</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(template_filename) = template_filename {
-<a href=#745 id=745 data-nosnippet>745</a>                    <span class="kw">let </span>template =
-<a href=#746 id=746 data-nosnippet>746</a>                        std::fs::read(template_filename).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
-<a href=#747 id=747 data-nosnippet>747</a>
-<a href=#748 id=748 data-nosnippet>748</a>                    <span class="kw">if </span>template_filename.extension().map(|e| e.to_str()) == <span class="prelude-val">Some</span>(<span class="prelude-val">Some</span>(<span class="string">"jinja"</span>)) {
-<a href=#749 id=749 data-nosnippet>749</a>                        <span class="macro">info!</span>(
-<a href=#750 id=750 data-nosnippet>750</a>                            <span class="string">"Serializing chat template to `{}`."</span>,
-<a href=#751 id=751 data-nosnippet>751</a>                            chat_template_jinja_out.display()
-<a href=#752 id=752 data-nosnippet>752</a>                        );
-<a href=#753 id=753 data-nosnippet>753</a>                        std::fs::write(<span class="kw-2">&amp;</span>chat_template_jinja_out, template)
-<a href=#754 id=754 data-nosnippet>754</a>                            .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
-<a href=#755 id=755 data-nosnippet>755</a>                    } <span class="kw">else </span>{
-<a href=#756 id=756 data-nosnippet>756</a>                        <span class="macro">info!</span>(
-<a href=#757 id=757 data-nosnippet>757</a>                            <span class="string">"Serializing tokenizer config to `{}`."</span>,
-<a href=#758 id=758 data-nosnippet>758</a>                            tokenizer_cfg_out.display()
-<a href=#759 id=759 data-nosnippet>759</a>                        );
-<a href=#760 id=760 data-nosnippet>760</a>                        std::fs::write(<span class="kw-2">&amp;</span>tokenizer_cfg_out, template)
-<a href=#761 id=761 data-nosnippet>761</a>                            .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
-<a href=#762 id=762 data-nosnippet>762</a>                    }
-<a href=#763 id=763 data-nosnippet>763</a>                }
-<a href=#764 id=764 data-nosnippet>764</a>
-<a href=#765 id=765 data-nosnippet>765</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(generation_config) = generation_config {
-<a href=#766 id=766 data-nosnippet>766</a>                    <span class="macro">info!</span>(
-<a href=#767 id=767 data-nosnippet>767</a>                        <span class="string">"Serializing generation config to `{}`."</span>,
-<a href=#768 id=768 data-nosnippet>768</a>                        gen_cfg_out.display()
-<a href=#769 id=769 data-nosnippet>769</a>                    );
-<a href=#770 id=770 data-nosnippet>770</a>
-<a href=#771 id=771 data-nosnippet>771</a>                    <span class="kw">let </span>cfg = std::fs::read(generation_config).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
-<a href=#772 id=772 data-nosnippet>772</a>                    std::fs::write(<span class="kw-2">&amp;</span>gen_cfg_out, cfg).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
-<a href=#773 id=773 data-nosnippet>773</a>                }
-<a href=#774 id=774 data-nosnippet>774</a>
-<a href=#775 id=775 data-nosnippet>775</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(processor_config) = processor_filename {
-<a href=#776 id=776 data-nosnippet>776</a>                    <span class="macro">info!</span>(
-<a href=#777 id=777 data-nosnippet>777</a>                        <span class="string">"Serializing processor config to `{}`."</span>,
-<a href=#778 id=778 data-nosnippet>778</a>                        processor_out.display()
-<a href=#779 id=779 data-nosnippet>779</a>                    );
-<a href=#780 id=780 data-nosnippet>780</a>
-<a href=#781 id=781 data-nosnippet>781</a>                    <span class="kw">let </span>cfg = std::fs::read(processor_config).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
-<a href=#782 id=782 data-nosnippet>782</a>                    std::fs::write(<span class="kw-2">&amp;</span>processor_out, cfg).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
-<a href=#783 id=783 data-nosnippet>783</a>                }
-<a href=#784 id=784 data-nosnippet>784</a>
-<a href=#785 id=785 data-nosnippet>785</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(preprocessor_config) = preprocessor_filename {
-<a href=#786 id=786 data-nosnippet>786</a>                    <span class="macro">info!</span>(
-<a href=#787 id=787 data-nosnippet>787</a>                        <span class="string">"Serializing preprocessor config to `{}`."</span>,
-<a href=#788 id=788 data-nosnippet>788</a>                        preprocessor_out.display()
-<a href=#789 id=789 data-nosnippet>789</a>                    );
-<a href=#790 id=790 data-nosnippet>790</a>
-<a href=#791 id=791 data-nosnippet>791</a>                    <span class="kw">let </span>cfg =
-<a href=#792 id=792 data-nosnippet>792</a>                        std::fs::read(preprocessor_config).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
-<a href=#793 id=793 data-nosnippet>793</a>                    std::fs::write(<span class="kw-2">&amp;</span>preprocessor_out, cfg).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
-<a href=#794 id=794 data-nosnippet>794</a>                }
-<a href=#795 id=795 data-nosnippet>795</a>            }
-<a href=#796 id=796 data-nosnippet>796</a>            <span class="kw">let </span>delta = Instant::now().duration_since(t_start).as_secs_f32();
-<a href=#797 id=797 data-nosnippet>797</a>            <span class="macro">info!</span>(<span class="string">"Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors. Took {delta:.2}s"</span>, );
-<a href=#798 id=798 data-nosnippet>798</a>        }
-<a href=#799 id=799 data-nosnippet>799</a>        <span class="prelude-val">Ok</span>(())
-<a href=#800 id=800 data-nosnippet>800</a>    }
-<a href=#801 id=801 data-nosnippet>801</a>
-<a href=#802 id=802 data-nosnippet>802</a>    <span class="kw">fn </span>load_from_artifacts(
-<a href=#803 id=803 data-nosnippet>803</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#804 id=804 data-nosnippet>804</a>        device: Device,
-<a href=#805 id=805 data-nosnippet>805</a>        topology: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Topology&gt;,
-<a href=#806 id=806 data-nosnippet>806</a>        silent: bool,
-<a href=#807 id=807 data-nosnippet>807</a>        artifacts: <span class="kw-2">&amp;</span>[PathBuf],
-<a href=#808 id=808 data-nosnippet>808</a>    ) -&gt; candle_core::Result&lt;()&gt; {
-<a href=#809 id=809 data-nosnippet>809</a>        <span class="kw">let </span>(tensors, mapper) = <span class="self">self</span>.get_layers();
-<a href=#810 id=810 data-nosnippet>810</a>        <span class="kw">let </span>total_tensors = tensors.len();
-<a href=#811 id=811 data-nosnippet>811</a>
-<a href=#812 id=812 data-nosnippet>812</a>        <span class="kw">let </span>layers = topology.map(|x| {
-<a href=#813 id=813 data-nosnippet>813</a>            x.<span class="number">0</span>.iter()
-<a href=#814 id=814 data-nosnippet>814</a>                .filter_map(|topo| topo.as_ref().map(|x| (x.isq, x.device.clone())))
-<a href=#815 id=815 data-nosnippet>815</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#816 id=816 data-nosnippet>816</a>        });
-<a href=#817 id=817 data-nosnippet>817</a>
-<a href=#818 id=818 data-nosnippet>818</a>        <span class="kw">let </span><span class="kw-2">mut </span>devices = Vec::new();
-<a href=#819 id=819 data-nosnippet>819</a>        <span class="kw">let </span><span class="kw-2">mut </span>comms = Vec::new();
-<a href=#820 id=820 data-nosnippet>820</a>        <span class="kw">for </span>(<span class="kw">_</span>, layer_num) <span class="kw">in </span><span class="kw-2">&amp;</span>tensors {
-<a href=#821 id=821 data-nosnippet>821</a>            <span class="kw">let </span>device = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>layers) = layers {
-<a href=#822 id=822 data-nosnippet>822</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(layer) = layer_num {
-<a href=#823 id=823 data-nosnippet>823</a>                    layers
-<a href=#824 id=824 data-nosnippet>824</a>                        .get(<span class="kw-2">*</span>layer)
-<a href=#825 id=825 data-nosnippet>825</a>                        .as_ref()
-<a href=#826 id=826 data-nosnippet>826</a>                        .map(|x| x.<span class="number">1</span>.clone())
-<a href=#827 id=827 data-nosnippet>827</a>                        .unwrap_or(<span class="prelude-val">Some</span>(device.clone()))
-<a href=#828 id=828 data-nosnippet>828</a>                        .unwrap_or(device.clone())
-<a href=#829 id=829 data-nosnippet>829</a>                } <span class="kw">else </span>{
-<a href=#830 id=830 data-nosnippet>830</a>                    device.clone()
-<a href=#831 id=831 data-nosnippet>831</a>                }
-<a href=#832 id=832 data-nosnippet>832</a>            } <span class="kw">else if let </span><span class="prelude-val">Some</span>(layer_num) = layer_num {
-<a href=#833 id=833 data-nosnippet>833</a>                mapper
-<a href=#834 id=834 data-nosnippet>834</a>                    .device_for(<span class="kw-2">*</span>layer_num, <span class="bool-val">false</span>)
-<a href=#835 id=835 data-nosnippet>835</a>                    .cloned()
-<a href=#836 id=836 data-nosnippet>836</a>                    .unwrap_or(device.clone())
-<a href=#837 id=837 data-nosnippet>837</a>            } <span class="kw">else </span>{
-<a href=#838 id=838 data-nosnippet>838</a>                device.clone()
-<a href=#839 id=839 data-nosnippet>839</a>            };
-<a href=#840 id=840 data-nosnippet>840</a>            devices.push(device);
-<a href=#841 id=841 data-nosnippet>841</a>            comms.push(mapper.get_comm_for(layer_num.unwrap_or(<span class="number">0</span>))<span class="question-mark">?</span>)
-<a href=#842 id=842 data-nosnippet>842</a>        }
-<a href=#843 id=843 data-nosnippet>843</a>
-<a href=#844 id=844 data-nosnippet>844</a>        <span class="kw">let </span>artifacts = <span class="kw">unsafe </span>{ candle_core::safetensors::MmapedSafetensors::multi(artifacts)<span class="question-mark">? </span>};
-<a href=#845 id=845 data-nosnippet>845</a>
-<a href=#846 id=846 data-nosnippet>846</a>        <span class="kw">let </span>artifact_isqs = artifacts
-<a href=#847 id=847 data-nosnippet>847</a>            .tensors()
-<a href=#848 id=848 data-nosnippet>848</a>            .into_iter()
-<a href=#849 id=849 data-nosnippet>849</a>            .map(|(name, tensor)| {
-<a href=#850 id=850 data-nosnippet>850</a>                (
-<a href=#851 id=851 data-nosnippet>851</a>                    name.parse::&lt;usize&gt;()
-<a href=#852 id=852 data-nosnippet>852</a>                        .expect(<span class="string">"Name should be parseable as usize"</span>),
-<a href=#853 id=853 data-nosnippet>853</a>                    tensor,
-<a href=#854 id=854 data-nosnippet>854</a>                )
-<a href=#855 id=855 data-nosnippet>855</a>            })
-<a href=#856 id=856 data-nosnippet>856</a>            .collect::&lt;HashMap&lt;<span class="kw">_</span>, <span class="kw">_</span>&gt;&gt;();
-<a href=#857 id=857 data-nosnippet>857</a>
-<a href=#858 id=858 data-nosnippet>858</a>        <span class="kw">if </span>artifact_isqs.len() != total_tensors {
-<a href=#859 id=859 data-nosnippet>859</a>            <span class="macro">candle_core::bail!</span>(
-<a href=#860 id=860 data-nosnippet>860</a>                <span class="string">"Number of artifacts ({}) does not match the number of ISQ layers ({total_tensors})"</span>,
-<a href=#861 id=861 data-nosnippet>861</a>                artifact_isqs.len(),
-<a href=#862 id=862 data-nosnippet>862</a>            );
-<a href=#863 id=863 data-nosnippet>863</a>        }
-<a href=#864 id=864 data-nosnippet>864</a>
-<a href=#865 id=865 data-nosnippet>865</a>        <span class="kw">let </span>bar = ProgressBar::new(total_tensors <span class="kw">as </span>u64);
-<a href=#866 id=866 data-nosnippet>866</a>        bar.set_style(
-<a href=#867 id=867 data-nosnippet>867</a>            ProgressStyle::default_bar()
-<a href=#868 id=868 data-nosnippet>868</a>                .template(<span class="string">"[{elapsed_precise}] [{bar:40.red/magenta}] {pos}/{len} ({eta})"</span>)
-<a href=#869 id=869 data-nosnippet>869</a>                .unwrap()
-<a href=#870 id=870 data-nosnippet>870</a>                .progress_chars(<span class="string">"#&gt;-"</span>),
-<a href=#871 id=871 data-nosnippet>871</a>        );
-<a href=#872 id=872 data-nosnippet>872</a>
-<a href=#873 id=873 data-nosnippet>873</a>        <span class="kw">let </span>t_start = Instant::now();
-<a href=#874 id=874 data-nosnippet>874</a>
-<a href=#875 id=875 data-nosnippet>875</a>        <span class="kw">let </span>guard = QuantizeOntoGuard::new();
-<a href=#876 id=876 data-nosnippet>876</a>
-<a href=#877 id=877 data-nosnippet>877</a>        <span class="kw">if </span>silent {
-<a href=#878 id=878 data-nosnippet>878</a>            (<span class="number">0</span>..tensors.len())
-<a href=#879 id=879 data-nosnippet>879</a>                .into_par_iter()
-<a href=#880 id=880 data-nosnippet>880</a>                .zip(tensors)
-<a href=#881 id=881 data-nosnippet>881</a>                .map(|(i, (tensor, <span class="kw">_</span>))| {
-<a href=#882 id=882 data-nosnippet>882</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(artifact) = artifact_isqs.get(<span class="kw-2">&amp;</span>i) {
-<a href=#883 id=883 data-nosnippet>883</a>                        <span class="kw">let </span>artifact = artifact.data();
-<a href=#884 id=884 data-nosnippet>884</a>
-<a href=#885 id=885 data-nosnippet>885</a>                        <span class="kw">let </span>comm = comms[i].clone();
-<a href=#886 id=886 data-nosnippet>886</a>                        <span class="kw">let </span>deserialized = <span class="kw">match </span>tensor.is_distributed() {
-<a href=#887 id=887 data-nosnippet>887</a>                            <span class="prelude-val">Some</span>(DistributedKind::ColumnParallel) =&gt; {
-<a href=#888 id=888 data-nosnippet>888</a>                                ColumnParallelLayer::deserialize(
-<a href=#889 id=889 data-nosnippet>889</a>                                    Cow::from(artifact),
-<a href=#890 id=890 data-nosnippet>890</a>                                    <span class="kw-2">&amp;</span>devices[i],
-<a href=#891 id=891 data-nosnippet>891</a>                                    <span class="kw-2">&amp;</span>comm,
-<a href=#892 id=892 data-nosnippet>892</a>                                    guard.clone(),
-<a href=#893 id=893 data-nosnippet>893</a>                                )<span class="question-mark">?
-<a href=#894 id=894 data-nosnippet>894</a>                            </span>}
-<a href=#895 id=895 data-nosnippet>895</a>                            <span class="prelude-val">Some</span>(DistributedKind::RowParallel) =&gt; RowParallelLayer::deserialize(
-<a href=#896 id=896 data-nosnippet>896</a>                                Cow::from(artifact),
-<a href=#897 id=897 data-nosnippet>897</a>                                <span class="kw-2">&amp;</span>devices[i],
-<a href=#898 id=898 data-nosnippet>898</a>                                <span class="kw-2">&amp;</span>comm,
-<a href=#899 id=899 data-nosnippet>899</a>                                guard.clone(),
-<a href=#900 id=900 data-nosnippet>900</a>                            )<span class="question-mark">?</span>,
-<a href=#901 id=901 data-nosnippet>901</a>                            <span class="prelude-val">Some</span>(DistributedKind::Replicated) =&gt; ReplicatedLayer::deserialize(
-<a href=#902 id=902 data-nosnippet>902</a>                                Cow::from(artifact),
-<a href=#903 id=903 data-nosnippet>903</a>                                <span class="kw-2">&amp;</span>devices[i],
-<a href=#904 id=904 data-nosnippet>904</a>                                <span class="kw-2">&amp;</span>comm,
-<a href=#905 id=905 data-nosnippet>905</a>                                guard.clone(),
-<a href=#906 id=906 data-nosnippet>906</a>                            )<span class="question-mark">?</span>,
-<a href=#907 id=907 data-nosnippet>907</a>                            <span class="prelude-val">None </span>=&gt; {
-<a href=#908 id=908 data-nosnippet>908</a>                                <span class="comment">// NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
-<a href=#909 id=909 data-nosnippet>909</a>                                </span><span class="kw">let </span>isq_type = artifact[mistralrs_quant::UQFF_QUANT_TYPE_OFFSET];
-<a href=#910 id=910 data-nosnippet>910</a>                                <span class="kw">match </span>QuantizedSerdeType::try_from(isq_type <span class="kw">as </span>usize)<span class="question-mark">? </span>{
-<a href=#911 id=911 data-nosnippet>911</a>                                    QuantizedSerdeType::Gguf =&gt; GgufMatMul::deserialize(
-<a href=#912 id=912 data-nosnippet>912</a>                                        Cow::from(artifact),
-<a href=#913 id=913 data-nosnippet>913</a>                                        <span class="kw-2">&amp;</span>devices[i],
-<a href=#914 id=914 data-nosnippet>914</a>                                        <span class="kw-2">&amp;</span>comm,
-<a href=#915 id=915 data-nosnippet>915</a>                                        guard.clone(),
-<a href=#916 id=916 data-nosnippet>916</a>                                    )<span class="question-mark">?</span>,
-<a href=#917 id=917 data-nosnippet>917</a>                                    QuantizedSerdeType::Unquant =&gt; UnquantLinear::deserialize(
-<a href=#918 id=918 data-nosnippet>918</a>                                        Cow::from(artifact),
-<a href=#919 id=919 data-nosnippet>919</a>                                        <span class="kw-2">&amp;</span>devices[i],
-<a href=#920 id=920 data-nosnippet>920</a>                                        <span class="kw-2">&amp;</span>comm,
-<a href=#921 id=921 data-nosnippet>921</a>                                        guard.clone(),
-<a href=#922 id=922 data-nosnippet>922</a>                                    )<span class="question-mark">?</span>,
-<a href=#923 id=923 data-nosnippet>923</a>                                    QuantizedSerdeType::Hqq =&gt; HqqLayer::deserialize(
-<a href=#924 id=924 data-nosnippet>924</a>                                        Cow::from(artifact),
-<a href=#925 id=925 data-nosnippet>925</a>                                        <span class="kw-2">&amp;</span>devices[i],
-<a href=#926 id=926 data-nosnippet>926</a>                                        <span class="kw-2">&amp;</span>comm,
-<a href=#927 id=927 data-nosnippet>927</a>                                        guard.clone(),
-<a href=#928 id=928 data-nosnippet>928</a>                                    )<span class="question-mark">?</span>,
-<a href=#929 id=929 data-nosnippet>929</a>                                    QuantizedSerdeType::Fp8 =&gt; FP8Linear::deserialize(
-<a href=#930 id=930 data-nosnippet>930</a>                                        Cow::from(artifact),
-<a href=#931 id=931 data-nosnippet>931</a>                                        <span class="kw-2">&amp;</span>devices[i],
-<a href=#932 id=932 data-nosnippet>932</a>                                        <span class="kw-2">&amp;</span>comm,
-<a href=#933 id=933 data-nosnippet>933</a>                                        guard.clone(),
-<a href=#934 id=934 data-nosnippet>934</a>                                    )<span class="question-mark">?</span>,
-<a href=#935 id=935 data-nosnippet>935</a>                                    QuantizedSerdeType::Afq =&gt; AfqLayer::deserialize(
-<a href=#936 id=936 data-nosnippet>936</a>                                        Cow::from(artifact),
-<a href=#937 id=937 data-nosnippet>937</a>                                        <span class="kw-2">&amp;</span>devices[i],
-<a href=#938 id=938 data-nosnippet>938</a>                                        <span class="kw-2">&amp;</span>comm,
-<a href=#939 id=939 data-nosnippet>939</a>                                        guard.clone(),
-<a href=#940 id=940 data-nosnippet>940</a>                                    )<span class="question-mark">?</span>,
-<a href=#941 id=941 data-nosnippet>941</a>                                }
-<a href=#942 id=942 data-nosnippet>942</a>                            }
-<a href=#943 id=943 data-nosnippet>943</a>                        };
-<a href=#944 id=944 data-nosnippet>944</a>                        <span class="kw-2">*</span>tensor = deserialized;
-<a href=#945 id=945 data-nosnippet>945</a>                    }
-<a href=#946 id=946 data-nosnippet>946</a>                    <span class="prelude-val">Ok</span>(())
-<a href=#947 id=947 data-nosnippet>947</a>                })
-<a href=#948 id=948 data-nosnippet>948</a>                .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
-<a href=#949 id=949 data-nosnippet>949</a>        } <span class="kw">else </span>{
-<a href=#950 id=950 data-nosnippet>950</a>            (<span class="number">0</span>..tensors.len())
-<a href=#951 id=951 data-nosnippet>951</a>                .into_par_iter()
-<a href=#952 id=952 data-nosnippet>952</a>                .zip(tensors)
-<a href=#953 id=953 data-nosnippet>953</a>                .progress_with(bar)
-<a href=#954 id=954 data-nosnippet>954</a>                .map(|(i, (tensor, <span class="kw">_</span>))| {
-<a href=#955 id=955 data-nosnippet>955</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(artifact) = artifact_isqs.get(<span class="kw-2">&amp;</span>i) {
-<a href=#956 id=956 data-nosnippet>956</a>                        <span class="kw">let </span>artifact = artifact.data();
-<a href=#957 id=957 data-nosnippet>957</a>
-<a href=#958 id=958 data-nosnippet>958</a>                        <span class="kw">let </span>comm = comms[i].clone();
-<a href=#959 id=959 data-nosnippet>959</a>                        <span class="kw">let </span>deserialized = <span class="kw">match </span>tensor.is_distributed() {
-<a href=#960 id=960 data-nosnippet>960</a>                            <span class="prelude-val">Some</span>(DistributedKind::ColumnParallel) =&gt; {
-<a href=#961 id=961 data-nosnippet>961</a>                                ColumnParallelLayer::deserialize(
-<a href=#962 id=962 data-nosnippet>962</a>                                    Cow::from(artifact),
-<a href=#963 id=963 data-nosnippet>963</a>                                    <span class="kw-2">&amp;</span>devices[i],
-<a href=#964 id=964 data-nosnippet>964</a>                                    <span class="kw-2">&amp;</span>comm,
-<a href=#965 id=965 data-nosnippet>965</a>                                    guard.clone(),
-<a href=#966 id=966 data-nosnippet>966</a>                                )<span class="question-mark">?
-<a href=#967 id=967 data-nosnippet>967</a>                            </span>}
-<a href=#968 id=968 data-nosnippet>968</a>                            <span class="prelude-val">Some</span>(DistributedKind::RowParallel) =&gt; RowParallelLayer::deserialize(
-<a href=#969 id=969 data-nosnippet>969</a>                                Cow::from(artifact),
-<a href=#970 id=970 data-nosnippet>970</a>                                <span class="kw-2">&amp;</span>devices[i],
-<a href=#971 id=971 data-nosnippet>971</a>                                <span class="kw-2">&amp;</span>comm,
-<a href=#972 id=972 data-nosnippet>972</a>                                guard.clone(),
-<a href=#973 id=973 data-nosnippet>973</a>                            )<span class="question-mark">?</span>,
-<a href=#974 id=974 data-nosnippet>974</a>                            <span class="prelude-val">Some</span>(DistributedKind::Replicated) =&gt; ReplicatedLayer::deserialize(
-<a href=#975 id=975 data-nosnippet>975</a>                                Cow::from(artifact),
-<a href=#976 id=976 data-nosnippet>976</a>                                <span class="kw-2">&amp;</span>devices[i],
-<a href=#977 id=977 data-nosnippet>977</a>                                <span class="kw-2">&amp;</span>comm,
-<a href=#978 id=978 data-nosnippet>978</a>                                guard.clone(),
-<a href=#979 id=979 data-nosnippet>979</a>                            )<span class="question-mark">?</span>,
-<a href=#980 id=980 data-nosnippet>980</a>                            <span class="prelude-val">None </span>=&gt; {
-<a href=#981 id=981 data-nosnippet>981</a>                                <span class="comment">// NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
-<a href=#982 id=982 data-nosnippet>982</a>                                </span><span class="kw">let </span>isq_type = artifact[mistralrs_quant::UQFF_QUANT_TYPE_OFFSET];
-<a href=#983 id=983 data-nosnippet>983</a>                                <span class="kw">match </span>QuantizedSerdeType::try_from(isq_type <span class="kw">as </span>usize)<span class="question-mark">? </span>{
-<a href=#984 id=984 data-nosnippet>984</a>                                    QuantizedSerdeType::Gguf =&gt; GgufMatMul::deserialize(
-<a href=#985 id=985 data-nosnippet>985</a>                                        Cow::from(artifact),
-<a href=#986 id=986 data-nosnippet>986</a>                                        <span class="kw-2">&amp;</span>devices[i],
-<a href=#987 id=987 data-nosnippet>987</a>                                        <span class="kw-2">&amp;</span>comm,
-<a href=#988 id=988 data-nosnippet>988</a>                                        guard.clone(),
-<a href=#989 id=989 data-nosnippet>989</a>                                    )<span class="question-mark">?</span>,
-<a href=#990 id=990 data-nosnippet>990</a>                                    QuantizedSerdeType::Unquant =&gt; UnquantLinear::deserialize(
-<a href=#991 id=991 data-nosnippet>991</a>                                        Cow::from(artifact),
-<a href=#992 id=992 data-nosnippet>992</a>                                        <span class="kw-2">&amp;</span>devices[i],
-<a href=#993 id=993 data-nosnippet>993</a>                                        <span class="kw-2">&amp;</span>comm,
-<a href=#994 id=994 data-nosnippet>994</a>                                        guard.clone(),
-<a href=#995 id=995 data-nosnippet>995</a>                                    )<span class="question-mark">?</span>,
-<a href=#996 id=996 data-nosnippet>996</a>                                    QuantizedSerdeType::Hqq =&gt; HqqLayer::deserialize(
-<a href=#997 id=997 data-nosnippet>997</a>                                        Cow::from(artifact),
-<a href=#998 id=998 data-nosnippet>998</a>                                        <span class="kw-2">&amp;</span>devices[i],
-<a href=#999 id=999 data-nosnippet>999</a>                                        <span class="kw-2">&amp;</span>comm,
-<a href=#1000 id=1000 data-nosnippet>1000</a>                                        guard.clone(),
-<a href=#1001 id=1001 data-nosnippet>1001</a>                                    )<span class="question-mark">?</span>,
-<a href=#1002 id=1002 data-nosnippet>1002</a>                                    QuantizedSerdeType::Fp8 =&gt; FP8Linear::deserialize(
-<a href=#1003 id=1003 data-nosnippet>1003</a>                                        Cow::from(artifact),
-<a href=#1004 id=1004 data-nosnippet>1004</a>                                        <span class="kw-2">&amp;</span>devices[i],
-<a href=#1005 id=1005 data-nosnippet>1005</a>                                        <span class="kw-2">&amp;</span>comm,
-<a href=#1006 id=1006 data-nosnippet>1006</a>                                        guard.clone(),
-<a href=#1007 id=1007 data-nosnippet>1007</a>                                    )<span class="question-mark">?</span>,
-<a href=#1008 id=1008 data-nosnippet>1008</a>                                    QuantizedSerdeType::Afq =&gt; AfqLayer::deserialize(
-<a href=#1009 id=1009 data-nosnippet>1009</a>                                        Cow::from(artifact),
-<a href=#1010 id=1010 data-nosnippet>1010</a>                                        <span class="kw-2">&amp;</span>devices[i],
-<a href=#1011 id=1011 data-nosnippet>1011</a>                                        <span class="kw-2">&amp;</span>comm,
-<a href=#1012 id=1012 data-nosnippet>1012</a>                                        guard.clone(),
-<a href=#1013 id=1013 data-nosnippet>1013</a>                                    )<span class="question-mark">?</span>,
-<a href=#1014 id=1014 data-nosnippet>1014</a>                                }
-<a href=#1015 id=1015 data-nosnippet>1015</a>                            }
-<a href=#1016 id=1016 data-nosnippet>1016</a>                        };
-<a href=#1017 id=1017 data-nosnippet>1017</a>                        <span class="kw-2">*</span>tensor = deserialized;
-<a href=#1018 id=1018 data-nosnippet>1018</a>                    }
-<a href=#1019 id=1019 data-nosnippet>1019</a>                    <span class="prelude-val">Ok</span>(())
-<a href=#1020 id=1020 data-nosnippet>1020</a>                })
-<a href=#1021 id=1021 data-nosnippet>1021</a>                .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
-<a href=#1022 id=1022 data-nosnippet>1022</a>        }
-<a href=#1023 id=1023 data-nosnippet>1023</a>
-<a href=#1024 id=1024 data-nosnippet>1024</a>        <span class="kw">let </span>delta = Instant::now().duration_since(t_start).as_secs_f32();
-<a href=#1025 id=1025 data-nosnippet>1025</a>        <span class="macro">info!</span>(<span class="string">"Loaded in-situ quantization artifacts into {total_tensors} total tensors. Took {delta:.2}s"</span>, );
-<a href=#1026 id=1026 data-nosnippet>1026</a>
-<a href=#1027 id=1027 data-nosnippet>1027</a>        <span class="prelude-val">Ok</span>(())
-<a href=#1028 id=1028 data-nosnippet>1028</a>    }
-<a href=#1029 id=1029 data-nosnippet>1029</a>}
-<a href=#1030 id=1030 data-nosnippet>1030</a>
-<a href=#1031 id=1031 data-nosnippet>1031</a><span class="doccomment">/// Trait for loading models with ISQ.
-<a href=#1032 id=1032 data-nosnippet>1032</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>IsqModelLoader {
-<a href=#1033 id=1033 data-nosnippet>1033</a>    <span class="doccomment">/// Regex to match layers which will have standard *immediate* ISQ applied.
-<a href=#1034 id=1034 data-nosnippet>1034</a>    ///
-<a href=#1035 id=1035 data-nosnippet>1035</a>    /// Only called on non-adapter models!
-<a href=#1036 id=1036 data-nosnippet>1036</a>    </span><span class="kw">fn </span>immediate_isq_predicates(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
-<a href=#1037 id=1037 data-nosnippet>1037</a>        <span class="prelude-val">Ok</span>(Vec::new())
-<a href=#1038 id=1038 data-nosnippet>1038</a>    }
-<a href=#1039 id=1039 data-nosnippet>1039</a>
-<a href=#1040 id=1040 data-nosnippet>1040</a>    <span class="doccomment">/// Regex to match layers which will have standard MoQE *immediate* ISQ applied.
-<a href=#1041 id=1041 data-nosnippet>1041</a>    ///
-<a href=#1042 id=1042 data-nosnippet>1042</a>    /// Only called on non-adapter models!
-<a href=#1043 id=1043 data-nosnippet>1043</a>    </span><span class="kw">fn </span>immediate_isq_predicates_moqe(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
-<a href=#1044 id=1044 data-nosnippet>1044</a>        <span class="self">self</span>.isq_layer_regexes(config)
-<a href=#1045 id=1045 data-nosnippet>1045</a>    }
-<a href=#1046 id=1046 data-nosnippet>1046</a>
-<a href=#1047 id=1047 data-nosnippet>1047</a>    <span class="doccomment">/// Regex to match layers which will have standard ISQ applied.
-<a href=#1048 id=1048 data-nosnippet>1048</a>    ///
-<a href=#1049 id=1049 data-nosnippet>1049</a>    /// Only called on non-adapter models!
-<a href=#1050 id=1050 data-nosnippet>1050</a>    </span><span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
-<a href=#1051 id=1051 data-nosnippet>1051</a>        <span class="prelude-val">Ok</span>(Vec::new())
-<a href=#1052 id=1052 data-nosnippet>1052</a>    }
-<a href=#1053 id=1053 data-nosnippet>1053</a>
-<a href=#1054 id=1054 data-nosnippet>1054</a>    <span class="doccomment">/// Regex to match layers which will have standard MoQE ISQ applied.
-<a href=#1055 id=1055 data-nosnippet>1055</a>    ///
-<a href=#1056 id=1056 data-nosnippet>1056</a>    /// Only called on non-adapter models!
-<a href=#1057 id=1057 data-nosnippet>1057</a>    </span><span class="kw">fn </span>isq_layer_regexes_moqe(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
-<a href=#1058 id=1058 data-nosnippet>1058</a>        <span class="self">self</span>.isq_layer_regexes(config)
-<a href=#1059 id=1059 data-nosnippet>1059</a>    }
-<a href=#1060 id=1060 data-nosnippet>1060</a>}</code></pre></div></section></main></body></html>
+<a href=#741 id=741 data-nosnippet>741</a>                <span class="kw">let </span>tokenizer_ref = tokenizer.get_tokenizer();
+<a href=#742 id=742 data-nosnippet>742</a>                serde_json::to_writer_pretty(File::create(<span class="kw-2">&amp;</span>tokenizer_out)<span class="question-mark">?</span>, tokenizer_ref)
+<a href=#743 id=743 data-nosnippet>743</a>                    .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+<a href=#744 id=744 data-nosnippet>744</a>
+<a href=#745 id=745 data-nosnippet>745</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(template_filename) = template_filename {
+<a href=#746 id=746 data-nosnippet>746</a>                    <span class="kw">let </span>template =
+<a href=#747 id=747 data-nosnippet>747</a>                        std::fs::read(template_filename).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+<a href=#748 id=748 data-nosnippet>748</a>
+<a href=#749 id=749 data-nosnippet>749</a>                    <span class="kw">if </span>template_filename.extension().map(|e| e.to_str()) == <span class="prelude-val">Some</span>(<span class="prelude-val">Some</span>(<span class="string">"jinja"</span>)) {
+<a href=#750 id=750 data-nosnippet>750</a>                        <span class="macro">info!</span>(
+<a href=#751 id=751 data-nosnippet>751</a>                            <span class="string">"Serializing chat template to `{}`."</span>,
+<a href=#752 id=752 data-nosnippet>752</a>                            chat_template_jinja_out.display()
+<a href=#753 id=753 data-nosnippet>753</a>                        );
+<a href=#754 id=754 data-nosnippet>754</a>                        std::fs::write(<span class="kw-2">&amp;</span>chat_template_jinja_out, template)
+<a href=#755 id=755 data-nosnippet>755</a>                            .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+<a href=#756 id=756 data-nosnippet>756</a>                    } <span class="kw">else </span>{
+<a href=#757 id=757 data-nosnippet>757</a>                        <span class="macro">info!</span>(
+<a href=#758 id=758 data-nosnippet>758</a>                            <span class="string">"Serializing tokenizer config to `{}`."</span>,
+<a href=#759 id=759 data-nosnippet>759</a>                            tokenizer_cfg_out.display()
+<a href=#760 id=760 data-nosnippet>760</a>                        );
+<a href=#761 id=761 data-nosnippet>761</a>                        std::fs::write(<span class="kw-2">&amp;</span>tokenizer_cfg_out, template)
+<a href=#762 id=762 data-nosnippet>762</a>                            .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+<a href=#763 id=763 data-nosnippet>763</a>                    }
+<a href=#764 id=764 data-nosnippet>764</a>                }
+<a href=#765 id=765 data-nosnippet>765</a>
+<a href=#766 id=766 data-nosnippet>766</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(generation_config) = generation_config {
+<a href=#767 id=767 data-nosnippet>767</a>                    <span class="macro">info!</span>(
+<a href=#768 id=768 data-nosnippet>768</a>                        <span class="string">"Serializing generation config to `{}`."</span>,
+<a href=#769 id=769 data-nosnippet>769</a>                        gen_cfg_out.display()
+<a href=#770 id=770 data-nosnippet>770</a>                    );
+<a href=#771 id=771 data-nosnippet>771</a>
+<a href=#772 id=772 data-nosnippet>772</a>                    <span class="kw">let </span>cfg = std::fs::read(generation_config).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+<a href=#773 id=773 data-nosnippet>773</a>                    std::fs::write(<span class="kw-2">&amp;</span>gen_cfg_out, cfg).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+<a href=#774 id=774 data-nosnippet>774</a>                }
+<a href=#775 id=775 data-nosnippet>775</a>
+<a href=#776 id=776 data-nosnippet>776</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(processor_config) = processor_filename {
+<a href=#777 id=777 data-nosnippet>777</a>                    <span class="macro">info!</span>(
+<a href=#778 id=778 data-nosnippet>778</a>                        <span class="string">"Serializing processor config to `{}`."</span>,
+<a href=#779 id=779 data-nosnippet>779</a>                        processor_out.display()
+<a href=#780 id=780 data-nosnippet>780</a>                    );
+<a href=#781 id=781 data-nosnippet>781</a>
+<a href=#782 id=782 data-nosnippet>782</a>                    <span class="kw">let </span>cfg = std::fs::read(processor_config).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+<a href=#783 id=783 data-nosnippet>783</a>                    std::fs::write(<span class="kw-2">&amp;</span>processor_out, cfg).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+<a href=#784 id=784 data-nosnippet>784</a>                }
+<a href=#785 id=785 data-nosnippet>785</a>
+<a href=#786 id=786 data-nosnippet>786</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(preprocessor_config) = preprocessor_filename {
+<a href=#787 id=787 data-nosnippet>787</a>                    <span class="macro">info!</span>(
+<a href=#788 id=788 data-nosnippet>788</a>                        <span class="string">"Serializing preprocessor config to `{}`."</span>,
+<a href=#789 id=789 data-nosnippet>789</a>                        preprocessor_out.display()
+<a href=#790 id=790 data-nosnippet>790</a>                    );
+<a href=#791 id=791 data-nosnippet>791</a>
+<a href=#792 id=792 data-nosnippet>792</a>                    <span class="kw">let </span>cfg =
+<a href=#793 id=793 data-nosnippet>793</a>                        std::fs::read(preprocessor_config).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+<a href=#794 id=794 data-nosnippet>794</a>                    std::fs::write(<span class="kw-2">&amp;</span>preprocessor_out, cfg).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+<a href=#795 id=795 data-nosnippet>795</a>                }
+<a href=#796 id=796 data-nosnippet>796</a>            }
+<a href=#797 id=797 data-nosnippet>797</a>            <span class="kw">let </span>delta = Instant::now().duration_since(t_start).as_secs_f32();
+<a href=#798 id=798 data-nosnippet>798</a>            <span class="macro">info!</span>(<span class="string">"Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors. Took {delta:.2}s"</span>, );
+<a href=#799 id=799 data-nosnippet>799</a>        }
+<a href=#800 id=800 data-nosnippet>800</a>        <span class="prelude-val">Ok</span>(())
+<a href=#801 id=801 data-nosnippet>801</a>    }
+<a href=#802 id=802 data-nosnippet>802</a>
+<a href=#803 id=803 data-nosnippet>803</a>    <span class="kw">fn </span>load_from_artifacts(
+<a href=#804 id=804 data-nosnippet>804</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#805 id=805 data-nosnippet>805</a>        device: Device,
+<a href=#806 id=806 data-nosnippet>806</a>        topology: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Topology&gt;,
+<a href=#807 id=807 data-nosnippet>807</a>        silent: bool,
+<a href=#808 id=808 data-nosnippet>808</a>        artifacts: <span class="kw-2">&amp;</span>[PathBuf],
+<a href=#809 id=809 data-nosnippet>809</a>    ) -&gt; candle_core::Result&lt;()&gt; {
+<a href=#810 id=810 data-nosnippet>810</a>        <span class="kw">let </span>(tensors, mapper) = <span class="self">self</span>.get_layers();
+<a href=#811 id=811 data-nosnippet>811</a>        <span class="kw">let </span>total_tensors = tensors.len();
+<a href=#812 id=812 data-nosnippet>812</a>
+<a href=#813 id=813 data-nosnippet>813</a>        <span class="kw">let </span>layers = topology.map(|x| {
+<a href=#814 id=814 data-nosnippet>814</a>            x.<span class="number">0</span>.iter()
+<a href=#815 id=815 data-nosnippet>815</a>                .filter_map(|topo| topo.as_ref().map(|x| (x.isq, x.device.clone())))
+<a href=#816 id=816 data-nosnippet>816</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#817 id=817 data-nosnippet>817</a>        });
+<a href=#818 id=818 data-nosnippet>818</a>
+<a href=#819 id=819 data-nosnippet>819</a>        <span class="kw">let </span><span class="kw-2">mut </span>devices = Vec::new();
+<a href=#820 id=820 data-nosnippet>820</a>        <span class="kw">let </span><span class="kw-2">mut </span>comms = Vec::new();
+<a href=#821 id=821 data-nosnippet>821</a>        <span class="kw">for </span>(<span class="kw">_</span>, layer_num) <span class="kw">in </span><span class="kw-2">&amp;</span>tensors {
+<a href=#822 id=822 data-nosnippet>822</a>            <span class="kw">let </span>device = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>layers) = layers {
+<a href=#823 id=823 data-nosnippet>823</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(layer) = layer_num {
+<a href=#824 id=824 data-nosnippet>824</a>                    layers
+<a href=#825 id=825 data-nosnippet>825</a>                        .get(<span class="kw-2">*</span>layer)
+<a href=#826 id=826 data-nosnippet>826</a>                        .as_ref()
+<a href=#827 id=827 data-nosnippet>827</a>                        .map(|x| x.<span class="number">1</span>.clone())
+<a href=#828 id=828 data-nosnippet>828</a>                        .unwrap_or(<span class="prelude-val">Some</span>(device.clone()))
+<a href=#829 id=829 data-nosnippet>829</a>                        .unwrap_or(device.clone())
+<a href=#830 id=830 data-nosnippet>830</a>                } <span class="kw">else </span>{
+<a href=#831 id=831 data-nosnippet>831</a>                    device.clone()
+<a href=#832 id=832 data-nosnippet>832</a>                }
+<a href=#833 id=833 data-nosnippet>833</a>            } <span class="kw">else if let </span><span class="prelude-val">Some</span>(layer_num) = layer_num {
+<a href=#834 id=834 data-nosnippet>834</a>                mapper
+<a href=#835 id=835 data-nosnippet>835</a>                    .device_for(<span class="kw-2">*</span>layer_num, <span class="bool-val">false</span>)
+<a href=#836 id=836 data-nosnippet>836</a>                    .cloned()
+<a href=#837 id=837 data-nosnippet>837</a>                    .unwrap_or(device.clone())
+<a href=#838 id=838 data-nosnippet>838</a>            } <span class="kw">else </span>{
+<a href=#839 id=839 data-nosnippet>839</a>                device.clone()
+<a href=#840 id=840 data-nosnippet>840</a>            };
+<a href=#841 id=841 data-nosnippet>841</a>            devices.push(device);
+<a href=#842 id=842 data-nosnippet>842</a>            comms.push(mapper.get_comm_for(layer_num.unwrap_or(<span class="number">0</span>))<span class="question-mark">?</span>)
+<a href=#843 id=843 data-nosnippet>843</a>        }
+<a href=#844 id=844 data-nosnippet>844</a>
+<a href=#845 id=845 data-nosnippet>845</a>        <span class="kw">let </span>artifacts = <span class="kw">unsafe </span>{ candle_core::safetensors::MmapedSafetensors::multi(artifacts)<span class="question-mark">? </span>};
+<a href=#846 id=846 data-nosnippet>846</a>
+<a href=#847 id=847 data-nosnippet>847</a>        <span class="kw">let </span>artifact_isqs = artifacts
+<a href=#848 id=848 data-nosnippet>848</a>            .tensors()
+<a href=#849 id=849 data-nosnippet>849</a>            .into_iter()
+<a href=#850 id=850 data-nosnippet>850</a>            .map(|(name, tensor)| {
+<a href=#851 id=851 data-nosnippet>851</a>                (
+<a href=#852 id=852 data-nosnippet>852</a>                    name.parse::&lt;usize&gt;()
+<a href=#853 id=853 data-nosnippet>853</a>                        .expect(<span class="string">"Name should be parseable as usize"</span>),
+<a href=#854 id=854 data-nosnippet>854</a>                    tensor,
+<a href=#855 id=855 data-nosnippet>855</a>                )
+<a href=#856 id=856 data-nosnippet>856</a>            })
+<a href=#857 id=857 data-nosnippet>857</a>            .collect::&lt;HashMap&lt;<span class="kw">_</span>, <span class="kw">_</span>&gt;&gt;();
+<a href=#858 id=858 data-nosnippet>858</a>
+<a href=#859 id=859 data-nosnippet>859</a>        <span class="kw">if </span>artifact_isqs.len() != total_tensors {
+<a href=#860 id=860 data-nosnippet>860</a>            <span class="macro">candle_core::bail!</span>(
+<a href=#861 id=861 data-nosnippet>861</a>                <span class="string">"Number of artifacts ({}) does not match the number of ISQ layers ({total_tensors})"</span>,
+<a href=#862 id=862 data-nosnippet>862</a>                artifact_isqs.len(),
+<a href=#863 id=863 data-nosnippet>863</a>            );
+<a href=#864 id=864 data-nosnippet>864</a>        }
+<a href=#865 id=865 data-nosnippet>865</a>
+<a href=#866 id=866 data-nosnippet>866</a>        <span class="kw">let </span>bar = ProgressBar::new(total_tensors <span class="kw">as </span>u64);
+<a href=#867 id=867 data-nosnippet>867</a>        bar.set_style(
+<a href=#868 id=868 data-nosnippet>868</a>            ProgressStyle::default_bar()
+<a href=#869 id=869 data-nosnippet>869</a>                .template(<span class="string">"[{elapsed_precise}] [{bar:40.red/magenta}] {pos}/{len} ({eta})"</span>)
+<a href=#870 id=870 data-nosnippet>870</a>                .unwrap()
+<a href=#871 id=871 data-nosnippet>871</a>                .progress_chars(<span class="string">"#&gt;-"</span>),
+<a href=#872 id=872 data-nosnippet>872</a>        );
+<a href=#873 id=873 data-nosnippet>873</a>
+<a href=#874 id=874 data-nosnippet>874</a>        <span class="kw">let </span>t_start = Instant::now();
+<a href=#875 id=875 data-nosnippet>875</a>
+<a href=#876 id=876 data-nosnippet>876</a>        <span class="kw">let </span>guard = QuantizeOntoGuard::new();
+<a href=#877 id=877 data-nosnippet>877</a>
+<a href=#878 id=878 data-nosnippet>878</a>        <span class="kw">if </span>silent {
+<a href=#879 id=879 data-nosnippet>879</a>            (<span class="number">0</span>..tensors.len())
+<a href=#880 id=880 data-nosnippet>880</a>                .into_par_iter()
+<a href=#881 id=881 data-nosnippet>881</a>                .zip(tensors)
+<a href=#882 id=882 data-nosnippet>882</a>                .map(|(i, (tensor, <span class="kw">_</span>))| {
+<a href=#883 id=883 data-nosnippet>883</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(artifact) = artifact_isqs.get(<span class="kw-2">&amp;</span>i) {
+<a href=#884 id=884 data-nosnippet>884</a>                        <span class="kw">let </span>artifact = artifact.data();
+<a href=#885 id=885 data-nosnippet>885</a>
+<a href=#886 id=886 data-nosnippet>886</a>                        <span class="kw">let </span>comm = comms[i].clone();
+<a href=#887 id=887 data-nosnippet>887</a>                        <span class="kw">let </span>deserialized = <span class="kw">match </span>tensor.is_distributed() {
+<a href=#888 id=888 data-nosnippet>888</a>                            <span class="prelude-val">Some</span>(DistributedKind::ColumnParallel) =&gt; {
+<a href=#889 id=889 data-nosnippet>889</a>                                ColumnParallelLayer::deserialize(
+<a href=#890 id=890 data-nosnippet>890</a>                                    Cow::from(artifact),
+<a href=#891 id=891 data-nosnippet>891</a>                                    <span class="kw-2">&amp;</span>devices[i],
+<a href=#892 id=892 data-nosnippet>892</a>                                    <span class="kw-2">&amp;</span>comm,
+<a href=#893 id=893 data-nosnippet>893</a>                                    guard.clone(),
+<a href=#894 id=894 data-nosnippet>894</a>                                )<span class="question-mark">?
+<a href=#895 id=895 data-nosnippet>895</a>                            </span>}
+<a href=#896 id=896 data-nosnippet>896</a>                            <span class="prelude-val">Some</span>(DistributedKind::RowParallel) =&gt; RowParallelLayer::deserialize(
+<a href=#897 id=897 data-nosnippet>897</a>                                Cow::from(artifact),
+<a href=#898 id=898 data-nosnippet>898</a>                                <span class="kw-2">&amp;</span>devices[i],
+<a href=#899 id=899 data-nosnippet>899</a>                                <span class="kw-2">&amp;</span>comm,
+<a href=#900 id=900 data-nosnippet>900</a>                                guard.clone(),
+<a href=#901 id=901 data-nosnippet>901</a>                            )<span class="question-mark">?</span>,
+<a href=#902 id=902 data-nosnippet>902</a>                            <span class="prelude-val">Some</span>(DistributedKind::Replicated) =&gt; ReplicatedLayer::deserialize(
+<a href=#903 id=903 data-nosnippet>903</a>                                Cow::from(artifact),
+<a href=#904 id=904 data-nosnippet>904</a>                                <span class="kw-2">&amp;</span>devices[i],
+<a href=#905 id=905 data-nosnippet>905</a>                                <span class="kw-2">&amp;</span>comm,
+<a href=#906 id=906 data-nosnippet>906</a>                                guard.clone(),
+<a href=#907 id=907 data-nosnippet>907</a>                            )<span class="question-mark">?</span>,
+<a href=#908 id=908 data-nosnippet>908</a>                            <span class="prelude-val">None </span>=&gt; {
+<a href=#909 id=909 data-nosnippet>909</a>                                <span class="comment">// NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+<a href=#910 id=910 data-nosnippet>910</a>                                </span><span class="kw">let </span>isq_type = artifact[mistralrs_quant::UQFF_QUANT_TYPE_OFFSET];
+<a href=#911 id=911 data-nosnippet>911</a>                                <span class="kw">match </span>QuantizedSerdeType::try_from(isq_type <span class="kw">as </span>usize)<span class="question-mark">? </span>{
+<a href=#912 id=912 data-nosnippet>912</a>                                    QuantizedSerdeType::Gguf =&gt; GgufMatMul::deserialize(
+<a href=#913 id=913 data-nosnippet>913</a>                                        Cow::from(artifact),
+<a href=#914 id=914 data-nosnippet>914</a>                                        <span class="kw-2">&amp;</span>devices[i],
+<a href=#915 id=915 data-nosnippet>915</a>                                        <span class="kw-2">&amp;</span>comm,
+<a href=#916 id=916 data-nosnippet>916</a>                                        guard.clone(),
+<a href=#917 id=917 data-nosnippet>917</a>                                    )<span class="question-mark">?</span>,
+<a href=#918 id=918 data-nosnippet>918</a>                                    QuantizedSerdeType::Unquant =&gt; UnquantLinear::deserialize(
+<a href=#919 id=919 data-nosnippet>919</a>                                        Cow::from(artifact),
+<a href=#920 id=920 data-nosnippet>920</a>                                        <span class="kw-2">&amp;</span>devices[i],
+<a href=#921 id=921 data-nosnippet>921</a>                                        <span class="kw-2">&amp;</span>comm,
+<a href=#922 id=922 data-nosnippet>922</a>                                        guard.clone(),
+<a href=#923 id=923 data-nosnippet>923</a>                                    )<span class="question-mark">?</span>,
+<a href=#924 id=924 data-nosnippet>924</a>                                    QuantizedSerdeType::Hqq =&gt; HqqLayer::deserialize(
+<a href=#925 id=925 data-nosnippet>925</a>                                        Cow::from(artifact),
+<a href=#926 id=926 data-nosnippet>926</a>                                        <span class="kw-2">&amp;</span>devices[i],
+<a href=#927 id=927 data-nosnippet>927</a>                                        <span class="kw-2">&amp;</span>comm,
+<a href=#928 id=928 data-nosnippet>928</a>                                        guard.clone(),
+<a href=#929 id=929 data-nosnippet>929</a>                                    )<span class="question-mark">?</span>,
+<a href=#930 id=930 data-nosnippet>930</a>                                    QuantizedSerdeType::Fp8 =&gt; FP8Linear::deserialize(
+<a href=#931 id=931 data-nosnippet>931</a>                                        Cow::from(artifact),
+<a href=#932 id=932 data-nosnippet>932</a>                                        <span class="kw-2">&amp;</span>devices[i],
+<a href=#933 id=933 data-nosnippet>933</a>                                        <span class="kw-2">&amp;</span>comm,
+<a href=#934 id=934 data-nosnippet>934</a>                                        guard.clone(),
+<a href=#935 id=935 data-nosnippet>935</a>                                    )<span class="question-mark">?</span>,
+<a href=#936 id=936 data-nosnippet>936</a>                                    QuantizedSerdeType::Afq =&gt; AfqLayer::deserialize(
+<a href=#937 id=937 data-nosnippet>937</a>                                        Cow::from(artifact),
+<a href=#938 id=938 data-nosnippet>938</a>                                        <span class="kw-2">&amp;</span>devices[i],
+<a href=#939 id=939 data-nosnippet>939</a>                                        <span class="kw-2">&amp;</span>comm,
+<a href=#940 id=940 data-nosnippet>940</a>                                        guard.clone(),
+<a href=#941 id=941 data-nosnippet>941</a>                                    )<span class="question-mark">?</span>,
+<a href=#942 id=942 data-nosnippet>942</a>                                }
+<a href=#943 id=943 data-nosnippet>943</a>                            }
+<a href=#944 id=944 data-nosnippet>944</a>                        };
+<a href=#945 id=945 data-nosnippet>945</a>                        <span class="kw-2">*</span>tensor = deserialized;
+<a href=#946 id=946 data-nosnippet>946</a>                    }
+<a href=#947 id=947 data-nosnippet>947</a>                    <span class="prelude-val">Ok</span>(())
+<a href=#948 id=948 data-nosnippet>948</a>                })
+<a href=#949 id=949 data-nosnippet>949</a>                .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
+<a href=#950 id=950 data-nosnippet>950</a>        } <span class="kw">else </span>{
+<a href=#951 id=951 data-nosnippet>951</a>            (<span class="number">0</span>..tensors.len())
+<a href=#952 id=952 data-nosnippet>952</a>                .into_par_iter()
+<a href=#953 id=953 data-nosnippet>953</a>                .zip(tensors)
+<a href=#954 id=954 data-nosnippet>954</a>                .progress_with(bar)
+<a href=#955 id=955 data-nosnippet>955</a>                .map(|(i, (tensor, <span class="kw">_</span>))| {
+<a href=#956 id=956 data-nosnippet>956</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(artifact) = artifact_isqs.get(<span class="kw-2">&amp;</span>i) {
+<a href=#957 id=957 data-nosnippet>957</a>                        <span class="kw">let </span>artifact = artifact.data();
+<a href=#958 id=958 data-nosnippet>958</a>
+<a href=#959 id=959 data-nosnippet>959</a>                        <span class="kw">let </span>comm = comms[i].clone();
+<a href=#960 id=960 data-nosnippet>960</a>                        <span class="kw">let </span>deserialized = <span class="kw">match </span>tensor.is_distributed() {
+<a href=#961 id=961 data-nosnippet>961</a>                            <span class="prelude-val">Some</span>(DistributedKind::ColumnParallel) =&gt; {
+<a href=#962 id=962 data-nosnippet>962</a>                                ColumnParallelLayer::deserialize(
+<a href=#963 id=963 data-nosnippet>963</a>                                    Cow::from(artifact),
+<a href=#964 id=964 data-nosnippet>964</a>                                    <span class="kw-2">&amp;</span>devices[i],
+<a href=#965 id=965 data-nosnippet>965</a>                                    <span class="kw-2">&amp;</span>comm,
+<a href=#966 id=966 data-nosnippet>966</a>                                    guard.clone(),
+<a href=#967 id=967 data-nosnippet>967</a>                                )<span class="question-mark">?
+<a href=#968 id=968 data-nosnippet>968</a>                            </span>}
+<a href=#969 id=969 data-nosnippet>969</a>                            <span class="prelude-val">Some</span>(DistributedKind::RowParallel) =&gt; RowParallelLayer::deserialize(
+<a href=#970 id=970 data-nosnippet>970</a>                                Cow::from(artifact),
+<a href=#971 id=971 data-nosnippet>971</a>                                <span class="kw-2">&amp;</span>devices[i],
+<a href=#972 id=972 data-nosnippet>972</a>                                <span class="kw-2">&amp;</span>comm,
+<a href=#973 id=973 data-nosnippet>973</a>                                guard.clone(),
+<a href=#974 id=974 data-nosnippet>974</a>                            )<span class="question-mark">?</span>,
+<a href=#975 id=975 data-nosnippet>975</a>                            <span class="prelude-val">Some</span>(DistributedKind::Replicated) =&gt; ReplicatedLayer::deserialize(
+<a href=#976 id=976 data-nosnippet>976</a>                                Cow::from(artifact),
+<a href=#977 id=977 data-nosnippet>977</a>                                <span class="kw-2">&amp;</span>devices[i],
+<a href=#978 id=978 data-nosnippet>978</a>                                <span class="kw-2">&amp;</span>comm,
+<a href=#979 id=979 data-nosnippet>979</a>                                guard.clone(),
+<a href=#980 id=980 data-nosnippet>980</a>                            )<span class="question-mark">?</span>,
+<a href=#981 id=981 data-nosnippet>981</a>                            <span class="prelude-val">None </span>=&gt; {
+<a href=#982 id=982 data-nosnippet>982</a>                                <span class="comment">// NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+<a href=#983 id=983 data-nosnippet>983</a>                                </span><span class="kw">let </span>isq_type = artifact[mistralrs_quant::UQFF_QUANT_TYPE_OFFSET];
+<a href=#984 id=984 data-nosnippet>984</a>                                <span class="kw">match </span>QuantizedSerdeType::try_from(isq_type <span class="kw">as </span>usize)<span class="question-mark">? </span>{
+<a href=#985 id=985 data-nosnippet>985</a>                                    QuantizedSerdeType::Gguf =&gt; GgufMatMul::deserialize(
+<a href=#986 id=986 data-nosnippet>986</a>                                        Cow::from(artifact),
+<a href=#987 id=987 data-nosnippet>987</a>                                        <span class="kw-2">&amp;</span>devices[i],
+<a href=#988 id=988 data-nosnippet>988</a>                                        <span class="kw-2">&amp;</span>comm,
+<a href=#989 id=989 data-nosnippet>989</a>                                        guard.clone(),
+<a href=#990 id=990 data-nosnippet>990</a>                                    )<span class="question-mark">?</span>,
+<a href=#991 id=991 data-nosnippet>991</a>                                    QuantizedSerdeType::Unquant =&gt; UnquantLinear::deserialize(
+<a href=#992 id=992 data-nosnippet>992</a>                                        Cow::from(artifact),
+<a href=#993 id=993 data-nosnippet>993</a>                                        <span class="kw-2">&amp;</span>devices[i],
+<a href=#994 id=994 data-nosnippet>994</a>                                        <span class="kw-2">&amp;</span>comm,
+<a href=#995 id=995 data-nosnippet>995</a>                                        guard.clone(),
+<a href=#996 id=996 data-nosnippet>996</a>                                    )<span class="question-mark">?</span>,
+<a href=#997 id=997 data-nosnippet>997</a>                                    QuantizedSerdeType::Hqq =&gt; HqqLayer::deserialize(
+<a href=#998 id=998 data-nosnippet>998</a>                                        Cow::from(artifact),
+<a href=#999 id=999 data-nosnippet>999</a>                                        <span class="kw-2">&amp;</span>devices[i],
+<a href=#1000 id=1000 data-nosnippet>1000</a>                                        <span class="kw-2">&amp;</span>comm,
+<a href=#1001 id=1001 data-nosnippet>1001</a>                                        guard.clone(),
+<a href=#1002 id=1002 data-nosnippet>1002</a>                                    )<span class="question-mark">?</span>,
+<a href=#1003 id=1003 data-nosnippet>1003</a>                                    QuantizedSerdeType::Fp8 =&gt; FP8Linear::deserialize(
+<a href=#1004 id=1004 data-nosnippet>1004</a>                                        Cow::from(artifact),
+<a href=#1005 id=1005 data-nosnippet>1005</a>                                        <span class="kw-2">&amp;</span>devices[i],
+<a href=#1006 id=1006 data-nosnippet>1006</a>                                        <span class="kw-2">&amp;</span>comm,
+<a href=#1007 id=1007 data-nosnippet>1007</a>                                        guard.clone(),
+<a href=#1008 id=1008 data-nosnippet>1008</a>                                    )<span class="question-mark">?</span>,
+<a href=#1009 id=1009 data-nosnippet>1009</a>                                    QuantizedSerdeType::Afq =&gt; AfqLayer::deserialize(
+<a href=#1010 id=1010 data-nosnippet>1010</a>                                        Cow::from(artifact),
+<a href=#1011 id=1011 data-nosnippet>1011</a>                                        <span class="kw-2">&amp;</span>devices[i],
+<a href=#1012 id=1012 data-nosnippet>1012</a>                                        <span class="kw-2">&amp;</span>comm,
+<a href=#1013 id=1013 data-nosnippet>1013</a>                                        guard.clone(),
+<a href=#1014 id=1014 data-nosnippet>1014</a>                                    )<span class="question-mark">?</span>,
+<a href=#1015 id=1015 data-nosnippet>1015</a>                                }
+<a href=#1016 id=1016 data-nosnippet>1016</a>                            }
+<a href=#1017 id=1017 data-nosnippet>1017</a>                        };
+<a href=#1018 id=1018 data-nosnippet>1018</a>                        <span class="kw-2">*</span>tensor = deserialized;
+<a href=#1019 id=1019 data-nosnippet>1019</a>                    }
+<a href=#1020 id=1020 data-nosnippet>1020</a>                    <span class="prelude-val">Ok</span>(())
+<a href=#1021 id=1021 data-nosnippet>1021</a>                })
+<a href=#1022 id=1022 data-nosnippet>1022</a>                .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
+<a href=#1023 id=1023 data-nosnippet>1023</a>        }
+<a href=#1024 id=1024 data-nosnippet>1024</a>
+<a href=#1025 id=1025 data-nosnippet>1025</a>        <span class="kw">let </span>delta = Instant::now().duration_since(t_start).as_secs_f32();
+<a href=#1026 id=1026 data-nosnippet>1026</a>        <span class="macro">info!</span>(<span class="string">"Loaded in-situ quantization artifacts into {total_tensors} total tensors. Took {delta:.2}s"</span>, );
+<a href=#1027 id=1027 data-nosnippet>1027</a>
+<a href=#1028 id=1028 data-nosnippet>1028</a>        <span class="prelude-val">Ok</span>(())
+<a href=#1029 id=1029 data-nosnippet>1029</a>    }
+<a href=#1030 id=1030 data-nosnippet>1030</a>}
+<a href=#1031 id=1031 data-nosnippet>1031</a>
+<a href=#1032 id=1032 data-nosnippet>1032</a><span class="doccomment">/// Trait for loading models with ISQ.
+<a href=#1033 id=1033 data-nosnippet>1033</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>IsqModelLoader {
+<a href=#1034 id=1034 data-nosnippet>1034</a>    <span class="doccomment">/// Regex to match layers which will have standard *immediate* ISQ applied.
+<a href=#1035 id=1035 data-nosnippet>1035</a>    ///
+<a href=#1036 id=1036 data-nosnippet>1036</a>    /// Only called on non-adapter models!
+<a href=#1037 id=1037 data-nosnippet>1037</a>    </span><span class="kw">fn </span>immediate_isq_predicates(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
+<a href=#1038 id=1038 data-nosnippet>1038</a>        <span class="prelude-val">Ok</span>(Vec::new())
+<a href=#1039 id=1039 data-nosnippet>1039</a>    }
+<a href=#1040 id=1040 data-nosnippet>1040</a>
+<a href=#1041 id=1041 data-nosnippet>1041</a>    <span class="doccomment">/// Regex to match layers which will have standard MoQE *immediate* ISQ applied.
+<a href=#1042 id=1042 data-nosnippet>1042</a>    ///
+<a href=#1043 id=1043 data-nosnippet>1043</a>    /// Only called on non-adapter models!
+<a href=#1044 id=1044 data-nosnippet>1044</a>    </span><span class="kw">fn </span>immediate_isq_predicates_moqe(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
+<a href=#1045 id=1045 data-nosnippet>1045</a>        <span class="self">self</span>.isq_layer_regexes(config)
+<a href=#1046 id=1046 data-nosnippet>1046</a>    }
+<a href=#1047 id=1047 data-nosnippet>1047</a>
+<a href=#1048 id=1048 data-nosnippet>1048</a>    <span class="doccomment">/// Regex to match layers which will have standard ISQ applied.
+<a href=#1049 id=1049 data-nosnippet>1049</a>    ///
+<a href=#1050 id=1050 data-nosnippet>1050</a>    /// Only called on non-adapter models!
+<a href=#1051 id=1051 data-nosnippet>1051</a>    </span><span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
+<a href=#1052 id=1052 data-nosnippet>1052</a>        <span class="prelude-val">Ok</span>(Vec::new())
+<a href=#1053 id=1053 data-nosnippet>1053</a>    }
+<a href=#1054 id=1054 data-nosnippet>1054</a>
+<a href=#1055 id=1055 data-nosnippet>1055</a>    <span class="doccomment">/// Regex to match layers which will have standard MoQE ISQ applied.
+<a href=#1056 id=1056 data-nosnippet>1056</a>    ///
+<a href=#1057 id=1057 data-nosnippet>1057</a>    /// Only called on non-adapter models!
+<a href=#1058 id=1058 data-nosnippet>1058</a>    </span><span class="kw">fn </span>isq_layer_regexes_moqe(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
+<a href=#1059 id=1059 data-nosnippet>1059</a>        <span class="self">self</span>.isq_layer_regexes(config)
+<a href=#1060 id=1060 data-nosnippet>1060</a>    }
+<a href=#1061 id=1061 data-nosnippet>1061</a>}</code></pre></div></section></main></body></html>

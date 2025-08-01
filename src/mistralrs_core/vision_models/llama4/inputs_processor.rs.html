@@ -7,15 +7,15 @@
 <a href=#7 id=7 data-nosnippet>7</a>    sync::Arc,
 <a href=#8 id=8 data-nosnippet>8</a>};
 <a href=#9 id=9 data-nosnippet>9</a>
-<a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>candle_core::{Context, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
-<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>image::DynamicImage;
-<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>itertools::Itertools;
-<a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>mistralrs_vision::{
-<a href=#14 id=14 data-nosnippet>14</a>    ApplyTensorTransforms, ApplyTransforms, Normalize, Rescale, TensorTransforms, ToTensorNoNorm,
-<a href=#15 id=15 data-nosnippet>15</a>    Transforms,
-<a href=#16 id=16 data-nosnippet>16</a>};
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>ordered_float::NotNan;
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>tokenizers::Tokenizer;
+<a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span><span class="kw">crate</span>::tokenizer::TokenizerImpl;
+<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>candle_core::{Context, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
+<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>image::DynamicImage;
+<a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>itertools::Itertools;
+<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>mistralrs_vision::{
+<a href=#15 id=15 data-nosnippet>15</a>    ApplyTensorTransforms, ApplyTransforms, Normalize, Rescale, TensorTransforms, ToTensorNoNorm,
+<a href=#16 id=16 data-nosnippet>16</a>    Transforms,
+<a href=#17 id=17 data-nosnippet>17</a>};
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>ordered_float::NotNan;
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>tracing::warn;
 <a href=#20 id=20 data-nosnippet>20</a>
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use crate</span>::{
@@ -128,7 +128,7 @@
 <a href=#128 id=128 data-nosnippet>128</a>    }
 <a href=#129 id=129 data-nosnippet>129</a>    <span class="kw">fn </span>process_inputs(
 <a href=#130 id=130 data-nosnippet>130</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#131 id=131 data-nosnippet>131</a>        tokenizer: <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;,
+<a href=#131 id=131 data-nosnippet>131</a>        tokenizer: <span class="prelude-ty">Option</span>&lt;Arc&lt;TokenizerImpl&gt;&gt;,
 <a href=#132 id=132 data-nosnippet>132</a>        input_seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
 <a href=#133 id=133 data-nosnippet>133</a>        is_prompt: bool,
 <a href=#134 id=134 data-nosnippet>134</a>        is_xlora: bool,

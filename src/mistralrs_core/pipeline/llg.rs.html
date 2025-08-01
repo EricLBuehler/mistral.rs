@@ -2,32 +2,34 @@
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>anyhow::Result;
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span>llguidance::{api::TopLevelGrammar, ParserFactory};
-<a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>tokenizers::Tokenizer;
-<a href=#6 id=6 data-nosnippet>6</a>
+<a href=#5 id=5 data-nosnippet>5</a>
+<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span><span class="kw">crate</span>::tokenizer::TokenizerImpl;
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span><span class="kw">crate</span>::Constraint;
 <a href=#8 id=8 data-nosnippet>8</a>
-<a href=#9 id=9 data-nosnippet>9</a><span class="kw">pub fn </span>build_llg_factory(tokenizer: Tokenizer) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;ParserFactory&gt;&gt; {
-<a href=#10 id=10 data-nosnippet>10</a>    <span class="kw">let </span>env =
-<a href=#11 id=11 data-nosnippet>11</a>        toktrie_hf_tokenizers::ByteTokenizer::from_tokenizer(tokenizer)<span class="question-mark">?</span>.into_tok_env(<span class="prelude-val">None</span>)<span class="question-mark">?</span>;
-<a href=#12 id=12 data-nosnippet>12</a>    <span class="kw">let </span>factory = ParserFactory::new_simple(<span class="kw-2">&amp;</span>env)<span class="question-mark">?</span>;
-<a href=#13 id=13 data-nosnippet>13</a>    <span class="prelude-val">Ok</span>(Arc::new(factory))
-<a href=#14 id=14 data-nosnippet>14</a>}
-<a href=#15 id=15 data-nosnippet>15</a>
-<a href=#16 id=16 data-nosnippet>16</a><span class="kw">pub fn </span>llg_grammar_from_constraint(constraint: <span class="kw-2">&amp;</span>Constraint) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;TopLevelGrammar&gt;&gt; {
-<a href=#17 id=17 data-nosnippet>17</a>    <span class="kw">let </span>grm = <span class="kw">match </span>constraint {
-<a href=#18 id=18 data-nosnippet>18</a>        Constraint::Regex(regex) =&gt; TopLevelGrammar::from_regex(regex),
-<a href=#19 id=19 data-nosnippet>19</a>        Constraint::Lark(lark) =&gt; TopLevelGrammar::from_lark(lark.clone()),
-<a href=#20 id=20 data-nosnippet>20</a>        Constraint::JsonSchema(value) =&gt; TopLevelGrammar::from_json_schema(value.clone()),
-<a href=#21 id=21 data-nosnippet>21</a>        Constraint::Llguidance(value) =&gt; value.clone(),
-<a href=#22 id=22 data-nosnippet>22</a>        Constraint::None =&gt; <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>),
-<a href=#23 id=23 data-nosnippet>23</a>    };
-<a href=#24 id=24 data-nosnippet>24</a>    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(grm))
-<a href=#25 id=25 data-nosnippet>25</a>}
-<a href=#26 id=26 data-nosnippet>26</a>
-<a href=#27 id=27 data-nosnippet>27</a><span class="kw">pub fn </span>constraint_from_llg_grammar(
-<a href=#28 id=28 data-nosnippet>28</a>    factory: <span class="kw-2">&amp;</span>ParserFactory,
-<a href=#29 id=29 data-nosnippet>29</a>    grm: TopLevelGrammar,
-<a href=#30 id=30 data-nosnippet>30</a>) -&gt; <span class="prelude-ty">Result</span>&lt;llguidance::Matcher&gt; {
-<a href=#31 id=31 data-nosnippet>31</a>    <span class="kw">let </span>parser = factory.create_parser(grm)<span class="question-mark">?</span>;
-<a href=#32 id=32 data-nosnippet>32</a>    <span class="prelude-val">Ok</span>(llguidance::Matcher::new(<span class="prelude-val">Ok</span>(parser)))
-<a href=#33 id=33 data-nosnippet>33</a>}</code></pre></div></section></main></body></html>
+<a href=#9 id=9 data-nosnippet>9</a><span class="kw">pub fn </span>build_llg_factory(tokenizer: TokenizerImpl) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;ParserFactory&gt;&gt; {
+<a href=#10 id=10 data-nosnippet>10</a>    <span class="comment">// Get the tokenizer
+<a href=#11 id=11 data-nosnippet>11</a>    </span><span class="kw">let </span>base_tokenizer = tokenizer.get_tokenizer().clone();
+<a href=#12 id=12 data-nosnippet>12</a>    <span class="kw">let </span>env =
+<a href=#13 id=13 data-nosnippet>13</a>        toktrie_hf_tokenizers::ByteTokenizer::from_tokenizer(base_tokenizer)<span class="question-mark">?</span>.into_tok_env(<span class="prelude-val">None</span>)<span class="question-mark">?</span>;
+<a href=#14 id=14 data-nosnippet>14</a>    <span class="kw">let </span>factory = ParserFactory::new_simple(<span class="kw-2">&amp;</span>env)<span class="question-mark">?</span>;
+<a href=#15 id=15 data-nosnippet>15</a>    <span class="prelude-val">Ok</span>(Arc::new(factory))
+<a href=#16 id=16 data-nosnippet>16</a>}
+<a href=#17 id=17 data-nosnippet>17</a>
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">pub fn </span>llg_grammar_from_constraint(constraint: <span class="kw-2">&amp;</span>Constraint) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;TopLevelGrammar&gt;&gt; {
+<a href=#19 id=19 data-nosnippet>19</a>    <span class="kw">let </span>grm = <span class="kw">match </span>constraint {
+<a href=#20 id=20 data-nosnippet>20</a>        Constraint::Regex(regex) =&gt; TopLevelGrammar::from_regex(regex),
+<a href=#21 id=21 data-nosnippet>21</a>        Constraint::Lark(lark) =&gt; TopLevelGrammar::from_lark(lark.clone()),
+<a href=#22 id=22 data-nosnippet>22</a>        Constraint::JsonSchema(value) =&gt; TopLevelGrammar::from_json_schema(value.clone()),
+<a href=#23 id=23 data-nosnippet>23</a>        Constraint::Llguidance(value) =&gt; value.clone(),
+<a href=#24 id=24 data-nosnippet>24</a>        Constraint::None =&gt; <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>),
+<a href=#25 id=25 data-nosnippet>25</a>    };
+<a href=#26 id=26 data-nosnippet>26</a>    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(grm))
+<a href=#27 id=27 data-nosnippet>27</a>}
+<a href=#28 id=28 data-nosnippet>28</a>
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">pub fn </span>constraint_from_llg_grammar(
+<a href=#30 id=30 data-nosnippet>30</a>    factory: <span class="kw-2">&amp;</span>ParserFactory,
+<a href=#31 id=31 data-nosnippet>31</a>    grm: TopLevelGrammar,
+<a href=#32 id=32 data-nosnippet>32</a>) -&gt; <span class="prelude-ty">Result</span>&lt;llguidance::Matcher&gt; {
+<a href=#33 id=33 data-nosnippet>33</a>    <span class="kw">let </span>parser = factory.create_parser(grm)<span class="question-mark">?</span>;
+<a href=#34 id=34 data-nosnippet>34</a>    <span class="prelude-val">Ok</span>(llguidance::Matcher::new(<span class="prelude-val">Ok</span>(parser)))
+<a href=#35 id=35 data-nosnippet>35</a>}</code></pre></div></section></main></body></html>
