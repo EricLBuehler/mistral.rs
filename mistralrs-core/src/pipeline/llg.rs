@@ -2,27 +2,17 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use llguidance::{api::TopLevelGrammar, ParserFactory};
-use tracing::info;
 
 use crate::tokenizer::TokenizerImpl;
 use crate::Constraint;
 
 pub fn build_llg_factory(tokenizer: TokenizerImpl) -> Result<Option<Arc<ParserFactory>>> {
-    // Get the HuggingFace tokenizer if available
-    match tokenizer.get_hf_tokenizer() {
-        Some(base_tokenizer) => {
-            let base_tokenizer = base_tokenizer.clone();
-            let env = toktrie_hf_tokenizers::ByteTokenizer::from_tokenizer(base_tokenizer)?
-                .into_tok_env(None)?;
-            let factory = ParserFactory::new_simple(&env)?;
-            Ok(Some(Arc::new(factory)))
-        }
-        None => {
-            // Return None if tokenizer is not HuggingFace-compatible (e.g., Tekken)
-            info!("LLG guidance not available for non-HuggingFace tokenizers (e.g., Tekken)");
-            Ok(None)
-        }
-    }
+    // Get the tokenizer
+    let base_tokenizer = tokenizer.get_tokenizer().clone();
+    let env =
+        toktrie_hf_tokenizers::ByteTokenizer::from_tokenizer(base_tokenizer)?.into_tok_env(None)?;
+    let factory = ParserFactory::new_simple(&env)?;
+    Ok(Some(Arc::new(factory)))
 }
 
 pub fn llg_grammar_from_constraint(constraint: &Constraint) -> Result<Option<TopLevelGrammar>> {

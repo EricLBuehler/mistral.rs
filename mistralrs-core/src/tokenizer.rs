@@ -39,13 +39,11 @@ impl Encoding {
     }
 }
 
-/// Enum representing different tokenizer implementations
+/// Wrapper for tokenizer implementations
 #[derive(Clone)]
 pub enum TokenizerImpl {
-    /// HuggingFace tokenizers (from tokenizer.json)
-    HuggingFace(Tokenizer),
-    /// GGUF embedded tokenizers
-    Gguf {
+    /// Tokenizer instance with optional special tokens
+    Tokenizer {
         tokenizer: Tokenizer,
         bos: Option<String>,
         eos: Option<String>,
@@ -57,16 +55,7 @@ impl TokenizerImpl {
     /// Encode text into tokens
     pub fn encode(&self, text: &str, add_special_tokens: bool) -> Result<Encoding> {
         match self {
-            Self::HuggingFace(tokenizer) => {
-                let encoding = tokenizer
-                    .encode(text, add_special_tokens)
-                    .map_err(anyhow::Error::msg)?;
-                Ok(Encoding::new(
-                    encoding.get_ids().to_vec(),
-                    encoding.get_attention_mask().to_vec(),
-                ))
-            }
-            Self::Gguf { tokenizer, .. } => {
+            Self::Tokenizer { tokenizer, .. } => {
                 let encoding = tokenizer
                     .encode(text, add_special_tokens)
                     .map_err(anyhow::Error::msg)?;
@@ -85,16 +74,7 @@ impl TokenizerImpl {
         add_special_tokens: bool,
     ) -> Result<Encoding> {
         match self {
-            Self::HuggingFace(tokenizer) => {
-                let encoding = tokenizer
-                    .encode_fast(text, add_special_tokens)
-                    .map_err(anyhow::Error::msg)?;
-                Ok(Encoding::new(
-                    encoding.get_ids().to_vec(),
-                    encoding.get_attention_mask().to_vec(),
-                ))
-            }
-            Self::Gguf { tokenizer, .. } => {
+            Self::Tokenizer { tokenizer, .. } => {
                 let encoding = tokenizer
                     .encode_fast(text, add_special_tokens)
                     .map_err(anyhow::Error::msg)?;
@@ -109,10 +89,7 @@ impl TokenizerImpl {
     /// Decode tokens into text
     pub fn decode(&self, ids: &[u32], skip_special_tokens: bool) -> Result<String> {
         match self {
-            Self::HuggingFace(tokenizer) => tokenizer
-                .decode(ids, skip_special_tokens)
-                .map_err(anyhow::Error::msg),
-            Self::Gguf { tokenizer, .. } => tokenizer
+            Self::Tokenizer { tokenizer, .. } => tokenizer
                 .decode(ids, skip_special_tokens)
                 .map_err(anyhow::Error::msg),
         }
@@ -121,74 +98,63 @@ impl TokenizerImpl {
     /// Get the vocabulary
     pub fn get_vocab(&self, with_added_tokens: bool) -> Option<HashMap<String, u32>> {
         match self {
-            Self::HuggingFace(tokenizer) => Some(tokenizer.get_vocab(with_added_tokens)),
-            Self::Gguf { tokenizer, .. } => Some(tokenizer.get_vocab(with_added_tokens)),
+            Self::Tokenizer { tokenizer, .. } => Some(tokenizer.get_vocab(with_added_tokens)),
         }
     }
 
     /// Get vocabulary size
     pub fn get_vocab_size(&self, with_added_tokens: bool) -> usize {
         match self {
-            Self::HuggingFace(tokenizer) => tokenizer.get_vocab_size(with_added_tokens),
-            Self::Gguf { tokenizer, .. } => tokenizer.get_vocab_size(with_added_tokens),
+            Self::Tokenizer { tokenizer, .. } => tokenizer.get_vocab_size(with_added_tokens),
         }
     }
 
     /// Add special tokens
     pub fn add_special_tokens(&mut self, tokens: &[AddedToken]) -> usize {
         match self {
-            Self::HuggingFace(tokenizer) => tokenizer.add_special_tokens(tokens),
-            Self::Gguf { tokenizer, .. } => tokenizer.add_special_tokens(tokens),
+            Self::Tokenizer { tokenizer, .. } => tokenizer.add_special_tokens(tokens),
         }
     }
 
-    /// Get the underlying HuggingFace tokenizer if available
-    pub fn get_hf_tokenizer(&self) -> Option<&Tokenizer> {
+    /// Get the underlying tokenizer
+    pub fn get_tokenizer(&self) -> &Tokenizer {
         match self {
-            Self::HuggingFace(tokenizer) => Some(tokenizer),
-            Self::Gguf { tokenizer, .. } => Some(tokenizer),
+            Self::Tokenizer { tokenizer, .. } => tokenizer,
         }
     }
 
     /// Get BOS token if available
     pub fn bos_token(&self) -> Option<&str> {
         match self {
-            Self::HuggingFace(_) => None, // HF tokenizers handle this internally
-            Self::Gguf { bos, .. } => bos.as_deref(),
+            Self::Tokenizer { bos, .. } => bos.as_deref(),
         }
     }
 
     /// Get EOS token if available
     pub fn eos_token(&self) -> Option<&str> {
         match self {
-            Self::HuggingFace(_) => None, // HF tokenizers handle this internally
-            Self::Gguf { eos, .. } => eos.as_deref(),
+            Self::Tokenizer { eos, .. } => eos.as_deref(),
         }
     }
 
     /// Get UNK token if available
     pub fn unk_token(&self) -> Option<&str> {
         match self {
-            Self::HuggingFace(_) => None, // HF tokenizers handle this internally
-            Self::Gguf { unk, .. } => unk.as_deref(),
+            Self::Tokenizer { unk, .. } => unk.as_deref(),
         }
     }
 
     /// Get token ID from token string
     pub fn token_to_id(&self, token: &str) -> Option<u32> {
         match self {
-            Self::HuggingFace(tokenizer) => tokenizer.token_to_id(token),
-            Self::Gguf { tokenizer, .. } => tokenizer.token_to_id(token),
+            Self::Tokenizer { tokenizer, .. } => tokenizer.token_to_id(token),
         }
     }
 
     /// Set padding parameters
     pub fn with_padding(&mut self, padding: Option<tokenizers::PaddingParams>) -> &mut Self {
         match self {
-            Self::HuggingFace(tokenizer) => {
-                tokenizer.with_padding(padding);
-            }
-            Self::Gguf { tokenizer, .. } => {
+            Self::Tokenizer { tokenizer, .. } => {
                 tokenizer.with_padding(padding);
             }
         }
@@ -206,16 +172,7 @@ impl TokenizerImpl {
             inputs.into_iter().map(|s| s.as_ref().to_string()).collect();
 
         match self {
-            Self::HuggingFace(tokenizer) => {
-                let encodings = tokenizer
-                    .encode_batch(input_strings, add_special_tokens)
-                    .map_err(anyhow::Error::msg)?;
-                Ok(encodings
-                    .into_iter()
-                    .map(|e| Encoding::new(e.get_ids().to_vec(), e.get_attention_mask().to_vec()))
-                    .collect())
-            }
-            Self::Gguf { tokenizer, .. } => {
+            Self::Tokenizer { tokenizer, .. } => {
                 let encodings = tokenizer
                     .encode_batch(input_strings, add_special_tokens)
                     .map_err(anyhow::Error::msg)?;
@@ -234,10 +191,7 @@ impl TokenizerImpl {
         skip_special_tokens: bool,
     ) -> Result<Vec<String>> {
         match self {
-            Self::HuggingFace(tokenizer) => tokenizer
-                .decode_batch(token_sequences, skip_special_tokens)
-                .map_err(anyhow::Error::msg),
-            Self::Gguf { tokenizer, .. } => tokenizer
+            Self::Tokenizer { tokenizer, .. } => tokenizer
                 .decode_batch(token_sequences, skip_special_tokens)
                 .map_err(anyhow::Error::msg),
         }

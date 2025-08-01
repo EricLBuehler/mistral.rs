@@ -45,5 +45,10 @@ pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(
                 .collect::<Vec<_>>(),
         );
     }
-    Ok(TokenizerImpl::HuggingFace(tokenizer))
+    Ok(TokenizerImpl::Tokenizer {
+        tokenizer,
+        bos: None,
+        eos: None,
+        unk: None,
+    })
 }

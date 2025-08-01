@@ -738,10 +738,8 @@ pub trait IsqModel {
 
                 info!("Serializing tokenizer to `{}`.", tokenizer_out.display());
 
-                let hf_tokenizer = tokenizer.get_hf_tokenizer().ok_or_else(|| {
-                    candle_core::Error::msg("Cannot serialize non-HuggingFace tokenizer")
-                })?;
-                serde_json::to_writer_pretty(File::create(&tokenizer_out)?, hf_tokenizer)
+                let tokenizer_ref = tokenizer.get_tokenizer();
+                serde_json::to_writer_pretty(File::create(&tokenizer_out)?, tokenizer_ref)
                     .map_err(candle_core::Error::msg)?;
 
                 if let Some(template_filename) = template_filename {

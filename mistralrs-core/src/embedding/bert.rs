@@ -430,7 +430,12 @@ impl BertPipeline {
         let config: Config = serde_json::from_str(&config)?;
         let base_tokenizer = tokenizers::Tokenizer::from_file(tokenizer_filename)
             .map_err(candle_core::Error::msg)?;
-        let tokenizer = TokenizerImpl::HuggingFace(base_tokenizer);
+        let tokenizer = TokenizerImpl::Tokenizer {
+            tokenizer: base_tokenizer,
+            bos: None,
+            eos: None,
+            unk: None,
+        };
 
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&[weights_filename], DType::F32, device)?
