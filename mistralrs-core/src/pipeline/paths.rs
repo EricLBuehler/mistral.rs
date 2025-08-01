@@ -30,7 +30,8 @@ use crate::{
 const SAFETENSOR_MATCH: &str = r"model-\d+-of-\d+\.safetensors\b";
 
 // Embedded chat template for Mistral models with Tekken tokenizer
-const MISTRAL_TEKKEN_CHAT_TEMPLATE: &str = include_str!("../../../chat_templates/mistral_default_tool_call.jinja");
+const MISTRAL_TEKKEN_CHAT_TEMPLATE: &str =
+    include_str!("../../../chat_templates/mistral_default_tool_call.jinja");
 const QUANT_SAFETENSOR_MATCH: &str = r"model\.safetensors\b";
 const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}.((pth)|(pt)|(bin))\b";
 
@@ -418,10 +419,11 @@ pub(crate) fn get_chat_template(
     chat_template_ovrd: Option<String>,
 ) -> ChatTemplate {
     // Check if this is a tekken tokenizer
-    let is_tekken = paths.get_tokenizer_filename()
+    let is_tekken = paths
+        .get_tokenizer_filename()
         .to_string_lossy()
         .contains("tekken");
-    
+
     // Get template content, this may be overridden.
     let template_content = if let Some(template_filename) = paths.get_template_filename() {
         if !["jinja", "json"].contains(
@@ -460,7 +462,9 @@ pub(crate) fn get_chat_template(
         None if is_tekken && template_content.is_none() => {
             // Use embedded Mistral chat template for tekken
             let mut template = ChatTemplate::default();
-            template.chat_template = Some(ChatTemplateValue(Either::Left(MISTRAL_TEKKEN_CHAT_TEMPLATE.to_string())));
+            template.chat_template = Some(ChatTemplateValue(Either::Left(
+                MISTRAL_TEKKEN_CHAT_TEMPLATE.to_string(),
+            )));
             // Set common tokens for Mistral models using Tekken
             template.bos_token = Some(BeginEndUnkPadTok(Either::Left("<s>".to_string())));
             template.eos_token = Some(BeginEndUnkPadTok(Either::Left("</s>".to_string())));

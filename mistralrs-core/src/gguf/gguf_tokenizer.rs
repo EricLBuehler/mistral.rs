@@ -132,7 +132,12 @@ pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
     let eos = Some(props.tokens[props.eos as usize].clone());
 
     Ok(GgufTokenizerConversion {
-        tokenizer: TokenizerImpl::new_gguf(tokenizer, bos, eos, unk),
+        tokenizer: TokenizerImpl::Gguf {
+            tokenizer,
+            bos,
+            eos,
+            unk,
+        },
     })
 }
 

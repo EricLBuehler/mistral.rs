@@ -33,27 +33,25 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     use_prefix_cacher: bool,
 ) -> Result<()> {
     let mut is_done = seq.is_done(logprobs.token, eos_tok, this.get_metadata().max_seq_len);
-    
+
     // Decode the token to bytes
     let completion_bytes = if let Some(tok_env) = this.get_metadata().tok_env() {
         // Use token trie if available (for HuggingFace tokenizers)
         tok_env.tok_trie().decode(&[logprobs.token])
     } else {
         // Fallback to tokenizer decode for tokenizers without trie (e.g., Tekken)
-        let tokenizer = this.tokenizer()
-            .ok_or_else(|| candle_core::Error::Msg(
-                "Pipeline must have either a token trie or a tokenizer".to_string()
-            ))?;
-        let text = tokenizer.decode(&[logprobs.token], false)
+        let tokenizer = this.tokenizer().ok_or_else(|| {
+            candle_core::Error::Msg(
+                "Pipeline must have either a token trie or a tokenizer".to_string(),
+            )
+        })?;
+        let text = tokenizer
+            .decode(&[logprobs.token], false)
             .map_err(candle_core::Error::msg)?;
         text.into_bytes()
     };
-    
-    seq.add_token(
-        logprobs.clone(),
-        completion_bytes,
-        &is_done,
-    );
+
+    seq.add_token(logprobs.clone(), completion_bytes, &is_done);
 
     // If we can have a tool and we got a tool, stop the sequence early.
     // Doesn't conflict with the logic below because it does the same thing anyway.

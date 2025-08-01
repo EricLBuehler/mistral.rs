@@ -12,7 +12,8 @@ pub fn build_llg_factory(tokenizer: TokenizerImpl) -> Result<Option<Arc<ParserFa
     match tokenizer.get_hf_tokenizer() {
         Some(base_tokenizer) => {
             let base_tokenizer = base_tokenizer.clone();
-            let env = toktrie_hf_tokenizers::ByteTokenizer::from_tokenizer(base_tokenizer)?.into_tok_env(None)?;
+            let env = toktrie_hf_tokenizers::ByteTokenizer::from_tokenizer(base_tokenizer)?
+                .into_tok_env(None)?;
             let factory = ParserFactory::new_simple(&env)?;
             Ok(Some(Arc::new(factory)))
         }

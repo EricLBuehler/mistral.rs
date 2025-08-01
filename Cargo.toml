@@ -31,7 +31,6 @@ candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0
 candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "95d713f9" }
 candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "95d713f9" }
 candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "95d713f9" }
-tekken = { version = "0.1", package = "tekken-rs" }
 # candle-core = { path = "../candle/candle-core" }
 # candle-nn = { path = "../candle/candle-nn" }
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }

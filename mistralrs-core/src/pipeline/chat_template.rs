@@ -167,7 +167,7 @@ pub fn calculate_eos_tokens(
     );
 
     let mut eos_toks = Vec::new();
-    
+
     // Handle tokenizers that don't expose vocabulary (e.g., Tekken)
     if let Some(vocab) = tokenizer.get_vocab(true) {
         for eos_tok in eos_tok_ids {
@@ -186,7 +186,7 @@ pub fn calculate_eos_tokens(
         }
         info!("Using default EOS token IDs for tokenizer without vocabulary access");
     }
-    
+
     eos_toks
 }
 

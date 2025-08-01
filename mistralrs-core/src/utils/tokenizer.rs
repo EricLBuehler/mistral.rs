@@ -5,7 +5,6 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde_json::Value;
 use tokenizers::{tokenizer, Tokenizer};
-use tekken::Tekkenizer;
 
 #[derive(Deserialize)]
 struct AddedToken {
@@ -18,16 +17,6 @@ pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(
     p: P,
     processor_added_tokens: Option<&[&str]>,
 ) -> Result<TokenizerImpl> {
-    // Check if this is a Tekken tokenizer by trying to detect its format
-    let path_str = p.as_ref().to_string_lossy();
-    if path_str.ends_with("tekken.json") || path_str.contains("tekken") {
-        // Try to load as Tekken tokenizer
-        match Tekkenizer::from_file(p.as_ref()) {
-            Ok(tekken) => return TokenizerImpl::new_tekken(tekken),
-            Err(_e) => ()
-        }
-    }
-
     let mut tokenizer = {
         let raw = std::fs::read(p.clone()).map_err(anyhow::Error::msg)?;
         let mut tokenizer: Value = serde_json::from_slice(&raw).unwrap();
@@ -56,5 +45,5 @@ pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(
                 .collect::<Vec<_>>(),
         );
     }
-    Ok(TokenizerImpl::new_huggingface(tokenizer))
+    Ok(TokenizerImpl::HuggingFace(tokenizer))
 }
