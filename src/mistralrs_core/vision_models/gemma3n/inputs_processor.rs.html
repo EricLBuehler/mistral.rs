@@ -2,10 +2,10 @@
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a></span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 <a href=#4 id=4 data-nosnippet>4</a>
-<a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span><span class="kw">crate</span>::tokenizer::TokenizerImpl;
-<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
-<a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>image::DynamicImage;
-<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>mistralrs_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};
+<a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
+<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>image::DynamicImage;
+<a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>mistralrs_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};
+<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>tokenizers::Tokenizer;
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>tracing::warn;
 <a href=#10 id=10 data-nosnippet>10</a>
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">use crate</span>::{
@@ -114,7 +114,7 @@
 <a href=#114 id=114 data-nosnippet>114</a>    }
 <a href=#115 id=115 data-nosnippet>115</a>    <span class="kw">fn </span>process_inputs(
 <a href=#116 id=116 data-nosnippet>116</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#117 id=117 data-nosnippet>117</a>        tokenizer: <span class="prelude-ty">Option</span>&lt;Arc&lt;TokenizerImpl&gt;&gt;,
+<a href=#117 id=117 data-nosnippet>117</a>        tokenizer: <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;,
 <a href=#118 id=118 data-nosnippet>118</a>        input_seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
 <a href=#119 id=119 data-nosnippet>119</a>        is_prompt: bool,
 <a href=#120 id=120 data-nosnippet>120</a>        is_xlora: bool,

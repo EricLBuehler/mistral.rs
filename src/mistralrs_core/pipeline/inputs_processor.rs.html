@@ -2,10 +2,10 @@
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a></span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 <a href=#4 id=4 data-nosnippet>4</a>
-<a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span><span class="kw">crate</span>::tokenizer::TokenizerImpl;
-<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>anyhow::Result;
-<a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>candle_core::Device;
-<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>text_models_inputs_processor::PagedAttentionMeta;
+<a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>anyhow::Result;
+<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>candle_core::Device;
+<a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>text_models_inputs_processor::PagedAttentionMeta;
+<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>tokenizers::Tokenizer;
 <a href=#9 id=9 data-nosnippet>9</a>
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use crate</span>::{device_map::DeviceMapper, sequence::Sequence};
 <a href=#11 id=11 data-nosnippet>11</a>
@@ -31,7 +31,7 @@
 <a href=#31 id=31 data-nosnippet>31</a>    </span><span class="attr">#[allow(clippy::too_many_arguments)]
 <a href=#32 id=32 data-nosnippet>32</a>    </span><span class="kw">fn </span>process_inputs(
 <a href=#33 id=33 data-nosnippet>33</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#34 id=34 data-nosnippet>34</a>        tokenizer: <span class="prelude-ty">Option</span>&lt;Arc&lt;TokenizerImpl&gt;&gt;,
+<a href=#34 id=34 data-nosnippet>34</a>        tokenizer: <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;,
 <a href=#35 id=35 data-nosnippet>35</a>        input_seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
 <a href=#36 id=36 data-nosnippet>36</a>        is_prompt: bool,
 <a href=#37 id=37 data-nosnippet>37</a>        is_xlora: bool,
@@ -53,9 +53,9 @@
 <a href=#53 id=53 data-nosnippet>53</a></span><span class="kw">pub mod </span>text_models_inputs_processor {
 <a href=#54 id=54 data-nosnippet>54</a>    <span class="kw">use </span>std::{any::Any, collections::HashMap, fmt::Debug, num::NonZeroUsize, sync::Arc};
 <a href=#55 id=55 data-nosnippet>55</a>
-<a href=#56 id=56 data-nosnippet>56</a>    <span class="kw">use </span><span class="kw">crate</span>::tokenizer::TokenizerImpl;
-<a href=#57 id=57 data-nosnippet>57</a>    <span class="kw">use </span>anyhow::Result;
-<a href=#58 id=58 data-nosnippet>58</a>    <span class="kw">use </span>candle_core::{DType, Device, DeviceLocation, Tensor, WithDType};
+<a href=#56 id=56 data-nosnippet>56</a>    <span class="kw">use </span>anyhow::Result;
+<a href=#57 id=57 data-nosnippet>57</a>    <span class="kw">use </span>candle_core::{DType, Device, DeviceLocation, Tensor, WithDType};
+<a href=#58 id=58 data-nosnippet>58</a>    <span class="kw">use </span>tokenizers::Tokenizer;
 <a href=#59 id=59 data-nosnippet>59</a>
 <a href=#60 id=60 data-nosnippet>60</a>    <span class="kw">use crate</span>::{
 <a href=#61 id=61 data-nosnippet>61</a>        device_map::DeviceMapper,
@@ -645,7 +645,7 @@
 <a href=#645 id=645 data-nosnippet>645</a>    <span class="kw">impl </span>InputsProcessor <span class="kw">for </span>TextInputsProcessor {
 <a href=#646 id=646 data-nosnippet>646</a>        <span class="kw">fn </span>process_inputs(
 <a href=#647 id=647 data-nosnippet>647</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#648 id=648 data-nosnippet>648</a>            <span class="kw">_</span>: <span class="prelude-ty">Option</span>&lt;Arc&lt;TokenizerImpl&gt;&gt;,
+<a href=#648 id=648 data-nosnippet>648</a>            <span class="kw">_</span>: <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;,
 <a href=#649 id=649 data-nosnippet>649</a>            input_seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
 <a href=#650 id=650 data-nosnippet>650</a>            is_prompt: bool,
 <a href=#651 id=651 data-nosnippet>651</a>            is_xlora: bool,

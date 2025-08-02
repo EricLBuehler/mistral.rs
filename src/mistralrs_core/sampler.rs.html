@@ -10,12 +10,12 @@
 <a href=#10 id=10 data-nosnippet>10</a><span class="attr">#[cfg(feature = <span class="string">"pyo3_macros"</span>)]
 <a href=#11 id=11 data-nosnippet>11</a></span><span class="kw">use </span>pyo3::pyclass;
 <a href=#12 id=12 data-nosnippet>12</a>
-<a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span><span class="kw">crate</span>::tokenizer::TokenizerImpl;
-<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>once_cell::sync::Lazy;
-<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>rand::distr::{weighted::WeightedIndex, Distribution};
-<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>rand_isaac::Isaac64Rng;
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>serde::{Deserialize, Serialize};
+<a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>once_cell::sync::Lazy;
+<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>rand::distr::{weighted::WeightedIndex, Distribution};
+<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>rand_isaac::Isaac64Rng;
+<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
+<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>serde::{Deserialize, Serialize};
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>tokenizers::Tokenizer;
 <a href=#19 id=19 data-nosnippet>19</a>
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">static </span>DRY_SEQUENCE_BREAKERS: Lazy&lt;Vec&lt;String&gt;&gt; =
 <a href=#21 id=21 data-nosnippet>21</a>    Lazy::new(|| [<span class="string">"\n"</span>, <span class="string">":"</span>, <span class="string">"\""</span>, <span class="string">"*"</span>].map(String::from).to_vec());
@@ -111,7 +111,7 @@
 <a href=#111 id=111 data-nosnippet>111</a>}
 <a href=#112 id=112 data-nosnippet>112</a>
 <a href=#113 id=113 data-nosnippet>113</a><span class="kw">impl </span>DrySamplingParamsInner {
-<a href=#114 id=114 data-nosnippet>114</a>    <span class="kw">pub fn </span>from(other: DrySamplingParams, tokenizer: <span class="kw-2">&amp;</span>TokenizerImpl) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt; {
+<a href=#114 id=114 data-nosnippet>114</a>    <span class="kw">pub fn </span>from(other: DrySamplingParams, tokenizer: <span class="kw-2">&amp;</span>Tokenizer) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt; {
 <a href=#115 id=115 data-nosnippet>115</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
 <a href=#116 id=116 data-nosnippet>116</a>            base: other.base,
 <a href=#117 id=117 data-nosnippet>117</a>            allowed_length: other.allowed_length,
@@ -182,7 +182,7 @@
 <a href=#182 id=182 data-nosnippet>182</a></span><span class="kw">pub struct </span>Sampler {
 <a href=#183 id=183 data-nosnippet>183</a>    temperature: <span class="prelude-ty">Option</span>&lt;f64&gt;,
 <a href=#184 id=184 data-nosnippet>184</a>    top_n_logprobs: usize,
-<a href=#185 id=185 data-nosnippet>185</a>    tokenizer: <span class="prelude-ty">Option</span>&lt;Arc&lt;TokenizerImpl&gt;&gt;,
+<a href=#185 id=185 data-nosnippet>185</a>    tokenizer: <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;,
 <a href=#186 id=186 data-nosnippet>186</a>    frequency_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
 <a href=#187 id=187 data-nosnippet>187</a>    presence_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
 <a href=#188 id=188 data-nosnippet>188</a>    dry_params: <span class="prelude-ty">Option</span>&lt;DrySamplingParamsInner&gt;,
@@ -221,7 +221,7 @@
 <a href=#221 id=221 data-nosnippet>221</a>    </span><span class="kw">pub fn </span>new(
 <a href=#222 id=222 data-nosnippet>222</a>        temperature: <span class="prelude-ty">Option</span>&lt;f64&gt;,
 <a href=#223 id=223 data-nosnippet>223</a>        top_n_logprobs: usize,
-<a href=#224 id=224 data-nosnippet>224</a>        tokenizer: <span class="prelude-ty">Option</span>&lt;Arc&lt;TokenizerImpl&gt;&gt;,
+<a href=#224 id=224 data-nosnippet>224</a>        tokenizer: <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;,
 <a href=#225 id=225 data-nosnippet>225</a>        frequency_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
 <a href=#226 id=226 data-nosnippet>226</a>        presence_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
 <a href=#227 id=227 data-nosnippet>227</a>        dry_params: <span class="prelude-ty">Option</span>&lt;DrySamplingParams&gt;,

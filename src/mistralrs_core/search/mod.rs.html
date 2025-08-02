@@ -3,14 +3,14 @@
 <a href=#3 id=3 data-nosnippet>3</a>
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">pub mod </span>rag;
 <a href=#5 id=5 data-nosnippet>5</a>
-<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span><span class="kw">crate</span>::tokenizer::TokenizerImpl;
-<a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>anyhow::Result;
-<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>html2text::{config, render::PlainDecorator};
-<a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>rayon::prelude::<span class="kw-2">*</span>;
-<a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>scraper::{Html, Selector};
-<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>serde::{Deserialize, Serialize};
-<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>serde_json::{json, Value};
-<a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>std::env::consts::{ARCH, FAMILY, OS};
+<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>anyhow::Result;
+<a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>html2text::{config, render::PlainDecorator};
+<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>rayon::prelude::<span class="kw-2">*</span>;
+<a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>scraper::{Html, Selector};
+<a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>serde::{Deserialize, Serialize};
+<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>serde_json::{json, Value};
+<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>std::env::consts::{ARCH, FAMILY, OS};
+<a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>tokenizers::Tokenizer;
 <a href=#14 id=14 data-nosnippet>14</a>
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use crate</span>::{Function, Tool, ToolType, WebSearchOptions, WebSearchUserLocation};
 <a href=#16 id=16 data-nosnippet>16</a>
@@ -78,7 +78,7 @@
 <a href=#78 id=78 data-nosnippet>78</a>}
 <a href=#79 id=79 data-nosnippet>79</a>
 <a href=#80 id=80 data-nosnippet>80</a><span class="kw">impl </span>SearchResult {
-<a href=#81 id=81 data-nosnippet>81</a>    <span class="kw">pub fn </span>cap_content_len(<span class="self">self</span>, tokenizer: <span class="kw-2">&amp;</span>TokenizerImpl, size: usize) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#81 id=81 data-nosnippet>81</a>    <span class="kw">pub fn </span>cap_content_len(<span class="self">self</span>, tokenizer: <span class="kw-2">&amp;</span>Tokenizer, size: usize) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
 <a href=#82 id=82 data-nosnippet>82</a>        <span class="kw">let </span>tokenized_content = tokenizer
 <a href=#83 id=83 data-nosnippet>83</a>            .encode_fast(<span class="self">self</span>.content, <span class="bool-val">false</span>)
 <a href=#84 id=84 data-nosnippet>84</a>            .map_err(anyhow::Error::msg)<span class="question-mark">?</span>;
@@ -97,7 +97,7 @@
 <a href=#97 id=97 data-nosnippet>97</a>}
 <a href=#98 id=98 data-nosnippet>98</a>
 <a href=#99 id=99 data-nosnippet>99</a><span class="kw">impl </span>ExtractResult {
-<a href=#100 id=100 data-nosnippet>100</a>    <span class="kw">pub fn </span>cap_content_len(<span class="self">self</span>, tokenizer: <span class="kw-2">&amp;</span>TokenizerImpl, size: usize) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#100 id=100 data-nosnippet>100</a>    <span class="kw">pub fn </span>cap_content_len(<span class="self">self</span>, tokenizer: <span class="kw-2">&amp;</span>Tokenizer, size: usize) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
 <a href=#101 id=101 data-nosnippet>101</a>        <span class="kw">let </span>tokenized_content = tokenizer
 <a href=#102 id=102 data-nosnippet>102</a>            .encode_fast(<span class="self">self</span>.content, <span class="bool-val">false</span>)
 <a href=#103 id=103 data-nosnippet>103</a>            .map_err(anyhow::Error::msg)<span class="question-mark">?</span>;

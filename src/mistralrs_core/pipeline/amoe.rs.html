@@ -237,7 +237,7 @@
 <a href=#237 id=237 data-nosnippet>237</a>    <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {
 <a href=#238 id=238 data-nosnippet>238</a>        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).reset_non_granular_state()
 <a href=#239 id=239 data-nosnippet>239</a>    }
-<a href=#240 id=240 data-nosnippet>240</a>    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">crate</span>::tokenizer::TokenizerImpl&gt;&gt; {
+<a href=#240 id=240 data-nosnippet>240</a>    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;tokenizers::Tokenizer&gt;&gt; {
 <a href=#241 id=241 data-nosnippet>241</a>        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).tokenizer()
 <a href=#242 id=242 data-nosnippet>242</a>    }
 <a href=#243 id=243 data-nosnippet>243</a>    <span class="kw">fn </span>device_mapper(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt; {
