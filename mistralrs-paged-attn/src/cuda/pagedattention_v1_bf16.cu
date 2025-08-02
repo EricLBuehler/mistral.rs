@@ -21,11 +21,11 @@ extern "C" void paged_attention_v1_bf16(
   if (cache_dtype == 3) {
     // FP8 cache
     CALL_V1_LAUNCHER_BLOCK_SIZE(__nv_bfloat16, uint8_t,
-                                  vllm::Fp8KVCacheDataType::kFp8E4M3);
+                                vllm::Fp8KVCacheDataType::kFp8E4M3);
   } else {
     // Non-FP8 cache
     CALL_V1_LAUNCHER_BLOCK_SIZE(__nv_bfloat16, __nv_bfloat16,
-                                  vllm::Fp8KVCacheDataType::kAuto);
+                                vllm::Fp8KVCacheDataType::kAuto);
   }
   CUDA_CHECK(cudaGetLastError());
 }

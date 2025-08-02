@@ -353,7 +353,6 @@ class Runner:
         pa_cache_type: PagedCacheType | None = None,
         no_paged_attn: bool = False,
         paged_attn: bool = False,
-        prompt_batchsize: int | None = None,
         seed: int | None = None,
         enable_search: bool = False,
         search_bert_model: str | None = None,
@@ -399,7 +398,6 @@ class Runner:
         - `pa_cache_type` sets the PagedAttention KV cache type (auto or f8e4m3). Defaults to `auto`.
         - `no_paged_attn` disables PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
         - `paged_attn` enables PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
-        - `prompt_batchsize` Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
         - `seed`, used to ensure reproducible random number generation.
         - `enable_search`: Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
         - `search_bert_model`: specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.

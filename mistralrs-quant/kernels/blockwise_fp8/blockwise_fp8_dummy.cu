@@ -27,10 +27,9 @@ extern "C" void launch_dequant_fp8_blockwise_kernel_bf16(
 }
 
 extern "C" void launch_quant_fp8_blockwise_kernel_f32(
-    const float *d_input, uint8_t *d_weight, float *d_scale,
-    int weight_height, int weight_width, int weight_row_stride,
-    int scale_stride, int weight_block_size_y, int weight_block_size_x,
-    cudaStream_t stream) {
+    const float *d_input, uint8_t *d_weight, float *d_scale, int weight_height,
+    int weight_width, int weight_row_stride, int scale_stride,
+    int weight_block_size_y, int weight_block_size_x, cudaStream_t stream) {
   assert(false);
 }
 

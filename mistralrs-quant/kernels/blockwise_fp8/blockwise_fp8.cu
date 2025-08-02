@@ -17,12 +17,14 @@
   } while (0)
 
 // Custom atomicMax for float
-__device__ __forceinline__ float atomicMaxFloat(float* addr, float value) {
-    float old;
-    old = (value >= 0) ? __int_as_float(atomicMax((int*)addr, __float_as_int(value))) :
-         __uint_as_float(atomicMin((unsigned int*)addr, __float_as_uint(value)));
+__device__ __forceinline__ float atomicMaxFloat(float *addr, float value) {
+  float old;
+  old = (value >= 0)
+            ? __int_as_float(atomicMax((int *)addr, __float_as_int(value)))
+            : __uint_as_float(
+                  atomicMin((unsigned int *)addr, __float_as_uint(value)));
 
-    return old;
+  return old;
 }
 
 template <typename T>
@@ -106,7 +108,8 @@ __global__ void quant_fp8_blockwise_kernel(
   __shared__ float block_scale;
   if (threadIdx.x == 0 && threadIdx.y == 0) {
     block_scale = block_absmax / 448.0f;
-    if (block_scale < 1e-12f) block_scale = 1e-12f; // Avoid division by zero
+    if (block_scale < 1e-12f)
+      block_scale = 1e-12f; // Avoid division by zero
     scale[grid_y * scale_stride + grid_x] = block_scale;
   }
   __syncthreads();
@@ -123,10 +126,13 @@ __global__ void quant_fp8_blockwise_kernel(
         float val = static_cast<float>(input[pos]);
         float scaled_val = val / block_scale;
         // Clamp to FP8 E4M3 range
-        if (scaled_val > 448.0f) scaled_val = 448.0f;
-        if (scaled_val < -448.0f) scaled_val = -448.0f;
+        if (scaled_val > 448.0f)
+          scaled_val = 448.0f;
+        if (scaled_val < -448.0f)
+          scaled_val = -448.0f;
         __half h_val = __float2half(scaled_val);
-        weight[pos].__x = __nv_cvt_halfraw_to_fp8(h_val, __NV_SATFINITE, __NV_E4M3);
+        weight[pos].__x =
+            __nv_cvt_halfraw_to_fp8(h_val, __NV_SATFINITE, __NV_E4M3);
       }
     }
   }

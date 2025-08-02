@@ -349,7 +349,6 @@ pub trait DeviceMappedModelLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
     ) -> Result<usize>;
     /// weight_pack_factor only applies to quantized weights.
     fn non_mapped_size_in_bytes(
@@ -384,7 +383,6 @@ pub trait DeviceMappedModelLoader {
         devices: &[Device],
         dtype: DType,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
         paged_attn_config: Option<&PagedAttentionConfig>,
     ) -> Result<DeviceMapMetadata>
     where
@@ -400,7 +398,6 @@ pub trait DeviceMappedModelLoader {
             devices,
             dtype,
             params,
-            prompt_chunksize,
             paged_attn_config,
         )
     }

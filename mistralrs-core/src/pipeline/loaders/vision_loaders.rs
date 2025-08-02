@@ -20,6 +20,7 @@ use self::minicpmo::{MiniCpmOConfig, MiniCpmOModel, MiniCpmOProcessor};
 
 use super::{DeviceMappedModelLoader, NonMappedSubModel, NormalLoadingMetadata};
 use crate::amoe::AnyMoeBaseModelMixin;
+use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::DeviceMapper;
 use crate::layers::Conv3dConfig;
 use crate::matformer::MatformerSliceConfig;
@@ -362,9 +363,8 @@ impl DeviceMappedModelLoader for AutoVisionLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
     ) -> Result<usize> {
-        Self::get_loader(config)?.mapped_max_act_size_elems(config, params, prompt_chunksize)
+        Self::get_loader(config)?.mapped_max_act_size_elems(config, params)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -556,7 +556,6 @@ impl DeviceMappedModelLoader for Phi3VLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         // NOTE: we ignore max_num_images although it can only be one...
         let AutoDeviceMapParams::Vision {
@@ -578,7 +577,7 @@ impl DeviceMappedModelLoader for Phi3VLoader {
 
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + max_seq_len;
+            let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -850,7 +849,6 @@ impl DeviceMappedModelLoader for Idefics2Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -869,7 +867,7 @@ impl DeviceMappedModelLoader for Idefics2Loader {
 
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + max_seq_len;
+            let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
             max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -1196,7 +1194,6 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -1221,7 +1218,7 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
         let max_text_attn = {
             let cfg = &config.text_config;
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + max_seq_len;
+            let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
 
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
@@ -1466,7 +1463,6 @@ impl DeviceMappedModelLoader for LLaVALoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -1487,7 +1483,7 @@ impl DeviceMappedModelLoader for LLaVALoader {
         let max_text_attn = {
             let cfg = &config.text_config;
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + max_seq_len;
+            let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
 
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
@@ -1770,7 +1766,6 @@ impl DeviceMappedModelLoader for VLlamaLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -1799,7 +1794,7 @@ impl DeviceMappedModelLoader for VLlamaLoader {
 
         let max_self_text_attn = {
             let cfg = &config.text_config;
-            max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
+            max_batch_size * cfg.num_attention_heads * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2)
         };
 
         Ok(max_self_text_attn.max(max_cross_text_attn))
@@ -2109,7 +2104,6 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -2134,7 +2128,7 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
 
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + max_seq_len;
+            let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -2432,7 +2426,6 @@ impl DeviceMappedModelLoader for Idefics3Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -2451,7 +2444,7 @@ impl DeviceMappedModelLoader for Idefics3Loader {
 
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + max_seq_len;
+            let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
             max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -2722,7 +2715,6 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -2741,7 +2733,7 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
 
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + max_seq_len;
+            let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
             max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -3017,7 +3009,6 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         // NOTE: we ignore max_num_images although it can only be one...
         let AutoDeviceMapParams::Vision {
@@ -3039,7 +3030,7 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
 
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + max_seq_len;
+            let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -3349,7 +3340,6 @@ impl DeviceMappedModelLoader for Qwen2_5VLLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -3374,7 +3364,7 @@ impl DeviceMappedModelLoader for Qwen2_5VLLoader {
 
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + max_seq_len;
+            let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -3655,7 +3645,6 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -3672,8 +3661,7 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         match cfg {
             Gemma3Config::Text(text_config) => Ok(max_batch_size
                 * text_config.num_attention_heads
-                * prompt_chunksize
-                * prompt_chunksize),
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2)),
             Gemma3Config::WithVision {
                 text_config,
                 vision_config,
@@ -3684,7 +3672,7 @@ impl DeviceMappedModelLoader for Gemma3Loader {
 
                 let max_text_attn = {
                     // This model injects the vision information directly into the input embeddings
-                    let max_seq_len = img_seq_len + *max_seq_len;
+                    let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
                     max_batch_size * text_config.num_attention_heads * max_seq_len * max_seq_len
                 };
                 Ok(max_text_attn)
@@ -3991,7 +3979,6 @@ impl DeviceMappedModelLoader for Mistral3Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let cfg: Mistral3Config = serde_json::from_str(config)?;
         let vcfg = &cfg.vision_config;
@@ -4031,7 +4018,7 @@ impl DeviceMappedModelLoader for Mistral3Loader {
         };
 
         // This model injects the vision information directly into the input embeddings
-        let max_seq_len = img_seq_len * max_num_images + *max_seq_len;
+        let max_seq_len = img_seq_len * max_num_images + *max_seq_len.min(&ATTENTION_CHUNK_SIZE);
         Ok(max_batch_size * tcfg.num_attention_heads * max_seq_len * max_seq_len)
     }
 
@@ -4397,7 +4384,6 @@ impl DeviceMappedModelLoader for VLlama4Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -4414,7 +4400,7 @@ impl DeviceMappedModelLoader for VLlama4Loader {
         let (_pixels_batch_size, num_text_image_toks) =
             self.run_dummy_processing(&cfg, *height, *width, *max_num_images, *max_batch_size)?;
 
-        let max_seq_len = max_seq_len + num_text_image_toks;
+        let max_seq_len = max_seq_len.min(&ATTENTION_CHUNK_SIZE) + num_text_image_toks;
 
         Ok(max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len)
     }
@@ -4792,7 +4778,6 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len,
@@ -4810,7 +4795,7 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         // Gemma3n is an "inject into the prompt" model, similar to Gemma3
         // We need to account for vision and audio tokens in the sequence length
 
-        let mut total_seq_len = *max_seq_len;
+        let mut total_seq_len = *max_seq_len.min(&ATTENTION_CHUNK_SIZE);
 
         // Add vision tokens
         {

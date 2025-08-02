@@ -60,7 +60,9 @@ print(resp1.output_text)
 
 # follow‑up: no need to resend the first question
 resp2 = client.responses.create(
-    model="default", previous_response_id=resp1.id, input="How many speakers are there in the audio?"
+    model="default",
+    previous_response_id=resp1.id,
+    input="How many speakers are there in the audio?",
 )
 
 print(resp2.output_text)

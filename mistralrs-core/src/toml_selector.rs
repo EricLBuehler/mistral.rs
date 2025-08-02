@@ -1,4 +1,4 @@
-use std::{fs::File, num::NonZeroUsize, path::PathBuf, str::FromStr};
+use std::{fs::File, path::PathBuf, str::FromStr};
 
 use mistralrs_quant::MULTI_LORA_DELIMITER;
 use serde::Deserialize;
@@ -492,14 +492,12 @@ struct TomlLoaderInnerParams {
     chat_template: Option<String>,
     no_kv_cache: bool,
     tokenizer_json: Option<String>,
-    prompt_chunksize: Option<NonZeroUsize>,
     jinja_explicit: Option<String>,
 }
 
 pub struct TomlLoaderArgs {
     pub chat_template: Option<String>,
     pub no_kv_cache: bool,
-    pub prompt_chunksize: Option<NonZeroUsize>,
     pub jinja_explicit: Option<String>,
 }
 
@@ -605,7 +603,6 @@ fn loader_from_selected(
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
                 write_uqff,
@@ -643,7 +640,6 @@ fn loader_from_selected(
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
@@ -688,7 +684,6 @@ fn loader_from_selected(
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
@@ -734,7 +729,6 @@ fn loader_from_selected(
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.no_kv_cache,
@@ -761,7 +755,6 @@ fn loader_from_selected(
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.no_kv_cache,
@@ -794,7 +787,6 @@ fn loader_from_selected(
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.no_kv_cache,
@@ -820,7 +812,6 @@ fn loader_from_selected(
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
@@ -847,7 +838,6 @@ fn loader_from_selected(
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
@@ -882,7 +872,6 @@ fn loader_from_selected(
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
@@ -918,7 +907,6 @@ fn loader_from_selected(
             hf_cache_path,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
                 from_uqff: from_uqff.map(|x| {
@@ -952,7 +940,6 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
             chat_template: args.chat_template,
             no_kv_cache: args.no_kv_cache,
             tokenizer_json: selector.tokenizer_json,
-            prompt_chunksize: args.prompt_chunksize,
             jinja_explicit: args.jinja_explicit,
         };
         let loader = loader_from_selected(args.clone(), selector.model)?;

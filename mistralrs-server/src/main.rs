@@ -137,10 +137,6 @@ struct Args {
     )]
     paged_attn: bool,
 
-    /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
-    #[arg(long = "prompt-batchsize")]
-    prompt_chunksize: Option<usize>,
-
     /// Use CPU only
     #[arg(long)]
     cpu: bool,
@@ -363,7 +359,6 @@ async fn main() -> Result<()> {
                 .with_enable_search(args.enable_search)
                 .with_seed_optional(args.seed)
                 .with_log_optional(args.log)
-                .with_prompt_chunksize_optional(args.prompt_chunksize)
                 .with_mcp_config_optional(mcp_config)
                 .with_paged_attn_cache_type(args.cache_type.unwrap_or_default());
 
@@ -402,7 +397,6 @@ async fn main() -> Result<()> {
                 .with_paged_attn_gpu_mem_usage_optional(args.paged_attn_gpu_mem_usage)
                 .with_paged_ctxt_len_optional(args.paged_ctxt_len)
                 .with_paged_attn_block_size_optional(args.paged_attn_block_size)
-                .with_prompt_chunksize_optional(args.prompt_chunksize)
                 .with_mcp_config_optional(mcp_config)
                 .with_paged_attn_cache_type(args.cache_type.unwrap_or_default())
                 .build()

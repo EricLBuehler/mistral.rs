@@ -3,7 +3,6 @@ use mistralrs_core::*;
 use mistralrs_core::{SearchCallback, Tool, ToolCallback};
 use std::collections::HashMap;
 use std::{
-    num::NonZeroUsize,
     ops::{Deref, DerefMut},
     path::PathBuf,
     sync::Arc,
@@ -44,7 +43,6 @@ pub struct VisionModelBuilder {
     pub(crate) matformer_slice_name: Option<String>,
 
     // Model running
-    pub(crate) prompt_chunksize: Option<NonZeroUsize>,
     pub(crate) topology: Option<Topology>,
     pub(crate) loader_type: Option<VisionLoaderType>,
     pub(crate) dtype: ModelDType,
@@ -70,7 +68,6 @@ impl VisionModelBuilder {
             topology: None,
             write_uqff: None,
             from_uqff: None,
-            prompt_chunksize: None,
             chat_template: None,
             tokenizer_json: None,
             max_edge: None,
@@ -143,12 +140,6 @@ impl VisionModelBuilder {
     /// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
     pub fn with_jinja_explicit(mut self, jinja_explicit: String) -> Self {
         self.jinja_explicit = Some(jinja_explicit);
-        self
-    }
-
-    /// Set the prompt batchsize to use for inference.
-    pub fn with_prompt_chunksize(mut self, prompt_chunksize: NonZeroUsize) -> Self {
-        self.prompt_chunksize = Some(prompt_chunksize);
         self
     }
 
@@ -310,7 +301,6 @@ impl VisionModelBuilder {
 
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = VisionSpecificConfig {
-            prompt_chunksize: self.prompt_chunksize,
             topology: self.topology,
             write_uqff: self.write_uqff,
             from_uqff: self.from_uqff,

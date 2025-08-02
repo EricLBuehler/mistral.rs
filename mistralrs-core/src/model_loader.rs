@@ -1,6 +1,5 @@
 use std::{
     fs::{self, File},
-    num::NonZeroUsize,
     path::PathBuf,
     str::FromStr,
 };
@@ -25,7 +24,6 @@ pub struct LoaderBuilder {
     no_kv_cache: bool,
     chat_template: Option<String>,
     jinja_explicit: Option<String>,
-    prompt_chunksize: Option<NonZeroUsize>,
 }
 
 impl LoaderBuilder {
@@ -34,7 +32,6 @@ impl LoaderBuilder {
             model,
             no_kv_cache: false,
             chat_template: None,
-            prompt_chunksize: None,
             jinja_explicit: None,
         }
     }
@@ -49,10 +46,6 @@ impl LoaderBuilder {
     }
     pub fn with_jinja_explicit(mut self, jinja_explicit: Option<String>) -> Self {
         self.jinja_explicit = jinja_explicit;
-        self
-    }
-    pub fn with_prompt_chunksize(mut self, prompt_chunksize: Option<NonZeroUsize>) -> Self {
-        self.prompt_chunksize = prompt_chunksize;
         self
     }
 
@@ -232,7 +225,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             let args = TomlLoaderArgs {
                 chat_template: args.chat_template,
                 no_kv_cache: args.no_kv_cache,
-                prompt_chunksize: args.prompt_chunksize,
                 jinja_explicit: args.jinja_explicit,
             };
             (selector, args).try_into()?
@@ -255,7 +247,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             matformer_slice_name,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
                 write_uqff,
@@ -299,7 +290,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         } => {
             let builder = AutoLoaderBuilder::new(
                 NormalSpecificConfig {
-                    prompt_chunksize: args.prompt_chunksize,
                     topology: Topology::from_option_path(topology.clone())?,
                     organization: organization.unwrap_or_default(),
                     write_uqff: write_uqff.clone(),
@@ -316,7 +306,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     matformer_slice_name: matformer_slice_name.clone(),
                 },
                 VisionSpecificConfig {
-                    prompt_chunksize: args.prompt_chunksize,
                     topology: Topology::from_option_path(topology)?,
                     write_uqff,
                     from_uqff: from_uqff.map(|x| {
@@ -365,7 +354,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             matformer_slice_name,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
                 from_uqff: from_uqff.map(|x| {
@@ -419,7 +407,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
@@ -465,7 +452,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
@@ -509,7 +495,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.no_kv_cache,
@@ -534,7 +519,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.no_kv_cache,
@@ -567,7 +551,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.no_kv_cache,
@@ -592,7 +575,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
@@ -618,7 +600,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
@@ -652,7 +633,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,

@@ -3,7 +3,6 @@ use mistralrs_core::*;
 use mistralrs_core::{SearchCallback, Tool, ToolCallback};
 use std::collections::HashMap;
 use std::{
-    num::NonZeroUsize,
     ops::{Deref, DerefMut},
     path::PathBuf,
     sync::Arc,
@@ -44,7 +43,6 @@ pub struct TextModelBuilder {
     pub(crate) matformer_slice_name: Option<String>,
 
     // Model running
-    pub(crate) prompt_chunksize: Option<NonZeroUsize>,
     pub(crate) topology: Option<Topology>,
     pub(crate) organization: IsqOrganization,
     pub(crate) loader_type: Option<NormalLoaderType>,
@@ -112,7 +110,6 @@ impl TextModelBuilder {
     pub fn new(model_id: impl ToString) -> Self {
         Self {
             model_id: model_id.to_string(),
-            prompt_chunksize: None,
             topology: None,
             organization: IsqOrganization::Default,
             write_uqff: None,
@@ -199,12 +196,6 @@ impl TextModelBuilder {
     /// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
     pub fn with_jinja_explicit(mut self, jinja_explicit: String) -> Self {
         self.jinja_explicit = Some(jinja_explicit);
-        self
-    }
-
-    /// Set the prompt batchsize to use for inference.
-    pub fn with_prompt_chunksize(mut self, prompt_chunksize: NonZeroUsize) -> Self {
-        self.prompt_chunksize = Some(prompt_chunksize);
         self
     }
 
@@ -383,7 +374,6 @@ impl TextModelBuilder {
 
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = NormalSpecificConfig {
-            prompt_chunksize: self.prompt_chunksize,
             topology: self.topology,
             organization: self.organization,
             write_uqff: self.write_uqff,

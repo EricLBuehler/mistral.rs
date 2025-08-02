@@ -459,23 +459,19 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                 // Clear KV cache in prep for training
                 target.set_none_cache(&mut input_seqs, true, true, false);
 
-                let inputs = inputs_processor
-                    .process_inputs(
-                        tokenizer.clone(),
-                        &mut input_seqs,
-                        true, // Always a prompt
-                        metadata.is_xlora,
-                        &device,
-                        metadata.no_kv_cache,
-                        None,
-                        false,
-                        input_processor_cfg.clone(),
-                        None, // TODO: get block tables/handle it for PagedAttention
-                        None, // TODO: prompt chunking doesn't work.
-                        None,
-                    )
-                    .nth(0)
-                    .unwrap();
+                let inputs = inputs_processor.process_inputs(
+                    tokenizer.clone(),
+                    &mut input_seqs,
+                    true, // Always a prompt
+                    metadata.is_xlora,
+                    &device,
+                    metadata.no_kv_cache,
+                    None,
+                    false,
+                    input_processor_cfg.clone(),
+                    None, // TODO: get block tables/handle it for PagedAttention
+                    None,
+                );
 
                 // === PREPARE AND RUN MODEL ==
 
