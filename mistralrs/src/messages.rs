@@ -19,6 +19,9 @@ pub trait RequestLike {
     fn take_tools(&mut self) -> Option<(Vec<Tool>, ToolChoice)>;
     fn take_sampling_params(&mut self) -> SamplingParams;
     fn take_web_search_options(&mut self) -> Option<WebSearchOptions>;
+    fn enforce_tool_schema(&self) -> Option<bool> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -332,6 +335,7 @@ pub struct RequestBuilder {
     sampling_params: SamplingParams,
     web_search_options: Option<WebSearchOptions>,
     enable_thinking: Option<bool>,
+    enforce_tool_schema: Option<bool>,
 }
 
 impl Default for RequestBuilder {
@@ -355,6 +359,7 @@ impl From<TextMessages> for RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_thinking: None,
+            enforce_tool_schema: None,
         }
     }
 }
@@ -374,6 +379,7 @@ impl From<VisionMessages> for RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_thinking: None,
+            enforce_tool_schema: None,
         }
     }
 }
@@ -393,6 +399,7 @@ impl RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_thinking: None,
+            enforce_tool_schema: None,
         }
     }
 
@@ -651,6 +658,11 @@ impl RequestBuilder {
         self.enable_thinking = Some(enable_thinking);
         self
     }
+
+    pub fn enforce_tool_schema(mut self, enforce: bool) -> Self {
+        self.enforce_tool_schema = Some(enforce);
+        self
+    }
 }
 
 impl RequestLike for RequestBuilder {
@@ -742,5 +754,9 @@ impl RequestLike for RequestBuilder {
         let mut other = None;
         std::mem::swap(&mut other, &mut self.web_search_options);
         other
+    }
+
+    fn enforce_tool_schema(&self) -> Option<bool> {
+        self.enforce_tool_schema
     }
 }

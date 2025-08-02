@@ -148,6 +148,7 @@ pub struct NormalRequest {
     pub suffix: Option<String>,
     pub tools: Option<Vec<Tool>>,
     pub tool_choice: Option<ToolChoice>,
+    pub enforce_tool_schema: Option<bool>,
     #[serde(skip)]
     pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
     pub return_raw_logits: bool,
@@ -171,6 +172,7 @@ impl NormalRequest {
             id,
             tools,
             tool_choice,
+            enforce_tool_schema: None,
             return_logprobs: false,
             is_streaming: false,
             constraint: Constraint::None,

@@ -538,6 +538,8 @@ pub struct ChatCompletionRequest {
     pub dry_sequence_breakers: Option<Vec<String>>,
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
+    #[schema(example = json!(Option::None::<bool>))]
+    pub enforce_tool_schema: Option<bool>,
 }
 
 /// Function for ChatCompletionRequest.messages Schema generation to handle `Either`
@@ -646,6 +648,8 @@ pub struct CompletionRequest {
     pub dry_allowed_length: Option<usize>,
     #[schema(example = json!(Option::None::<String>))]
     pub dry_sequence_breakers: Option<Vec<String>>,
+    #[schema(example = json!(Option::None::<bool>))]
+    pub enforce_tool_schema: Option<bool>,
 }
 
 /// Image generation request
@@ -849,6 +853,8 @@ pub struct ResponsesCreateRequest {
     pub dry_sequence_breakers: Option<Vec<String>>,
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
+    #[schema(example = json!(Option::None::<bool>))]
+    pub enforce_tool_schema: Option<bool>,
 }
 
 /// Response object

@@ -101,7 +101,6 @@ hound.workspace = true
 apodize.workspace = true
 symphonia.workspace = true
 mistralrs-audio.workspace = true
-rust-mcp-schema.workspace = true
 mistralrs-mcp = { workspace = true, features = ["utoipa"] }
 statrs.workspace = true
 

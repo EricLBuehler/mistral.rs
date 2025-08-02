@@ -4,15 +4,17 @@ use bm25::{Embedder, EmbedderBuilder, Language, ScoredDocument, Scorer};
 use either::Either;
 use indexmap::IndexMap;
 use tokenizers::InputSequence;
+use tracing::Instrument;
 use tracing::{level_filters::LevelFilter, Dispatch};
 
 use crate::{
     get_mut_arcmutex,
-    request::SearchContextSize,
+    request::{Constraint, LlguidanceGrammar, SearchContextSize},
     search::{self, ExtractFunctionParameters, SearchFunctionParameters, SearchResult},
     MessageContent, NormalRequest, RequestMessage, Response, ResponseOk, ToolCallResponse,
     ToolChoice, WebSearchOptions,
 };
+use llguidance::api::GrammarWithLexer;
 
 use super::Engine;
 
@@ -440,7 +442,7 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
     probe.web_search_options = None;
 
     // The conversation context that the user *will* see.
-    let mut visible_req = probe.clone();
+    let mut visible_req: NormalRequest = probe.clone();
     visible_req.response = user_sender.clone();
 
     // We'll drive everything inside a single spawned task.
@@ -461,6 +463,7 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
 
             // ----------------------- NON-STREAMING ------------------------
             if !is_streaming {
+                tracing::info!("search_request: received LLM response");
                 let done = match receiver.recv().await.unwrap().as_result().unwrap() {
                     ResponseOk::Done(done) => done,
                     other => {
@@ -524,16 +527,27 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                 }
 
                 // Tool requested → build the next turn.
-                let tc = tc_opt.unwrap();
+                let mut tc = tc_opt.unwrap().clone();
+
+                // Optionally enforce the tool schema.
+                if visible_req.enforce_tool_schema.unwrap_or(false) {
+                    if let Err(e) =
+                        generate_tool_arguments(this_clone.clone(), &mut visible_req, &mut tc).await
+                    {
+                        tracing::error!("Argument generation failed: {}", e);
+                    }
+                }
+
                 let next_visible = if search::search_tool_called(&tc.function.name) {
                     let web_search_options = web_search_options.as_ref().unwrap();
                     if tc.function.name == search::SEARCH_TOOL_NAME {
-                        do_search(this_clone.clone(), visible_req, tc, web_search_options).await
+                        do_search(this_clone.clone(), visible_req, &tc, web_search_options).await
                     } else {
-                        do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
+                        do_extraction(this_clone.clone(), visible_req, &tc, web_search_options)
+                            .await
                     }
                 } else {
-                    do_custom_tool(this_clone.clone(), visible_req, tc).await
+                    do_custom_tool(this_clone.clone(), visible_req, &tc).await
                 };
 
                 // The fresh request becomes both the user-visible context and
@@ -631,16 +645,27 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                     break; // No more tool calls → done.
                 }
 
-                let tc = tc_opt.unwrap();
+                let mut tc = tc_opt.unwrap().clone();
+
+                // Optionally enforce the tool schema.
+                if visible_req.enforce_tool_schema.unwrap_or(false) {
+                    if let Err(e) =
+                        generate_tool_arguments(this_clone.clone(), &mut visible_req, &mut tc).await
+                    {
+                        tracing::error!("Argument generation failed: {}", e);
+                    }
+                }
+
                 let next_visible = if search::search_tool_called(&tc.function.name) {
                     let web_search_options = web_search_options.as_ref().unwrap();
                     if tc.function.name == search::SEARCH_TOOL_NAME {
-                        do_search(this_clone.clone(), visible_req, tc, web_search_options).await
+                        do_search(this_clone.clone(), visible_req, &tc, web_search_options).await
                     } else {
-                        do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
+                        do_extraction(this_clone.clone(), visible_req, &tc, web_search_options)
+                            .await
                     }
                 } else {
-                    do_custom_tool(this_clone.clone(), visible_req, tc).await
+                    do_custom_tool(this_clone.clone(), visible_req, &tc).await
                 };
 
                 visible_req = next_visible.clone();
@@ -651,4 +676,136 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
     });
 
     get_mut_arcmutex!(this.handles).push(handle);
+}
+
+// Helper function to flatten JSON Schema by inlining definitions and resolving $ref.
+fn flatten_schema(schema: &mut serde_json::Value) {
+    let defs = schema
+        .get("definitions")
+        .and_then(|d| d.as_object())
+        .cloned()
+        .unwrap_or_default();
+
+    fn recurse(obj: &mut serde_json::Value, defs: &serde_json::Map<String, serde_json::Value>) {
+        match obj {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::String(ref_str)) = map.get("$ref") {
+                    if let Some(def_name) = ref_str.strip_prefix("#/definitions/") {
+                        if let Some(def_val) = defs.get(def_name) {
+                            *obj = def_val.clone();
+                            recurse(obj, defs);
+                        }
+                    }
+                } else {
+                    for v in map.values_mut() {
+                        recurse(v, defs);
+                    }
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for v in arr {
+                    recurse(v, defs);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    recurse(schema, &defs);
+    // Remove definitions after inlining
+    if let Some(map) = schema.as_object_mut() {
+        map.remove("definitions");
+    }
+}
+
+// Extracted function for argument generation
+async fn generate_tool_arguments(
+    engine: Arc<Engine>,
+    visible_req: &mut NormalRequest,
+    tc: &mut ToolCallResponse,
+) -> Result<(), String> {
+    let tool_name = &tc.function.name;
+    tracing::info!("Generating arguments for tool `{}`", tool_name);
+    if let Some(tool_cb) = engine.tool_callbacks_with_tools.get(tool_name) {
+        // generate grammar from function schema
+        let mut grammar_schema = tool_cb.tool.function.parameters.clone();
+        if let Some(ref mut schema) = grammar_schema {
+            flatten_schema(schema);
+        }
+        let schema = GrammarWithLexer {
+            name: Some("args".to_string()),
+            json_schema: grammar_schema,
+            ..Default::default()
+        };
+
+        let grammar = LlguidanceGrammar {
+            grammars: vec![schema],
+            max_tokens: None,
+        };
+
+        // Set grammar constraint and request argument generation
+        visible_req.constraint = Constraint::Llguidance(grammar);
+        let mut current = visible_req.clone();
+
+        // Each dispatch gets its own one-shot channel
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        current.response = sender;
+
+        // Request argument generation from model
+        engine.add_request(current).await;
+
+        visible_req.constraint = Constraint::None;
+
+        // Await model output and extract generated arguments
+        if let Some(response) = receiver.recv().await {
+            match response.as_result() {
+                Ok(model_response) => {
+                    if let ResponseOk::Done(done) = model_response {
+                        if let Some(content) = done.choices[0].message.content.as_ref() {
+                            tc.function.arguments = content.clone();
+                        } else {
+                            tracing::error!(
+                                "No content generated for tool `{}` arguments",
+                                tool_name
+                            );
+                            return Err(format!(
+                                "No content generated for tool `{}` arguments",
+                                tool_name
+                            ));
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Error during model inference for tool `{}` argument generation: {:?}",
+                        tool_name,
+                        e
+                    );
+                    return Err(format!(
+                        "Error during model inference for tool `{}` argument generation: {:?}",
+                        tool_name, e
+                    ));
+                }
+            }
+        } else {
+            tracing::error!(
+                "No response received when generating arguments for tool `{}`",
+                tool_name
+            );
+            return Err(format!(
+                "No response received when generating arguments for tool `{}`",
+                tool_name
+            ));
+        }
+    } else {
+        tracing::error!(
+            "Tool `{}` not found in tool_callbacks_with_tools during argument generation.",
+            tool_name
+        );
+        return Err(format!(
+            "Tool `{}` not found in tool_callbacks_with_tools during argument generation.",
+            tool_name
+        ));
+    }
+    Ok(())
 }

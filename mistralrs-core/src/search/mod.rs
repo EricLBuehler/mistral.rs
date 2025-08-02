@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 pub mod rag;
@@ -8,7 +7,7 @@ use html2text::{config, render::PlainDecorator};
 use rayon::prelude::*;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::env::consts::{ARCH, FAMILY, OS};
 use tokenizers::Tokenizer;
 
@@ -125,7 +124,7 @@ pub struct ExtractFunctionParameters {
 
 pub fn get_search_tools(web_search_options: &WebSearchOptions) -> Result<Vec<Tool>> {
     let search_tool = {
-        let parameters: HashMap<String, Value> = serde_json::from_value(json!({
+        let parameters = json!({
             "type": "object",
             "properties": {
                 "query": {
@@ -134,7 +133,7 @@ pub fn get_search_tools(web_search_options: &WebSearchOptions) -> Result<Vec<Too
                 },
             },
             "required": ["query"],
-        }))?;
+        });
 
         let location_details = match &web_search_options.user_location {
             Some(WebSearchUserLocation::Approximate { approximate }) => {
@@ -160,7 +159,7 @@ pub fn get_search_tools(web_search_options: &WebSearchOptions) -> Result<Vec<Too
     };
 
     let extract_tool = {
-        let parameters: HashMap<String, Value> = serde_json::from_value(json!({
+        let parameters = json!({
             "type": "object",
             "properties": {
                 "url": {
@@ -169,7 +168,7 @@ pub fn get_search_tools(web_search_options: &WebSearchOptions) -> Result<Vec<Too
                 },
             },
             "required": ["url"],
-        }))?;
+        });
 
         let description = web_search_options
             .extract_description

@@ -478,6 +478,7 @@ pub async fn parse_request(
             constraint,
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,
+            enforce_tool_schema: oairequest.enforce_tool_schema,
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: oairequest.web_search_options,
