@@ -4,6 +4,7 @@ pub(crate) mod memory_usage;
 pub(crate) mod model_config;
 pub(crate) mod normal;
 pub(crate) mod progress;
+pub(crate) mod tiktoken;
 pub(crate) mod tokenizer;
 pub(crate) mod tokens;
 pub(crate) mod unvarbuilder;
