@@ -1,10 +1,12 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Embedding, Module};
+use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::{
-    distributed::layers::PackedExperts, linear_no_bias, ColumnParallelLayer, QuantMethod,
-    QuantizedConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, SumAllReduce,
+    apply_immediate_isq, distributed::layers::PackedExperts, linear_no_bias,
+    should_apply_immediate_isq, ColumnParallelLayer, QuantMethod, QuantMethodConfig,
+    QuantizedConfig, ReplicatedLayer, RowParallelLayer, Shard, ShardedVarBuilder, SumAllReduce,
+    UnquantLinear,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -298,11 +300,10 @@ impl Mlp {
 }
 
 struct TextExperts {
-    gate_proj: Vec<Arc<dyn QuantMethod>>,
-    up_proj: Vec<Arc<dyn QuantMethod>>,
-    down_proj: Vec<Arc<dyn QuantMethod>>,
+    gate_up_proj: Arc<dyn QuantMethod>,
+    down_proj: Arc<dyn QuantMethod>,
     act: Activation,
-    hidden_size: usize,
+    intermediate_size: usize,
     sum_all_reduce: SumAllReduce,
 }
 
@@ -313,58 +314,72 @@ impl TextExperts {
         quantization_config: &Option<QuantizedConfig>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        let PackedExperts {
-            gate_proj,
-            up_proj,
-            down_proj,
-        } = PackedExperts::new(
-            cfg.num_local_experts,
-            cfg.hidden_size,
-            cfg.intermediate_size,
-            quantization_config,
-            false,
-            comm,
-            vb,
+        let base_vb = vb.clone();
+        let vb = if should_apply_immediate_isq(&vb) {
+            vb.set_device(Device::Cpu)
+        } else {
+            vb
+        };
+
+        let shard_gate_up = Shard::Simple {
+            dim: 2,
+            rank: comm.rank(),
+            world_size: comm.world_size(),
+        };
+        let shard_down = Shard::Simple {
+            dim: 1,
+            rank: comm.rank(),
+            world_size: comm.world_size(),
+        };
+        let gate_up_proj = vb.get_with_hints(
+            (
+                cfg.num_local_experts,
+                cfg.hidden_size,
+                cfg.intermediate_size * 2,
+            ),
+            "gate_up_proj",
+            shard_gate_up,
         )?;
+        let down_proj = vb.get_with_hints(
+            (
+                cfg.num_local_experts,
+                cfg.intermediate_size,
+                cfg.hidden_size,
+            ),
+            "down_proj",
+            shard_down,
+        )?;
+
+        let mut gate_up_proj: Arc<dyn QuantMethod> = Arc::new(<UnquantLinear as QuantMethod>::new(
+            QuantMethodConfig::Unquantized(Linear::new(gate_up_proj, None)),
+        )?);
+        gate_up_proj = apply_immediate_isq(gate_up_proj, base_vb.clone())?;
+        let mut down_proj: Arc<dyn QuantMethod> = Arc::new(<UnquantLinear as QuantMethod>::new(
+            QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
+        )?);
+        down_proj = apply_immediate_isq(down_proj, base_vb)?;
+
         Ok(Self {
-            gate_proj,
-            up_proj,
+            gate_up_proj,
             down_proj,
             act: cfg.hidden_act,
-            hidden_size: cfg.hidden_size,
+            intermediate_size: cfg.intermediate_size,
             sum_all_reduce: SumAllReduce::new(comm),
         })
     }
 
-    // xs: (bs * seq_len, hidden_size)
-    // expert indices: (bs * seq_len)
-    fn forward(&self, xs: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        let xs = xs.unsqueeze(1)?;
-
-        if self.gate_proj.len() == 1 {
-            let gate = self.gate_proj[0].gather_forward_autocast(&xs, indices)?;
-            let up = self.up_proj[0].gather_forward_autocast(&xs, indices)?;
-            let mut xs = self.down_proj[0]
-                .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, indices)?;
-            xs = self.sum_all_reduce.sum_all_reduce(&xs)?;
-            xs.reshape(((), self.hidden_size))
-        } else {
-            let indices = indices.to_vec1::<u32>()?;
-            let mut results = Vec::new();
-            for (tok, id) in indices.into_iter().enumerate() {
-                let xs = xs.i(tok)?.reshape((1, self.hidden_size))?;
-
-                let res = {
-                    let gate = self.gate_proj[id as usize].forward_autocast(&xs)?;
-                    let up = self.up_proj[id as usize].forward_autocast(&xs)?;
-                    self.down_proj[id as usize].forward_autocast(&(up * gate.apply(&self.act)?)?)?
-                };
-                results.push(res);
-            }
-            let mut xs = Tensor::cat(&results, 0)?;
-            xs = self.sum_all_reduce.sum_all_reduce(&xs)?;
-            xs.reshape(((), self.hidden_size))
-        }
+    // xs: (num_local_experts, bs * seq_len, hidden_size)
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let gate_up = self.gate_up_proj.forward(xs)?;
+        let gate = gate_up.narrow(D::Minus1, 0, self.intermediate_size)?;
+        let up = gate_up.narrow(
+            D::Minus1,
+            self.intermediate_size,
+            self.intermediate_size * 2,
+        )?;
+        let mut down = self.down_proj.forward(&(up * self.act.forward(&gate)?)?)?;
+        down = self.sum_all_reduce.sum_all_reduce(&down)?;
+        Ok(down)
     }
 }
 
@@ -416,18 +431,23 @@ impl TextMoe {
         } = router_logits.topk(self.topk)?;
 
         let router_scores = candle_nn::ops::sigmoid(&router_top_value.to_dtype(DType::F32)?)?
-            .to_dtype(router_top_value.dtype())?;
+            .to_dtype(router_top_value.dtype())?
+            .scatter(&router_indices, &router_top_value.zeros_like()?, 1)?;
 
-        let routed_in = xs.broadcast_mul(&router_scores)?;
-        let routed_out = self
-            .experts
-            .forward(&routed_in, &router_indices.squeeze(D::Minus1)?)?
-            .reshape((bs, seq_len, hidden_dim))?;
-        let out = self
-            .shared_expert
-            .forward(&xs.reshape((bs, seq_len, hidden_dim))?)?;
+        let routed_in = xs
+            .repeat((router_scores.dim(1)?, 1))?
+            .broadcast_mul(&router_scores.reshape(((), 1))?)?;
+        let mut routed_out = self.experts.forward(&routed_in.reshape((
+            router_scores.dim(1)?,
+            (),
+            routed_in.dim(D::Minus1)?,
+        ))?)?;
+        routed_out = routed_out
+            .reshape((router_scores.dim(1)?, (), routed_out.dim(D::Minus1)?))?
+            .sum(0)?;
+        let out = self.shared_expert.forward(&xs)?;
 
-        out + routed_out
+        (out + routed_out)?.reshape((bs, seq_len, hidden_dim))
     }
 }
 
@@ -809,15 +829,8 @@ impl IsqModel for TextModel {
                 }
                 MoeOrMlp::Moe(x) => {
                     tensors.push((&mut x.router, Some(i)));
-                    for g in &mut x.experts.gate_proj {
-                        tensors.push((g, Some(i)));
-                    }
-                    for u in &mut x.experts.up_proj {
-                        tensors.push((u, Some(i)));
-                    }
-                    for d in &mut x.experts.down_proj {
-                        tensors.push((d, Some(i)));
-                    }
+                    tensors.push((&mut x.experts.gate_up_proj, Some(i)));
+                    tensors.push((&mut x.experts.down_proj, Some(i)));
                     tensors.push((&mut x.shared_expert.gate, Some(i)));
                     tensors.push((&mut x.shared_expert.up, Some(i)));
                     tensors.push((&mut x.shared_expert.down, Some(i)));
