@@ -21,3 +21,4 @@ Some kernels are copied or based on implementations in:
 - https://github.com/vllm-project/vllm
 - https://github.com/mobiusml/hqq
 - https://github.com/bitsandbytes-foundation/bitsandbytes
+- https://github.com/kozistr/candle-moe
