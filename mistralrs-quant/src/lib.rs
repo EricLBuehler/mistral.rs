@@ -56,8 +56,9 @@ pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::{CollectedImatrixData, ImatrixLayerStats};
 pub use lora::{
-    clear_applied_loras, get_applied_loras, linear_no_bias_static_lora, push_applied_lora,
-    LoraAdapter, LoraConfig, StaticLoraConfig, MULTI_LORA_DELIMITER,
+    get_activated_ids, get_applied_loras, init_applied_lora, linear_no_bias_static_lora,
+    push_applied_lora, set_activated_ids, AppliedLoraKind, LoraAdapter, LoraConfig,
+    StaticLoraConfig, MULTI_LORA_DELIMITER,
 };
 pub use unquantized::UnquantLinear;
 pub use utils::isq::apply_immediate_isq;
@@ -66,6 +67,8 @@ pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 
 use candle_nn::{Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
+
+use crate::lora::maybe_wrap_runtime_lora;
 
 #[derive(Clone, Debug)]
 pub struct ImmediateIsqParams {
@@ -760,7 +763,13 @@ pub fn linear_no_bias(
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, None),
             ))?;
-            Arc::new(layer) as Arc<dyn QuantMethod>
+            maybe_wrap_runtime_lora(
+                Arc::new(layer) as Arc<dyn QuantMethod>,
+                &vb,
+                in_dim,
+                out_dim,
+                Default::default(),
+            )?
         }
     };
     apply_immediate_isq(layer, base_vb)
@@ -805,7 +814,13 @@ pub fn linear(
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, Some(bias)),
             ))?;
-            Arc::new(layer) as Arc<dyn QuantMethod>
+            maybe_wrap_runtime_lora(
+                Arc::new(layer) as Arc<dyn QuantMethod>,
+                &vb,
+                in_dim,
+                out_dim,
+                Default::default(),
+            )?
         }
     };
     apply_immediate_isq(layer, base_vb)
