@@ -75,6 +75,8 @@
 //!     let topology = None;
 //!     let max_seq_len = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN;
 //!     let max_batch_size = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE;
+//!     let matformer_config_path = None;
+//!     let matformer_slice_name = None;
 //!
 //!     let model = ModelSelected::Plain {
 //!         model_id: plain_model_id,
@@ -90,6 +92,8 @@
 //!         max_seq_len,
 //!         max_batch_size,
 //!         hf_cache_path,
+//!         matformer_config_path,
+//!         matformer_slice_name,
 //!     };
 //!
 //!     let shared_mistralrs = MistralRsForServerBuilder::new()
