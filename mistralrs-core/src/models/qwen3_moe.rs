@@ -1,8 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, Module, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use mistralrs_quant::{
-    ColumnParallelLayer, FusedExperts, QuantMethod, QuantizedConfig, ReplicatedLayer,
+    ColumnParallelLayer, FusedExperts, NonZeroOp, QuantMethod, QuantizedConfig, ReplicatedLayer,
     RowParallelLayer, ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
@@ -493,62 +493,67 @@ impl SlowMoeMlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let (b_size, seq_len, hidden_dim) = xs.dims3()?;
-        let xs = xs.reshape(((), hidden_dim))?;
+        let (bs, seq, hidden) = xs.dims3()?;
+        let xs = xs.reshape(((), hidden))?;
+        
         let router_logits = xs.apply(&self.gate)?;
         let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
 
-        // In order to extract topk, we extract the data from the tensor and manipulate it
-        // directly. Maybe we will want to use some custom ops instead at some point.
-        let experts_per_tok = routing_weights
+        // Get top-k experts
+        let selected_experts = routing_weights
             .arg_sort_last_dim(false)?
             .narrow(D::Minus1, 0, self.num_experts_per_tok)?
             .contiguous()?;
-        let routing_weights = routing_weights.gather(&experts_per_tok, D::Minus1)?;
+        let routing_weights = routing_weights.gather(&selected_experts, D::Minus1)?;
 
-        // routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-        // top_x contains the row indexes to evaluate for each expert.
-        let routing_weights = routing_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
-        let experts_per_tok = experts_per_tok.to_vec2::<u32>()?;
-        let mut top_x = vec![vec![]; self.experts.len()];
-        let mut selected_experts = vec![vec![]; self.experts.len()];
-        for (row_idx, (rw, expert_idxs)) in routing_weights
-            .iter()
-            .zip(experts_per_tok.iter())
-            .enumerate()
-        {
-            let sum_rw = rw.iter().sum::<f32>();
-            for (&rw, &expert_idx) in rw.iter().zip(expert_idxs.iter()) {
-                top_x[expert_idx as usize].push(row_idx as u32);
-                let rw = if self.norm_topk_prob { rw / sum_rw } else { rw };
-                selected_experts[expert_idx as usize].push(rw)
-            }
-        }
+        // Normalize routing weights if needed
+        let routing_weights = if self.norm_topk_prob {
+            routing_weights.broadcast_div(&routing_weights.sum_keepdim(D::Minus1)?)?
+        } else {
+            routing_weights
+        };
 
-        let mut ys = xs.zeros_like()?;
-        for (expert_idx, expert_layer) in self.experts.iter().enumerate() {
-            let top_x = &top_x[expert_idx];
-            if top_x.is_empty() {
+        let mut final_hidden_states = xs.zeros_like()?;
+
+        // One hot encode the selected experts to create an expert mask
+        // this will be used to easily index which expert to activate
+        let experts_mask =
+            candle_nn::encoding::one_hot(selected_experts, self.experts.len(), 1u8, 0u8)?
+                .permute((2, 1, 0))?;
+
+        // Loop over all avail experts in the model and perform the computation on each expert
+        for expert_idx in 0..self.experts.len() {
+            let expert = &self.experts[expert_idx];
+            let expert_mask = experts_mask.i(expert_idx)?;
+            assert_eq!(expert_mask.rank(), 2);
+            let nonzero_mask = expert_mask.contiguous()?.nonzero()?;
+            
+            if nonzero_mask.dim(0)? == 0 {
                 continue;
             }
-            let top_x = Tensor::new(top_x.as_slice(), xs.device())?;
-            let selected_experts =
-                Tensor::new(selected_experts[expert_idx].as_slice(), xs.device())?
-                    .reshape(((), 1))?
-                    .to_dtype(xs.dtype())?;
-            // Index the correct hidden states and compute the expert hidden state for
-            // the current expert. We need to make sure to multiply the output hidden
-            // states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-            let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden_dim))?;
-            // current_hidden_states = expert_layer(current_state, routing_weights[top_x_list, idx_list, None])
-            let current_hidden_states = expert_layer
-                .forward(&current_state.unsqueeze(0)?)?
-                .squeeze(0)?;
-            let current_hidden_states = current_hidden_states.broadcast_mul(&selected_experts)?;
-            ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
+            
+            let idx = nonzero_mask.i((.., 0))?.contiguous()?;
+            let top_x = nonzero_mask.i((.., 1))?.contiguous()?;
+
+            // Index the correct hidden states and compute the expert hidden state
+            // for the current expert, we need to make sure to multiply the output hidden
+            // states by `routing_weights` on the corresponding tokens (top-1, top-2)
+            let current_state = xs.index_select(&top_x, 0)?.reshape((1, (), hidden))?;
+            let current_routing_weights = routing_weights
+                .index_select(&top_x, 0)?
+                .gather(&idx.unsqueeze(1)?.contiguous()?, 1)?;
+            let exp_out = expert.forward(&current_state)?;
+
+            let current_hidden_states = exp_out.broadcast_mul(&current_routing_weights)?;
+
+            final_hidden_states = final_hidden_states.index_add(
+                &top_x.contiguous()?,
+                &current_hidden_states.squeeze(0)?,
+                0,
+            )?;
         }
-        let ys = ys.reshape((b_size, seq_len, hidden_dim))?;
-        Ok(ys)
+
+        final_hidden_states.reshape((bs, seq, hidden))
     }
 }
 
@@ -603,7 +608,7 @@ impl DecoderLayer {
         {
             let vb = mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq);
 
-            if vb.device().is_metal() {
+            if false &&vb.device().is_metal() {
                 MoeOrMlp::FastMoe(FastMoeMlp::new(
                     cfg,
                     vb,
