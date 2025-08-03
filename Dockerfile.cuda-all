@@ -10,12 +10,12 @@ RUN <<HEREDOC
     apt-get install -y --no-install-recommends \
         curl \
         libssl-dev \
-        pkg-config
+        pkg-config && \
 
     rm -rf /var/lib/apt/lists/*
 HEREDOC
 
-RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
+RUN curl https://sh.rustup.rs -sSf | bash -s -- -y && test -f /root/.cargo/bin/rustup
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN rustup update nightly && rustup default nightly
 
@@ -58,10 +58,8 @@ RUN <<HEREDOC
         libssl-dev \
         curl \
         pkg-config \
-        # Provided for convenience when using the NCCL crate feature:
         openmpi-bin \
-        # Provided for MKL feature runtime:
-        intel-oneapi-hpc-toolkit
+        intel-oneapi-hpc-toolkit && \
 
     rm -rf /var/lib/apt/lists/*
 HEREDOC
