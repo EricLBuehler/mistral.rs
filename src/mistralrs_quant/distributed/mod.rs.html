@@ -57,14 +57,14 @@
 <a href=#57 id=57 data-nosnippet>57</a>}
 <a href=#58 id=58 data-nosnippet>58</a>
 <a href=#59 id=59 data-nosnippet>59</a><span class="kw">pub fn </span>get_global_tp_size_from_devices() -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#60 id=60 data-nosnippet>60</a>    <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
+<a href=#60 id=60 data-nosnippet>60</a>    <span class="attr">#[cfg(all(feature = <span class="string">"cuda"</span>, feature = <span class="string">"ring"</span>))]
 <a href=#61 id=61 data-nosnippet>61</a>    </span>{
 <a href=#62 id=62 data-nosnippet>62</a>        <span class="kw">use </span>candle_core::cuda::WrapErr;
 <a href=#63 id=63 data-nosnippet>63</a>        candle_core::cuda::cudarc::driver::result::device::get_count()
 <a href=#64 id=64 data-nosnippet>64</a>            .w()
 <a href=#65 id=65 data-nosnippet>65</a>            .map(|x| x <span class="kw">as </span>usize)
 <a href=#66 id=66 data-nosnippet>66</a>    }
-<a href=#67 id=67 data-nosnippet>67</a>    <span class="attr">#[cfg(feature = <span class="string">"ring"</span>)]
+<a href=#67 id=67 data-nosnippet>67</a>    <span class="attr">#[cfg(all(not(feature = <span class="string">"cuda"</span>), feature = <span class="string">"ring"</span>))]
 <a href=#68 id=68 data-nosnippet>68</a>    </span>{
 <a href=#69 id=69 data-nosnippet>69</a>        <span class="kw">let </span>config = RingConfig::load();
 <a href=#70 id=70 data-nosnippet>70</a>        <span class="prelude-val">Ok</span>(config.world_size)
