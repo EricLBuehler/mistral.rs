@@ -382,11 +382,8 @@ impl Pipeline for SpeculativePipeline {
                             false,
                             None,
                             None, // TODO: get block tables/handle it
-                            None, // TODO: do we support???
                             get_mut_arcmutex!(self.draft).device_mapper(),
                         )
-                        .nth(0)
-                        .unwrap()
                         .unwrap()
                         .inputs;
                     let logits = get_mut_arcmutex!(self.draft).forward_inputs(inputs, false)?;
@@ -455,11 +452,8 @@ impl Pipeline for SpeculativePipeline {
                         false,
                         None,
                         None, // TODO: get block tables/handle it
-                        None, // TODO: do we support???
                         get_mut_arcmutex!(self.target).device_mapper(),
                     )
-                    .nth(0)
-                    .unwrap()
                     .unwrap()
                     .inputs;
 

@@ -171,11 +171,9 @@ pub fn get_device_layers(
     devices: &[Device],
     dtype: DType,
     params: &AutoDeviceMapParams,
-    prompt_chunksize: usize,
     paged_attn_config: Option<&PagedAttentionConfig>,
 ) -> Result<DeviceMapMetadata> {
-    let mapped_max =
-        loader.mapped_max_act_size_elems(config, params, prompt_chunksize)? * dtype.size_in_bytes();
+    let mapped_max = loader.mapped_max_act_size_elems(config, params)? * dtype.size_in_bytes();
     let non_mapped_max =
         loader.non_mapped_max_act_size_elems(config, params)? * dtype.size_in_bytes();
 
@@ -341,7 +339,6 @@ pub fn get_device_layers(
             devices,
             dtype,
             params,
-            prompt_chunksize,
             None,
         );
     }

@@ -1,4 +1,4 @@
-use std::{any::Any, num::NonZeroUsize, sync::Arc};
+use std::{any::Any, sync::Arc};
 
 use anyhow::{Context, Result};
 use candle_core::Device;
@@ -70,30 +70,20 @@ impl InputsProcessor for DiffusionInputsProcessor {
         _return_raw_logits: bool,
         _other_config: Option<Arc<dyn Any>>,
         _paged_attn_metadata: Option<PagedAttentionMeta>,
-        prompt_chunksize: Option<NonZeroUsize>,
         _mapper: Option<&dyn DeviceMapper>,
-    ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>> {
-        let mut make_value = if prompt_chunksize.is_some() {
-            return Box::new(std::iter::once(Err(anyhow::Error::msg(
-                "Prompt batching is unsupported for diffusion models",
-            ))));
-        } else {
-            || {
-                let inputs = ModelInputs {
-                    prompts: input_seqs
-                        .iter_mut()
-                        .map(|seq| seq.get_initial_prompt().to_string())
-                        .collect::<Vec<_>>(),
-                    params: input_seqs[0]
-                        .get_diffusion_diffusion_params()
-                        .context("Diffusion model params must be present")?,
-                };
-                Ok(InputProcessorOutput {
-                    inputs: Box::new(inputs),
-                    seq_indices: (0..input_seqs.len()).collect::<Vec<_>>(),
-                })
-            }
+    ) -> Result<InputProcessorOutput> {
+        let inputs = ModelInputs {
+            prompts: input_seqs
+                .iter_mut()
+                .map(|seq| seq.get_initial_prompt().to_string())
+                .collect::<Vec<_>>(),
+            params: input_seqs[0]
+                .get_diffusion_diffusion_params()
+                .context("Diffusion model params must be present")?,
         };
-        Box::new(std::iter::once(make_value()))
+        Ok(InputProcessorOutput {
+            inputs: Box::new(inputs),
+            seq_indices: (0..input_seqs.len()).collect::<Vec<_>>(),
+        })
     }
 }

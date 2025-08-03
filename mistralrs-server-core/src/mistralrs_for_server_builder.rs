@@ -1,6 +1,6 @@
 //! ## mistral.rs instance for server builder.
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use candle_core::Device;
@@ -95,7 +95,6 @@ pub mod defaults {
     pub const PAGED_ATTN_CPU: bool = false;
     pub const PAGED_ATTN_CUDA: bool = true;
     pub const PAGED_ATTN_METAL: bool = false;
-    pub const PROMPT_CHUNKSIZE: Option<usize> = None;
     pub const CPU: bool = false;
     pub const ENABLE_SEARCH: bool = false;
     pub const SEARCH_BERT_MODEL: Option<String> = None;
@@ -135,7 +134,6 @@ pub mod defaults {
 ///        .with_paged_attn_gpu_mem_usage_optional(args.paged_attn_gpu_mem_usage)
 ///        .with_paged_ctxt_len_optional(args.paged_ctxt_len)
 ///        .with_paged_attn_block_size_optional(args.paged_attn_block_size)
-///        .with_prompt_chunksize_optional(args.prompt_chunksize)
 ///        .build()
 ///        .await?;
 /// ```
@@ -220,9 +218,6 @@ pub struct MistralRsForServerBuilder {
     /// Enables or disables PagedAttention. By default, PagedAttention will be enabled for CUDA and disabled for Metal (and is not supported for CPU). Use this to override the default behavior.
     paged_attn: Option<bool>,
 
-    /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
-    prompt_chunksize: Option<usize>,
-
     /// Use CPU only
     cpu: bool,
 
@@ -267,7 +262,6 @@ impl Default for MistralRsForServerBuilder {
             paged_ctxt_len: defaults::PAGED_CTXT_LEN,
             paged_attn_block_size: defaults::PAGED_ATTN_BLOCK_SIZE,
             paged_attn: defaults::PAGED_ATTN,
-            prompt_chunksize: defaults::PROMPT_CHUNKSIZE,
             cpu: defaults::CPU,
             enable_search: defaults::ENABLE_SEARCH,
             search_bert_model: defaults::SEARCH_BERT_MODEL,
@@ -541,20 +535,6 @@ impl MistralRsForServerBuilder {
         self
     }
 
-    /// Sets the prompt chunking size.
-    pub fn with_prompt_chunksize(mut self, prompt_chunksize: usize) -> Self {
-        self.prompt_chunksize = Some(prompt_chunksize);
-        self
-    }
-
-    /// Sets the prompt chunking size if provided.
-    pub fn with_prompt_chunksize_optional(mut self, prompt_chunksize: Option<usize>) -> Self {
-        if let Some(prompt_chunksize) = prompt_chunksize {
-            self = self.with_prompt_chunksize(prompt_chunksize);
-        }
-        self
-    }
-
     /// Sets whether to force CPU-only execution.
     pub fn with_cpu(mut self, cpu: bool) -> Self {
         self.cpu = cpu;
@@ -628,14 +608,6 @@ impl MistralRsForServerBuilder {
             self.max_seqs = 1;
         }
 
-        let prompt_chunksize = match self.prompt_chunksize {
-            Some(0) => {
-                anyhow::bail!("`prompt_chunksize` must be a strictly positive integer, got 0.",)
-            }
-            Some(x) => Some(NonZeroUsize::new(x).unwrap()),
-            None => None,
-        };
-
         let max_seq_len = auto_device_map_params.max_seq_len();
 
         let device = if let Some(device) = self.device {
@@ -663,7 +635,6 @@ impl MistralRsForServerBuilder {
         let loader: Box<dyn Loader> = LoaderBuilder::new(model)
             .with_no_kv_cache(self.no_kv_cache)
             .with_chat_template(self.chat_template)
-            .with_prompt_chunksize(prompt_chunksize)
             .with_jinja_explicit(self.jinja_explicit)
             .build()?;
 
@@ -729,14 +700,6 @@ impl MistralRsForServerBuilder {
             self.max_seqs = 1;
         }
 
-        let prompt_chunksize = match self.prompt_chunksize {
-            Some(0) => {
-                anyhow::bail!("`prompt_chunksize` must be a strictly positive integer, got 0.",)
-            }
-            Some(x) => Some(NonZeroUsize::new(x).unwrap()),
-            None => None,
-        };
-
         let max_seq_len = auto_device_map_params.max_seq_len();
 
         let device = if let Some(device) = self.device {
@@ -754,7 +717,6 @@ impl MistralRsForServerBuilder {
                     .clone()
                     .or(self.chat_template.clone()),
             )
-            .with_prompt_chunksize(prompt_chunksize)
             .with_jinja_explicit(
                 first_model
                     .jinja_explicit
@@ -850,7 +812,6 @@ impl MistralRsForServerBuilder {
                         .clone()
                         .or(self.chat_template.clone()),
                 )
-                .with_prompt_chunksize(prompt_chunksize)
                 .with_jinja_explicit(
                     model_config
                         .jinja_explicit

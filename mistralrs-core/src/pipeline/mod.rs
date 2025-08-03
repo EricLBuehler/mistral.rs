@@ -59,7 +59,6 @@ pub use speech::{SpeechLoader, SpeechPipeline};
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
@@ -117,7 +116,6 @@ pub struct GeneralMetadata {
     // PagedAttention stuff
     pub cache_config: Option<CacheConfig>,
     pub cache_engine: Option<CacheEngine>,
-    pub prompt_chunksize: Option<NonZeroUsize>,
     pub model_metadata: Option<Arc<dyn ModelConfigLike + Send + Sync>>,
     pub modalities: Modalities,
 }
@@ -396,32 +394,23 @@ pub trait Pipeline:
     ) -> Result<Duration, candle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
-                let inputs_iter = self.get_processor().inputs_processor().process_inputs(
-                    self.tokenizer(),
-                    input_seqs,
-                    is_prompt,
-                    self.get_metadata().is_xlora,
-                    &self.device(),
-                    self.get_metadata().no_kv_cache,
-                    None,
-                    return_raw_logits,
-                    self.get_input_processor_config(),
-                    None,
-                    self.get_metadata().prompt_chunksize,
-                    self.device_mapper(),
-                );
+                let inputs_iter =
+                    std::iter::once(self.get_processor().inputs_processor().process_inputs(
+                        self.tokenizer(),
+                        input_seqs,
+                        is_prompt,
+                        self.get_metadata().is_xlora,
+                        &self.device(),
+                        self.get_metadata().no_kv_cache,
+                        None,
+                        return_raw_logits,
+                        self.get_input_processor_config(),
+                        None,
+                        self.device_mapper(),
+                    ));
 
                 let mut logits = vec![None; input_seqs.len()];
-                let prompt_chunksize = self
-                    .get_metadata()
-                    .prompt_chunksize
-                    .map(NonZeroUsize::get)
-                    .unwrap_or(1);
-                let len_inputs = input_seqs
-                    .iter()
-                    .map(|seq| seq.get_toks().len().div_ceil(prompt_chunksize))
-                    .max()
-                    .unwrap();
+                let len_inputs = 1;
                 let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
 
                 let mut exec_duration = Duration::ZERO;
@@ -618,32 +607,23 @@ pub trait Pipeline:
                         &blocks_to_copy,
                     )?;
 
-                let inputs_iter = self.get_processor().inputs_processor().process_inputs(
-                    self.tokenizer(),
-                    input_seqs,
-                    is_prompt,
-                    self.get_metadata().is_xlora,
-                    &self.device(),
-                    self.get_metadata().no_kv_cache,
-                    None,
-                    return_raw_logits,
-                    self.get_input_processor_config(),
-                    Some(metadata),
-                    self.get_metadata().prompt_chunksize,
-                    self.device_mapper(),
-                );
+                let inputs_iter =
+                    std::iter::once(self.get_processor().inputs_processor().process_inputs(
+                        self.tokenizer(),
+                        input_seqs,
+                        is_prompt,
+                        self.get_metadata().is_xlora,
+                        &self.device(),
+                        self.get_metadata().no_kv_cache,
+                        None,
+                        return_raw_logits,
+                        self.get_input_processor_config(),
+                        Some(metadata),
+                        self.device_mapper(),
+                    ));
 
                 let mut logits = vec![None; input_seqs.len()];
-                let prompt_chunksize = self
-                    .get_metadata()
-                    .prompt_chunksize
-                    .map(NonZeroUsize::get)
-                    .unwrap_or(1);
-                let len_inputs = input_seqs
-                    .iter()
-                    .map(|seq| seq.get_toks().len().div_ceil(prompt_chunksize))
-                    .max()
-                    .unwrap();
+                let len_inputs = 1;
                 let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
 
                 let mut exec_duration = Duration::ZERO;

@@ -1,9 +1,9 @@
-#include <cuda.h>
-#include <cuda_fp16.h>
-#include <assert.h>
-#include <iostream>
 #include "marlin/marlin.cuh"
 #include "marlin/marlin_dtypes.cuh"
+#include <assert.h>
+#include <cuda.h>
+#include <cuda_fp16.h>
+#include <iostream>
 using namespace marlin;
 
 template <int const num_threads, int const num_bits, bool const has_perm>

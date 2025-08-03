@@ -540,7 +540,6 @@ impl Engine {
                     false,
                     pipeline.get_input_processor_config(),
                     None,
-                    pipeline.get_metadata().prompt_chunksize,
                     pipeline.device_mapper(),
                 );
             }

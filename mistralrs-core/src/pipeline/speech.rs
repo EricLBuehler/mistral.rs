@@ -25,7 +25,6 @@ use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use regex::Regex;
 use std::any::Any;
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
@@ -120,28 +119,18 @@ impl InputsProcessor for SpeechInputsProcessor {
         _return_raw_logits: bool,
         _other_config: Option<Arc<dyn Any>>,
         _paged_attn_metadata: Option<PagedAttentionMeta>,
-        prompt_chunksize: Option<NonZeroUsize>,
         _mapper: Option<&dyn DeviceMapper>,
-    ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>> {
-        let make_value = if prompt_chunksize.is_some() {
-            return Box::new(std::iter::once(Err(anyhow::Error::msg(
-                "Prompt batching is unsupported for speech models",
-            ))));
-        } else {
-            || {
-                let inputs = ModelInputs {
-                    prompts: input_seqs
-                        .iter()
-                        .map(|seq| seq.get_initial_prompt().to_string())
-                        .collect(),
-                };
-                Ok(InputProcessorOutput {
-                    inputs: Box::new(inputs),
-                    seq_indices: (0..input_seqs.len()).collect::<Vec<_>>(),
-                })
-            }
+    ) -> Result<InputProcessorOutput> {
+        let inputs = ModelInputs {
+            prompts: input_seqs
+                .iter()
+                .map(|seq| seq.get_initial_prompt().to_string())
+                .collect(),
         };
-        Box::new(std::iter::once(make_value()))
+        Ok(InputProcessorOutput {
+            inputs: Box::new(inputs),
+            seq_indices: (0..input_seqs.len()).collect::<Vec<_>>(),
+        })
     }
 }
 
@@ -304,7 +293,6 @@ impl Loader for SpeechLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
-                prompt_chunksize: None,
                 model_metadata: None,
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],

@@ -9,7 +9,6 @@ use requests::{ChatCompletionRequest, CompletionRequest, ToolChoice};
 use serde_json::Value;
 use std::{
     cell::RefCell,
-    num::NonZeroUsize,
     path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex, OnceLock},
@@ -156,7 +155,6 @@ fn parse_which(
     which: Which,
     no_kv_cache: bool,
     chat_template: Option<String>,
-    prompt_chunksize: Option<NonZeroUsize>,
     jinja_explicit: Option<String>,
 ) -> PyApiResult<Box<dyn Loader>> {
     Ok(match which {
@@ -177,7 +175,6 @@ fn parse_which(
             matformer_slice_name,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.map(Into::into).unwrap_or(Default::default()),
                 write_uqff,
@@ -215,7 +212,6 @@ fn parse_which(
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
@@ -260,7 +256,6 @@ fn parse_which(
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
@@ -297,7 +292,6 @@ fn parse_which(
             quantized_model_id,
             quantized_filename.map_left(|f| vec![f]).into_inner(),
             GGUFSpecificConfig {
-                prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             no_kv_cache,
@@ -320,7 +314,6 @@ fn parse_which(
             quantized_model_id,
             quantized_filename.map_left(|f| vec![f]).into_inner(),
             GGUFSpecificConfig {
-                prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             no_kv_cache,
@@ -351,7 +344,6 @@ fn parse_which(
             quantized_model_id,
             quantized_filename.map_left(|f| vec![f]).into_inner(),
             GGUFSpecificConfig {
-                prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             no_kv_cache,
@@ -377,7 +369,6 @@ fn parse_which(
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             chat_template,
@@ -404,7 +395,6 @@ fn parse_which(
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             chat_template,
@@ -439,7 +429,6 @@ fn parse_which(
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             chat_template,
@@ -475,7 +464,6 @@ fn parse_which(
             matformer_slice_name,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
-                prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
                 from_uqff: from_uqff.map(|x| {
@@ -573,7 +561,6 @@ impl Runner {
         pa_cache_type = None,
         no_paged_attn = false,
         paged_attn = false,
-        prompt_chunksize = None,
         seed = None,
         enable_search = false,
         search_bert_model = None,
@@ -601,7 +588,6 @@ impl Runner {
         pa_cache_type: Option<PagedCacheType>,
         no_paged_attn: bool,
         paged_attn: bool,
-        prompt_chunksize: Option<usize>,
         seed: Option<u64>,
         enable_search: bool,
         search_bert_model: Option<String>,
@@ -704,31 +690,14 @@ impl Runner {
             max_seqs
         };
 
-        let prompt_chunksize = match prompt_chunksize {
-            Some(0) => {
-                return Err(PyApiErr::from(
-                    "`prompt_chunksize` must be a strictly positive integer, got 0.",
-                ))
-            }
-            Some(x) => Some(NonZeroUsize::new(x).unwrap()),
-            None => None,
-        };
-
         let loader = parse_which(
             which,
             no_kv_cache,
             chat_template.clone(),
-            prompt_chunksize,
             jinja_explicit.clone(),
         )?;
         let loader = if let Some(draft_which) = which_draft {
-            let draft = parse_which(
-                draft_which,
-                no_kv_cache,
-                chat_template,
-                prompt_chunksize,
-                jinja_explicit,
-            )?;
+            let draft = parse_which(draft_which, no_kv_cache, chat_template, jinja_explicit)?;
             Box::new(SpeculativeLoader {
                 target: loader,
                 draft,
