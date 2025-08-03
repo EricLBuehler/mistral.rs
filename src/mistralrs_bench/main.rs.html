@@ -8,8 +8,8 @@
 <a href=#8 id=8 data-nosnippet>8</a>    MistralRsBuilder, ModelSelected, NormalRequest, PagedAttentionConfig, PagedCacheType, Request,
 <a href=#9 id=9 data-nosnippet>9</a>    RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 <a href=#10 id=10 data-nosnippet>10</a>};
-<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>std::sync::Arc;
-<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>std::{fmt::Display, num::NonZeroUsize};
+<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>std::fmt::Display;
+<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>std::sync::Arc;
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>tokio::sync::mpsc::channel;
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>tracing::info;
 <a href=#15 id=15 data-nosnippet>15</a>
@@ -346,256 +346,242 @@
 <a href=#346 id=346 data-nosnippet>346</a>    <span class="doccomment">/// Enable PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
 <a href=#347 id=347 data-nosnippet>347</a>    </span><span class="attr">#[arg(long = <span class="string">"paged-attn"</span>, default_value_t = <span class="bool-val">false</span>)]
 <a href=#348 id=348 data-nosnippet>348</a>    </span>paged_attn: bool,
-<a href=#349 id=349 data-nosnippet>349</a>
-<a href=#350 id=350 data-nosnippet>350</a>    <span class="doccomment">/// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
-<a href=#351 id=351 data-nosnippet>351</a>    </span><span class="attr">#[arg(long = <span class="string">"prompt-batchsize"</span>)]
-<a href=#352 id=352 data-nosnippet>352</a>    </span>prompt_chunksize: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#353 id=353 data-nosnippet>353</a>}
-<a href=#354 id=354 data-nosnippet>354</a>
-<a href=#355 id=355 data-nosnippet>355</a><span class="attr">#[tokio::main]
-<a href=#356 id=356 data-nosnippet>356</a></span><span class="kw">async fn </span>main() -&gt; anyhow::Result&lt;()&gt; {
-<a href=#357 id=357 data-nosnippet>357</a>    <span class="kw">let </span><span class="kw-2">mut </span>args = Args::parse();
-<a href=#358 id=358 data-nosnippet>358</a>    initialize_logging();
-<a href=#359 id=359 data-nosnippet>359</a>
-<a href=#360 id=360 data-nosnippet>360</a>    args.concurrency = <span class="prelude-val">Some</span>(args.concurrency.unwrap_or(<span class="macro">vec!</span>[<span class="number">1</span>]));
-<a href=#361 id=361 data-nosnippet>361</a>
-<a href=#362 id=362 data-nosnippet>362</a>    <span class="kw">let </span>prompt_chunksize = <span class="kw">match </span>args.prompt_chunksize {
-<a href=#363 id=363 data-nosnippet>363</a>        <span class="prelude-val">Some</span>(<span class="number">0</span>) =&gt; {
-<a href=#364 id=364 data-nosnippet>364</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"`prompt_chunksize` must be a strictly positive integer, got 0."</span>,)
-<a href=#365 id=365 data-nosnippet>365</a>        }
-<a href=#366 id=366 data-nosnippet>366</a>        <span class="prelude-val">Some</span>(x) =&gt; <span class="prelude-val">Some</span>(NonZeroUsize::new(x).unwrap()),
-<a href=#367 id=367 data-nosnippet>367</a>        <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
-<a href=#368 id=368 data-nosnippet>368</a>    };
-<a href=#369 id=369 data-nosnippet>369</a>
-<a href=#370 id=370 data-nosnippet>370</a>    <span class="kw">let </span>dtype = get_model_dtype(<span class="kw-2">&amp;</span>args.model)<span class="question-mark">?</span>;
-<a href=#371 id=371 data-nosnippet>371</a>    <span class="kw">let </span>auto_device_map_params = get_auto_device_map_params(<span class="kw-2">&amp;</span>args.model)<span class="question-mark">?</span>;
-<a href=#372 id=372 data-nosnippet>372</a>
-<a href=#373 id=373 data-nosnippet>373</a>    <span class="kw">let </span>max_seq_len = auto_device_map_params.max_seq_len();
+<a href=#349 id=349 data-nosnippet>349</a>}
+<a href=#350 id=350 data-nosnippet>350</a>
+<a href=#351 id=351 data-nosnippet>351</a><span class="attr">#[tokio::main]
+<a href=#352 id=352 data-nosnippet>352</a></span><span class="kw">async fn </span>main() -&gt; anyhow::Result&lt;()&gt; {
+<a href=#353 id=353 data-nosnippet>353</a>    <span class="kw">let </span><span class="kw-2">mut </span>args = Args::parse();
+<a href=#354 id=354 data-nosnippet>354</a>    initialize_logging();
+<a href=#355 id=355 data-nosnippet>355</a>
+<a href=#356 id=356 data-nosnippet>356</a>    args.concurrency = <span class="prelude-val">Some</span>(args.concurrency.unwrap_or(<span class="macro">vec!</span>[<span class="number">1</span>]));
+<a href=#357 id=357 data-nosnippet>357</a>
+<a href=#358 id=358 data-nosnippet>358</a>    <span class="kw">let </span>dtype = get_model_dtype(<span class="kw-2">&amp;</span>args.model)<span class="question-mark">?</span>;
+<a href=#359 id=359 data-nosnippet>359</a>    <span class="kw">let </span>auto_device_map_params = get_auto_device_map_params(<span class="kw-2">&amp;</span>args.model)<span class="question-mark">?</span>;
+<a href=#360 id=360 data-nosnippet>360</a>
+<a href=#361 id=361 data-nosnippet>361</a>    <span class="kw">let </span>max_seq_len = auto_device_map_params.max_seq_len();
+<a href=#362 id=362 data-nosnippet>362</a>
+<a href=#363 id=363 data-nosnippet>363</a>    <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>Loader&gt; = LoaderBuilder::new(args.model).build()<span class="question-mark">?</span>;
+<a href=#364 id=364 data-nosnippet>364</a>    <span class="kw">let </span>model_name = loader.get_id();
+<a href=#365 id=365 data-nosnippet>365</a>
+<a href=#366 id=366 data-nosnippet>366</a>    <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
+<a href=#367 id=367 data-nosnippet>367</a>    </span><span class="kw">let </span>device = Device::new_metal(<span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#368 id=368 data-nosnippet>368</a>    <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
+<a href=#369 id=369 data-nosnippet>369</a>    </span><span class="kw">let </span>device = <span class="kw">if </span>mistralrs_core::distributed::use_nccl() {
+<a href=#370 id=370 data-nosnippet>370</a>        Device::Cpu
+<a href=#371 id=371 data-nosnippet>371</a>    } <span class="kw">else </span>{
+<a href=#372 id=372 data-nosnippet>372</a>        Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?
+<a href=#373 id=373 data-nosnippet>373</a>    </span>};
 <a href=#374 id=374 data-nosnippet>374</a>
-<a href=#375 id=375 data-nosnippet>375</a>    <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>Loader&gt; = LoaderBuilder::new(args.model)
-<a href=#376 id=376 data-nosnippet>376</a>        .with_prompt_chunksize(prompt_chunksize)
-<a href=#377 id=377 data-nosnippet>377</a>        .build()<span class="question-mark">?</span>;
-<a href=#378 id=378 data-nosnippet>378</a>    <span class="kw">let </span>model_name = loader.get_id();
-<a href=#379 id=379 data-nosnippet>379</a>
-<a href=#380 id=380 data-nosnippet>380</a>    <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
-<a href=#381 id=381 data-nosnippet>381</a>    </span><span class="kw">let </span>device = Device::new_metal(<span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#382 id=382 data-nosnippet>382</a>    <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
-<a href=#383 id=383 data-nosnippet>383</a>    </span><span class="kw">let </span>device = <span class="kw">if </span>mistralrs_core::distributed::use_nccl() {
-<a href=#384 id=384 data-nosnippet>384</a>        Device::Cpu
-<a href=#385 id=385 data-nosnippet>385</a>    } <span class="kw">else </span>{
-<a href=#386 id=386 data-nosnippet>386</a>        Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?
-<a href=#387 id=387 data-nosnippet>387</a>    </span>};
-<a href=#388 id=388 data-nosnippet>388</a>
-<a href=#389 id=389 data-nosnippet>389</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(seed) = args.seed {
-<a href=#390 id=390 data-nosnippet>390</a>        device.set_seed(seed)<span class="question-mark">?</span>;
-<a href=#391 id=391 data-nosnippet>391</a>    }
-<a href=#392 id=392 data-nosnippet>392</a>
-<a href=#393 id=393 data-nosnippet>393</a>    <span class="kw">let </span>token_source = TokenSource::CacheToken;
-<a href=#394 id=394 data-nosnippet>394</a>    <span class="macro">info!</span>(
-<a href=#395 id=395 data-nosnippet>395</a>        <span class="string">"avx: {}, neon: {}, simd128: {}, f16c: {}"</span>,
-<a href=#396 id=396 data-nosnippet>396</a>        candle_core::utils::with_avx(),
-<a href=#397 id=397 data-nosnippet>397</a>        candle_core::utils::with_neon(),
-<a href=#398 id=398 data-nosnippet>398</a>        candle_core::utils::with_simd128(),
-<a href=#399 id=399 data-nosnippet>399</a>        candle_core::utils::with_f16c()
-<a href=#400 id=400 data-nosnippet>400</a>    );
-<a href=#401 id=401 data-nosnippet>401</a>    <span class="macro">info!</span>(<span class="string">"Sampling method: penalties -&gt; temperature -&gt; topk -&gt; topp -&gt; minp -&gt; multinomial"</span>);
-<a href=#402 id=402 data-nosnippet>402</a>    <span class="macro">info!</span>(<span class="string">"Model kind is: {}"</span>, loader.get_kind().to_string());
-<a href=#403 id=403 data-nosnippet>403</a>
-<a href=#404 id=404 data-nosnippet>404</a>    <span class="comment">// Parse device mapper
-<a href=#405 id=405 data-nosnippet>405</a>    </span><span class="kw">let </span>mapper = <span class="kw">if let </span><span class="prelude-val">Some</span>(device_layers) = args.num_device_layers {
-<a href=#406 id=406 data-nosnippet>406</a>        <span class="kw">if </span>device_layers.len() == <span class="number">1 </span>&amp;&amp; device_layers[<span class="number">0</span>].parse::&lt;usize&gt;().is_ok() {
-<a href=#407 id=407 data-nosnippet>407</a>            <span class="kw">let </span>layers = device_layers[<span class="number">0</span>].parse::&lt;usize&gt;().unwrap();
-<a href=#408 id=408 data-nosnippet>408</a>            DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(<span class="macro">vec!</span>[
-<a href=#409 id=409 data-nosnippet>409</a>                DeviceLayerMapMetadata { ordinal: <span class="number">0</span>, layers },
-<a href=#410 id=410 data-nosnippet>410</a>            ]))
-<a href=#411 id=411 data-nosnippet>411</a>        } <span class="kw">else </span>{
-<a href=#412 id=412 data-nosnippet>412</a>            <span class="kw">let </span><span class="kw-2">mut </span>mapping = Vec::new();
-<a href=#413 id=413 data-nosnippet>413</a>            <span class="kw">for </span>layer <span class="kw">in </span>device_layers {
-<a href=#414 id=414 data-nosnippet>414</a>                <span class="kw">let </span>split = layer.splitn(<span class="number">2</span>, <span class="string">':'</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#415 id=415 data-nosnippet>415</a>                <span class="kw">if </span>split.len() &lt; <span class="number">2 </span>{
-<a href=#416 id=416 data-nosnippet>416</a>                    <span class="macro">panic!</span>(<span class="string">"Expected layer to be of format ORD:NUM, got {layer}"</span>);
-<a href=#417 id=417 data-nosnippet>417</a>                }
-<a href=#418 id=418 data-nosnippet>418</a>                <span class="kw">let </span>ord = split[<span class="number">0</span>]
-<a href=#419 id=419 data-nosnippet>419</a>                    .parse::&lt;usize&gt;()
-<a href=#420 id=420 data-nosnippet>420</a>                    .unwrap_or_else(|<span class="kw">_</span>| <span class="macro">panic!</span>(<span class="string">"Failed to parse {} as integer."</span>, split[<span class="number">0</span>]));
-<a href=#421 id=421 data-nosnippet>421</a>                <span class="kw">let </span>num = split[<span class="number">1</span>]
-<a href=#422 id=422 data-nosnippet>422</a>                    .parse::&lt;usize&gt;()
-<a href=#423 id=423 data-nosnippet>423</a>                    .unwrap_or_else(|<span class="kw">_</span>| <span class="macro">panic!</span>(<span class="string">"Failed to parse {} as integer."</span>, split[<span class="number">1</span>]));
-<a href=#424 id=424 data-nosnippet>424</a>                <span class="kw">for </span>DeviceLayerMapMetadata { ordinal, layers: <span class="kw">_ </span>} <span class="kw">in </span><span class="kw-2">&amp;</span>mapping {
-<a href=#425 id=425 data-nosnippet>425</a>                    <span class="kw">if </span><span class="kw-2">*</span>ordinal == ord {
-<a href=#426 id=426 data-nosnippet>426</a>                        <span class="macro">panic!</span>(<span class="string">"Duplicate ordinal {ord}"</span>);
-<a href=#427 id=427 data-nosnippet>427</a>                    }
-<a href=#428 id=428 data-nosnippet>428</a>                }
-<a href=#429 id=429 data-nosnippet>429</a>                mapping.push(DeviceLayerMapMetadata {
-<a href=#430 id=430 data-nosnippet>430</a>                    ordinal: ord,
-<a href=#431 id=431 data-nosnippet>431</a>                    layers: num,
-<a href=#432 id=432 data-nosnippet>432</a>                });
-<a href=#433 id=433 data-nosnippet>433</a>            }
-<a href=#434 id=434 data-nosnippet>434</a>            DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
-<a href=#435 id=435 data-nosnippet>435</a>        }
-<a href=#436 id=436 data-nosnippet>436</a>    } <span class="kw">else </span>{
-<a href=#437 id=437 data-nosnippet>437</a>        DeviceMapSetting::Auto(auto_device_map_params)
-<a href=#438 id=438 data-nosnippet>438</a>    };
-<a href=#439 id=439 data-nosnippet>439</a>
-<a href=#440 id=440 data-nosnippet>440</a>    <span class="kw">let </span>no_paged_attn = <span class="kw">if </span>device.is_cuda() || mistralrs_core::distributed::use_nccl() {
-<a href=#441 id=441 data-nosnippet>441</a>        args.no_paged_attn
-<a href=#442 id=442 data-nosnippet>442</a>    } <span class="kw">else if </span>device.is_metal() {
-<a href=#443 id=443 data-nosnippet>443</a>        !args.paged_attn
-<a href=#444 id=444 data-nosnippet>444</a>    } <span class="kw">else </span>{
-<a href=#445 id=445 data-nosnippet>445</a>        <span class="bool-val">true
-<a href=#446 id=446 data-nosnippet>446</a>    </span>};
-<a href=#447 id=447 data-nosnippet>447</a>
-<a href=#448 id=448 data-nosnippet>448</a>    <span class="comment">// Allocate 0.5 GB of CPU memory just as a placeholder.
-<a href=#449 id=449 data-nosnippet>449</a>    // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
-<a href=#450 id=450 data-nosnippet>450</a>    </span><span class="kw">let </span>cache_config = <span class="kw">match </span>(
-<a href=#451 id=451 data-nosnippet>451</a>        args.paged_attn_block_size,
-<a href=#452 id=452 data-nosnippet>452</a>        args.paged_attn_gpu_mem,
-<a href=#453 id=453 data-nosnippet>453</a>        args.paged_attn_gpu_mem_usage,
-<a href=#454 id=454 data-nosnippet>454</a>        args.paged_ctxt_len,
-<a href=#455 id=455 data-nosnippet>455</a>        paged_attn_supported(),
-<a href=#456 id=456 data-nosnippet>456</a>        no_paged_attn,
-<a href=#457 id=457 data-nosnippet>457</a>    ) {
-<a href=#458 id=458 data-nosnippet>458</a>        (block_size, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
-<a href=#459 id=459 data-nosnippet>459</a>            block_size,
-<a href=#460 id=460 data-nosnippet>460</a>            <span class="number">512</span>,
-<a href=#461 id=461 data-nosnippet>461</a>            MemoryGpuConfig::ContextSize(max_seq_len),
-<a href=#462 id=462 data-nosnippet>462</a>            args.cache_type.unwrap_or_default(),
-<a href=#463 id=463 data-nosnippet>463</a>        )<span class="question-mark">?</span>),
-<a href=#464 id=464 data-nosnippet>464</a>        (block_size, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(ctxt), <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
-<a href=#465 id=465 data-nosnippet>465</a>            block_size,
-<a href=#466 id=466 data-nosnippet>466</a>            <span class="number">512</span>,
-<a href=#467 id=467 data-nosnippet>467</a>            MemoryGpuConfig::ContextSize(ctxt),
-<a href=#468 id=468 data-nosnippet>468</a>            args.cache_type.unwrap_or_default(),
-<a href=#469 id=469 data-nosnippet>469</a>        )<span class="question-mark">?</span>),
-<a href=#470 id=470 data-nosnippet>470</a>        (block_size, <span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(f), <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
-<a href=#471 id=471 data-nosnippet>471</a>            block_size,
-<a href=#472 id=472 data-nosnippet>472</a>            <span class="number">512</span>,
-<a href=#473 id=473 data-nosnippet>473</a>            MemoryGpuConfig::Utilization(f),
-<a href=#474 id=474 data-nosnippet>474</a>            args.cache_type.unwrap_or_default(),
-<a href=#475 id=475 data-nosnippet>475</a>        )<span class="question-mark">?</span>),
-<a href=#476 id=476 data-nosnippet>476</a>        (block_size, <span class="prelude-val">Some</span>(m), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
-<a href=#477 id=477 data-nosnippet>477</a>            block_size,
-<a href=#478 id=478 data-nosnippet>478</a>            <span class="number">512</span>,
-<a href=#479 id=479 data-nosnippet>479</a>            MemoryGpuConfig::MbAmount(m),
-<a href=#480 id=480 data-nosnippet>480</a>            args.cache_type.unwrap_or_default(),
-<a href=#481 id=481 data-nosnippet>481</a>        )<span class="question-mark">?</span>),
-<a href=#482 id=482 data-nosnippet>482</a>        (block_size, <span class="prelude-val">Some</span>(_m), <span class="prelude-val">Some</span>(f), <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; {
-<a href=#483 id=483 data-nosnippet>483</a>            <span class="macro">info!</span>(<span class="string">"Both memory size, and usage were specified, defaulting to the usage value."</span>);
-<a href=#484 id=484 data-nosnippet>484</a>            <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
-<a href=#485 id=485 data-nosnippet>485</a>                block_size,
-<a href=#486 id=486 data-nosnippet>486</a>                <span class="number">512</span>,
-<a href=#487 id=487 data-nosnippet>487</a>                MemoryGpuConfig::Utilization(f),
-<a href=#488 id=488 data-nosnippet>488</a>                args.cache_type.unwrap_or_default(),
-<a href=#489 id=489 data-nosnippet>489</a>            )<span class="question-mark">?</span>)
-<a href=#490 id=490 data-nosnippet>490</a>        }
-<a href=#491 id=491 data-nosnippet>491</a>        (block_size, <span class="prelude-val">Some</span>(_m), <span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(ctxt), <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; {
-<a href=#492 id=492 data-nosnippet>492</a>            <span class="macro">info!</span>(<span class="string">"All memory size and ctxt len, defaulting to the context len value."</span>);
-<a href=#493 id=493 data-nosnippet>493</a>            <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
-<a href=#494 id=494 data-nosnippet>494</a>                block_size,
-<a href=#495 id=495 data-nosnippet>495</a>                <span class="number">512</span>,
-<a href=#496 id=496 data-nosnippet>496</a>                MemoryGpuConfig::ContextSize(ctxt),
-<a href=#497 id=497 data-nosnippet>497</a>                args.cache_type.unwrap_or_default(),
-<a href=#498 id=498 data-nosnippet>498</a>            )<span class="question-mark">?</span>)
-<a href=#499 id=499 data-nosnippet>499</a>        }
-<a href=#500 id=500 data-nosnippet>500</a>        (block_size, <span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(f), <span class="prelude-val">Some</span>(_ctxt), <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; {
-<a href=#501 id=501 data-nosnippet>501</a>            <span class="macro">info!</span>(<span class="string">"Both ctxt len and usage were specified, defaulting to the usage value."</span>);
-<a href=#502 id=502 data-nosnippet>502</a>            <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
-<a href=#503 id=503 data-nosnippet>503</a>                block_size,
-<a href=#504 id=504 data-nosnippet>504</a>                <span class="number">512</span>,
-<a href=#505 id=505 data-nosnippet>505</a>                MemoryGpuConfig::Utilization(f),
-<a href=#506 id=506 data-nosnippet>506</a>                args.cache_type.unwrap_or_default(),
-<a href=#507 id=507 data-nosnippet>507</a>            )<span class="question-mark">?</span>)
-<a href=#508 id=508 data-nosnippet>508</a>        }
-<a href=#509 id=509 data-nosnippet>509</a>        (<span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="prelude-val">None</span>,
-<a href=#510 id=510 data-nosnippet>510</a>    };
-<a href=#511 id=511 data-nosnippet>511</a>
-<a href=#512 id=512 data-nosnippet>512</a>    <span class="kw">let </span>isq = args
-<a href=#513 id=513 data-nosnippet>513</a>        .in_situ_quant
-<a href=#514 id=514 data-nosnippet>514</a>        .as_ref()
-<a href=#515 id=515 data-nosnippet>515</a>        .and_then(|isq| parse_isq_value(isq, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>device)).ok());
-<a href=#516 id=516 data-nosnippet>516</a>
-<a href=#517 id=517 data-nosnippet>517</a>    <span class="kw">let </span>pipeline = loader.load_model_from_hf(
-<a href=#518 id=518 data-nosnippet>518</a>        <span class="prelude-val">None</span>,
-<a href=#519 id=519 data-nosnippet>519</a>        token_source,
-<a href=#520 id=520 data-nosnippet>520</a>        <span class="kw-2">&amp;</span>dtype,
-<a href=#521 id=521 data-nosnippet>521</a>        <span class="kw-2">&amp;</span>device,
-<a href=#522 id=522 data-nosnippet>522</a>        <span class="bool-val">false</span>,
-<a href=#523 id=523 data-nosnippet>523</a>        mapper,
-<a href=#524 id=524 data-nosnippet>524</a>        isq,
-<a href=#525 id=525 data-nosnippet>525</a>        cache_config,
-<a href=#526 id=526 data-nosnippet>526</a>    )<span class="question-mark">?</span>;
-<a href=#527 id=527 data-nosnippet>527</a>    <span class="macro">info!</span>(<span class="string">"Model loaded."</span>);
-<a href=#528 id=528 data-nosnippet>528</a>
-<a href=#529 id=529 data-nosnippet>529</a>    <span class="kw">let </span>scheduler_config = <span class="kw">if </span>cache_config.is_some() {
-<a href=#530 id=530 data-nosnippet>530</a>        <span class="comment">// Handle case where we may have device mapping
-<a href=#531 id=531 data-nosnippet>531</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>cache_config) = pipeline.blocking_lock().get_metadata().cache_config {
-<a href=#532 id=532 data-nosnippet>532</a>            SchedulerConfig::PagedAttentionMeta {
-<a href=#533 id=533 data-nosnippet>533</a>                max_num_seqs: <span class="kw-2">*</span>args.concurrency.as_ref().unwrap().iter().max().unwrap(),
-<a href=#534 id=534 data-nosnippet>534</a>                config: cache_config.clone(),
-<a href=#535 id=535 data-nosnippet>535</a>            }
-<a href=#536 id=536 data-nosnippet>536</a>        } <span class="kw">else </span>{
-<a href=#537 id=537 data-nosnippet>537</a>            SchedulerConfig::DefaultScheduler {
-<a href=#538 id=538 data-nosnippet>538</a>                method: DefaultSchedulerMethod::Fixed(
-<a href=#539 id=539 data-nosnippet>539</a>                    (<span class="kw-2">*</span>args.concurrency.as_ref().unwrap().iter().max().unwrap())
-<a href=#540 id=540 data-nosnippet>540</a>                        .try_into()
-<a href=#541 id=541 data-nosnippet>541</a>                        .unwrap(),
-<a href=#542 id=542 data-nosnippet>542</a>                ),
-<a href=#543 id=543 data-nosnippet>543</a>            }
-<a href=#544 id=544 data-nosnippet>544</a>        }
-<a href=#545 id=545 data-nosnippet>545</a>    } <span class="kw">else </span>{
-<a href=#546 id=546 data-nosnippet>546</a>        SchedulerConfig::DefaultScheduler {
-<a href=#547 id=547 data-nosnippet>547</a>            method: DefaultSchedulerMethod::Fixed(
-<a href=#548 id=548 data-nosnippet>548</a>                (<span class="kw-2">*</span>args.concurrency.as_ref().unwrap().iter().max().unwrap())
-<a href=#549 id=549 data-nosnippet>549</a>                    .try_into()
-<a href=#550 id=550 data-nosnippet>550</a>                    .unwrap(),
-<a href=#551 id=551 data-nosnippet>551</a>            ),
-<a href=#552 id=552 data-nosnippet>552</a>        }
-<a href=#553 id=553 data-nosnippet>553</a>    };
-<a href=#554 id=554 data-nosnippet>554</a>    <span class="kw">let </span>mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, <span class="bool-val">false</span>, <span class="prelude-val">None</span>)
-<a href=#555 id=555 data-nosnippet>555</a>        .with_no_prefix_cache(<span class="bool-val">true</span>)
-<a href=#556 id=556 data-nosnippet>556</a>        .with_disable_eos_stop(<span class="bool-val">true</span>)
-<a href=#557 id=557 data-nosnippet>557</a>        .build()
-<a href=#558 id=558 data-nosnippet>558</a>        .<span class="kw">await</span>;
-<a href=#559 id=559 data-nosnippet>559</a>
-<a href=#560 id=560 data-nosnippet>560</a>    <span class="macro">info!</span>(<span class="string">"Starting warmup run."</span>);
-<a href=#561 id=561 data-nosnippet>561</a>    warmup_run(mistralrs.clone());
-<a href=#562 id=562 data-nosnippet>562</a>    <span class="macro">info!</span>(<span class="string">"Finished warmup run."</span>);
-<a href=#563 id=563 data-nosnippet>563</a>    <span class="macro">info!</span>(<span class="string">"Starting benchmarks."</span>);
-<a href=#564 id=564 data-nosnippet>564</a>
-<a href=#565 id=565 data-nosnippet>565</a>    <span class="kw">for </span>concurrency <span class="kw">in </span>args.concurrency.as_ref().unwrap() {
-<a href=#566 id=566 data-nosnippet>566</a>        <span class="kw">let </span><span class="kw-2">mut </span>results = <span class="macro">vec!</span>[];
-<a href=#567 id=567 data-nosnippet>567</a>        <span class="kw">if </span>args.n_gen &gt; <span class="number">0 </span>{
-<a href=#568 id=568 data-nosnippet>568</a>            <span class="kw">let </span>r = run_bench(
-<a href=#569 id=569 data-nosnippet>569</a>                mistralrs.clone(),
-<a href=#570 id=570 data-nosnippet>570</a>                RequestMessage::Completion {
-<a href=#571 id=571 data-nosnippet>571</a>                    text: <span class="string">"Rust"</span>.to_string(),
-<a href=#572 id=572 data-nosnippet>572</a>                    echo_prompt: <span class="bool-val">false</span>,
-<a href=#573 id=573 data-nosnippet>573</a>                    best_of: <span class="prelude-val">None</span>,
-<a href=#574 id=574 data-nosnippet>574</a>                },
-<a href=#575 id=575 data-nosnippet>575</a>                args.n_gen - <span class="number">1</span>,
-<a href=#576 id=576 data-nosnippet>576</a>                <span class="kw-2">*</span>concurrency,
-<a href=#577 id=577 data-nosnippet>577</a>                args.repetitions,
-<a href=#578 id=578 data-nosnippet>578</a>                TestName::Gen(args.n_gen),
-<a href=#579 id=579 data-nosnippet>579</a>            )<span class="question-mark">?</span>;
+<a href=#375 id=375 data-nosnippet>375</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(seed) = args.seed {
+<a href=#376 id=376 data-nosnippet>376</a>        device.set_seed(seed)<span class="question-mark">?</span>;
+<a href=#377 id=377 data-nosnippet>377</a>    }
+<a href=#378 id=378 data-nosnippet>378</a>
+<a href=#379 id=379 data-nosnippet>379</a>    <span class="kw">let </span>token_source = TokenSource::CacheToken;
+<a href=#380 id=380 data-nosnippet>380</a>    <span class="macro">info!</span>(
+<a href=#381 id=381 data-nosnippet>381</a>        <span class="string">"avx: {}, neon: {}, simd128: {}, f16c: {}"</span>,
+<a href=#382 id=382 data-nosnippet>382</a>        candle_core::utils::with_avx(),
+<a href=#383 id=383 data-nosnippet>383</a>        candle_core::utils::with_neon(),
+<a href=#384 id=384 data-nosnippet>384</a>        candle_core::utils::with_simd128(),
+<a href=#385 id=385 data-nosnippet>385</a>        candle_core::utils::with_f16c()
+<a href=#386 id=386 data-nosnippet>386</a>    );
+<a href=#387 id=387 data-nosnippet>387</a>    <span class="macro">info!</span>(<span class="string">"Sampling method: penalties -&gt; temperature -&gt; topk -&gt; topp -&gt; minp -&gt; multinomial"</span>);
+<a href=#388 id=388 data-nosnippet>388</a>    <span class="macro">info!</span>(<span class="string">"Model kind is: {}"</span>, loader.get_kind().to_string());
+<a href=#389 id=389 data-nosnippet>389</a>
+<a href=#390 id=390 data-nosnippet>390</a>    <span class="comment">// Parse device mapper
+<a href=#391 id=391 data-nosnippet>391</a>    </span><span class="kw">let </span>mapper = <span class="kw">if let </span><span class="prelude-val">Some</span>(device_layers) = args.num_device_layers {
+<a href=#392 id=392 data-nosnippet>392</a>        <span class="kw">if </span>device_layers.len() == <span class="number">1 </span>&amp;&amp; device_layers[<span class="number">0</span>].parse::&lt;usize&gt;().is_ok() {
+<a href=#393 id=393 data-nosnippet>393</a>            <span class="kw">let </span>layers = device_layers[<span class="number">0</span>].parse::&lt;usize&gt;().unwrap();
+<a href=#394 id=394 data-nosnippet>394</a>            DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(<span class="macro">vec!</span>[
+<a href=#395 id=395 data-nosnippet>395</a>                DeviceLayerMapMetadata { ordinal: <span class="number">0</span>, layers },
+<a href=#396 id=396 data-nosnippet>396</a>            ]))
+<a href=#397 id=397 data-nosnippet>397</a>        } <span class="kw">else </span>{
+<a href=#398 id=398 data-nosnippet>398</a>            <span class="kw">let </span><span class="kw-2">mut </span>mapping = Vec::new();
+<a href=#399 id=399 data-nosnippet>399</a>            <span class="kw">for </span>layer <span class="kw">in </span>device_layers {
+<a href=#400 id=400 data-nosnippet>400</a>                <span class="kw">let </span>split = layer.splitn(<span class="number">2</span>, <span class="string">':'</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#401 id=401 data-nosnippet>401</a>                <span class="kw">if </span>split.len() &lt; <span class="number">2 </span>{
+<a href=#402 id=402 data-nosnippet>402</a>                    <span class="macro">panic!</span>(<span class="string">"Expected layer to be of format ORD:NUM, got {layer}"</span>);
+<a href=#403 id=403 data-nosnippet>403</a>                }
+<a href=#404 id=404 data-nosnippet>404</a>                <span class="kw">let </span>ord = split[<span class="number">0</span>]
+<a href=#405 id=405 data-nosnippet>405</a>                    .parse::&lt;usize&gt;()
+<a href=#406 id=406 data-nosnippet>406</a>                    .unwrap_or_else(|<span class="kw">_</span>| <span class="macro">panic!</span>(<span class="string">"Failed to parse {} as integer."</span>, split[<span class="number">0</span>]));
+<a href=#407 id=407 data-nosnippet>407</a>                <span class="kw">let </span>num = split[<span class="number">1</span>]
+<a href=#408 id=408 data-nosnippet>408</a>                    .parse::&lt;usize&gt;()
+<a href=#409 id=409 data-nosnippet>409</a>                    .unwrap_or_else(|<span class="kw">_</span>| <span class="macro">panic!</span>(<span class="string">"Failed to parse {} as integer."</span>, split[<span class="number">1</span>]));
+<a href=#410 id=410 data-nosnippet>410</a>                <span class="kw">for </span>DeviceLayerMapMetadata { ordinal, layers: <span class="kw">_ </span>} <span class="kw">in </span><span class="kw-2">&amp;</span>mapping {
+<a href=#411 id=411 data-nosnippet>411</a>                    <span class="kw">if </span><span class="kw-2">*</span>ordinal == ord {
+<a href=#412 id=412 data-nosnippet>412</a>                        <span class="macro">panic!</span>(<span class="string">"Duplicate ordinal {ord}"</span>);
+<a href=#413 id=413 data-nosnippet>413</a>                    }
+<a href=#414 id=414 data-nosnippet>414</a>                }
+<a href=#415 id=415 data-nosnippet>415</a>                mapping.push(DeviceLayerMapMetadata {
+<a href=#416 id=416 data-nosnippet>416</a>                    ordinal: ord,
+<a href=#417 id=417 data-nosnippet>417</a>                    layers: num,
+<a href=#418 id=418 data-nosnippet>418</a>                });
+<a href=#419 id=419 data-nosnippet>419</a>            }
+<a href=#420 id=420 data-nosnippet>420</a>            DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
+<a href=#421 id=421 data-nosnippet>421</a>        }
+<a href=#422 id=422 data-nosnippet>422</a>    } <span class="kw">else </span>{
+<a href=#423 id=423 data-nosnippet>423</a>        DeviceMapSetting::Auto(auto_device_map_params)
+<a href=#424 id=424 data-nosnippet>424</a>    };
+<a href=#425 id=425 data-nosnippet>425</a>
+<a href=#426 id=426 data-nosnippet>426</a>    <span class="kw">let </span>no_paged_attn = <span class="kw">if </span>device.is_cuda() || mistralrs_core::distributed::use_nccl() {
+<a href=#427 id=427 data-nosnippet>427</a>        args.no_paged_attn
+<a href=#428 id=428 data-nosnippet>428</a>    } <span class="kw">else if </span>device.is_metal() {
+<a href=#429 id=429 data-nosnippet>429</a>        !args.paged_attn
+<a href=#430 id=430 data-nosnippet>430</a>    } <span class="kw">else </span>{
+<a href=#431 id=431 data-nosnippet>431</a>        <span class="bool-val">true
+<a href=#432 id=432 data-nosnippet>432</a>    </span>};
+<a href=#433 id=433 data-nosnippet>433</a>
+<a href=#434 id=434 data-nosnippet>434</a>    <span class="comment">// Allocate 0.5 GB of CPU memory just as a placeholder.
+<a href=#435 id=435 data-nosnippet>435</a>    // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
+<a href=#436 id=436 data-nosnippet>436</a>    </span><span class="kw">let </span>cache_config = <span class="kw">match </span>(
+<a href=#437 id=437 data-nosnippet>437</a>        args.paged_attn_block_size,
+<a href=#438 id=438 data-nosnippet>438</a>        args.paged_attn_gpu_mem,
+<a href=#439 id=439 data-nosnippet>439</a>        args.paged_attn_gpu_mem_usage,
+<a href=#440 id=440 data-nosnippet>440</a>        args.paged_ctxt_len,
+<a href=#441 id=441 data-nosnippet>441</a>        paged_attn_supported(),
+<a href=#442 id=442 data-nosnippet>442</a>        no_paged_attn,
+<a href=#443 id=443 data-nosnippet>443</a>    ) {
+<a href=#444 id=444 data-nosnippet>444</a>        (block_size, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
+<a href=#445 id=445 data-nosnippet>445</a>            block_size,
+<a href=#446 id=446 data-nosnippet>446</a>            <span class="number">512</span>,
+<a href=#447 id=447 data-nosnippet>447</a>            MemoryGpuConfig::ContextSize(max_seq_len),
+<a href=#448 id=448 data-nosnippet>448</a>            args.cache_type.unwrap_or_default(),
+<a href=#449 id=449 data-nosnippet>449</a>        )<span class="question-mark">?</span>),
+<a href=#450 id=450 data-nosnippet>450</a>        (block_size, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(ctxt), <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
+<a href=#451 id=451 data-nosnippet>451</a>            block_size,
+<a href=#452 id=452 data-nosnippet>452</a>            <span class="number">512</span>,
+<a href=#453 id=453 data-nosnippet>453</a>            MemoryGpuConfig::ContextSize(ctxt),
+<a href=#454 id=454 data-nosnippet>454</a>            args.cache_type.unwrap_or_default(),
+<a href=#455 id=455 data-nosnippet>455</a>        )<span class="question-mark">?</span>),
+<a href=#456 id=456 data-nosnippet>456</a>        (block_size, <span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(f), <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
+<a href=#457 id=457 data-nosnippet>457</a>            block_size,
+<a href=#458 id=458 data-nosnippet>458</a>            <span class="number">512</span>,
+<a href=#459 id=459 data-nosnippet>459</a>            MemoryGpuConfig::Utilization(f),
+<a href=#460 id=460 data-nosnippet>460</a>            args.cache_type.unwrap_or_default(),
+<a href=#461 id=461 data-nosnippet>461</a>        )<span class="question-mark">?</span>),
+<a href=#462 id=462 data-nosnippet>462</a>        (block_size, <span class="prelude-val">Some</span>(m), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
+<a href=#463 id=463 data-nosnippet>463</a>            block_size,
+<a href=#464 id=464 data-nosnippet>464</a>            <span class="number">512</span>,
+<a href=#465 id=465 data-nosnippet>465</a>            MemoryGpuConfig::MbAmount(m),
+<a href=#466 id=466 data-nosnippet>466</a>            args.cache_type.unwrap_or_default(),
+<a href=#467 id=467 data-nosnippet>467</a>        )<span class="question-mark">?</span>),
+<a href=#468 id=468 data-nosnippet>468</a>        (block_size, <span class="prelude-val">Some</span>(_m), <span class="prelude-val">Some</span>(f), <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; {
+<a href=#469 id=469 data-nosnippet>469</a>            <span class="macro">info!</span>(<span class="string">"Both memory size, and usage were specified, defaulting to the usage value."</span>);
+<a href=#470 id=470 data-nosnippet>470</a>            <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
+<a href=#471 id=471 data-nosnippet>471</a>                block_size,
+<a href=#472 id=472 data-nosnippet>472</a>                <span class="number">512</span>,
+<a href=#473 id=473 data-nosnippet>473</a>                MemoryGpuConfig::Utilization(f),
+<a href=#474 id=474 data-nosnippet>474</a>                args.cache_type.unwrap_or_default(),
+<a href=#475 id=475 data-nosnippet>475</a>            )<span class="question-mark">?</span>)
+<a href=#476 id=476 data-nosnippet>476</a>        }
+<a href=#477 id=477 data-nosnippet>477</a>        (block_size, <span class="prelude-val">Some</span>(_m), <span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(ctxt), <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; {
+<a href=#478 id=478 data-nosnippet>478</a>            <span class="macro">info!</span>(<span class="string">"All memory size and ctxt len, defaulting to the context len value."</span>);
+<a href=#479 id=479 data-nosnippet>479</a>            <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
+<a href=#480 id=480 data-nosnippet>480</a>                block_size,
+<a href=#481 id=481 data-nosnippet>481</a>                <span class="number">512</span>,
+<a href=#482 id=482 data-nosnippet>482</a>                MemoryGpuConfig::ContextSize(ctxt),
+<a href=#483 id=483 data-nosnippet>483</a>                args.cache_type.unwrap_or_default(),
+<a href=#484 id=484 data-nosnippet>484</a>            )<span class="question-mark">?</span>)
+<a href=#485 id=485 data-nosnippet>485</a>        }
+<a href=#486 id=486 data-nosnippet>486</a>        (block_size, <span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(f), <span class="prelude-val">Some</span>(_ctxt), <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; {
+<a href=#487 id=487 data-nosnippet>487</a>            <span class="macro">info!</span>(<span class="string">"Both ctxt len and usage were specified, defaulting to the usage value."</span>);
+<a href=#488 id=488 data-nosnippet>488</a>            <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
+<a href=#489 id=489 data-nosnippet>489</a>                block_size,
+<a href=#490 id=490 data-nosnippet>490</a>                <span class="number">512</span>,
+<a href=#491 id=491 data-nosnippet>491</a>                MemoryGpuConfig::Utilization(f),
+<a href=#492 id=492 data-nosnippet>492</a>                args.cache_type.unwrap_or_default(),
+<a href=#493 id=493 data-nosnippet>493</a>            )<span class="question-mark">?</span>)
+<a href=#494 id=494 data-nosnippet>494</a>        }
+<a href=#495 id=495 data-nosnippet>495</a>        (<span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="prelude-val">None</span>,
+<a href=#496 id=496 data-nosnippet>496</a>    };
+<a href=#497 id=497 data-nosnippet>497</a>
+<a href=#498 id=498 data-nosnippet>498</a>    <span class="kw">let </span>isq = args
+<a href=#499 id=499 data-nosnippet>499</a>        .in_situ_quant
+<a href=#500 id=500 data-nosnippet>500</a>        .as_ref()
+<a href=#501 id=501 data-nosnippet>501</a>        .and_then(|isq| parse_isq_value(isq, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>device)).ok());
+<a href=#502 id=502 data-nosnippet>502</a>
+<a href=#503 id=503 data-nosnippet>503</a>    <span class="kw">let </span>pipeline = loader.load_model_from_hf(
+<a href=#504 id=504 data-nosnippet>504</a>        <span class="prelude-val">None</span>,
+<a href=#505 id=505 data-nosnippet>505</a>        token_source,
+<a href=#506 id=506 data-nosnippet>506</a>        <span class="kw-2">&amp;</span>dtype,
+<a href=#507 id=507 data-nosnippet>507</a>        <span class="kw-2">&amp;</span>device,
+<a href=#508 id=508 data-nosnippet>508</a>        <span class="bool-val">false</span>,
+<a href=#509 id=509 data-nosnippet>509</a>        mapper,
+<a href=#510 id=510 data-nosnippet>510</a>        isq,
+<a href=#511 id=511 data-nosnippet>511</a>        cache_config,
+<a href=#512 id=512 data-nosnippet>512</a>    )<span class="question-mark">?</span>;
+<a href=#513 id=513 data-nosnippet>513</a>    <span class="macro">info!</span>(<span class="string">"Model loaded."</span>);
+<a href=#514 id=514 data-nosnippet>514</a>
+<a href=#515 id=515 data-nosnippet>515</a>    <span class="kw">let </span>scheduler_config = <span class="kw">if </span>cache_config.is_some() {
+<a href=#516 id=516 data-nosnippet>516</a>        <span class="comment">// Handle case where we may have device mapping
+<a href=#517 id=517 data-nosnippet>517</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>cache_config) = pipeline.blocking_lock().get_metadata().cache_config {
+<a href=#518 id=518 data-nosnippet>518</a>            SchedulerConfig::PagedAttentionMeta {
+<a href=#519 id=519 data-nosnippet>519</a>                max_num_seqs: <span class="kw-2">*</span>args.concurrency.as_ref().unwrap().iter().max().unwrap(),
+<a href=#520 id=520 data-nosnippet>520</a>                config: cache_config.clone(),
+<a href=#521 id=521 data-nosnippet>521</a>            }
+<a href=#522 id=522 data-nosnippet>522</a>        } <span class="kw">else </span>{
+<a href=#523 id=523 data-nosnippet>523</a>            SchedulerConfig::DefaultScheduler {
+<a href=#524 id=524 data-nosnippet>524</a>                method: DefaultSchedulerMethod::Fixed(
+<a href=#525 id=525 data-nosnippet>525</a>                    (<span class="kw-2">*</span>args.concurrency.as_ref().unwrap().iter().max().unwrap())
+<a href=#526 id=526 data-nosnippet>526</a>                        .try_into()
+<a href=#527 id=527 data-nosnippet>527</a>                        .unwrap(),
+<a href=#528 id=528 data-nosnippet>528</a>                ),
+<a href=#529 id=529 data-nosnippet>529</a>            }
+<a href=#530 id=530 data-nosnippet>530</a>        }
+<a href=#531 id=531 data-nosnippet>531</a>    } <span class="kw">else </span>{
+<a href=#532 id=532 data-nosnippet>532</a>        SchedulerConfig::DefaultScheduler {
+<a href=#533 id=533 data-nosnippet>533</a>            method: DefaultSchedulerMethod::Fixed(
+<a href=#534 id=534 data-nosnippet>534</a>                (<span class="kw-2">*</span>args.concurrency.as_ref().unwrap().iter().max().unwrap())
+<a href=#535 id=535 data-nosnippet>535</a>                    .try_into()
+<a href=#536 id=536 data-nosnippet>536</a>                    .unwrap(),
+<a href=#537 id=537 data-nosnippet>537</a>            ),
+<a href=#538 id=538 data-nosnippet>538</a>        }
+<a href=#539 id=539 data-nosnippet>539</a>    };
+<a href=#540 id=540 data-nosnippet>540</a>    <span class="kw">let </span>mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, <span class="bool-val">false</span>, <span class="prelude-val">None</span>)
+<a href=#541 id=541 data-nosnippet>541</a>        .with_no_prefix_cache(<span class="bool-val">true</span>)
+<a href=#542 id=542 data-nosnippet>542</a>        .with_disable_eos_stop(<span class="bool-val">true</span>)
+<a href=#543 id=543 data-nosnippet>543</a>        .build()
+<a href=#544 id=544 data-nosnippet>544</a>        .<span class="kw">await</span>;
+<a href=#545 id=545 data-nosnippet>545</a>
+<a href=#546 id=546 data-nosnippet>546</a>    <span class="macro">info!</span>(<span class="string">"Starting warmup run."</span>);
+<a href=#547 id=547 data-nosnippet>547</a>    warmup_run(mistralrs.clone());
+<a href=#548 id=548 data-nosnippet>548</a>    <span class="macro">info!</span>(<span class="string">"Finished warmup run."</span>);
+<a href=#549 id=549 data-nosnippet>549</a>    <span class="macro">info!</span>(<span class="string">"Starting benchmarks."</span>);
+<a href=#550 id=550 data-nosnippet>550</a>
+<a href=#551 id=551 data-nosnippet>551</a>    <span class="kw">for </span>concurrency <span class="kw">in </span>args.concurrency.as_ref().unwrap() {
+<a href=#552 id=552 data-nosnippet>552</a>        <span class="kw">let </span><span class="kw-2">mut </span>results = <span class="macro">vec!</span>[];
+<a href=#553 id=553 data-nosnippet>553</a>        <span class="kw">if </span>args.n_gen &gt; <span class="number">0 </span>{
+<a href=#554 id=554 data-nosnippet>554</a>            <span class="kw">let </span>r = run_bench(
+<a href=#555 id=555 data-nosnippet>555</a>                mistralrs.clone(),
+<a href=#556 id=556 data-nosnippet>556</a>                RequestMessage::Completion {
+<a href=#557 id=557 data-nosnippet>557</a>                    text: <span class="string">"Rust"</span>.to_string(),
+<a href=#558 id=558 data-nosnippet>558</a>                    echo_prompt: <span class="bool-val">false</span>,
+<a href=#559 id=559 data-nosnippet>559</a>                    best_of: <span class="prelude-val">None</span>,
+<a href=#560 id=560 data-nosnippet>560</a>                },
+<a href=#561 id=561 data-nosnippet>561</a>                args.n_gen - <span class="number">1</span>,
+<a href=#562 id=562 data-nosnippet>562</a>                <span class="kw-2">*</span>concurrency,
+<a href=#563 id=563 data-nosnippet>563</a>                args.repetitions,
+<a href=#564 id=564 data-nosnippet>564</a>                TestName::Gen(args.n_gen),
+<a href=#565 id=565 data-nosnippet>565</a>            )<span class="question-mark">?</span>;
+<a href=#566 id=566 data-nosnippet>566</a>            results.push(r);
+<a href=#567 id=567 data-nosnippet>567</a>        }
+<a href=#568 id=568 data-nosnippet>568</a>
+<a href=#569 id=569 data-nosnippet>569</a>        <span class="kw">if </span>args.n_prompt &gt; <span class="number">0 </span>{
+<a href=#570 id=570 data-nosnippet>570</a>            <span class="kw">let </span>tks = (<span class="number">1000</span>..<span class="number">1000 </span>+ args.n_prompt <span class="kw">as </span>u32).collect();
+<a href=#571 id=571 data-nosnippet>571</a>            <span class="kw">let </span>r = run_bench(
+<a href=#572 id=572 data-nosnippet>572</a>                mistralrs.clone(),
+<a href=#573 id=573 data-nosnippet>573</a>                RequestMessage::CompletionTokens(tks),
+<a href=#574 id=574 data-nosnippet>574</a>                <span class="number">1</span>,
+<a href=#575 id=575 data-nosnippet>575</a>                <span class="kw-2">*</span>concurrency,
+<a href=#576 id=576 data-nosnippet>576</a>                args.repetitions,
+<a href=#577 id=577 data-nosnippet>577</a>                TestName::Prompt(args.n_prompt),
+<a href=#578 id=578 data-nosnippet>578</a>            )<span class="question-mark">?</span>;
+<a href=#579 id=579 data-nosnippet>579</a>
 <a href=#580 id=580 data-nosnippet>580</a>            results.push(r);
 <a href=#581 id=581 data-nosnippet>581</a>        }
 <a href=#582 id=582 data-nosnippet>582</a>
-<a href=#583 id=583 data-nosnippet>583</a>        <span class="kw">if </span>args.n_prompt &gt; <span class="number">0 </span>{
-<a href=#584 id=584 data-nosnippet>584</a>            <span class="kw">let </span>tks = (<span class="number">1000</span>..<span class="number">1000 </span>+ args.n_prompt <span class="kw">as </span>u32).collect();
-<a href=#585 id=585 data-nosnippet>585</a>            <span class="kw">let </span>r = run_bench(
-<a href=#586 id=586 data-nosnippet>586</a>                mistralrs.clone(),
-<a href=#587 id=587 data-nosnippet>587</a>                RequestMessage::CompletionTokens(tks),
-<a href=#588 id=588 data-nosnippet>588</a>                <span class="number">1</span>,
-<a href=#589 id=589 data-nosnippet>589</a>                <span class="kw-2">*</span>concurrency,
-<a href=#590 id=590 data-nosnippet>590</a>                args.repetitions,
-<a href=#591 id=591 data-nosnippet>591</a>                TestName::Prompt(args.n_prompt),
-<a href=#592 id=592 data-nosnippet>592</a>            )<span class="question-mark">?</span>;
-<a href=#593 id=593 data-nosnippet>593</a>
-<a href=#594 id=594 data-nosnippet>594</a>            results.push(r);
-<a href=#595 id=595 data-nosnippet>595</a>        }
-<a href=#596 id=596 data-nosnippet>596</a>
-<a href=#597 id=597 data-nosnippet>597</a>        print_usage(<span class="kw-2">&amp;</span>model_name, <span class="kw-2">&amp;</span>device, results);
-<a href=#598 id=598 data-nosnippet>598</a>    }
-<a href=#599 id=599 data-nosnippet>599</a>
-<a href=#600 id=600 data-nosnippet>600</a>    <span class="prelude-val">Ok</span>(())
-<a href=#601 id=601 data-nosnippet>601</a>}</code></pre></div></section></main></body></html>
+<a href=#583 id=583 data-nosnippet>583</a>        print_usage(<span class="kw-2">&amp;</span>model_name, <span class="kw-2">&amp;</span>device, results);
+<a href=#584 id=584 data-nosnippet>584</a>    }
+<a href=#585 id=585 data-nosnippet>585</a>
+<a href=#586 id=586 data-nosnippet>586</a>    <span class="prelude-val">Ok</span>(())
+<a href=#587 id=587 data-nosnippet>587</a>}</code></pre></div></section></main></body></html>
