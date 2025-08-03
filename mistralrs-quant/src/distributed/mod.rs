@@ -70,7 +70,7 @@ pub fn get_global_tp_size_from_devices() -> Result<usize> {
         Ok(config.world_size)
     }
 
-    #[cfg(not(any(feature = "cuda", feature = "ring")))]
+    #[cfg(not(feature = "ring"))]
     Ok(1)
 }
 
