@@ -187,6 +187,9 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
                     .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
                 Ok(QuantizedConfig::Afq { bits, group_size })
             }
+            Some(m) if m == "mxfp4" => {
+                Ok(QuantizedConfig::MXFP4 {  })
+            }
             None => {
                 let bits = raw
                     .bits
