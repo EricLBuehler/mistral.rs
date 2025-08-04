@@ -85,6 +85,7 @@ pub struct HttpTransport {
     client: reqwest::Client,
     base_url: String,
     headers: HashMap<String, String>,
+    request_id: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl HttpTransport {
@@ -145,6 +146,7 @@ impl HttpTransport {
             client,
             base_url,
             headers: headers.unwrap_or_default(),
+            request_id: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
         })
     }
 
@@ -267,9 +269,12 @@ impl McpTransport for HttpTransport {
             params
         };
 
+        let id = self
+            .request_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let request_body = serde_json::json!({
             "jsonrpc": "2.0",
-            "id": 1,
+            "id": id,
             "method": method,
             "params": params
         });
@@ -629,7 +634,6 @@ impl McpTransport for ProcessTransport {
 
         // Send request via stdin
         let request_line = serde_json::to_string(&request_body)? + "\n";
-        println!("Request line: '{request_line}'");
         let mut stdin = self.stdin.lock().await;
         stdin.write_all(request_line.as_bytes()).await?;
         stdin.flush().await?;
@@ -708,7 +712,6 @@ impl McpTransport for ProcessTransport {
                 format!(
                     "{}\n",
                     serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
-                        .to_string()
                 )
                 .as_bytes(),
             )
