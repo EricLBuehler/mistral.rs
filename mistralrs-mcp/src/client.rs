@@ -366,6 +366,7 @@ impl HttpMcpConnection {
         self.transport
             .send_request("initialize", init_params)
             .await?;
+        self.transport.send_initialization_notification().await?;
         Ok(())
     }
 }
@@ -534,6 +535,7 @@ impl ProcessMcpConnection {
         self.transport
             .send_request("initialize", init_params)
             .await?;
+        self.transport.send_initialization_notification().await?;
         Ok(())
     }
 }
@@ -701,6 +703,7 @@ impl WebSocketMcpConnection {
         self.transport
             .send_request("initialize", init_params)
             .await?;
+        self.transport.send_initialization_notification().await?;
         Ok(())
     }
 }

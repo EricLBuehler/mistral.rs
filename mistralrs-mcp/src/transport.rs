@@ -19,6 +19,9 @@ pub trait McpTransport: Send + Sync {
 
     /// Close the transport connection
     async fn close(&self) -> Result<()>;
+
+    /// Send initialization noification
+    async fn send_initialization_notification(&self) -> Result<()>;
 }
 
 /// HTTP-based MCP transport
@@ -342,6 +345,28 @@ impl McpTransport for HttpTransport {
         // HTTP connections don't need explicit closing
         Ok(())
     }
+
+    /// Sends the server a initialization notification to let it know we are done initializing
+    async fn send_initialization_notification(&self) -> Result<()> {
+        let request_body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+        });
+
+        let mut request_builder = self
+            .client
+            .post(&self.base_url)
+            .json(&request_body)
+            .header("Accept", "application/json, text/event-stream");
+
+        // Add custom headers
+        for (key, value) in &self.headers {
+            request_builder = request_builder.header(key, value);
+        }
+
+        request_builder.send().await?;
+        Ok(())
+    }
 }
 
 /// Process-based MCP transport using stdin/stdout communication
@@ -420,6 +445,7 @@ impl McpTransport for HttpTransport {
 /// - Stderr is captured for debugging and error reporting
 pub struct ProcessTransport {
     child: std::sync::Arc<tokio::sync::Mutex<tokio::process::Child>>,
+    request_id: std::sync::Arc<std::sync::atomic::AtomicU64>,
     stdin: std::sync::Arc<tokio::sync::Mutex<tokio::process::ChildStdin>>,
     stdout_reader:
         std::sync::Arc<tokio::sync::Mutex<tokio::io::BufReader<tokio::process::ChildStdout>>>,
@@ -520,6 +546,7 @@ impl ProcessTransport {
 
         Ok(Self {
             child: std::sync::Arc::new(tokio::sync::Mutex::new(child)),
+            request_id: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
             stdin: std::sync::Arc::new(tokio::sync::Mutex::new(stdin)),
             stdout_reader: std::sync::Arc::new(tokio::sync::Mutex::new(stdout_reader)),
         })
@@ -589,17 +616,20 @@ impl McpTransport for ProcessTransport {
         } else {
             params
         };
-
+        // Generate unique request ID
+        let id = self
+            .request_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let request_body = serde_json::json!({
             "jsonrpc": "2.0",
-            "id": 1,
+            "id": id,
             "method": method,
             "params": params
         });
 
         // Send request via stdin
         let request_line = serde_json::to_string(&request_body)? + "\n";
-
+        println!("Request line: '{request_line}'");
         let mut stdin = self.stdin.lock().await;
         stdin.write_all(request_line.as_bytes()).await?;
         stdin.flush().await?;
@@ -666,6 +696,25 @@ impl McpTransport for ProcessTransport {
     async fn close(&self) -> Result<()> {
         let mut child = self.child.lock().await;
         child.kill().await?;
+        Ok(())
+    }
+
+    /// Sends the server a initialization notification to let it know we are done initializing
+    async fn send_initialization_notification(&self) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+        let mut stdin = self.stdin.lock().await;
+        stdin
+            .write_all(
+                format!(
+                    "{}\n",
+                    serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
+                        .to_string()
+                )
+                .as_bytes(),
+            )
+            .await?;
+        stdin.flush().await?;
+        drop(stdin);
         Ok(())
     }
 }
@@ -989,6 +1038,26 @@ impl McpTransport for WebSocketTransport {
             .send(close_message)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to send close message: {}", e))?;
+        Ok(())
+    }
+
+    /// Sends the server a initialization notification to let it know we are done initializing
+    async fn send_initialization_notification(&self) -> Result<()> {
+        let request_body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+        });
+
+        // Send request
+        let message = Message::Text(serde_json::to_string(&request_body)?);
+
+        {
+            let mut write = self.write.lock().await;
+            write
+                .send(message)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to send WebSocket message: {}", e))?;
+        }
         Ok(())
     }
 }
