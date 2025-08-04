@@ -569,6 +569,68 @@ mod metal_tests {
     }
 }
 
+pub(crate) fn afq_dequantize_impl(
+    w_q: &Tensor,
+    scales: &Tensor,
+    biases: &Tensor,
+    group_size: usize,
+    _bits: usize,
+) -> Result<Tensor> {
+    if _bits == 40 {
+        // mxfp4 is not supported in CPU backend
+        candle_core::bail!("mxfp4 dequantization is only supported on Metal backend");
+    }
+    let device = w_q.device().clone();
+    let codes = w_q.flatten_all()?.to_vec1::<u32>()?;
+    let sc = scales
+        .flatten_all()?
+        .to_dtype(DType::F32)?
+        .to_vec1::<f32>()?;
+    let bs = biases
+        .flatten_all()?
+        .to_dtype(DType::F32)?
+        .to_vec1::<f32>()?;
+
+    let packed_row = w_q.dim(D::Minus1)?;
+    let outer = codes.len() / packed_row;
+    let inner = packed_row * 32 / _bits;
+    let groups_per_row = inner / group_size;
+
+    let mut out = vec![0f32; outer * inner];
+    for row in 0..outer {
+        for g in 0..groups_per_row {
+            let scale = sc[row * groups_per_row + g];
+            let bias = bs[row * groups_per_row + g];
+            for i in 0..group_size {
+                let j = g * group_size + i;
+                let bit_off = j * _bits;
+                let word_id = bit_off / 32;
+                let shift = bit_off % 32;
+
+                let row_base = row * packed_row;
+                let mut q = (codes[row_base + word_id] >> shift) & ((1u32 << _bits) - 1);
+                if shift + _bits > 32 {
+                    q |= (codes[row_base + word_id + 1] << (32 - shift)) & ((1u32 << _bits) - 1);
+                }
+
+                let idx = row * inner + j;
+                out[idx] = bias + q as f32 * scale;
+            }
+        }
+    }
+
+    Tensor::from_vec(
+        out,
+        {
+            let mut d = w_q.dims().to_vec();
+            *d.last_mut().unwrap() = inner;
+            d
+        },
+        &device,
+    )?
+    .to_dtype(scales.dtype())
+}
+
 // ============================================================
 //                    Portable CPU back‑end
 // ============================================================
@@ -680,60 +742,7 @@ mod cpu_backend {
         group_size: usize,
         _bits: usize,
     ) -> Result<Tensor> {
-        if _bits == 40 {
-            // mxfp4 is not supported in CPU backend
-            candle_core::bail!("mxfp4 dequantization is only supported on Metal backend");
-        }
-        let device = w_q.device().clone();
-        let codes = w_q.flatten_all()?.to_vec1::<u32>()?;
-        let sc = scales
-            .flatten_all()?
-            .to_dtype(DType::F32)?
-            .to_vec1::<f32>()?;
-        let bs = biases
-            .flatten_all()?
-            .to_dtype(DType::F32)?
-            .to_vec1::<f32>()?;
-
-        let packed_row = w_q.dim(D::Minus1)?;
-        let outer = codes.len() / packed_row;
-        let inner = packed_row * 32 / _bits;
-        let groups_per_row = inner / group_size;
-
-        let mut out = vec![0f32; outer * inner];
-        for row in 0..outer {
-            for g in 0..groups_per_row {
-                let scale = sc[row * groups_per_row + g];
-                let bias = bs[row * groups_per_row + g];
-                for i in 0..group_size {
-                    let j = g * group_size + i;
-                    let bit_off = j * _bits;
-                    let word_id = bit_off / 32;
-                    let shift = bit_off % 32;
-
-                    let row_base = row * packed_row;
-                    let mut q = (codes[row_base + word_id] >> shift) & ((1u32 << _bits) - 1);
-                    if shift + _bits > 32 {
-                        q |=
-                            (codes[row_base + word_id + 1] << (32 - shift)) & ((1u32 << _bits) - 1);
-                    }
-
-                    let idx = row * inner + j;
-                    out[idx] = bias + q as f32 * scale;
-                }
-            }
-        }
-
-        Tensor::from_vec(
-            out,
-            {
-                let mut d = w_q.dims().to_vec();
-                *d.last_mut().unwrap() = inner;
-                d
-            },
-            &device,
-        )?
-        .to_dtype(scales.dtype())
+        super::afq_dequantize_impl(w_q, scales, biases, group_size, _bits)
     }
 
     /// Very simple (and slow) matmul after full de‑quantisation.  Handles 2‑D tensors.
