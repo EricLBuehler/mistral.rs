@@ -105,6 +105,7 @@ impl Kernels {
         file_system.insert("sort_impl.metal", include_str!("sort_impl.metal"));
         file_system.insert("copy_impl.metal", include_str!("copy_impl.metal"));
         file_system.insert("float8.metal", include_str!("float8.metal"));
+        file_system.insert("float4.metal", include_str!("float4.metal"));
 
         // Recursive include preprocessor
         fn preprocess_includes(

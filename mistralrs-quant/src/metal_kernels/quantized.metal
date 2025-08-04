@@ -1,3 +1,4 @@
+#include "float4.metal"
 #include "utils.metal"
 #include <metal_common>
 #include <metal_math>
