@@ -33,9 +33,11 @@ serde_default_fn!(bool, word_emb_default, false);
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct GPTOSSConfig {
-    pub hidden_act: Activation,
+    pub hidden_act: Option<Activation>,
     pub hidden_size: usize,
     pub intermediate_size: usize,
+    pub swiglu_limit: f64,
+    pub head_dim: usize,
     pub vocab_size: usize,
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
@@ -47,21 +49,14 @@ pub struct GPTOSSConfig {
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub tie_word_embeddings: bool,
-    pub moe_layers: Option<Vec<usize>>,
-    pub interleave_moe_layer_step: usize,
-    pub intermediate_size_mlp: usize,
-    pub num_local_experts: usize,
-    pub num_experts_per_tok: usize,
-    pub attention_chunk_size: usize,
+    pub num_experts: usize,
+    pub experts_per_token: usize,
+    pub sliding_window: usize,
 }
 
 impl GPTOSSConfig {
-    pub fn moe_layers(&self) -> Vec<usize> {
-        self.moe_layers.clone().unwrap_or(
-            (self.interleave_moe_layer_step - 1..self.num_hidden_layers)
-                .step_by(self.interleave_moe_layer_step)
-                .collect(),
-        )
+    pub fn hidden_act(&self) -> Activation {
+        self.hidden_act.unwrap_or(Activation::Silu)
     }
 }
 
@@ -133,7 +128,7 @@ impl CausalSelfAttention {
             comm,
             mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
         )?;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let head_dim = cfg.head_dim;
 
         Ok(Self {
             q_proj,
@@ -154,7 +149,7 @@ impl CausalSelfAttention {
                 ),
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
-                sliding_window: None,
+                sliding_window: Some(cfg.sliding_window),
             },
         })
     }
@@ -317,7 +312,7 @@ impl TextExperts {
             up_proj,
             down_proj,
         } = PackedExperts::new(
-            cfg.num_local_experts,
+            cfg.num_experts,
             cfg.hidden_size,
             cfg.intermediate_size,
             quantization_config,
@@ -329,7 +324,7 @@ impl TextExperts {
             gate_proj,
             up_proj,
             down_proj,
-            act: cfg.hidden_act,
+            act: cfg.hidden_act(),
             hidden_size: cfg.hidden_size,
             sum_all_reduce: SumAllReduce::new(comm),
         })
@@ -384,7 +379,7 @@ impl TextMoe {
         let experts = TextExperts::new(vb.pp("experts"), cfg, quantization_config, comm)?;
         let router = linear_no_bias(
             cfg.hidden_size,
-            cfg.num_local_experts,
+            cfg.num_experts,
             quantization_config,
             vb.pp("router"),
         )?;
@@ -393,14 +388,14 @@ impl TextMoe {
             cfg.hidden_size,
             cfg.intermediate_size,
             quantization_config,
-            cfg.hidden_act,
+            cfg.hidden_act(),
             comm,
         )?;
         Ok(Self {
             experts,
             shared_expert,
             router,
-            topk: cfg.num_experts_per_tok,
+            topk: cfg.experts_per_token,
         })
     }
 
@@ -430,26 +425,11 @@ impl TextMoe {
     }
 }
 
-enum MoeOrMlp {
-    Mlp(Mlp),
-    Moe(TextMoe),
-}
-
-impl MoeOrMlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        match self {
-            Self::Mlp(l) => l.forward(xs),
-            Self::Moe(l) => l.forward(xs),
-        }
-    }
-}
-
 struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
-    ff: MoeOrMlp,
-    use_chunked_attention: bool,
+    moe: TextMoe,
 }
 
 impl Block {
@@ -464,7 +444,6 @@ impl Block {
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        let use_chunked_attention = (layer_idx + 1) % 4 != 0;
         let attn = CausalSelfAttention::new(
             vb.pp("self_attn"),
             cfg,
@@ -475,26 +454,12 @@ impl Block {
             paged_attn,
             comm,
         )?;
-        let is_moe_layer = cfg.moe_layers().contains(&layer_idx);
-        let ff = if is_moe_layer {
-            let moe = TextMoe::new(
-                mapper.set_device(layer_idx, vb.pp("feed_forward"), loading_isq),
-                cfg,
-                &cfg.quantization_config,
-                comm,
-            )?;
-            MoeOrMlp::Moe(moe)
-        } else {
-            let mlp = Mlp::new(
-                mapper.set_device(layer_idx, vb.pp("feed_forward"), loading_isq),
-                cfg.hidden_size,
-                cfg.intermediate_size_mlp,
-                &cfg.quantization_config,
-                cfg.hidden_act,
-                comm,
-            )?;
-            MoeOrMlp::Mlp(mlp)
-        };
+        let moe = TextMoe::new(
+            mapper.set_device(layer_idx, vb.pp("feed_forward"), loading_isq),
+            cfg,
+            &cfg.quantization_config,
+            comm,
+        )?;
         let rms_1 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -509,8 +474,7 @@ impl Block {
             rms_1,
             attn,
             rms_2,
-            ff,
-            use_chunked_attention,
+            moe,
         })
     }
 
@@ -535,7 +499,7 @@ impl Block {
             flash_params,
         )? + residual)?;
         let residual = &x;
-        let x = (self.ff.forward(&self.rms_2.forward(&x)?)? + residual)?;
+        let x = (self.moe.forward(&self.rms_2.forward(&x)?)? + residual)?;
         Ok(x)
     }
 }
@@ -549,7 +513,6 @@ pub struct GPTOSSModel {
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
-    attention_chunk_size: usize,
 }
 
 impl GPTOSSModel {
@@ -614,7 +577,7 @@ impl GPTOSSModel {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let head_dim = cfg.head_dim;
         let mut ropes = HashMap::new();
         for i in 0..cfg.num_hidden_layers {
             let device = mapper
@@ -679,12 +642,11 @@ impl GPTOSSModel {
                 num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
                     .max(1),
                 num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
-                sliding_window: None,
-                k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-                v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+                sliding_window: Some(cfg.sliding_window),
+                k_head_dim: cfg.head_dim,
+                v_head_dim: cfg.head_dim,
             },
             mapper,
-            attention_chunk_size: cfg.attention_chunk_size,
         })
     }
 
@@ -769,28 +731,19 @@ impl IsqModel for GPTOSSModel {
             tensors.push((&mut layer.attn.k_proj, Some(i)));
             tensors.push((&mut layer.attn.v_proj, Some(i)));
             tensors.push((&mut layer.attn.o_proj, Some(i)));
-            match &mut layer.ff {
-                MoeOrMlp::Mlp(x) => {
-                    tensors.push((&mut x.gate, Some(i)));
-                    tensors.push((&mut x.up, Some(i)));
-                    tensors.push((&mut x.down, Some(i)));
-                }
-                MoeOrMlp::Moe(x) => {
-                    tensors.push((&mut x.router, Some(i)));
-                    for g in &mut x.experts.gate_proj {
-                        tensors.push((g, Some(i)));
-                    }
-                    for u in &mut x.experts.up_proj {
-                        tensors.push((u, Some(i)));
-                    }
-                    for d in &mut x.experts.down_proj {
-                        tensors.push((d, Some(i)));
-                    }
-                    tensors.push((&mut x.shared_expert.gate, Some(i)));
-                    tensors.push((&mut x.shared_expert.up, Some(i)));
-                    tensors.push((&mut x.shared_expert.down, Some(i)));
-                }
+            tensors.push((&mut layer.moe.router, Some(i)));
+            for g in &mut layer.moe.experts.gate_proj {
+                tensors.push((g, Some(i)));
             }
+            for u in &mut layer.moe.experts.up_proj {
+                tensors.push((u, Some(i)));
+            }
+            for d in &mut layer.moe.experts.down_proj {
+                tensors.push((d, Some(i)));
+            }
+            tensors.push((&mut layer.moe.shared_expert.gate, Some(i)));
+            tensors.push((&mut layer.moe.shared_expert.up, Some(i)));
+            tensors.push((&mut layer.moe.shared_expert.down, Some(i)));
         }
         (tensors, &*self.mapper)
     }
@@ -804,14 +757,21 @@ impl IsqModel for GPTOSSModel {
 impl NormalModel for GPTOSSModel {
     fn forward(
         &self,
-        _input_ids: &Tensor,
-        _seqlen_offsets: &[usize],
-        _context_lens: Vec<(usize, usize)>,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        _flash_params: &FlashParams,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        unreachable!()
+        self.forward_embeds(
+            input_ids,
+            self.get_input_embeddings(input_ids)?,
+            seqlen_offsets,
+            context_lens,
+            metadata,
+            flash_params,
+        )
     }
     fn xlora_forward(
         &self,

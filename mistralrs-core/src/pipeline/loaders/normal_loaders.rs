@@ -3994,7 +3994,7 @@ impl DeviceMappedModelLoader for GPTOSSLoader {
 
         let mut per_layer_elems = Vec::new();
 
-        for layer_idx in 0..cfg.num_hidden_layers {
+        for _ in 0..cfg.num_hidden_layers {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
 
@@ -4006,21 +4006,12 @@ impl DeviceMappedModelLoader for GPTOSSLoader {
             let v_proj = size_in * size_kv / weight_pack_factor;
             let o_proj = size_q * size_in / weight_pack_factor;
 
-            let use_moe = cfg.moe_layers().contains(&layer_idx);
-            let moe_block = if use_moe {
+            let moe_block = {
                 let h_size = cfg.hidden_size;
                 let i_size = cfg.intermediate_size;
-                let gate_proj = cfg.num_local_experts * h_size * i_size / weight_pack_factor;
-                let up_proj = cfg.num_local_experts * h_size * i_size / weight_pack_factor;
-                let down_proj = cfg.num_local_experts * i_size * h_size / weight_pack_factor;
-
-                gate_proj + up_proj + down_proj
-            } else {
-                let h_size = cfg.hidden_size;
-                let i_size = cfg.intermediate_size_mlp;
-                let gate_proj = h_size * i_size / weight_pack_factor;
-                let up_proj = h_size * i_size / weight_pack_factor;
-                let down_proj = i_size * h_size / weight_pack_factor;
+                let gate_proj = cfg.num_experts * h_size * i_size / weight_pack_factor;
+                let up_proj = cfg.num_experts * h_size * i_size / weight_pack_factor;
+                let down_proj = cfg.num_experts * i_size * h_size / weight_pack_factor;
 
                 gate_proj + up_proj + down_proj
             };
@@ -4056,9 +4047,9 @@ impl DeviceMappedModelLoader for GPTOSSLoader {
             hidden_size: cfg.hidden_size,
             num_kv_heads: cfg.num_attention_heads,
             num_attn_heads: cfg.num_attention_heads,
-            sliding_window: None,
-            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            sliding_window: Some(cfg.sliding_window),
+            k_head_dim: cfg.head_dim,
+            v_head_dim: cfg.head_dim,
         };
 
         Ok(Box::new(cfg))
