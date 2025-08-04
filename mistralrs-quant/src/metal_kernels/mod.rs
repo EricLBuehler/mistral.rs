@@ -852,6 +852,7 @@ pub fn call_affine_quantize(
     let packs_per_int = match bits {
         3 => 8,
         6 => 4,
+        40 => 2,  // mxfp4: 2 FP4 values per byte
         _ => 8 / bits,
     };
     let per_thread = if dequantize {

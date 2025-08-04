@@ -235,6 +235,7 @@ impl QuantizedConfig {
                 5 => IsqType::Q5K.pack_factor(dtype),
                 6 => IsqType::Q6K.pack_factor(dtype),
                 8 => IsqType::Q8_0.pack_factor(dtype),
+                40 => 4, // mxfp4: 2 FP4 values per byte = factor of 4
                 other => panic!("Unexpected bits in `pack_factor` {other}"),
             },
             Self::Fp8 { .. } => IsqType::Q8_0.pack_factor(dtype),

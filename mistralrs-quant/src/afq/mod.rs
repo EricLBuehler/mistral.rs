@@ -26,6 +26,7 @@ pub enum AfqBits {
     Four = 4,
     Six = 6,
     Eight = 8,
+    Mxfp4 = 40,
 }
 
 impl TryFrom<usize> for AfqBits {
@@ -37,6 +38,7 @@ impl TryFrom<usize> for AfqBits {
             4 => Ok(Self::Four),
             6 => Ok(Self::Six),
             8 => Ok(Self::Eight),
+            40 => Ok(Self::Mxfp4),
             x => candle_core::bail!("Invalid AFQ bits {x}."),
         }
     }
@@ -227,6 +229,7 @@ impl AfqLayer {
             AfqBits::Four => Ok(IsqType::AFQ4),
             AfqBits::Six => Ok(IsqType::AFQ6),
             AfqBits::Eight => Ok(IsqType::AFQ8),
+            AfqBits::Mxfp4 => candle_core::bail!("mxfp4 is not supported as an ISQ type"),
         }
     }
 
