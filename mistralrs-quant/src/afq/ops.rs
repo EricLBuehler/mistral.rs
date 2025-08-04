@@ -1,8 +1,8 @@
 #![allow(unused)]
 
 use candle_core::{
-    backend::BackendStorage, from_storage_no_op, DType, MetalStorage, Result, Shape, Storage,
-    Tensor, D,
+    backend::BackendStorage, cpu_backend::CpuStorage, from_storage_no_op, DType, MetalStorage,
+    Result, Shape, Storage, Tensor, D,
 };
 
 use super::{AfqBits, AfqGroupSize};
@@ -574,61 +574,166 @@ pub(crate) fn afq_dequantize_impl(
     scales: &Tensor,
     biases: &Tensor,
     group_size: usize,
-    _bits: usize,
+    bits: usize,
 ) -> Result<Tensor> {
-    if _bits == 40 {
-        // mxfp4 is not supported in CPU backend
-        candle_core::bail!("mxfp4 dequantization is only supported on Metal backend");
-    }
     let device = w_q.device().clone();
-    let codes = w_q.flatten_all()?.to_vec1::<u32>()?;
-    let sc = scales
-        .flatten_all()?
-        .to_dtype(DType::F32)?
-        .to_vec1::<f32>()?;
-    let bs = biases
-        .flatten_all()?
-        .to_dtype(DType::F32)?
-        .to_vec1::<f32>()?;
 
-    let packed_row = w_q.dim(D::Minus1)?;
-    let outer = codes.len() / packed_row;
-    let inner = packed_row * 32 / _bits;
-    let groups_per_row = inner / group_size;
+    // Handle float4 (mxfp4) format
+    if bits == 40 {
+        use float4::F4E2M1;
 
-    let mut out = vec![0f32; outer * inner];
-    for row in 0..outer {
-        for g in 0..groups_per_row {
-            let scale = sc[row * groups_per_row + g];
-            let bias = bs[row * groups_per_row + g];
-            for i in 0..group_size {
-                let j = g * group_size + i;
-                let bit_off = j * _bits;
-                let word_id = bit_off / 32;
-                let shift = bit_off % 32;
+        // For float4, we expect F4 weights and F8E8M0 scales (no biases)
+        // First, get the raw F4 data
+        let (storage, layout) = w_q.storage_and_layout();
+        let codes = match &*storage {
+            Storage::Cpu(cpu_storage) => match cpu_storage {
+                CpuStorage::F4(data) => data.clone(),
+                _ => candle_core::bail!("Expected F4 storage for float4 weights"),
+            },
+            _ => candle_core::bail!("float4 dequantization only supported on CPU"),
+        };
 
+        // Scales should be F8E8M0 - convert to f32 scale factors
+        let (scale_storage, _) = scales.storage_and_layout();
+        let sc: Vec<f32> = match &*scale_storage {
+            Storage::Cpu(cpu_storage) => match cpu_storage {
+                CpuStorage::F8E8M0(data) => data
+                    .iter()
+                    .map(|&s| {
+                        if s == 0xFF {
+                            f32::NAN
+                        } else {
+                            2f32.powi(s as i32 - 127)
+                        }
+                    })
+                    .collect(),
+                _ => candle_core::bail!("Expected F8E8M0 storage for float4 scales"),
+            },
+            _ => candle_core::bail!("float4 scale dequantization only supported on CPU"),
+        };
+
+        // F4 storage is already packed - each byte contains 2 F4 values
+        // So codes.len() is the number of bytes, not the number of F4 values
+        let packed_row = w_q.dim(D::Minus1)?;
+        let outer = codes.len() / packed_row;
+        let inner = packed_row * 2; // 4 bits per weight, so 2 weights per byte
+        let groups_per_row = inner / group_size;
+
+        // Use rayon for parallel processing
+        use rayon::prelude::*;
+
+        let out: Vec<f32> = (0..outer)
+            .into_par_iter()
+            .flat_map(|row| {
+                let mut row_out = vec![0f32; inner];
                 let row_base = row * packed_row;
-                let mut q = (codes[row_base + word_id] >> shift) & ((1u32 << _bits) - 1);
-                if shift + _bits > 32 {
-                    q |= (codes[row_base + word_id + 1] << (32 - shift)) & ((1u32 << _bits) - 1);
+                let scale_base = row * groups_per_row;
+
+                for g in 0..groups_per_row {
+                    let scale = sc[scale_base + g];
+                    let group_start = g * group_size;
+
+                    // Process group elements
+                    for i in 0..group_size {
+                        let j = group_start + i;
+                        let byte_idx = j / 2;
+                        let nibble = j % 2;
+
+                        // Extract 4-bit value
+                        let byte = codes[row_base + byte_idx];
+                        let fp4bits = if nibble == 0 {
+                            byte & 0x0F
+                        } else {
+                            (byte >> 4) & 0x0F
+                        };
+
+                        // Convert F4E2M1 to f32
+                        let fp4 = F4E2M1::from_bits(fp4bits);
+                        let value = fp4.to_f64() as f32;
+
+                        row_out[j] = value * scale;
+                    }
                 }
+                row_out
+            })
+            .collect();
 
-                let idx = row * inner + j;
-                out[idx] = bias + q as f32 * scale;
-            }
-        }
+        Tensor::from_vec(
+            out,
+            {
+                let mut d = w_q.dims().to_vec();
+                *d.last_mut().unwrap() = inner;
+                d
+            },
+            &device,
+        )?
+        .to_dtype(scales.dtype())
+    } else {
+        // Original implementation for non-float4 formats
+        let codes = w_q.flatten_all()?.to_vec1::<u32>()?;
+        let sc = scales
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
+        let bs = biases
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
+
+        let packed_row = w_q.dim(D::Minus1)?;
+        let outer = codes.len() / packed_row;
+        let inner = packed_row * 32 / bits;
+        let groups_per_row = inner / group_size;
+
+        // Pre-compute constants
+        let bit_mask = (1u32 << bits) - 1;
+
+        // Use rayon for parallel processing
+        use rayon::prelude::*;
+
+        let out: Vec<f32> = (0..outer)
+            .into_par_iter()
+            .flat_map(|row| {
+                let mut row_out = vec![0f32; inner];
+                let row_base = row * packed_row;
+                let scale_base = row * groups_per_row;
+
+                for g in 0..groups_per_row {
+                    let scale = sc[scale_base + g];
+                    let bias = bs[scale_base + g];
+                    let group_start = g * group_size;
+
+                    // Process group elements
+                    for i in 0..group_size {
+                        let j = group_start + i;
+                        let bit_off = j * bits;
+                        let word_id = bit_off >> 5; // Faster than / 32
+                        let shift = bit_off & 31; // Faster than % 32
+
+                        // Extract quantized value
+                        let mut q = (codes[row_base + word_id] >> shift) & bit_mask;
+                        if shift + bits > 32 {
+                            q |= (codes[row_base + word_id + 1] << (32 - shift)) & bit_mask;
+                        }
+
+                        row_out[j] = bias + q as f32 * scale;
+                    }
+                }
+                row_out
+            })
+            .collect();
+
+        Tensor::from_vec(
+            out,
+            {
+                let mut d = w_q.dims().to_vec();
+                *d.last_mut().unwrap() = inner;
+                d
+            },
+            &device,
+        )?
+        .to_dtype(scales.dtype())
     }
-
-    Tensor::from_vec(
-        out,
-        {
-            let mut d = w_q.dims().to_vec();
-            *d.last_mut().unwrap() = inner;
-            d
-        },
-        &device,
-    )?
-    .to_dtype(scales.dtype())
 }
 
 // ============================================================
@@ -740,9 +845,9 @@ mod cpu_backend {
         scales: &Tensor,
         biases: &Tensor,
         group_size: usize,
-        _bits: usize,
+        bits: usize,
     ) -> Result<Tensor> {
-        super::afq_dequantize_impl(w_q, scales, biases, group_size, _bits)
+        super::afq_dequantize_impl(w_q, scales, biases, group_size, bits)
     }
 
     /// Very simple (and slow) matmul after full de‑quantisation.  Handles 2‑D tensors.

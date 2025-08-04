@@ -1523,6 +1523,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "float4"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5939bac0ef2ad7c83a53e4fb889c1d81f007b07061d648cd271071984d86f257"
+
+[[package]]
 name = "float8"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3174,6 +3180,7 @@ dependencies = [
  "byteorder",
  "candle-core",
  "candle-nn",
+ "float4",
  "float8",
  "half",
  "hf-hub",
