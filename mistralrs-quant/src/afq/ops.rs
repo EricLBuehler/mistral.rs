@@ -583,6 +583,10 @@ mod cpu_backend {
         group_size: usize,
         bits: usize,
     ) -> Result<(Tensor, Tensor, Tensor)> {
+        if bits == 40 {
+            // mxfp4 is not supported in CPU backend
+            candle_core::bail!("mxfp4 quantization is only supported on Metal backend");
+        }
         let device = w.device().clone();
         let levels = ((1u32 << bits) - 1) as f32;
 
@@ -676,6 +680,10 @@ mod cpu_backend {
         group_size: usize,
         _bits: usize,
     ) -> Result<Tensor> {
+        if _bits == 40 {
+            // mxfp4 is not supported in CPU backend
+            candle_core::bail!("mxfp4 dequantization is only supported on Metal backend");
+        }
         let device = w_q.device().clone();
         let codes = w_q.flatten_all()?.to_vec1::<u32>()?;
         let sc = scales
@@ -741,6 +749,10 @@ mod cpu_backend {
         bits: usize,
         transpose: bool,
     ) -> Result<Tensor> {
+        if bits == 40 {
+            // mxfp4 is not supported in CPU backend
+            candle_core::bail!("mxfp4 matmul is only supported on Metal backend");
+        }
         let w_f32 = afq_dequantize_op(w, scales, biases, group_size, bits)?.to_dtype(x.dtype())?;
         if transpose {
             x.broadcast_matmul(&w_f32.t()?)

@@ -1006,13 +1006,14 @@ MLX_MTL_CONST int SIMD_SIZE = 32;
 MLX_MTL_CONST int QUAD_SIZE = 4;
 
 // Helper to load scale based on bit width
-template <typename T, int bits> inline T load_scale(const device T *scale_ptr) {
+template <typename T, typename S, int bits>
+inline T load_scale(const device S *scale_ptr) {
   if (bits == 40) {
     // For mxfp4, scale is stored as uint8_t UM8E0 format
     const device uint8_t *uint_scale = (const device uint8_t *)scale_ptr;
     return static_cast<T>(scale_to_float(*uint_scale));
   } else {
-    return *scale_ptr;
+    return static_cast<T>(*scale_ptr);
   }
 }
 
@@ -1239,8 +1240,8 @@ inline U qdot(const device uint8_t *w, const thread U *x_thread, U scale,
     // Each byte contains 2 FP4 values
     for (int i = 0; i < values_per_thread; i += 2) {
       uint8_t packed = w[i / 2];
-      float w0 = fp4_to_float(packed & 0x0f);
-      float w1 = fp4_to_float((packed >> 4) & 0x0f);
+      U w0 = static_cast<U>(fp4_to_float(packed & 0x0f));
+      U w1 = static_cast<U>(fp4_to_float((packed >> 4) & 0x0f));
       accum += x_thread[i] * w0 + x_thread[i + 1] * w1;
     }
   }
@@ -1324,8 +1325,8 @@ inline U qdot_safe(const device uint8_t *w, const thread U *x_thread, U scale,
     // Each byte contains 2 FP4 values
     for (int i = 0; i < N; i += 2) {
       uint8_t packed = w[i / 2];
-      float w0 = fp4_to_float(packed & 0x0f);
-      float w1 = fp4_to_float((packed >> 4) & 0x0f);
+      U w0 = static_cast<U>(fp4_to_float(packed & 0x0f));
+      U w1 = static_cast<U>(fp4_to_float((packed >> 4) & 0x0f));
       accum += x_thread[i] * w0;
       if (i + 1 < N) {
         accum += x_thread[i + 1] * w1;
@@ -1405,8 +1406,8 @@ inline void qouter(const thread uint8_t *w, U x, U scale, U bias,
     // Each byte contains 2 FP4 values
     for (int i = 0; i < values_per_thread; i += 2) {
       uint8_t packed = w[i / 2];
-      float w0 = fp4_to_float(packed & 0x0f);
-      float w1 = fp4_to_float((packed >> 4) & 0x0f);
+      U w0 = static_cast<U>(fp4_to_float(packed & 0x0f));
+      U w1 = static_cast<U>(fp4_to_float((packed >> 4) & 0x0f));
       result[i] += x * (scale * w0);     // No bias for mxfp4
       result[i + 1] += x * (scale * w1); // No bias for mxfp4
     }
@@ -1478,10 +1479,13 @@ inline void dequantize(const device uint8_t *w, U scale, U bias,
     // Each byte contains 2 FP4 values
     for (int i = 0; i < N; i += 2) {
       uint8_t packed = w[i / 2];
-      w_local[i] = scale * fp4_to_float(packed & 0x0f); // No bias for mxfp4
+      w_local[i] =
+          scale *
+          static_cast<U>(fp4_to_float(packed & 0x0f)); // No bias for mxfp4
       if (i + 1 < N) {
         w_local[i + 1] =
-            scale * fp4_to_float((packed >> 4) & 0x0f); // No bias for mxfp4
+            scale * static_cast<U>(fp4_to_float((packed >> 4) &
+                                                0x0f)); // No bias for mxfp4
       }
     }
   }
@@ -1546,7 +1550,7 @@ struct QuantizedBlockLoader {
       return;
     }
 
-    T scale = load_scale<T, bits>(scales);
+    T scale = load_scale<T, T, bits>(scales);
     T bias = bits == 40 ? T(0) : *biases; // No bias for mxfp4
     for (int i = 0; i < n_reads; i++) {
       dequantize<T, pack_factor, bits>(src + i * bytes_per_pack, scale, bias,
@@ -1573,7 +1577,7 @@ struct QuantizedBlockLoader {
       return;
     }
 
-    T scale = load_scale<T, bits>(scales);
+    T scale = load_scale<T, T, bits>(scales);
     T bias = bits == 40 ? T(0) : *biases; // No bias for mxfp4
     for (int i = 0; i < n_reads; i++) {
       dequantize<T, pack_factor, bits>(
@@ -1642,7 +1646,7 @@ METAL_FUNC void qmv_quad_impl(const device uint32_t *w, const device T *scales,
     const device T *sl = scales + row * in_vec_size_g * quads_per_simd;
     const device T *bl = biases + row * in_vec_size_g * quads_per_simd;
 
-    U s = load_scale<U, bits>(sl);
+    U s = load_scale<U, T, bits>(sl);
     U b = bits == 40 ? U(0) : bl[0];
     if (row * quads_per_simd + out_row < out_vec_size) {
       result[row] += qdot<U, values_per_thread, bits>(wl, x_thread, s, b, sum);
@@ -1952,7 +1956,7 @@ METAL_FUNC void qvm_impl(const device uint32_t *w, const device T *scales,
   if (remaining == 0) {
     for (int i = 0; i < in_vec_size; i += block_size) {
       x_local = *x;
-      scale = load_scale<U, bits>(scales);
+      scale = load_scale<U, T, bits>(scales);
       bias = bits == 40 ? U(0) : *biases;
       w_local = *((device vec_w *)ws);
       qouter<U, tn * pack_factor, bits>((thread uint8_t *)&w_local, x_local,
@@ -1966,7 +1970,7 @@ METAL_FUNC void qvm_impl(const device uint32_t *w, const device T *scales,
   } else {
     for (int i = block_size; i < in_vec_size; i += block_size) {
       x_local = *x;
-      scale = load_scale<U, bits>(scales);
+      scale = load_scale<U, T, bits>(scales);
       bias = bits == 40 ? U(0) : *biases;
       w_local = *((device vec_w *)ws);
 
@@ -1980,7 +1984,7 @@ METAL_FUNC void qvm_impl(const device uint32_t *w, const device T *scales,
     }
     if (static_cast<int>(simd_lid) < remaining) {
       x_local = *x;
-      scale = load_scale<U, bits>(scales);
+      scale = load_scale<U, T, bits>(scales);
       bias = bits == 40 ? U(0) : *biases;
       w_local = *((device vec_w *)ws);
     } else {
@@ -2849,7 +2853,7 @@ template <typename T, const int group_size, const int bits>
   size_t offset = index.x + grid_dim.x * size_t(index.y);
   size_t oindex = offset * packs_per_int;
   size_t gindex = oindex / group_size;
-  T scale = load_scale<T, bits>(scales + gindex);
+  T scale = load_scale<T, T, bits>(scales + gindex);
   T bias = bits == 40 ? T(0) : biases[gindex];
 
   out += oindex;
@@ -2887,10 +2891,10 @@ template <typename T, const int group_size, const int bits>
         uint8_t byte = w[offset / 2];
         if (i == 0) {
           d = byte & 0x0f;
-          out[i] = scale * fp4_to_float(d);
+          out[i] = static_cast<T>(scale * fp4_to_float(d));
         } else {
           d = (byte >> 4) & 0x0f;
-          out[i] = scale * fp4_to_float(d);
+          out[i] = static_cast<T>(scale * fp4_to_float(d));
         }
         continue;
       }
