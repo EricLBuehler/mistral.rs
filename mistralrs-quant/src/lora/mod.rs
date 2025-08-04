@@ -52,7 +52,7 @@ pub struct LoraAdapter {
     pub weights: ShardedVarBuilder,
 }
 
-pub(crate) fn merge_lora_weights(
+pub fn merge_lora_weights(
     vb: &ShardedVarBuilder,
     mut weight: Tensor,
     in_dim: usize,

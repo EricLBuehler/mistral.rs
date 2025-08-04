@@ -35,7 +35,7 @@ mod utils;
 mod vector_fp8;
 
 use gptq::gptq_linear;
-use lora::merge_lora_weights;
+pub use lora::merge_lora_weights;
 use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
