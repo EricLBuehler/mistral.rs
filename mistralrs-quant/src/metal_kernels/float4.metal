@@ -31,3 +31,11 @@ float fp4_to_float(uchar fp4_bits) {
     return sign != 0 ? -value : value;
   }
 }
+
+float scale_to_float(uchar value) {
+  if (value == 0xFF) {
+    return NAN;
+  } else {
+    return pow(2.0f, float(int(value) - 127));
+  }
+}
