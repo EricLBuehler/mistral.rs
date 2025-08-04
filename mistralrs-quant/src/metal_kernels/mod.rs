@@ -8,6 +8,8 @@ use std::sync::{Arc, RwLock};
 use std::{collections::HashMap, sync::OnceLock};
 
 pub mod utils;
+pub mod gather_mm;
+
 use utils::{
     get_2d_grid_dims, get_2d_grid_dims_divisor, get_block_dims, linear_split, EncoderParam,
     EncoderProvider,
@@ -105,6 +107,7 @@ impl Kernels {
         file_system.insert("sort_impl.metal", include_str!("sort_impl.metal"));
         file_system.insert("copy_impl.metal", include_str!("copy_impl.metal"));
         file_system.insert("float8.metal", include_str!("float8.metal"));
+        file_system.insert("gather_mm.metal", include_str!("gather_mm.metal"));
 
         // Recursive include preprocessor
         fn preprocess_includes(
@@ -226,6 +229,7 @@ impl Kernels {
             "copy.metal",           // Copy operations (includes utils.metal, copy_impl.metal)
             "scan.metal",           // Scan operations (includes utils.metal, scan_impl.metal)
             "sort.metal",           // Sort operations (includes utils.metal, sort_impl.metal)
+            "gather_mm.metal",      // Gather MM operations
         ];
 
         for file in main_files {

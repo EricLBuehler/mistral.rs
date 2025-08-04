@@ -4,6 +4,7 @@ pub(crate) mod isq;
 pub mod log;
 mod ops;
 mod uqff;
+pub mod gather_mm;
 
 pub use ops::{BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
 pub use uqff::UQFF_QUANT_TYPE_OFFSET;
