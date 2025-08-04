@@ -24,7 +24,7 @@ pub use crate::layers_utils::repeat_kv;
 use crate::{
     amoe::{AnyMoeTrainableLayer, MlpLayer},
     gguf::Content,
-    models::{llama, smollm3},
+    models::{gpt_oss::GPTOSSConfig, llama, smollm3},
     ops::SplitOp,
     vision_models::{
         gemma3::config::Gemma3TextConfig,
@@ -1882,6 +1882,76 @@ impl DiaRotaryEmbedding {
         Tensor::cat(&[first_part, second_part], D::Minus1)
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct GPTOSSRotaryEmbedding(RotaryEmbedding);
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GPTOSSScaledRopeType {
+    #[serde(alias = "linear")]
+    Linear,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GPTOSSopeScalingConfig {
+    factor: f64,
+    rope_type: GPTOSSScaledRopeType,
+}
+
+impl GPTOSSRotaryEmbedding {
+    fn new_linear(
+        cfg: &GPTOSSConfig,
+        factor: f64,
+        is_gpt_neox: bool,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Self> {
+        let max_seq_len = cfg.max_position_embeddings;
+        let dim = cfg.head_dim;
+
+        let inv_freq: Vec<_> = (0..dim)
+            .step_by(2)
+            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
+        let inv_freq = (inv_freq / factor)?;
+
+        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
+            .to_dtype(DType::F32)?
+            .reshape((max_seq_len, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+        let sin = freqs.sin()?.to_dtype(dtype)?;
+        let cos = freqs.cos()?.to_dtype(dtype)?;
+        Ok(Self(RotaryEmbedding {
+            cos,
+            sin,
+            is_gpt_neox,
+        }))
+    }
+
+    pub fn new(is_gpt_neox: bool, dtype: DType, cfg: &GPTOSSConfig, dev: &Device) -> Result<Self> {
+        match &cfg.rope_scaling {
+            Some(GPTOSSopeScalingConfig {
+                rope_type: GPTOSSScaledRopeType::Linear,
+                factor,
+            }) => Self::new_linear(cfg, *factor, is_gpt_neox, dtype, dev),
+
+            _ => Self::new_linear(cfg, 1.0, is_gpt_neox, dtype, dev),
+        }
+    }
+
+    pub fn forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        seqlen_offsets: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        self.0.forward(q, k, seqlen_offsets)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct QLinear {
     inner: QMatMul,

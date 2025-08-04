@@ -14,7 +14,8 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     layers::{
-        embedding, Activation, CausalMasker, Llama3RopeConfig, Llama3RotaryEmbedding, RmsNorm, Sdpa,
+        embedding, Activation, CausalMasker, GPTOSSRotaryEmbedding, GPTOSSopeScalingConfig,
+        RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
     ops::{TopKLastDimOp, TopKOutput},
@@ -29,9 +30,6 @@ use crate::{
 };
 
 serde_default_fn!(bool, word_emb_default, false);
-serde_default_fn!(Option<f32>, attn_temperature_tuning, Some(4.));
-serde_default_fn!(Option<f32>, floor_scale, Some(8192.));
-serde_default_fn!(Option<f32>, attn_scale, Some(0.1));
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct GPTOSSConfig {
@@ -45,17 +43,10 @@ pub struct GPTOSSConfig {
     pub rms_norm_eps: f64,
     pub rope_theta: f32,
     pub max_position_embeddings: usize,
-    pub rope_scaling: Option<Llama3RopeConfig>,
+    pub rope_scaling: Option<GPTOSSopeScalingConfig>,
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub tie_word_embeddings: bool,
-    #[serde(default = "floor_scale")]
-    pub floor_scale: Option<f32>,
-    #[serde(default = "attn_scale")]
-    pub attn_scale: Option<f32>,
-    #[serde(default = "attn_temperature_tuning")]
-    pub attn_temperature_tuning: Option<f32>,
-    pub use_qk_norm: bool,
     pub moe_layers: Option<Vec<usize>>,
     pub interleave_moe_layer_step: usize,
     pub intermediate_size_mlp: usize,
@@ -82,15 +73,10 @@ struct CausalSelfAttention {
     num_attention_heads: usize,
     num_key_value_heads: usize,
     head_dim: usize,
-    rotary_emb: Arc<Llama3RotaryEmbedding>,
+    rotary_emb: Arc<GPTOSSRotaryEmbedding>,
     max_seq_len: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
-    norm: Option<RmsNorm>,
-    use_rope: bool,
-    floor_scale: Option<f32>,
-    attn_scale: Option<f32>,
-    attn_temperature_tuning: Option<f32>,
 }
 
 impl CausalSelfAttention {
@@ -101,7 +87,7 @@ impl CausalSelfAttention {
         layer_idx: usize,
         loading_isq: bool,
         mapper: &dyn DeviceMapper,
-        rope: Arc<Llama3RotaryEmbedding>,
+        rope: Arc<GPTOSSRotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
@@ -147,17 +133,7 @@ impl CausalSelfAttention {
             comm,
             mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
         )?;
-        let use_rope = (layer_idx + 1) % 4 != 0;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let norm = if cfg.use_qk_norm && use_rope {
-            let vb = mapper.set_device(layer_idx, vb, false);
-            Some(RmsNorm::from_w(
-                Tensor::ones(head_dim, vb.dtype(), vb.device())?,
-                1e-6,
-            )?)
-        } else {
-            None
-        };
 
         Ok(Self {
             q_proj,
@@ -180,11 +156,6 @@ impl CausalSelfAttention {
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
             },
-            norm,
-            use_rope,
-            floor_scale: cfg.floor_scale,
-            attn_scale: cfg.attn_scale,
-            attn_temperature_tuning: cfg.attn_temperature_tuning,
         })
     }
 
@@ -192,7 +163,6 @@ impl CausalSelfAttention {
     fn forward(
         &self,
         x: &Tensor,
-        position_ids: &Tensor,
         attention_mask: &Option<Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
@@ -215,26 +185,7 @@ impl CausalSelfAttention {
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        if self.use_rope {
-            (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
-        }
-
-        if let Some(qk_norm) = &self.norm {
-            q = qk_norm.forward(&q)?;
-            k = qk_norm.forward(&k)?;
-        }
-
-        if self.attn_temperature_tuning.is_some() && !self.use_rope {
-            let floor_scale = self.floor_scale.unwrap() as f64;
-            let attn_scale = self.attn_scale.unwrap() as f64;
-            let floor = ((position_ids.to_dtype(DType::F32)? + 1.)? / floor_scale)?.floor()?;
-            let attn_scales = (((floor + 1.0)?.log()? * attn_scale)? + 1.0)?;
-
-            q = q
-                .to_dtype(DType::F32)?
-                .broadcast_mul(&attn_scales.unsqueeze(D::Minus1)?)?
-                .to_dtype(q.dtype())?;
-        }
+        (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
@@ -509,7 +460,7 @@ impl Block {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: Arc<Llama3RotaryEmbedding>,
+        rope: Arc<GPTOSSRotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
@@ -567,9 +518,7 @@ impl Block {
     fn forward(
         &self,
         x: &Tensor,
-        position_ids: &Tensor,
         attention_mask: &Option<Tensor>,
-        chunked_mask: &Option<Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -577,15 +526,9 @@ impl Block {
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
-        let mask = if self.use_chunked_attention {
-            chunked_mask
-        } else {
-            attention_mask
-        };
         let x = (self.attn.forward(
             &x,
-            position_ids,
-            mask,
+            attention_mask,
             seqlen_offsets,
             kv_cache,
             metadata,
@@ -679,11 +622,11 @@ impl GPTOSSModel {
                 .unwrap_or(&normal_loading_metadata.real_device);
             ropes.insert(
                 device.location(),
-                Arc::new(Llama3RotaryEmbedding::new_llama4(
+                Arc::new(GPTOSSRotaryEmbedding::new(
+                    is_gptx,
                     vb_m.dtype(),
                     cfg,
                     device,
-                    is_gptx,
                 )?),
             );
         }
@@ -766,20 +709,8 @@ impl GPTOSSModel {
             .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
             .unwrap_or(cache as &dyn PastKvLenCache);
 
-        let position_ids = Tensor::new(
-            seqlen_offsets.iter().map(|o| *o as i32).collect::<Vec<_>>(),
-            input_ids.device(),
-        )?;
-
         let mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
-            cache_for_mask,
-            x.dtype(),
-            self.blocks[0].attn.num_attention_heads,
-        )?;
-        let chunked_mask = CausalMasker.make_chunked_mask_matrix(
-            input_ids,
-            self.attention_chunk_size,
             cache_for_mask,
             x.dtype(),
             self.blocks[0].attn.num_attention_heads,
@@ -791,22 +722,11 @@ impl GPTOSSModel {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
-        // PagedAttention prompt chunking
-        let chunked_mask = chunked_mask.filter(|_| {
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-        });
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
             x = block.forward(
                 &x,
-                &position_ids.to_device(x.device())?,
                 &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
-                &chunked_mask
-                    .clone()
-                    .map(|m| m.to_device(x.device()).unwrap()),
                 seqlen_offsets,
                 &mut cache[block_idx],
                 metadata
