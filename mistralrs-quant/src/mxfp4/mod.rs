@@ -129,6 +129,10 @@ impl MXFP4Layer {
         bias: bool,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
+        if !vb.device().is_metal() {
+            candle_core::bail!("MXFP4Layer only works on Metal.");
+        }
+
         let QuantizedConfig::MXFP4 {} = config else {
             candle_core::bail!("Unexpected quantization config.")
         };
@@ -169,6 +173,10 @@ impl MXFP4Layer {
         bias: bool,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
+        if !vb.device().is_metal() {
+            candle_core::bail!("MXFP4Layer only works on Metal.");
+        }
+
         let QuantizedConfig::MXFP4 {} = config else {
             candle_core::bail!("Unexpected quantization config.")
         };
