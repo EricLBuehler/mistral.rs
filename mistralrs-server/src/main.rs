@@ -256,6 +256,7 @@ fn validate_mcp_config(config: &McpClientConfig) -> Result<()> {
                     anyhow::bail!("Empty command for server '{}'", server.id);
                 }
             }
+            _ => {} // Ignore StreamableHttp, Sse, and any other variants
         }
     }
 
