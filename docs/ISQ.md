@@ -63,10 +63,8 @@ Check out the [imatrix docs](IMATRIX.md).
 ## Python Example
 ```python
 runner = Runner(
-    which=Which.GGUF(
-        tok_model_id="mistralai/Mistral-7B-Instruct-v0.1",
-        quantized_model_id="TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
-        quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",
+    which=Which.Plain(
+        model_id="Qwen/Qwen3-0.6B",
     ),
     in_situ_quant="4",
 )
