@@ -10,9 +10,9 @@ use crate::{
     lora::merge_lora_weights,
     should_apply_immediate_isq,
     utils::isq::{apply_immediate_isq, apply_immediate_isq_always},
-    AfqLayer, BnbLinear, DistributedKind, DummyLayer, FP8Linear, GgufMatMul, HqqLayer, QuantMethod,
-    QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, QuantizedSerdeType,
-    Shard, ShardedVarBuilder, UnquantLinear,
+    AfqLayer, BnbLinear, DistributedKind, DummyLayer, FP8Linear, GgufMatMul, HqqLayer, MXFP4Layer,
+    QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
+    QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
 use super::{Comm, SumAllReduce};
@@ -83,6 +83,9 @@ impl RowParallelLayer {
                 }
                 QuantizedConfig::Afq { .. } => {
                     AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
+                QuantizedConfig::MXFP4 {} => {
+                    MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
                 }
             }
         } else {
@@ -357,6 +360,9 @@ impl ColumnParallelLayer {
                 }
                 QuantizedConfig::Afq { .. } => {
                     AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
+                QuantizedConfig::MXFP4 {} => {
+                    MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
                 }
             }
         } else {
@@ -650,6 +656,9 @@ impl ReplicatedLayer {
                 QuantizedConfig::Afq { .. } => {
                     AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
                 }
+                QuantizedConfig::MXFP4 {} => {
+                    MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
             }
         } else {
             // Handle the case where the layer is dummy (no tensors)
@@ -716,6 +725,9 @@ impl ReplicatedLayer {
                 }
                 QuantizedConfig::Afq { .. } => {
                     AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
+                QuantizedConfig::MXFP4 {} => {
+                    MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
                 }
             }
         } else {

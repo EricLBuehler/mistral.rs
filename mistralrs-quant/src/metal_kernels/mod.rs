@@ -105,6 +105,7 @@ impl Kernels {
         file_system.insert("sort_impl.metal", include_str!("sort_impl.metal"));
         file_system.insert("copy_impl.metal", include_str!("copy_impl.metal"));
         file_system.insert("float8.metal", include_str!("float8.metal"));
+        file_system.insert("float4.metal", include_str!("float4.metal"));
 
         // Recursive include preprocessor
         fn preprocess_includes(
@@ -851,6 +852,7 @@ pub fn call_affine_quantize(
     let packs_per_int = match bits {
         3 => 8,
         6 => 4,
+        40 => 2, // mxfp4: 2 FP4 values per byte
         _ => 8 / bits,
     };
     let per_thread = if dequantize {
