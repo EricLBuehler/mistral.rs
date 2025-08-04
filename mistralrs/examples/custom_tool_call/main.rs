@@ -48,10 +48,9 @@ async fn main() -> Result<()> {
         .await?;
 
     // Define the JSON schema for the tool the model can call.
-    let parameters = std::collections::HashMap::from([(
-        "query".to_string(),
-        serde_json::json!({"type": "string", "description": "Query"}),
-    )]);
+    let parameters = serde_json::json!({
+        "query": {"type": "string", "description": "Query"}
+    });
     let tool = Tool {
         tp: ToolType::Function,
         function: mistralrs::Function {

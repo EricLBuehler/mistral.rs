@@ -250,6 +250,7 @@ pub fn parse_request(
             },
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,
+            enforce_tool_schema: None,
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,

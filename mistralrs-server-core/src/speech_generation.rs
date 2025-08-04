@@ -74,6 +74,7 @@ pub fn parse_request(
         constraint: Constraint::None,
         tool_choice: None,
         tools: None,
+        enforce_tool_schema: None,
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,

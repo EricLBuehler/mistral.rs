@@ -307,6 +307,7 @@ async fn parse_responses_request(
         stream: oairequest.stream,
         tools: oairequest.tools,
         tool_choice: oairequest.tool_choice,
+        enforce_tool_schema: oairequest.enforce_tool_schema,
         response_format: oairequest.response_format,
         web_search_options: oairequest.web_search_options,
         top_k: oairequest.top_k,
