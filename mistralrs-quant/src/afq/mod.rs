@@ -16,7 +16,7 @@ use crate::{
     QuantizedSerde, QuantizedSerdeType, ShardedVarBuilder,
 };
 
-mod ops;
+pub(crate) mod ops;
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy)]
@@ -102,7 +102,8 @@ impl QuantMethod for AfqLayer {
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
             | QuantMethodConfig::BlockwiseFP8 { .. }
-            | QuantMethodConfig::Unquantized(_) => unreachable!(),
+            | QuantMethodConfig::Unquantized(_)
+            | QuantMethodConfig::MXFP4 { .. } => unreachable!(),
             QuantMethodConfig::Afq {
                 weight,
                 bias,

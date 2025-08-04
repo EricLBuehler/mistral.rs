@@ -26,6 +26,7 @@ mod gptq;
 mod hqq;
 mod imatrix;
 mod lora;
+mod mxfp4;
 pub mod rotary;
 pub mod safetensors;
 mod scalar_fp8;
@@ -59,6 +60,7 @@ pub use lora::{
     clear_applied_loras, get_applied_loras, linear_no_bias_static_lora, push_applied_lora,
     LoraAdapter, LoraConfig, StaticLoraConfig, MULTI_LORA_DELIMITER,
 };
+pub use mxfp4::MXFP4Layer;
 pub use unquantized::UnquantLinear;
 pub use utils::isq::apply_immediate_isq;
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
@@ -130,6 +132,7 @@ pub enum QuantizedConfig {
         bits: usize,
         group_size: usize,
     },
+    MXFP4 {},
 }
 
 // Common fields for all variants
@@ -209,6 +212,7 @@ impl QuantizedConfig {
             Self::Fp8 { .. } => "fp8",
             Self::Bitsandbytes { .. } => "bitsandbytes",
             Self::Afq { .. } => "afq",
+            Self::MXFP4 { .. } => "mxfp4",
         }
     }
 
@@ -223,6 +227,7 @@ impl QuantizedConfig {
                 bnb_4bit_quant_type: None,
             } => "8 bits".to_string(),
             Self::Afq { bits, .. } => format!("{bits} bits"),
+            Self::MXFP4 {} => format!("{} bits", mxfp4::N_BITS),
         }
     }
 
@@ -245,6 +250,7 @@ impl QuantizedConfig {
             | Self::Bitsandbytes {
                 bnb_4bit_quant_type: None,
             } => IsqType::Q4K.pack_factor(dtype),
+            Self::MXFP4 {} => IsqType::Q4_0.pack_factor(dtype),
         }
     }
 }
@@ -301,6 +307,11 @@ pub enum QuantMethodConfig {
         bias: Option<Tensor>,
         bits: AfqBits,
         group_size: AfqGroupSize,
+    },
+    MXFP4 {
+        blocks: Tensor,
+        scales: Tensor,
+        bias: Option<Tensor>,
     },
 }
 
@@ -748,6 +759,9 @@ pub fn linear_no_bias(
             QuantizedConfig::Afq { .. } => {
                 AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, false, vb)?
             }
+            QuantizedConfig::MXFP4 {} => {
+                MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, false, vb)?
+            }
         }
     } else {
         // Handle the case where the layer is dummy (no tensors)
@@ -791,6 +805,9 @@ pub fn linear(
             }
             QuantizedConfig::Afq { .. } => {
                 AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, true, vb)?
+            }
+            QuantizedConfig::MXFP4 {} => {
+                MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, true, vb)?
             }
         }
     } else {

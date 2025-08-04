@@ -41,7 +41,8 @@ impl QuantMethod for VectorFP8Linear {
             | QuantMethodConfig::Bnb { .. }
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::BlockwiseFP8 { .. }
-            | QuantMethodConfig::Afq { .. } => unreachable!(),
+            | QuantMethodConfig::Afq { .. }
+            | QuantMethodConfig::MXFP4 { .. } => unreachable!(),
         }
     }
 
