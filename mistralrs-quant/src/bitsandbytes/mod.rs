@@ -232,6 +232,10 @@ impl QuantMethod for BnbLinear {
         Self::dequantize(&self.weight, &self.params, self.quant_ty)
     }
 
+    fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
+    }
+
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let w = Self::dequantize(&self.weight, &self.params, self.quant_ty)?
             .t()?

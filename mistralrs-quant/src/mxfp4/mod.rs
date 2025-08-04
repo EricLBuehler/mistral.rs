@@ -61,6 +61,10 @@ impl QuantMethod for MXFP4Layer {
         )
     }
 
+    fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
+    }
+
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let mut x = ops::afq_mm_op(
             x,

@@ -15,6 +15,9 @@ impl QuantMethod for DummyLayer {
     fn dequantize_w(&self) -> Result<candle_core::Tensor> {
         candle_core::bail!("DummyLayer cannot be dequantized!")
     }
+    fn bias(&self) -> Option<&candle_core::Tensor> {
+        None
+    }
     fn add_delta_w(
         &self,
         _delta: &candle_core::Tensor,

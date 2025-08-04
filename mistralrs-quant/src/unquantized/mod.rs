@@ -51,6 +51,10 @@ impl QuantMethod for UnquantLinear {
         Ok(self.w.clone())
     }
 
+    fn bias(&self) -> Option<&Tensor> {
+        self.b.as_ref()
+    }
+
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(a.device().clone());

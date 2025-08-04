@@ -1,14 +1,18 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Embedding, Module};
+use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::{
-    apply_immediate_isq, linear_no_bias, should_apply_immediate_isq, AfqLayer, ColumnParallelLayer,
-    Comm, MXFP4Layer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder, SumAllReduce,
+    apply_immediate_isq, linear_no_bias, log::once_log_info, should_apply_immediate_isq, AfqLayer,
+    ColumnParallelLayer, Comm, IsqType, MXFP4Layer, QuantMethod, QuantMethodConfig,
+    QuantizeOntoGuard, QuantizedConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+    SumAllReduce, UnquantLinear,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -309,6 +313,7 @@ impl Experts {
         bias: bool,
         comm: &Arc<Comm>,
         vb: ShardedVarBuilder,
+        loading_isq: bool,
     ) -> Result<Self> {
         if bias {
             candle_core::bail!("PackedExperts does not support bias.");
@@ -332,14 +337,14 @@ impl Experts {
                     let base_vb = vb.clone();
 
                     let vb_mlp1_proj = if should_apply_immediate_isq(&vb) {
-                        vb.pp("mlp1").set_device(Device::Cpu)
+                        vb.pp("gate_up_proj").set_device(Device::Cpu)
                     } else {
-                        vb.pp("mlp1")
+                        vb.pp("gate_up_proj")
                     };
                     let vb_mlp2_proj = if should_apply_immediate_isq(&vb) {
-                        vb.pp("mlp2").set_device(Device::Cpu)
+                        vb.pp("down_proj").set_device(Device::Cpu)
                     } else {
-                        vb.pp("mlp2")
+                        vb.pp("down_proj")
                     };
                     let mut gate_up_proj = AfqLayer::afq_packed_linear_b(
                         num_local_experts,
@@ -358,8 +363,8 @@ impl Experts {
                         vb_mlp2_proj,
                     )?;
 
-                    gate_up_proj = apply_immediate_isq(gate_up_proj, base_vb.pp("mlp1"))?;
-                    down_proj = apply_immediate_isq(down_proj, base_vb.pp("mlp2"))?;
+                    gate_up_proj = apply_immediate_isq(gate_up_proj, base_vb.pp("gate_up_proj"))?;
+                    down_proj = apply_immediate_isq(down_proj, base_vb.pp("down_proj"))?;
 
                     (vec![gate_up_proj], vec![down_proj])
                 }
@@ -370,12 +375,14 @@ impl Experts {
 
                     let base_vb = vb.clone();
 
-                    let vb_mlp1_proj = if should_apply_immediate_isq(&vb) {
+                    let is_quantized =
+                        loading_isq || vb.device().is_cuda() || should_apply_immediate_isq(&vb);
+                    let vb_mlp1_proj = if is_quantized {
                         vb.pp("mlp1").set_device(Device::Cpu)
                     } else {
                         vb.pp("mlp1")
                     };
-                    let vb_mlp2_proj = if should_apply_immediate_isq(&vb) {
+                    let vb_mlp2_proj = if is_quantized {
                         vb.pp("mlp2").set_device(Device::Cpu)
                     } else {
                         vb.pp("mlp2")
@@ -396,6 +403,37 @@ impl Experts {
                         bias,
                         vb_mlp2_proj,
                     )?;
+
+                    if is_quantized {
+                        gate_up_proj = Arc::new(UnquantLinear::new(
+                            QuantMethodConfig::Unquantized(Linear::new(
+                                gate_up_proj.dequantize_w()?,
+                                gate_up_proj.bias().cloned(),
+                            )),
+                        )?);
+                        down_proj = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                            Linear::new(down_proj.dequantize_w()?, down_proj.bias().cloned()),
+                        ))?);
+                    }
+
+                    // If on cuda and no other quantization, automatic quant to Q4K
+                    if vb.device().is_cuda() && !loading_isq && !should_apply_immediate_isq(&vb) {
+                        once_log_info("Requantizing MoE layers to ISQ 4.");
+                        gate_up_proj = gate_up_proj.apply_isq(
+                            Some(IsqType::Q4K),
+                            vb.device().clone(),
+                            &AtomicUsize::new(0),
+                            None,
+                            QuantizeOntoGuard::new(),
+                        )?;
+                        down_proj = down_proj.apply_isq(
+                            Some(IsqType::Q4K),
+                            vb.device().clone(),
+                            &AtomicUsize::new(0),
+                            None,
+                            QuantizeOntoGuard::new(),
+                        )?;
+                    }
 
                     gate_up_proj = apply_immediate_isq(gate_up_proj, base_vb.pp("mlp1"))?;
                     down_proj = apply_immediate_isq(down_proj, base_vb.pp("mlp2"))?;
@@ -435,6 +473,7 @@ impl TextExperts {
         cfg: &GPTOSSConfig,
         quantization_config: &Option<QuantizedConfig>,
         comm: &Arc<mistralrs_quant::Comm>,
+        loading_isq: bool,
     ) -> Result<Self> {
         let Experts {
             gate_up_proj,
@@ -447,6 +486,7 @@ impl TextExperts {
             false,
             comm,
             vb,
+            loading_isq,
         )?;
         Ok(Self {
             gate_up_proj,
@@ -516,8 +556,15 @@ impl TextMoe {
         cfg: &GPTOSSConfig,
         quantization_config: &Option<QuantizedConfig>,
         comm: &Arc<mistralrs_quant::Comm>,
+        loading_isq: bool,
     ) -> Result<Self> {
-        let experts = TextExperts::new(vb.pp("experts"), cfg, quantization_config, comm)?;
+        let experts = TextExperts::new(
+            vb.pp("experts"),
+            cfg,
+            quantization_config,
+            comm,
+            loading_isq,
+        )?;
         let router = linear_no_bias(
             cfg.hidden_size,
             cfg.num_experts,
@@ -600,6 +647,7 @@ impl Block {
             cfg,
             &cfg.quantization_config,
             comm,
+            loading_isq,
         )?;
         let rms_1 = RmsNorm::new(
             cfg.hidden_size,
