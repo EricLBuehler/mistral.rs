@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1
 
+# Stage 1: Build environment
 FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04 AS builder
+SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN <<HEREDOC
@@ -15,11 +17,9 @@ HEREDOC
 
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
-RUN rustup update nightly
-RUN rustup default nightly
+RUN rustup update nightly && rustup default nightly
 
 WORKDIR /mistralrs
-
 COPY . .
 
 # Rayon threads are limited to minimize memory requirements in CI, avoiding OOM
@@ -31,9 +31,10 @@ ARG RUSTFLAGS="-Z threads=${RUST_NUM_THREADS}"
 ARG WITH_FEATURES="cuda,cudnn"
 RUN cargo build --release --workspace --exclude mistralrs-pyo3 --features "${WITH_FEATURES}"
 
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS base
-ENV HUGGINGFACE_HUB_CACHE=/data \
-    PORT=80
+
+# Stage 2: Minimal runtime environment
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS runtime
+SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN <<HEREDOC
@@ -48,14 +49,11 @@ RUN <<HEREDOC
     rm -rf /var/lib/apt/lists/*
 HEREDOC
 
-FROM base
-
-COPY --from=builder /mistralrs/target/release/mistralrs-bench /usr/local/bin/mistralrs-bench
-RUN chmod +x /usr/local/bin/mistralrs-bench
-COPY --from=builder /mistralrs/target/release/mistralrs-server /usr/local/bin/mistralrs-server
-RUN chmod +x /usr/local/bin/mistralrs-server
-COPY --from=builder /mistralrs/target/release/mistralrs-web-chat /usr/local/bin/mistralrs-web-chat
-RUN chmod +x /usr/local/bin/mistralrs-web-chat
-
+COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-bench /usr/local/bin/mistralrs-bench
+COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-server /usr/local/bin/mistralrs-server
+COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-web-chat /usr/local/bin/mistralrs-web-chat
 # Copy chat templates for users running models which may not include them
 COPY --from=builder /mistralrs/chat_templates /chat_templates
+
+ENV HUGGINGFACE_HUB_CACHE=/data \
+    PORT=80
