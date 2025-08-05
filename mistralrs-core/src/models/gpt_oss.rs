@@ -21,8 +21,7 @@ use crate::{
     device_map::DeviceMapper,
     kv_cache::NormalCacheType,
     layers::{
-        embedding, Activation, CausalMasker, GPTOSSRotaryEmbedding, GPTOSSopeScalingConfig,
-        RmsNorm, Sdpa,
+        embedding, repeat_kv, Activation, CausalMasker, GPTOSSRotaryEmbedding, GPTOSSopeScalingConfig, RmsNorm, Sdpa
     },
     layers_masker::PastKvLenCache,
     ops::{TopKLastDimOp, TopKOutput},
@@ -213,6 +212,9 @@ impl CausalSelfAttention {
         let mut y = {
             let (k, v) = kv_cache.append(&k, &v)?;
 
+            let k = repeat_kv(k.clone(), self.sdpa_params.n_kv_groups)?;
+            let v = repeat_kv(v.clone(), self.sdpa_params.n_kv_groups)?;
+            
             // Use chunked attention with a closure that captures the necessary parameters
             chunked_attention(
                 &q.contiguous()?,
@@ -236,7 +238,7 @@ impl CausalSelfAttention {
                             .broadcast_as(Shape::from_dims(&[
                                 q.dim(0)?,
                                 self.num_attention_heads,
-                                q.dim(D::Minus1)?,
+                                q.dim(D::Minus2)?,
                                 1,
                             ]))?;
                     att = Tensor::cat(&[&att, &sinks], D::Minus1)?;
@@ -321,100 +323,6 @@ pub struct Experts {
     pub down_proj_bias: Tensor,
 }
 
-fn dequantize_impl(
-    w_q: &Tensor,
-    scales: &Tensor,
-    group_size: usize,
-) -> Result<Tensor> {
-    let device = w_q.device().clone();
-
-    use float4::F4E2M1;
-
-    // For float4, we expect F4 weights and F8E8M0 scales (no biases)
-    // First, get the raw F4 data
-    let (storage, layout) = w_q.storage_and_layout();
-    let codes = match &*storage {
-        Storage::Cpu(cpu_storage) => match cpu_storage {
-            CpuStorage::F4(data) => data.clone(),
-            _ => candle_core::bail!("Expected F4 storage for float4 weights"),
-        },
-        _ => candle_core::bail!("float4 dequantization only supported on CPU"),
-    };
-
-    // Scales should be F8E8M0 - convert to f32 scale factors
-    let (scale_storage, _) = scales.storage_and_layout();
-    let sc: Vec<f32> = match &*scale_storage {
-        Storage::Cpu(cpu_storage) => match cpu_storage {
-            CpuStorage::F8E8M0(data) => data
-                .iter()
-                .map(|&s| {
-                    if s == 0xFF {
-                        f32::NAN
-                    } else {
-                        2f32.powi(s as i32 - 127)
-                    }
-                })
-                .collect(),
-            _ => candle_core::bail!("Expected F8E8M0 storage for float4 scales"),
-        },
-        _ => candle_core::bail!("float4 scale dequantization only supported on CPU"),
-    };
-
-    // F4 storage is already packed - each byte contains 2 F4 values
-    // So codes.len() is the number of bytes, not the number of F4 values
-    let packed_row = w_q.dim(D::Minus1)?;
-    let outer = codes.len() / packed_row;
-    let inner = packed_row * 2; // 4 bits per weight, so 2 weights per byte
-    let groups_per_row = inner / group_size;
-
-    // Use rayon for parallel processing
-    use rayon::prelude::*;
-
-    let out: Vec<f32> = codes
-        .par_chunks_exact(packed_row)
-        .enumerate()
-        .flat_map(|(row, chunk)| {
-            let mut row_out = vec![0f32; inner];
-            let scale_base = row * groups_per_row;
-
-            for g in 0..groups_per_row {
-                let scale = sc[scale_base + g];
-                let group_start = g * group_size;
-
-                for i in 0..group_size {
-                    let j = group_start + i;
-                    let byte_idx = j / 2;
-                    let nibble = j % 2;
-
-                    let byte = chunk[byte_idx];
-                    let fp4bits = if nibble == 0 {
-                        byte & 0x0F
-                    } else {
-                        (byte >> 4) & 0x0F
-                    };
-
-                    let fp4 = F4E2M1::from_bits(fp4bits);
-                    let value = fp4.to_f64() as f32;
-
-                    row_out[j] = value * scale;
-                }
-            }
-            row_out
-        })
-        .collect();
-
-    Tensor::from_vec(
-        out,
-        {
-            let mut d = w_q.dims().to_vec();
-            *d.last_mut().unwrap() = inner;
-            d
-        },
-        &device,
-    )?
-    .to_dtype(DType::BF16)
-}
-
 impl Experts {
     /// Note: we only support AFQ/MXFP4/unquantized here because they are the only ones that support indexed.
     #[allow(clippy::too_many_arguments)]
@@ -445,8 +353,7 @@ impl Experts {
         // } else {
         //     vb.pp("down_proj")
         // };
-        let device = vb.device().clone();
-        let vb = vb.set_device(Device::Cpu);
+        // let vb = vb.set_device(Device::Cpu);
         let gu_blocks = vb
             .get_with_hints_dtype(
                 (
@@ -459,52 +366,63 @@ impl Experts {
                 "gate_up_proj_blocks",
                 Default::default(),
                 DType::F4,
-            )?;
-            // .reshape((num_local_experts, intermediate_size * 2, 1440))?;
+            )?
+            .reshape((num_local_experts, intermediate_size * 2, 1440))?;
         let gu_scales = vb.get_with_hints_dtype(
             (num_local_experts, intermediate_size * 2, 90), //hidden_size * 32),
             "gate_up_proj_scales",
             Default::default(),
             DType::F8E8M0,
         )?;
-        
+        let mut gate_up_proj: Arc<dyn QuantMethod> =
+            Arc::new(MXFP4Layer::new(QuantMethodConfig::MXFP4 {
+                blocks: gu_blocks,
+                scales: gu_scales,
+                bias: None,
+            })?);
+
         let d_blocks = vb
             .get_with_hints_dtype(
                 (num_local_experts, hidden_size, 90, 16), //intermediate_size * 4 / 32),
                 "down_proj_blocks",
                 Default::default(),
                 DType::F4,
-            )?;
-            // .reshape((num_local_experts, hidden_size, 1440))?;
+            )?
+            .reshape((num_local_experts, hidden_size, 1440))?;
         let d_scales = vb.get_with_hints_dtype(
             (num_local_experts, hidden_size, 90), //intermediate_size * 32),
             "down_proj_scales",
             Default::default(),
             DType::F8E8M0,
         )?;
-        
-        dbg!(&gu_blocks, &gu_scales, &d_blocks, &d_scales);
-        let mut gate_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-            Linear::new(dequantize_impl(&gu_blocks, &gu_scales, 32)?.to_device(&device)?, None),
-        ))?);
-        println!("A");
-        let mut down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-            Linear::new(dequantize_impl(&d_blocks, &d_scales, 32)?.to_device(&device)?, None),
-        ))?);
-        println!("B");
+        let mut down_proj: Arc<dyn QuantMethod> =
+            Arc::new(MXFP4Layer::new(QuantMethodConfig::MXFP4 {
+                blocks: d_blocks,
+                scales: d_scales,
+                bias: None,
+            })?);
+
+        if is_quantized {
+            gate_up_proj = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                Linear::new(gate_up_proj.dequantize_w()?.t()?.contiguous()?, gate_up_proj.bias().cloned()),
+            ))?);
+            down_proj = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                Linear::new(down_proj.dequantize_w()?.t()?.contiguous()?, down_proj.bias().cloned()),
+            ))?);
+        }
 
         // If on cuda and no other quantization, automatic quant to Q4K
         // if vb.device().is_cuda() && !loading_isq && !should_apply_immediate_isq(&vb) {
             once_log_info("Requantizing MoE layers to ISQ 4.");
             gate_up_proj = gate_up_proj.apply_isq(
-                Some(IsqType::Q4K),
+                Some(IsqType::AFQ4),
                 vb.device().clone(),
                 &AtomicUsize::new(0),
                 None,
                 QuantizeOntoGuard::new(),
             )?;
             down_proj = down_proj.apply_isq(
-                Some(IsqType::Q4K),
+                Some(IsqType::AFQ4),
                 vb.device().clone(),
                 &AtomicUsize::new(0),
                 None,
@@ -597,7 +515,7 @@ impl TextExperts {
             .reshape((num_experts, (), xs.dim(D::Minus1)?))?;
         let gate_up = self
             .gate_up_proj
-            .forward_autocast(&xs)?
+            .forward_autocast(&xs).unwrap()
             .broadcast_add(&self.gate_up_proj_bias.unsqueeze(D::Minus2)?)?
             .reshape((xs.dim(0)?, xs.dim(1)?, (), 2))?;
         let gate = gate_up.i((.., .., .., 0))?.clamp(-self.limit, self.limit)?;
@@ -605,7 +523,7 @@ impl TextExperts {
         let glu = (&gate * candle_nn::ops::sigmoid(&(&gate * self.alpha)?)?)?;
         xs = self
             .down_proj
-            .forward_autocast(&((&up + 1.)? * glu)?)?
+            .forward_autocast(&((&up + 1.)? * glu)?).unwrap()
             .broadcast_add(&self.down_proj_bias.unsqueeze(D::Minus2)?)?
             .reshape((num_experts, bs, (), self.hidden_size))?;
         xs = xs.broadcast_mul(
