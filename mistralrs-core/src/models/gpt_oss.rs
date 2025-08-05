@@ -1,10 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Result, Shape, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::{
     apply_immediate_isq, linear_no_bias, log::once_log_info, should_apply_immediate_isq, AfqLayer,
-    ColumnParallelLayer, Comm, IsqType, MXFP4Layer, QuantMethod, QuantMethodConfig,
+    ColumnParallelLayer, Comm, IsqType, MXFP4Layer, MatMul, QuantMethod, QuantMethodConfig,
     QuantizeOntoGuard, QuantizedConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
     SumAllReduce, UnquantLinear,
 };
@@ -16,7 +16,7 @@ use std::{
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    attention::SdpaParams,
+    attention::{chunked_attention, SdpaParams},
     device_map::DeviceMapper,
     layers::{
         embedding, Activation, CausalMasker, GPTOSSRotaryEmbedding, GPTOSSopeScalingConfig,
@@ -57,6 +57,7 @@ pub struct GPTOSSConfig {
     pub num_experts: usize,
     pub experts_per_token: usize,
     pub sliding_window: usize,
+    pub attention_bias: bool,
 }
 
 impl GPTOSSConfig {
@@ -77,6 +78,7 @@ struct CausalSelfAttention {
     max_seq_len: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
+    sinks: Tensor,
 }
 
 impl CausalSelfAttention {
@@ -98,7 +100,7 @@ impl CausalSelfAttention {
             size_in,
             size_q,
             &cfg.quantization_config,
-            false,
+            cfg.attention_bias,
             comm,
             mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
         )?;
@@ -111,7 +113,7 @@ impl CausalSelfAttention {
             size_in,
             size_kv,
             &cfg.quantization_config,
-            false,
+            cfg.attention_bias,
             comm,
             kv_shard,
             mapper.set_device(layer_idx, vb.pp("k_proj"), loading_isq),
@@ -120,7 +122,7 @@ impl CausalSelfAttention {
             size_in,
             size_kv,
             &cfg.quantization_config,
-            false,
+            cfg.attention_bias,
             comm,
             kv_shard,
             mapper.set_device(layer_idx, vb.pp("v_proj"), loading_isq),
@@ -129,10 +131,13 @@ impl CausalSelfAttention {
             size_q,
             size_in,
             &cfg.quantization_config,
-            false,
+            cfg.attention_bias,
             comm,
             mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
         )?;
+        let sinks = mapper
+            .set_nm_device(vb.clone(), loading_isq)
+            .get(cfg.num_attention_heads, "sinks")?;
         let head_dim = cfg.head_dim;
 
         Ok(Self {
@@ -156,6 +161,7 @@ impl CausalSelfAttention {
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: Some(cfg.sliding_window),
             },
+            sinks,
         })
     }
 
@@ -187,52 +193,46 @@ impl CausalSelfAttention {
 
         (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
-        let mut y = match &self.paged_attn {
-            Some(paged_attn) => match metadata {
-                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
-                    &q,
-                    &k,
-                    &v,
-                    attention_mask.clone().as_ref(),
-                    Some(key_cache),
-                    Some(value_cache),
-                    input_metadata,
-                    &self.sdpa_params,
-                    Some(flash_params),
-                )?,
-                None => {
-                    // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
-                    // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
-                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                    // Sanity check.
-                    assert!(attention_mask.is_some());
-                    paged_attn.forward(
-                        &q,
-                        &k,
-                        &v,
-                        attention_mask.clone().as_ref(),
-                        None,
-                        None,
-                        &input_metadata,
-                        &self.sdpa_params,
-                        Some(flash_params),
-                    )?
-                }
-            },
-            None => {
-                let (k, v) = kv_cache.append(&k, &v)?;
+        let mut y = {
+            let (k, v) = kv_cache.append(&k, &v)?;
 
-                Sdpa.run_attention(
-                    &q.contiguous()?,
-                    &k.contiguous()?,
-                    &v.contiguous()?,
-                    attention_mask.clone().as_ref(),
-                    Some(flash_params),
-                    &self.sdpa_params,
-                )?
-            }
+            // Use chunked attention with a closure that captures the necessary parameters
+            chunked_attention(
+                &q.contiguous()?,
+                &k.contiguous()?,
+                &v.contiguous()?,
+                attention_mask.clone().as_ref(),
+                |q_chunk, k, v, mask_chunk| {
+                    let mut att = MatMul.matmul_affine_mul(
+                        q_chunk,
+                        &k.t()?,
+                        self.sdpa_params.softmax_scale.into(),
+                    )?;
+
+                    if let Some(mask) = mask_chunk {
+                        att = att.broadcast_add(mask)?;
+                    }
+
+                    let sinks =
+                        self.sinks
+                            .reshape((1, (), 1, 1))?
+                            .broadcast_as(Shape::from_dims(&[
+                                q.dim(0)?,
+                                self.num_attention_heads,
+                                q.dim(D::Minus1)?,
+                                1,
+                            ]))?;
+                    att = Tensor::cat(&[&att, &sinks], D::Minus1)?;
+                    // TODO eval
+                    att = att.broadcast_sub(&att.max_keepdim(D::Minus1)?)?;
+
+                    att = candle_nn::ops::softmax_last_dim(&att)?;
+                    // Drop the sink
+                    att = att.i((.., .., .., ..att.dim(D::Minus1)? - 1))?;
+                    MatMul.matmul(&att, v)
+                },
+            )?
         };
-
         y = if attention_mask.is_some() {
             y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
         } else {
