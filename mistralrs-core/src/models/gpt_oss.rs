@@ -4,7 +4,10 @@ use candle_core::{CpuStorage, DType, Device, IndexOp, Result, Shape, Storage, Te
 use candle_nn::{Embedding, Linear, Module};
 use core::num;
 use mistralrs_quant::{
-    apply_immediate_isq, linear, linear_no_bias, log::once_log_info, should_apply_immediate_isq, AfqLayer, BitWiseOp, ColumnParallelLayer, Comm, IsqType, MXFP4Layer, MatMul, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, SumAllReduce, UnquantLinear
+    apply_immediate_isq, linear, linear_no_bias, log::once_log_info, should_apply_immediate_isq,
+    AfqLayer, BitWiseOp, ColumnParallelLayer, Comm, IsqType, MXFP4Layer, MatMul, QuantMethod,
+    QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
+    ShardedVarBuilder, SumAllReduce, UnquantLinear,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -18,7 +21,8 @@ use crate::{
     device_map::DeviceMapper,
     kv_cache::NormalCacheType,
     layers::{
-        embedding, repeat_kv, Activation, CausalMasker, GPTOSSRotaryEmbedding, GPTOSSopeScalingConfig, RmsNorm, Sdpa
+        embedding, repeat_kv, Activation, CausalMasker, GPTOSSRotaryEmbedding,
+        GPTOSSopeScalingConfig, RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
     ops::{TopKLastDimOp, TopKOutput},
@@ -211,7 +215,7 @@ impl CausalSelfAttention {
 
             let k = repeat_kv(k.clone(), self.sdpa_params.n_kv_groups)?;
             let v = repeat_kv(v.clone(), self.sdpa_params.n_kv_groups)?;
-            
+
             // Use chunked attention with a closure that captures the necessary parameters
             chunked_attention(
                 &q.contiguous()?,
@@ -351,80 +355,82 @@ impl Experts {
         //     vb.pp("down_proj")
         // };
         // let vb = vb.set_device(Device::Cpu);
-        let gu_blocks = vb
-            .get_with_hints_dtype(
-                (
-                    num_local_experts,
-                    intermediate_size * 2,
-                    90,
-                    16,
-                    // hidden_size * 4 / 32,
-                ),
-                "gate_up_proj_blocks",
-                Default::default(),
-                DType::F4,
-            )?
-            .reshape((num_local_experts, intermediate_size * 2, 1440))?;
+        let gu_blocks = vb.get_with_hints_dtype(
+            (
+                num_local_experts,
+                intermediate_size * 2,
+                90,
+                16,
+                // hidden_size * 4 / 32,
+            ),
+            "gate_up_proj_blocks",
+            Default::default(),
+            DType::F4,
+        )?;
+        // .reshape((num_local_experts, intermediate_size * 2, 1440))?;
         let gu_scales = vb.get_with_hints_dtype(
             (num_local_experts, intermediate_size * 2, 90), //hidden_size * 32),
             "gate_up_proj_scales",
             Default::default(),
             DType::F8E8M0,
         )?;
-        let mut gate_up_proj: Arc<dyn QuantMethod> =
-            Arc::new(MXFP4Layer::new(QuantMethodConfig::MXFP4 {
-                blocks: gu_blocks,
-                scales: gu_scales,
-                bias: None,
-            })?);
+        // let mut gate_up_proj: Arc<dyn QuantMethod> =
+        //     Arc::new(MXFP4Layer::new(QuantMethodConfig::MXFP4 {
+        //         blocks: gu_blocks,
+        //         scales: gu_scales,
+        //         bias: None,
+        //     })?);
 
-        let d_blocks = vb
-            .get_with_hints_dtype(
-                (num_local_experts, hidden_size, 90, 16), //intermediate_size * 4 / 32),
-                "down_proj_blocks",
-                Default::default(),
-                DType::F4,
-            )?
-            .reshape((num_local_experts, hidden_size, 1440))?;
+        let d_blocks = vb.get_with_hints_dtype(
+            (num_local_experts, hidden_size, 90, 16), //intermediate_size * 4 / 32),
+            "down_proj_blocks",
+            Default::default(),
+            DType::F4,
+        )?;
+        // .reshape((num_local_experts, hidden_size, 1440))?;
         let d_scales = vb.get_with_hints_dtype(
             (num_local_experts, hidden_size, 90), //intermediate_size * 32),
             "down_proj_scales",
             Default::default(),
             DType::F8E8M0,
         )?;
-        let mut down_proj: Arc<dyn QuantMethod> =
-            Arc::new(MXFP4Layer::new(QuantMethodConfig::MXFP4 {
-                blocks: d_blocks,
-                scales: d_scales,
-                bias: None,
-            })?);
+        // let mut down_proj: Arc<dyn QuantMethod> =
+        //     Arc::new(MXFP4Layer::new(QuantMethodConfig::MXFP4 {
+        //         blocks: d_blocks,
+        //         scales: d_scales,
+        //         bias: None,
+        //     })?);
 
         // if is_quantized {
-            gate_up_proj = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                Linear::new(dbg!(gate_up_proj.dequantize_w()?.t()?).contiguous()?, gate_up_proj.bias().cloned()),
-            ))?);
-            down_proj = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                Linear::new(dbg!(down_proj.dequantize_w()?.t()?).contiguous()?, down_proj.bias().cloned()),
-            ))?);
+        let unpack_gu =
+            mistralrs_quant::mxfp4::ops::mxfp4_unpack(&gu_blocks, &gu_scales, DType::BF16)?;
+        let unpack_d =
+            mistralrs_quant::mxfp4::ops::mxfp4_unpack(&d_blocks, &d_scales, DType::BF16)?;
+        let mut gate_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(Linear::new(unpack_gu, None)),
+        )?);
+        let mut down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(Linear::new(unpack_d, None)),
+        )?);
         // }
 
         // If on cuda and no other quantization, automatic quant to Q4K
         // if vb.device().is_cuda() && !loading_isq && !should_apply_immediate_isq(&vb) {
-            // once_log_info("Requantizing MoE layers to ISQ 4.");
-            // gate_up_proj = gate_up_proj.apply_isq(
-            //     Some(IsqType::AFQ4),
-            //     vb.device().clone(),
-            //     &AtomicUsize::new(0),
-            //     None,
-            //     QuantizeOntoGuard::new(),
-            // )?;
-            // down_proj = down_proj.apply_isq(
-            //     Some(IsqType::AFQ4),
-            //     vb.device().clone(),
-            //     &AtomicUsize::new(0),
-            //     None,
-            //     QuantizeOntoGuard::new(),
-            // )?;
+        // once_log_info("Requantizing MoE layers to ISQ 4.");
+        // gate_up_proj = gate_up_proj.apply_isq(
+        //     Some(IsqType::AFQ4),
+        //     vb.device().clone(),
+        //     &AtomicUsize::new(0),
+        //     None,
+        //     QuantizeOntoGuard::new(),
+        // )?;
+        // down_proj = down_proj.apply_isq(
+        //     Some(IsqType::AFQ4),
+        //     vb.device().clone(),
+        //     &AtomicUsize::new(0),
+        //     None,
+        //     QuantizeOntoGuard::new(),
+        // )?;
         // }
 
         // gate_up_proj = apply_immediate_isq(gate_up_proj, base_vb.pp("gate_up_proj"))?;
@@ -512,7 +518,8 @@ impl TextExperts {
             .reshape((num_experts, (), xs.dim(D::Minus1)?))?;
         let gate_up = self
             .gate_up_proj
-            .forward_autocast(&xs).unwrap()
+            .forward_autocast(&xs)
+            .unwrap()
             .broadcast_add(&self.gate_up_proj_bias.unsqueeze(D::Minus2)?)?
             .reshape((xs.dim(0)?, xs.dim(1)?, (), 2))?;
         let gate = gate_up.i((.., .., .., 0))?.clamp(-self.limit, self.limit)?;
@@ -520,7 +527,8 @@ impl TextExperts {
         let glu = (&gate * candle_nn::ops::sigmoid(&(&gate * self.alpha)?)?)?;
         xs = self
             .down_proj
-            .forward_autocast(&((&up + 1.)? * glu)?).unwrap()
+            .forward_autocast(&((&up + 1.)? * glu)?)
+            .unwrap()
             .broadcast_add(&self.down_proj_bias.unsqueeze(D::Minus2)?)?
             .reshape((num_experts, bs, (), self.hidden_size))?;
         xs = xs.broadcast_mul(

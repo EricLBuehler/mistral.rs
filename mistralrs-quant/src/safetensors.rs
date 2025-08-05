@@ -120,10 +120,10 @@ fn convert(
             convert_with_cast_::<f32, half::f16, _>(view, device, conv)
         }
 
-        (st::Dtype::U8,Some(DType::F6E2M3))
-        | (st::Dtype::U8,Some(DType::F6E3M2))
-        | (st::Dtype::U8,Some(DType::F4))
-        | (st::Dtype::U8,Some(DType::F8E8M0)) => {
+        (st::Dtype::U8, Some(DType::F6E2M3))
+        | (st::Dtype::U8, Some(DType::F6E3M2))
+        | (st::Dtype::U8, Some(DType::F4))
+        | (st::Dtype::U8, Some(DType::F8E8M0)) => {
             // For dummy types, we need to handle loading by creating a dummy tensor
             // Since these types don't have actual data representation, we'll create
             // a tensor that indicates it's a dummy type

@@ -26,7 +26,7 @@ mod gptq;
 mod hqq;
 mod imatrix;
 mod lora;
-mod mxfp4;
+pub mod mxfp4;
 pub mod rotary;
 pub mod safetensors;
 mod scalar_fp8;

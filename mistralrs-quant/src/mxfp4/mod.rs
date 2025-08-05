@@ -7,7 +7,9 @@ use crate::{
     QuantizedConfig, QuantizedSerde, ShardedVarBuilder,
 };
 
-use crate::afq::ops;
+use crate::afq::ops as afq_ops;
+
+pub mod ops;
 
 const GROUP_SIZE: AfqGroupSize = AfqGroupSize::Low;
 const _: () = assert!(GROUP_SIZE as usize == 32);
@@ -52,7 +54,7 @@ impl QuantMethod for MXFP4Layer {
     }
 
     fn dequantize_w(&self) -> Result<candle_core::Tensor> {
-        ops::afq_dequantize_op(
+        afq_ops::afq_dequantize_op(
             &self.blocks,
             &self.scales,
             &self.scales.clone(),
@@ -66,7 +68,7 @@ impl QuantMethod for MXFP4Layer {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let mut x = ops::afq_mm_op(
+        let mut x = afq_ops::afq_mm_op(
             x,
             &self.blocks,
             &self.scales,
@@ -84,7 +86,7 @@ impl QuantMethod for MXFP4Layer {
     }
 
     fn gather_forward(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        let mut x = ops::afq_mm_op(
+        let mut x = afq_ops::afq_mm_op(
             x,
             &self.blocks,
             &self.scales,

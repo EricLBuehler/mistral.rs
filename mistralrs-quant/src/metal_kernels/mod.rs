@@ -106,6 +106,7 @@ impl Kernels {
         file_system.insert("copy_impl.metal", include_str!("copy_impl.metal"));
         file_system.insert("float8.metal", include_str!("float8.metal"));
         file_system.insert("float4.metal", include_str!("float4.metal"));
+        file_system.insert("mxfp4_unpack.metal", include_str!("mxfp4_unpack.metal"));
 
         // Recursive include preprocessor
         fn preprocess_includes(
@@ -227,6 +228,7 @@ impl Kernels {
             "copy.metal",           // Copy operations (includes utils.metal, copy_impl.metal)
             "scan.metal",           // Scan operations (includes utils.metal, scan_impl.metal)
             "sort.metal",           // Sort operations (includes utils.metal, sort_impl.metal)
+            "mxfp4_unpack.metal",   // Mxfp4 unpack ops
         ];
 
         for file in main_files {
@@ -2417,5 +2419,35 @@ pub fn call_hqq_pack_1bit(
     };
 
     encoder.dispatch_thread_groups(grid_size, threadgroup_size);
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub fn call_unpack_mxfp4(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: DType,
+    blocks: &Buffer,
+    scales: &Buffer,
+    output: &Buffer,
+    rows_total: usize,
+    b: usize,
+) -> Result<(), MetalKernelError> {
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let dtype = match dtype {
+        DType::F32 => "float",
+        DType::F16 => "half",
+        DType::BF16 => "bfloat",
+        _ => unreachable!(),
+    };
+    let pipeline = kernels.load_pipeline(device, &format!("unpack_mxfp4_{dtype}"))?;
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (blocks, scales, output, rows_total, b));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, rows_total * b);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }

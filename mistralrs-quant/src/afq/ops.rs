@@ -170,7 +170,7 @@ pub(crate) fn afq_dequantize_op(
             device.device(),
             &command_buffer,
             &crate::metal_kernels::Kernels::new(),
-            DType::BF16,//scales.dtype(),
+            DType::BF16, //scales.dtype(),
             wq_s.buffer(),
             w_q.layout().start_offset() * wq_s.dtype().size_in_bytes(),
             w_q.dims(),
