@@ -3264,6 +3264,7 @@ dependencies = [
  "derive_more 2.0.1",
  "dirs 6.0.0",
  "either",
+ "float4",
  "float8",
  "futures",
  "galil-seiferas",

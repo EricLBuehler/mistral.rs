@@ -120,6 +120,16 @@ fn convert(
             convert_with_cast_::<f32, half::f16, _>(view, device, conv)
         }
 
+        (st::Dtype::U8,Some(DType::F6E2M3))
+        | (st::Dtype::U8,Some(DType::F6E3M2))
+        | (st::Dtype::U8,Some(DType::F4))
+        | (st::Dtype::U8,Some(DType::F8E8M0)) => {
+            // For dummy types, we need to handle loading by creating a dummy tensor
+            // Since these types don't have actual data representation, we'll create
+            // a tensor that indicates it's a dummy type
+            convert_dummy(view, cast_dtype.unwrap(), device)
+        }
+
         (st::Dtype::U8, _) => convert_::<u8>(view, device),
         (st::Dtype::U16, _) => {
             let conv = |x| Ok(u32::from(x));
@@ -134,27 +144,18 @@ fn convert(
         (st::Dtype::F32, _) => convert_::<f32>(view, device),
         (st::Dtype::F64, _) => convert_::<f64>(view, device),
         (st::Dtype::F8_E4M3, _) => convert_::<F8E4M3>(view, device),
-        (st::Dtype::F6_E2M3, _)
-        | (st::Dtype::F6_E3M2, _)
-        | (st::Dtype::F4, _)
-        | (st::Dtype::F8_E8M0, _) => {
-            // For dummy types, we need to handle loading by creating a dummy tensor
-            // Since these types don't have actual data representation, we'll create
-            // a tensor that indicates it's a dummy type
-            convert_dummy(view, device)
-        }
         (dtype, _) => Err(Error::UnsupportedSafeTensorDtype(dtype)),
     }
 }
 
-fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
+fn convert_dummy(view: &st::TensorView<'_>, dtype: DType, device: &Device) -> Result<Tensor> {
     // For dummy types, we'll create the appropriate storage variant that preserves
     // both the raw data and the correct dtype
-    let (dtype, _dtype_name) = match view.dtype() {
-        st::Dtype::F6_E2M3 => (DType::F6E2M3, "F6_E2M3 (MX6)"),
-        st::Dtype::F6_E3M2 => (DType::F6E3M2, "F6_E3M2 (MX6)"),
-        st::Dtype::F4 => (DType::F4, "F4 (MX4)"),
-        st::Dtype::F8_E8M0 => (DType::F8E8M0, "F8_E8M0"),
+    let (dtype, _dtype_name) = match dtype {
+        DType::F6E2M3 => (DType::F6E2M3, "F6_E2M3 (MX6)"),
+        DType::F6E3M2 => (DType::F6E3M2, "F6_E3M2 (MX6)"),
+        DType::F4 => (DType::F4, "F4 (MX4)"),
+        DType::F8E8M0 => (DType::F8E8M0, "F8_E8M0"),
         _ => unreachable!("convert_dummy called with non-dummy dtype"),
     };
 

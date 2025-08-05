@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Result, Shape, Tensor, D};
+use candle_core::{CpuStorage, DType, Device, IndexOp, Result, Shape, Storage, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use core::num;
 use mistralrs_quant::{
@@ -102,8 +102,8 @@ impl CausalSelfAttention {
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let size_in = cfg.hidden_size;
-        let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
-        let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+        let size_q = cfg.head_dim * cfg.num_attention_heads;
+        let size_kv = cfg.head_dim * cfg.num_key_value_heads;
         let q_proj = ColumnParallelLayer::new(
             size_in,
             size_q,
@@ -112,11 +112,8 @@ impl CausalSelfAttention {
             comm,
             mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
         )?;
-        let kv_shard = mistralrs_quant::compute_kv_shard(
-            cfg.num_key_value_heads,
-            cfg.hidden_size / cfg.num_attention_heads,
-            comm,
-        );
+        let kv_shard =
+            mistralrs_quant::compute_kv_shard(cfg.num_key_value_heads, cfg.head_dim, comm);
         let k_proj = ColumnParallelLayer::new_with_shard(
             size_in,
             size_kv,
@@ -324,6 +321,104 @@ pub struct Experts {
     pub down_proj_bias: Tensor,
 }
 
+fn dequantize_impl(
+    w_q: &Tensor,
+    scales: &Tensor,
+    group_size: usize,
+) -> Result<Tensor> {
+    let device = w_q.device().clone();
+
+    use float4::F4E2M1;
+
+    // For float4, we expect F4 weights and F8E8M0 scales (no biases)
+    // First, get the raw F4 data
+    let (storage, layout) = w_q.storage_and_layout();
+    let codes = match &*storage {
+        Storage::Cpu(cpu_storage) => match cpu_storage {
+            CpuStorage::F4(data) => data.clone(),
+            _ => candle_core::bail!("Expected F4 storage for float4 weights"),
+        },
+        _ => candle_core::bail!("float4 dequantization only supported on CPU"),
+    };
+
+    // Scales should be F8E8M0 - convert to f32 scale factors
+    let (scale_storage, _) = scales.storage_and_layout();
+    let sc: Vec<f32> = match &*scale_storage {
+        Storage::Cpu(cpu_storage) => match cpu_storage {
+            CpuStorage::F8E8M0(data) => data
+                .iter()
+                .map(|&s| {
+                    if s == 0xFF {
+                        f32::NAN
+                    } else {
+                        2f32.powi(s as i32 - 127)
+                    }
+                })
+                .collect(),
+            _ => candle_core::bail!("Expected F8E8M0 storage for float4 scales"),
+        },
+        _ => candle_core::bail!("float4 scale dequantization only supported on CPU"),
+    };
+
+    // F4 storage is already packed - each byte contains 2 F4 values
+    // So codes.len() is the number of bytes, not the number of F4 values
+    let packed_row = w_q.dim(D::Minus1)?;
+    let outer = codes.len() / packed_row;
+    let inner = packed_row * 2; // 4 bits per weight, so 2 weights per byte
+    let groups_per_row = inner / group_size;
+
+    // Use rayon for parallel processing
+    use rayon::prelude::*;
+
+    dbg!(outer, inner, packed_row, groups_per_row);
+    let out: Vec<f32> = (0..outer)
+        .into_par_iter()
+        .flat_map(|row| {
+            let mut row_out = vec![0f32; inner];
+            let row_base = row * packed_row;
+            let scale_base = row * groups_per_row;
+
+            for g in 0..groups_per_row {
+                let scale = sc[scale_base + g];
+                let group_start = g * group_size;
+
+                // Process group elements
+                for i in 0..group_size {
+                    let j = group_start + i;
+                    let byte_idx = j / 2;
+                    let nibble = j % 2;
+
+                    // Extract 4-bit value
+                    let byte = codes[row_base + byte_idx];
+                    let fp4bits = if nibble == 0 {
+                        byte & 0x0F
+                    } else {
+                        (byte >> 4) & 0x0F
+                    };
+
+                    // Convert F4E2M1 to f32
+                    let fp4 = F4E2M1::from_bits(fp4bits);
+                    let value = fp4.to_f64() as f32;
+
+                    row_out[j] = value * scale;
+                }
+            }
+            row_out
+        })
+        .collect();
+
+    Tensor::from_vec(
+        out,
+        {
+            let mut d = w_q.dims().to_vec();
+            *d.last_mut().unwrap() = inner;
+            d
+        },
+        &device,
+    )?
+    .to_dtype(DType::BF16)
+}
+
 impl Experts {
     /// Note: we only support AFQ/MXFP4/unquantized here because they are the only ones that support indexed.
     #[allow(clippy::too_many_arguments)]
@@ -337,140 +432,98 @@ impl Experts {
         vb: ShardedVarBuilder,
         loading_isq: bool,
     ) -> Result<Self> {
-        if bias {
-            candle_core::bail!("PackedExperts does not support bias.");
-        }
+        let base_vb = vb.clone();
 
-        let (gate_up_proj, down_proj, gate_up_proj_bias, down_proj_bias) = if let Some(quant_conf) =
-            &config
-        {
-            // GPTQ and BNB do not support tensor parallelism
-            if comm.world_size() != 1 {
-                candle_core::bail!(
-                    "PackedExperts with quantization config does not support distributed (world size {}). Use ISQ.",
-                    comm.world_size()
-                );
-            }
+        // let is_quantized =
+        //     loading_isq || vb.device().is_cuda() || should_apply_immediate_isq(&vb);
+        assert!(!(loading_isq || should_apply_immediate_isq(&vb)));
+        let is_quantized = true;
 
-            match quant_conf {
-                QuantizedConfig::MXFP4 { .. } => {
-                    if !vb.contains_tensor("gate_up_proj.blocks")
-                        || !vb.contains_tensor("down_proj.blocks")
-                    {
-                        candle_core::bail!("PackedExperts with AFQ quantization config only supports `gate_up_proj` format.");
-                    }
-
-                    let base_vb = vb.clone();
-
-                    // let is_quantized =
-                    //     loading_isq || vb.device().is_cuda() || should_apply_immediate_isq(&vb);
-                    assert!(loading_isq || should_apply_immediate_isq(&vb));
-                    let is_quantized = true;
-
-                    // let vb_gate_up_proj_proj = if is_quantized {
-                    //     vb.pp("gate_up_proj").set_device(Device::Cpu)
-                    // } else {
-                    //     vb.pp("gate_up_proj")
-                    // };
-                    // let vb_down_proj_proj = if is_quantized {
-                    //     vb.pp("down_proj").set_device(Device::Cpu)
-                    // } else {
-                    //     vb.pp("down_proj")
-                    // };
-                    let gu_blocks = vb.clone().set_device(Device::Cpu).get_with_hints_dtype(
-                        (
-                            num_local_experts,
-                            intermediate_size * 2,
-                            hidden_size * 4 / 32,
-                        ),
-                        "gate_up_proj_blocks",
-                        Default::default(),
-                        DType::F4,
-                    )?;
-                    let gu_scales = vb.clone().set_device(Device::Cpu).get_with_hints_dtype(
-                        (num_local_experts, intermediate_size * 2, hidden_size * 32),
-                        "gate_up_proj_scales",
-                        Default::default(),
-                        DType::F8E8M0,
-                    )?;
-                    let mut gate_up_proj: Arc<dyn QuantMethod> =
-                        Arc::new(MXFP4Layer::new(QuantMethodConfig::MXFP4 {
-                            blocks: gu_blocks,
-                            scales: gu_scales,
-                            bias: None,
-                        })?);
-
-                    let d_blocks = vb.clone().set_device(Device::Cpu).get_with_hints_dtype(
-                        (num_local_experts, hidden_size, intermediate_size * 4 / 32),
-                        "down_proj_blocks",
-                        Default::default(),
-                        DType::F4,
-                    )?;
-                    let d_scales = vb.clone().set_device(Device::Cpu).get_with_hints_dtype(
-                        (num_local_experts, hidden_size, intermediate_size * 32),
-                        "down_proj_scales",
-                        Default::default(),
-                        DType::F8E8M0,
-                    )?;
-                    let mut down_proj: Arc<dyn QuantMethod> =
-                        Arc::new(MXFP4Layer::new(QuantMethodConfig::MXFP4 {
-                            blocks: d_blocks,
-                            scales: d_scales,
-                            bias: None,
-                        })?);
-
-                    if is_quantized {
-                        gate_up_proj = Arc::new(UnquantLinear::new(
-                            QuantMethodConfig::Unquantized(Linear::new(
-                                gate_up_proj.dequantize_w()?,
-                                gate_up_proj.bias().cloned(),
-                            )),
-                        )?);
-                        down_proj = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                            Linear::new(down_proj.dequantize_w()?, down_proj.bias().cloned()),
-                        ))?);
-                    }
-
-                    // If on cuda and no other quantization, automatic quant to Q4K
-                    if vb.device().is_cuda() && !loading_isq && !should_apply_immediate_isq(&vb) {
-                        once_log_info("Requantizing MoE layers to ISQ 4.");
-                        gate_up_proj = gate_up_proj.apply_isq(
-                            Some(IsqType::Q4K),
-                            vb.device().clone(),
-                            &AtomicUsize::new(0),
-                            None,
-                            QuantizeOntoGuard::new(),
-                        )?;
-                        down_proj = down_proj.apply_isq(
-                            Some(IsqType::Q4K),
-                            vb.device().clone(),
-                            &AtomicUsize::new(0),
-                            None,
-                            QuantizeOntoGuard::new(),
-                        )?;
-                    }
-
-                    gate_up_proj = apply_immediate_isq(gate_up_proj, base_vb.pp("gate_up_proj"))?;
-                    down_proj = apply_immediate_isq(down_proj, base_vb.pp("down_proj"))?;
-
-                    let gate_up_proj_bias = vb.get(
-                        (num_local_experts, 2 * intermediate_size),
-                        "gate_up_proj_bias",
-                    )?;
-                    let down_proj_bias =
-                        vb.get((num_local_experts, 2 * hidden_size), "down_proj_bias")?;
-
-                    (gate_up_proj, down_proj, gate_up_proj_bias, down_proj_bias)
-                }
-                _ => candle_core::bail!(
-                    "`Experts` with quantization config only allows AFQ/MXFP4 quantization"
+        // let vb_gate_up_proj_proj = if is_quantized {
+        //     vb.pp("gate_up_proj").set_device(Device::Cpu)
+        // } else {
+        //     vb.pp("gate_up_proj")
+        // };
+        // let vb_down_proj_proj = if is_quantized {
+        //     vb.pp("down_proj").set_device(Device::Cpu)
+        // } else {
+        //     vb.pp("down_proj")
+        // };
+        let device = vb.device().clone();
+        let vb = vb.set_device(Device::Cpu);
+        let gu_blocks = vb
+            .get_with_hints_dtype(
+                (
+                    num_local_experts,
+                    intermediate_size * 2,
+                    90,
+                    16,
+                    // hidden_size * 4 / 32,
                 ),
-            }
-        } else {
-            candle_core::bail!(
-                "`Experts` with quantization config only allows AFQ/MXFP4 quantization"
-            );
-        };
+                "gate_up_proj_blocks",
+                Default::default(),
+                DType::F4,
+            )?;
+            // .reshape((num_local_experts, intermediate_size * 2, 1440))?;
+        let gu_scales = vb.get_with_hints_dtype(
+            (num_local_experts, intermediate_size * 2, 90), //hidden_size * 32),
+            "gate_up_proj_scales",
+            Default::default(),
+            DType::F8E8M0,
+        )?;
+        
+        let d_blocks = vb
+            .get_with_hints_dtype(
+                (num_local_experts, hidden_size, 90, 16), //intermediate_size * 4 / 32),
+                "down_proj_blocks",
+                Default::default(),
+                DType::F4,
+            )?;
+            // .reshape((num_local_experts, hidden_size, 1440))?;
+        let d_scales = vb.get_with_hints_dtype(
+            (num_local_experts, hidden_size, 90), //intermediate_size * 32),
+            "down_proj_scales",
+            Default::default(),
+            DType::F8E8M0,
+        )?;
+        
+        dbg!(&gu_blocks, &gu_scales, &d_blocks, &d_scales);
+        let mut gate_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+            Linear::new(dequantize_impl(&gu_blocks, &gu_scales, 32)?.to_device(&device)?, None),
+        ))?);
+        println!("A");
+        let mut down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+            Linear::new(dequantize_impl(&d_blocks, &d_scales, 32)?.to_device(&device)?, None),
+        ))?);
+        println!("B");
+
+        // If on cuda and no other quantization, automatic quant to Q4K
+        // if vb.device().is_cuda() && !loading_isq && !should_apply_immediate_isq(&vb) {
+            once_log_info("Requantizing MoE layers to ISQ 4.");
+            gate_up_proj = gate_up_proj.apply_isq(
+                Some(IsqType::Q4K),
+                vb.device().clone(),
+                &AtomicUsize::new(0),
+                None,
+                QuantizeOntoGuard::new(),
+            )?;
+            down_proj = down_proj.apply_isq(
+                Some(IsqType::Q4K),
+                vb.device().clone(),
+                &AtomicUsize::new(0),
+                None,
+                QuantizeOntoGuard::new(),
+            )?;
+        // }
+
+        // gate_up_proj = apply_immediate_isq(gate_up_proj, base_vb.pp("gate_up_proj"))?;
+        // down_proj = apply_immediate_isq(down_proj, base_vb.pp("down_proj"))?;
+
+        let gate_up_proj_bias = vb.get(
+            (num_local_experts, 2 * intermediate_size),
+            "gate_up_proj_bias",
+        )?;
+        let down_proj_bias = vb.get((num_local_experts, 2 * hidden_size), "down_proj_bias")?;
 
         Ok(Self {
             gate_up_proj,
@@ -666,7 +719,7 @@ struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
-    moe: TextMoe,
+    mlp: TextMoe,
 }
 
 impl Block {
@@ -691,8 +744,8 @@ impl Block {
             paged_attn,
             comm,
         )?;
-        let moe = TextMoe::new(
-            mapper.set_device(layer_idx, vb.pp("feed_forward"), loading_isq),
+        let mlp = TextMoe::new(
+            mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
             cfg,
             &cfg.quantization_config,
             comm,
@@ -712,7 +765,7 @@ impl Block {
             rms_1,
             attn,
             rms_2,
-            moe,
+            mlp,
         })
     }
 
@@ -739,7 +792,7 @@ impl Block {
             flash_params,
         )? + residual)?;
         let residual = &x;
-        let x = (self.moe.forward(&self.rms_2.forward(&x)?)? + residual)?;
+        let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
         Ok(x)
     }
 }
@@ -784,6 +837,9 @@ impl GPTOSSModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        let mut cfg = cfg.clone();
+        cfg.quantization_config = None;
+        let cfg = &cfg;
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
                 "Using {} quantization: {}.",
@@ -998,9 +1054,9 @@ impl IsqModel for GPTOSSModel {
             tensors.push((&mut layer.attn.k_proj, Some(i)));
             tensors.push((&mut layer.attn.v_proj, Some(i)));
             tensors.push((&mut layer.attn.o_proj, Some(i)));
-            tensors.push((&mut layer.moe.router, Some(i)));
-            tensors.push((&mut layer.moe.experts.gate_up_proj, Some(i)));
-            tensors.push((&mut layer.moe.experts.down_proj, Some(i)));
+            tensors.push((&mut layer.mlp.router, Some(i)));
+            tensors.push((&mut layer.mlp.experts.gate_up_proj, Some(i)));
+            tensors.push((&mut layer.mlp.experts.down_proj, Some(i)));
         }
         (tensors, &*self.mapper)
     }

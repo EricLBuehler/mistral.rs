@@ -3854,7 +3854,7 @@ impl NormalModelLoader for GPTOSSLoader {
         Ok(false)
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
-        let cfg: crate::vision_models::llama4::Llama4Config = serde_json::from_str(config)?;
+        let cfg: crate::models::gpt_oss::GPTOSSConfig = serde_json::from_str(config)?;
         Ok(Box::new(cfg))
     }
     fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
