@@ -2,11 +2,12 @@
 
 use candle_core::{DType, Device, IndexOp, Result, Shape, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
+use core::num;
 use mistralrs_quant::{
-    apply_immediate_isq, linear_no_bias, log::once_log_info, should_apply_immediate_isq, AfqLayer,
-    ColumnParallelLayer, Comm, IsqType, MXFP4Layer, MatMul, QuantMethod, QuantMethodConfig,
-    QuantizeOntoGuard, QuantizedConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
-    SumAllReduce, UnquantLinear,
+    apply_immediate_isq, linear, linear_no_bias, log::once_log_info, should_apply_immediate_isq,
+    AfqLayer, ColumnParallelLayer, Comm, IsqType, MXFP4Layer, MatMul, QuantMethod,
+    QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
+    ShardedVarBuilder, SumAllReduce, UnquantLinear,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -41,7 +42,6 @@ pub struct GPTOSSConfig {
     pub hidden_act: Option<Activation>,
     pub hidden_size: usize,
     pub intermediate_size: usize,
-    pub swiglu_limit: f64,
     pub head_dim: usize,
     pub vocab_size: usize,
     pub num_hidden_layers: usize,
@@ -298,8 +298,10 @@ impl Mlp {
 
 #[derive(Debug)]
 pub struct Experts {
-    pub gate_up_proj: Vec<Arc<dyn QuantMethod>>,
-    pub down_proj: Vec<Arc<dyn QuantMethod>>,
+    pub gate_up_proj: Arc<dyn QuantMethod>,
+    pub down_proj: Arc<dyn QuantMethod>,
+    pub gate_up_proj_bias: Tensor,
+    pub down_proj_bias: Tensor,
 }
 
 impl Experts {
@@ -319,7 +321,9 @@ impl Experts {
             candle_core::bail!("PackedExperts does not support bias.");
         }
 
-        let (gate_up_proj, down_proj) = if let Some(quant_conf) = &config {
+        let (gate_up_proj, down_proj, gate_up_proj_bias, down_proj_bias) = if let Some(quant_conf) =
+            &config
+        {
             // GPTQ and BNB do not support tensor parallelism
             if comm.world_size() != 1 {
                 candle_core::bail!(
@@ -329,79 +333,42 @@ impl Experts {
             }
 
             match quant_conf {
-                QuantizedConfig::Afq { .. } => {
-                    if !vb.contains_tensor("mlp1.blocks") || !vb.contains_tensor("mlp2.blocks") {
-                        candle_core::bail!("PackedExperts with AFQ quantization config only supports `mlp1` format.");
-                    }
-
-                    let base_vb = vb.clone();
-
-                    let vb_mlp1_proj = if should_apply_immediate_isq(&vb) {
-                        vb.pp("gate_up_proj").set_device(Device::Cpu)
-                    } else {
-                        vb.pp("gate_up_proj")
-                    };
-                    let vb_mlp2_proj = if should_apply_immediate_isq(&vb) {
-                        vb.pp("down_proj").set_device(Device::Cpu)
-                    } else {
-                        vb.pp("down_proj")
-                    };
-                    let mut gate_up_proj = AfqLayer::afq_packed_linear_b(
-                        num_local_experts,
-                        hidden_size,
-                        intermediate_size * 2,
-                        quant_conf,
-                        bias,
-                        vb_mlp1_proj,
-                    )?;
-                    let mut down_proj = AfqLayer::afq_packed_linear_b(
-                        num_local_experts,
-                        intermediate_size,
-                        hidden_size,
-                        quant_conf,
-                        bias,
-                        vb_mlp2_proj,
-                    )?;
-
-                    gate_up_proj = apply_immediate_isq(gate_up_proj, base_vb.pp("gate_up_proj"))?;
-                    down_proj = apply_immediate_isq(down_proj, base_vb.pp("down_proj"))?;
-
-                    (vec![gate_up_proj], vec![down_proj])
-                }
                 QuantizedConfig::MXFP4 { .. } => {
-                    if !vb.contains_tensor("mlp1.blocks") || !vb.contains_tensor("mlp2.blocks") {
-                        candle_core::bail!("PackedExperts with AFQ quantization config only supports `mlp1` format.");
+                    if !vb.contains_tensor("gate_up_proj.blocks")
+                        || !vb.contains_tensor("down_proj.blocks")
+                    {
+                        candle_core::bail!("PackedExperts with AFQ quantization config only supports `gate_up_proj` format.");
                     }
 
                     let base_vb = vb.clone();
 
                     let is_quantized =
                         loading_isq || vb.device().is_cuda() || should_apply_immediate_isq(&vb);
-                    let vb_mlp1_proj = if is_quantized {
-                        vb.pp("mlp1").set_device(Device::Cpu)
+                    let vb_gate_up_proj_proj = if is_quantized {
+                        vb.pp("gate_up_proj").set_device(Device::Cpu)
                     } else {
-                        vb.pp("mlp1")
+                        vb.pp("gate_up_proj")
                     };
-                    let vb_mlp2_proj = if is_quantized {
-                        vb.pp("mlp2").set_device(Device::Cpu)
+                    let vb_down_proj_proj = if is_quantized {
+                        vb.pp("down_proj").set_device(Device::Cpu)
                     } else {
-                        vb.pp("mlp2")
+                        vb.pp("down_proj")
                     };
                     let mut gate_up_proj = MXFP4Layer::packed_linear_b(
                         num_local_experts,
                         hidden_size,
                         intermediate_size * 2,
                         quant_conf,
-                        bias,
-                        vb_mlp1_proj,
+                        false,
+                        vb_gate_up_proj_proj,
                     )?;
                     let mut down_proj = MXFP4Layer::packed_linear_b(
                         num_local_experts,
                         intermediate_size,
                         hidden_size,
                         quant_conf,
-                        bias,
-                        vb_mlp2_proj,
+                        false,
+                        vb_down_proj_proj,
                     )?;
 
                     if is_quantized {
@@ -435,10 +402,17 @@ impl Experts {
                         )?;
                     }
 
-                    gate_up_proj = apply_immediate_isq(gate_up_proj, base_vb.pp("mlp1"))?;
-                    down_proj = apply_immediate_isq(down_proj, base_vb.pp("mlp2"))?;
+                    gate_up_proj = apply_immediate_isq(gate_up_proj, base_vb.pp("gate_up_proj"))?;
+                    down_proj = apply_immediate_isq(down_proj, base_vb.pp("down_proj"))?;
 
-                    (vec![gate_up_proj], vec![down_proj])
+                    let gate_up_proj_bias = vb.get(
+                        (num_local_experts, 2 * intermediate_size),
+                        "gate_up_proj_bias",
+                    )?;
+                    let down_proj_bias =
+                        vb.get((num_local_experts, 2 * hidden_size), "down_proj_bias")?;
+
+                    (gate_up_proj, down_proj, gate_up_proj_bias, down_proj_bias)
                 }
                 _ => candle_core::bail!(
                     "`Experts` with quantization config only allows AFQ/MXFP4 quantization"
@@ -453,18 +427,23 @@ impl Experts {
         Ok(Self {
             gate_up_proj,
             down_proj,
+            gate_up_proj_bias,
+            down_proj_bias,
         })
     }
 }
 
 struct TextExperts {
-    gate_up_proj: Vec<Arc<dyn QuantMethod>>,
-    down_proj: Vec<Arc<dyn QuantMethod>>,
+    gate_up_proj: Arc<dyn QuantMethod>,
+    down_proj: Arc<dyn QuantMethod>,
+    gate_up_proj_bias: Tensor,
+    down_proj_bias: Tensor,
     act: Activation,
     hidden_size: usize,
     intermediate_size: usize,
     sum_all_reduce: SumAllReduce,
-    swiglu_limit: f64,
+    limit: f64,
+    alpha: f64,
 }
 
 impl TextExperts {
@@ -478,12 +457,14 @@ impl TextExperts {
         let Experts {
             gate_up_proj,
             down_proj,
+            gate_up_proj_bias,
+            down_proj_bias,
         } = Experts::new(
             cfg.num_local_experts,
             cfg.hidden_size,
             cfg.intermediate_size,
             quantization_config,
-            false,
+            true,
             comm,
             vb,
             loading_isq,
@@ -491,61 +472,94 @@ impl TextExperts {
         Ok(Self {
             gate_up_proj,
             down_proj,
+            gate_up_proj_bias,
+            down_proj_bias,
             act: cfg.hidden_act(),
             hidden_size: cfg.hidden_size,
             intermediate_size: cfg.intermediate_size,
             sum_all_reduce: SumAllReduce::new(comm),
-            swiglu_limit: cfg.swiglu_limit,
+            limit: 7.0,
+            alpha: 1.702,
         })
     }
 
     // xs: (bs * seq_len, hidden_size)
     // expert indices: (bs * seq_len)
-    fn forward(&self, xs: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        let xs = xs.unsqueeze(1)?;
+    fn forward(
+        &self,
+        bs: usize,
+        xs: &Tensor,
+        routing_weights: &Tensor,
+        // routing_indices: &Tensor,
+    ) -> Result<Tensor> {
+        let mut xs = xs.unsqueeze(1)?;
 
-        if self.gate_up_proj.len() == 1 {
-            let gate_up = self.gate_up_proj[0]
-                .gather_forward_autocast(&xs, indices)?
-                .clamp(-self.swiglu_limit, self.swiglu_limit)?;
-            let gate = gate_up.narrow(D::Minus1, 0, self.intermediate_size)?;
-            let up = gate.narrow(D::Minus1, self.intermediate_size, self.intermediate_size)?;
+        let num_experts = routing_weights.dim(1)?;
+        xs = xs
+            .repeat((num_experts, 1))?
+            .reshape((num_experts, (), xs.dim(D::Minus1)?))?;
+        let gate_up = self
+            .gate_up_proj
+            .forward_autocast(&xs)?
+            .broadcast_add(&self.gate_up_proj_bias.unsqueeze(D::Minus2)?)?
+            .reshape((xs.dim(0)?, xs.dim(1)?, (), 2))?;
+        let gate = gate_up.i((.., .., .., 0))?.clamp(-self.limit, self.limit)?;
+        let up = gate_up.i((.., .., .., 1))?.clamp(-self.limit, self.limit)?;
+        let glu = (&gate * candle_nn::ops::sigmoid(&(&gate * self.alpha)?)?)?;
+        xs = self
+            .down_proj
+            .forward_autocast(&((&up + 1.)? * glu)?)?
+            .broadcast_add(&self.down_proj_bias.unsqueeze(D::Minus2)?)?
+            .reshape((num_experts, bs, (), self.hidden_size))?;
+        xs = xs.broadcast_mul(
+            &routing_weights
+                .transpose(0, 1)?
+                .reshape((num_experts, bs, ()))?
+                .unsqueeze(D::Minus1)?,
+        )?;
+        xs.sum(0)
 
-            let mut xs = self.down_proj[0]
-                .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, indices)?
-                .clamp(-self.swiglu_limit, self.swiglu_limit)?;
-            xs = self.sum_all_reduce.sum_all_reduce(&xs)?;
-            xs.reshape(((), self.hidden_size))
-        } else {
-            let indices = indices.to_vec1::<u32>()?;
-            let mut results = Vec::new();
-            for (tok, id) in indices.into_iter().enumerate() {
-                let xs = xs.i(tok)?.reshape((1, self.hidden_size))?;
+        // if self.gate_up_proj.len() == 1 {
+        //     let gate_up = self.gate_up_proj[0]
+        //         .gather_forward_autocast(&xs, indices)?
+        //         .clamp(-self.swiglu_limit, self.swiglu_limit)?;
+        //     let gate = gate_up.narrow(D::Minus1, 0, self.intermediate_size)?;
+        //     let up = gate.narrow(D::Minus1, self.intermediate_size, self.intermediate_size)?;
 
-                let res = {
-                    let gate_up = self.gate_up_proj[id as usize]
-                        .forward_autocast(&xs)?
-                        .clamp(-self.swiglu_limit, self.swiglu_limit)?;
-                    let gate = gate_up.narrow(D::Minus1, 0, self.intermediate_size)?;
-                    let up =
-                        gate.narrow(D::Minus1, self.intermediate_size, self.intermediate_size)?;
+        //     let mut xs = self.down_proj[0]
+        //         .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, indices)?
+        //         .clamp(-self.swiglu_limit, self.swiglu_limit)?;
+        //     xs = self.sum_all_reduce.sum_all_reduce(&xs)?;
+        //     xs.reshape(((), self.hidden_size))
+        // } else {
+        //     let indices = indices.to_vec1::<u32>()?;
+        //     let mut results = Vec::new();
+        //     for (tok, id) in indices.into_iter().enumerate() {
+        //         let xs = xs.i(tok)?.reshape((1, self.hidden_size))?;
 
-                    self.down_proj[id as usize]
-                        .forward_autocast(&(up * gate.apply(&self.act)?)?)?
-                        .clamp(-self.swiglu_limit, self.swiglu_limit)?
-                };
-                results.push(res);
-            }
-            let mut xs = Tensor::cat(&results, 0)?;
-            xs = self.sum_all_reduce.sum_all_reduce(&xs)?;
-            xs.reshape(((), self.hidden_size))
-        }
+        //         let res = {
+        //             let gate_up = self.gate_up_proj[id as usize]
+        //                 .forward_autocast(&xs)?
+        //                 .clamp(-self.swiglu_limit, self.swiglu_limit)?;
+        //             let gate = gate_up.narrow(D::Minus1, 0, self.intermediate_size)?;
+        //             let up =
+        //                 gate.narrow(D::Minus1, self.intermediate_size, self.intermediate_size)?;
+
+        //             self.down_proj[id as usize]
+        //                 .forward_autocast(&(up * gate.apply(&self.act)?)?)?
+        //                 .clamp(-self.swiglu_limit, self.swiglu_limit)?
+        //         };
+        //         results.push(res);
+        //     }
+        //     let mut xs = Tensor::cat(&results, 0)?;
+        //     xs = self.sum_all_reduce.sum_all_reduce(&xs)?;
+        //     xs.reshape(((), self.hidden_size))
+        // }
     }
 }
 
 struct TextMoe {
     experts: TextExperts,
-    shared_expert: Mlp,
     router: Arc<dyn QuantMethod>,
     topk: usize,
 }
@@ -565,23 +579,14 @@ impl TextMoe {
             comm,
             loading_isq,
         )?;
-        let router = linear_no_bias(
+        let router = linear(
             cfg.hidden_size,
             cfg.num_local_experts,
             quantization_config,
             vb.pp("router"),
         )?;
-        let shared_expert = Mlp::new(
-            vb.pp("shared_expert"),
-            cfg.hidden_size,
-            cfg.intermediate_size,
-            quantization_config,
-            cfg.hidden_act(),
-            comm,
-        )?;
         Ok(Self {
             experts,
-            shared_expert,
             router,
             topk: cfg.num_experts_per_tok,
         })
@@ -600,16 +605,12 @@ impl TextMoe {
         let router_scores = candle_nn::ops::sigmoid(&router_top_value.to_dtype(DType::F32)?)?
             .to_dtype(router_top_value.dtype())?;
 
-        let routed_in = xs.broadcast_mul(&router_scores)?;
         let routed_out = self
             .experts
-            .forward(&routed_in, &router_indices.squeeze(D::Minus1)?)?
+            .forward(bs, &xs, &router_scores)?
             .reshape((bs, seq_len, hidden_dim))?;
-        let out = self
-            .shared_expert
-            .forward(&xs.reshape((bs, seq_len, hidden_dim))?)?;
 
-        out + routed_out
+        Ok(routed_out)
     }
 }
 
@@ -922,15 +923,8 @@ impl IsqModel for GPTOSSModel {
             tensors.push((&mut layer.attn.v_proj, Some(i)));
             tensors.push((&mut layer.attn.o_proj, Some(i)));
             tensors.push((&mut layer.moe.router, Some(i)));
-            for g in &mut layer.moe.experts.gate_up_proj {
-                tensors.push((g, Some(i)));
-            }
-            for d in &mut layer.moe.experts.down_proj {
-                tensors.push((d, Some(i)));
-            }
-            tensors.push((&mut layer.moe.shared_expert.gate, Some(i)));
-            tensors.push((&mut layer.moe.shared_expert.up, Some(i)));
-            tensors.push((&mut layer.moe.shared_expert.down, Some(i)));
+            tensors.push((&mut layer.moe.experts.gate_up_proj, Some(i)));
+            tensors.push((&mut layer.moe.experts.down_proj, Some(i)));
         }
         (tensors, &*self.mapper)
     }
