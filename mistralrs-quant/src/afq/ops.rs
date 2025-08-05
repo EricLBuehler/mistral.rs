@@ -149,13 +149,13 @@ pub(crate) fn afq_dequantize_op(
         let mut w_shape = w_q.dims().to_vec();
         *w_shape.last_mut().unwrap() = out_size;
 
-        // if out_size != scales.dim(D::Minus1)? * group_size
-        //     || out_size != biases.dim(D::Minus1)? * group_size
-        // {
-        //     candle_core::bail!(
-        //         "Scales and biases do not match the matrix given dequantization parameters."
-        //     );
-        // }
+        if out_size != scales.dim(D::Minus1)? * group_size
+            || out_size != biases.dim(D::Minus1)? * group_size
+        {
+            candle_core::bail!(
+                "Scales and biases do not match the matrix given dequantization parameters."
+            );
+        }
 
         let output = device.new_buffer(
             w_shape.iter().product(),
@@ -190,7 +190,7 @@ pub(crate) fn afq_dequantize_op(
                 output,
                 device.clone(),
                 w_shape.iter().product(),
-                DType::BF16,//scales.dtype(),
+                scales.dtype(),
             )),
             w_shape,
             false,

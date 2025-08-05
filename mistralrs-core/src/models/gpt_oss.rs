@@ -4,10 +4,7 @@ use candle_core::{CpuStorage, DType, Device, IndexOp, Result, Shape, Storage, Te
 use candle_nn::{Embedding, Linear, Module};
 use core::num;
 use mistralrs_quant::{
-    apply_immediate_isq, linear, linear_no_bias, log::once_log_info, should_apply_immediate_isq,
-    AfqLayer, ColumnParallelLayer, Comm, IsqType, MXFP4Layer, MatMul, QuantMethod,
-    QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder, SumAllReduce, UnquantLinear,
+    apply_immediate_isq, linear, linear_no_bias, log::once_log_info, should_apply_immediate_isq, AfqLayer, BitWiseOp, ColumnParallelLayer, Comm, IsqType, MXFP4Layer, MatMul, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, SumAllReduce, UnquantLinear
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -402,32 +399,32 @@ impl Experts {
                 bias: None,
             })?);
 
-        if is_quantized {
+        // if is_quantized {
             gate_up_proj = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                Linear::new(gate_up_proj.dequantize_w()?.t()?.contiguous()?, gate_up_proj.bias().cloned()),
+                Linear::new(dbg!(gate_up_proj.dequantize_w()?.t()?).contiguous()?, gate_up_proj.bias().cloned()),
             ))?);
             down_proj = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                Linear::new(down_proj.dequantize_w()?.t()?.contiguous()?, down_proj.bias().cloned()),
+                Linear::new(dbg!(down_proj.dequantize_w()?.t()?).contiguous()?, down_proj.bias().cloned()),
             ))?);
-        }
+        // }
 
         // If on cuda and no other quantization, automatic quant to Q4K
         // if vb.device().is_cuda() && !loading_isq && !should_apply_immediate_isq(&vb) {
-            once_log_info("Requantizing MoE layers to ISQ 4.");
-            gate_up_proj = gate_up_proj.apply_isq(
-                Some(IsqType::AFQ4),
-                vb.device().clone(),
-                &AtomicUsize::new(0),
-                None,
-                QuantizeOntoGuard::new(),
-            )?;
-            down_proj = down_proj.apply_isq(
-                Some(IsqType::AFQ4),
-                vb.device().clone(),
-                &AtomicUsize::new(0),
-                None,
-                QuantizeOntoGuard::new(),
-            )?;
+            // once_log_info("Requantizing MoE layers to ISQ 4.");
+            // gate_up_proj = gate_up_proj.apply_isq(
+            //     Some(IsqType::AFQ4),
+            //     vb.device().clone(),
+            //     &AtomicUsize::new(0),
+            //     None,
+            //     QuantizeOntoGuard::new(),
+            // )?;
+            // down_proj = down_proj.apply_isq(
+            //     Some(IsqType::AFQ4),
+            //     vb.device().clone(),
+            //     &AtomicUsize::new(0),
+            //     None,
+            //     QuantizeOntoGuard::new(),
+            // )?;
         // }
 
         // gate_up_proj = apply_immediate_isq(gate_up_proj, base_vb.pp("gate_up_proj"))?;
