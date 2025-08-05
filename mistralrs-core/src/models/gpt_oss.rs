@@ -19,6 +19,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{chunked_attention, SdpaParams},
     device_map::DeviceMapper,
+    kv_cache::NormalCacheType,
     layers::{
         embedding, Activation, CausalMasker, GPTOSSRotaryEmbedding, GPTOSSopeScalingConfig,
         RmsNorm, Sdpa,
@@ -34,6 +35,12 @@ use crate::{
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
+
+macro_rules! is_sliding {
+    ($layer_idx:expr, $cfg:expr) => {
+        $cfg.layer_types[$layer_idx] == "sliding_window"
+    };
+}
 
 serde_default_fn!(bool, word_emb_default, false);
 
@@ -58,6 +65,7 @@ pub struct GPTOSSConfig {
     pub num_experts_per_tok: usize,
     pub sliding_window: usize,
     pub attention_bias: bool,
+    pub layer_types: Vec<String>,
 }
 
 impl GPTOSSConfig {
@@ -139,6 +147,11 @@ impl CausalSelfAttention {
             .set_nm_device(vb.clone(), loading_isq)
             .get(cfg.num_attention_heads, "sinks")?;
         let head_dim = cfg.head_dim;
+        let sliding_window = if is_sliding!(layer_idx, cfg) {
+            Some(cfg.sliding_window)
+        } else {
+            None
+        };
 
         Ok(Self {
             q_proj,
@@ -159,7 +172,7 @@ impl CausalSelfAttention {
                 ),
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
-                sliding_window: Some(cfg.sliding_window),
+                sliding_window,
             },
             sinks,
         })
@@ -169,7 +182,8 @@ impl CausalSelfAttention {
     fn forward(
         &self,
         x: &Tensor,
-        attention_mask: &Option<Tensor>,
+        attention_mask: Option<&Tensor>,
+        sliding_attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -193,6 +207,12 @@ impl CausalSelfAttention {
 
         (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
+        let mask = if self.sdpa_params.sliding_window.is_some() {
+            sliding_attention_mask
+        } else {
+            attention_mask
+        };
+
         let mut y = {
             let (k, v) = kv_cache.append(&k, &v)?;
 
@@ -201,7 +221,7 @@ impl CausalSelfAttention {
                 &q.contiguous()?,
                 &k.contiguous()?,
                 &v.contiguous()?,
-                attention_mask.clone().as_ref(),
+                mask,
                 |q_chunk, k, v, mask_chunk| {
                     let mut att = MatMul.matmul_affine_mul(
                         q_chunk,
@@ -342,34 +362,62 @@ impl Experts {
 
                     let base_vb = vb.clone();
 
-                    let is_quantized =
-                        loading_isq || vb.device().is_cuda() || should_apply_immediate_isq(&vb);
-                    let vb_gate_up_proj_proj = if is_quantized {
-                        vb.pp("gate_up_proj").set_device(Device::Cpu)
-                    } else {
-                        vb.pp("gate_up_proj")
-                    };
-                    let vb_down_proj_proj = if is_quantized {
-                        vb.pp("down_proj").set_device(Device::Cpu)
-                    } else {
-                        vb.pp("down_proj")
-                    };
-                    let mut gate_up_proj = MXFP4Layer::packed_linear_b(
-                        num_local_experts,
-                        hidden_size,
-                        intermediate_size * 2,
-                        quant_conf,
-                        false,
-                        vb_gate_up_proj_proj,
+                    // let is_quantized =
+                    //     loading_isq || vb.device().is_cuda() || should_apply_immediate_isq(&vb);
+                    assert!(loading_isq || should_apply_immediate_isq(&vb));
+                    let is_quantized = true;
+
+                    // let vb_gate_up_proj_proj = if is_quantized {
+                    //     vb.pp("gate_up_proj").set_device(Device::Cpu)
+                    // } else {
+                    //     vb.pp("gate_up_proj")
+                    // };
+                    // let vb_down_proj_proj = if is_quantized {
+                    //     vb.pp("down_proj").set_device(Device::Cpu)
+                    // } else {
+                    //     vb.pp("down_proj")
+                    // };
+                    let gu_blocks = vb.clone().set_device(Device::Cpu).get_with_hints_dtype(
+                        (
+                            num_local_experts,
+                            intermediate_size * 2,
+                            hidden_size * 4 / 32,
+                        ),
+                        "gate_up_proj_blocks",
+                        Default::default(),
+                        DType::F4,
                     )?;
-                    let mut down_proj = MXFP4Layer::packed_linear_b(
-                        num_local_experts,
-                        intermediate_size,
-                        hidden_size,
-                        quant_conf,
-                        false,
-                        vb_down_proj_proj,
+                    let gu_scales = vb.clone().set_device(Device::Cpu).get_with_hints_dtype(
+                        (num_local_experts, intermediate_size * 2, hidden_size * 32),
+                        "gate_up_proj_scales",
+                        Default::default(),
+                        DType::F8E8M0,
                     )?;
+                    let mut gate_up_proj: Arc<dyn QuantMethod> =
+                        Arc::new(MXFP4Layer::new(QuantMethodConfig::MXFP4 {
+                            blocks: gu_blocks,
+                            scales: gu_scales,
+                            bias: None,
+                        })?);
+
+                    let d_blocks = vb.clone().set_device(Device::Cpu).get_with_hints_dtype(
+                        (num_local_experts, hidden_size, intermediate_size * 4 / 32),
+                        "down_proj_blocks",
+                        Default::default(),
+                        DType::F4,
+                    )?;
+                    let d_scales = vb.clone().set_device(Device::Cpu).get_with_hints_dtype(
+                        (num_local_experts, hidden_size, intermediate_size * 32),
+                        "down_proj_scales",
+                        Default::default(),
+                        DType::F8E8M0,
+                    )?;
+                    let mut down_proj: Arc<dyn QuantMethod> =
+                        Arc::new(MXFP4Layer::new(QuantMethodConfig::MXFP4 {
+                            blocks: d_blocks,
+                            scales: d_scales,
+                            bias: None,
+                        })?);
 
                     if is_quantized {
                         gate_up_proj = Arc::new(UnquantLinear::new(
@@ -672,7 +720,8 @@ impl Block {
     fn forward(
         &self,
         x: &Tensor,
-        attention_mask: &Option<Tensor>,
+        attention_mask: Option<&Tensor>,
+        sliding_attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -683,6 +732,7 @@ impl Block {
         let x = (self.attn.forward(
             &x,
             attention_mask,
+            sliding_attention_mask,
             seqlen_offsets,
             kv_cache,
             metadata,
@@ -703,6 +753,7 @@ pub struct GPTOSSModel {
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
+    sliding_window: usize,
 }
 
 impl GPTOSSModel {
@@ -816,15 +867,23 @@ impl GPTOSSModel {
             )
         })?;
 
+        let cache_types = (0..cfg.num_hidden_layers)
+            .map(|layer_idx| {
+                is_sliding!(layer_idx, cfg)
+                    .then(|| NormalCacheType::SlidingWindow {
+                        window: cfg.sliding_window,
+                    })
+                    .unwrap_or(NormalCacheType::Normal {
+                        max_seq_len: cfg.max_position_embeddings,
+                    })
+            })
+            .collect::<Vec<_>>();
         Ok(Self {
             wte,
             blocks,
             ln_f,
             lm_head,
-            kv_cache: EitherCache::Normal(NormalCache::new(
-                cfg.num_hidden_layers,
-                cfg.max_position_embeddings,
-            )),
+            kv_cache: EitherCache::Normal(NormalCache::from_types(cache_types)),
             device: normal_loading_metadata.real_device,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
@@ -838,6 +897,7 @@ impl GPTOSSModel {
                 v_head_dim: cfg.head_dim,
             },
             mapper,
+            sliding_window: cfg.sliding_window,
         })
     }
 
@@ -857,19 +917,28 @@ impl GPTOSSModel {
     ) -> Result<Tensor> {
         let mut x = input_embeds;
         let cache = &mut self.kv_cache.normal().0;
-        let cache_for_mask = metadata
-            .as_ref()
-            .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-            .unwrap_or(cache as &dyn PastKvLenCache);
-
-        let mask = CausalMasker.make_causal_mask_matrix(
+        let attention_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
-            cache_for_mask,
+            &*cache,
             x.dtype(),
-            self.blocks[0].attn.num_attention_heads,
+            self.cfg.num_attn_heads,
         )?;
         // PagedAttention prompt chunking
-        let mask = mask.filter(|_| {
+        let attention_mask = attention_mask.filter(|_| {
+            metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true)
+        });
+        let sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+            input_ids,
+            &*cache,
+            Some(self.sliding_window),
+            x.dtype(),
+            self.cfg.num_attn_heads,
+        )?;
+        // PagedAttention prompt chunking
+        let sliding_attention_mask = sliding_attention_mask.filter(|_| {
             metadata
                 .as_ref()
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
@@ -879,7 +948,14 @@ impl GPTOSSModel {
             x = self.mapper.map(x, block_idx)?;
             x = block.forward(
                 &x,
-                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                attention_mask
+                    .as_ref()
+                    .map(|m| m.to_device(x.device()).unwrap())
+                    .as_ref(),
+                sliding_attention_mask
+                    .as_ref()
+                    .map(|m| m.to_device(x.device()).unwrap())
+                    .as_ref(),
                 seqlen_offsets,
                 &mut cache[block_idx],
                 metadata

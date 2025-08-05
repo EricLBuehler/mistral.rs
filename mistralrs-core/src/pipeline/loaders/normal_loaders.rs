@@ -199,7 +199,7 @@ impl NormalLoaderType {
             "Glm4ForCausalLM" => Ok(Self::GLM4),
             "Qwen3MoeForCausalLM" => Ok(Self::Qwen3Moe),
             "SmolLM3ForCausalLM" => Ok(Self::SmolLm3),
-            "GPTOSSForCausalLM" => Ok(Self::GPTOSS),
+            "GptOssForCausalLM" => Ok(Self::GPTOSS),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),

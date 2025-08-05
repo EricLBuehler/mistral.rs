@@ -1899,7 +1899,6 @@ pub struct GPTOSSopeScalingConfig {
     beta_fast: f32,
     beta_slow: f32,
     factor: f32,
-    #[serde(rename = "type")]
     rope_type: GPTOSSScaledRopeType,
 }
 

@@ -139,18 +139,22 @@ impl MXFP4Layer {
 
         let group_size = GROUP_SIZE as usize;
 
-        let blocks = vb.get_with_hints_dtype(
-            (out_dim, in_dim * N_BITS / 32),
-            "blocks",
-            Default::default(),
-            DType::F4,
-        )?;
-        let scales = vb.get_with_hints_dtype(
-            (out_dim, in_dim / group_size),
-            "scales",
-            Default::default(),
-            DType::F8E8M0,
-        )?;
+        let blocks = vb
+            .set_prefix(format!("{}_blocks", vb.prefix()))
+            .get_with_hints_dtype(
+                (out_dim, in_dim * N_BITS / 32),
+                "blocks",
+                Default::default(),
+                DType::F4,
+            )?;
+        let scales = vb
+            .set_prefix(format!("{}_blocks", vb.prefix()))
+            .get_with_hints_dtype(
+                (out_dim, in_dim / group_size),
+                "scales",
+                Default::default(),
+                DType::F8E8M0,
+            )?;
 
         let bias = if bias {
             Some(vb.get((out_dim,), "bias")?)
@@ -179,18 +183,22 @@ impl MXFP4Layer {
 
         let group_size = GROUP_SIZE as usize;
 
-        let blocks = vb.get_with_hints_dtype(
-            (num_local_experts, out_dim, in_dim * N_BITS / 32),
-            "blocks",
-            Default::default(),
-            DType::F4,
-        )?;
-        let scales = vb.get_with_hints_dtype(
-            (num_local_experts, out_dim, in_dim / group_size),
-            "scales",
-            Default::default(),
-            DType::F8E8M0,
-        )?;
+        let blocks = vb
+            .set_prefix(format!("{}_blocks", vb.prefix()))
+            .get_with_hints_dtype(
+                (num_local_experts, out_dim, in_dim * N_BITS / 32),
+                "blocks",
+                Default::default(),
+                DType::F4,
+            )?;
+        let scales = vb
+            .set_prefix(format!("{}_blocks", vb.prefix()))
+            .get_with_hints_dtype(
+                (num_local_experts, out_dim, in_dim / group_size),
+                "scales",
+                Default::default(),
+                DType::F8E8M0,
+            )?;
 
         let bias = if bias {
             Some(vb.get((num_local_experts, out_dim), "bias")?)
