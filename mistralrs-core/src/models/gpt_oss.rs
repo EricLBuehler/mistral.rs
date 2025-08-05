@@ -370,33 +370,29 @@ fn dequantize_impl(
     // Use rayon for parallel processing
     use rayon::prelude::*;
 
-    dbg!(outer, inner, packed_row, groups_per_row);
-    let out: Vec<f32> = (0..outer)
-        .into_par_iter()
-        .flat_map(|row| {
+    let out: Vec<f32> = codes
+        .par_chunks_exact(packed_row)
+        .enumerate()
+        .flat_map(|(row, chunk)| {
             let mut row_out = vec![0f32; inner];
-            let row_base = row * packed_row;
             let scale_base = row * groups_per_row;
 
             for g in 0..groups_per_row {
                 let scale = sc[scale_base + g];
                 let group_start = g * group_size;
 
-                // Process group elements
                 for i in 0..group_size {
                     let j = group_start + i;
                     let byte_idx = j / 2;
                     let nibble = j % 2;
 
-                    // Extract 4-bit value
-                    let byte = codes[row_base + byte_idx];
+                    let byte = chunk[byte_idx];
                     let fp4bits = if nibble == 0 {
                         byte & 0x0F
                     } else {
                         (byte >> 4) & 0x0F
                     };
 
-                    // Convert F4E2M1 to f32
                     let fp4 = F4E2M1::from_bits(fp4bits);
                     let value = fp4.to_f64() as f32;
 
@@ -523,7 +519,7 @@ impl Experts {
             (num_local_experts, 2 * intermediate_size),
             "gate_up_proj_bias",
         )?;
-        let down_proj_bias = vb.get((num_local_experts, 2 * hidden_size), "down_proj_bias")?;
+        let down_proj_bias = vb.get((num_local_experts, intermediate_size), "down_proj_bias")?;
 
         Ok(Self {
             gate_up_proj,
