@@ -4009,9 +4009,9 @@ impl DeviceMappedModelLoader for GPTOSSLoader {
             let moe_block = {
                 let h_size = cfg.hidden_size;
                 let i_size = cfg.intermediate_size;
-                let gate_proj = cfg.num_experts * h_size * i_size / weight_pack_factor;
-                let up_proj = cfg.num_experts * h_size * i_size / weight_pack_factor;
-                let down_proj = cfg.num_experts * i_size * h_size / weight_pack_factor;
+                let gate_proj = cfg.num_local_experts * h_size * i_size / weight_pack_factor;
+                let up_proj = cfg.num_local_experts * h_size * i_size / weight_pack_factor;
+                let down_proj = cfg.num_local_experts * i_size * h_size / weight_pack_factor;
 
                 gate_proj + up_proj + down_proj
             };
