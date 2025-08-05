@@ -45,11 +45,6 @@ SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-RUN curl -s https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
-    | gpg --dearmor | tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null \
-    && echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | \
-    tee /etc/apt/sources.list.d/oneAPI.list
-
 RUN <<HEREDOC
     apt-get update
     apt-get install -y --no-install-recommends \
@@ -58,15 +53,23 @@ RUN <<HEREDOC
         libssl-dev \
         curl \
         pkg-config \
-        openmpi-bin \
-        intel-oneapi-hpc-toolkit && \
+        openmpi-bin && \
 
     rm -rf /var/lib/apt/lists/*
 HEREDOC
 
+# MKL Runtime
+RUN curl -s https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
+    | gpg --dearmor | tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null \
+    && echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | \
+    tee /etc/apt/sources.list.d/oneAPI.list
+    && apt-get update \
+    && apt-get install -y intel-oneapi-hpc-toolkit
+
 COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-bench /usr/local/bin/mistralrs-bench
 COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-server /usr/local/bin/mistralrs-server
 COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-web-chat /usr/local/bin/mistralrs-web-chat
+
 # Copy chat templates for users running models which may not include them
 COPY --from=builder /mistralrs/chat_templates /chat_templates
 
