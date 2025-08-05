@@ -54,8 +54,8 @@ pub struct GPTOSSConfig {
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub tie_word_embeddings: bool,
-    pub num_experts: usize,
-    pub experts_per_token: usize,
+    pub num_local_experts: usize,
+    pub num_experts_per_tok: usize,
     pub sliding_window: usize,
     pub attention_bias: bool,
 }
@@ -479,7 +479,7 @@ impl TextExperts {
             gate_up_proj,
             down_proj,
         } = Experts::new(
-            cfg.num_experts,
+            cfg.num_local_experts,
             cfg.hidden_size,
             cfg.intermediate_size,
             quantization_config,
@@ -567,7 +567,7 @@ impl TextMoe {
         )?;
         let router = linear_no_bias(
             cfg.hidden_size,
-            cfg.num_experts,
+            cfg.num_local_experts,
             quantization_config,
             vb.pp("router"),
         )?;
@@ -583,7 +583,7 @@ impl TextMoe {
             experts,
             shared_expert,
             router,
-            topk: cfg.experts_per_token,
+            topk: cfg.num_experts_per_tok,
         })
     }
 
@@ -739,6 +739,7 @@ impl GPTOSSModel {
                 quant_cfg.get_bits_name(&vb_m)
             );
         }
+        assert_eq!(AttentionImplementation::Eager, attention_mechanism);
         let mapper = normal_loading_metadata.mapper;
 
         let wte = embedding(
