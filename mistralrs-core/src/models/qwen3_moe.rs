@@ -495,14 +495,14 @@ impl SlowMoeMlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         // Shapes and device
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
-        let device = xs.device();
 
         // Flatten tokens: xs2d: [N, H]
         let xs2d = xs.reshape(((), hidden_dim))?;
 
         // Router: logits -> softmax -> top-k indices and scores
         let router_logits = xs2d.apply(&self.gate)?; // [N, E]
-        let routing_weights_full = candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?; // [N, E]
+        let routing_weights_full =
+            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?; // [N, E]
         let indices = routing_weights_full
             .arg_sort_last_dim(false)?
             .narrow(D::Minus1, 0, self.num_experts_per_tok)?
@@ -517,7 +517,10 @@ impl SlowMoeMlp {
         let k = indices.dim(D::Minus1)?;
         let n_experts = self.experts.len();
         let total_rows = n_tokens * k;
-        let indices_cpu = indices.to_device(&Device::Cpu)?.to_dtype(DType::I64)?.to_vec2::<i64>()?; // [N,K]
+        let indices_cpu = indices
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::I64)?
+            .to_vec2::<i64>()?; // [N,K]
         let mut ids_to_sorted: Vec<i64> = Vec::with_capacity(total_rows);
         let mut ids_from_sorted: Vec<i64> = vec![-1; total_rows];
         let mut tokens_per_expert: Vec<usize> = vec![0; n_experts];
@@ -560,10 +563,12 @@ impl SlowMoeMlp {
         let mut out_chunks: Vec<Tensor> = Vec::with_capacity(n_experts);
         for e in 0..n_experts {
             let cnt = tokens_per_expert[e];
-            if cnt == 0 { continue; }
+            if cnt == 0 {
+                continue;
+            }
             let off = prefix[e];
-            let slice = grouped_in.narrow(0, off, cnt)?;   // [cnt, H]
-            let slice_bth = slice.unsqueeze(0)?;            // [1, cnt, H]
+            let slice = grouped_in.narrow(0, off, cnt)?; // [cnt, H]
+            let slice_bth = slice.unsqueeze(0)?; // [1, cnt, H]
             let out_e = self.experts[e].forward(&slice_bth)?.squeeze(0)?; // [cnt, H]
             out_chunks.push(out_e);
         }
@@ -576,7 +581,7 @@ impl SlowMoeMlp {
         // Unpermute back to original row order and shape [N, K, H]
         let ids_from_sorted_t = Tensor::new(ids_from_sorted.as_slice(), &device)?;
         let y = grouped_out.index_select(&ids_from_sorted_t, 0)?; // [N*K, H]
-        let y = y.reshape((n_tokens, k, hidden_dim))?;            // [N, K, H]
+        let y = y.reshape((n_tokens, k, hidden_dim))?; // [N, K, H]
 
         // Combine with routing scores: weighted sum across K
         let y = y
@@ -634,9 +639,7 @@ impl SlowMoeMlp {
                         candle_core::bail!("indices must match xs batch/time dims");
                     }
                 } else if expected_n != t {
-                    candle_core::bail!(
-                        "indices [B,T,K] must flatten to N == T when xs is [N,H]"
-                    );
+                    candle_core::bail!("indices [B,T,K] must flatten to N == T when xs is [N,H]");
                 }
                 (ik, indices.reshape((expected_n, ik))?)
             }
