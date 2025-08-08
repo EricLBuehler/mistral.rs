@@ -262,8 +262,8 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
         let tk = p.tokens[i as usize].clone();
         tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
     }
-    if unk.is_some() {
-        let tk = p.tokens[unk.unwrap() as usize].clone();
+    if let Some(u) = unk {
+        let tk = p.tokens[u as usize].clone();
         tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
     }
 

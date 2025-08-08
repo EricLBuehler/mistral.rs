@@ -275,7 +275,7 @@ impl QuantizedSerde for RowParallelLayer {
     fn name(&self) -> &'static str {
         self.weight.name()
     }
-    fn serialize(&self) -> Result<std::borrow::Cow<[u8]>> {
+    fn serialize(&self) -> Result<std::borrow::Cow<'_, [u8]>> {
         self.weight.serialize_with_bias(self.bias.clone())
     }
     fn deserialize(
@@ -583,7 +583,7 @@ impl QuantizedSerde for ColumnParallelLayer {
     fn name(&self) -> &'static str {
         self.weight.name()
     }
-    fn serialize(&self) -> Result<std::borrow::Cow<[u8]>> {
+    fn serialize(&self) -> Result<std::borrow::Cow<'_, [u8]>> {
         self.weight.serialize_with_bias(self.bias.clone())
     }
     fn deserialize(
@@ -839,7 +839,7 @@ impl QuantizedSerde for ReplicatedLayer {
     fn name(&self) -> &'static str {
         self.0.name()
     }
-    fn serialize(&self) -> Result<std::borrow::Cow<[u8]>> {
+    fn serialize(&self) -> Result<std::borrow::Cow<'_, [u8]>> {
         self.0.serialize()
     }
     fn deserialize(

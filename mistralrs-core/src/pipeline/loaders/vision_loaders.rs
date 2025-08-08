@@ -4610,6 +4610,7 @@ impl DeviceMappedModelLoader for VLlama4Loader {
 /// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 pub struct Gemma3nLoader;
 
+#[allow(dead_code)]
 pub struct Gemma3nPrefixer;
 
 impl MultimodalPromptPrefixer for Gemma3nPrefixer {

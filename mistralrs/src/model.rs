@@ -67,7 +67,7 @@ impl Model {
     pub async fn stream_chat_request<R: RequestLike>(
         &self,
         mut request: R,
-    ) -> anyhow::Result<Stream> {
+    ) -> anyhow::Result<Stream<'_>> {
         let (tx, rx) = channel(1);
 
         let (tools, tool_choice) = if let Some((a, b)) = request.take_tools() {
