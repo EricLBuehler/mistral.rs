@@ -195,8 +195,8 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
 
     // Add special tokens (bos, eos, unk):
     for i in [bos, Some(eos), Some(unk)] {
-        if i.is_some() {
-            let tk = p.tokens[i.unwrap() as usize].clone();
+        if let Some(v) = i {
+            let tk = p.tokens[v as usize].clone();
             tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
         }
     }
@@ -267,8 +267,8 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
     )));
 
     for i in [bos, Some(eos)] {
-        if i.is_some() {
-            let tk = p.tokens[i.unwrap() as usize].clone();
+        if let Some(v) = i {
+            let tk = p.tokens[v as usize].clone();
             tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
         }
     }

@@ -69,7 +69,7 @@ impl FusedMoe {
             .arg_sort_last_dim(false)?
             .narrow(D::Minus1, 0, self.num_experts_per_tok)?
             .contiguous()?
-            .to_device(&xs.device())?;
+            .to_device(xs.device())?;
         let mut scores = routing_weights.gather(&indices, D::Minus1)?;
 
         if self.norm_topk_prob {
@@ -80,10 +80,8 @@ impl FusedMoe {
             let xs = xs.reshape((num_tokens, 1, hidden_dim))?;
             let gate = self.gate_experts.indexed_moe_forward(&xs, &indices)?;
             let up = self.up_experts.indexed_moe_forward(&xs, &indices)?;
-            let xs = self
-                .down_experts
-                .indexed_moe_forward(&(up * gate.apply(&self.act)?)?, &indices)?;
-            xs
+            self.down_experts
+                .indexed_moe_forward(&(up * gate.apply(&self.act)?)?, &indices)?
         };
         ys.broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
             .sum(D::Minus2)?
