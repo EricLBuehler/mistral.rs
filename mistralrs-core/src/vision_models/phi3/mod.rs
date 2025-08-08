@@ -737,124 +737,125 @@ impl ImageEmbedding {
         if positions.dim(0)? > 0 {
             select = true;
             // input_ids[positions[:, 0], positions[:, 1]]
-            if self.use_hd_transform && image_sizes.is_some() {
-                assert_eq!(pixel_values.dims().len(), 5);
-                let bs = pixel_values.dim(0)?;
-                let img_features = self.get_image_features(&pixel_values.flatten(0, 1)?)?;
-                let base_feat_dim = (img_features.dims()[1] as f32).sqrt() as usize;
-                assert_eq!(base_feat_dim, 24);
+            if self.use_hd_transform {
+                if let Some(image_sizes_ref) = image_sizes.as_ref() {
+                    assert_eq!(pixel_values.dims().len(), 5);
+                    let bs = pixel_values.dim(0)?;
+                    let img_features = self.get_image_features(&pixel_values.flatten(0, 1)?)?;
+                    let base_feat_dim = (img_features.dims()[1] as f32).sqrt() as usize;
+                    assert_eq!(base_feat_dim, 24);
 
-                // bs x max_num_crops x (24x24) x C
-                let img_features =
-                    img_features.reshape((bs, (), base_feat_dim.pow(2), self.image_dim_out))?;
-                let C = self.image_dim_out;
-                let H = base_feat_dim;
+                    // bs x max_num_crops x (24x24) x C
+                    let img_features =
+                        img_features.reshape((bs, (), base_feat_dim.pow(2), self.image_dim_out))?;
+                    let C = self.image_dim_out;
+                    let H = base_feat_dim;
 
-                let mut output_imgs = Vec::new();
-                let mut output_len = Vec::new();
-                for bs_ in 0..bs {
-                    let (h, w) = image_sizes.as_ref().unwrap()[bs_];
-                    let h = h / 336;
-                    let w = w / 336;
-                    let B_ = h * w;
+                    let mut output_imgs = Vec::new();
+                    let mut output_len = Vec::new();
+                    for (bs_, &(h, w)) in image_sizes_ref.iter().enumerate().take(bs) {
+                        let h = h / 336;
+                        let w = w / 336;
+                        let B_ = h * w;
 
-                    // 1 x (24x24) x 1024
-                    let global_img_feature = img_features.i((bs_, ..1))?;
+                        // 1 x (24x24) x 1024
+                        let global_img_feature = img_features.i((bs_, ..1))?;
 
-                    // 1 x 12 x 12 x 4096
-                    let glb_img = global_img_feature
-                        .reshape((1, H, H, C))?
-                        .reshape((1, H / 2, 2, H / 2, 2, C))?
-                        .contiguous()?
-                        .permute((0, 1, 3, 2, 4, 5))?
-                        .reshape((1, H / 2, H / 2, 4 * C))?
-                        .contiguous()?;
-                    let temp_glbl_gn = self
-                        .sub_gn
-                        .as_ref()
-                        .expect("Need `sub_gn` if `use_hd_transform`")
-                        .repeat((1, H / 2, 1, 1))?;
+                        // 1 x 12 x 12 x 4096
+                        let glb_img = global_img_feature
+                            .reshape((1, H, H, C))?
+                            .reshape((1, H / 2, 2, H / 2, 2, C))?
+                            .contiguous()?
+                            .permute((0, 1, 3, 2, 4, 5))?
+                            .reshape((1, H / 2, H / 2, 4 * C))?
+                            .contiguous()?;
+                        let temp_glbl_gn = self
+                            .sub_gn
+                            .as_ref()
+                            .expect("Need `sub_gn` if `use_hd_transform`")
+                            .repeat((1, H / 2, 1, 1))?;
 
-                    // 1 x 156 x 4096
-                    let glb_img =
-                        Tensor::cat(&[glb_img, temp_glbl_gn], 2)?.reshape((1, (), 4 * C))?;
+                        // 1 x 156 x 4096
+                        let glb_img =
+                            Tensor::cat(&[glb_img, temp_glbl_gn], 2)?.reshape((1, (), 4 * C))?;
 
-                    // (max_num_crops-1) x (12x12) x C
-                    let sub_img = img_features.i((bs_, 1..))?;
+                        // (max_num_crops-1) x (12x12) x C
+                        let sub_img = img_features.i((bs_, 1..))?;
 
-                    // 16x574x1024
-                    // Get rid of padding sub_img
-                    let sub_img = sub_img.i(..B_)?;
+                        // 16x574x1024
+                        // Get rid of padding sub_img
+                        let sub_img = sub_img.i(..B_)?;
 
-                    // (num_crops, 12, 2, 12, 2, 1024) -> (num_crops, 12, 12, 2, 2, 1024) -> (num_crops, 12*12, 4*1024)
-                    let sub_img = sub_img
-                        .reshape((B_, H, H, C))?
-                        .reshape((B_, H / 2, 2, H / 2, 2, C))?
-                        .contiguous()?
-                        .permute((0, 1, 3, 2, 4, 5))?
-                        .reshape((B_, (), 4 * C))?
-                        .contiguous()?;
-                    let sub_img = sub_img
-                        .reshape(BigShapeWithOneHole((1usize, h, w, 12usize, 12usize, ())))?
-                        .permute((0, 1, 3, 2, 4, 5))?
-                        .reshape((1, h * 12, w * 12, 4 * C))?;
-                    let temp_sub_gn = self
-                        .sub_gn
-                        .as_ref()
-                        .expect("Need `sub_gn` if `use_hd_transform`")
-                        .repeat((1, h * 12, 1, 1))?;
+                        // (num_crops, 12, 2, 12, 2, 1024) -> (num_crops, 12, 12, 2, 2, 1024) -> (num_crops, 12*12, 4*1024)
+                        let sub_img = sub_img
+                            .reshape((B_, H, H, C))?
+                            .reshape((B_, H / 2, 2, H / 2, 2, C))?
+                            .contiguous()?
+                            .permute((0, 1, 3, 2, 4, 5))?
+                            .reshape((B_, (), 4 * C))?
+                            .contiguous()?;
+                        let sub_img = sub_img
+                            .reshape(BigShapeWithOneHole((1usize, h, w, 12usize, 12usize, ())))?
+                            .permute((0, 1, 3, 2, 4, 5))?
+                            .reshape((1, h * 12, w * 12, 4 * C))?;
+                        let temp_sub_gn = self
+                            .sub_gn
+                            .as_ref()
+                            .expect("Need `sub_gn` if `use_hd_transform`")
+                            .repeat((1, h * 12, 1, 1))?;
 
-                    let sub_img =
-                        Tensor::cat(&[sub_img, temp_sub_gn], 2)?.reshape((1, (), 4 * C))?;
+                        let sub_img =
+                            Tensor::cat(&[sub_img, temp_sub_gn], 2)?.reshape((1, (), 4 * C))?;
 
-                    // (1, num_img_tokens, 1024*4)
+                        // (1, num_img_tokens, 1024*4)
 
-                    match self.hd_transform_order.as_str() {
-                        "glb_sub" => {
-                            output_imgs.push(Tensor::cat(
-                                &[
-                                    glb_img,
-                                    self.glb_gn
-                                        .as_ref()
-                                        .expect("Need `glb_gn` if `use_hd_transform`")
-                                        .clone(),
-                                    sub_img,
-                                ],
-                                1,
-                            )?);
+                        match self.hd_transform_order.as_str() {
+                            "glb_sub" => {
+                                output_imgs.push(Tensor::cat(
+                                    &[
+                                        glb_img,
+                                        self.glb_gn
+                                            .as_ref()
+                                            .expect("Need `glb_gn` if `use_hd_transform`")
+                                            .clone(),
+                                        sub_img,
+                                    ],
+                                    1,
+                                )?);
+                            }
+                            "sub_glb" => {
+                                output_imgs.push(Tensor::cat(
+                                    &[
+                                        sub_img,
+                                        self.glb_gn
+                                            .as_ref()
+                                            .expect("Need `glb_gn` if `use_hd_transform`")
+                                            .clone(),
+                                        glb_img,
+                                    ],
+                                    1,
+                                )?);
+                            }
+                            other => {
+                                candle_core::bail!("Invalid hd_transform_order=`{other}`");
+                            }
                         }
-                        "sub_glb" => {
-                            output_imgs.push(Tensor::cat(
-                                &[
-                                    sub_img,
-                                    self.glb_gn
-                                        .as_ref()
-                                        .expect("Need `glb_gn` if `use_hd_transform`")
-                                        .clone(),
-                                    glb_img,
-                                ],
-                                1,
-                            )?);
-                        }
-                        other => {
-                            candle_core::bail!("Invalid hd_transform_order=`{other}`");
-                        }
+
+                        let temp_len = (h * w + 1) * 144 + 1 + (h + 1) * 12;
+                        assert_eq!(temp_len, output_imgs.last().unwrap().dims()[1]);
+                        output_len.push(temp_len);
                     }
 
-                    let temp_len = (h * w + 1) * 144 + 1 + (h + 1) * 12;
-                    assert_eq!(temp_len, output_imgs.last().unwrap().dims()[1]);
-                    output_len.push(temp_len);
+                    hd_transform = Some(output_len);
+                    let mut image_set_tensor_inner = Vec::new();
+                    for img in output_imgs {
+                        let layerout = self
+                            .layers
+                            .forward(&img.to_device(&target_dev)?.to_dtype(target_dtype)?)?;
+                        image_set_tensor_inner.push(layerout);
+                    }
+                    image_set_tensor = Some(Either::Left(image_set_tensor_inner));
                 }
-
-                hd_transform = Some(output_len);
-                let mut image_set_tensor_inner = Vec::new();
-                for img in output_imgs {
-                    let layerout = self
-                        .layers
-                        .forward(&img.to_device(&target_dev)?.to_dtype(target_dtype)?)?;
-                    image_set_tensor_inner.push(layerout);
-                }
-                image_set_tensor = Some(Either::Left(image_set_tensor_inner));
             } else if pixel_values.dims().len() == 4 {
                 let tt = self
                     .get_image_features(pixel_values)?

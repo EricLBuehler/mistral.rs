@@ -325,10 +325,10 @@ impl QuantizedSerde for AfqLayer {
     fn isq_serde_supported(&self) -> bool {
         true
     }
-    fn serialize(&self) -> Result<Cow<[u8]>> {
+    fn serialize(&self) -> Result<Cow<'_, [u8]>> {
         self.serialize_with_bias(self.bias.clone())
     }
-    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<[u8]>> {
+    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<'_, [u8]>> {
         let mut buffer = Vec::new();
 
         // Version is always first!

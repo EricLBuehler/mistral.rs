@@ -556,7 +556,7 @@ pub trait QuantizedSerde {
     fn isq_serde_supported(&self) -> bool {
         false
     }
-    fn serialize(&self) -> Result<Cow<[u8]>> {
+    fn serialize(&self) -> Result<Cow<'_, [u8]>> {
         candle_core::bail!("`QuantizedSerde::serialize` is not supported.")
     }
     fn deserialize(
@@ -581,7 +581,7 @@ pub trait QuantizedSerde {
         candle_core::bail!("`QuantizedSerde::deserialize_ext_bias` is not supported.")
     }
     /// NOT meant for external calling
-    fn serialize_with_bias(&self, _bias: Option<Tensor>) -> Result<Cow<[u8]>> {
+    fn serialize_with_bias(&self, _bias: Option<Tensor>) -> Result<Cow<'_, [u8]>> {
         candle_core::bail!("`QuantizedSerde::serialize_with_bias` is not supported.")
     }
 }
