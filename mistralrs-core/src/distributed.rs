@@ -26,16 +26,13 @@ use crate::{DeviceMapSetting, IsqOrganization, ModelPaths, Request};
 pub(crate) const IS_DAEMON_FLAG: &str = "__MISTRALRS_DAEMON_INTERNAL";
 
 pub fn is_daemon() -> bool {
-    #[cfg(feature = "cuda")]
-    {
+    if cfg!(feature = "cuda") && !cfg!(feature = "ring") {
         std::env::var(IS_DAEMON_FLAG).is_ok()
-    }
-    #[cfg(feature = "ring")]
-    {
+    } else if cfg!(feature = "ring") {
         !RingConfig::load().is_master_rank()
+    } else {
+        false
     }
-    #[cfg(not(any(feature = "cuda", feature = "ring")))]
-    false
 }
 
 pub fn nccl_daemon_replicator(request_sender: Sender<Request>) {
