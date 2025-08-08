@@ -40,15 +40,15 @@ struct PropsGGUF {
     scores: Option<Vec<f32>>,
     merges: Option<Vec<String>>,
     unk: Option<u32>,
+    bos: Option<u32>,
     eos: u32,
-    bos: u32,
 }
 
 impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
     type Error = anyhow::Error;
 
     fn try_from(c: ContentMetadata) -> Result<Self, Self::Error> {
-        let required = ["model", "tokens", "eos_token_id", "bos_token_id"];
+        let required = ["model", "tokens", "eos_token_id"];
         c.has_required_keys(&required)?;
 
         let props = Self {
@@ -59,7 +59,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             merges: c.get_value("merges").ok(),
             unk: c.get_value("unknown_token_id").ok(),
             eos: c.get_value("eos_token_id")?,
-            bos: c.get_value("bos_token_id")?,
+            bos: c.get_value("bos_token_id").ok(),
         };
 
         Ok(props)
@@ -130,9 +130,15 @@ pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
         _ => None,
     };
 
+    let bos = if props.bos.is_some() {
+        Some(props.tokens[props.bos.unwrap() as usize].clone())
+    } else {
+        None
+    };
+
     Ok(GgufTokenizerConversion {
         tokenizer,
-        bos: Some(props.tokens[props.bos as usize].clone()),
+        bos,
         eos: Some(props.tokens[props.eos as usize].clone()),
         unk,
     })
@@ -188,9 +194,11 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
     )?;
 
     // Add special tokens (bos, eos, unk):
-    for i in [bos, eos, unk] {
-        let tk = p.tokens[i as usize].clone();
-        tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
+    for i in [bos, Some(eos), Some(unk)] {
+        if i.is_some() {
+            let tk = p.tokens[i.unwrap() as usize].clone();
+            tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
+        }
     }
     Ok((tokenizer, TokenizerKind::Unigram))
 }
@@ -218,7 +226,7 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
         vocab.insert(token.clone(), i as u32);
     }
 
-    let PropsGGUF { eos, bos, unk, .. } = *p;
+    let PropsGGUF { bos, eos, unk, .. } = *p;
 
     let mut bpe = BpeBuilder::new().vocab_and_merges(vocab, merges);
     if let Some(unk) = unk {
@@ -258,9 +266,11 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
         false, false, false,
     )));
 
-    for i in [bos, eos] {
-        let tk = p.tokens[i as usize].clone();
-        tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
+    for i in [bos, Some(eos)] {
+        if i.is_some() {
+            let tk = p.tokens[i.unwrap() as usize].clone();
+            tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
+        }
     }
     if unk.is_some() {
         let tk = p.tokens[unk.unwrap() as usize].clone();
