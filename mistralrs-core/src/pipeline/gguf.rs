@@ -522,14 +522,20 @@ impl Loader for GGUFLoader {
             Model::Qwen3MoE(ref model) => model.cache.normal().0.len(),
         };
 
-        if chat_template.bos_token.is_none() && bos.is_some() {
-            chat_template.bos_token = Some(BeginEndUnkPadTok(Either::Left(bos.unwrap())));
+        if chat_template.bos_token.is_none() {
+            if let Some(v) = bos {
+                chat_template.bos_token = Some(BeginEndUnkPadTok(Either::Left(v)));
+            }
         }
-        if chat_template.eos_token.is_none() && eos.is_some() {
-            chat_template.eos_token = Some(BeginEndUnkPadTok(Either::Left(eos.unwrap())));
+        if chat_template.eos_token.is_none() {
+            if let Some(v) = eos {
+                chat_template.eos_token = Some(BeginEndUnkPadTok(Either::Left(v)));
+            }
         }
-        if chat_template.unk_token.is_none() && unk.is_some() {
-            chat_template.unk_token = Some(BeginEndUnkPadTok(Either::Left(unk.unwrap())));
+        if chat_template.unk_token.is_none() {
+            if let Some(v) = unk {
+                chat_template.unk_token = Some(BeginEndUnkPadTok(Either::Left(v)));
+            }
         }
 
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);

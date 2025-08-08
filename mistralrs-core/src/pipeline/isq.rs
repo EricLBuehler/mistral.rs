@@ -39,7 +39,7 @@ impl safetensors::tensor::View for CowBytesView<'_> {
         &self.shape
     }
 
-    fn data(&self) -> Cow<[u8]> {
+    fn data(&self) -> Cow<'_, [u8]> {
         assert!(matches!(self.data, Cow::Borrowed(_)));
         // Cloning a `Cow` is cheap (only clones the enum, not the data).
         self.data.clone()

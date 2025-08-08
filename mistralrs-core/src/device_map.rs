@@ -470,6 +470,7 @@ impl DeviceMapper for NcclDeviceMapper {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 /// A device mapper which does device mapping per hidden layer.
 pub struct NcclPipelineParallelMapper {
     mappings: Vec<(Arc<mistralrs_quant::Comm>, Device)>,

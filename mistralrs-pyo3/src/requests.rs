@@ -268,7 +268,7 @@ impl ChatCompletionRequest {
                     PyErr,
                 >(Either::Right(prompt))
             } else {
-                return Err(PyTypeError::new_err("Expected a string or list of dicts."));
+                Err(PyTypeError::new_err("Expected a string or list of dicts."))
             }
         })?;
         Ok(Self {
