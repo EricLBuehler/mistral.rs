@@ -203,7 +203,7 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
     }
 
     /// Schedule all sequences based on their state and the available space.
-    pub fn schedule(&mut self, logger: &IntervalLogger) -> DefaultSchedulerOutput {
+    pub fn schedule(&mut self, logger: &IntervalLogger) -> DefaultSchedulerOutput<'_> {
         // Filter out all done sequences
         let running = std::mem::take(&mut self.running);
         let mut waiting = std::mem::take(&mut self.waiting);
