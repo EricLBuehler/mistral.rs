@@ -275,7 +275,7 @@
 <a href=#275 id=275 data-nosnippet>275</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
 <a href=#276 id=276 data-nosnippet>276</a>        <span class="string">"bnb-linear"
 <a href=#277 id=277 data-nosnippet>277</a>    </span>}
-<a href=#278 id=278 data-nosnippet>278</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
+<a href=#278 id=278 data-nosnippet>278</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;<span class="lifetime">'_</span>, [u8]&gt;&gt; {
 <a href=#279 id=279 data-nosnippet>279</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"BitsAndBytes quantization does not support UQFF serialization"</span>)
 <a href=#280 id=280 data-nosnippet>280</a>    }
 <a href=#281 id=281 data-nosnippet>281</a>

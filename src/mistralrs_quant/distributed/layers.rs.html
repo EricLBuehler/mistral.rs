@@ -275,7 +275,7 @@
 <a href=#275 id=275 data-nosnippet>275</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
 <a href=#276 id=276 data-nosnippet>276</a>        <span class="self">self</span>.weight.name()
 <a href=#277 id=277 data-nosnippet>277</a>    }
-<a href=#278 id=278 data-nosnippet>278</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;std::borrow::Cow&lt;[u8]&gt;&gt; {
+<a href=#278 id=278 data-nosnippet>278</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;std::borrow::Cow&lt;<span class="lifetime">'_</span>, [u8]&gt;&gt; {
 <a href=#279 id=279 data-nosnippet>279</a>        <span class="self">self</span>.weight.serialize_with_bias(<span class="self">self</span>.bias.clone())
 <a href=#280 id=280 data-nosnippet>280</a>    }
 <a href=#281 id=281 data-nosnippet>281</a>    <span class="kw">fn </span>deserialize(
@@ -583,7 +583,7 @@
 <a href=#583 id=583 data-nosnippet>583</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
 <a href=#584 id=584 data-nosnippet>584</a>        <span class="self">self</span>.weight.name()
 <a href=#585 id=585 data-nosnippet>585</a>    }
-<a href=#586 id=586 data-nosnippet>586</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;std::borrow::Cow&lt;[u8]&gt;&gt; {
+<a href=#586 id=586 data-nosnippet>586</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;std::borrow::Cow&lt;<span class="lifetime">'_</span>, [u8]&gt;&gt; {
 <a href=#587 id=587 data-nosnippet>587</a>        <span class="self">self</span>.weight.serialize_with_bias(<span class="self">self</span>.bias.clone())
 <a href=#588 id=588 data-nosnippet>588</a>    }
 <a href=#589 id=589 data-nosnippet>589</a>    <span class="kw">fn </span>deserialize(
@@ -839,7 +839,7 @@
 <a href=#839 id=839 data-nosnippet>839</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
 <a href=#840 id=840 data-nosnippet>840</a>        <span class="self">self</span>.<span class="number">0</span>.name()
 <a href=#841 id=841 data-nosnippet>841</a>    }
-<a href=#842 id=842 data-nosnippet>842</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;std::borrow::Cow&lt;[u8]&gt;&gt; {
+<a href=#842 id=842 data-nosnippet>842</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;std::borrow::Cow&lt;<span class="lifetime">'_</span>, [u8]&gt;&gt; {
 <a href=#843 id=843 data-nosnippet>843</a>        <span class="self">self</span>.<span class="number">0</span>.serialize()
 <a href=#844 id=844 data-nosnippet>844</a>    }
 <a href=#845 id=845 data-nosnippet>845</a>    <span class="kw">fn </span>deserialize(

@@ -67,7 +67,7 @@
 <a href=#67 id=67 data-nosnippet>67</a>    </span><span class="kw">pub async fn </span>stream_chat_request&lt;R: RequestLike&gt;(
 <a href=#68 id=68 data-nosnippet>68</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#69 id=69 data-nosnippet>69</a>        <span class="kw-2">mut </span>request: R,
-<a href=#70 id=70 data-nosnippet>70</a>    ) -&gt; anyhow::Result&lt;Stream&gt; {
+<a href=#70 id=70 data-nosnippet>70</a>    ) -&gt; anyhow::Result&lt;Stream&lt;<span class="lifetime">'_</span>&gt;&gt; {
 <a href=#71 id=71 data-nosnippet>71</a>        <span class="kw">let </span>(tx, rx) = channel(<span class="number">1</span>);
 <a href=#72 id=72 data-nosnippet>72</a>
 <a href=#73 id=73 data-nosnippet>73</a>        <span class="kw">let </span>(tools, tool_choice) = <span class="kw">if let </span><span class="prelude-val">Some</span>((a, b)) = request.take_tools() {

@@ -188,10 +188,10 @@
 <a href=#188 id=188 data-nosnippet>188</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
 <a href=#189 id=189 data-nosnippet>189</a>        <span class="string">"fp8-linear"
 <a href=#190 id=190 data-nosnippet>190</a>    </span>}
-<a href=#191 id=191 data-nosnippet>191</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
+<a href=#191 id=191 data-nosnippet>191</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;<span class="lifetime">'_</span>, [u8]&gt;&gt; {
 <a href=#192 id=192 data-nosnippet>192</a>        <span class="self">self</span>.serialize_with_bias(<span class="self">self</span>.lin.bias().cloned())
 <a href=#193 id=193 data-nosnippet>193</a>    }
-<a href=#194 id=194 data-nosnippet>194</a>    <span class="kw">fn </span>serialize_with_bias(<span class="kw-2">&amp;</span><span class="self">self</span>, bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
+<a href=#194 id=194 data-nosnippet>194</a>    <span class="kw">fn </span>serialize_with_bias(<span class="kw-2">&amp;</span><span class="self">self</span>, bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;<span class="lifetime">'_</span>, [u8]&gt;&gt; {
 <a href=#195 id=195 data-nosnippet>195</a>        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Vec::new();
 <a href=#196 id=196 data-nosnippet>196</a>
 <a href=#197 id=197 data-nosnippet>197</a>        <span class="comment">// Version is always first!

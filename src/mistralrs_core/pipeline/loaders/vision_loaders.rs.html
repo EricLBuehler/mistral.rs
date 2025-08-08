@@ -4610,868 +4610,869 @@
 <a href=#4610 id=4610 data-nosnippet>4610</a>/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 <a href=#4611 id=4611 data-nosnippet>4611</a></span><span class="kw">pub struct </span>Gemma3nLoader;
 <a href=#4612 id=4612 data-nosnippet>4612</a>
-<a href=#4613 id=4613 data-nosnippet>4613</a><span class="kw">pub struct </span>Gemma3nPrefixer;
-<a href=#4614 id=4614 data-nosnippet>4614</a>
-<a href=#4615 id=4615 data-nosnippet>4615</a><span class="kw">impl </span>MultimodalPromptPrefixer <span class="kw">for </span>Gemma3nPrefixer {
-<a href=#4616 id=4616 data-nosnippet>4616</a>    <span class="kw">fn </span>prefix_image(<span class="kw-2">&amp;</span><span class="self">self</span>, _image_indexes: Vec&lt;usize&gt;, prompt: <span class="kw-2">&amp;</span>str) -&gt; String {
-<a href=#4617 id=4617 data-nosnippet>4617</a>        prompt.to_string()
-<a href=#4618 id=4618 data-nosnippet>4618</a>    }
-<a href=#4619 id=4619 data-nosnippet>4619</a>}
-<a href=#4620 id=4620 data-nosnippet>4620</a>
-<a href=#4621 id=4621 data-nosnippet>4621</a><span class="kw">impl </span>VisionModelLoader <span class="kw">for </span>Gemma3nLoader {
-<a href=#4622 id=4622 data-nosnippet>4622</a>    <span class="kw">fn </span>load(
-<a href=#4623 id=4623 data-nosnippet>4623</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#4624 id=4624 data-nosnippet>4624</a>        config: <span class="kw-2">&amp;</span>str,
-<a href=#4625 id=4625 data-nosnippet>4625</a>        vb: ShardedVarBuilder,
-<a href=#4626 id=4626 data-nosnippet>4626</a>        normal_loading_metadata: NormalLoadingMetadata,
-<a href=#4627 id=4627 data-nosnippet>4627</a>        attention_mechanism: AttentionImplementation,
-<a href=#4628 id=4628 data-nosnippet>4628</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>VisionModel + Send + Sync&gt;&gt; {
-<a href=#4629 id=4629 data-nosnippet>4629</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#4630 id=4630 data-nosnippet>4630</a>        <span class="prelude-val">Ok</span>(Box::new(Gemma3nModel::new(
-<a href=#4631 id=4631 data-nosnippet>4631</a>            <span class="kw-2">&amp;</span>cfg,
-<a href=#4632 id=4632 data-nosnippet>4632</a>            vb,
-<a href=#4633 id=4633 data-nosnippet>4633</a>            <span class="self">self</span>.is_gptx(config),
-<a href=#4634 id=4634 data-nosnippet>4634</a>            normal_loading_metadata,
-<a href=#4635 id=4635 data-nosnippet>4635</a>            attention_mechanism,
-<a href=#4636 id=4636 data-nosnippet>4636</a>        )<span class="question-mark">?</span>))
-<a href=#4637 id=4637 data-nosnippet>4637</a>    }
-<a href=#4638 id=4638 data-nosnippet>4638</a>    <span class="kw">fn </span>is_gptx(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; bool {
-<a href=#4639 id=4639 data-nosnippet>4639</a>        <span class="bool-val">true
-<a href=#4640 id=4640 data-nosnippet>4640</a>    </span>}
-<a href=#4641 id=4641 data-nosnippet>4641</a>    <span class="kw">fn </span>get_config_repr(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>Debug&gt;&gt; {
-<a href=#4642 id=4642 data-nosnippet>4642</a>        <span class="kw">let </span>config: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#4643 id=4643 data-nosnippet>4643</a>        <span class="prelude-val">Ok</span>(Box::new(config))
-<a href=#4644 id=4644 data-nosnippet>4644</a>    }
-<a href=#4645 id=4645 data-nosnippet>4645</a>    <span class="kw">fn </span>get_processor(
-<a href=#4646 id=4646 data-nosnippet>4646</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#4647 id=4647 data-nosnippet>4647</a>        _config: <span class="kw-2">&amp;</span>str,
-<a href=#4648 id=4648 data-nosnippet>4648</a>        processor_config: <span class="prelude-ty">Option</span>&lt;ProcessorConfig&gt;,
-<a href=#4649 id=4649 data-nosnippet>4649</a>        _preprocessor_config: PreProcessorConfig,
-<a href=#4650 id=4650 data-nosnippet>4650</a>        _max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
-<a href=#4651 id=4651 data-nosnippet>4651</a>    ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt; {
-<a href=#4652 id=4652 data-nosnippet>4652</a>        <span class="comment">// Handle the Gemma 3 1b case here
-<a href=#4653 id=4653 data-nosnippet>4653</a>        </span>Arc::new(Gemma3nProcessor::new(
-<a href=#4654 id=4654 data-nosnippet>4654</a>            processor_config.unwrap_or_default(),
-<a href=#4655 id=4655 data-nosnippet>4655</a>            <span class="bool-val">true</span>,
-<a href=#4656 id=4656 data-nosnippet>4656</a>        ))
-<a href=#4657 id=4657 data-nosnippet>4657</a>    }
-<a href=#4658 id=4658 data-nosnippet>4658</a>    <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; bool {
-<a href=#4659 id=4659 data-nosnippet>4659</a>        <span class="bool-val">false
-<a href=#4660 id=4660 data-nosnippet>4660</a>    </span>}
-<a href=#4661 id=4661 data-nosnippet>4661</a>    <span class="kw">fn </span>supports_prefix_cacher(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; bool {
-<a href=#4662 id=4662 data-nosnippet>4662</a>        <span class="bool-val">true
-<a href=#4663 id=4663 data-nosnippet>4663</a>    </span>}
-<a href=#4664 id=4664 data-nosnippet>4664</a>    <span class="kw">fn </span>prefixer(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; Arc&lt;<span class="kw">dyn </span>MultimodalPromptPrefixer&gt; {
-<a href=#4665 id=4665 data-nosnippet>4665</a>        Arc::new(Gemma3Prefixer)
-<a href=#4666 id=4666 data-nosnippet>4666</a>    }
-<a href=#4667 id=4667 data-nosnippet>4667</a>    <span class="kw">fn </span>modalities(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Modalities&gt; {
-<a href=#4668 id=4668 data-nosnippet>4668</a>        <span class="prelude-val">Ok</span>(Modalities {
-<a href=#4669 id=4669 data-nosnippet>4669</a>            input: <span class="macro">vec!</span>[
-<a href=#4670 id=4670 data-nosnippet>4670</a>                SupportedModality::Text,
-<a href=#4671 id=4671 data-nosnippet>4671</a>                SupportedModality::Vision,
-<a href=#4672 id=4672 data-nosnippet>4672</a>                SupportedModality::Audio,
-<a href=#4673 id=4673 data-nosnippet>4673</a>            ],
-<a href=#4674 id=4674 data-nosnippet>4674</a>            output: <span class="macro">vec!</span>[SupportedModality::Text],
-<a href=#4675 id=4675 data-nosnippet>4675</a>        })
-<a href=#4676 id=4676 data-nosnippet>4676</a>    }
-<a href=#4677 id=4677 data-nosnippet>4677</a>}
-<a href=#4678 id=4678 data-nosnippet>4678</a>
-<a href=#4679 id=4679 data-nosnippet>4679</a><span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>Gemma3nLoader {
-<a href=#4680 id=4680 data-nosnippet>4680</a>    <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
-<a href=#4681 id=4681 data-nosnippet>4681</a>        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
-<a href=#4682 id=4682 data-nosnippet>4682</a>            Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4683 id=4683 data-nosnippet>4683</a>            <span class="comment">// Language model attention
-<a href=#4684 id=4684 data-nosnippet>4684</a>            </span>Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4685 id=4685 data-nosnippet>4685</a>            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4686 id=4686 data-nosnippet>4686</a>            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4687 id=4687 data-nosnippet>4687</a>            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4688 id=4688 data-nosnippet>4688</a>            <span class="comment">// Language model MLP
-<a href=#4689 id=4689 data-nosnippet>4689</a>            </span>Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4690 id=4690 data-nosnippet>4690</a>            Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4691 id=4691 data-nosnippet>4691</a>            Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4692 id=4692 data-nosnippet>4692</a>            <span class="comment">// Audio conformer attention layers
-<a href=#4693 id=4693 data-nosnippet>4693</a>            </span>Regex::new(<span class="string">r"conformer\.(\d+)\.attention\.attn\.q_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4694 id=4694 data-nosnippet>4694</a>            Regex::new(<span class="string">r"conformer\.(\d+)\.attention\.attn\.k_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4695 id=4695 data-nosnippet>4695</a>            Regex::new(<span class="string">r"conformer\.(\d+)\.attention\.attn\.v_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4696 id=4696 data-nosnippet>4696</a>            Regex::new(
-<a href=#4697 id=4697 data-nosnippet>4697</a>                <span class="string">r"conformer\.(\d+)\.attention\.attn\.relative_position_embedding\.pos_proj\.(weight|bias)$"</span>,
-<a href=#4698 id=4698 data-nosnippet>4698</a>            )<span class="question-mark">?</span>,
-<a href=#4699 id=4699 data-nosnippet>4699</a>            Regex::new(<span class="string">r"conformer\.(\d+)\.attention\.post\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4700 id=4700 data-nosnippet>4700</a>            <span class="comment">// Audio conformer FFW layers
-<a href=#4701 id=4701 data-nosnippet>4701</a>            </span>Regex::new(<span class="string">r"conformer\.(\d+)\.ffw_layer_start\.ffw_layer_1\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4702 id=4702 data-nosnippet>4702</a>            Regex::new(<span class="string">r"conformer\.(\d+)\.ffw_layer_start\.ffw_layer_2\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4703 id=4703 data-nosnippet>4703</a>            Regex::new(<span class="string">r"conformer\.(\d+)\.ffw_layer_end\.ffw_layer_1\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4704 id=4704 data-nosnippet>4704</a>            Regex::new(<span class="string">r"conformer\.(\d+)\.ffw_layer_end\.ffw_layer_2\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4705 id=4705 data-nosnippet>4705</a>            <span class="comment">// Audio conformer conv1d layers
-<a href=#4706 id=4706 data-nosnippet>4706</a>            </span>Regex::new(<span class="string">r"conformer\.(\d+)\.lconv1d\.linear_start\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4707 id=4707 data-nosnippet>4707</a>            Regex::new(<span class="string">r"conformer\.(\d+)\.lconv1d\.linear_end\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4708 id=4708 data-nosnippet>4708</a>            <span class="comment">// Audio subsample projection
-<a href=#4709 id=4709 data-nosnippet>4709</a>            </span>Regex::new(<span class="string">r"subsample_conv_projection\.input_proj_linear\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4710 id=4710 data-nosnippet>4710</a>            <span class="comment">// Multimodal embedders
-<a href=#4711 id=4711 data-nosnippet>4711</a>            </span>Regex::new(<span class="string">r"embed_vision\.embedding_projection\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4712 id=4712 data-nosnippet>4712</a>            Regex::new(<span class="string">r"embed_audio\.embedding_projection\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4713 id=4713 data-nosnippet>4713</a>        ])
-<a href=#4714 id=4714 data-nosnippet>4714</a>    }
-<a href=#4715 id=4715 data-nosnippet>4715</a>    <span class="kw">fn </span>immediate_isq_predicates(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
-<a href=#4716 id=4716 data-nosnippet>4716</a>        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
-<a href=#4717 id=4717 data-nosnippet>4717</a>            Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4718 id=4718 data-nosnippet>4718</a>            <span class="comment">// Language model attention
-<a href=#4719 id=4719 data-nosnippet>4719</a>            </span>Regex::new(<span class="string">r"model\.language_model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4720 id=4720 data-nosnippet>4720</a>            Regex::new(<span class="string">r"model\.language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4721 id=4721 data-nosnippet>4721</a>            Regex::new(<span class="string">r"model\.language_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4722 id=4722 data-nosnippet>4722</a>            Regex::new(<span class="string">r"model\.language_model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4723 id=4723 data-nosnippet>4723</a>            <span class="comment">// Language model MLP
-<a href=#4724 id=4724 data-nosnippet>4724</a>            </span>Regex::new(<span class="string">r"model\.language_model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4725 id=4725 data-nosnippet>4725</a>            Regex::new(<span class="string">r"model\.language_model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4726 id=4726 data-nosnippet>4726</a>            Regex::new(<span class="string">r"model\.language_model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4727 id=4727 data-nosnippet>4727</a>            <span class="comment">// Projections
-<a href=#4728 id=4728 data-nosnippet>4728</a>            </span>Regex::new(<span class="string">r"model\.language_model\.per_layer_model_projection\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4729 id=4729 data-nosnippet>4729</a>            Regex::new(<span class="string">r"model\.language_model\.altup_projections\.(\d+)\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4730 id=4730 data-nosnippet>4730</a>            Regex::new(<span class="string">r"model\.language_model\.altup_unembed_projections\.(\d+)\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4731 id=4731 data-nosnippet>4731</a>            <span class="comment">// Audio conformer attention layers
-<a href=#4732 id=4732 data-nosnippet>4732</a>            </span>Regex::new(
-<a href=#4733 id=4733 data-nosnippet>4733</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.attention\.attn\.q_proj\.(weight|bias)$"</span>,
-<a href=#4734 id=4734 data-nosnippet>4734</a>            )<span class="question-mark">?</span>,
-<a href=#4735 id=4735 data-nosnippet>4735</a>            Regex::new(
-<a href=#4736 id=4736 data-nosnippet>4736</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.attention\.attn\.k_proj\.(weight|bias)$"</span>,
-<a href=#4737 id=4737 data-nosnippet>4737</a>            )<span class="question-mark">?</span>,
-<a href=#4738 id=4738 data-nosnippet>4738</a>            Regex::new(
-<a href=#4739 id=4739 data-nosnippet>4739</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.attention\.attn\.v_proj\.(weight|bias)$"</span>,
-<a href=#4740 id=4740 data-nosnippet>4740</a>            )<span class="question-mark">?</span>,
-<a href=#4741 id=4741 data-nosnippet>4741</a>            Regex::new(
-<a href=#4742 id=4742 data-nosnippet>4742</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.attention\.attn\.relative_position_embedding\.pos_proj\.(weight|bias)$"</span>,
-<a href=#4743 id=4743 data-nosnippet>4743</a>            )<span class="question-mark">?</span>,
-<a href=#4744 id=4744 data-nosnippet>4744</a>            Regex::new(<span class="string">r"model\.audio_tower\.conformer\.(\d+)\.attention\.post\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4745 id=4745 data-nosnippet>4745</a>            <span class="comment">// Audio conformer FFW layers
-<a href=#4746 id=4746 data-nosnippet>4746</a>            </span>Regex::new(
-<a href=#4747 id=4747 data-nosnippet>4747</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.ffw_layer_start\.ffw_layer_1\.(weight|bias)$"</span>,
-<a href=#4748 id=4748 data-nosnippet>4748</a>            )<span class="question-mark">?</span>,
-<a href=#4749 id=4749 data-nosnippet>4749</a>            Regex::new(
-<a href=#4750 id=4750 data-nosnippet>4750</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.ffw_layer_start\.ffw_layer_2\.(weight|bias)$"</span>,
-<a href=#4751 id=4751 data-nosnippet>4751</a>            )<span class="question-mark">?</span>,
-<a href=#4752 id=4752 data-nosnippet>4752</a>            Regex::new(
-<a href=#4753 id=4753 data-nosnippet>4753</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.ffw_layer_end\.ffw_layer_1\.(weight|bias)$"</span>,
-<a href=#4754 id=4754 data-nosnippet>4754</a>            )<span class="question-mark">?</span>,
-<a href=#4755 id=4755 data-nosnippet>4755</a>            Regex::new(
-<a href=#4756 id=4756 data-nosnippet>4756</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.ffw_layer_end\.ffw_layer_2\.(weight|bias)$"</span>,
-<a href=#4757 id=4757 data-nosnippet>4757</a>            )<span class="question-mark">?</span>,
-<a href=#4758 id=4758 data-nosnippet>4758</a>            <span class="comment">// Audio conformer conv1d layers
-<a href=#4759 id=4759 data-nosnippet>4759</a>            </span>Regex::new(
-<a href=#4760 id=4760 data-nosnippet>4760</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.lconv1d\.linear_start\.(weight|bias)$"</span>,
-<a href=#4761 id=4761 data-nosnippet>4761</a>            )<span class="question-mark">?</span>,
-<a href=#4762 id=4762 data-nosnippet>4762</a>            Regex::new(
-<a href=#4763 id=4763 data-nosnippet>4763</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.lconv1d\.linear_end\.(weight|bias)$"</span>,
-<a href=#4764 id=4764 data-nosnippet>4764</a>            )<span class="question-mark">?</span>,
-<a href=#4765 id=4765 data-nosnippet>4765</a>            <span class="comment">// Audio subsample projection
-<a href=#4766 id=4766 data-nosnippet>4766</a>            </span>Regex::new(
-<a href=#4767 id=4767 data-nosnippet>4767</a>                <span class="string">r"model\.audio_tower\.subsample_conv_projection\.input_proj_linear\.(weight|bias)$"</span>,
-<a href=#4768 id=4768 data-nosnippet>4768</a>            )<span class="question-mark">?</span>,
-<a href=#4769 id=4769 data-nosnippet>4769</a>            <span class="comment">// Multimodal embedders
-<a href=#4770 id=4770 data-nosnippet>4770</a>            </span>Regex::new(<span class="string">r"model\.embed_vision\.embedding_projection\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4771 id=4771 data-nosnippet>4771</a>            Regex::new(<span class="string">r"model\.embed_audio\.embedding_projection\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-<a href=#4772 id=4772 data-nosnippet>4772</a>        ])
-<a href=#4773 id=4773 data-nosnippet>4773</a>    }
-<a href=#4774 id=4774 data-nosnippet>4774</a>}
-<a href=#4775 id=4775 data-nosnippet>4775</a>
-<a href=#4776 id=4776 data-nosnippet>4776</a><span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>Gemma3nLoader {
-<a href=#4777 id=4777 data-nosnippet>4777</a>    <span class="kw">fn </span>mapped_max_act_size_elems(
-<a href=#4778 id=4778 data-nosnippet>4778</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#4779 id=4779 data-nosnippet>4779</a>        config: <span class="kw-2">&amp;</span>str,
-<a href=#4780 id=4780 data-nosnippet>4780</a>        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
-<a href=#4781 id=4781 data-nosnippet>4781</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#4782 id=4782 data-nosnippet>4782</a>        <span class="kw">let </span>AutoDeviceMapParams::Vision {
-<a href=#4783 id=4783 data-nosnippet>4783</a>            max_seq_len,
-<a href=#4784 id=4784 data-nosnippet>4784</a>            max_batch_size,
-<a href=#4785 id=4785 data-nosnippet>4785</a>            max_image_shape: <span class="kw">_</span>,
-<a href=#4786 id=4786 data-nosnippet>4786</a>            max_num_images,
-<a href=#4787 id=4787 data-nosnippet>4787</a>        } = params
-<a href=#4788 id=4788 data-nosnippet>4788</a>        <span class="kw">else </span>{
-<a href=#4789 id=4789 data-nosnippet>4789</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected vision AutoDeviceMapParams for this model!"</span>)
-<a href=#4790 id=4790 data-nosnippet>4790</a>        };
-<a href=#4791 id=4791 data-nosnippet>4791</a>
-<a href=#4792 id=4792 data-nosnippet>4792</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#4793 id=4793 data-nosnippet>4793</a>        <span class="kw">let </span>text_cfg = <span class="kw-2">&amp;</span>cfg.text_config;
-<a href=#4794 id=4794 data-nosnippet>4794</a>
-<a href=#4795 id=4795 data-nosnippet>4795</a>        <span class="comment">// Gemma3n is an "inject into the prompt" model, similar to Gemma3
-<a href=#4796 id=4796 data-nosnippet>4796</a>        // We need to account for vision and audio tokens in the sequence length
-<a href=#4797 id=4797 data-nosnippet>4797</a>
-<a href=#4798 id=4798 data-nosnippet>4798</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>total_seq_len = <span class="kw-2">*</span>max_seq_len.min(<span class="kw-2">&amp;</span>ATTENTION_CHUNK_SIZE);
-<a href=#4799 id=4799 data-nosnippet>4799</a>
-<a href=#4800 id=4800 data-nosnippet>4800</a>        <span class="comment">// Add vision tokens
-<a href=#4801 id=4801 data-nosnippet>4801</a>        </span>{
-<a href=#4802 id=4802 data-nosnippet>4802</a>            <span class="comment">// Vision tokens are injected into the prompt
-<a href=#4803 id=4803 data-nosnippet>4803</a>            // MSFA outputs fixed 16x16 features regardless of input size
-<a href=#4804 id=4804 data-nosnippet>4804</a>            </span><span class="kw">let </span>msfa_spatial_size = <span class="number">16</span>; <span class="comment">// Fixed from vision.rs line 1115
-<a href=#4805 id=4805 data-nosnippet>4805</a>            </span><span class="kw">let </span>vision_tokens_per_image = msfa_spatial_size * msfa_spatial_size; <span class="comment">// 256 tokens
-<a href=#4806 id=4806 data-nosnippet>4806</a>            </span>total_seq_len += vision_tokens_per_image * max_num_images;
-<a href=#4807 id=4807 data-nosnippet>4807</a>        }
-<a href=#4808 id=4808 data-nosnippet>4808</a>
-<a href=#4809 id=4809 data-nosnippet>4809</a>        <span class="comment">// Add audio tokens
-<a href=#4810 id=4810 data-nosnippet>4810</a>        </span>{
-<a href=#4811 id=4811 data-nosnippet>4811</a>            <span class="comment">// Audio tokens are injected into the prompt
-<a href=#4812 id=4812 data-nosnippet>4812</a>            // From config field audio_soft_tokens_per_image (typically 188)
-<a href=#4813 id=4813 data-nosnippet>4813</a>            </span><span class="kw">let </span>audio_tokens = cfg.audio_soft_tokens_per_image;
-<a href=#4814 id=4814 data-nosnippet>4814</a>            total_seq_len += audio_tokens;
-<a href=#4815 id=4815 data-nosnippet>4815</a>        }
-<a href=#4816 id=4816 data-nosnippet>4816</a>
-<a href=#4817 id=4817 data-nosnippet>4817</a>        <span class="comment">// Calculate max attention size for text model with all injected tokens
-<a href=#4818 id=4818 data-nosnippet>4818</a>        </span><span class="kw">let </span>max_text_attn =
-<a href=#4819 id=4819 data-nosnippet>4819</a>            max_batch_size * text_cfg.num_attention_heads * total_seq_len * total_seq_len;
-<a href=#4820 id=4820 data-nosnippet>4820</a>
-<a href=#4821 id=4821 data-nosnippet>4821</a>        <span class="prelude-val">Ok</span>(max_text_attn)
-<a href=#4822 id=4822 data-nosnippet>4822</a>    }
-<a href=#4823 id=4823 data-nosnippet>4823</a>
-<a href=#4824 id=4824 data-nosnippet>4824</a>    <span class="kw">fn </span>non_mapped_max_act_size_elems(
-<a href=#4825 id=4825 data-nosnippet>4825</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#4826 id=4826 data-nosnippet>4826</a>        config: <span class="kw-2">&amp;</span>str,
-<a href=#4827 id=4827 data-nosnippet>4827</a>        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
-<a href=#4828 id=4828 data-nosnippet>4828</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#4829 id=4829 data-nosnippet>4829</a>        <span class="kw">let </span>AutoDeviceMapParams::Vision {
-<a href=#4830 id=4830 data-nosnippet>4830</a>            max_seq_len: <span class="kw">_</span>,
-<a href=#4831 id=4831 data-nosnippet>4831</a>            max_batch_size,
-<a href=#4832 id=4832 data-nosnippet>4832</a>            max_image_shape: <span class="kw">_</span>,
-<a href=#4833 id=4833 data-nosnippet>4833</a>            max_num_images,
-<a href=#4834 id=4834 data-nosnippet>4834</a>        } = params
-<a href=#4835 id=4835 data-nosnippet>4835</a>        <span class="kw">else </span>{
-<a href=#4836 id=4836 data-nosnippet>4836</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected vision AutoDeviceMapParams for this model!"</span>)
-<a href=#4837 id=4837 data-nosnippet>4837</a>        };
-<a href=#4838 id=4838 data-nosnippet>4838</a>
-<a href=#4839 id=4839 data-nosnippet>4839</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#4840 id=4840 data-nosnippet>4840</a>
-<a href=#4841 id=4841 data-nosnippet>4841</a>        <span class="comment">// Calculate max activation sizes for each modality
-<a href=#4842 id=4842 data-nosnippet>4842</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>max_activation = <span class="number">0</span>;
-<a href=#4843 id=4843 data-nosnippet>4843</a>
-<a href=#4844 id=4844 data-nosnippet>4844</a>        <span class="comment">// Vision activation size
-<a href=#4845 id=4845 data-nosnippet>4845</a>        </span>{
-<a href=#4846 id=4846 data-nosnippet>4846</a>            <span class="comment">// Vision is Gemma3n's MobileNetV5 architecture with Multi-Query Attention
-<a href=#4847 id=4847 data-nosnippet>4847</a>            // The peak activation is in the Multi-Query Attention layers
-<a href=#4848 id=4848 data-nosnippet>4848</a>
-<a href=#4849 id=4849 data-nosnippet>4849</a>            // From the architecture: stages 3 and 4 have MMQA blocks
-<a href=#4850 id=4850 data-nosnippet>4850</a>            // Input images are 768x768 (from inputs_processor.rs)
-<a href=#4851 id=4851 data-nosnippet>4851</a>            // Stage 3: 640 channels at 48x48 (768/16 downsampling), MMQA with num_heads=12, kv_dim=64
-<a href=#4852 id=4852 data-nosnippet>4852</a>            // Stage 4: 1280 channels at 24x24 (768/32 downsampling), MMQA with num_heads=16, kv_dim=96
-<a href=#4853 id=4853 data-nosnippet>4853</a>            // MSFA output: 2048 channels at fixed 16x16
-<a href=#4854 id=4854 data-nosnippet>4854</a>
-<a href=#4855 id=4855 data-nosnippet>4855</a>            </span><span class="kw">let </span>vision_tower_act = {
-<a href=#4856 id=4856 data-nosnippet>4856</a>                <span class="comment">// Peak is during MMQA attention computation in stage 4
-<a href=#4857 id=4857 data-nosnippet>4857</a>                // Stage 4 has higher memory usage than Stage 3 due to more heads (16 vs 12)
-<a href=#4858 id=4858 data-nosnippet>4858</a>                // From vision.rs: Stage 4 has num_heads=16, kv_dim=96, kv_stride=1
-<a href=#4859 id=4859 data-nosnippet>4859</a>                </span><span class="kw">let </span>num_heads = <span class="number">16</span>; <span class="comment">// Stage 4 configuration
-<a href=#4860 id=4860 data-nosnippet>4860</a>                </span><span class="kw">let </span>spatial_size = <span class="number">24</span>; <span class="comment">// 768 / 32 = 24 (input 768x768, stage 4 has 32x downsampling)
-<a href=#4861 id=4861 data-nosnippet>4861</a>                </span><span class="kw">let </span>seq_len = spatial_size * spatial_size;
-<a href=#4862 id=4862 data-nosnippet>4862</a>
-<a href=#4863 id=4863 data-nosnippet>4863</a>                <span class="comment">// Attention scores: [B * num_images, num_heads, seq_len, seq_len]
-<a href=#4864 id=4864 data-nosnippet>4864</a>                </span>max_batch_size * max_num_images * num_heads * seq_len * seq_len
-<a href=#4865 id=4865 data-nosnippet>4865</a>            };
-<a href=#4866 id=4866 data-nosnippet>4866</a>
-<a href=#4867 id=4867 data-nosnippet>4867</a>            <span class="comment">// Vision embedder activations
-<a href=#4868 id=4868 data-nosnippet>4868</a>            </span><span class="kw">let </span>vision_embed_act = {
-<a href=#4869 id=4869 data-nosnippet>4869</a>                <span class="comment">// MSFA output: 2048 channels at fixed 16x16 spatial (from vision.rs line 1115)
-<a href=#4870 id=4870 data-nosnippet>4870</a>                </span><span class="kw">let </span>msfa_channels = <span class="number">2048</span>; <span class="comment">// MSFA_OUT_CHANNELS from vision.rs
-<a href=#4871 id=4871 data-nosnippet>4871</a>                </span><span class="kw">let </span>spatial_size = <span class="number">16</span>; <span class="comment">// Fixed output resolution from MSFA
-<a href=#4872 id=4872 data-nosnippet>4872</a>                </span><span class="kw">let </span>vision_features =
-<a href=#4873 id=4873 data-nosnippet>4873</a>                    max_batch_size * max_num_images * msfa_channels * spatial_size * spatial_size;
-<a href=#4874 id=4874 data-nosnippet>4874</a>
-<a href=#4875 id=4875 data-nosnippet>4875</a>                <span class="comment">// After embedding projection to text hidden size
-<a href=#4876 id=4876 data-nosnippet>4876</a>                </span><span class="kw">let </span>projected = max_batch_size
-<a href=#4877 id=4877 data-nosnippet>4877</a>                    * max_num_images
-<a href=#4878 id=4878 data-nosnippet>4878</a>                    * spatial_size
+<a href=#4613 id=4613 data-nosnippet>4613</a><span class="attr">#[allow(dead_code)]
+<a href=#4614 id=4614 data-nosnippet>4614</a></span><span class="kw">pub struct </span>Gemma3nPrefixer;
+<a href=#4615 id=4615 data-nosnippet>4615</a>
+<a href=#4616 id=4616 data-nosnippet>4616</a><span class="kw">impl </span>MultimodalPromptPrefixer <span class="kw">for </span>Gemma3nPrefixer {
+<a href=#4617 id=4617 data-nosnippet>4617</a>    <span class="kw">fn </span>prefix_image(<span class="kw-2">&amp;</span><span class="self">self</span>, _image_indexes: Vec&lt;usize&gt;, prompt: <span class="kw-2">&amp;</span>str) -&gt; String {
+<a href=#4618 id=4618 data-nosnippet>4618</a>        prompt.to_string()
+<a href=#4619 id=4619 data-nosnippet>4619</a>    }
+<a href=#4620 id=4620 data-nosnippet>4620</a>}
+<a href=#4621 id=4621 data-nosnippet>4621</a>
+<a href=#4622 id=4622 data-nosnippet>4622</a><span class="kw">impl </span>VisionModelLoader <span class="kw">for </span>Gemma3nLoader {
+<a href=#4623 id=4623 data-nosnippet>4623</a>    <span class="kw">fn </span>load(
+<a href=#4624 id=4624 data-nosnippet>4624</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#4625 id=4625 data-nosnippet>4625</a>        config: <span class="kw-2">&amp;</span>str,
+<a href=#4626 id=4626 data-nosnippet>4626</a>        vb: ShardedVarBuilder,
+<a href=#4627 id=4627 data-nosnippet>4627</a>        normal_loading_metadata: NormalLoadingMetadata,
+<a href=#4628 id=4628 data-nosnippet>4628</a>        attention_mechanism: AttentionImplementation,
+<a href=#4629 id=4629 data-nosnippet>4629</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>VisionModel + Send + Sync&gt;&gt; {
+<a href=#4630 id=4630 data-nosnippet>4630</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#4631 id=4631 data-nosnippet>4631</a>        <span class="prelude-val">Ok</span>(Box::new(Gemma3nModel::new(
+<a href=#4632 id=4632 data-nosnippet>4632</a>            <span class="kw-2">&amp;</span>cfg,
+<a href=#4633 id=4633 data-nosnippet>4633</a>            vb,
+<a href=#4634 id=4634 data-nosnippet>4634</a>            <span class="self">self</span>.is_gptx(config),
+<a href=#4635 id=4635 data-nosnippet>4635</a>            normal_loading_metadata,
+<a href=#4636 id=4636 data-nosnippet>4636</a>            attention_mechanism,
+<a href=#4637 id=4637 data-nosnippet>4637</a>        )<span class="question-mark">?</span>))
+<a href=#4638 id=4638 data-nosnippet>4638</a>    }
+<a href=#4639 id=4639 data-nosnippet>4639</a>    <span class="kw">fn </span>is_gptx(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; bool {
+<a href=#4640 id=4640 data-nosnippet>4640</a>        <span class="bool-val">true
+<a href=#4641 id=4641 data-nosnippet>4641</a>    </span>}
+<a href=#4642 id=4642 data-nosnippet>4642</a>    <span class="kw">fn </span>get_config_repr(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>Debug&gt;&gt; {
+<a href=#4643 id=4643 data-nosnippet>4643</a>        <span class="kw">let </span>config: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#4644 id=4644 data-nosnippet>4644</a>        <span class="prelude-val">Ok</span>(Box::new(config))
+<a href=#4645 id=4645 data-nosnippet>4645</a>    }
+<a href=#4646 id=4646 data-nosnippet>4646</a>    <span class="kw">fn </span>get_processor(
+<a href=#4647 id=4647 data-nosnippet>4647</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#4648 id=4648 data-nosnippet>4648</a>        _config: <span class="kw-2">&amp;</span>str,
+<a href=#4649 id=4649 data-nosnippet>4649</a>        processor_config: <span class="prelude-ty">Option</span>&lt;ProcessorConfig&gt;,
+<a href=#4650 id=4650 data-nosnippet>4650</a>        _preprocessor_config: PreProcessorConfig,
+<a href=#4651 id=4651 data-nosnippet>4651</a>        _max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
+<a href=#4652 id=4652 data-nosnippet>4652</a>    ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt; {
+<a href=#4653 id=4653 data-nosnippet>4653</a>        <span class="comment">// Handle the Gemma 3 1b case here
+<a href=#4654 id=4654 data-nosnippet>4654</a>        </span>Arc::new(Gemma3nProcessor::new(
+<a href=#4655 id=4655 data-nosnippet>4655</a>            processor_config.unwrap_or_default(),
+<a href=#4656 id=4656 data-nosnippet>4656</a>            <span class="bool-val">true</span>,
+<a href=#4657 id=4657 data-nosnippet>4657</a>        ))
+<a href=#4658 id=4658 data-nosnippet>4658</a>    }
+<a href=#4659 id=4659 data-nosnippet>4659</a>    <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; bool {
+<a href=#4660 id=4660 data-nosnippet>4660</a>        <span class="bool-val">false
+<a href=#4661 id=4661 data-nosnippet>4661</a>    </span>}
+<a href=#4662 id=4662 data-nosnippet>4662</a>    <span class="kw">fn </span>supports_prefix_cacher(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; bool {
+<a href=#4663 id=4663 data-nosnippet>4663</a>        <span class="bool-val">true
+<a href=#4664 id=4664 data-nosnippet>4664</a>    </span>}
+<a href=#4665 id=4665 data-nosnippet>4665</a>    <span class="kw">fn </span>prefixer(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; Arc&lt;<span class="kw">dyn </span>MultimodalPromptPrefixer&gt; {
+<a href=#4666 id=4666 data-nosnippet>4666</a>        Arc::new(Gemma3Prefixer)
+<a href=#4667 id=4667 data-nosnippet>4667</a>    }
+<a href=#4668 id=4668 data-nosnippet>4668</a>    <span class="kw">fn </span>modalities(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Modalities&gt; {
+<a href=#4669 id=4669 data-nosnippet>4669</a>        <span class="prelude-val">Ok</span>(Modalities {
+<a href=#4670 id=4670 data-nosnippet>4670</a>            input: <span class="macro">vec!</span>[
+<a href=#4671 id=4671 data-nosnippet>4671</a>                SupportedModality::Text,
+<a href=#4672 id=4672 data-nosnippet>4672</a>                SupportedModality::Vision,
+<a href=#4673 id=4673 data-nosnippet>4673</a>                SupportedModality::Audio,
+<a href=#4674 id=4674 data-nosnippet>4674</a>            ],
+<a href=#4675 id=4675 data-nosnippet>4675</a>            output: <span class="macro">vec!</span>[SupportedModality::Text],
+<a href=#4676 id=4676 data-nosnippet>4676</a>        })
+<a href=#4677 id=4677 data-nosnippet>4677</a>    }
+<a href=#4678 id=4678 data-nosnippet>4678</a>}
+<a href=#4679 id=4679 data-nosnippet>4679</a>
+<a href=#4680 id=4680 data-nosnippet>4680</a><span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>Gemma3nLoader {
+<a href=#4681 id=4681 data-nosnippet>4681</a>    <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
+<a href=#4682 id=4682 data-nosnippet>4682</a>        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+<a href=#4683 id=4683 data-nosnippet>4683</a>            Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4684 id=4684 data-nosnippet>4684</a>            <span class="comment">// Language model attention
+<a href=#4685 id=4685 data-nosnippet>4685</a>            </span>Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4686 id=4686 data-nosnippet>4686</a>            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4687 id=4687 data-nosnippet>4687</a>            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4688 id=4688 data-nosnippet>4688</a>            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4689 id=4689 data-nosnippet>4689</a>            <span class="comment">// Language model MLP
+<a href=#4690 id=4690 data-nosnippet>4690</a>            </span>Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4691 id=4691 data-nosnippet>4691</a>            Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4692 id=4692 data-nosnippet>4692</a>            Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4693 id=4693 data-nosnippet>4693</a>            <span class="comment">// Audio conformer attention layers
+<a href=#4694 id=4694 data-nosnippet>4694</a>            </span>Regex::new(<span class="string">r"conformer\.(\d+)\.attention\.attn\.q_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4695 id=4695 data-nosnippet>4695</a>            Regex::new(<span class="string">r"conformer\.(\d+)\.attention\.attn\.k_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4696 id=4696 data-nosnippet>4696</a>            Regex::new(<span class="string">r"conformer\.(\d+)\.attention\.attn\.v_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4697 id=4697 data-nosnippet>4697</a>            Regex::new(
+<a href=#4698 id=4698 data-nosnippet>4698</a>                <span class="string">r"conformer\.(\d+)\.attention\.attn\.relative_position_embedding\.pos_proj\.(weight|bias)$"</span>,
+<a href=#4699 id=4699 data-nosnippet>4699</a>            )<span class="question-mark">?</span>,
+<a href=#4700 id=4700 data-nosnippet>4700</a>            Regex::new(<span class="string">r"conformer\.(\d+)\.attention\.post\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4701 id=4701 data-nosnippet>4701</a>            <span class="comment">// Audio conformer FFW layers
+<a href=#4702 id=4702 data-nosnippet>4702</a>            </span>Regex::new(<span class="string">r"conformer\.(\d+)\.ffw_layer_start\.ffw_layer_1\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4703 id=4703 data-nosnippet>4703</a>            Regex::new(<span class="string">r"conformer\.(\d+)\.ffw_layer_start\.ffw_layer_2\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4704 id=4704 data-nosnippet>4704</a>            Regex::new(<span class="string">r"conformer\.(\d+)\.ffw_layer_end\.ffw_layer_1\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4705 id=4705 data-nosnippet>4705</a>            Regex::new(<span class="string">r"conformer\.(\d+)\.ffw_layer_end\.ffw_layer_2\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4706 id=4706 data-nosnippet>4706</a>            <span class="comment">// Audio conformer conv1d layers
+<a href=#4707 id=4707 data-nosnippet>4707</a>            </span>Regex::new(<span class="string">r"conformer\.(\d+)\.lconv1d\.linear_start\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4708 id=4708 data-nosnippet>4708</a>            Regex::new(<span class="string">r"conformer\.(\d+)\.lconv1d\.linear_end\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4709 id=4709 data-nosnippet>4709</a>            <span class="comment">// Audio subsample projection
+<a href=#4710 id=4710 data-nosnippet>4710</a>            </span>Regex::new(<span class="string">r"subsample_conv_projection\.input_proj_linear\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4711 id=4711 data-nosnippet>4711</a>            <span class="comment">// Multimodal embedders
+<a href=#4712 id=4712 data-nosnippet>4712</a>            </span>Regex::new(<span class="string">r"embed_vision\.embedding_projection\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4713 id=4713 data-nosnippet>4713</a>            Regex::new(<span class="string">r"embed_audio\.embedding_projection\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4714 id=4714 data-nosnippet>4714</a>        ])
+<a href=#4715 id=4715 data-nosnippet>4715</a>    }
+<a href=#4716 id=4716 data-nosnippet>4716</a>    <span class="kw">fn </span>immediate_isq_predicates(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
+<a href=#4717 id=4717 data-nosnippet>4717</a>        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+<a href=#4718 id=4718 data-nosnippet>4718</a>            Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4719 id=4719 data-nosnippet>4719</a>            <span class="comment">// Language model attention
+<a href=#4720 id=4720 data-nosnippet>4720</a>            </span>Regex::new(<span class="string">r"model\.language_model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4721 id=4721 data-nosnippet>4721</a>            Regex::new(<span class="string">r"model\.language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4722 id=4722 data-nosnippet>4722</a>            Regex::new(<span class="string">r"model\.language_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4723 id=4723 data-nosnippet>4723</a>            Regex::new(<span class="string">r"model\.language_model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4724 id=4724 data-nosnippet>4724</a>            <span class="comment">// Language model MLP
+<a href=#4725 id=4725 data-nosnippet>4725</a>            </span>Regex::new(<span class="string">r"model\.language_model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4726 id=4726 data-nosnippet>4726</a>            Regex::new(<span class="string">r"model\.language_model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4727 id=4727 data-nosnippet>4727</a>            Regex::new(<span class="string">r"model\.language_model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4728 id=4728 data-nosnippet>4728</a>            <span class="comment">// Projections
+<a href=#4729 id=4729 data-nosnippet>4729</a>            </span>Regex::new(<span class="string">r"model\.language_model\.per_layer_model_projection\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4730 id=4730 data-nosnippet>4730</a>            Regex::new(<span class="string">r"model\.language_model\.altup_projections\.(\d+)\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4731 id=4731 data-nosnippet>4731</a>            Regex::new(<span class="string">r"model\.language_model\.altup_unembed_projections\.(\d+)\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4732 id=4732 data-nosnippet>4732</a>            <span class="comment">// Audio conformer attention layers
+<a href=#4733 id=4733 data-nosnippet>4733</a>            </span>Regex::new(
+<a href=#4734 id=4734 data-nosnippet>4734</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.attention\.attn\.q_proj\.(weight|bias)$"</span>,
+<a href=#4735 id=4735 data-nosnippet>4735</a>            )<span class="question-mark">?</span>,
+<a href=#4736 id=4736 data-nosnippet>4736</a>            Regex::new(
+<a href=#4737 id=4737 data-nosnippet>4737</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.attention\.attn\.k_proj\.(weight|bias)$"</span>,
+<a href=#4738 id=4738 data-nosnippet>4738</a>            )<span class="question-mark">?</span>,
+<a href=#4739 id=4739 data-nosnippet>4739</a>            Regex::new(
+<a href=#4740 id=4740 data-nosnippet>4740</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.attention\.attn\.v_proj\.(weight|bias)$"</span>,
+<a href=#4741 id=4741 data-nosnippet>4741</a>            )<span class="question-mark">?</span>,
+<a href=#4742 id=4742 data-nosnippet>4742</a>            Regex::new(
+<a href=#4743 id=4743 data-nosnippet>4743</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.attention\.attn\.relative_position_embedding\.pos_proj\.(weight|bias)$"</span>,
+<a href=#4744 id=4744 data-nosnippet>4744</a>            )<span class="question-mark">?</span>,
+<a href=#4745 id=4745 data-nosnippet>4745</a>            Regex::new(<span class="string">r"model\.audio_tower\.conformer\.(\d+)\.attention\.post\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4746 id=4746 data-nosnippet>4746</a>            <span class="comment">// Audio conformer FFW layers
+<a href=#4747 id=4747 data-nosnippet>4747</a>            </span>Regex::new(
+<a href=#4748 id=4748 data-nosnippet>4748</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.ffw_layer_start\.ffw_layer_1\.(weight|bias)$"</span>,
+<a href=#4749 id=4749 data-nosnippet>4749</a>            )<span class="question-mark">?</span>,
+<a href=#4750 id=4750 data-nosnippet>4750</a>            Regex::new(
+<a href=#4751 id=4751 data-nosnippet>4751</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.ffw_layer_start\.ffw_layer_2\.(weight|bias)$"</span>,
+<a href=#4752 id=4752 data-nosnippet>4752</a>            )<span class="question-mark">?</span>,
+<a href=#4753 id=4753 data-nosnippet>4753</a>            Regex::new(
+<a href=#4754 id=4754 data-nosnippet>4754</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.ffw_layer_end\.ffw_layer_1\.(weight|bias)$"</span>,
+<a href=#4755 id=4755 data-nosnippet>4755</a>            )<span class="question-mark">?</span>,
+<a href=#4756 id=4756 data-nosnippet>4756</a>            Regex::new(
+<a href=#4757 id=4757 data-nosnippet>4757</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.ffw_layer_end\.ffw_layer_2\.(weight|bias)$"</span>,
+<a href=#4758 id=4758 data-nosnippet>4758</a>            )<span class="question-mark">?</span>,
+<a href=#4759 id=4759 data-nosnippet>4759</a>            <span class="comment">// Audio conformer conv1d layers
+<a href=#4760 id=4760 data-nosnippet>4760</a>            </span>Regex::new(
+<a href=#4761 id=4761 data-nosnippet>4761</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.lconv1d\.linear_start\.(weight|bias)$"</span>,
+<a href=#4762 id=4762 data-nosnippet>4762</a>            )<span class="question-mark">?</span>,
+<a href=#4763 id=4763 data-nosnippet>4763</a>            Regex::new(
+<a href=#4764 id=4764 data-nosnippet>4764</a>                <span class="string">r"model\.audio_tower\.conformer\.(\d+)\.lconv1d\.linear_end\.(weight|bias)$"</span>,
+<a href=#4765 id=4765 data-nosnippet>4765</a>            )<span class="question-mark">?</span>,
+<a href=#4766 id=4766 data-nosnippet>4766</a>            <span class="comment">// Audio subsample projection
+<a href=#4767 id=4767 data-nosnippet>4767</a>            </span>Regex::new(
+<a href=#4768 id=4768 data-nosnippet>4768</a>                <span class="string">r"model\.audio_tower\.subsample_conv_projection\.input_proj_linear\.(weight|bias)$"</span>,
+<a href=#4769 id=4769 data-nosnippet>4769</a>            )<span class="question-mark">?</span>,
+<a href=#4770 id=4770 data-nosnippet>4770</a>            <span class="comment">// Multimodal embedders
+<a href=#4771 id=4771 data-nosnippet>4771</a>            </span>Regex::new(<span class="string">r"model\.embed_vision\.embedding_projection\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4772 id=4772 data-nosnippet>4772</a>            Regex::new(<span class="string">r"model\.embed_audio\.embedding_projection\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+<a href=#4773 id=4773 data-nosnippet>4773</a>        ])
+<a href=#4774 id=4774 data-nosnippet>4774</a>    }
+<a href=#4775 id=4775 data-nosnippet>4775</a>}
+<a href=#4776 id=4776 data-nosnippet>4776</a>
+<a href=#4777 id=4777 data-nosnippet>4777</a><span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>Gemma3nLoader {
+<a href=#4778 id=4778 data-nosnippet>4778</a>    <span class="kw">fn </span>mapped_max_act_size_elems(
+<a href=#4779 id=4779 data-nosnippet>4779</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#4780 id=4780 data-nosnippet>4780</a>        config: <span class="kw-2">&amp;</span>str,
+<a href=#4781 id=4781 data-nosnippet>4781</a>        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+<a href=#4782 id=4782 data-nosnippet>4782</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+<a href=#4783 id=4783 data-nosnippet>4783</a>        <span class="kw">let </span>AutoDeviceMapParams::Vision {
+<a href=#4784 id=4784 data-nosnippet>4784</a>            max_seq_len,
+<a href=#4785 id=4785 data-nosnippet>4785</a>            max_batch_size,
+<a href=#4786 id=4786 data-nosnippet>4786</a>            max_image_shape: <span class="kw">_</span>,
+<a href=#4787 id=4787 data-nosnippet>4787</a>            max_num_images,
+<a href=#4788 id=4788 data-nosnippet>4788</a>        } = params
+<a href=#4789 id=4789 data-nosnippet>4789</a>        <span class="kw">else </span>{
+<a href=#4790 id=4790 data-nosnippet>4790</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected vision AutoDeviceMapParams for this model!"</span>)
+<a href=#4791 id=4791 data-nosnippet>4791</a>        };
+<a href=#4792 id=4792 data-nosnippet>4792</a>
+<a href=#4793 id=4793 data-nosnippet>4793</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#4794 id=4794 data-nosnippet>4794</a>        <span class="kw">let </span>text_cfg = <span class="kw-2">&amp;</span>cfg.text_config;
+<a href=#4795 id=4795 data-nosnippet>4795</a>
+<a href=#4796 id=4796 data-nosnippet>4796</a>        <span class="comment">// Gemma3n is an "inject into the prompt" model, similar to Gemma3
+<a href=#4797 id=4797 data-nosnippet>4797</a>        // We need to account for vision and audio tokens in the sequence length
+<a href=#4798 id=4798 data-nosnippet>4798</a>
+<a href=#4799 id=4799 data-nosnippet>4799</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>total_seq_len = <span class="kw-2">*</span>max_seq_len.min(<span class="kw-2">&amp;</span>ATTENTION_CHUNK_SIZE);
+<a href=#4800 id=4800 data-nosnippet>4800</a>
+<a href=#4801 id=4801 data-nosnippet>4801</a>        <span class="comment">// Add vision tokens
+<a href=#4802 id=4802 data-nosnippet>4802</a>        </span>{
+<a href=#4803 id=4803 data-nosnippet>4803</a>            <span class="comment">// Vision tokens are injected into the prompt
+<a href=#4804 id=4804 data-nosnippet>4804</a>            // MSFA outputs fixed 16x16 features regardless of input size
+<a href=#4805 id=4805 data-nosnippet>4805</a>            </span><span class="kw">let </span>msfa_spatial_size = <span class="number">16</span>; <span class="comment">// Fixed from vision.rs line 1115
+<a href=#4806 id=4806 data-nosnippet>4806</a>            </span><span class="kw">let </span>vision_tokens_per_image = msfa_spatial_size * msfa_spatial_size; <span class="comment">// 256 tokens
+<a href=#4807 id=4807 data-nosnippet>4807</a>            </span>total_seq_len += vision_tokens_per_image * max_num_images;
+<a href=#4808 id=4808 data-nosnippet>4808</a>        }
+<a href=#4809 id=4809 data-nosnippet>4809</a>
+<a href=#4810 id=4810 data-nosnippet>4810</a>        <span class="comment">// Add audio tokens
+<a href=#4811 id=4811 data-nosnippet>4811</a>        </span>{
+<a href=#4812 id=4812 data-nosnippet>4812</a>            <span class="comment">// Audio tokens are injected into the prompt
+<a href=#4813 id=4813 data-nosnippet>4813</a>            // From config field audio_soft_tokens_per_image (typically 188)
+<a href=#4814 id=4814 data-nosnippet>4814</a>            </span><span class="kw">let </span>audio_tokens = cfg.audio_soft_tokens_per_image;
+<a href=#4815 id=4815 data-nosnippet>4815</a>            total_seq_len += audio_tokens;
+<a href=#4816 id=4816 data-nosnippet>4816</a>        }
+<a href=#4817 id=4817 data-nosnippet>4817</a>
+<a href=#4818 id=4818 data-nosnippet>4818</a>        <span class="comment">// Calculate max attention size for text model with all injected tokens
+<a href=#4819 id=4819 data-nosnippet>4819</a>        </span><span class="kw">let </span>max_text_attn =
+<a href=#4820 id=4820 data-nosnippet>4820</a>            max_batch_size * text_cfg.num_attention_heads * total_seq_len * total_seq_len;
+<a href=#4821 id=4821 data-nosnippet>4821</a>
+<a href=#4822 id=4822 data-nosnippet>4822</a>        <span class="prelude-val">Ok</span>(max_text_attn)
+<a href=#4823 id=4823 data-nosnippet>4823</a>    }
+<a href=#4824 id=4824 data-nosnippet>4824</a>
+<a href=#4825 id=4825 data-nosnippet>4825</a>    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+<a href=#4826 id=4826 data-nosnippet>4826</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#4827 id=4827 data-nosnippet>4827</a>        config: <span class="kw-2">&amp;</span>str,
+<a href=#4828 id=4828 data-nosnippet>4828</a>        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+<a href=#4829 id=4829 data-nosnippet>4829</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+<a href=#4830 id=4830 data-nosnippet>4830</a>        <span class="kw">let </span>AutoDeviceMapParams::Vision {
+<a href=#4831 id=4831 data-nosnippet>4831</a>            max_seq_len: <span class="kw">_</span>,
+<a href=#4832 id=4832 data-nosnippet>4832</a>            max_batch_size,
+<a href=#4833 id=4833 data-nosnippet>4833</a>            max_image_shape: <span class="kw">_</span>,
+<a href=#4834 id=4834 data-nosnippet>4834</a>            max_num_images,
+<a href=#4835 id=4835 data-nosnippet>4835</a>        } = params
+<a href=#4836 id=4836 data-nosnippet>4836</a>        <span class="kw">else </span>{
+<a href=#4837 id=4837 data-nosnippet>4837</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected vision AutoDeviceMapParams for this model!"</span>)
+<a href=#4838 id=4838 data-nosnippet>4838</a>        };
+<a href=#4839 id=4839 data-nosnippet>4839</a>
+<a href=#4840 id=4840 data-nosnippet>4840</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#4841 id=4841 data-nosnippet>4841</a>
+<a href=#4842 id=4842 data-nosnippet>4842</a>        <span class="comment">// Calculate max activation sizes for each modality
+<a href=#4843 id=4843 data-nosnippet>4843</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>max_activation = <span class="number">0</span>;
+<a href=#4844 id=4844 data-nosnippet>4844</a>
+<a href=#4845 id=4845 data-nosnippet>4845</a>        <span class="comment">// Vision activation size
+<a href=#4846 id=4846 data-nosnippet>4846</a>        </span>{
+<a href=#4847 id=4847 data-nosnippet>4847</a>            <span class="comment">// Vision is Gemma3n's MobileNetV5 architecture with Multi-Query Attention
+<a href=#4848 id=4848 data-nosnippet>4848</a>            // The peak activation is in the Multi-Query Attention layers
+<a href=#4849 id=4849 data-nosnippet>4849</a>
+<a href=#4850 id=4850 data-nosnippet>4850</a>            // From the architecture: stages 3 and 4 have MMQA blocks
+<a href=#4851 id=4851 data-nosnippet>4851</a>            // Input images are 768x768 (from inputs_processor.rs)
+<a href=#4852 id=4852 data-nosnippet>4852</a>            // Stage 3: 640 channels at 48x48 (768/16 downsampling), MMQA with num_heads=12, kv_dim=64
+<a href=#4853 id=4853 data-nosnippet>4853</a>            // Stage 4: 1280 channels at 24x24 (768/32 downsampling), MMQA with num_heads=16, kv_dim=96
+<a href=#4854 id=4854 data-nosnippet>4854</a>            // MSFA output: 2048 channels at fixed 16x16
+<a href=#4855 id=4855 data-nosnippet>4855</a>
+<a href=#4856 id=4856 data-nosnippet>4856</a>            </span><span class="kw">let </span>vision_tower_act = {
+<a href=#4857 id=4857 data-nosnippet>4857</a>                <span class="comment">// Peak is during MMQA attention computation in stage 4
+<a href=#4858 id=4858 data-nosnippet>4858</a>                // Stage 4 has higher memory usage than Stage 3 due to more heads (16 vs 12)
+<a href=#4859 id=4859 data-nosnippet>4859</a>                // From vision.rs: Stage 4 has num_heads=16, kv_dim=96, kv_stride=1
+<a href=#4860 id=4860 data-nosnippet>4860</a>                </span><span class="kw">let </span>num_heads = <span class="number">16</span>; <span class="comment">// Stage 4 configuration
+<a href=#4861 id=4861 data-nosnippet>4861</a>                </span><span class="kw">let </span>spatial_size = <span class="number">24</span>; <span class="comment">// 768 / 32 = 24 (input 768x768, stage 4 has 32x downsampling)
+<a href=#4862 id=4862 data-nosnippet>4862</a>                </span><span class="kw">let </span>seq_len = spatial_size * spatial_size;
+<a href=#4863 id=4863 data-nosnippet>4863</a>
+<a href=#4864 id=4864 data-nosnippet>4864</a>                <span class="comment">// Attention scores: [B * num_images, num_heads, seq_len, seq_len]
+<a href=#4865 id=4865 data-nosnippet>4865</a>                </span>max_batch_size * max_num_images * num_heads * seq_len * seq_len
+<a href=#4866 id=4866 data-nosnippet>4866</a>            };
+<a href=#4867 id=4867 data-nosnippet>4867</a>
+<a href=#4868 id=4868 data-nosnippet>4868</a>            <span class="comment">// Vision embedder activations
+<a href=#4869 id=4869 data-nosnippet>4869</a>            </span><span class="kw">let </span>vision_embed_act = {
+<a href=#4870 id=4870 data-nosnippet>4870</a>                <span class="comment">// MSFA output: 2048 channels at fixed 16x16 spatial (from vision.rs line 1115)
+<a href=#4871 id=4871 data-nosnippet>4871</a>                </span><span class="kw">let </span>msfa_channels = <span class="number">2048</span>; <span class="comment">// MSFA_OUT_CHANNELS from vision.rs
+<a href=#4872 id=4872 data-nosnippet>4872</a>                </span><span class="kw">let </span>spatial_size = <span class="number">16</span>; <span class="comment">// Fixed output resolution from MSFA
+<a href=#4873 id=4873 data-nosnippet>4873</a>                </span><span class="kw">let </span>vision_features =
+<a href=#4874 id=4874 data-nosnippet>4874</a>                    max_batch_size * max_num_images * msfa_channels * spatial_size * spatial_size;
+<a href=#4875 id=4875 data-nosnippet>4875</a>
+<a href=#4876 id=4876 data-nosnippet>4876</a>                <span class="comment">// After embedding projection to text hidden size
+<a href=#4877 id=4877 data-nosnippet>4877</a>                </span><span class="kw">let </span>projected = max_batch_size
+<a href=#4878 id=4878 data-nosnippet>4878</a>                    * max_num_images
 <a href=#4879 id=4879 data-nosnippet>4879</a>                    * spatial_size
-<a href=#4880 id=4880 data-nosnippet>4880</a>                    * cfg.text_config.hidden_size;
-<a href=#4881 id=4881 data-nosnippet>4881</a>
-<a href=#4882 id=4882 data-nosnippet>4882</a>                vision_features.max(projected)
-<a href=#4883 id=4883 data-nosnippet>4883</a>            };
-<a href=#4884 id=4884 data-nosnippet>4884</a>
-<a href=#4885 id=4885 data-nosnippet>4885</a>            max_activation = max_activation.max(vision_tower_act).max(vision_embed_act);
-<a href=#4886 id=4886 data-nosnippet>4886</a>        }
-<a href=#4887 id=4887 data-nosnippet>4887</a>
-<a href=#4888 id=4888 data-nosnippet>4888</a>        <span class="comment">// Audio activation size
-<a href=#4889 id=4889 data-nosnippet>4889</a>        </span>{
-<a href=#4890 id=4890 data-nosnippet>4890</a>            <span class="kw">let </span>audio_cfg = <span class="kw-2">&amp;</span>cfg.audio_config;
-<a href=#4891 id=4891 data-nosnippet>4891</a>
-<a href=#4892 id=4892 data-nosnippet>4892</a>            <span class="comment">// Calculate max audio sequence length based on config
-<a href=#4893 id=4893 data-nosnippet>4893</a>            // Audio uses conformer with subsampling and reduction
-<a href=#4894 id=4894 data-nosnippet>4894</a>
-<a href=#4895 id=4895 data-nosnippet>4895</a>            // A rough estimate of max_audio_frames
-<a href=#4896 id=4896 data-nosnippet>4896</a>            </span><span class="kw">let </span>max_audio_frames = <span class="number">1280</span>;
-<a href=#4897 id=4897 data-nosnippet>4897</a>
-<a href=#4898 id=4898 data-nosnippet>4898</a>            <span class="kw">let </span>subsample_factor: usize = audio_cfg
-<a href=#4899 id=4899 data-nosnippet>4899</a>                .sscp_conv_stride_size
-<a href=#4900 id=4900 data-nosnippet>4900</a>                .iter()
-<a href=#4901 id=4901 data-nosnippet>4901</a>                .map(|stride| stride[<span class="number">0</span>]) <span class="comment">// Time dimension stride
-<a href=#4902 id=4902 data-nosnippet>4902</a>                </span>.product();
-<a href=#4903 id=4903 data-nosnippet>4903</a>            <span class="kw">let </span>audio_seq_after_subsample = max_audio_frames / subsample_factor;
-<a href=#4904 id=4904 data-nosnippet>4904</a>
-<a href=#4905 id=4905 data-nosnippet>4905</a>            <span class="comment">// Audio encoder activations
-<a href=#4906 id=4906 data-nosnippet>4906</a>            </span><span class="kw">let </span>audio_encoder_act = {
-<a href=#4907 id=4907 data-nosnippet>4907</a>                <span class="comment">// Conformer FFW layers have expansion factor from config
-<a href=#4908 id=4908 data-nosnippet>4908</a>                </span><span class="kw">let </span>intermediate_size = audio_cfg.hidden_size * <span class="number">4</span>; <span class="comment">// FFW expansion factor
-<a href=#4909 id=4909 data-nosnippet>4909</a>
-<a href=#4910 id=4910 data-nosnippet>4910</a>                // Peak is in the FFW layers before reduction
-<a href=#4911 id=4911 data-nosnippet>4911</a>                </span>max_batch_size * audio_seq_after_subsample * intermediate_size
-<a href=#4912 id=4912 data-nosnippet>4912</a>            };
-<a href=#4913 id=4913 data-nosnippet>4913</a>
-<a href=#4914 id=4914 data-nosnippet>4914</a>            <span class="comment">// Audio attention activations
-<a href=#4915 id=4915 data-nosnippet>4915</a>            </span><span class="kw">let </span>audio_attn_act = {
-<a href=#4916 id=4916 data-nosnippet>4916</a>                <span class="comment">// Attention uses chunked processing with specific context sizes
-<a href=#4917 id=4917 data-nosnippet>4917</a>                </span><span class="kw">let </span>chunk_size = audio_cfg.conf_attention_chunk_size;
-<a href=#4918 id=4918 data-nosnippet>4918</a>                <span class="kw">let </span>context_size = chunk_size + audio_cfg.conf_attention_context_left - <span class="number">1
-<a href=#4919 id=4919 data-nosnippet>4919</a>                    </span>+ audio_cfg.conf_attention_context_right;
-<a href=#4920 id=4920 data-nosnippet>4920</a>
-<a href=#4921 id=4921 data-nosnippet>4921</a>                <span class="comment">// Peak is attention scores: [B, num_heads, num_chunks, chunk_size, context_size]
-<a href=#4922 id=4922 data-nosnippet>4922</a>                </span><span class="kw">let </span>num_chunks = audio_seq_after_subsample.div_ceil(chunk_size);
-<a href=#4923 id=4923 data-nosnippet>4923</a>
-<a href=#4924 id=4924 data-nosnippet>4924</a>                max_batch_size
-<a href=#4925 id=4925 data-nosnippet>4925</a>                    * audio_cfg.conf_num_attention_heads
-<a href=#4926 id=4926 data-nosnippet>4926</a>                    * num_chunks
-<a href=#4927 id=4927 data-nosnippet>4927</a>                    * chunk_size
-<a href=#4928 id=4928 data-nosnippet>4928</a>                    * context_size
-<a href=#4929 id=4929 data-nosnippet>4929</a>            };
-<a href=#4930 id=4930 data-nosnippet>4930</a>
-<a href=#4931 id=4931 data-nosnippet>4931</a>            max_activation = max_activation.max(audio_encoder_act).max(audio_attn_act);
-<a href=#4932 id=4932 data-nosnippet>4932</a>        }
-<a href=#4933 id=4933 data-nosnippet>4933</a>
-<a href=#4934 id=4934 data-nosnippet>4934</a>        <span class="prelude-val">Ok</span>(max_activation)
-<a href=#4935 id=4935 data-nosnippet>4935</a>    }
-<a href=#4936 id=4936 data-nosnippet>4936</a>
-<a href=#4937 id=4937 data-nosnippet>4937</a>    <span class="kw">fn </span>non_mapped_size_in_bytes(
-<a href=#4938 id=4938 data-nosnippet>4938</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#4939 id=4939 data-nosnippet>4939</a>        config: <span class="kw-2">&amp;</span>str,
-<a href=#4940 id=4940 data-nosnippet>4940</a>        dtype: DType,
-<a href=#4941 id=4941 data-nosnippet>4941</a>        weight_pack_factor: usize,
-<a href=#4942 id=4942 data-nosnippet>4942</a>        matformer_config: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>MatformerSliceConfig&gt;,
-<a href=#4943 id=4943 data-nosnippet>4943</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#4944 id=4944 data-nosnippet>4944</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#4945 id=4945 data-nosnippet>4945</a>
-<a href=#4946 id=4946 data-nosnippet>4946</a>        <span class="comment">// Apply matformer slicing if configured
-<a href=#4947 id=4947 data-nosnippet>4947</a>        </span><span class="kw">let </span>text_cfg = <span class="kw">if let </span><span class="prelude-val">Some</span>(matformer_cfg) = matformer_config {
-<a href=#4948 id=4948 data-nosnippet>4948</a>            <span class="kw">use </span><span class="kw">crate</span>::device_map::DummyDeviceMapper;
-<a href=#4949 id=4949 data-nosnippet>4949</a>            <span class="kw">use </span><span class="kw">crate</span>::vision_models::gemma3n::text::handle_matformer_slicing;
-<a href=#4950 id=4950 data-nosnippet>4950</a>
-<a href=#4951 id=4951 data-nosnippet>4951</a>            <span class="kw">let </span>dummy_mapper = DummyDeviceMapper {
-<a href=#4952 id=4952 data-nosnippet>4952</a>                nm_device: Device::Cpu,
-<a href=#4953 id=4953 data-nosnippet>4953</a>            };
-<a href=#4954 id=4954 data-nosnippet>4954</a>            <span class="kw">let </span>(adjusted_cfg, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>) = handle_matformer_slicing(
-<a href=#4955 id=4955 data-nosnippet>4955</a>                <span class="kw-2">&amp;</span>cfg.text_config,
-<a href=#4956 id=4956 data-nosnippet>4956</a>                <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(matformer_cfg.clone()),
-<a href=#4957 id=4957 data-nosnippet>4957</a>                <span class="kw-2">&amp;</span>dummy_mapper,
-<a href=#4958 id=4958 data-nosnippet>4958</a>            )<span class="question-mark">?</span>;
-<a href=#4959 id=4959 data-nosnippet>4959</a>            adjusted_cfg
-<a href=#4960 id=4960 data-nosnippet>4960</a>        } <span class="kw">else </span>{
-<a href=#4961 id=4961 data-nosnippet>4961</a>            cfg.text_config.clone()
-<a href=#4962 id=4962 data-nosnippet>4962</a>        };
-<a href=#4963 id=4963 data-nosnippet>4963</a>
-<a href=#4964 id=4964 data-nosnippet>4964</a>        <span class="kw">let </span>text_cfg = <span class="kw-2">&amp;</span>text_cfg;
-<a href=#4965 id=4965 data-nosnippet>4965</a>
-<a href=#4966 id=4966 data-nosnippet>4966</a>        <span class="comment">// Text components that are not device-mapped
-<a href=#4967 id=4967 data-nosnippet>4967</a>        </span><span class="kw">let </span>text_elems = {
-<a href=#4968 id=4968 data-nosnippet>4968</a>            <span class="comment">// Embeddings
-<a href=#4969 id=4969 data-nosnippet>4969</a>            </span><span class="kw">let </span>embed_tokens = text_cfg.hidden_size * text_cfg.vocab_size;
-<a href=#4970 id=4970 data-nosnippet>4970</a>            <span class="kw">let </span>embed_tokens_per_layer = text_cfg.num_hidden_layers
-<a href=#4971 id=4971 data-nosnippet>4971</a>                * text_cfg.hidden_size_per_layer_input
-<a href=#4972 id=4972 data-nosnippet>4972</a>                * text_cfg.vocab_size_per_layer_input;
-<a href=#4973 id=4973 data-nosnippet>4973</a>
-<a href=#4974 id=4974 data-nosnippet>4974</a>            <span class="comment">// LM head (if not tied)
-<a href=#4975 id=4975 data-nosnippet>4975</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!text_cfg.tie_word_embeddings || weight_pack_factor != <span class="number">1 </span>{
-<a href=#4976 id=4976 data-nosnippet>4976</a>                text_cfg.hidden_size * text_cfg.vocab_size / weight_pack_factor
-<a href=#4977 id=4977 data-nosnippet>4977</a>            } <span class="kw">else </span>{
-<a href=#4978 id=4978 data-nosnippet>4978</a>                <span class="number">0
-<a href=#4979 id=4979 data-nosnippet>4979</a>            </span>};
-<a href=#4980 id=4980 data-nosnippet>4980</a>
-<a href=#4981 id=4981 data-nosnippet>4981</a>            <span class="comment">// Final layer norm
-<a href=#4982 id=4982 data-nosnippet>4982</a>            </span><span class="kw">let </span>norm = text_cfg.hidden_size;
-<a href=#4983 id=4983 data-nosnippet>4983</a>
-<a href=#4984 id=4984 data-nosnippet>4984</a>            <span class="comment">// AltUp projections (not device-mapped)
-<a href=#4985 id=4985 data-nosnippet>4985</a>            </span><span class="kw">let </span>altup_projections =
-<a href=#4986 id=4986 data-nosnippet>4986</a>                (text_cfg.altup_num_inputs - <span class="number">1</span>) * text_cfg.hidden_size * text_cfg.hidden_size
-<a href=#4987 id=4987 data-nosnippet>4987</a>                    / weight_pack_factor;
-<a href=#4988 id=4988 data-nosnippet>4988</a>            <span class="kw">let </span>altup_unembed_projections =
-<a href=#4989 id=4989 data-nosnippet>4989</a>                (text_cfg.altup_num_inputs - <span class="number">1</span>) * text_cfg.hidden_size * text_cfg.hidden_size
-<a href=#4990 id=4990 data-nosnippet>4990</a>                    / weight_pack_factor;
-<a href=#4991 id=4991 data-nosnippet>4991</a>
-<a href=#4992 id=4992 data-nosnippet>4992</a>            <span class="comment">// Per-layer model projection
-<a href=#4993 id=4993 data-nosnippet>4993</a>            </span><span class="kw">let </span>per_layer_model_projection = text_cfg.num_hidden_layers
-<a href=#4994 id=4994 data-nosnippet>4994</a>                * text_cfg.hidden_size
-<a href=#4995 id=4995 data-nosnippet>4995</a>                * text_cfg.hidden_size_per_layer_input
-<a href=#4996 id=4996 data-nosnippet>4996</a>                / weight_pack_factor;
-<a href=#4997 id=4997 data-nosnippet>4997</a>            <span class="kw">let </span>per_layer_projection_norm = text_cfg.hidden_size;
-<a href=#4998 id=4998 data-nosnippet>4998</a>
-<a href=#4999 id=4999 data-nosnippet>4999</a>            embed_tokens
-<a href=#5000 id=5000 data-nosnippet>5000</a>                + embed_tokens_per_layer
-<a href=#5001 id=5001 data-nosnippet>5001</a>                + lm_head
-<a href=#5002 id=5002 data-nosnippet>5002</a>                + norm
-<a href=#5003 id=5003 data-nosnippet>5003</a>                + altup_projections
-<a href=#5004 id=5004 data-nosnippet>5004</a>                + altup_unembed_projections
-<a href=#5005 id=5005 data-nosnippet>5005</a>                + per_layer_model_projection
-<a href=#5006 id=5006 data-nosnippet>5006</a>                + per_layer_projection_norm
-<a href=#5007 id=5007 data-nosnippet>5007</a>        };
-<a href=#5008 id=5008 data-nosnippet>5008</a>
-<a href=#5009 id=5009 data-nosnippet>5009</a>        <span class="comment">// Vision components
-<a href=#5010 id=5010 data-nosnippet>5010</a>        </span><span class="kw">let </span>vision_elems = {
-<a href=#5011 id=5011 data-nosnippet>5011</a>            <span class="kw">let </span>vision_cfg = <span class="kw-2">&amp;</span>cfg.vision_config;
-<a href=#5012 id=5012 data-nosnippet>5012</a>            <span class="comment">// Vision tower - calculated from actual Gemma3n architecture
-<a href=#5013 id=5013 data-nosnippet>5013</a>            // NOTE: Vision tower uses only Conv2d layers, NOT Arc&lt;dyn QuantMethod&gt;,
-<a href=#5014 id=5014 data-nosnippet>5014</a>            // so NONE of these should be divided by weight_pack_factor
-<a href=#5015 id=5015 data-nosnippet>5015</a>            </span><span class="kw">let </span>vision_tower_elems = {
-<a href=#5016 id=5016 data-nosnippet>5016</a>                <span class="kw">use </span><span class="kw">crate</span>::vision_models::gemma3n::vision::{
-<a href=#5017 id=5017 data-nosnippet>5017</a>                    gemma3n_mobilenet_def, make_divisible, BlockType, INPUT_CHANNELS,
-<a href=#5018 id=5018 data-nosnippet>5018</a>                    MSFA_EXPANSION_RATIO, MSFA_IN_CHANNELS, MSFA_OUT_CHANNELS, STEM_KERNEL_SIZE,
-<a href=#5019 id=5019 data-nosnippet>5019</a>                    STEM_OUT_CHANNELS,
-<a href=#5020 id=5020 data-nosnippet>5020</a>                };
-<a href=#5021 id=5021 data-nosnippet>5021</a>
-<a href=#5022 id=5022 data-nosnippet>5022</a>                <span class="comment">// Stem: ConvNormAct (Conv2d + RMSNorm)
-<a href=#5023 id=5023 data-nosnippet>5023</a>                </span><span class="kw">let </span>stem_conv =
-<a href=#5024 id=5024 data-nosnippet>5024</a>                    INPUT_CHANNELS * STEM_OUT_CHANNELS * STEM_KERNEL_SIZE * STEM_KERNEL_SIZE;
-<a href=#5025 id=5025 data-nosnippet>5025</a>                <span class="kw">let </span>stem_norm = STEM_OUT_CHANNELS; <span class="comment">// RMSNorm weight
-<a href=#5026 id=5026 data-nosnippet>5026</a>
-<a href=#5027 id=5027 data-nosnippet>5027</a>                // Track input channels through the network
-<a href=#5028 id=5028 data-nosnippet>5028</a>                </span><span class="kw">let </span><span class="kw-2">mut </span>in_chs = STEM_OUT_CHANNELS;
-<a href=#5029 id=5029 data-nosnippet>5029</a>                <span class="kw">let </span><span class="kw-2">mut </span>total_elems = stem_conv + stem_norm;
-<a href=#5030 id=5030 data-nosnippet>5030</a>
-<a href=#5031 id=5031 data-nosnippet>5031</a>                <span class="comment">// Process all stages from gemma3n_mobilenet_def
-<a href=#5032 id=5032 data-nosnippet>5032</a>                </span><span class="kw">let </span>block_defs = gemma3n_mobilenet_def();
-<a href=#5033 id=5033 data-nosnippet>5033</a>
-<a href=#5034 id=5034 data-nosnippet>5034</a>                <span class="kw">for </span>stage_blocks <span class="kw">in </span>block_defs.iter() {
-<a href=#5035 id=5035 data-nosnippet>5035</a>                    <span class="kw">for </span>block_type <span class="kw">in </span>stage_blocks.iter() {
-<a href=#5036 id=5036 data-nosnippet>5036</a>                        <span class="kw">match </span>block_type {
-<a href=#5037 id=5037 data-nosnippet>5037</a>                            BlockType::EdgeResidual {
-<a href=#5038 id=5038 data-nosnippet>5038</a>                                out_channels,
-<a href=#5039 id=5039 data-nosnippet>5039</a>                                kernel_size,
-<a href=#5040 id=5040 data-nosnippet>5040</a>                                stride: <span class="kw">_</span>,
-<a href=#5041 id=5041 data-nosnippet>5041</a>                                expand_ratio,
-<a href=#5042 id=5042 data-nosnippet>5042</a>                                ..
-<a href=#5043 id=5043 data-nosnippet>5043</a>                            } =&gt; {
-<a href=#5044 id=5044 data-nosnippet>5044</a>                                <span class="attr">#[allow(clippy::cast_precision_loss)]
-<a href=#5045 id=5045 data-nosnippet>5045</a>                                </span><span class="kw">let </span>mid_chs = make_divisible(in_chs <span class="kw">as </span>f64 * expand_ratio, <span class="number">8</span>);
-<a href=#5046 id=5046 data-nosnippet>5046</a>                                <span class="comment">// EdgeResidual: all Conv2d layers, not quantizable
-<a href=#5047 id=5047 data-nosnippet>5047</a>                                </span>total_elems += in_chs * mid_chs * kernel_size * kernel_size; <span class="comment">// conv_exp (Conv2d)
-<a href=#5048 id=5048 data-nosnippet>5048</a>                                </span>total_elems += mid_chs; <span class="comment">// bn1 weight
-<a href=#5049 id=5049 data-nosnippet>5049</a>                                </span>total_elems += mid_chs * out_channels; <span class="comment">// conv_pwl (Conv2d)
-<a href=#5050 id=5050 data-nosnippet>5050</a>                                </span>total_elems += out_channels; <span class="comment">// bn2 weight
-<a href=#5051 id=5051 data-nosnippet>5051</a>                                </span>in_chs = <span class="kw-2">*</span>out_channels;
-<a href=#5052 id=5052 data-nosnippet>5052</a>                            }
-<a href=#5053 id=5053 data-nosnippet>5053</a>                            BlockType::UniversalInvertedResidual {
-<a href=#5054 id=5054 data-nosnippet>5054</a>                                out_channels,
-<a href=#5055 id=5055 data-nosnippet>5055</a>                                start_kernel_size,
-<a href=#5056 id=5056 data-nosnippet>5056</a>                                mid_kernel_size,
-<a href=#5057 id=5057 data-nosnippet>5057</a>                                stride: <span class="kw">_</span>,
-<a href=#5058 id=5058 data-nosnippet>5058</a>                                expand_ratio,
-<a href=#5059 id=5059 data-nosnippet>5059</a>                                ..
-<a href=#5060 id=5060 data-nosnippet>5060</a>                            } =&gt; {
-<a href=#5061 id=5061 data-nosnippet>5061</a>                                <span class="attr">#[allow(clippy::cast_precision_loss)]
-<a href=#5062 id=5062 data-nosnippet>5062</a>                                </span><span class="kw">let </span>mid_chs = make_divisible(in_chs <span class="kw">as </span>f64 * expand_ratio, <span class="number">8</span>);
-<a href=#5063 id=5063 data-nosnippet>5063</a>                                <span class="comment">// UniversalInvertedResidual: all Conv2d layers, not quantizable
-<a href=#5064 id=5064 data-nosnippet>5064</a>                                </span><span class="kw">if </span><span class="kw-2">*</span>expand_ratio != <span class="number">1.0 </span>{
-<a href=#5065 id=5065 data-nosnippet>5065</a>                                    total_elems += in_chs * mid_chs; <span class="comment">// expand conv (Conv2d)
-<a href=#5066 id=5066 data-nosnippet>5066</a>                                    </span>total_elems += mid_chs; <span class="comment">// expand norm
-<a href=#5067 id=5067 data-nosnippet>5067</a>                                </span>}
-<a href=#5068 id=5068 data-nosnippet>5068</a>                                <span class="kw">if </span><span class="kw-2">*</span>start_kernel_size &gt; <span class="number">0 </span>{
-<a href=#5069 id=5069 data-nosnippet>5069</a>                                    total_elems += mid_chs * start_kernel_size * start_kernel_size; <span class="comment">// depthwise start (Conv2d)
-<a href=#5070 id=5070 data-nosnippet>5070</a>                                    </span>total_elems += mid_chs; <span class="comment">// norm
-<a href=#5071 id=5071 data-nosnippet>5071</a>                                </span>}
-<a href=#5072 id=5072 data-nosnippet>5072</a>                                <span class="kw">if </span><span class="kw-2">*</span>mid_kernel_size &gt; <span class="number">0 </span>{
-<a href=#5073 id=5073 data-nosnippet>5073</a>                                    total_elems += mid_chs * mid_kernel_size * mid_kernel_size; <span class="comment">// depthwise mid (Conv2d)
-<a href=#5074 id=5074 data-nosnippet>5074</a>                                    </span>total_elems += mid_chs; <span class="comment">// norm
-<a href=#5075 id=5075 data-nosnippet>5075</a>                                </span>}
-<a href=#5076 id=5076 data-nosnippet>5076</a>                                total_elems += mid_chs * out_channels; <span class="comment">// project conv (Conv2d)
-<a href=#5077 id=5077 data-nosnippet>5077</a>                                </span>total_elems += out_channels; <span class="comment">// project norm
-<a href=#5078 id=5078 data-nosnippet>5078</a>                                </span>total_elems += out_channels; <span class="comment">// layer scale gamma
-<a href=#5079 id=5079 data-nosnippet>5079</a>                                </span>in_chs = <span class="kw-2">*</span>out_channels;
-<a href=#5080 id=5080 data-nosnippet>5080</a>                            }
-<a href=#5081 id=5081 data-nosnippet>5081</a>                            BlockType::MultiQueryAttention {
-<a href=#5082 id=5082 data-nosnippet>5082</a>                                num_heads,
-<a href=#5083 id=5083 data-nosnippet>5083</a>                                kv_dim,
-<a href=#5084 id=5084 data-nosnippet>5084</a>                                kv_stride: <span class="kw">_</span>,
-<a href=#5085 id=5085 data-nosnippet>5085</a>                                ..
-<a href=#5086 id=5086 data-nosnippet>5086</a>                            } =&gt; {
-<a href=#5087 id=5087 data-nosnippet>5087</a>                                <span class="comment">// MMQA: all Conv2d layers, not quantizable
-<a href=#5088 id=5088 data-nosnippet>5088</a>                                </span><span class="kw">let </span>dw_kernel_size = <span class="number">3</span>; <span class="comment">// Default dw_kernel_size for MMQA
-<a href=#5089 id=5089 data-nosnippet>5089</a>                                </span>total_elems += in_chs; <span class="comment">// norm weight
-<a href=#5090 id=5090 data-nosnippet>5090</a>                                </span>total_elems += in_chs * num_heads * kv_dim; <span class="comment">// query_proj (Conv2d)
-<a href=#5091 id=5091 data-nosnippet>5091</a>                                </span>total_elems += in_chs * kv_dim; <span class="comment">// key_proj (Conv2d)
-<a href=#5092 id=5092 data-nosnippet>5092</a>                                </span>total_elems += in_chs * dw_kernel_size * dw_kernel_size; <span class="comment">// key_dw_conv (Conv2d)
-<a href=#5093 id=5093 data-nosnippet>5093</a>                                </span>total_elems += <span class="kw-2">*</span>kv_dim; <span class="comment">// value_down_conv (Conv2d)
-<a href=#5094 id=5094 data-nosnippet>5094</a>                                </span>total_elems += <span class="number">1</span>; <span class="comment">// value_norm weight
-<a href=#5095 id=5095 data-nosnippet>5095</a>                                </span>total_elems += <span class="kw-2">*</span>kv_dim; <span class="comment">// value_proj (Conv2d)
-<a href=#5096 id=5096 data-nosnippet>5096</a>                                </span>total_elems += num_heads * kv_dim * in_chs; <span class="comment">// output_proj (Conv2d)
-<a href=#5097 id=5097 data-nosnippet>5097</a>                                </span>total_elems += in_chs; <span class="comment">// layer scale
-<a href=#5098 id=5098 data-nosnippet>5098</a>                            </span>}
-<a href=#5099 id=5099 data-nosnippet>5099</a>                        }
-<a href=#5100 id=5100 data-nosnippet>5100</a>                    }
-<a href=#5101 id=5101 data-nosnippet>5101</a>                }
-<a href=#5102 id=5102 data-nosnippet>5102</a>
-<a href=#5103 id=5103 data-nosnippet>5103</a>                <span class="comment">// Multi-scale fusion adapter (msfa) - also uses Conv2d layers
-<a href=#5104 id=5104 data-nosnippet>5104</a>                </span><span class="kw">let </span>msfa_in = MSFA_IN_CHANNELS.iter().sum::&lt;usize&gt;();
-<a href=#5105 id=5105 data-nosnippet>5105</a>                <span class="kw">let </span>msfa_out = MSFA_OUT_CHANNELS;
-<a href=#5106 id=5106 data-nosnippet>5106</a>                <span class="attr">#[allow(clippy::cast_precision_loss)]
-<a href=#5107 id=5107 data-nosnippet>5107</a>                </span><span class="kw">let </span>msfa_mid = make_divisible(msfa_in <span class="kw">as </span>f64 * MSFA_EXPANSION_RATIO, <span class="number">8</span>);
-<a href=#5108 id=5108 data-nosnippet>5108</a>
-<a href=#5109 id=5109 data-nosnippet>5109</a>                <span class="comment">// MSFA FFN (UIR with expansion_ratio) - Conv2d layers, not quantizable
-<a href=#5110 id=5110 data-nosnippet>5110</a>                </span>total_elems += msfa_in * msfa_mid; <span class="comment">// expand (Conv2d)
-<a href=#5111 id=5111 data-nosnippet>5111</a>                </span>total_elems += msfa_mid; <span class="comment">// expand norm
-<a href=#5112 id=5112 data-nosnippet>5112</a>                </span>total_elems += msfa_mid * msfa_out; <span class="comment">// project (Conv2d)
-<a href=#5113 id=5113 data-nosnippet>5113</a>                </span>total_elems += msfa_out; <span class="comment">// project norm
-<a href=#5114 id=5114 data-nosnippet>5114</a>                </span>total_elems += msfa_out; <span class="comment">// final norm
-<a href=#5115 id=5115 data-nosnippet>5115</a>
-<a href=#5116 id=5116 data-nosnippet>5116</a>                </span>total_elems
-<a href=#5117 id=5117 data-nosnippet>5117</a>            };
-<a href=#5118 id=5118 data-nosnippet>5118</a>
-<a href=#5119 id=5119 data-nosnippet>5119</a>            <span class="comment">// Vision multimodal embedder components
-<a href=#5120 id=5120 data-nosnippet>5120</a>            </span><span class="kw">let </span>embed_vision_elems = {
-<a href=#5121 id=5121 data-nosnippet>5121</a>                <span class="comment">// Embedding layer (not quantizable)
-<a href=#5122 id=5122 data-nosnippet>5122</a>                </span><span class="kw">let </span>embedding = vision_cfg.vocab_size * vision_cfg.hidden_size;
-<a href=#5123 id=5123 data-nosnippet>5123</a>
-<a href=#5124 id=5124 data-nosnippet>5124</a>                <span class="comment">// Normalization layers (not quantizable)
-<a href=#5125 id=5125 data-nosnippet>5125</a>                </span><span class="kw">let </span>hard_norm = vision_cfg.hidden_size;
-<a href=#5126 id=5126 data-nosnippet>5126</a>                <span class="kw">let </span>soft_norm = vision_cfg.hidden_size;
-<a href=#5127 id=5127 data-nosnippet>5127</a>
-<a href=#5128 id=5128 data-nosnippet>5128</a>                <span class="comment">// Projection from vision to text hidden size (IS Arc&lt;dyn QuantMethod&gt;, so quantizable)
-<a href=#5129 id=5129 data-nosnippet>5129</a>                </span><span class="kw">let </span>projection = vision_cfg.hidden_size * text_cfg.hidden_size / weight_pack_factor;
-<a href=#5130 id=5130 data-nosnippet>5130</a>
-<a href=#5131 id=5131 data-nosnippet>5131</a>                <span class="comment">// Post-projection norm (not quantizable)
-<a href=#5132 id=5132 data-nosnippet>5132</a>                </span><span class="kw">let </span>post_norm = text_cfg.hidden_size;
-<a href=#5133 id=5133 data-nosnippet>5133</a>
-<a href=#5134 id=5134 data-nosnippet>5134</a>                embedding + hard_norm + soft_norm + projection + post_norm
-<a href=#5135 id=5135 data-nosnippet>5135</a>            };
-<a href=#5136 id=5136 data-nosnippet>5136</a>
-<a href=#5137 id=5137 data-nosnippet>5137</a>            vision_tower_elems + embed_vision_elems
-<a href=#5138 id=5138 data-nosnippet>5138</a>        };
-<a href=#5139 id=5139 data-nosnippet>5139</a>
-<a href=#5140 id=5140 data-nosnippet>5140</a>        <span class="comment">// Audio components - based on actual audio.rs structure
-<a href=#5141 id=5141 data-nosnippet>5141</a>        </span><span class="kw">let </span>audio_elems = {
-<a href=#5142 id=5142 data-nosnippet>5142</a>            <span class="kw">let </span>audio_cfg = <span class="kw-2">&amp;</span>cfg.audio_config;
-<a href=#5143 id=5143 data-nosnippet>5143</a>
-<a href=#5144 id=5144 data-nosnippet>5144</a>            <span class="comment">// SubSampleConvProjection components
-<a href=#5145 id=5145 data-nosnippet>5145</a>            </span><span class="kw">let </span>subsample_conv_projection_elems = {
-<a href=#5146 id=5146 data-nosnippet>5146</a>                <span class="comment">// Conv blocks (Conv2d layers - NOT quantizable)
-<a href=#5147 id=5147 data-nosnippet>5147</a>                </span><span class="kw">let </span><span class="kw-2">mut </span>conv_elems = <span class="number">0</span>;
-<a href=#5148 id=5148 data-nosnippet>5148</a>
-<a href=#5149 id=5149 data-nosnippet>5149</a>                <span class="comment">// conv_0: Conv2d from 1 channel to first channel size
-<a href=#5150 id=5150 data-nosnippet>5150</a>                </span><span class="kw">let </span>in_ch_0 = <span class="number">1</span>;
-<a href=#5151 id=5151 data-nosnippet>5151</a>                <span class="kw">let </span>out_ch_0 = audio_cfg.sscp_conv_channel_size[<span class="number">0</span>];
-<a href=#5152 id=5152 data-nosnippet>5152</a>                <span class="kw">let </span>kernel_0 = <span class="kw-2">&amp;</span>audio_cfg.sscp_conv_kernel_size[<span class="number">0</span>];
-<a href=#5153 id=5153 data-nosnippet>5153</a>                conv_elems += in_ch_0 * out_ch_0 * kernel_0[<span class="number">0</span>] * kernel_0[<span class="number">1</span>];
-<a href=#5154 id=5154 data-nosnippet>5154</a>
-<a href=#5155 id=5155 data-nosnippet>5155</a>                <span class="comment">// conv_1: Conv2d from first to second channel size
-<a href=#5156 id=5156 data-nosnippet>5156</a>                </span><span class="kw">let </span>in_ch_1 = out_ch_0;
-<a href=#5157 id=5157 data-nosnippet>5157</a>                <span class="kw">let </span>out_ch_1 = audio_cfg.sscp_conv_channel_size[<span class="number">1</span>];
-<a href=#5158 id=5158 data-nosnippet>5158</a>                <span class="kw">let </span>kernel_1 = <span class="kw-2">&amp;</span>audio_cfg.sscp_conv_kernel_size[<span class="number">1</span>];
-<a href=#5159 id=5159 data-nosnippet>5159</a>                conv_elems += in_ch_1 * out_ch_1 * kernel_1[<span class="number">0</span>] * kernel_1[<span class="number">1</span>];
-<a href=#5160 id=5160 data-nosnippet>5160</a>
-<a href=#5161 id=5161 data-nosnippet>5161</a>                <span class="comment">// CumulativeGroupNorm for each conv block (weight only, no bias by default)
-<a href=#5162 id=5162 data-nosnippet>5162</a>                </span><span class="kw">let </span>norm_0 = out_ch_0; <span class="comment">// norm weight for conv_0
-<a href=#5163 id=5163 data-nosnippet>5163</a>                </span><span class="kw">let </span>norm_1 = out_ch_1; <span class="comment">// norm weight for conv_1
-<a href=#5164 id=5164 data-nosnippet>5164</a>
-<a href=#5165 id=5165 data-nosnippet>5165</a>                // input_proj_linear (Arc&lt;dyn QuantMethod&gt; - IS quantizable)
-<a href=#5166 id=5166 data-nosnippet>5166</a>                </span><span class="kw">let </span><span class="kw-2">mut </span>f_out = audio_cfg.input_feat_size;
-<a href=#5167 id=5167 data-nosnippet>5167</a>                <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="number">2 </span>{
-<a href=#5168 id=5168 data-nosnippet>5168</a>                    <span class="kw">let </span>kernel_w = audio_cfg.sscp_conv_kernel_size[i][<span class="number">1</span>];
-<a href=#5169 id=5169 data-nosnippet>5169</a>                    <span class="kw">let </span>stride_w = audio_cfg.sscp_conv_stride_size[i][<span class="number">1</span>];
-<a href=#5170 id=5170 data-nosnippet>5170</a>                    <span class="kw">let </span>pad_left = <span class="number">1</span>;
-<a href=#5171 id=5171 data-nosnippet>5171</a>                    <span class="kw">let </span>pad_right = <span class="number">1</span>;
-<a href=#5172 id=5172 data-nosnippet>5172</a>                    f_out = (f_out + pad_left + pad_right + stride_w - kernel_w) / stride_w;
-<a href=#5173 id=5173 data-nosnippet>5173</a>                }
-<a href=#5174 id=5174 data-nosnippet>5174</a>                <span class="kw">let </span>input_proj_in_features = out_ch_1 * f_out;
-<a href=#5175 id=5175 data-nosnippet>5175</a>                <span class="kw">let </span>input_proj_linear =
-<a href=#5176 id=5176 data-nosnippet>5176</a>                    input_proj_in_features * audio_cfg.hidden_size / weight_pack_factor;
-<a href=#5177 id=5177 data-nosnippet>5177</a>
-<a href=#5178 id=5178 data-nosnippet>5178</a>                conv_elems + norm_0 + norm_1 + input_proj_linear
-<a href=#5179 id=5179 data-nosnippet>5179</a>            };
-<a href=#5180 id=5180 data-nosnippet>5180</a>
-<a href=#5181 id=5181 data-nosnippet>5181</a>            <span class="comment">// Conformer blocks
-<a href=#5182 id=5182 data-nosnippet>5182</a>            </span><span class="kw">let </span>conformer_elems = {
-<a href=#5183 id=5183 data-nosnippet>5183</a>                <span class="kw">let </span><span class="kw-2">mut </span>total = <span class="number">0</span>;
-<a href=#5184 id=5184 data-nosnippet>5184</a>
-<a href=#5185 id=5185 data-nosnippet>5185</a>                <span class="kw">for _ in </span><span class="number">0</span>..audio_cfg.conf_num_hidden_layers {
-<a href=#5186 id=5186 data-nosnippet>5186</a>                    <span class="comment">// ConformerAttention
-<a href=#5187 id=5187 data-nosnippet>5187</a>                    </span><span class="kw">let </span>attention_elems = {
-<a href=#5188 id=5188 data-nosnippet>5188</a>                        <span class="comment">// Norms (NOT quantizable)
-<a href=#5189 id=5189 data-nosnippet>5189</a>                        </span><span class="kw">let </span>pre_attn_norm = audio_cfg.hidden_size;
-<a href=#5190 id=5190 data-nosnippet>5190</a>                        <span class="kw">let </span>post_norm = audio_cfg.hidden_size;
-<a href=#5191 id=5191 data-nosnippet>5191</a>
-<a href=#5192 id=5192 data-nosnippet>5192</a>                        <span class="comment">// Attention projections (Arc&lt;dyn QuantMethod&gt; - IS quantizable)
-<a href=#5193 id=5193 data-nosnippet>5193</a>                        </span><span class="kw">let </span>q_proj =
-<a href=#5194 id=5194 data-nosnippet>5194</a>                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
-<a href=#5195 id=5195 data-nosnippet>5195</a>                        <span class="kw">let </span>k_proj =
-<a href=#5196 id=5196 data-nosnippet>5196</a>                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
-<a href=#5197 id=5197 data-nosnippet>5197</a>                        <span class="kw">let </span>v_proj =
-<a href=#5198 id=5198 data-nosnippet>5198</a>                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
-<a href=#5199 id=5199 data-nosnippet>5199</a>                        <span class="kw">let </span>post =
-<a href=#5200 id=5200 data-nosnippet>5200</a>                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
-<a href=#5201 id=5201 data-nosnippet>5201</a>
-<a href=#5202 id=5202 data-nosnippet>5202</a>                        <span class="comment">// RelativePositionEmbedding
-<a href=#5203 id=5203 data-nosnippet>5203</a>                        </span><span class="kw">let </span>pos_proj =
-<a href=#5204 id=5204 data-nosnippet>5204</a>                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
-<a href=#5205 id=5205 data-nosnippet>5205</a>                        <span class="kw">let </span>per_dim_scale =
-<a href=#5206 id=5206 data-nosnippet>5206</a>                            audio_cfg.hidden_size / audio_cfg.conf_num_attention_heads; <span class="comment">// head_dim
-<a href=#5207 id=5207 data-nosnippet>5207</a>                        </span><span class="kw">let </span>inv_timescales = audio_cfg.hidden_size / <span class="number">2</span>; <span class="comment">// num_timescales
-<a href=#5208 id=5208 data-nosnippet>5208</a>                        </span><span class="kw">let </span>pos_indices = audio_cfg.conf_attention_context_left
-<a href=#5209 id=5209 data-nosnippet>5209</a>                            + audio_cfg.conf_attention_context_right
-<a href=#5210 id=5210 data-nosnippet>5210</a>                            + <span class="number">1</span>;
-<a href=#5211 id=5211 data-nosnippet>5211</a>
-<a href=#5212 id=5212 data-nosnippet>5212</a>                        <span class="comment">// Local causal masks (precomputed tensors)
-<a href=#5213 id=5213 data-nosnippet>5213</a>                        </span><span class="kw">let </span>chunk_size = audio_cfg.conf_attention_chunk_size;
-<a href=#5214 id=5214 data-nosnippet>5214</a>                        <span class="kw">let </span>context_size = chunk_size + audio_cfg.conf_attention_context_left - <span class="number">1
-<a href=#5215 id=5215 data-nosnippet>5215</a>                            </span>+ audio_cfg.conf_attention_context_right;
-<a href=#5216 id=5216 data-nosnippet>5216</a>                        <span class="kw">let </span>local_causal_valid_mask = chunk_size * context_size; <span class="comment">// U8 tensor
-<a href=#5217 id=5217 data-nosnippet>5217</a>                        </span><span class="kw">let </span>invalid_logits_tensor = <span class="number">1</span>; <span class="comment">// single f32 value
-<a href=#5218 id=5218 data-nosnippet>5218</a>
-<a href=#5219 id=5219 data-nosnippet>5219</a>                        </span>pre_attn_norm
-<a href=#5220 id=5220 data-nosnippet>5220</a>                            + post_norm
-<a href=#5221 id=5221 data-nosnippet>5221</a>                            + q_proj
-<a href=#5222 id=5222 data-nosnippet>5222</a>                            + k_proj
-<a href=#5223 id=5223 data-nosnippet>5223</a>                            + v_proj
-<a href=#5224 id=5224 data-nosnippet>5224</a>                            + post
-<a href=#5225 id=5225 data-nosnippet>5225</a>                            + pos_proj
-<a href=#5226 id=5226 data-nosnippet>5226</a>                            + per_dim_scale
-<a href=#5227 id=5227 data-nosnippet>5227</a>                            + inv_timescales
-<a href=#5228 id=5228 data-nosnippet>5228</a>                            + pos_indices
-<a href=#5229 id=5229 data-nosnippet>5229</a>                            + local_causal_valid_mask
-<a href=#5230 id=5230 data-nosnippet>5230</a>                            + invalid_logits_tensor
-<a href=#5231 id=5231 data-nosnippet>5231</a>                    };
-<a href=#5232 id=5232 data-nosnippet>5232</a>
-<a href=#5233 id=5233 data-nosnippet>5233</a>                    <span class="comment">// ConformerFeedForward (start and end)
-<a href=#5234 id=5234 data-nosnippet>5234</a>                    </span><span class="kw">let </span>ffw_elems = {
-<a href=#5235 id=5235 data-nosnippet>5235</a>                        <span class="comment">// Each FFW has:
-<a href=#5236 id=5236 data-nosnippet>5236</a>                        // - pre_layer_norm (NOT quantizable)
-<a href=#5237 id=5237 data-nosnippet>5237</a>                        // - ffw_layer_1 (Arc&lt;dyn QuantMethod&gt; - IS quantizable)
-<a href=#5238 id=5238 data-nosnippet>5238</a>                        // - ffw_layer_2 (Arc&lt;dyn QuantMethod&gt; - IS quantizable)
-<a href=#5239 id=5239 data-nosnippet>5239</a>                        // - post_layer_norm (NOT quantizable)
-<a href=#5240 id=5240 data-nosnippet>5240</a>                        </span><span class="kw">let </span>intermediate_size = audio_cfg.hidden_size * <span class="number">4</span>;
-<a href=#5241 id=5241 data-nosnippet>5241</a>
-<a href=#5242 id=5242 data-nosnippet>5242</a>                        <span class="kw">let </span>ffw_start = {
-<a href=#5243 id=5243 data-nosnippet>5243</a>                            <span class="kw">let </span>pre_norm = audio_cfg.hidden_size;
-<a href=#5244 id=5244 data-nosnippet>5244</a>                            <span class="kw">let </span>layer_1 =
-<a href=#5245 id=5245 data-nosnippet>5245</a>                                audio_cfg.hidden_size * intermediate_size / weight_pack_factor;
-<a href=#5246 id=5246 data-nosnippet>5246</a>                            <span class="kw">let </span>layer_2 =
-<a href=#5247 id=5247 data-nosnippet>5247</a>                                intermediate_size * audio_cfg.hidden_size / weight_pack_factor;
-<a href=#5248 id=5248 data-nosnippet>5248</a>                            <span class="kw">let </span>post_norm = audio_cfg.hidden_size;
-<a href=#5249 id=5249 data-nosnippet>5249</a>                            pre_norm + layer_1 + layer_2 + post_norm
-<a href=#5250 id=5250 data-nosnippet>5250</a>                        };
-<a href=#5251 id=5251 data-nosnippet>5251</a>
-<a href=#5252 id=5252 data-nosnippet>5252</a>                        <span class="kw">let </span>ffw_end = ffw_start; <span class="comment">// Same structure
-<a href=#5253 id=5253 data-nosnippet>5253</a>
-<a href=#5254 id=5254 data-nosnippet>5254</a>                        </span>ffw_start + ffw_end
-<a href=#5255 id=5255 data-nosnippet>5255</a>                    };
-<a href=#5256 id=5256 data-nosnippet>5256</a>
-<a href=#5257 id=5257 data-nosnippet>5257</a>                    <span class="comment">// ConformerLightConv1d
-<a href=#5258 id=5258 data-nosnippet>5258</a>                    </span><span class="kw">let </span>lconv1d_elems = {
-<a href=#5259 id=5259 data-nosnippet>5259</a>                        <span class="comment">// Norms (NOT quantizable)
-<a href=#5260 id=5260 data-nosnippet>5260</a>                        </span><span class="kw">let </span>pre_layer_norm = audio_cfg.hidden_size;
-<a href=#5261 id=5261 data-nosnippet>5261</a>                        <span class="kw">let </span>conv_norm = audio_cfg.hidden_size;
-<a href=#5262 id=5262 data-nosnippet>5262</a>
-<a href=#5263 id=5263 data-nosnippet>5263</a>                        <span class="comment">// Linear layers (Arc&lt;dyn QuantMethod&gt; - IS quantizable)
-<a href=#5264 id=5264 data-nosnippet>5264</a>                        </span><span class="kw">let </span>linear_start = audio_cfg.hidden_size * (audio_cfg.hidden_size * <span class="number">2</span>)
-<a href=#5265 id=5265 data-nosnippet>5265</a>                            / weight_pack_factor;
-<a href=#5266 id=5266 data-nosnippet>5266</a>                        <span class="kw">let </span>linear_end =
-<a href=#5267 id=5267 data-nosnippet>5267</a>                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
-<a href=#5268 id=5268 data-nosnippet>5268</a>
-<a href=#5269 id=5269 data-nosnippet>5269</a>                        <span class="comment">// depthwise_conv1d (Conv1d - NOT quantizable)
-<a href=#5270 id=5270 data-nosnippet>5270</a>                        </span><span class="kw">let </span>depthwise = audio_cfg.hidden_size * audio_cfg.conf_conv_kernel_size;
-<a href=#5271 id=5271 data-nosnippet>5271</a>
-<a href=#5272 id=5272 data-nosnippet>5272</a>                        pre_layer_norm + conv_norm + linear_start + linear_end + depthwise
-<a href=#5273 id=5273 data-nosnippet>5273</a>                    };
-<a href=#5274 id=5274 data-nosnippet>5274</a>
-<a href=#5275 id=5275 data-nosnippet>5275</a>                    <span class="comment">// Final norm for conformer block (NOT quantizable)
-<a href=#5276 id=5276 data-nosnippet>5276</a>                    </span><span class="kw">let </span>block_norm = audio_cfg.hidden_size;
-<a href=#5277 id=5277 data-nosnippet>5277</a>
-<a href=#5278 id=5278 data-nosnippet>5278</a>                    total += attention_elems + ffw_elems + lconv1d_elems + block_norm;
-<a href=#5279 id=5279 data-nosnippet>5279</a>                }
-<a href=#5280 id=5280 data-nosnippet>5280</a>
-<a href=#5281 id=5281 data-nosnippet>5281</a>                total
-<a href=#5282 id=5282 data-nosnippet>5282</a>            };
-<a href=#5283 id=5283 data-nosnippet>5283</a>
-<a href=#5284 id=5284 data-nosnippet>5284</a>            <span class="comment">// Audio multimodal embedder (embed_audio)
-<a href=#5285 id=5285 data-nosnippet>5285</a>            </span><span class="kw">let </span>embed_audio_elems = {
-<a href=#5286 id=5286 data-nosnippet>5286</a>                <span class="comment">// Embedding layer (ScaledEmbedding - NOT quantizable)
-<a href=#5287 id=5287 data-nosnippet>5287</a>                </span><span class="kw">let </span>embedding = audio_cfg.vocab_size * audio_cfg.hidden_size;
-<a href=#5288 id=5288 data-nosnippet>5288</a>
-<a href=#5289 id=5289 data-nosnippet>5289</a>                <span class="comment">// RMS norms (NOT quantizable)
-<a href=#5290 id=5290 data-nosnippet>5290</a>                </span><span class="kw">let </span>hard_embedding_norm = audio_cfg.hidden_size; <span class="comment">// with scale
-<a href=#5291 id=5291 data-nosnippet>5291</a>                </span><span class="kw">let </span>soft_embedding_norm = audio_cfg.hidden_size; <span class="comment">// with scale
-<a href=#5292 id=5292 data-nosnippet>5292</a>                </span><span class="kw">let </span>embedding_post_projection_norm = text_cfg.hidden_size; <span class="comment">// without scale
-<a href=#5293 id=5293 data-nosnippet>5293</a>
-<a href=#5294 id=5294 data-nosnippet>5294</a>                // Projection (Arc&lt;dyn QuantMethod&gt; - IS quantizable)
-<a href=#5295 id=5295 data-nosnippet>5295</a>                </span><span class="kw">let </span>embedding_projection =
-<a href=#5296 id=5296 data-nosnippet>5296</a>                    audio_cfg.hidden_size * text_cfg.hidden_size / weight_pack_factor;
-<a href=#5297 id=5297 data-nosnippet>5297</a>
-<a href=#5298 id=5298 data-nosnippet>5298</a>                embedding
-<a href=#5299 id=5299 data-nosnippet>5299</a>                    + hard_embedding_norm
-<a href=#5300 id=5300 data-nosnippet>5300</a>                    + soft_embedding_norm
-<a href=#5301 id=5301 data-nosnippet>5301</a>                    + embedding_post_projection_norm
-<a href=#5302 id=5302 data-nosnippet>5302</a>                    + embedding_projection
-<a href=#5303 id=5303 data-nosnippet>5303</a>            };
-<a href=#5304 id=5304 data-nosnippet>5304</a>
-<a href=#5305 id=5305 data-nosnippet>5305</a>            subsample_conv_projection_elems + conformer_elems + embed_audio_elems
-<a href=#5306 id=5306 data-nosnippet>5306</a>        };
-<a href=#5307 id=5307 data-nosnippet>5307</a>
-<a href=#5308 id=5308 data-nosnippet>5308</a>        <span class="kw">let </span>vision_dtype = <span class="kw">if </span>dtype == DType::F16 {
-<a href=#5309 id=5309 data-nosnippet>5309</a>            <span class="comment">// f16 -&gt; f32 for vision model in particular.
-<a href=#5310 id=5310 data-nosnippet>5310</a>            </span>DType::F32
-<a href=#5311 id=5311 data-nosnippet>5311</a>        } <span class="kw">else </span>{
-<a href=#5312 id=5312 data-nosnippet>5312</a>            dtype
-<a href=#5313 id=5313 data-nosnippet>5313</a>        };
-<a href=#5314 id=5314 data-nosnippet>5314</a>
-<a href=#5315 id=5315 data-nosnippet>5315</a>        <span class="kw">let </span>total_elems = text_elems * dtype.size_in_bytes()
-<a href=#5316 id=5316 data-nosnippet>5316</a>            + vision_elems * vision_dtype.size_in_bytes()
-<a href=#5317 id=5317 data-nosnippet>5317</a>            + audio_elems * dtype.size_in_bytes();
-<a href=#5318 id=5318 data-nosnippet>5318</a>
-<a href=#5319 id=5319 data-nosnippet>5319</a>        <span class="prelude-val">Ok</span>(total_elems)
-<a href=#5320 id=5320 data-nosnippet>5320</a>    }
-<a href=#5321 id=5321 data-nosnippet>5321</a>
-<a href=#5322 id=5322 data-nosnippet>5322</a>    <span class="kw">fn </span>layer_sizes_in_bytes(
-<a href=#5323 id=5323 data-nosnippet>5323</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#5324 id=5324 data-nosnippet>5324</a>        config: <span class="kw-2">&amp;</span>str,
-<a href=#5325 id=5325 data-nosnippet>5325</a>        dtype: DType,
-<a href=#5326 id=5326 data-nosnippet>5326</a>        weight_pack_factor: usize,
-<a href=#5327 id=5327 data-nosnippet>5327</a>        matformer_config: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>MatformerSliceConfig&gt;,
-<a href=#5328 id=5328 data-nosnippet>5328</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
-<a href=#5329 id=5329 data-nosnippet>5329</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#5330 id=5330 data-nosnippet>5330</a>
-<a href=#5331 id=5331 data-nosnippet>5331</a>        <span class="comment">// Apply matformer slicing if configured
-<a href=#5332 id=5332 data-nosnippet>5332</a>        </span><span class="kw">let </span>(text_cfg, _layer_rename_map, _layers_skipped) = <span class="kw">if let </span><span class="prelude-val">Some</span>(matformer_cfg) =
-<a href=#5333 id=5333 data-nosnippet>5333</a>            matformer_config
-<a href=#5334 id=5334 data-nosnippet>5334</a>        {
-<a href=#5335 id=5335 data-nosnippet>5335</a>            <span class="kw">use </span><span class="kw">crate</span>::device_map::DummyDeviceMapper;
-<a href=#5336 id=5336 data-nosnippet>5336</a>            <span class="kw">use </span><span class="kw">crate</span>::vision_models::gemma3n::text::handle_matformer_slicing;
-<a href=#5337 id=5337 data-nosnippet>5337</a>
-<a href=#5338 id=5338 data-nosnippet>5338</a>            <span class="kw">let </span>dummy_mapper = DummyDeviceMapper {
-<a href=#5339 id=5339 data-nosnippet>5339</a>                nm_device: Device::Cpu,
-<a href=#5340 id=5340 data-nosnippet>5340</a>            };
-<a href=#5341 id=5341 data-nosnippet>5341</a>            <span class="kw">let </span>(adjusted_cfg, <span class="kw">_</span>, <span class="kw">_</span>, layer_rename_map, layers_skipped) = handle_matformer_slicing(
-<a href=#5342 id=5342 data-nosnippet>5342</a>                <span class="kw-2">&amp;</span>cfg.text_config,
-<a href=#5343 id=5343 data-nosnippet>5343</a>                <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(matformer_cfg.clone()),
-<a href=#5344 id=5344 data-nosnippet>5344</a>                <span class="kw-2">&amp;</span>dummy_mapper,
-<a href=#5345 id=5345 data-nosnippet>5345</a>            )<span class="question-mark">?</span>;
-<a href=#5346 id=5346 data-nosnippet>5346</a>            (adjusted_cfg, layer_rename_map, layers_skipped)
-<a href=#5347 id=5347 data-nosnippet>5347</a>        } <span class="kw">else </span>{
-<a href=#5348 id=5348 data-nosnippet>5348</a>            (cfg.text_config.clone(), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
-<a href=#5349 id=5349 data-nosnippet>5349</a>        };
-<a href=#5350 id=5350 data-nosnippet>5350</a>
-<a href=#5351 id=5351 data-nosnippet>5351</a>        <span class="kw">let </span>text_cfg = <span class="kw-2">&amp;</span>text_cfg;
-<a href=#5352 id=5352 data-nosnippet>5352</a>
-<a href=#5353 id=5353 data-nosnippet>5353</a>        <span class="comment">// When matformer slicing is applied, we only include the layers that are kept
-<a href=#5354 id=5354 data-nosnippet>5354</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>layer_sizes = Vec::new();
-<a href=#5355 id=5355 data-nosnippet>5355</a>
-<a href=#5356 id=5356 data-nosnippet>5356</a>        <span class="comment">// Note: We don't need orig_intermediate_sizes anymore since the adjusted config
-<a href=#5357 id=5357 data-nosnippet>5357</a>        // already has the correct intermediate sizes after matformer slicing
-<a href=#5358 id=5358 data-nosnippet>5358</a>
-<a href=#5359 id=5359 data-nosnippet>5359</a>        </span><span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..text_cfg.num_hidden_layers {
-<a href=#5360 id=5360 data-nosnippet>5360</a>            <span class="kw">let </span>per_layer_elems = {
-<a href=#5361 id=5361 data-nosnippet>5361</a>                <span class="comment">// Layer norms
-<a href=#5362 id=5362 data-nosnippet>5362</a>                </span><span class="kw">let </span>input_layernorm = text_cfg.hidden_size;
-<a href=#5363 id=5363 data-nosnippet>5363</a>                <span class="kw">let </span>post_attention_layernorm = text_cfg.hidden_size;
-<a href=#5364 id=5364 data-nosnippet>5364</a>                <span class="kw">let </span>pre_feedforward_layernorm = text_cfg.hidden_size;
-<a href=#5365 id=5365 data-nosnippet>5365</a>                <span class="kw">let </span>post_feedforward_layernorm = text_cfg.hidden_size;
-<a href=#5366 id=5366 data-nosnippet>5366</a>                <span class="kw">let </span>post_per_layer_input_norm = text_cfg.hidden_size;
-<a href=#5367 id=5367 data-nosnippet>5367</a>
-<a href=#5368 id=5368 data-nosnippet>5368</a>                <span class="comment">// Attention components
-<a href=#5369 id=5369 data-nosnippet>5369</a>                </span><span class="kw">let </span>size_in = text_cfg.hidden_size;
-<a href=#5370 id=5370 data-nosnippet>5370</a>                <span class="kw">let </span>size_q = text_cfg.num_attention_heads * text_cfg.head_dim;
-<a href=#5371 id=5371 data-nosnippet>5371</a>                <span class="kw">let </span>size_kv = text_cfg.num_key_value_heads * text_cfg.head_dim;
-<a href=#5372 id=5372 data-nosnippet>5372</a>
-<a href=#5373 id=5373 data-nosnippet>5373</a>                <span class="kw">let </span>q_proj = size_in * size_q / weight_pack_factor;
-<a href=#5374 id=5374 data-nosnippet>5374</a>                <span class="kw">let </span>k_proj = size_in * size_kv / weight_pack_factor;
-<a href=#5375 id=5375 data-nosnippet>5375</a>                <span class="kw">let </span>v_proj = size_in * size_kv / weight_pack_factor;
-<a href=#5376 id=5376 data-nosnippet>5376</a>                <span class="kw">let </span>o_proj = size_q * size_in / weight_pack_factor;
-<a href=#5377 id=5377 data-nosnippet>5377</a>
-<a href=#5378 id=5378 data-nosnippet>5378</a>                <span class="comment">// Q, K, V norms
-<a href=#5379 id=5379 data-nosnippet>5379</a>                </span><span class="kw">let </span>q_norm = text_cfg.head_dim;
-<a href=#5380 id=5380 data-nosnippet>5380</a>                <span class="kw">let </span>k_norm = text_cfg.head_dim;
-<a href=#5381 id=5381 data-nosnippet>5381</a>                <span class="kw">let </span>v_norm = text_cfg.head_dim; <span class="comment">// No bias for v_norm
-<a href=#5382 id=5382 data-nosnippet>5382</a>
-<a href=#5383 id=5383 data-nosnippet>5383</a>                // MLP components - use the adjusted intermediate sizes from matformer
-<a href=#5384 id=5384 data-nosnippet>5384</a>                </span><span class="kw">let </span>intermediate_size = <span class="kw">match </span><span class="kw-2">&amp;</span>text_cfg.intermediate_size {
-<a href=#5385 id=5385 data-nosnippet>5385</a>                    IntermediateSize::Single(size) =&gt; <span class="kw-2">*</span>size,
-<a href=#5386 id=5386 data-nosnippet>5386</a>                    IntermediateSize::PerLayer(sizes) =&gt; sizes[layer_idx],
-<a href=#5387 id=5387 data-nosnippet>5387</a>                    IntermediateSize::Matformer(sizes, <span class="kw">_</span>) =&gt; sizes[layer_idx],
-<a href=#5388 id=5388 data-nosnippet>5388</a>                };
-<a href=#5389 id=5389 data-nosnippet>5389</a>                <span class="kw">let </span>gate_proj = text_cfg.hidden_size * intermediate_size / weight_pack_factor;
-<a href=#5390 id=5390 data-nosnippet>5390</a>                <span class="kw">let </span>up_proj = text_cfg.hidden_size * intermediate_size / weight_pack_factor;
-<a href=#5391 id=5391 data-nosnippet>5391</a>                <span class="kw">let </span>down_proj = intermediate_size * text_cfg.hidden_size / weight_pack_factor;
-<a href=#5392 id=5392 data-nosnippet>5392</a>
-<a href=#5393 id=5393 data-nosnippet>5393</a>                <span class="comment">// AltUp components (per layer)
-<a href=#5394 id=5394 data-nosnippet>5394</a>                </span><span class="kw">let </span>altup_elems = {
-<a href=#5395 id=5395 data-nosnippet>5395</a>                    <span class="kw">let </span>correct_output_scale = text_cfg.hidden_size;
-<a href=#5396 id=5396 data-nosnippet>5396</a>                    <span class="kw">let </span>correction_coefs = text_cfg.altup_num_inputs * text_cfg.altup_num_inputs;
-<a href=#5397 id=5397 data-nosnippet>5397</a>                    <span class="kw">let </span>prediction_coefs =
-<a href=#5398 id=5398 data-nosnippet>5398</a>                        text_cfg.altup_num_inputs * text_cfg.altup_num_inputs.pow(<span class="number">2</span>);
-<a href=#5399 id=5399 data-nosnippet>5399</a>                    <span class="kw">let </span>modality_router = text_cfg.hidden_size * text_cfg.altup_num_inputs;
-<a href=#5400 id=5400 data-nosnippet>5400</a>                    <span class="kw">let </span>router_norm = text_cfg.hidden_size;
-<a href=#5401 id=5401 data-nosnippet>5401</a>
-<a href=#5402 id=5402 data-nosnippet>5402</a>                    correct_output_scale
-<a href=#5403 id=5403 data-nosnippet>5403</a>                        + correction_coefs
-<a href=#5404 id=5404 data-nosnippet>5404</a>                        + prediction_coefs
-<a href=#5405 id=5405 data-nosnippet>5405</a>                        + modality_router
-<a href=#5406 id=5406 data-nosnippet>5406</a>                        + router_norm
-<a href=#5407 id=5407 data-nosnippet>5407</a>                };
-<a href=#5408 id=5408 data-nosnippet>5408</a>
-<a href=#5409 id=5409 data-nosnippet>5409</a>                <span class="comment">// Laurel block components
-<a href=#5410 id=5410 data-nosnippet>5410</a>                </span><span class="kw">let </span>laurel_elems = {
-<a href=#5411 id=5411 data-nosnippet>5411</a>                    <span class="kw">let </span>left = text_cfg.hidden_size * text_cfg.laurel_rank;
-<a href=#5412 id=5412 data-nosnippet>5412</a>                    <span class="kw">let </span>right = text_cfg.laurel_rank * text_cfg.hidden_size;
-<a href=#5413 id=5413 data-nosnippet>5413</a>                    <span class="kw">let </span>post_norm = text_cfg.hidden_size;
-<a href=#5414 id=5414 data-nosnippet>5414</a>
-<a href=#5415 id=5415 data-nosnippet>5415</a>                    left + right + post_norm
-<a href=#5416 id=5416 data-nosnippet>5416</a>                };
-<a href=#5417 id=5417 data-nosnippet>5417</a>
-<a href=#5418 id=5418 data-nosnippet>5418</a>                <span class="comment">// Per-layer input components
-<a href=#5419 id=5419 data-nosnippet>5419</a>                </span><span class="kw">let </span>per_layer_input_gate =
-<a href=#5420 id=5420 data-nosnippet>5420</a>                    text_cfg.hidden_size * text_cfg.hidden_size_per_layer_input;
-<a href=#5421 id=5421 data-nosnippet>5421</a>                <span class="kw">let </span>per_layer_projection =
-<a href=#5422 id=5422 data-nosnippet>5422</a>                    text_cfg.hidden_size_per_layer_input * text_cfg.hidden_size;
-<a href=#5423 id=5423 data-nosnippet>5423</a>
-<a href=#5424 id=5424 data-nosnippet>5424</a>                input_layernorm
-<a href=#5425 id=5425 data-nosnippet>5425</a>                    + post_attention_layernorm
-<a href=#5426 id=5426 data-nosnippet>5426</a>                    + pre_feedforward_layernorm
-<a href=#5427 id=5427 data-nosnippet>5427</a>                    + post_feedforward_layernorm
-<a href=#5428 id=5428 data-nosnippet>5428</a>                    + post_per_layer_input_norm
-<a href=#5429 id=5429 data-nosnippet>5429</a>                    + q_proj
-<a href=#5430 id=5430 data-nosnippet>5430</a>                    + k_proj
-<a href=#5431 id=5431 data-nosnippet>5431</a>                    + v_proj
-<a href=#5432 id=5432 data-nosnippet>5432</a>                    + o_proj
-<a href=#5433 id=5433 data-nosnippet>5433</a>                    + q_norm
-<a href=#5434 id=5434 data-nosnippet>5434</a>                    + k_norm
-<a href=#5435 id=5435 data-nosnippet>5435</a>                    + v_norm
-<a href=#5436 id=5436 data-nosnippet>5436</a>                    + gate_proj
-<a href=#5437 id=5437 data-nosnippet>5437</a>                    + up_proj
-<a href=#5438 id=5438 data-nosnippet>5438</a>                    + down_proj
-<a href=#5439 id=5439 data-nosnippet>5439</a>                    + altup_elems
-<a href=#5440 id=5440 data-nosnippet>5440</a>                    + laurel_elems
-<a href=#5441 id=5441 data-nosnippet>5441</a>                    + per_layer_input_gate
-<a href=#5442 id=5442 data-nosnippet>5442</a>                    + per_layer_projection
-<a href=#5443 id=5443 data-nosnippet>5443</a>            };
-<a href=#5444 id=5444 data-nosnippet>5444</a>
-<a href=#5445 id=5445 data-nosnippet>5445</a>            layer_sizes.push(per_layer_elems * dtype.size_in_bytes());
-<a href=#5446 id=5446 data-nosnippet>5446</a>        }
-<a href=#5447 id=5447 data-nosnippet>5447</a>
-<a href=#5448 id=5448 data-nosnippet>5448</a>        <span class="prelude-val">Ok</span>(layer_sizes)
-<a href=#5449 id=5449 data-nosnippet>5449</a>    }
-<a href=#5450 id=5450 data-nosnippet>5450</a>
-<a href=#5451 id=5451 data-nosnippet>5451</a>    <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#5452 id=5452 data-nosnippet>5452</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#5453 id=5453 data-nosnippet>5453</a>        <span class="prelude-val">Ok</span>(cfg.text_config.num_hidden_layers)
-<a href=#5454 id=5454 data-nosnippet>5454</a>    }
-<a href=#5455 id=5455 data-nosnippet>5455</a>
-<a href=#5456 id=5456 data-nosnippet>5456</a>    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
-<a href=#5457 id=5457 data-nosnippet>5457</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#5458 id=5458 data-nosnippet>5458</a>        <span class="kw">let </span>cfg = cfg.text_config;
-<a href=#5459 id=5459 data-nosnippet>5459</a>
-<a href=#5460 id=5460 data-nosnippet>5460</a>        <span class="kw">let </span>cfg = ModelConfigMetadata {
-<a href=#5461 id=5461 data-nosnippet>5461</a>            max_seq_len: cfg.max_position_embeddings,
-<a href=#5462 id=5462 data-nosnippet>5462</a>            num_layers: cfg.num_hidden_layers,
-<a href=#5463 id=5463 data-nosnippet>5463</a>            hidden_size: cfg.hidden_size,
-<a href=#5464 id=5464 data-nosnippet>5464</a>            num_kv_heads: cfg.num_key_value_heads,
-<a href=#5465 id=5465 data-nosnippet>5465</a>            num_attn_heads: cfg.num_attention_heads,
-<a href=#5466 id=5466 data-nosnippet>5466</a>            sliding_window: <span class="prelude-val">None</span>, <span class="comment">// None to be more forgiving, some do not
-<a href=#5467 id=5467 data-nosnippet>5467</a>            </span>k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-<a href=#5468 id=5468 data-nosnippet>5468</a>            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-<a href=#5469 id=5469 data-nosnippet>5469</a>        };
-<a href=#5470 id=5470 data-nosnippet>5470</a>
-<a href=#5471 id=5471 data-nosnippet>5471</a>        <span class="prelude-val">Ok</span>(Box::new(cfg))
-<a href=#5472 id=5472 data-nosnippet>5472</a>    }
-<a href=#5473 id=5473 data-nosnippet>5473</a>
-<a href=#5474 id=5474 data-nosnippet>5474</a>    <span class="kw">fn </span>non_mapped_sub_models(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;NonMappedSubModel&gt;&gt; {
-<a href=#5475 id=5475 data-nosnippet>5475</a>        <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[NonMappedSubModel::Vision, NonMappedSubModel::Audio])
-<a href=#5476 id=5476 data-nosnippet>5476</a>    }
-<a href=#5477 id=5477 data-nosnippet>5477</a>}</code></pre></div></section></main></body></html>
+<a href=#4880 id=4880 data-nosnippet>4880</a>                    * spatial_size
+<a href=#4881 id=4881 data-nosnippet>4881</a>                    * cfg.text_config.hidden_size;
+<a href=#4882 id=4882 data-nosnippet>4882</a>
+<a href=#4883 id=4883 data-nosnippet>4883</a>                vision_features.max(projected)
+<a href=#4884 id=4884 data-nosnippet>4884</a>            };
+<a href=#4885 id=4885 data-nosnippet>4885</a>
+<a href=#4886 id=4886 data-nosnippet>4886</a>            max_activation = max_activation.max(vision_tower_act).max(vision_embed_act);
+<a href=#4887 id=4887 data-nosnippet>4887</a>        }
+<a href=#4888 id=4888 data-nosnippet>4888</a>
+<a href=#4889 id=4889 data-nosnippet>4889</a>        <span class="comment">// Audio activation size
+<a href=#4890 id=4890 data-nosnippet>4890</a>        </span>{
+<a href=#4891 id=4891 data-nosnippet>4891</a>            <span class="kw">let </span>audio_cfg = <span class="kw-2">&amp;</span>cfg.audio_config;
+<a href=#4892 id=4892 data-nosnippet>4892</a>
+<a href=#4893 id=4893 data-nosnippet>4893</a>            <span class="comment">// Calculate max audio sequence length based on config
+<a href=#4894 id=4894 data-nosnippet>4894</a>            // Audio uses conformer with subsampling and reduction
+<a href=#4895 id=4895 data-nosnippet>4895</a>
+<a href=#4896 id=4896 data-nosnippet>4896</a>            // A rough estimate of max_audio_frames
+<a href=#4897 id=4897 data-nosnippet>4897</a>            </span><span class="kw">let </span>max_audio_frames = <span class="number">1280</span>;
+<a href=#4898 id=4898 data-nosnippet>4898</a>
+<a href=#4899 id=4899 data-nosnippet>4899</a>            <span class="kw">let </span>subsample_factor: usize = audio_cfg
+<a href=#4900 id=4900 data-nosnippet>4900</a>                .sscp_conv_stride_size
+<a href=#4901 id=4901 data-nosnippet>4901</a>                .iter()
+<a href=#4902 id=4902 data-nosnippet>4902</a>                .map(|stride| stride[<span class="number">0</span>]) <span class="comment">// Time dimension stride
+<a href=#4903 id=4903 data-nosnippet>4903</a>                </span>.product();
+<a href=#4904 id=4904 data-nosnippet>4904</a>            <span class="kw">let </span>audio_seq_after_subsample = max_audio_frames / subsample_factor;
+<a href=#4905 id=4905 data-nosnippet>4905</a>
+<a href=#4906 id=4906 data-nosnippet>4906</a>            <span class="comment">// Audio encoder activations
+<a href=#4907 id=4907 data-nosnippet>4907</a>            </span><span class="kw">let </span>audio_encoder_act = {
+<a href=#4908 id=4908 data-nosnippet>4908</a>                <span class="comment">// Conformer FFW layers have expansion factor from config
+<a href=#4909 id=4909 data-nosnippet>4909</a>                </span><span class="kw">let </span>intermediate_size = audio_cfg.hidden_size * <span class="number">4</span>; <span class="comment">// FFW expansion factor
+<a href=#4910 id=4910 data-nosnippet>4910</a>
+<a href=#4911 id=4911 data-nosnippet>4911</a>                // Peak is in the FFW layers before reduction
+<a href=#4912 id=4912 data-nosnippet>4912</a>                </span>max_batch_size * audio_seq_after_subsample * intermediate_size
+<a href=#4913 id=4913 data-nosnippet>4913</a>            };
+<a href=#4914 id=4914 data-nosnippet>4914</a>
+<a href=#4915 id=4915 data-nosnippet>4915</a>            <span class="comment">// Audio attention activations
+<a href=#4916 id=4916 data-nosnippet>4916</a>            </span><span class="kw">let </span>audio_attn_act = {
+<a href=#4917 id=4917 data-nosnippet>4917</a>                <span class="comment">// Attention uses chunked processing with specific context sizes
+<a href=#4918 id=4918 data-nosnippet>4918</a>                </span><span class="kw">let </span>chunk_size = audio_cfg.conf_attention_chunk_size;
+<a href=#4919 id=4919 data-nosnippet>4919</a>                <span class="kw">let </span>context_size = chunk_size + audio_cfg.conf_attention_context_left - <span class="number">1
+<a href=#4920 id=4920 data-nosnippet>4920</a>                    </span>+ audio_cfg.conf_attention_context_right;
+<a href=#4921 id=4921 data-nosnippet>4921</a>
+<a href=#4922 id=4922 data-nosnippet>4922</a>                <span class="comment">// Peak is attention scores: [B, num_heads, num_chunks, chunk_size, context_size]
+<a href=#4923 id=4923 data-nosnippet>4923</a>                </span><span class="kw">let </span>num_chunks = audio_seq_after_subsample.div_ceil(chunk_size);
+<a href=#4924 id=4924 data-nosnippet>4924</a>
+<a href=#4925 id=4925 data-nosnippet>4925</a>                max_batch_size
+<a href=#4926 id=4926 data-nosnippet>4926</a>                    * audio_cfg.conf_num_attention_heads
+<a href=#4927 id=4927 data-nosnippet>4927</a>                    * num_chunks
+<a href=#4928 id=4928 data-nosnippet>4928</a>                    * chunk_size
+<a href=#4929 id=4929 data-nosnippet>4929</a>                    * context_size
+<a href=#4930 id=4930 data-nosnippet>4930</a>            };
+<a href=#4931 id=4931 data-nosnippet>4931</a>
+<a href=#4932 id=4932 data-nosnippet>4932</a>            max_activation = max_activation.max(audio_encoder_act).max(audio_attn_act);
+<a href=#4933 id=4933 data-nosnippet>4933</a>        }
+<a href=#4934 id=4934 data-nosnippet>4934</a>
+<a href=#4935 id=4935 data-nosnippet>4935</a>        <span class="prelude-val">Ok</span>(max_activation)
+<a href=#4936 id=4936 data-nosnippet>4936</a>    }
+<a href=#4937 id=4937 data-nosnippet>4937</a>
+<a href=#4938 id=4938 data-nosnippet>4938</a>    <span class="kw">fn </span>non_mapped_size_in_bytes(
+<a href=#4939 id=4939 data-nosnippet>4939</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#4940 id=4940 data-nosnippet>4940</a>        config: <span class="kw-2">&amp;</span>str,
+<a href=#4941 id=4941 data-nosnippet>4941</a>        dtype: DType,
+<a href=#4942 id=4942 data-nosnippet>4942</a>        weight_pack_factor: usize,
+<a href=#4943 id=4943 data-nosnippet>4943</a>        matformer_config: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>MatformerSliceConfig&gt;,
+<a href=#4944 id=4944 data-nosnippet>4944</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+<a href=#4945 id=4945 data-nosnippet>4945</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#4946 id=4946 data-nosnippet>4946</a>
+<a href=#4947 id=4947 data-nosnippet>4947</a>        <span class="comment">// Apply matformer slicing if configured
+<a href=#4948 id=4948 data-nosnippet>4948</a>        </span><span class="kw">let </span>text_cfg = <span class="kw">if let </span><span class="prelude-val">Some</span>(matformer_cfg) = matformer_config {
+<a href=#4949 id=4949 data-nosnippet>4949</a>            <span class="kw">use </span><span class="kw">crate</span>::device_map::DummyDeviceMapper;
+<a href=#4950 id=4950 data-nosnippet>4950</a>            <span class="kw">use </span><span class="kw">crate</span>::vision_models::gemma3n::text::handle_matformer_slicing;
+<a href=#4951 id=4951 data-nosnippet>4951</a>
+<a href=#4952 id=4952 data-nosnippet>4952</a>            <span class="kw">let </span>dummy_mapper = DummyDeviceMapper {
+<a href=#4953 id=4953 data-nosnippet>4953</a>                nm_device: Device::Cpu,
+<a href=#4954 id=4954 data-nosnippet>4954</a>            };
+<a href=#4955 id=4955 data-nosnippet>4955</a>            <span class="kw">let </span>(adjusted_cfg, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>) = handle_matformer_slicing(
+<a href=#4956 id=4956 data-nosnippet>4956</a>                <span class="kw-2">&amp;</span>cfg.text_config,
+<a href=#4957 id=4957 data-nosnippet>4957</a>                <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(matformer_cfg.clone()),
+<a href=#4958 id=4958 data-nosnippet>4958</a>                <span class="kw-2">&amp;</span>dummy_mapper,
+<a href=#4959 id=4959 data-nosnippet>4959</a>            )<span class="question-mark">?</span>;
+<a href=#4960 id=4960 data-nosnippet>4960</a>            adjusted_cfg
+<a href=#4961 id=4961 data-nosnippet>4961</a>        } <span class="kw">else </span>{
+<a href=#4962 id=4962 data-nosnippet>4962</a>            cfg.text_config.clone()
+<a href=#4963 id=4963 data-nosnippet>4963</a>        };
+<a href=#4964 id=4964 data-nosnippet>4964</a>
+<a href=#4965 id=4965 data-nosnippet>4965</a>        <span class="kw">let </span>text_cfg = <span class="kw-2">&amp;</span>text_cfg;
+<a href=#4966 id=4966 data-nosnippet>4966</a>
+<a href=#4967 id=4967 data-nosnippet>4967</a>        <span class="comment">// Text components that are not device-mapped
+<a href=#4968 id=4968 data-nosnippet>4968</a>        </span><span class="kw">let </span>text_elems = {
+<a href=#4969 id=4969 data-nosnippet>4969</a>            <span class="comment">// Embeddings
+<a href=#4970 id=4970 data-nosnippet>4970</a>            </span><span class="kw">let </span>embed_tokens = text_cfg.hidden_size * text_cfg.vocab_size;
+<a href=#4971 id=4971 data-nosnippet>4971</a>            <span class="kw">let </span>embed_tokens_per_layer = text_cfg.num_hidden_layers
+<a href=#4972 id=4972 data-nosnippet>4972</a>                * text_cfg.hidden_size_per_layer_input
+<a href=#4973 id=4973 data-nosnippet>4973</a>                * text_cfg.vocab_size_per_layer_input;
+<a href=#4974 id=4974 data-nosnippet>4974</a>
+<a href=#4975 id=4975 data-nosnippet>4975</a>            <span class="comment">// LM head (if not tied)
+<a href=#4976 id=4976 data-nosnippet>4976</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!text_cfg.tie_word_embeddings || weight_pack_factor != <span class="number">1 </span>{
+<a href=#4977 id=4977 data-nosnippet>4977</a>                text_cfg.hidden_size * text_cfg.vocab_size / weight_pack_factor
+<a href=#4978 id=4978 data-nosnippet>4978</a>            } <span class="kw">else </span>{
+<a href=#4979 id=4979 data-nosnippet>4979</a>                <span class="number">0
+<a href=#4980 id=4980 data-nosnippet>4980</a>            </span>};
+<a href=#4981 id=4981 data-nosnippet>4981</a>
+<a href=#4982 id=4982 data-nosnippet>4982</a>            <span class="comment">// Final layer norm
+<a href=#4983 id=4983 data-nosnippet>4983</a>            </span><span class="kw">let </span>norm = text_cfg.hidden_size;
+<a href=#4984 id=4984 data-nosnippet>4984</a>
+<a href=#4985 id=4985 data-nosnippet>4985</a>            <span class="comment">// AltUp projections (not device-mapped)
+<a href=#4986 id=4986 data-nosnippet>4986</a>            </span><span class="kw">let </span>altup_projections =
+<a href=#4987 id=4987 data-nosnippet>4987</a>                (text_cfg.altup_num_inputs - <span class="number">1</span>) * text_cfg.hidden_size * text_cfg.hidden_size
+<a href=#4988 id=4988 data-nosnippet>4988</a>                    / weight_pack_factor;
+<a href=#4989 id=4989 data-nosnippet>4989</a>            <span class="kw">let </span>altup_unembed_projections =
+<a href=#4990 id=4990 data-nosnippet>4990</a>                (text_cfg.altup_num_inputs - <span class="number">1</span>) * text_cfg.hidden_size * text_cfg.hidden_size
+<a href=#4991 id=4991 data-nosnippet>4991</a>                    / weight_pack_factor;
+<a href=#4992 id=4992 data-nosnippet>4992</a>
+<a href=#4993 id=4993 data-nosnippet>4993</a>            <span class="comment">// Per-layer model projection
+<a href=#4994 id=4994 data-nosnippet>4994</a>            </span><span class="kw">let </span>per_layer_model_projection = text_cfg.num_hidden_layers
+<a href=#4995 id=4995 data-nosnippet>4995</a>                * text_cfg.hidden_size
+<a href=#4996 id=4996 data-nosnippet>4996</a>                * text_cfg.hidden_size_per_layer_input
+<a href=#4997 id=4997 data-nosnippet>4997</a>                / weight_pack_factor;
+<a href=#4998 id=4998 data-nosnippet>4998</a>            <span class="kw">let </span>per_layer_projection_norm = text_cfg.hidden_size;
+<a href=#4999 id=4999 data-nosnippet>4999</a>
+<a href=#5000 id=5000 data-nosnippet>5000</a>            embed_tokens
+<a href=#5001 id=5001 data-nosnippet>5001</a>                + embed_tokens_per_layer
+<a href=#5002 id=5002 data-nosnippet>5002</a>                + lm_head
+<a href=#5003 id=5003 data-nosnippet>5003</a>                + norm
+<a href=#5004 id=5004 data-nosnippet>5004</a>                + altup_projections
+<a href=#5005 id=5005 data-nosnippet>5005</a>                + altup_unembed_projections
+<a href=#5006 id=5006 data-nosnippet>5006</a>                + per_layer_model_projection
+<a href=#5007 id=5007 data-nosnippet>5007</a>                + per_layer_projection_norm
+<a href=#5008 id=5008 data-nosnippet>5008</a>        };
+<a href=#5009 id=5009 data-nosnippet>5009</a>
+<a href=#5010 id=5010 data-nosnippet>5010</a>        <span class="comment">// Vision components
+<a href=#5011 id=5011 data-nosnippet>5011</a>        </span><span class="kw">let </span>vision_elems = {
+<a href=#5012 id=5012 data-nosnippet>5012</a>            <span class="kw">let </span>vision_cfg = <span class="kw-2">&amp;</span>cfg.vision_config;
+<a href=#5013 id=5013 data-nosnippet>5013</a>            <span class="comment">// Vision tower - calculated from actual Gemma3n architecture
+<a href=#5014 id=5014 data-nosnippet>5014</a>            // NOTE: Vision tower uses only Conv2d layers, NOT Arc&lt;dyn QuantMethod&gt;,
+<a href=#5015 id=5015 data-nosnippet>5015</a>            // so NONE of these should be divided by weight_pack_factor
+<a href=#5016 id=5016 data-nosnippet>5016</a>            </span><span class="kw">let </span>vision_tower_elems = {
+<a href=#5017 id=5017 data-nosnippet>5017</a>                <span class="kw">use </span><span class="kw">crate</span>::vision_models::gemma3n::vision::{
+<a href=#5018 id=5018 data-nosnippet>5018</a>                    gemma3n_mobilenet_def, make_divisible, BlockType, INPUT_CHANNELS,
+<a href=#5019 id=5019 data-nosnippet>5019</a>                    MSFA_EXPANSION_RATIO, MSFA_IN_CHANNELS, MSFA_OUT_CHANNELS, STEM_KERNEL_SIZE,
+<a href=#5020 id=5020 data-nosnippet>5020</a>                    STEM_OUT_CHANNELS,
+<a href=#5021 id=5021 data-nosnippet>5021</a>                };
+<a href=#5022 id=5022 data-nosnippet>5022</a>
+<a href=#5023 id=5023 data-nosnippet>5023</a>                <span class="comment">// Stem: ConvNormAct (Conv2d + RMSNorm)
+<a href=#5024 id=5024 data-nosnippet>5024</a>                </span><span class="kw">let </span>stem_conv =
+<a href=#5025 id=5025 data-nosnippet>5025</a>                    INPUT_CHANNELS * STEM_OUT_CHANNELS * STEM_KERNEL_SIZE * STEM_KERNEL_SIZE;
+<a href=#5026 id=5026 data-nosnippet>5026</a>                <span class="kw">let </span>stem_norm = STEM_OUT_CHANNELS; <span class="comment">// RMSNorm weight
+<a href=#5027 id=5027 data-nosnippet>5027</a>
+<a href=#5028 id=5028 data-nosnippet>5028</a>                // Track input channels through the network
+<a href=#5029 id=5029 data-nosnippet>5029</a>                </span><span class="kw">let </span><span class="kw-2">mut </span>in_chs = STEM_OUT_CHANNELS;
+<a href=#5030 id=5030 data-nosnippet>5030</a>                <span class="kw">let </span><span class="kw-2">mut </span>total_elems = stem_conv + stem_norm;
+<a href=#5031 id=5031 data-nosnippet>5031</a>
+<a href=#5032 id=5032 data-nosnippet>5032</a>                <span class="comment">// Process all stages from gemma3n_mobilenet_def
+<a href=#5033 id=5033 data-nosnippet>5033</a>                </span><span class="kw">let </span>block_defs = gemma3n_mobilenet_def();
+<a href=#5034 id=5034 data-nosnippet>5034</a>
+<a href=#5035 id=5035 data-nosnippet>5035</a>                <span class="kw">for </span>stage_blocks <span class="kw">in </span>block_defs.iter() {
+<a href=#5036 id=5036 data-nosnippet>5036</a>                    <span class="kw">for </span>block_type <span class="kw">in </span>stage_blocks.iter() {
+<a href=#5037 id=5037 data-nosnippet>5037</a>                        <span class="kw">match </span>block_type {
+<a href=#5038 id=5038 data-nosnippet>5038</a>                            BlockType::EdgeResidual {
+<a href=#5039 id=5039 data-nosnippet>5039</a>                                out_channels,
+<a href=#5040 id=5040 data-nosnippet>5040</a>                                kernel_size,
+<a href=#5041 id=5041 data-nosnippet>5041</a>                                stride: <span class="kw">_</span>,
+<a href=#5042 id=5042 data-nosnippet>5042</a>                                expand_ratio,
+<a href=#5043 id=5043 data-nosnippet>5043</a>                                ..
+<a href=#5044 id=5044 data-nosnippet>5044</a>                            } =&gt; {
+<a href=#5045 id=5045 data-nosnippet>5045</a>                                <span class="attr">#[allow(clippy::cast_precision_loss)]
+<a href=#5046 id=5046 data-nosnippet>5046</a>                                </span><span class="kw">let </span>mid_chs = make_divisible(in_chs <span class="kw">as </span>f64 * expand_ratio, <span class="number">8</span>);
+<a href=#5047 id=5047 data-nosnippet>5047</a>                                <span class="comment">// EdgeResidual: all Conv2d layers, not quantizable
+<a href=#5048 id=5048 data-nosnippet>5048</a>                                </span>total_elems += in_chs * mid_chs * kernel_size * kernel_size; <span class="comment">// conv_exp (Conv2d)
+<a href=#5049 id=5049 data-nosnippet>5049</a>                                </span>total_elems += mid_chs; <span class="comment">// bn1 weight
+<a href=#5050 id=5050 data-nosnippet>5050</a>                                </span>total_elems += mid_chs * out_channels; <span class="comment">// conv_pwl (Conv2d)
+<a href=#5051 id=5051 data-nosnippet>5051</a>                                </span>total_elems += out_channels; <span class="comment">// bn2 weight
+<a href=#5052 id=5052 data-nosnippet>5052</a>                                </span>in_chs = <span class="kw-2">*</span>out_channels;
+<a href=#5053 id=5053 data-nosnippet>5053</a>                            }
+<a href=#5054 id=5054 data-nosnippet>5054</a>                            BlockType::UniversalInvertedResidual {
+<a href=#5055 id=5055 data-nosnippet>5055</a>                                out_channels,
+<a href=#5056 id=5056 data-nosnippet>5056</a>                                start_kernel_size,
+<a href=#5057 id=5057 data-nosnippet>5057</a>                                mid_kernel_size,
+<a href=#5058 id=5058 data-nosnippet>5058</a>                                stride: <span class="kw">_</span>,
+<a href=#5059 id=5059 data-nosnippet>5059</a>                                expand_ratio,
+<a href=#5060 id=5060 data-nosnippet>5060</a>                                ..
+<a href=#5061 id=5061 data-nosnippet>5061</a>                            } =&gt; {
+<a href=#5062 id=5062 data-nosnippet>5062</a>                                <span class="attr">#[allow(clippy::cast_precision_loss)]
+<a href=#5063 id=5063 data-nosnippet>5063</a>                                </span><span class="kw">let </span>mid_chs = make_divisible(in_chs <span class="kw">as </span>f64 * expand_ratio, <span class="number">8</span>);
+<a href=#5064 id=5064 data-nosnippet>5064</a>                                <span class="comment">// UniversalInvertedResidual: all Conv2d layers, not quantizable
+<a href=#5065 id=5065 data-nosnippet>5065</a>                                </span><span class="kw">if </span><span class="kw-2">*</span>expand_ratio != <span class="number">1.0 </span>{
+<a href=#5066 id=5066 data-nosnippet>5066</a>                                    total_elems += in_chs * mid_chs; <span class="comment">// expand conv (Conv2d)
+<a href=#5067 id=5067 data-nosnippet>5067</a>                                    </span>total_elems += mid_chs; <span class="comment">// expand norm
+<a href=#5068 id=5068 data-nosnippet>5068</a>                                </span>}
+<a href=#5069 id=5069 data-nosnippet>5069</a>                                <span class="kw">if </span><span class="kw-2">*</span>start_kernel_size &gt; <span class="number">0 </span>{
+<a href=#5070 id=5070 data-nosnippet>5070</a>                                    total_elems += mid_chs * start_kernel_size * start_kernel_size; <span class="comment">// depthwise start (Conv2d)
+<a href=#5071 id=5071 data-nosnippet>5071</a>                                    </span>total_elems += mid_chs; <span class="comment">// norm
+<a href=#5072 id=5072 data-nosnippet>5072</a>                                </span>}
+<a href=#5073 id=5073 data-nosnippet>5073</a>                                <span class="kw">if </span><span class="kw-2">*</span>mid_kernel_size &gt; <span class="number">0 </span>{
+<a href=#5074 id=5074 data-nosnippet>5074</a>                                    total_elems += mid_chs * mid_kernel_size * mid_kernel_size; <span class="comment">// depthwise mid (Conv2d)
+<a href=#5075 id=5075 data-nosnippet>5075</a>                                    </span>total_elems += mid_chs; <span class="comment">// norm
+<a href=#5076 id=5076 data-nosnippet>5076</a>                                </span>}
+<a href=#5077 id=5077 data-nosnippet>5077</a>                                total_elems += mid_chs * out_channels; <span class="comment">// project conv (Conv2d)
+<a href=#5078 id=5078 data-nosnippet>5078</a>                                </span>total_elems += out_channels; <span class="comment">// project norm
+<a href=#5079 id=5079 data-nosnippet>5079</a>                                </span>total_elems += out_channels; <span class="comment">// layer scale gamma
+<a href=#5080 id=5080 data-nosnippet>5080</a>                                </span>in_chs = <span class="kw-2">*</span>out_channels;
+<a href=#5081 id=5081 data-nosnippet>5081</a>                            }
+<a href=#5082 id=5082 data-nosnippet>5082</a>                            BlockType::MultiQueryAttention {
+<a href=#5083 id=5083 data-nosnippet>5083</a>                                num_heads,
+<a href=#5084 id=5084 data-nosnippet>5084</a>                                kv_dim,
+<a href=#5085 id=5085 data-nosnippet>5085</a>                                kv_stride: <span class="kw">_</span>,
+<a href=#5086 id=5086 data-nosnippet>5086</a>                                ..
+<a href=#5087 id=5087 data-nosnippet>5087</a>                            } =&gt; {
+<a href=#5088 id=5088 data-nosnippet>5088</a>                                <span class="comment">// MMQA: all Conv2d layers, not quantizable
+<a href=#5089 id=5089 data-nosnippet>5089</a>                                </span><span class="kw">let </span>dw_kernel_size = <span class="number">3</span>; <span class="comment">// Default dw_kernel_size for MMQA
+<a href=#5090 id=5090 data-nosnippet>5090</a>                                </span>total_elems += in_chs; <span class="comment">// norm weight
+<a href=#5091 id=5091 data-nosnippet>5091</a>                                </span>total_elems += in_chs * num_heads * kv_dim; <span class="comment">// query_proj (Conv2d)
+<a href=#5092 id=5092 data-nosnippet>5092</a>                                </span>total_elems += in_chs * kv_dim; <span class="comment">// key_proj (Conv2d)
+<a href=#5093 id=5093 data-nosnippet>5093</a>                                </span>total_elems += in_chs * dw_kernel_size * dw_kernel_size; <span class="comment">// key_dw_conv (Conv2d)
+<a href=#5094 id=5094 data-nosnippet>5094</a>                                </span>total_elems += <span class="kw-2">*</span>kv_dim; <span class="comment">// value_down_conv (Conv2d)
+<a href=#5095 id=5095 data-nosnippet>5095</a>                                </span>total_elems += <span class="number">1</span>; <span class="comment">// value_norm weight
+<a href=#5096 id=5096 data-nosnippet>5096</a>                                </span>total_elems += <span class="kw-2">*</span>kv_dim; <span class="comment">// value_proj (Conv2d)
+<a href=#5097 id=5097 data-nosnippet>5097</a>                                </span>total_elems += num_heads * kv_dim * in_chs; <span class="comment">// output_proj (Conv2d)
+<a href=#5098 id=5098 data-nosnippet>5098</a>                                </span>total_elems += in_chs; <span class="comment">// layer scale
+<a href=#5099 id=5099 data-nosnippet>5099</a>                            </span>}
+<a href=#5100 id=5100 data-nosnippet>5100</a>                        }
+<a href=#5101 id=5101 data-nosnippet>5101</a>                    }
+<a href=#5102 id=5102 data-nosnippet>5102</a>                }
+<a href=#5103 id=5103 data-nosnippet>5103</a>
+<a href=#5104 id=5104 data-nosnippet>5104</a>                <span class="comment">// Multi-scale fusion adapter (msfa) - also uses Conv2d layers
+<a href=#5105 id=5105 data-nosnippet>5105</a>                </span><span class="kw">let </span>msfa_in = MSFA_IN_CHANNELS.iter().sum::&lt;usize&gt;();
+<a href=#5106 id=5106 data-nosnippet>5106</a>                <span class="kw">let </span>msfa_out = MSFA_OUT_CHANNELS;
+<a href=#5107 id=5107 data-nosnippet>5107</a>                <span class="attr">#[allow(clippy::cast_precision_loss)]
+<a href=#5108 id=5108 data-nosnippet>5108</a>                </span><span class="kw">let </span>msfa_mid = make_divisible(msfa_in <span class="kw">as </span>f64 * MSFA_EXPANSION_RATIO, <span class="number">8</span>);
+<a href=#5109 id=5109 data-nosnippet>5109</a>
+<a href=#5110 id=5110 data-nosnippet>5110</a>                <span class="comment">// MSFA FFN (UIR with expansion_ratio) - Conv2d layers, not quantizable
+<a href=#5111 id=5111 data-nosnippet>5111</a>                </span>total_elems += msfa_in * msfa_mid; <span class="comment">// expand (Conv2d)
+<a href=#5112 id=5112 data-nosnippet>5112</a>                </span>total_elems += msfa_mid; <span class="comment">// expand norm
+<a href=#5113 id=5113 data-nosnippet>5113</a>                </span>total_elems += msfa_mid * msfa_out; <span class="comment">// project (Conv2d)
+<a href=#5114 id=5114 data-nosnippet>5114</a>                </span>total_elems += msfa_out; <span class="comment">// project norm
+<a href=#5115 id=5115 data-nosnippet>5115</a>                </span>total_elems += msfa_out; <span class="comment">// final norm
+<a href=#5116 id=5116 data-nosnippet>5116</a>
+<a href=#5117 id=5117 data-nosnippet>5117</a>                </span>total_elems
+<a href=#5118 id=5118 data-nosnippet>5118</a>            };
+<a href=#5119 id=5119 data-nosnippet>5119</a>
+<a href=#5120 id=5120 data-nosnippet>5120</a>            <span class="comment">// Vision multimodal embedder components
+<a href=#5121 id=5121 data-nosnippet>5121</a>            </span><span class="kw">let </span>embed_vision_elems = {
+<a href=#5122 id=5122 data-nosnippet>5122</a>                <span class="comment">// Embedding layer (not quantizable)
+<a href=#5123 id=5123 data-nosnippet>5123</a>                </span><span class="kw">let </span>embedding = vision_cfg.vocab_size * vision_cfg.hidden_size;
+<a href=#5124 id=5124 data-nosnippet>5124</a>
+<a href=#5125 id=5125 data-nosnippet>5125</a>                <span class="comment">// Normalization layers (not quantizable)
+<a href=#5126 id=5126 data-nosnippet>5126</a>                </span><span class="kw">let </span>hard_norm = vision_cfg.hidden_size;
+<a href=#5127 id=5127 data-nosnippet>5127</a>                <span class="kw">let </span>soft_norm = vision_cfg.hidden_size;
+<a href=#5128 id=5128 data-nosnippet>5128</a>
+<a href=#5129 id=5129 data-nosnippet>5129</a>                <span class="comment">// Projection from vision to text hidden size (IS Arc&lt;dyn QuantMethod&gt;, so quantizable)
+<a href=#5130 id=5130 data-nosnippet>5130</a>                </span><span class="kw">let </span>projection = vision_cfg.hidden_size * text_cfg.hidden_size / weight_pack_factor;
+<a href=#5131 id=5131 data-nosnippet>5131</a>
+<a href=#5132 id=5132 data-nosnippet>5132</a>                <span class="comment">// Post-projection norm (not quantizable)
+<a href=#5133 id=5133 data-nosnippet>5133</a>                </span><span class="kw">let </span>post_norm = text_cfg.hidden_size;
+<a href=#5134 id=5134 data-nosnippet>5134</a>
+<a href=#5135 id=5135 data-nosnippet>5135</a>                embedding + hard_norm + soft_norm + projection + post_norm
+<a href=#5136 id=5136 data-nosnippet>5136</a>            };
+<a href=#5137 id=5137 data-nosnippet>5137</a>
+<a href=#5138 id=5138 data-nosnippet>5138</a>            vision_tower_elems + embed_vision_elems
+<a href=#5139 id=5139 data-nosnippet>5139</a>        };
+<a href=#5140 id=5140 data-nosnippet>5140</a>
+<a href=#5141 id=5141 data-nosnippet>5141</a>        <span class="comment">// Audio components - based on actual audio.rs structure
+<a href=#5142 id=5142 data-nosnippet>5142</a>        </span><span class="kw">let </span>audio_elems = {
+<a href=#5143 id=5143 data-nosnippet>5143</a>            <span class="kw">let </span>audio_cfg = <span class="kw-2">&amp;</span>cfg.audio_config;
+<a href=#5144 id=5144 data-nosnippet>5144</a>
+<a href=#5145 id=5145 data-nosnippet>5145</a>            <span class="comment">// SubSampleConvProjection components
+<a href=#5146 id=5146 data-nosnippet>5146</a>            </span><span class="kw">let </span>subsample_conv_projection_elems = {
+<a href=#5147 id=5147 data-nosnippet>5147</a>                <span class="comment">// Conv blocks (Conv2d layers - NOT quantizable)
+<a href=#5148 id=5148 data-nosnippet>5148</a>                </span><span class="kw">let </span><span class="kw-2">mut </span>conv_elems = <span class="number">0</span>;
+<a href=#5149 id=5149 data-nosnippet>5149</a>
+<a href=#5150 id=5150 data-nosnippet>5150</a>                <span class="comment">// conv_0: Conv2d from 1 channel to first channel size
+<a href=#5151 id=5151 data-nosnippet>5151</a>                </span><span class="kw">let </span>in_ch_0 = <span class="number">1</span>;
+<a href=#5152 id=5152 data-nosnippet>5152</a>                <span class="kw">let </span>out_ch_0 = audio_cfg.sscp_conv_channel_size[<span class="number">0</span>];
+<a href=#5153 id=5153 data-nosnippet>5153</a>                <span class="kw">let </span>kernel_0 = <span class="kw-2">&amp;</span>audio_cfg.sscp_conv_kernel_size[<span class="number">0</span>];
+<a href=#5154 id=5154 data-nosnippet>5154</a>                conv_elems += in_ch_0 * out_ch_0 * kernel_0[<span class="number">0</span>] * kernel_0[<span class="number">1</span>];
+<a href=#5155 id=5155 data-nosnippet>5155</a>
+<a href=#5156 id=5156 data-nosnippet>5156</a>                <span class="comment">// conv_1: Conv2d from first to second channel size
+<a href=#5157 id=5157 data-nosnippet>5157</a>                </span><span class="kw">let </span>in_ch_1 = out_ch_0;
+<a href=#5158 id=5158 data-nosnippet>5158</a>                <span class="kw">let </span>out_ch_1 = audio_cfg.sscp_conv_channel_size[<span class="number">1</span>];
+<a href=#5159 id=5159 data-nosnippet>5159</a>                <span class="kw">let </span>kernel_1 = <span class="kw-2">&amp;</span>audio_cfg.sscp_conv_kernel_size[<span class="number">1</span>];
+<a href=#5160 id=5160 data-nosnippet>5160</a>                conv_elems += in_ch_1 * out_ch_1 * kernel_1[<span class="number">0</span>] * kernel_1[<span class="number">1</span>];
+<a href=#5161 id=5161 data-nosnippet>5161</a>
+<a href=#5162 id=5162 data-nosnippet>5162</a>                <span class="comment">// CumulativeGroupNorm for each conv block (weight only, no bias by default)
+<a href=#5163 id=5163 data-nosnippet>5163</a>                </span><span class="kw">let </span>norm_0 = out_ch_0; <span class="comment">// norm weight for conv_0
+<a href=#5164 id=5164 data-nosnippet>5164</a>                </span><span class="kw">let </span>norm_1 = out_ch_1; <span class="comment">// norm weight for conv_1
+<a href=#5165 id=5165 data-nosnippet>5165</a>
+<a href=#5166 id=5166 data-nosnippet>5166</a>                // input_proj_linear (Arc&lt;dyn QuantMethod&gt; - IS quantizable)
+<a href=#5167 id=5167 data-nosnippet>5167</a>                </span><span class="kw">let </span><span class="kw-2">mut </span>f_out = audio_cfg.input_feat_size;
+<a href=#5168 id=5168 data-nosnippet>5168</a>                <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="number">2 </span>{
+<a href=#5169 id=5169 data-nosnippet>5169</a>                    <span class="kw">let </span>kernel_w = audio_cfg.sscp_conv_kernel_size[i][<span class="number">1</span>];
+<a href=#5170 id=5170 data-nosnippet>5170</a>                    <span class="kw">let </span>stride_w = audio_cfg.sscp_conv_stride_size[i][<span class="number">1</span>];
+<a href=#5171 id=5171 data-nosnippet>5171</a>                    <span class="kw">let </span>pad_left = <span class="number">1</span>;
+<a href=#5172 id=5172 data-nosnippet>5172</a>                    <span class="kw">let </span>pad_right = <span class="number">1</span>;
+<a href=#5173 id=5173 data-nosnippet>5173</a>                    f_out = (f_out + pad_left + pad_right + stride_w - kernel_w) / stride_w;
+<a href=#5174 id=5174 data-nosnippet>5174</a>                }
+<a href=#5175 id=5175 data-nosnippet>5175</a>                <span class="kw">let </span>input_proj_in_features = out_ch_1 * f_out;
+<a href=#5176 id=5176 data-nosnippet>5176</a>                <span class="kw">let </span>input_proj_linear =
+<a href=#5177 id=5177 data-nosnippet>5177</a>                    input_proj_in_features * audio_cfg.hidden_size / weight_pack_factor;
+<a href=#5178 id=5178 data-nosnippet>5178</a>
+<a href=#5179 id=5179 data-nosnippet>5179</a>                conv_elems + norm_0 + norm_1 + input_proj_linear
+<a href=#5180 id=5180 data-nosnippet>5180</a>            };
+<a href=#5181 id=5181 data-nosnippet>5181</a>
+<a href=#5182 id=5182 data-nosnippet>5182</a>            <span class="comment">// Conformer blocks
+<a href=#5183 id=5183 data-nosnippet>5183</a>            </span><span class="kw">let </span>conformer_elems = {
+<a href=#5184 id=5184 data-nosnippet>5184</a>                <span class="kw">let </span><span class="kw-2">mut </span>total = <span class="number">0</span>;
+<a href=#5185 id=5185 data-nosnippet>5185</a>
+<a href=#5186 id=5186 data-nosnippet>5186</a>                <span class="kw">for _ in </span><span class="number">0</span>..audio_cfg.conf_num_hidden_layers {
+<a href=#5187 id=5187 data-nosnippet>5187</a>                    <span class="comment">// ConformerAttention
+<a href=#5188 id=5188 data-nosnippet>5188</a>                    </span><span class="kw">let </span>attention_elems = {
+<a href=#5189 id=5189 data-nosnippet>5189</a>                        <span class="comment">// Norms (NOT quantizable)
+<a href=#5190 id=5190 data-nosnippet>5190</a>                        </span><span class="kw">let </span>pre_attn_norm = audio_cfg.hidden_size;
+<a href=#5191 id=5191 data-nosnippet>5191</a>                        <span class="kw">let </span>post_norm = audio_cfg.hidden_size;
+<a href=#5192 id=5192 data-nosnippet>5192</a>
+<a href=#5193 id=5193 data-nosnippet>5193</a>                        <span class="comment">// Attention projections (Arc&lt;dyn QuantMethod&gt; - IS quantizable)
+<a href=#5194 id=5194 data-nosnippet>5194</a>                        </span><span class="kw">let </span>q_proj =
+<a href=#5195 id=5195 data-nosnippet>5195</a>                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
+<a href=#5196 id=5196 data-nosnippet>5196</a>                        <span class="kw">let </span>k_proj =
+<a href=#5197 id=5197 data-nosnippet>5197</a>                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
+<a href=#5198 id=5198 data-nosnippet>5198</a>                        <span class="kw">let </span>v_proj =
+<a href=#5199 id=5199 data-nosnippet>5199</a>                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
+<a href=#5200 id=5200 data-nosnippet>5200</a>                        <span class="kw">let </span>post =
+<a href=#5201 id=5201 data-nosnippet>5201</a>                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
+<a href=#5202 id=5202 data-nosnippet>5202</a>
+<a href=#5203 id=5203 data-nosnippet>5203</a>                        <span class="comment">// RelativePositionEmbedding
+<a href=#5204 id=5204 data-nosnippet>5204</a>                        </span><span class="kw">let </span>pos_proj =
+<a href=#5205 id=5205 data-nosnippet>5205</a>                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
+<a href=#5206 id=5206 data-nosnippet>5206</a>                        <span class="kw">let </span>per_dim_scale =
+<a href=#5207 id=5207 data-nosnippet>5207</a>                            audio_cfg.hidden_size / audio_cfg.conf_num_attention_heads; <span class="comment">// head_dim
+<a href=#5208 id=5208 data-nosnippet>5208</a>                        </span><span class="kw">let </span>inv_timescales = audio_cfg.hidden_size / <span class="number">2</span>; <span class="comment">// num_timescales
+<a href=#5209 id=5209 data-nosnippet>5209</a>                        </span><span class="kw">let </span>pos_indices = audio_cfg.conf_attention_context_left
+<a href=#5210 id=5210 data-nosnippet>5210</a>                            + audio_cfg.conf_attention_context_right
+<a href=#5211 id=5211 data-nosnippet>5211</a>                            + <span class="number">1</span>;
+<a href=#5212 id=5212 data-nosnippet>5212</a>
+<a href=#5213 id=5213 data-nosnippet>5213</a>                        <span class="comment">// Local causal masks (precomputed tensors)
+<a href=#5214 id=5214 data-nosnippet>5214</a>                        </span><span class="kw">let </span>chunk_size = audio_cfg.conf_attention_chunk_size;
+<a href=#5215 id=5215 data-nosnippet>5215</a>                        <span class="kw">let </span>context_size = chunk_size + audio_cfg.conf_attention_context_left - <span class="number">1
+<a href=#5216 id=5216 data-nosnippet>5216</a>                            </span>+ audio_cfg.conf_attention_context_right;
+<a href=#5217 id=5217 data-nosnippet>5217</a>                        <span class="kw">let </span>local_causal_valid_mask = chunk_size * context_size; <span class="comment">// U8 tensor
+<a href=#5218 id=5218 data-nosnippet>5218</a>                        </span><span class="kw">let </span>invalid_logits_tensor = <span class="number">1</span>; <span class="comment">// single f32 value
+<a href=#5219 id=5219 data-nosnippet>5219</a>
+<a href=#5220 id=5220 data-nosnippet>5220</a>                        </span>pre_attn_norm
+<a href=#5221 id=5221 data-nosnippet>5221</a>                            + post_norm
+<a href=#5222 id=5222 data-nosnippet>5222</a>                            + q_proj
+<a href=#5223 id=5223 data-nosnippet>5223</a>                            + k_proj
+<a href=#5224 id=5224 data-nosnippet>5224</a>                            + v_proj
+<a href=#5225 id=5225 data-nosnippet>5225</a>                            + post
+<a href=#5226 id=5226 data-nosnippet>5226</a>                            + pos_proj
+<a href=#5227 id=5227 data-nosnippet>5227</a>                            + per_dim_scale
+<a href=#5228 id=5228 data-nosnippet>5228</a>                            + inv_timescales
+<a href=#5229 id=5229 data-nosnippet>5229</a>                            + pos_indices
+<a href=#5230 id=5230 data-nosnippet>5230</a>                            + local_causal_valid_mask
+<a href=#5231 id=5231 data-nosnippet>5231</a>                            + invalid_logits_tensor
+<a href=#5232 id=5232 data-nosnippet>5232</a>                    };
+<a href=#5233 id=5233 data-nosnippet>5233</a>
+<a href=#5234 id=5234 data-nosnippet>5234</a>                    <span class="comment">// ConformerFeedForward (start and end)
+<a href=#5235 id=5235 data-nosnippet>5235</a>                    </span><span class="kw">let </span>ffw_elems = {
+<a href=#5236 id=5236 data-nosnippet>5236</a>                        <span class="comment">// Each FFW has:
+<a href=#5237 id=5237 data-nosnippet>5237</a>                        // - pre_layer_norm (NOT quantizable)
+<a href=#5238 id=5238 data-nosnippet>5238</a>                        // - ffw_layer_1 (Arc&lt;dyn QuantMethod&gt; - IS quantizable)
+<a href=#5239 id=5239 data-nosnippet>5239</a>                        // - ffw_layer_2 (Arc&lt;dyn QuantMethod&gt; - IS quantizable)
+<a href=#5240 id=5240 data-nosnippet>5240</a>                        // - post_layer_norm (NOT quantizable)
+<a href=#5241 id=5241 data-nosnippet>5241</a>                        </span><span class="kw">let </span>intermediate_size = audio_cfg.hidden_size * <span class="number">4</span>;
+<a href=#5242 id=5242 data-nosnippet>5242</a>
+<a href=#5243 id=5243 data-nosnippet>5243</a>                        <span class="kw">let </span>ffw_start = {
+<a href=#5244 id=5244 data-nosnippet>5244</a>                            <span class="kw">let </span>pre_norm = audio_cfg.hidden_size;
+<a href=#5245 id=5245 data-nosnippet>5245</a>                            <span class="kw">let </span>layer_1 =
+<a href=#5246 id=5246 data-nosnippet>5246</a>                                audio_cfg.hidden_size * intermediate_size / weight_pack_factor;
+<a href=#5247 id=5247 data-nosnippet>5247</a>                            <span class="kw">let </span>layer_2 =
+<a href=#5248 id=5248 data-nosnippet>5248</a>                                intermediate_size * audio_cfg.hidden_size / weight_pack_factor;
+<a href=#5249 id=5249 data-nosnippet>5249</a>                            <span class="kw">let </span>post_norm = audio_cfg.hidden_size;
+<a href=#5250 id=5250 data-nosnippet>5250</a>                            pre_norm + layer_1 + layer_2 + post_norm
+<a href=#5251 id=5251 data-nosnippet>5251</a>                        };
+<a href=#5252 id=5252 data-nosnippet>5252</a>
+<a href=#5253 id=5253 data-nosnippet>5253</a>                        <span class="kw">let </span>ffw_end = ffw_start; <span class="comment">// Same structure
+<a href=#5254 id=5254 data-nosnippet>5254</a>
+<a href=#5255 id=5255 data-nosnippet>5255</a>                        </span>ffw_start + ffw_end
+<a href=#5256 id=5256 data-nosnippet>5256</a>                    };
+<a href=#5257 id=5257 data-nosnippet>5257</a>
+<a href=#5258 id=5258 data-nosnippet>5258</a>                    <span class="comment">// ConformerLightConv1d
+<a href=#5259 id=5259 data-nosnippet>5259</a>                    </span><span class="kw">let </span>lconv1d_elems = {
+<a href=#5260 id=5260 data-nosnippet>5260</a>                        <span class="comment">// Norms (NOT quantizable)
+<a href=#5261 id=5261 data-nosnippet>5261</a>                        </span><span class="kw">let </span>pre_layer_norm = audio_cfg.hidden_size;
+<a href=#5262 id=5262 data-nosnippet>5262</a>                        <span class="kw">let </span>conv_norm = audio_cfg.hidden_size;
+<a href=#5263 id=5263 data-nosnippet>5263</a>
+<a href=#5264 id=5264 data-nosnippet>5264</a>                        <span class="comment">// Linear layers (Arc&lt;dyn QuantMethod&gt; - IS quantizable)
+<a href=#5265 id=5265 data-nosnippet>5265</a>                        </span><span class="kw">let </span>linear_start = audio_cfg.hidden_size * (audio_cfg.hidden_size * <span class="number">2</span>)
+<a href=#5266 id=5266 data-nosnippet>5266</a>                            / weight_pack_factor;
+<a href=#5267 id=5267 data-nosnippet>5267</a>                        <span class="kw">let </span>linear_end =
+<a href=#5268 id=5268 data-nosnippet>5268</a>                            audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor;
+<a href=#5269 id=5269 data-nosnippet>5269</a>
+<a href=#5270 id=5270 data-nosnippet>5270</a>                        <span class="comment">// depthwise_conv1d (Conv1d - NOT quantizable)
+<a href=#5271 id=5271 data-nosnippet>5271</a>                        </span><span class="kw">let </span>depthwise = audio_cfg.hidden_size * audio_cfg.conf_conv_kernel_size;
+<a href=#5272 id=5272 data-nosnippet>5272</a>
+<a href=#5273 id=5273 data-nosnippet>5273</a>                        pre_layer_norm + conv_norm + linear_start + linear_end + depthwise
+<a href=#5274 id=5274 data-nosnippet>5274</a>                    };
+<a href=#5275 id=5275 data-nosnippet>5275</a>
+<a href=#5276 id=5276 data-nosnippet>5276</a>                    <span class="comment">// Final norm for conformer block (NOT quantizable)
+<a href=#5277 id=5277 data-nosnippet>5277</a>                    </span><span class="kw">let </span>block_norm = audio_cfg.hidden_size;
+<a href=#5278 id=5278 data-nosnippet>5278</a>
+<a href=#5279 id=5279 data-nosnippet>5279</a>                    total += attention_elems + ffw_elems + lconv1d_elems + block_norm;
+<a href=#5280 id=5280 data-nosnippet>5280</a>                }
+<a href=#5281 id=5281 data-nosnippet>5281</a>
+<a href=#5282 id=5282 data-nosnippet>5282</a>                total
+<a href=#5283 id=5283 data-nosnippet>5283</a>            };
+<a href=#5284 id=5284 data-nosnippet>5284</a>
+<a href=#5285 id=5285 data-nosnippet>5285</a>            <span class="comment">// Audio multimodal embedder (embed_audio)
+<a href=#5286 id=5286 data-nosnippet>5286</a>            </span><span class="kw">let </span>embed_audio_elems = {
+<a href=#5287 id=5287 data-nosnippet>5287</a>                <span class="comment">// Embedding layer (ScaledEmbedding - NOT quantizable)
+<a href=#5288 id=5288 data-nosnippet>5288</a>                </span><span class="kw">let </span>embedding = audio_cfg.vocab_size * audio_cfg.hidden_size;
+<a href=#5289 id=5289 data-nosnippet>5289</a>
+<a href=#5290 id=5290 data-nosnippet>5290</a>                <span class="comment">// RMS norms (NOT quantizable)
+<a href=#5291 id=5291 data-nosnippet>5291</a>                </span><span class="kw">let </span>hard_embedding_norm = audio_cfg.hidden_size; <span class="comment">// with scale
+<a href=#5292 id=5292 data-nosnippet>5292</a>                </span><span class="kw">let </span>soft_embedding_norm = audio_cfg.hidden_size; <span class="comment">// with scale
+<a href=#5293 id=5293 data-nosnippet>5293</a>                </span><span class="kw">let </span>embedding_post_projection_norm = text_cfg.hidden_size; <span class="comment">// without scale
+<a href=#5294 id=5294 data-nosnippet>5294</a>
+<a href=#5295 id=5295 data-nosnippet>5295</a>                // Projection (Arc&lt;dyn QuantMethod&gt; - IS quantizable)
+<a href=#5296 id=5296 data-nosnippet>5296</a>                </span><span class="kw">let </span>embedding_projection =
+<a href=#5297 id=5297 data-nosnippet>5297</a>                    audio_cfg.hidden_size * text_cfg.hidden_size / weight_pack_factor;
+<a href=#5298 id=5298 data-nosnippet>5298</a>
+<a href=#5299 id=5299 data-nosnippet>5299</a>                embedding
+<a href=#5300 id=5300 data-nosnippet>5300</a>                    + hard_embedding_norm
+<a href=#5301 id=5301 data-nosnippet>5301</a>                    + soft_embedding_norm
+<a href=#5302 id=5302 data-nosnippet>5302</a>                    + embedding_post_projection_norm
+<a href=#5303 id=5303 data-nosnippet>5303</a>                    + embedding_projection
+<a href=#5304 id=5304 data-nosnippet>5304</a>            };
+<a href=#5305 id=5305 data-nosnippet>5305</a>
+<a href=#5306 id=5306 data-nosnippet>5306</a>            subsample_conv_projection_elems + conformer_elems + embed_audio_elems
+<a href=#5307 id=5307 data-nosnippet>5307</a>        };
+<a href=#5308 id=5308 data-nosnippet>5308</a>
+<a href=#5309 id=5309 data-nosnippet>5309</a>        <span class="kw">let </span>vision_dtype = <span class="kw">if </span>dtype == DType::F16 {
+<a href=#5310 id=5310 data-nosnippet>5310</a>            <span class="comment">// f16 -&gt; f32 for vision model in particular.
+<a href=#5311 id=5311 data-nosnippet>5311</a>            </span>DType::F32
+<a href=#5312 id=5312 data-nosnippet>5312</a>        } <span class="kw">else </span>{
+<a href=#5313 id=5313 data-nosnippet>5313</a>            dtype
+<a href=#5314 id=5314 data-nosnippet>5314</a>        };
+<a href=#5315 id=5315 data-nosnippet>5315</a>
+<a href=#5316 id=5316 data-nosnippet>5316</a>        <span class="kw">let </span>total_elems = text_elems * dtype.size_in_bytes()
+<a href=#5317 id=5317 data-nosnippet>5317</a>            + vision_elems * vision_dtype.size_in_bytes()
+<a href=#5318 id=5318 data-nosnippet>5318</a>            + audio_elems * dtype.size_in_bytes();
+<a href=#5319 id=5319 data-nosnippet>5319</a>
+<a href=#5320 id=5320 data-nosnippet>5320</a>        <span class="prelude-val">Ok</span>(total_elems)
+<a href=#5321 id=5321 data-nosnippet>5321</a>    }
+<a href=#5322 id=5322 data-nosnippet>5322</a>
+<a href=#5323 id=5323 data-nosnippet>5323</a>    <span class="kw">fn </span>layer_sizes_in_bytes(
+<a href=#5324 id=5324 data-nosnippet>5324</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#5325 id=5325 data-nosnippet>5325</a>        config: <span class="kw-2">&amp;</span>str,
+<a href=#5326 id=5326 data-nosnippet>5326</a>        dtype: DType,
+<a href=#5327 id=5327 data-nosnippet>5327</a>        weight_pack_factor: usize,
+<a href=#5328 id=5328 data-nosnippet>5328</a>        matformer_config: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>MatformerSliceConfig&gt;,
+<a href=#5329 id=5329 data-nosnippet>5329</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
+<a href=#5330 id=5330 data-nosnippet>5330</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#5331 id=5331 data-nosnippet>5331</a>
+<a href=#5332 id=5332 data-nosnippet>5332</a>        <span class="comment">// Apply matformer slicing if configured
+<a href=#5333 id=5333 data-nosnippet>5333</a>        </span><span class="kw">let </span>(text_cfg, _layer_rename_map, _layers_skipped) = <span class="kw">if let </span><span class="prelude-val">Some</span>(matformer_cfg) =
+<a href=#5334 id=5334 data-nosnippet>5334</a>            matformer_config
+<a href=#5335 id=5335 data-nosnippet>5335</a>        {
+<a href=#5336 id=5336 data-nosnippet>5336</a>            <span class="kw">use </span><span class="kw">crate</span>::device_map::DummyDeviceMapper;
+<a href=#5337 id=5337 data-nosnippet>5337</a>            <span class="kw">use </span><span class="kw">crate</span>::vision_models::gemma3n::text::handle_matformer_slicing;
+<a href=#5338 id=5338 data-nosnippet>5338</a>
+<a href=#5339 id=5339 data-nosnippet>5339</a>            <span class="kw">let </span>dummy_mapper = DummyDeviceMapper {
+<a href=#5340 id=5340 data-nosnippet>5340</a>                nm_device: Device::Cpu,
+<a href=#5341 id=5341 data-nosnippet>5341</a>            };
+<a href=#5342 id=5342 data-nosnippet>5342</a>            <span class="kw">let </span>(adjusted_cfg, <span class="kw">_</span>, <span class="kw">_</span>, layer_rename_map, layers_skipped) = handle_matformer_slicing(
+<a href=#5343 id=5343 data-nosnippet>5343</a>                <span class="kw-2">&amp;</span>cfg.text_config,
+<a href=#5344 id=5344 data-nosnippet>5344</a>                <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(matformer_cfg.clone()),
+<a href=#5345 id=5345 data-nosnippet>5345</a>                <span class="kw-2">&amp;</span>dummy_mapper,
+<a href=#5346 id=5346 data-nosnippet>5346</a>            )<span class="question-mark">?</span>;
+<a href=#5347 id=5347 data-nosnippet>5347</a>            (adjusted_cfg, layer_rename_map, layers_skipped)
+<a href=#5348 id=5348 data-nosnippet>5348</a>        } <span class="kw">else </span>{
+<a href=#5349 id=5349 data-nosnippet>5349</a>            (cfg.text_config.clone(), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
+<a href=#5350 id=5350 data-nosnippet>5350</a>        };
+<a href=#5351 id=5351 data-nosnippet>5351</a>
+<a href=#5352 id=5352 data-nosnippet>5352</a>        <span class="kw">let </span>text_cfg = <span class="kw-2">&amp;</span>text_cfg;
+<a href=#5353 id=5353 data-nosnippet>5353</a>
+<a href=#5354 id=5354 data-nosnippet>5354</a>        <span class="comment">// When matformer slicing is applied, we only include the layers that are kept
+<a href=#5355 id=5355 data-nosnippet>5355</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>layer_sizes = Vec::new();
+<a href=#5356 id=5356 data-nosnippet>5356</a>
+<a href=#5357 id=5357 data-nosnippet>5357</a>        <span class="comment">// Note: We don't need orig_intermediate_sizes anymore since the adjusted config
+<a href=#5358 id=5358 data-nosnippet>5358</a>        // already has the correct intermediate sizes after matformer slicing
+<a href=#5359 id=5359 data-nosnippet>5359</a>
+<a href=#5360 id=5360 data-nosnippet>5360</a>        </span><span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..text_cfg.num_hidden_layers {
+<a href=#5361 id=5361 data-nosnippet>5361</a>            <span class="kw">let </span>per_layer_elems = {
+<a href=#5362 id=5362 data-nosnippet>5362</a>                <span class="comment">// Layer norms
+<a href=#5363 id=5363 data-nosnippet>5363</a>                </span><span class="kw">let </span>input_layernorm = text_cfg.hidden_size;
+<a href=#5364 id=5364 data-nosnippet>5364</a>                <span class="kw">let </span>post_attention_layernorm = text_cfg.hidden_size;
+<a href=#5365 id=5365 data-nosnippet>5365</a>                <span class="kw">let </span>pre_feedforward_layernorm = text_cfg.hidden_size;
+<a href=#5366 id=5366 data-nosnippet>5366</a>                <span class="kw">let </span>post_feedforward_layernorm = text_cfg.hidden_size;
+<a href=#5367 id=5367 data-nosnippet>5367</a>                <span class="kw">let </span>post_per_layer_input_norm = text_cfg.hidden_size;
+<a href=#5368 id=5368 data-nosnippet>5368</a>
+<a href=#5369 id=5369 data-nosnippet>5369</a>                <span class="comment">// Attention components
+<a href=#5370 id=5370 data-nosnippet>5370</a>                </span><span class="kw">let </span>size_in = text_cfg.hidden_size;
+<a href=#5371 id=5371 data-nosnippet>5371</a>                <span class="kw">let </span>size_q = text_cfg.num_attention_heads * text_cfg.head_dim;
+<a href=#5372 id=5372 data-nosnippet>5372</a>                <span class="kw">let </span>size_kv = text_cfg.num_key_value_heads * text_cfg.head_dim;
+<a href=#5373 id=5373 data-nosnippet>5373</a>
+<a href=#5374 id=5374 data-nosnippet>5374</a>                <span class="kw">let </span>q_proj = size_in * size_q / weight_pack_factor;
+<a href=#5375 id=5375 data-nosnippet>5375</a>                <span class="kw">let </span>k_proj = size_in * size_kv / weight_pack_factor;
+<a href=#5376 id=5376 data-nosnippet>5376</a>                <span class="kw">let </span>v_proj = size_in * size_kv / weight_pack_factor;
+<a href=#5377 id=5377 data-nosnippet>5377</a>                <span class="kw">let </span>o_proj = size_q * size_in / weight_pack_factor;
+<a href=#5378 id=5378 data-nosnippet>5378</a>
+<a href=#5379 id=5379 data-nosnippet>5379</a>                <span class="comment">// Q, K, V norms
+<a href=#5380 id=5380 data-nosnippet>5380</a>                </span><span class="kw">let </span>q_norm = text_cfg.head_dim;
+<a href=#5381 id=5381 data-nosnippet>5381</a>                <span class="kw">let </span>k_norm = text_cfg.head_dim;
+<a href=#5382 id=5382 data-nosnippet>5382</a>                <span class="kw">let </span>v_norm = text_cfg.head_dim; <span class="comment">// No bias for v_norm
+<a href=#5383 id=5383 data-nosnippet>5383</a>
+<a href=#5384 id=5384 data-nosnippet>5384</a>                // MLP components - use the adjusted intermediate sizes from matformer
+<a href=#5385 id=5385 data-nosnippet>5385</a>                </span><span class="kw">let </span>intermediate_size = <span class="kw">match </span><span class="kw-2">&amp;</span>text_cfg.intermediate_size {
+<a href=#5386 id=5386 data-nosnippet>5386</a>                    IntermediateSize::Single(size) =&gt; <span class="kw-2">*</span>size,
+<a href=#5387 id=5387 data-nosnippet>5387</a>                    IntermediateSize::PerLayer(sizes) =&gt; sizes[layer_idx],
+<a href=#5388 id=5388 data-nosnippet>5388</a>                    IntermediateSize::Matformer(sizes, <span class="kw">_</span>) =&gt; sizes[layer_idx],
+<a href=#5389 id=5389 data-nosnippet>5389</a>                };
+<a href=#5390 id=5390 data-nosnippet>5390</a>                <span class="kw">let </span>gate_proj = text_cfg.hidden_size * intermediate_size / weight_pack_factor;
+<a href=#5391 id=5391 data-nosnippet>5391</a>                <span class="kw">let </span>up_proj = text_cfg.hidden_size * intermediate_size / weight_pack_factor;
+<a href=#5392 id=5392 data-nosnippet>5392</a>                <span class="kw">let </span>down_proj = intermediate_size * text_cfg.hidden_size / weight_pack_factor;
+<a href=#5393 id=5393 data-nosnippet>5393</a>
+<a href=#5394 id=5394 data-nosnippet>5394</a>                <span class="comment">// AltUp components (per layer)
+<a href=#5395 id=5395 data-nosnippet>5395</a>                </span><span class="kw">let </span>altup_elems = {
+<a href=#5396 id=5396 data-nosnippet>5396</a>                    <span class="kw">let </span>correct_output_scale = text_cfg.hidden_size;
+<a href=#5397 id=5397 data-nosnippet>5397</a>                    <span class="kw">let </span>correction_coefs = text_cfg.altup_num_inputs * text_cfg.altup_num_inputs;
+<a href=#5398 id=5398 data-nosnippet>5398</a>                    <span class="kw">let </span>prediction_coefs =
+<a href=#5399 id=5399 data-nosnippet>5399</a>                        text_cfg.altup_num_inputs * text_cfg.altup_num_inputs.pow(<span class="number">2</span>);
+<a href=#5400 id=5400 data-nosnippet>5400</a>                    <span class="kw">let </span>modality_router = text_cfg.hidden_size * text_cfg.altup_num_inputs;
+<a href=#5401 id=5401 data-nosnippet>5401</a>                    <span class="kw">let </span>router_norm = text_cfg.hidden_size;
+<a href=#5402 id=5402 data-nosnippet>5402</a>
+<a href=#5403 id=5403 data-nosnippet>5403</a>                    correct_output_scale
+<a href=#5404 id=5404 data-nosnippet>5404</a>                        + correction_coefs
+<a href=#5405 id=5405 data-nosnippet>5405</a>                        + prediction_coefs
+<a href=#5406 id=5406 data-nosnippet>5406</a>                        + modality_router
+<a href=#5407 id=5407 data-nosnippet>5407</a>                        + router_norm
+<a href=#5408 id=5408 data-nosnippet>5408</a>                };
+<a href=#5409 id=5409 data-nosnippet>5409</a>
+<a href=#5410 id=5410 data-nosnippet>5410</a>                <span class="comment">// Laurel block components
+<a href=#5411 id=5411 data-nosnippet>5411</a>                </span><span class="kw">let </span>laurel_elems = {
+<a href=#5412 id=5412 data-nosnippet>5412</a>                    <span class="kw">let </span>left = text_cfg.hidden_size * text_cfg.laurel_rank;
+<a href=#5413 id=5413 data-nosnippet>5413</a>                    <span class="kw">let </span>right = text_cfg.laurel_rank * text_cfg.hidden_size;
+<a href=#5414 id=5414 data-nosnippet>5414</a>                    <span class="kw">let </span>post_norm = text_cfg.hidden_size;
+<a href=#5415 id=5415 data-nosnippet>5415</a>
+<a href=#5416 id=5416 data-nosnippet>5416</a>                    left + right + post_norm
+<a href=#5417 id=5417 data-nosnippet>5417</a>                };
+<a href=#5418 id=5418 data-nosnippet>5418</a>
+<a href=#5419 id=5419 data-nosnippet>5419</a>                <span class="comment">// Per-layer input components
+<a href=#5420 id=5420 data-nosnippet>5420</a>                </span><span class="kw">let </span>per_layer_input_gate =
+<a href=#5421 id=5421 data-nosnippet>5421</a>                    text_cfg.hidden_size * text_cfg.hidden_size_per_layer_input;
+<a href=#5422 id=5422 data-nosnippet>5422</a>                <span class="kw">let </span>per_layer_projection =
+<a href=#5423 id=5423 data-nosnippet>5423</a>                    text_cfg.hidden_size_per_layer_input * text_cfg.hidden_size;
+<a href=#5424 id=5424 data-nosnippet>5424</a>
+<a href=#5425 id=5425 data-nosnippet>5425</a>                input_layernorm
+<a href=#5426 id=5426 data-nosnippet>5426</a>                    + post_attention_layernorm
+<a href=#5427 id=5427 data-nosnippet>5427</a>                    + pre_feedforward_layernorm
+<a href=#5428 id=5428 data-nosnippet>5428</a>                    + post_feedforward_layernorm
+<a href=#5429 id=5429 data-nosnippet>5429</a>                    + post_per_layer_input_norm
+<a href=#5430 id=5430 data-nosnippet>5430</a>                    + q_proj
+<a href=#5431 id=5431 data-nosnippet>5431</a>                    + k_proj
+<a href=#5432 id=5432 data-nosnippet>5432</a>                    + v_proj
+<a href=#5433 id=5433 data-nosnippet>5433</a>                    + o_proj
+<a href=#5434 id=5434 data-nosnippet>5434</a>                    + q_norm
+<a href=#5435 id=5435 data-nosnippet>5435</a>                    + k_norm
+<a href=#5436 id=5436 data-nosnippet>5436</a>                    + v_norm
+<a href=#5437 id=5437 data-nosnippet>5437</a>                    + gate_proj
+<a href=#5438 id=5438 data-nosnippet>5438</a>                    + up_proj
+<a href=#5439 id=5439 data-nosnippet>5439</a>                    + down_proj
+<a href=#5440 id=5440 data-nosnippet>5440</a>                    + altup_elems
+<a href=#5441 id=5441 data-nosnippet>5441</a>                    + laurel_elems
+<a href=#5442 id=5442 data-nosnippet>5442</a>                    + per_layer_input_gate
+<a href=#5443 id=5443 data-nosnippet>5443</a>                    + per_layer_projection
+<a href=#5444 id=5444 data-nosnippet>5444</a>            };
+<a href=#5445 id=5445 data-nosnippet>5445</a>
+<a href=#5446 id=5446 data-nosnippet>5446</a>            layer_sizes.push(per_layer_elems * dtype.size_in_bytes());
+<a href=#5447 id=5447 data-nosnippet>5447</a>        }
+<a href=#5448 id=5448 data-nosnippet>5448</a>
+<a href=#5449 id=5449 data-nosnippet>5449</a>        <span class="prelude-val">Ok</span>(layer_sizes)
+<a href=#5450 id=5450 data-nosnippet>5450</a>    }
+<a href=#5451 id=5451 data-nosnippet>5451</a>
+<a href=#5452 id=5452 data-nosnippet>5452</a>    <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+<a href=#5453 id=5453 data-nosnippet>5453</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#5454 id=5454 data-nosnippet>5454</a>        <span class="prelude-val">Ok</span>(cfg.text_config.num_hidden_layers)
+<a href=#5455 id=5455 data-nosnippet>5455</a>    }
+<a href=#5456 id=5456 data-nosnippet>5456</a>
+<a href=#5457 id=5457 data-nosnippet>5457</a>    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+<a href=#5458 id=5458 data-nosnippet>5458</a>        <span class="kw">let </span>cfg: Gemma3nConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#5459 id=5459 data-nosnippet>5459</a>        <span class="kw">let </span>cfg = cfg.text_config;
+<a href=#5460 id=5460 data-nosnippet>5460</a>
+<a href=#5461 id=5461 data-nosnippet>5461</a>        <span class="kw">let </span>cfg = ModelConfigMetadata {
+<a href=#5462 id=5462 data-nosnippet>5462</a>            max_seq_len: cfg.max_position_embeddings,
+<a href=#5463 id=5463 data-nosnippet>5463</a>            num_layers: cfg.num_hidden_layers,
+<a href=#5464 id=5464 data-nosnippet>5464</a>            hidden_size: cfg.hidden_size,
+<a href=#5465 id=5465 data-nosnippet>5465</a>            num_kv_heads: cfg.num_key_value_heads,
+<a href=#5466 id=5466 data-nosnippet>5466</a>            num_attn_heads: cfg.num_attention_heads,
+<a href=#5467 id=5467 data-nosnippet>5467</a>            sliding_window: <span class="prelude-val">None</span>, <span class="comment">// None to be more forgiving, some do not
+<a href=#5468 id=5468 data-nosnippet>5468</a>            </span>k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+<a href=#5469 id=5469 data-nosnippet>5469</a>            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+<a href=#5470 id=5470 data-nosnippet>5470</a>        };
+<a href=#5471 id=5471 data-nosnippet>5471</a>
+<a href=#5472 id=5472 data-nosnippet>5472</a>        <span class="prelude-val">Ok</span>(Box::new(cfg))
+<a href=#5473 id=5473 data-nosnippet>5473</a>    }
+<a href=#5474 id=5474 data-nosnippet>5474</a>
+<a href=#5475 id=5475 data-nosnippet>5475</a>    <span class="kw">fn </span>non_mapped_sub_models(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;NonMappedSubModel&gt;&gt; {
+<a href=#5476 id=5476 data-nosnippet>5476</a>        <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[NonMappedSubModel::Vision, NonMappedSubModel::Audio])
+<a href=#5477 id=5477 data-nosnippet>5477</a>    }
+<a href=#5478 id=5478 data-nosnippet>5478</a>}</code></pre></div></section></main></body></html>

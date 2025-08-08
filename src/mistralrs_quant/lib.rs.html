@@ -556,7 +556,7 @@
 <a href=#556 id=556 data-nosnippet>556</a>    <span class="kw">fn </span>isq_serde_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
 <a href=#557 id=557 data-nosnippet>557</a>        <span class="bool-val">false
 <a href=#558 id=558 data-nosnippet>558</a>    </span>}
-<a href=#559 id=559 data-nosnippet>559</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
+<a href=#559 id=559 data-nosnippet>559</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;<span class="lifetime">'_</span>, [u8]&gt;&gt; {
 <a href=#560 id=560 data-nosnippet>560</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"`QuantizedSerde::serialize` is not supported."</span>)
 <a href=#561 id=561 data-nosnippet>561</a>    }
 <a href=#562 id=562 data-nosnippet>562</a>    <span class="kw">fn </span>deserialize(
@@ -581,7 +581,7 @@
 <a href=#581 id=581 data-nosnippet>581</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"`QuantizedSerde::deserialize_ext_bias` is not supported."</span>)
 <a href=#582 id=582 data-nosnippet>582</a>    }
 <a href=#583 id=583 data-nosnippet>583</a>    <span class="doccomment">/// NOT meant for external calling
-<a href=#584 id=584 data-nosnippet>584</a>    </span><span class="kw">fn </span>serialize_with_bias(<span class="kw-2">&amp;</span><span class="self">self</span>, _bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
+<a href=#584 id=584 data-nosnippet>584</a>    </span><span class="kw">fn </span>serialize_with_bias(<span class="kw-2">&amp;</span><span class="self">self</span>, _bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;<span class="lifetime">'_</span>, [u8]&gt;&gt; {
 <a href=#585 id=585 data-nosnippet>585</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"`QuantizedSerde::serialize_with_bias` is not supported."</span>)
 <a href=#586 id=586 data-nosnippet>586</a>    }
 <a href=#587 id=587 data-nosnippet>587</a>}
