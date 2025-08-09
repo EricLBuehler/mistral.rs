@@ -156,6 +156,10 @@ impl Loader for DiffusionLoader {
             .map(std::fs::read_to_string)
             .collect::<io::Result<Vec<_>>>()?;
 
+        if let Device::Cuda(dev) = &device {
+            unsafe { dev.disable_event_tracking() };
+        }
+
         let mapper = DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None)?;
         let dtype = mapper.get_min_dtype(dtype)?;
 

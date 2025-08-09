@@ -274,6 +274,10 @@ impl Loader for GGMLLoader {
             device.device_pretty_repr()
         );
 
+        if let Device::Cuda(dev) = &device {
+            unsafe { dev.disable_event_tracking() };
+        }
+
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
         let model = ggml_file::Content::read(&mut file, device)
             .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;

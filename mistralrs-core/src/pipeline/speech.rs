@@ -251,6 +251,10 @@ impl Loader for SpeechLoader {
 
         let cfg: DiaConfig = serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
 
+        if let Device::Cuda(dev) = &device {
+            unsafe { dev.disable_event_tracking() };
+        }
+
         let mapper = DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None)?;
         let dtype = mapper.get_min_dtype(dtype)?;
 

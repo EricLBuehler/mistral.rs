@@ -571,13 +571,13 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 [[package]]
 name = "candle-core"
 version = "0.9.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=95d713f9#95d713f996225a3643b1d0c3eeb5a35c40516625"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=5e6c385#5e6c385147daa6ec06a27e715dbb594581bdefec"
 dependencies = [
  "accelerate-src",
  "byteorder",
  "candle-kernels",
  "candle-metal-kernels",
- "cudarc",
+ "cudarc 0.17.2",
  "float8",
  "gemm 0.17.1",
  "half",
@@ -602,7 +602,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.9.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=95d713f9#95d713f996225a3643b1d0c3eeb5a35c40516625"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=5e6c385#5e6c385147daa6ec06a27e715dbb594581bdefec"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -613,7 +613,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.9.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=95d713f9#95d713f996225a3643b1d0c3eeb5a35c40516625"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=5e6c385#5e6c385147daa6ec06a27e715dbb594581bdefec"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -625,7 +625,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.9.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=95d713f9#95d713f996225a3643b1d0c3eeb5a35c40516625"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=5e6c385#5e6c385147daa6ec06a27e715dbb594581bdefec"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -633,7 +633,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.9.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=95d713f9#95d713f996225a3643b1d0c3eeb5a35c40516625"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=5e6c385#5e6c385147daa6ec06a27e715dbb594581bdefec"
 dependencies = [
  "half",
  "metal 0.27.0",
@@ -645,7 +645,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.9.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=95d713f9#95d713f996225a3643b1d0c3eeb5a35c40516625"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=5e6c385#5e6c385147daa6ec06a27e715dbb594581bdefec"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -1022,6 +1022,16 @@ name = "cudarc"
 version = "0.16.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "17200eb07e7d85a243aa1bf4569a7aa998385ba98d14833973a817a63cc86e92"
+dependencies = [
+ "half",
+ "libloading",
+]
+
+[[package]]
+name = "cudarc"
+version = "0.17.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8147ca46109d41cc513fd629b52bbea9bd09b972034c2f32954ce84a92895a91"
 dependencies = [
  "half",
  "libloading",
@@ -1524,11 +1534,11 @@ dependencies = [
 
 [[package]]
 name = "float8"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f498aec3b227cd892ce18967f4033d9d397d28a80a7ab67e9f6b0176a79654e"
+checksum = "e7389e420f229301d5673bd9893dc2c315f0ecfae57e26cbc3e26704e834b25f"
 dependencies = [
- "cudarc",
+ "cudarc 0.17.2",
  "half",
  "num-traits",
 ]
@@ -6029,7 +6039,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14053653d0b7fa7b21015aa9a62edc8af2f60aa6f9c54e66386ecce55f22ed29"
 dependencies = [
- "cudarc",
+ "cudarc 0.16.6",
  "half",
  "serde",
  "thiserror 1.0.69",
