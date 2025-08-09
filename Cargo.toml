@@ -27,10 +27,10 @@ license = "MIT"
 rust-version = "1.82"
 
 [workspace.dependencies]
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "9adb2fb" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "9adb2fb" }
-candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "9adb2fb" }
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "9adb2fb" }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "5e6c385" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "5e6c385" }
+candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "5e6c385" }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "5e6c385" }
 # candle-core = { path = "../candle/candle-core" }
 # candle-nn = { path = "../candle/candle-nn" }
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }
@@ -82,7 +82,7 @@ url = "2.5.4"
 utoipa = "5.3.1"
 walkdir = "2.5.0"
 data-url = "0.3.1"
-float8 = "0.3.0"
+float8 = "0.4.0"
 regex = "1.11.1"
 metal = { version = "0.27.0", features = ["mps"] }
 safetensors = "0.6.0"

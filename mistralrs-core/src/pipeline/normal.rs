@@ -327,6 +327,12 @@ impl Loader for NormalLoader {
         } else {
             device_map::get_all_similar_devices(device)?
         };
+        #[cfg(feature = "cuda")]
+        for device in &available_devices {
+            if let Device::Cuda(dev) = device {
+                unsafe { dev.disable_event_tracking() };
+            }
+        }
         let device = if use_nccl || cfg!(feature = "ring") {
             available_devices[0].clone()
         } else {

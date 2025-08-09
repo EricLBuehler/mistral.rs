@@ -355,6 +355,11 @@ impl Loader for GGUFLoader {
             mapper = DeviceMapSetting::Map(new);
         }
 
+        #[cfg(feature = "cuda")]
+        if let Device::Cuda(dev) = &device {
+            unsafe { dev.disable_event_tracking() };
+        }
+
         let pipeline_mapper =
             mapper.into_mapper(num_layers, device, self.config.topology.as_ref())?;
         let mapper = mapper.into_mapper(num_layers, device, self.config.topology.as_ref())?;
