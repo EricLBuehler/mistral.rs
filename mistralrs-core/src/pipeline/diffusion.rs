@@ -156,6 +156,7 @@ impl Loader for DiffusionLoader {
             .map(std::fs::read_to_string)
             .collect::<io::Result<Vec<_>>>()?;
 
+        #[cfg(feature = "cuda")]
         if let Device::Cuda(dev) = &device {
             unsafe { dev.disable_event_tracking() };
         }

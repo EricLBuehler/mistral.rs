@@ -274,6 +274,7 @@ impl Loader for GGMLLoader {
             device.device_pretty_repr()
         );
 
+        #[cfg(feature = "cuda")]
         if let Device::Cuda(dev) = &device {
             unsafe { dev.disable_event_tracking() };
         }

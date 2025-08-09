@@ -353,6 +353,7 @@ impl Loader for GGUFLoader {
             mapper = DeviceMapSetting::Map(new);
         }
 
+        #[cfg(feature = "cuda")]
         if let Device::Cuda(dev) = &device {
             unsafe { dev.disable_event_tracking() };
         }
