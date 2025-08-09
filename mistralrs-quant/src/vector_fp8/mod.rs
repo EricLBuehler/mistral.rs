@@ -50,6 +50,10 @@ impl QuantMethod for VectorFP8Linear {
         ops::fp8_vector_dequantize(&self.weight, &self.weight_scale_inv, self.dequant_dtype)
     }
 
+    fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
+    }
+
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         // Dequantize matmul always.
         let weight = self.dequantize_w()?;

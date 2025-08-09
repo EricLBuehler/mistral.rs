@@ -359,6 +359,7 @@ pub fn get_model_paths(
             let safetensors = listing
                 .clone()
                 .filter(|x| x.ends_with(".safetensors"))
+                .filter(|x| !x.contains("model.safetensors")) // TODO
                 .collect::<Vec<_>>();
             let pickles = listing
                 .clone()

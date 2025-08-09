@@ -50,6 +50,10 @@ impl QuantMethod for GgufMatMul {
         self.w.dequantize_f16()?.to_dtype(DType::F32)
     }
 
+    fn bias(&self) -> Option<&Tensor> {
+        self.b.as_ref()
+    }
+
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         let x = self.w.forward(a)?;
         if let Some(ref b) = self.b {
