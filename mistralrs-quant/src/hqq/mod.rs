@@ -920,6 +920,10 @@ impl QuantMethod for HqqLayer {
         self.dequantize()
     }
 
+    fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
+    }
+
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         /*
         if self.cfg.force_dequantize {

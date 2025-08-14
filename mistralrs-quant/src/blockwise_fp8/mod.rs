@@ -65,6 +65,10 @@ impl QuantMethod for BlockwiseFP8Linear {
         )
     }
 
+    fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
+    }
+
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         // Dequantize matmul always.
         // TODO: add a specific kernel?

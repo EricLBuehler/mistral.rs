@@ -265,7 +265,7 @@ fn main() -> Result<(), String> {
         use std::process::Command;
         use std::{env, str};
 
-        const METAL_SOURCES: [&str; 9] = [
+        const METAL_SOURCES: [&str; 10] = [
             "bitwise",
             "blockwise_fp8",
             "bnb_dequantize",
@@ -275,6 +275,7 @@ fn main() -> Result<(), String> {
             "scan",
             "sort",
             "copy",
+            "mxfp4_unpack",
         ];
         const HEADER_SOURCES: [&str; 5] = ["utils", "bf16", "scan_impl", "sort_impl", "copy_impl"];
         for src in METAL_SOURCES {

@@ -171,6 +171,7 @@ rustfft = "6.3.0"
 hound = "3.5.1"
 apodize = "1.0.0"
 statrs = "0.18.0"
+openai-harmony = { git = "https://github.com/openai/harmony" }
 
 mistralrs-core = { path = "mistralrs-core" }
 mistralrs-paged-attn = { path = "mistralrs-paged-attn" }

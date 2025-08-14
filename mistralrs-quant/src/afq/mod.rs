@@ -134,6 +134,10 @@ impl QuantMethod for AfqLayer {
         )
     }
 
+    fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
+    }
+
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         ops::afq_mm_op(
             x,

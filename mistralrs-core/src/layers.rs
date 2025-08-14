@@ -24,7 +24,7 @@ pub use crate::layers_utils::repeat_kv;
 use crate::{
     amoe::{AnyMoeTrainableLayer, MlpLayer},
     gguf::Content,
-    models::{llama, smollm3},
+    models::{gpt_oss::GPTOSSConfig, llama, smollm3},
     ops::SplitOp,
     vision_models::{
         gemma3::config::Gemma3TextConfig,
@@ -1882,6 +1882,175 @@ impl DiaRotaryEmbedding {
         Tensor::cat(&[first_part, second_part], D::Minus1)
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct GPTOSSRotaryEmbedding(RotaryEmbedding);
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GPTOSSScaledRopeType {
+    #[serde(alias = "yarn")]
+    Yarn,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GPTOSSopeScalingConfig {
+    original_max_position_embeddings: usize,
+    beta_fast: f32,
+    beta_slow: f32,
+    factor: f32,
+    rope_type: GPTOSSScaledRopeType,
+}
+
+impl GPTOSSRotaryEmbedding {
+    fn new_linear(
+        cfg: &GPTOSSConfig,
+        factor: f64,
+        is_gpt_neox: bool,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Self> {
+        let max_seq_len = cfg.max_position_embeddings;
+        let dim = cfg.head_dim;
+
+        let inv_freq: Vec<_> = (0..dim)
+            .step_by(2)
+            .map(|i| 1f32 / cfg.rope_theta.powf(i as f32 / dim as f32) as f32)
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
+        let inv_freq = (inv_freq / factor)?;
+
+        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
+            .to_dtype(DType::F32)?
+            .reshape((max_seq_len, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+        let sin = freqs.sin()?.to_dtype(dtype)?;
+        let cos = freqs.cos()?.to_dtype(dtype)?;
+        Ok(Self(RotaryEmbedding {
+            cos,
+            sin,
+            is_gpt_neox,
+        }))
+    }
+
+    fn yarn_find_correction_dim(
+        num_rot: f32,
+        dim: usize,
+        base: f32,
+        max_position_embeddings: usize,
+    ) -> f32 {
+        (dim as f32 * (max_position_embeddings as f32 / (num_rot * 2. * PI)).ln())
+            / (2. * base.ln())
+    }
+
+    fn yarn_find_correction_range(
+        low_rot: f32,
+        high_rot: f32,
+        dim: usize,
+        base: f32,
+        max_position_embeddings: usize,
+    ) -> (f32, f32) {
+        let low =
+            Self::yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings).floor();
+        let high =
+            Self::yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings).ceil();
+        (low.max(0.), high.min(dim as f32 - 1.))
+    }
+
+    fn yarn_linear_ramp_mask(min: f32, mut max: f32, dim: usize, dev: &Device) -> Result<Tensor> {
+        if min == max {
+            // https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite/blob/604d5664dddd88a0433dbae533b7fe9472482de0/modeling_deepseek.py#L255
+            max += 0.001;
+        }
+        let linear_func =
+            ((Tensor::arange(0f32, dim as f32, dev)? - min as f64)? / (max as f64 - min as f64))?;
+        linear_func.clamp(0., 1)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_yarn(
+        cfg: &GPTOSSConfig,
+        dtype: DType,
+        dev: &Device,
+        is_gpt_neox: bool,
+        original_max_position_embeddings: usize,
+        beta_fast: f32,
+        beta_slow: f32,
+        factor: f32,
+    ) -> Result<Self> {
+        let freq_extra: Vec<_> = (0..cfg.head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / cfg.rope_theta.powf(i as f32 / cfg.head_dim as f32))
+            .collect();
+        let freq_extra_len = freq_extra.len();
+        let freq_extra = Tensor::from_vec(freq_extra, freq_extra_len, dev)?;
+        let freq_inter: Vec<_> = (0..cfg.head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / (factor * cfg.rope_theta.powf(i as f32 / cfg.head_dim as f32)))
+            .collect();
+        let freq_inter_len = freq_inter.len();
+        let freq_inter = Tensor::from_vec(freq_inter, (1, freq_inter_len), dev)?;
+
+        let (low, high) = Self::yarn_find_correction_range(
+            beta_fast,
+            beta_slow,
+            cfg.head_dim,
+            cfg.rope_theta,
+            original_max_position_embeddings,
+        );
+        let inv_freq_mask = (1. - Self::yarn_linear_ramp_mask(low, high, cfg.head_dim / 2, dev)?)?;
+        let inv_freq = freq_inter
+            .broadcast_mul(&(1. - &inv_freq_mask)?)?
+            .broadcast_add(&freq_extra.broadcast_mul(&inv_freq_mask)?)?;
+
+        let t = Tensor::arange(0u32, cfg.max_position_embeddings as u32, dev)?
+            .to_dtype(DType::F32)?
+            .reshape((cfg.max_position_embeddings, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+
+        let sin = freqs.sin()?.to_dtype(dtype)?;
+        let cos = freqs.cos()?.to_dtype(dtype)?;
+        Ok(Self(RotaryEmbedding {
+            cos,
+            sin,
+            is_gpt_neox,
+        }))
+    }
+
+    pub fn new(is_gpt_neox: bool, dtype: DType, cfg: &GPTOSSConfig, dev: &Device) -> Result<Self> {
+        match &cfg.rope_scaling {
+            &Some(GPTOSSopeScalingConfig {
+                rope_type: GPTOSSScaledRopeType::Yarn,
+                factor,
+                beta_fast,
+                beta_slow,
+                original_max_position_embeddings,
+            }) => Self::new_yarn(
+                cfg,
+                dtype,
+                dev,
+                is_gpt_neox,
+                original_max_position_embeddings,
+                beta_fast,
+                beta_slow,
+                factor,
+            ),
+
+            _ => unimplemented!(),
+        }
+    }
+
+    pub fn forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        seqlen_offsets: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        self.0.forward(q, k, seqlen_offsets)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct QLinear {
     inner: QMatMul,
