@@ -180,8 +180,10 @@ pub fn calculate_eos_tokens(
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct GenerationConfig {
+    #[serde(default)]
     #[serde(with = "either::serde_untagged_optional")]
     bos_token_id: Option<Either<u32, Vec<u32>>>,
+    #[serde(default)]
     #[serde(with = "either::serde_untagged_optional")]
     eos_token_id: Option<Either<u32, Vec<u32>>>,
 }
