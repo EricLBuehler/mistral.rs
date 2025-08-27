@@ -215,6 +215,10 @@ impl QuantMethod for RowParallelLayer {
         self.weight.dequantize_w()
     }
 
+    fn bias(&self) -> Option<&Tensor> {
+        self.weight.bias()
+    }
+
     fn dtype_and_device(&self) -> (candle_core::DType, candle_core::Device) {
         self.weight.dtype_and_device()
     }
@@ -527,6 +531,10 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.dequantize_w()
     }
 
+    fn bias(&self) -> Option<&Tensor> {
+        self.weight.bias()
+    }
+
     fn dtype_and_device(&self) -> (candle_core::DType, candle_core::Device) {
         self.weight.dtype_and_device()
     }
@@ -790,6 +798,10 @@ impl QuantMethod for ReplicatedLayer {
 
     fn dequantize_w(&self) -> Result<Tensor> {
         self.0.dequantize_w()
+    }
+
+    fn bias(&self) -> Option<&Tensor> {
+        self.0.bias()
     }
 
     fn dtype_and_device(&self) -> (candle_core::DType, candle_core::Device) {

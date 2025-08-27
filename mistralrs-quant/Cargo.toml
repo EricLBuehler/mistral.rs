@@ -24,6 +24,7 @@ tracing.workspace = true
 rayon.workspace = true
 byteorder.workspace = true
 float8.workspace = true
+float4 = "0.1"
 once_cell.workspace = true
 metal = { workspace = true, optional = true }
 thiserror.workspace = true

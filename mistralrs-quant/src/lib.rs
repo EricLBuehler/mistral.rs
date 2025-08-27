@@ -26,7 +26,7 @@ mod gptq;
 mod hqq;
 mod imatrix;
 mod lora;
-mod mxfp4;
+pub mod mxfp4;
 pub mod rotary;
 pub mod safetensors;
 mod scalar_fp8;
@@ -35,7 +35,7 @@ mod utils;
 mod vector_fp8;
 
 use gptq::gptq_linear;
-use lora::merge_lora_weights;
+pub use lora::merge_lora_weights;
 use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
@@ -651,6 +651,8 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         Self: Sized;
 
     fn dequantize_w(&self) -> Result<Tensor>;
+
+    fn bias(&self) -> Option<&Tensor>;
 
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
     /// Automatically cast to required quantization activation type and back

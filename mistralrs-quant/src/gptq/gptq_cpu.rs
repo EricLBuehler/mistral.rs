@@ -35,6 +35,10 @@ impl QuantMethod for GptqLayer {
         todo!()
     }
 
+    fn bias(&self) -> Option<&Tensor> {
+        todo!()
+    }
+
     fn forward(&self, _a: &Tensor) -> Result<Tensor> {
         todo!()
     }

@@ -7,7 +7,9 @@ use crate::{
     QuantizedConfig, QuantizedSerde, ShardedVarBuilder,
 };
 
-use crate::afq::ops;
+use crate::afq::ops as afq_ops;
+
+pub mod ops;
 
 const GROUP_SIZE: AfqGroupSize = AfqGroupSize::Low;
 const _: () = assert!(GROUP_SIZE as usize == 32);
@@ -52,7 +54,7 @@ impl QuantMethod for MXFP4Layer {
     }
 
     fn dequantize_w(&self) -> Result<candle_core::Tensor> {
-        ops::afq_dequantize_op(
+        afq_ops::afq_dequantize_op(
             &self.blocks,
             &self.scales,
             &self.scales.clone(),
@@ -61,8 +63,12 @@ impl QuantMethod for MXFP4Layer {
         )
     }
 
+    fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
+    }
+
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let mut x = ops::afq_mm_op(
+        let mut x = afq_ops::afq_mm_op(
             x,
             &self.blocks,
             &self.scales,
@@ -80,7 +86,7 @@ impl QuantMethod for MXFP4Layer {
     }
 
     fn gather_forward(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        let mut x = ops::afq_mm_op(
+        let mut x = afq_ops::afq_mm_op(
             x,
             &self.blocks,
             &self.scales,
@@ -129,28 +135,28 @@ impl MXFP4Layer {
         bias: bool,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
-        if !vb.device().is_metal() {
-            candle_core::bail!("MXFP4Layer only works on Metal.");
-        }
-
         let QuantizedConfig::MXFP4 {} = config else {
             candle_core::bail!("Unexpected quantization config.")
         };
 
         let group_size = GROUP_SIZE as usize;
 
-        let blocks = vb.get_with_hints_dtype(
-            (out_dim, in_dim * N_BITS / 32),
-            "blocks",
-            Default::default(),
-            DType::F4,
-        )?;
-        let scales = vb.get_with_hints_dtype(
-            (out_dim, in_dim / group_size),
-            "scales",
-            Default::default(),
-            DType::F8E8M0,
-        )?;
+        let blocks = vb
+            .set_prefix(format!("{}_blocks", vb.prefix()))
+            .get_with_hints_dtype(
+                (out_dim, in_dim * N_BITS / 32),
+                "blocks",
+                Default::default(),
+                DType::F4,
+            )?;
+        let scales = vb
+            .set_prefix(format!("{}_blocks", vb.prefix()))
+            .get_with_hints_dtype(
+                (out_dim, in_dim / group_size),
+                "scales",
+                Default::default(),
+                DType::F8E8M0,
+            )?;
 
         let bias = if bias {
             Some(vb.get((out_dim,), "bias")?)
@@ -173,28 +179,28 @@ impl MXFP4Layer {
         bias: bool,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
-        if !vb.device().is_metal() {
-            candle_core::bail!("MXFP4Layer only works on Metal.");
-        }
-
         let QuantizedConfig::MXFP4 {} = config else {
             candle_core::bail!("Unexpected quantization config.")
         };
 
         let group_size = GROUP_SIZE as usize;
 
-        let blocks = vb.get_with_hints_dtype(
-            (num_local_experts, out_dim, in_dim * N_BITS / 32),
-            "blocks",
-            Default::default(),
-            DType::F4,
-        )?;
-        let scales = vb.get_with_hints_dtype(
-            (num_local_experts, out_dim, in_dim / group_size),
-            "scales",
-            Default::default(),
-            DType::F8E8M0,
-        )?;
+        let blocks = vb
+            .set_prefix(format!("{}_blocks", vb.prefix()))
+            .get_with_hints_dtype(
+                (num_local_experts, out_dim, in_dim * N_BITS / 32),
+                "blocks",
+                Default::default(),
+                DType::F4,
+            )?;
+        let scales = vb
+            .set_prefix(format!("{}_blocks", vb.prefix()))
+            .get_with_hints_dtype(
+                (num_local_experts, out_dim, in_dim / group_size),
+                "scales",
+                Default::default(),
+                DType::F8E8M0,
+            )?;
 
         let bias = if bias {
             Some(vb.get((num_local_experts, out_dim), "bias")?)

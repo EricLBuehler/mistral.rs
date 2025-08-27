@@ -10,9 +10,10 @@ use super::{
     IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use super::{
-    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, GLM4Loader, Gemma2Loader, GemmaLoader,
-    LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader,
-    Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader, SmolLm3Loader, Starcoder2Loader,
+    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, GLM4Loader, GPTOSSLoader, Gemma2Loader,
+    GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
+    Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader, SmolLm3Loader,
+    Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
 use crate::attention::ATTENTION_CHUNK_SIZE;
@@ -225,6 +226,7 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::GLM4) => Box::new(GLM4Loader),
             Some(NormalLoaderType::Qwen3Moe) => Box::new(Qwen3MoELoader),
             Some(NormalLoaderType::SmolLm3) => Box::new(SmolLm3Loader),
+            Some(NormalLoaderType::GPTOSS) => Box::new(GPTOSSLoader),
             None => Box::new(AutoNormalLoader),
         };
         Ok(Box::new(NormalLoader {
