@@ -2,6 +2,7 @@
 name = "mistralrs-mcp"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "MCP (Model Context Protocol) client for mistral.rs"
 license.workspace = true
 homepage.workspace = true
