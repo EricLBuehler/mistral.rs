@@ -868,449 +868,450 @@
 <a href=#868 id=868 data-nosnippet>868</a>
 <a href=#869 id=869 data-nosnippet>869</a>    <span class="kw">pub fn </span>set_state(<span class="kw-2">&amp;</span><span class="self">self</span>, state: SequenceState) {
 <a href=#870 id=870 data-nosnippet>870</a>        <span class="kw">if </span><span class="macro">matches!</span>(state, SequenceState::Error) {
-<a href=#871 id=871 data-nosnippet>871</a>            <span class="macro">get_mut_group!</span>(<span class="self">self</span>).n_choices = <span class="macro">get_mut_group!</span>(<span class="self">self</span>).n_choices.saturating_sub(<span class="number">1</span>);
-<a href=#872 id=872 data-nosnippet>872</a>        }
-<a href=#873 id=873 data-nosnippet>873</a>        <span class="kw-2">*</span><span class="self">self</span>.state.write().unwrap() = state;
-<a href=#874 id=874 data-nosnippet>874</a>    }
-<a href=#875 id=875 data-nosnippet>875</a>
-<a href=#876 id=876 data-nosnippet>876</a>    <span class="kw">pub fn </span>getstate(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; SequenceState {
-<a href=#877 id=877 data-nosnippet>877</a>        <span class="kw-2">*</span><span class="self">self</span>.state.read().unwrap()
-<a href=#878 id=878 data-nosnippet>878</a>    }
-<a href=#879 id=879 data-nosnippet>879</a>
-<a href=#880 id=880 data-nosnippet>880</a>    <span class="kw">pub fn </span>is_done(
-<a href=#881 id=881 data-nosnippet>881</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#882 id=882 data-nosnippet>882</a>        tok: u32,
-<a href=#883 id=883 data-nosnippet>883</a>        eos_tok: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u32]&gt;,
-<a href=#884 id=884 data-nosnippet>884</a>        max_model_len: usize,
-<a href=#885 id=885 data-nosnippet>885</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;StopReason&gt; {
-<a href=#886 id=886 data-nosnippet>886</a>        <span class="kw">let </span>is_eos = <span class="kw">match </span>eos_tok {
-<a href=#887 id=887 data-nosnippet>887</a>            <span class="prelude-val">Some</span>(eos_tok) =&gt; eos_tok.contains(<span class="kw-2">&amp;</span>tok),
-<a href=#888 id=888 data-nosnippet>888</a>            <span class="prelude-val">None </span>=&gt; <span class="bool-val">false</span>,
-<a href=#889 id=889 data-nosnippet>889</a>        };
-<a href=#890 id=890 data-nosnippet>890</a>        <span class="kw">if </span>is_eos {
-<a href=#891 id=891 data-nosnippet>891</a>            <span class="prelude-val">Some</span>(StopReason::Eos)
-<a href=#892 id=892 data-nosnippet>892</a>        } <span class="kw">else if </span><span class="macro">matches!</span>(
-<a href=#893 id=893 data-nosnippet>893</a>            <span class="kw-2">&amp;*</span><span class="self">self</span>.state.read().unwrap(),
-<a href=#894 id=894 data-nosnippet>894</a>            SequenceState::Done(StopReason::Canceled)
-<a href=#895 id=895 data-nosnippet>895</a>        ) {
-<a href=#896 id=896 data-nosnippet>896</a>            <span class="prelude-val">Some</span>(StopReason::Canceled)
-<a href=#897 id=897 data-nosnippet>897</a>        } <span class="kw">else if </span><span class="self">self</span>.stop_tokens.contains(<span class="kw-2">&amp;</span>tok) {
-<a href=#898 id=898 data-nosnippet>898</a>            <span class="prelude-val">Some</span>(StopReason::StopTok(tok))
-<a href=#899 id=899 data-nosnippet>899</a>        } <span class="kw">else if </span><span class="self">self</span>.max_len.is_some()
-<a href=#900 id=900 data-nosnippet>900</a>            &amp;&amp; <span class="self">self</span>.tokens.len().saturating_sub(<span class="self">self</span>.prompt_len) + <span class="number">1 </span>&gt;= <span class="self">self</span>.max_len.unwrap()
-<a href=#901 id=901 data-nosnippet>901</a>        {
-<a href=#902 id=902 data-nosnippet>902</a>            <span class="comment">// add_token will be called after this check
-<a href=#903 id=903 data-nosnippet>903</a>            </span><span class="prelude-val">Some</span>(StopReason::Length(<span class="self">self</span>.max_len.unwrap()))
-<a href=#904 id=904 data-nosnippet>904</a>        } <span class="kw">else if </span><span class="self">self</span>.tokens.len().saturating_sub(<span class="self">self</span>.prompt_len) &gt;= max_model_len {
-<a href=#905 id=905 data-nosnippet>905</a>            <span class="prelude-val">Some</span>(StopReason::ModelLength(max_model_len))
-<a href=#906 id=906 data-nosnippet>906</a>        } <span class="kw">else </span>{
-<a href=#907 id=907 data-nosnippet>907</a>            <span class="kw">if </span>!<span class="self">self</span>.stop_strings.is_empty() {
-<a href=#908 id=908 data-nosnippet>908</a>                <span class="kw">for </span>(idx, s) <span class="kw">in </span><span class="self">self</span>.stop_strings.iter().enumerate() {
-<a href=#909 id=909 data-nosnippet>909</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(pos) = galil_seiferas::gs_find(<span class="kw-2">&amp;</span><span class="self">self</span>.completion_bytes, s.as_bytes())
-<a href=#910 id=910 data-nosnippet>910</a>                    {
-<a href=#911 id=911 data-nosnippet>911</a>                        <span class="kw">return </span><span class="prelude-val">Some</span>(StopReason::StopString {
-<a href=#912 id=912 data-nosnippet>912</a>                            stop_string_idx: idx,
-<a href=#913 id=913 data-nosnippet>913</a>                            completion_bytes_pos: pos,
-<a href=#914 id=914 data-nosnippet>914</a>                        });
-<a href=#915 id=915 data-nosnippet>915</a>                    }
-<a href=#916 id=916 data-nosnippet>916</a>                }
-<a href=#917 id=917 data-nosnippet>917</a>            }
-<a href=#918 id=918 data-nosnippet>918</a>            <span class="prelude-val">None
-<a href=#919 id=919 data-nosnippet>919</a>        </span>}
-<a href=#920 id=920 data-nosnippet>920</a>    }
-<a href=#921 id=921 data-nosnippet>921</a>
-<a href=#922 id=922 data-nosnippet>922</a>    <span class="kw">pub fn </span>logprobs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[Logprobs] {
-<a href=#923 id=923 data-nosnippet>923</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.logprobs
-<a href=#924 id=924 data-nosnippet>924</a>    }
-<a href=#925 id=925 data-nosnippet>925</a>
-<a href=#926 id=926 data-nosnippet>926</a>    <span class="kw">pub fn </span>return_logprobs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#927 id=927 data-nosnippet>927</a>        <span class="self">self</span>.return_logprobs
-<a href=#928 id=928 data-nosnippet>928</a>    }
-<a href=#929 id=929 data-nosnippet>929</a>
-<a href=#930 id=930 data-nosnippet>930</a>    <span class="kw">pub fn </span>prompt_tokens(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-<a href=#931 id=931 data-nosnippet>931</a>        <span class="self">self</span>.prompt_len
-<a href=#932 id=932 data-nosnippet>932</a>    }
-<a href=#933 id=933 data-nosnippet>933</a>
-<a href=#934 id=934 data-nosnippet>934</a>    <span class="kw">pub fn </span>stop_strings(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[String] {
-<a href=#935 id=935 data-nosnippet>935</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.stop_strings
-<a href=#936 id=936 data-nosnippet>936</a>    }
-<a href=#937 id=937 data-nosnippet>937</a>
-<a href=#938 id=938 data-nosnippet>938</a>    <span class="doccomment">/// Returns the delta between the last two decoded sequences
-<a href=#939 id=939 data-nosnippet>939</a>    </span><span class="kw">pub fn </span>get_delta(
-<a href=#940 id=940 data-nosnippet>940</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#941 id=941 data-nosnippet>941</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;String&gt;, Box&lt;<span class="kw">dyn </span>std::error::Error + Send + Sync&gt;&gt; {
-<a href=#942 id=942 data-nosnippet>942</a>        <span class="kw">let </span>new_decoded = <span class="self">self</span>.peek_delta();
-<a href=#943 id=943 data-nosnippet>943</a>        <span class="kw">if </span><span class="macro">matches!</span>(new_decoded, <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(<span class="kw">_</span>))) {
-<a href=#944 id=944 data-nosnippet>944</a>            <span class="self">self</span>.stream_idx = <span class="self">self</span>.completion_bytes.len();
-<a href=#945 id=945 data-nosnippet>945</a>        }
-<a href=#946 id=946 data-nosnippet>946</a>        new_decoded
-<a href=#947 id=947 data-nosnippet>947</a>    }
-<a href=#948 id=948 data-nosnippet>948</a>
-<a href=#949 id=949 data-nosnippet>949</a>    <span class="doccomment">/// Peeks at the delta between the last two decoded sequences, but does not advance the stream index.
-<a href=#950 id=950 data-nosnippet>950</a>    </span><span class="kw">pub fn </span>peek_delta(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;String&gt;, Box&lt;<span class="kw">dyn </span>std::error::Error + Send + Sync&gt;&gt; {
-<a href=#951 id=951 data-nosnippet>951</a>        <span class="kw">let </span>is_first = <span class="self">self</span>.stream_idx == <span class="number">0</span>;
-<a href=#952 id=952 data-nosnippet>952</a>        <span class="kw">let </span>new_decoded = String::from_utf8_lossy(<span class="kw-2">&amp;</span><span class="self">self</span>.completion_bytes[<span class="self">self</span>.stream_idx..]);
-<a href=#953 id=953 data-nosnippet>953</a>        <span class="comment">// Check if the sequence ends with valid utf8, if not skip it as it probably is a multi token sequence
-<a href=#954 id=954 data-nosnippet>954</a>        </span><span class="kw">if </span>new_decoded.ends_with(<span class="string">'�'</span>) {
-<a href=#955 id=955 data-nosnippet>955</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
-<a href=#956 id=956 data-nosnippet>956</a>        }
-<a href=#957 id=957 data-nosnippet>957</a>
-<a href=#958 id=958 data-nosnippet>958</a>        <span class="comment">// The first token usually starts with a space. We don't want to add that to the delta.
-<a href=#959 id=959 data-nosnippet>959</a>        // Since we're using the completion_bytes, we need to take care of that ourselves.
-<a href=#960 id=960 data-nosnippet>960</a>        // Had we used HF's Tokenizer, it would have taken care of that for us.
-<a href=#961 id=961 data-nosnippet>961</a>        </span><span class="kw">if </span>is_first {
-<a href=#962 id=962 data-nosnippet>962</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(new_decoded.trim_start().to_string()));
-<a href=#963 id=963 data-nosnippet>963</a>        }
-<a href=#964 id=964 data-nosnippet>964</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(new_decoded.to_string()))
-<a href=#965 id=965 data-nosnippet>965</a>    }
-<a href=#966 id=966 data-nosnippet>966</a>
-<a href=#967 id=967 data-nosnippet>967</a>    <span class="kw">pub fn </span>timestamp(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u128 {
-<a href=#968 id=968 data-nosnippet>968</a>        <span class="self">self</span>.timestamp
-<a href=#969 id=969 data-nosnippet>969</a>    }
-<a href=#970 id=970 data-nosnippet>970</a>
-<a href=#971 id=971 data-nosnippet>971</a>    <span class="kw">pub fn </span>prompt_timestamp(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;u128&gt; {
-<a href=#972 id=972 data-nosnippet>972</a>        <span class="self">self</span>.prompt_timestamp
-<a href=#973 id=973 data-nosnippet>973</a>    }
-<a href=#974 id=974 data-nosnippet>974</a>
-<a href=#975 id=975 data-nosnippet>975</a>    <span class="kw">fn </span>update_time_info(<span class="kw-2">&amp;</span><span class="self">self</span>) {
-<a href=#976 id=976 data-nosnippet>976</a>        <span class="kw">let </span>now = SystemTime::now()
-<a href=#977 id=977 data-nosnippet>977</a>            .duration_since(UNIX_EPOCH)
-<a href=#978 id=978 data-nosnippet>978</a>            .expect(<span class="string">"Time travel has occurred!"</span>)
-<a href=#979 id=979 data-nosnippet>979</a>            .as_millis();
-<a href=#980 id=980 data-nosnippet>980</a>
-<a href=#981 id=981 data-nosnippet>981</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(ts) = <span class="self">self</span>.prompt_timestamp {
-<a href=#982 id=982 data-nosnippet>982</a>            <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_completion_time = now - ts;
-<a href=#983 id=983 data-nosnippet>983</a>            <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_prompt_time = <span class="self">self</span>.total_prompt_time.unwrap();
-<a href=#984 id=984 data-nosnippet>984</a>        }
-<a href=#985 id=985 data-nosnippet>985</a>
-<a href=#986 id=986 data-nosnippet>986</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_time = now - <span class="self">self</span>.timestamp;
-<a href=#987 id=987 data-nosnippet>987</a>
-<a href=#988 id=988 data-nosnippet>988</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_prompt_toks = <span class="self">self</span>.prompt_len;
-<a href=#989 id=989 data-nosnippet>989</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_toks = <span class="self">self</span>.len();
-<a href=#990 id=990 data-nosnippet>990</a>    }
-<a href=#991 id=991 data-nosnippet>991</a>
-<a href=#992 id=992 data-nosnippet>992</a>    <span class="kw">pub fn </span>add_image_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, choice: ImageChoice) {
-<a href=#993 id=993 data-nosnippet>993</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).image_choices.push(choice);
-<a href=#994 id=994 data-nosnippet>994</a>    }
-<a href=#995 id=995 data-nosnippet>995</a>
-<a href=#996 id=996 data-nosnippet>996</a>    <span class="kw">pub fn </span>add_speech_pcm_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, pcm: Arc&lt;Vec&lt;f32&gt;&gt;, rate: usize, channels: usize) {
-<a href=#997 id=997 data-nosnippet>997</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).speech_pcms.push((pcm, rate, channels));
-<a href=#998 id=998 data-nosnippet>998</a>    }
-<a href=#999 id=999 data-nosnippet>999</a>
-<a href=#1000 id=1000 data-nosnippet>1000</a>    <span class="kw">pub fn </span>add_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, choice: Choice) {
-<a href=#1001 id=1001 data-nosnippet>1001</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).choices.push(choice);
-<a href=#1002 id=1002 data-nosnippet>1002</a>        <span class="self">self</span>.update_time_info();
-<a href=#1003 id=1003 data-nosnippet>1003</a>    }
-<a href=#1004 id=1004 data-nosnippet>1004</a>
-<a href=#1005 id=1005 data-nosnippet>1005</a>    <span class="kw">pub fn </span>add_raw_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, logit_chunks: Vec&lt;Tensor&gt;) {
-<a href=#1006 id=1006 data-nosnippet>1006</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>)
-<a href=#1007 id=1007 data-nosnippet>1007</a>            .raw_choices
-<a href=#1008 id=1008 data-nosnippet>1008</a>            .push((logit_chunks, <span class="self">self</span>.tokens.clone()));
-<a href=#1009 id=1009 data-nosnippet>1009</a>        <span class="self">self</span>.update_time_info();
-<a href=#1010 id=1010 data-nosnippet>1010</a>    }
-<a href=#1011 id=1011 data-nosnippet>1011</a>
-<a href=#1012 id=1012 data-nosnippet>1012</a>    <span class="kw">pub fn </span>add_completion_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>choice: CompletionChoice) {
-<a href=#1013 id=1013 data-nosnippet>1013</a>        choice.text = <span class="macro">format!</span>(
-<a href=#1014 id=1014 data-nosnippet>1014</a>            <span class="string">"{}{}{}"</span>,
-<a href=#1015 id=1015 data-nosnippet>1015</a>            <span class="self">self</span>.prefix.as_deref().unwrap_or(<span class="string">""</span>),
-<a href=#1016 id=1016 data-nosnippet>1016</a>            choice.text,
-<a href=#1017 id=1017 data-nosnippet>1017</a>            <span class="self">self</span>.suffix.as_deref().unwrap_or(<span class="string">""</span>)
-<a href=#1018 id=1018 data-nosnippet>1018</a>        );
-<a href=#1019 id=1019 data-nosnippet>1019</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>)
-<a href=#1020 id=1020 data-nosnippet>1020</a>            .completion_choices
-<a href=#1021 id=1021 data-nosnippet>1021</a>            .push((<span class="self">self</span>.cumulative_logprob, choice));
-<a href=#1022 id=1022 data-nosnippet>1022</a>        <span class="self">self</span>.update_time_info();
-<a href=#1023 id=1023 data-nosnippet>1023</a>    }
-<a href=#1024 id=1024 data-nosnippet>1024</a>
-<a href=#1025 id=1025 data-nosnippet>1025</a>    <span class="kw">pub fn </span>get_response_index(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-<a href=#1026 id=1026 data-nosnippet>1026</a>        <span class="self">self</span>.response_index
-<a href=#1027 id=1027 data-nosnippet>1027</a>    }
-<a href=#1028 id=1028 data-nosnippet>1028</a>
-<a href=#1029 id=1029 data-nosnippet>1029</a>    <span class="kw">pub fn </span>get_mut_group(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MutexGuard&lt;<span class="lifetime">'_</span>, SequenceGroup&gt; {
-<a href=#1030 id=1030 data-nosnippet>1030</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>)
-<a href=#1031 id=1031 data-nosnippet>1031</a>    }
-<a href=#1032 id=1032 data-nosnippet>1032</a>
-<a href=#1033 id=1033 data-nosnippet>1033</a>    <span class="kw">pub fn </span>add_streaming_chunk_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, chunk: ChunkChoice) {
-<a href=#1034 id=1034 data-nosnippet>1034</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).chat_streaming_chunks.push(chunk);
-<a href=#1035 id=1035 data-nosnippet>1035</a>        <span class="self">self</span>.update_time_info();
-<a href=#1036 id=1036 data-nosnippet>1036</a>    }
-<a href=#1037 id=1037 data-nosnippet>1037</a>
-<a href=#1038 id=1038 data-nosnippet>1038</a>    <span class="kw">pub fn </span>add_streaming_completion_chunk_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, chunk: CompletionChunkChoice) {
-<a href=#1039 id=1039 data-nosnippet>1039</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).completion_streaming_chunks.push(chunk);
-<a href=#1040 id=1040 data-nosnippet>1040</a>        <span class="self">self</span>.update_time_info();
-<a href=#1041 id=1041 data-nosnippet>1041</a>    }
-<a href=#1042 id=1042 data-nosnippet>1042</a>
-<a href=#1043 id=1043 data-nosnippet>1043</a>    <span class="kw">pub fn </span>take_images(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;image::DynamicImage&gt;&gt; {
-<a href=#1044 id=1044 data-nosnippet>1044</a>        <span class="self">self</span>.multimodal.take_images()
-<a href=#1045 id=1045 data-nosnippet>1045</a>    }
-<a href=#1046 id=1046 data-nosnippet>1046</a>
-<a href=#1047 id=1047 data-nosnippet>1047</a>    <span class="kw">pub fn </span>clone_images(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;image::DynamicImage&gt;&gt; {
-<a href=#1048 id=1048 data-nosnippet>1048</a>        <span class="self">self</span>.multimodal.clone_images()
-<a href=#1049 id=1049 data-nosnippet>1049</a>    }
-<a href=#1050 id=1050 data-nosnippet>1050</a>
-<a href=#1051 id=1051 data-nosnippet>1051</a>    <span class="kw">pub fn </span>images(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[image::DynamicImage]&gt; {
-<a href=#1052 id=1052 data-nosnippet>1052</a>        <span class="self">self</span>.multimodal.images()
-<a href=#1053 id=1053 data-nosnippet>1053</a>    }
-<a href=#1054 id=1054 data-nosnippet>1054</a>
-<a href=#1055 id=1055 data-nosnippet>1055</a>    <span class="kw">pub fn </span>image_hashes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u64]&gt; {
-<a href=#1056 id=1056 data-nosnippet>1056</a>        <span class="self">self</span>.multimodal.image_hashes()
-<a href=#1057 id=1057 data-nosnippet>1057</a>    }
-<a href=#1058 id=1058 data-nosnippet>1058</a>
-<a href=#1059 id=1059 data-nosnippet>1059</a>    <span class="kw">pub fn </span>has_images(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#1060 id=1060 data-nosnippet>1060</a>        <span class="self">self</span>.multimodal.has_images()
-<a href=#1061 id=1061 data-nosnippet>1061</a>    }
-<a href=#1062 id=1062 data-nosnippet>1062</a>
-<a href=#1063 id=1063 data-nosnippet>1063</a>    <span class="kw">pub fn </span>take_audios(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;AudioInput&gt;&gt; {
-<a href=#1064 id=1064 data-nosnippet>1064</a>        <span class="self">self</span>.multimodal.take_audios()
-<a href=#1065 id=1065 data-nosnippet>1065</a>    }
-<a href=#1066 id=1066 data-nosnippet>1066</a>
-<a href=#1067 id=1067 data-nosnippet>1067</a>    <span class="kw">pub fn </span>clone_audios(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;AudioInput&gt;&gt; {
-<a href=#1068 id=1068 data-nosnippet>1068</a>        <span class="self">self</span>.multimodal.clone_audios()
-<a href=#1069 id=1069 data-nosnippet>1069</a>    }
-<a href=#1070 id=1070 data-nosnippet>1070</a>
-<a href=#1071 id=1071 data-nosnippet>1071</a>    <span class="kw">pub fn </span>audios(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[AudioInput]&gt; {
-<a href=#1072 id=1072 data-nosnippet>1072</a>        <span class="self">self</span>.multimodal.audios()
-<a href=#1073 id=1073 data-nosnippet>1073</a>    }
-<a href=#1074 id=1074 data-nosnippet>1074</a>
-<a href=#1075 id=1075 data-nosnippet>1075</a>    <span class="kw">pub fn </span>audio_hashes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u64]&gt; {
-<a href=#1076 id=1076 data-nosnippet>1076</a>        <span class="self">self</span>.multimodal.audio_hashes()
-<a href=#1077 id=1077 data-nosnippet>1077</a>    }
-<a href=#1078 id=1078 data-nosnippet>1078</a>
-<a href=#1079 id=1079 data-nosnippet>1079</a>    <span class="kw">pub fn </span>has_audios(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#1080 id=1080 data-nosnippet>1080</a>        <span class="self">self</span>.multimodal.has_audios()
-<a href=#1081 id=1081 data-nosnippet>1081</a>    }
-<a href=#1082 id=1082 data-nosnippet>1082</a>
-<a href=#1083 id=1083 data-nosnippet>1083</a>    <span class="doccomment">/// Keep these last n audios
-<a href=#1084 id=1084 data-nosnippet>1084</a>    </span><span class="kw">pub fn </span>keep_num_audios(<span class="kw-2">&amp;mut </span><span class="self">self</span>, audios_to_keep: usize) {
-<a href=#1085 id=1085 data-nosnippet>1085</a>        <span class="self">self</span>.multimodal.keep_num_audios(audios_to_keep)
-<a href=#1086 id=1086 data-nosnippet>1086</a>    }
-<a href=#1087 id=1087 data-nosnippet>1087</a>
-<a href=#1088 id=1088 data-nosnippet>1088</a>    <span class="doccomment">/// Keep these last n images
-<a href=#1089 id=1089 data-nosnippet>1089</a>    </span><span class="kw">pub fn </span>keep_num_images(<span class="kw-2">&amp;mut </span><span class="self">self</span>, images_to_keep: usize) {
-<a href=#1090 id=1090 data-nosnippet>1090</a>        <span class="self">self</span>.multimodal.keep_num_images(images_to_keep)
-<a href=#1091 id=1091 data-nosnippet>1091</a>    }
-<a href=#1092 id=1092 data-nosnippet>1092</a>
-<a href=#1093 id=1093 data-nosnippet>1093</a>    <span class="kw">pub fn </span>image_gen_response_format(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;ImageGenerationResponseFormat&gt; {
-<a href=#1094 id=1094 data-nosnippet>1094</a>        <span class="self">self</span>.multimodal.image_gen_response_format()
-<a href=#1095 id=1095 data-nosnippet>1095</a>    }
-<a href=#1096 id=1096 data-nosnippet>1096</a>
-<a href=#1097 id=1097 data-nosnippet>1097</a>    <span class="kw">pub fn </span>sequence_stepping_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>SeqStepType {
-<a href=#1098 id=1098 data-nosnippet>1098</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.sequence_stepping_type
-<a href=#1099 id=1099 data-nosnippet>1099</a>    }
-<a href=#1100 id=1100 data-nosnippet>1100</a>
-<a href=#1101 id=1101 data-nosnippet>1101</a>    <span class="kw">pub fn </span>get_diffusion_diffusion_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DiffusionGenerationParams&gt; {
-<a href=#1102 id=1102 data-nosnippet>1102</a>        <span class="self">self</span>.multimodal.diffusion_params()
-<a href=#1103 id=1103 data-nosnippet>1103</a>    }
-<a href=#1104 id=1104 data-nosnippet>1104</a>
-<a href=#1105 id=1105 data-nosnippet>1105</a>    <span class="kw">pub fn </span>eos_tokens(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[u32] {
-<a href=#1106 id=1106 data-nosnippet>1106</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.eos_tokens
-<a href=#1107 id=1107 data-nosnippet>1107</a>    }
-<a href=#1108 id=1108 data-nosnippet>1108</a>}
-<a href=#1109 id=1109 data-nosnippet>1109</a>
-<a href=#1110 id=1110 data-nosnippet>1110</a><span class="kw">pub struct </span>SequenceGroup {
-<a href=#1111 id=1111 data-nosnippet>1111</a>    n_choices: usize, <span class="comment">// The target number of choices to return. Can be decreased if an error is thrown.
-<a href=#1112 id=1112 data-nosnippet>1112</a>    </span>best_of: <span class="prelude-ty">Option</span>&lt;usize&gt;, <span class="comment">// Top n seqs based on cumulative logprobs.
-<a href=#1113 id=1113 data-nosnippet>1113</a>    </span><span class="kw">pub </span>total_prompt_toks: usize,
-<a href=#1114 id=1114 data-nosnippet>1114</a>    <span class="kw">pub </span>total_toks: usize,
-<a href=#1115 id=1115 data-nosnippet>1115</a>    <span class="kw">pub </span>total_prompt_time: u128,
-<a href=#1116 id=1116 data-nosnippet>1116</a>    <span class="kw">pub </span>total_time: u128,
-<a href=#1117 id=1117 data-nosnippet>1117</a>    <span class="kw">pub </span>total_completion_time: u128,
-<a href=#1118 id=1118 data-nosnippet>1118</a>    choices: Vec&lt;Choice&gt;,
-<a href=#1119 id=1119 data-nosnippet>1119</a>    image_choices: Vec&lt;ImageChoice&gt;,
-<a href=#1120 id=1120 data-nosnippet>1120</a>    speech_pcms: Vec&lt;(Arc&lt;Vec&lt;f32&gt;&gt;, usize, usize)&gt;, <span class="comment">// (pcm, rate, channels)
-<a href=#1121 id=1121 data-nosnippet>1121</a>    </span>raw_choices: Vec&lt;(Vec&lt;Tensor&gt;, Vec&lt;u32&gt;)&gt;,
-<a href=#1122 id=1122 data-nosnippet>1122</a>    completion_choices: Vec&lt;(f32, CompletionChoice)&gt;,
-<a href=#1123 id=1123 data-nosnippet>1123</a>    <span class="kw">pub </span>chat_streaming_chunks: Vec&lt;ChunkChoice&gt;,
-<a href=#1124 id=1124 data-nosnippet>1124</a>    <span class="kw">pub </span>completion_streaming_chunks: Vec&lt;CompletionChunkChoice&gt;,
-<a href=#1125 id=1125 data-nosnippet>1125</a>    <span class="kw">pub </span>is_streaming: bool,
-<a href=#1126 id=1126 data-nosnippet>1126</a>    <span class="kw">pub </span>is_chat: bool,
-<a href=#1127 id=1127 data-nosnippet>1127</a>}
-<a href=#1128 id=1128 data-nosnippet>1128</a>
-<a href=#1129 id=1129 data-nosnippet>1129</a><span class="kw">impl </span>SequenceGroup {
-<a href=#1130 id=1130 data-nosnippet>1130</a>    <span class="kw">pub fn </span>new(
-<a href=#1131 id=1131 data-nosnippet>1131</a>        n_choices: usize,
-<a href=#1132 id=1132 data-nosnippet>1132</a>        is_streaming: bool,
-<a href=#1133 id=1133 data-nosnippet>1133</a>        is_chat: bool,
-<a href=#1134 id=1134 data-nosnippet>1134</a>        best_of: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#1135 id=1135 data-nosnippet>1135</a>    ) -&gt; <span class="self">Self </span>{
-<a href=#1136 id=1136 data-nosnippet>1136</a>        <span class="self">Self </span>{
-<a href=#1137 id=1137 data-nosnippet>1137</a>            choices: Vec::new(),
-<a href=#1138 id=1138 data-nosnippet>1138</a>            image_choices: Vec::new(),
-<a href=#1139 id=1139 data-nosnippet>1139</a>            speech_pcms: Vec::new(),
-<a href=#1140 id=1140 data-nosnippet>1140</a>            raw_choices: Vec::new(),
-<a href=#1141 id=1141 data-nosnippet>1141</a>            completion_choices: Vec::new(),
-<a href=#1142 id=1142 data-nosnippet>1142</a>            n_choices,
-<a href=#1143 id=1143 data-nosnippet>1143</a>            total_prompt_toks: <span class="number">0</span>,
-<a href=#1144 id=1144 data-nosnippet>1144</a>            total_toks: <span class="number">0</span>,
-<a href=#1145 id=1145 data-nosnippet>1145</a>            total_prompt_time: <span class="number">0</span>,
-<a href=#1146 id=1146 data-nosnippet>1146</a>            total_time: <span class="number">0</span>,
-<a href=#1147 id=1147 data-nosnippet>1147</a>            total_completion_time: <span class="number">0</span>,
-<a href=#1148 id=1148 data-nosnippet>1148</a>            chat_streaming_chunks: Vec::new(),
-<a href=#1149 id=1149 data-nosnippet>1149</a>            completion_streaming_chunks: Vec::new(),
-<a href=#1150 id=1150 data-nosnippet>1150</a>            is_streaming,
-<a href=#1151 id=1151 data-nosnippet>1151</a>            is_chat,
-<a href=#1152 id=1152 data-nosnippet>1152</a>            best_of,
-<a href=#1153 id=1153 data-nosnippet>1153</a>        }
-<a href=#1154 id=1154 data-nosnippet>1154</a>    }
-<a href=#1155 id=1155 data-nosnippet>1155</a>
-<a href=#1156 id=1156 data-nosnippet>1156</a>    <span class="kw">pub fn </span>get_choices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[Choice] {
-<a href=#1157 id=1157 data-nosnippet>1157</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.choices
-<a href=#1158 id=1158 data-nosnippet>1158</a>    }
-<a href=#1159 id=1159 data-nosnippet>1159</a>
-<a href=#1160 id=1160 data-nosnippet>1160</a>    <span class="doccomment">/// This may apply the best_of.
-<a href=#1161 id=1161 data-nosnippet>1161</a>    </span><span class="kw">pub fn </span>get_completion_choices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;CompletionChoice&gt; {
-<a href=#1162 id=1162 data-nosnippet>1162</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(best_of) = <span class="self">self</span>.best_of {
-<a href=#1163 id=1163 data-nosnippet>1163</a>            <span class="kw">let </span><span class="kw-2">mut </span>choices = <span class="self">self</span>.completion_choices.clone();
-<a href=#1164 id=1164 data-nosnippet>1164</a>            <span class="comment">// Sort by descending logprobs
-<a href=#1165 id=1165 data-nosnippet>1165</a>            </span>choices.sort_by(|a, b| b.<span class="number">0</span>.partial_cmp(<span class="kw-2">&amp;</span>a.<span class="number">0</span>).expect(<span class="string">"No ordering."</span>));
-<a href=#1166 id=1166 data-nosnippet>1166</a>            choices
-<a href=#1167 id=1167 data-nosnippet>1167</a>                .into_iter()
-<a href=#1168 id=1168 data-nosnippet>1168</a>                .take(best_of)
-<a href=#1169 id=1169 data-nosnippet>1169</a>                .map(|(<span class="kw">_</span>, x)| x)
-<a href=#1170 id=1170 data-nosnippet>1170</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#1171 id=1171 data-nosnippet>1171</a>        } <span class="kw">else </span>{
-<a href=#1172 id=1172 data-nosnippet>1172</a>            <span class="self">self</span>.completion_choices
-<a href=#1173 id=1173 data-nosnippet>1173</a>                .clone()
-<a href=#1174 id=1174 data-nosnippet>1174</a>                .into_iter()
-<a href=#1175 id=1175 data-nosnippet>1175</a>                .map(|(<span class="kw">_</span>, x)| x)
-<a href=#1176 id=1176 data-nosnippet>1176</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#1177 id=1177 data-nosnippet>1177</a>        }
-<a href=#1178 id=1178 data-nosnippet>1178</a>    }
-<a href=#1179 id=1179 data-nosnippet>1179</a>
-<a href=#1180 id=1180 data-nosnippet>1180</a>    <span class="kw">pub fn </span>get_image_choices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[ImageChoice] {
-<a href=#1181 id=1181 data-nosnippet>1181</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.image_choices
-<a href=#1182 id=1182 data-nosnippet>1182</a>    }
-<a href=#1183 id=1183 data-nosnippet>1183</a>
-<a href=#1184 id=1184 data-nosnippet>1184</a>    <span class="kw">pub fn </span>get_usage(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Usage {
-<a href=#1185 id=1185 data-nosnippet>1185</a>        <span class="attr">#[allow(clippy::cast_precision_loss)]
-<a href=#1186 id=1186 data-nosnippet>1186</a>        </span>Usage {
-<a href=#1187 id=1187 data-nosnippet>1187</a>            completion_tokens: <span class="self">self</span>.total_toks.saturating_sub(<span class="self">self</span>.total_prompt_toks),
-<a href=#1188 id=1188 data-nosnippet>1188</a>            prompt_tokens: <span class="self">self</span>.total_prompt_toks,
-<a href=#1189 id=1189 data-nosnippet>1189</a>            total_tokens: <span class="self">self</span>.total_toks,
-<a href=#1190 id=1190 data-nosnippet>1190</a>            avg_tok_per_sec: (<span class="self">self</span>.total_toks <span class="kw">as </span>f32 / <span class="self">self</span>.total_time <span class="kw">as </span>f32) * <span class="number">1000.</span>,
-<a href=#1191 id=1191 data-nosnippet>1191</a>            avg_prompt_tok_per_sec: (<span class="self">self</span>.total_prompt_toks <span class="kw">as </span>f32 / <span class="self">self</span>.total_prompt_time <span class="kw">as </span>f32)
-<a href=#1192 id=1192 data-nosnippet>1192</a>                * <span class="number">1000.</span>,
-<a href=#1193 id=1193 data-nosnippet>1193</a>            avg_compl_tok_per_sec: (<span class="self">self</span>.total_toks.saturating_sub(<span class="self">self</span>.total_prompt_toks) <span class="kw">as </span>f32
-<a href=#1194 id=1194 data-nosnippet>1194</a>                / <span class="self">self</span>.total_completion_time <span class="kw">as </span>f32)
-<a href=#1195 id=1195 data-nosnippet>1195</a>                * <span class="number">1000.</span>,
-<a href=#1196 id=1196 data-nosnippet>1196</a>            total_time_sec: <span class="self">self</span>.total_time <span class="kw">as </span>f32 / <span class="number">1000.</span>,
-<a href=#1197 id=1197 data-nosnippet>1197</a>            total_completion_time_sec: <span class="self">self</span>.total_completion_time <span class="kw">as </span>f32 / <span class="number">1000.</span>,
-<a href=#1198 id=1198 data-nosnippet>1198</a>            total_prompt_time_sec: <span class="self">self</span>.total_prompt_time <span class="kw">as </span>f32 / <span class="number">1000.</span>,
-<a href=#1199 id=1199 data-nosnippet>1199</a>        }
-<a href=#1200 id=1200 data-nosnippet>1200</a>    }
-<a href=#1201 id=1201 data-nosnippet>1201</a>
-<a href=#1202 id=1202 data-nosnippet>1202</a>    <span class="kw">pub async fn </span>maybe_send_chat_done_response(
-<a href=#1203 id=1203 data-nosnippet>1203</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1204 id=1204 data-nosnippet>1204</a>        response: ChatCompletionResponse,
-<a href=#1205 id=1205 data-nosnippet>1205</a>        sender: Sender&lt;Response&gt;,
-<a href=#1206 id=1206 data-nosnippet>1206</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), SendError&lt;Response&gt;&gt; {
-<a href=#1207 id=1207 data-nosnippet>1207</a>        <span class="kw">if </span><span class="self">self</span>.choices.len() == <span class="self">self</span>.n_choices {
-<a href=#1208 id=1208 data-nosnippet>1208</a>            sender.send(Response::Done(response)).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#1209 id=1209 data-nosnippet>1209</a>        }
-<a href=#1210 id=1210 data-nosnippet>1210</a>
-<a href=#1211 id=1211 data-nosnippet>1211</a>        <span class="prelude-val">Ok</span>(())
-<a href=#1212 id=1212 data-nosnippet>1212</a>    }
-<a href=#1213 id=1213 data-nosnippet>1213</a>
-<a href=#1214 id=1214 data-nosnippet>1214</a>    <span class="kw">pub async fn </span>maybe_send_raw_done_response(
-<a href=#1215 id=1215 data-nosnippet>1215</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1216 id=1216 data-nosnippet>1216</a>        sender: Sender&lt;Response&gt;,
-<a href=#1217 id=1217 data-nosnippet>1217</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), SendError&lt;Response&gt;&gt; {
-<a href=#1218 id=1218 data-nosnippet>1218</a>        <span class="kw">if </span><span class="self">self</span>.raw_choices.len() == <span class="self">self</span>.n_choices {
-<a href=#1219 id=1219 data-nosnippet>1219</a>            <span class="macro">assert_eq!</span>(<span class="self">self</span>.raw_choices.len(), <span class="number">1</span>);
-<a href=#1220 id=1220 data-nosnippet>1220</a>            <span class="kw">let </span>(logits_chunks, tokens) = <span class="self">self</span>.raw_choices[<span class="number">0</span>].clone();
-<a href=#1221 id=1221 data-nosnippet>1221</a>            sender
-<a href=#1222 id=1222 data-nosnippet>1222</a>                .send(Response::Raw {
-<a href=#1223 id=1223 data-nosnippet>1223</a>                    logits_chunks,
-<a href=#1224 id=1224 data-nosnippet>1224</a>                    tokens,
-<a href=#1225 id=1225 data-nosnippet>1225</a>                })
-<a href=#1226 id=1226 data-nosnippet>1226</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#1227 id=1227 data-nosnippet>1227</a>        }
-<a href=#1228 id=1228 data-nosnippet>1228</a>
-<a href=#1229 id=1229 data-nosnippet>1229</a>        <span class="prelude-val">Ok</span>(())
-<a href=#1230 id=1230 data-nosnippet>1230</a>    }
-<a href=#1231 id=1231 data-nosnippet>1231</a>
-<a href=#1232 id=1232 data-nosnippet>1232</a>    <span class="kw">pub async fn </span>maybe_send_image_gen_response(
-<a href=#1233 id=1233 data-nosnippet>1233</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1234 id=1234 data-nosnippet>1234</a>        response: ImageGenerationResponse,
-<a href=#1235 id=1235 data-nosnippet>1235</a>        sender: Sender&lt;Response&gt;,
-<a href=#1236 id=1236 data-nosnippet>1236</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), SendError&lt;Response&gt;&gt; {
-<a href=#1237 id=1237 data-nosnippet>1237</a>        <span class="kw">if </span><span class="self">self</span>.image_choices.len() == <span class="self">self</span>.n_choices {
-<a href=#1238 id=1238 data-nosnippet>1238</a>            sender.send(Response::ImageGeneration(response)).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#1239 id=1239 data-nosnippet>1239</a>        }
-<a href=#1240 id=1240 data-nosnippet>1240</a>
-<a href=#1241 id=1241 data-nosnippet>1241</a>        <span class="prelude-val">Ok</span>(())
-<a href=#1242 id=1242 data-nosnippet>1242</a>    }
-<a href=#1243 id=1243 data-nosnippet>1243</a>
-<a href=#1244 id=1244 data-nosnippet>1244</a>    <span class="kw">pub async fn </span>maybe_send_speech_response(
-<a href=#1245 id=1245 data-nosnippet>1245</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1246 id=1246 data-nosnippet>1246</a>        sender: Sender&lt;Response&gt;,
-<a href=#1247 id=1247 data-nosnippet>1247</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), SendError&lt;Response&gt;&gt; {
-<a href=#1248 id=1248 data-nosnippet>1248</a>        <span class="macro">assert_eq!</span>(<span class="self">self</span>.speech_pcms.len(), <span class="number">1</span>);
-<a href=#1249 id=1249 data-nosnippet>1249</a>
-<a href=#1250 id=1250 data-nosnippet>1250</a>        <span class="kw">let </span>(pcm, rate, channels) = <span class="self">self</span>.speech_pcms[<span class="number">0</span>].clone();
-<a href=#1251 id=1251 data-nosnippet>1251</a>        sender
-<a href=#1252 id=1252 data-nosnippet>1252</a>            .send(Response::Speech {
-<a href=#1253 id=1253 data-nosnippet>1253</a>                pcm,
-<a href=#1254 id=1254 data-nosnippet>1254</a>                rate,
-<a href=#1255 id=1255 data-nosnippet>1255</a>                channels,
-<a href=#1256 id=1256 data-nosnippet>1256</a>            })
-<a href=#1257 id=1257 data-nosnippet>1257</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#1258 id=1258 data-nosnippet>1258</a>
-<a href=#1259 id=1259 data-nosnippet>1259</a>        <span class="prelude-val">Ok</span>(())
-<a href=#1260 id=1260 data-nosnippet>1260</a>    }
-<a href=#1261 id=1261 data-nosnippet>1261</a>
-<a href=#1262 id=1262 data-nosnippet>1262</a>    <span class="kw">pub async fn </span>maybe_send_streaming_response(
-<a href=#1263 id=1263 data-nosnippet>1263</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#1264 id=1264 data-nosnippet>1264</a>        seq: <span class="kw-2">&amp;</span>Sequence,
-<a href=#1265 id=1265 data-nosnippet>1265</a>        model: String,
-<a href=#1266 id=1266 data-nosnippet>1266</a>        usage_opt: <span class="prelude-ty">Option</span>&lt;Usage&gt;,
-<a href=#1267 id=1267 data-nosnippet>1267</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), Box&lt;SendError&lt;Response&gt;&gt;&gt; {
-<a href=#1268 id=1268 data-nosnippet>1268</a>        <span class="kw">if </span><span class="self">self</span>.chat_streaming_chunks.len() == <span class="self">self</span>.n_choices &amp;&amp; <span class="self">self</span>.is_streaming {
-<a href=#1269 id=1269 data-nosnippet>1269</a>            <span class="kw">let </span><span class="kw-2">mut </span>swap_streaming_chunks = <span class="macro">vec!</span>[];
-<a href=#1270 id=1270 data-nosnippet>1270</a>
-<a href=#1271 id=1271 data-nosnippet>1271</a>            std::mem::swap(<span class="kw-2">&amp;mut </span>swap_streaming_chunks, <span class="kw-2">&amp;mut </span><span class="self">self</span>.chat_streaming_chunks);
-<a href=#1272 id=1272 data-nosnippet>1272</a>
-<a href=#1273 id=1273 data-nosnippet>1273</a>            seq.responder()
-<a href=#1274 id=1274 data-nosnippet>1274</a>                .send(Response::Chunk(ChatCompletionChunkResponse {
-<a href=#1275 id=1275 data-nosnippet>1275</a>                    id: seq.id.to_string(),
-<a href=#1276 id=1276 data-nosnippet>1276</a>                    choices: swap_streaming_chunks,
-<a href=#1277 id=1277 data-nosnippet>1277</a>                    created: seq.timestamp,
-<a href=#1278 id=1278 data-nosnippet>1278</a>                    model: model.clone(),
-<a href=#1279 id=1279 data-nosnippet>1279</a>                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
-<a href=#1280 id=1280 data-nosnippet>1280</a>                    object: <span class="string">"chat.completion.chunk"</span>.to_string(),
-<a href=#1281 id=1281 data-nosnippet>1281</a>                    usage: usage_opt,
-<a href=#1282 id=1282 data-nosnippet>1282</a>                }))
-<a href=#1283 id=1283 data-nosnippet>1283</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#1284 id=1284 data-nosnippet>1284</a>        } <span class="kw">else if </span><span class="self">self</span>.completion_streaming_chunks.len() == <span class="self">self</span>.n_choices &amp;&amp; <span class="self">self</span>.is_streaming {
-<a href=#1285 id=1285 data-nosnippet>1285</a>            <span class="kw">let </span><span class="kw-2">mut </span>swap_streaming_chunks = <span class="macro">vec!</span>[];
-<a href=#1286 id=1286 data-nosnippet>1286</a>
-<a href=#1287 id=1287 data-nosnippet>1287</a>            std::mem::swap(
-<a href=#1288 id=1288 data-nosnippet>1288</a>                <span class="kw-2">&amp;mut </span>swap_streaming_chunks,
-<a href=#1289 id=1289 data-nosnippet>1289</a>                <span class="kw-2">&amp;mut </span><span class="self">self</span>.completion_streaming_chunks,
-<a href=#1290 id=1290 data-nosnippet>1290</a>            );
-<a href=#1291 id=1291 data-nosnippet>1291</a>
-<a href=#1292 id=1292 data-nosnippet>1292</a>            seq.responder()
-<a href=#1293 id=1293 data-nosnippet>1293</a>                .send(Response::CompletionChunk(CompletionChunkResponse {
-<a href=#1294 id=1294 data-nosnippet>1294</a>                    id: seq.id.to_string(),
-<a href=#1295 id=1295 data-nosnippet>1295</a>                    choices: swap_streaming_chunks,
-<a href=#1296 id=1296 data-nosnippet>1296</a>                    created: seq.timestamp,
-<a href=#1297 id=1297 data-nosnippet>1297</a>                    model: model.clone(),
-<a href=#1298 id=1298 data-nosnippet>1298</a>                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
-<a href=#1299 id=1299 data-nosnippet>1299</a>                    object: <span class="string">"text_completion"</span>.to_string(),
-<a href=#1300 id=1300 data-nosnippet>1300</a>                }))
-<a href=#1301 id=1301 data-nosnippet>1301</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#1302 id=1302 data-nosnippet>1302</a>        }
-<a href=#1303 id=1303 data-nosnippet>1303</a>        <span class="prelude-val">Ok</span>(())
-<a href=#1304 id=1304 data-nosnippet>1304</a>    }
-<a href=#1305 id=1305 data-nosnippet>1305</a>
-<a href=#1306 id=1306 data-nosnippet>1306</a>    <span class="kw">pub async fn </span>maybe_send_completion_done_response(
-<a href=#1307 id=1307 data-nosnippet>1307</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1308 id=1308 data-nosnippet>1308</a>        response: CompletionResponse,
-<a href=#1309 id=1309 data-nosnippet>1309</a>        sender: Sender&lt;Response&gt;,
-<a href=#1310 id=1310 data-nosnippet>1310</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), Box&lt;SendError&lt;Response&gt;&gt;&gt; {
-<a href=#1311 id=1311 data-nosnippet>1311</a>        <span class="kw">if </span><span class="self">self</span>.completion_choices.len() == <span class="self">self</span>.n_choices {
-<a href=#1312 id=1312 data-nosnippet>1312</a>            sender.send(Response::CompletionDone(response)).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#1313 id=1313 data-nosnippet>1313</a>        }
-<a href=#1314 id=1314 data-nosnippet>1314</a>        <span class="prelude-val">Ok</span>(())
-<a href=#1315 id=1315 data-nosnippet>1315</a>    }
-<a href=#1316 id=1316 data-nosnippet>1316</a>}</code></pre></div></section></main></body></html>
+<a href=#871 id=871 data-nosnippet>871</a>            <span class="kw">let </span><span class="kw-2">mut </span>group = <span class="macro">get_mut_group!</span>(<span class="self">self</span>);
+<a href=#872 id=872 data-nosnippet>872</a>            group.n_choices = group.n_choices.saturating_sub(<span class="number">1</span>);
+<a href=#873 id=873 data-nosnippet>873</a>        }
+<a href=#874 id=874 data-nosnippet>874</a>        <span class="kw-2">*</span><span class="self">self</span>.state.write().unwrap() = state;
+<a href=#875 id=875 data-nosnippet>875</a>    }
+<a href=#876 id=876 data-nosnippet>876</a>
+<a href=#877 id=877 data-nosnippet>877</a>    <span class="kw">pub fn </span>getstate(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; SequenceState {
+<a href=#878 id=878 data-nosnippet>878</a>        <span class="kw-2">*</span><span class="self">self</span>.state.read().unwrap()
+<a href=#879 id=879 data-nosnippet>879</a>    }
+<a href=#880 id=880 data-nosnippet>880</a>
+<a href=#881 id=881 data-nosnippet>881</a>    <span class="kw">pub fn </span>is_done(
+<a href=#882 id=882 data-nosnippet>882</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#883 id=883 data-nosnippet>883</a>        tok: u32,
+<a href=#884 id=884 data-nosnippet>884</a>        eos_tok: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u32]&gt;,
+<a href=#885 id=885 data-nosnippet>885</a>        max_model_len: usize,
+<a href=#886 id=886 data-nosnippet>886</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;StopReason&gt; {
+<a href=#887 id=887 data-nosnippet>887</a>        <span class="kw">let </span>is_eos = <span class="kw">match </span>eos_tok {
+<a href=#888 id=888 data-nosnippet>888</a>            <span class="prelude-val">Some</span>(eos_tok) =&gt; eos_tok.contains(<span class="kw-2">&amp;</span>tok),
+<a href=#889 id=889 data-nosnippet>889</a>            <span class="prelude-val">None </span>=&gt; <span class="bool-val">false</span>,
+<a href=#890 id=890 data-nosnippet>890</a>        };
+<a href=#891 id=891 data-nosnippet>891</a>        <span class="kw">if </span>is_eos {
+<a href=#892 id=892 data-nosnippet>892</a>            <span class="prelude-val">Some</span>(StopReason::Eos)
+<a href=#893 id=893 data-nosnippet>893</a>        } <span class="kw">else if </span><span class="macro">matches!</span>(
+<a href=#894 id=894 data-nosnippet>894</a>            <span class="kw-2">&amp;*</span><span class="self">self</span>.state.read().unwrap(),
+<a href=#895 id=895 data-nosnippet>895</a>            SequenceState::Done(StopReason::Canceled)
+<a href=#896 id=896 data-nosnippet>896</a>        ) {
+<a href=#897 id=897 data-nosnippet>897</a>            <span class="prelude-val">Some</span>(StopReason::Canceled)
+<a href=#898 id=898 data-nosnippet>898</a>        } <span class="kw">else if </span><span class="self">self</span>.stop_tokens.contains(<span class="kw-2">&amp;</span>tok) {
+<a href=#899 id=899 data-nosnippet>899</a>            <span class="prelude-val">Some</span>(StopReason::StopTok(tok))
+<a href=#900 id=900 data-nosnippet>900</a>        } <span class="kw">else if </span><span class="self">self</span>.max_len.is_some()
+<a href=#901 id=901 data-nosnippet>901</a>            &amp;&amp; <span class="self">self</span>.tokens.len().saturating_sub(<span class="self">self</span>.prompt_len) + <span class="number">1 </span>&gt;= <span class="self">self</span>.max_len.unwrap()
+<a href=#902 id=902 data-nosnippet>902</a>        {
+<a href=#903 id=903 data-nosnippet>903</a>            <span class="comment">// add_token will be called after this check
+<a href=#904 id=904 data-nosnippet>904</a>            </span><span class="prelude-val">Some</span>(StopReason::Length(<span class="self">self</span>.max_len.unwrap()))
+<a href=#905 id=905 data-nosnippet>905</a>        } <span class="kw">else if </span><span class="self">self</span>.tokens.len().saturating_sub(<span class="self">self</span>.prompt_len) &gt;= max_model_len {
+<a href=#906 id=906 data-nosnippet>906</a>            <span class="prelude-val">Some</span>(StopReason::ModelLength(max_model_len))
+<a href=#907 id=907 data-nosnippet>907</a>        } <span class="kw">else </span>{
+<a href=#908 id=908 data-nosnippet>908</a>            <span class="kw">if </span>!<span class="self">self</span>.stop_strings.is_empty() {
+<a href=#909 id=909 data-nosnippet>909</a>                <span class="kw">for </span>(idx, s) <span class="kw">in </span><span class="self">self</span>.stop_strings.iter().enumerate() {
+<a href=#910 id=910 data-nosnippet>910</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(pos) = galil_seiferas::gs_find(<span class="kw-2">&amp;</span><span class="self">self</span>.completion_bytes, s.as_bytes())
+<a href=#911 id=911 data-nosnippet>911</a>                    {
+<a href=#912 id=912 data-nosnippet>912</a>                        <span class="kw">return </span><span class="prelude-val">Some</span>(StopReason::StopString {
+<a href=#913 id=913 data-nosnippet>913</a>                            stop_string_idx: idx,
+<a href=#914 id=914 data-nosnippet>914</a>                            completion_bytes_pos: pos,
+<a href=#915 id=915 data-nosnippet>915</a>                        });
+<a href=#916 id=916 data-nosnippet>916</a>                    }
+<a href=#917 id=917 data-nosnippet>917</a>                }
+<a href=#918 id=918 data-nosnippet>918</a>            }
+<a href=#919 id=919 data-nosnippet>919</a>            <span class="prelude-val">None
+<a href=#920 id=920 data-nosnippet>920</a>        </span>}
+<a href=#921 id=921 data-nosnippet>921</a>    }
+<a href=#922 id=922 data-nosnippet>922</a>
+<a href=#923 id=923 data-nosnippet>923</a>    <span class="kw">pub fn </span>logprobs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[Logprobs] {
+<a href=#924 id=924 data-nosnippet>924</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.logprobs
+<a href=#925 id=925 data-nosnippet>925</a>    }
+<a href=#926 id=926 data-nosnippet>926</a>
+<a href=#927 id=927 data-nosnippet>927</a>    <span class="kw">pub fn </span>return_logprobs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#928 id=928 data-nosnippet>928</a>        <span class="self">self</span>.return_logprobs
+<a href=#929 id=929 data-nosnippet>929</a>    }
+<a href=#930 id=930 data-nosnippet>930</a>
+<a href=#931 id=931 data-nosnippet>931</a>    <span class="kw">pub fn </span>prompt_tokens(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#932 id=932 data-nosnippet>932</a>        <span class="self">self</span>.prompt_len
+<a href=#933 id=933 data-nosnippet>933</a>    }
+<a href=#934 id=934 data-nosnippet>934</a>
+<a href=#935 id=935 data-nosnippet>935</a>    <span class="kw">pub fn </span>stop_strings(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[String] {
+<a href=#936 id=936 data-nosnippet>936</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.stop_strings
+<a href=#937 id=937 data-nosnippet>937</a>    }
+<a href=#938 id=938 data-nosnippet>938</a>
+<a href=#939 id=939 data-nosnippet>939</a>    <span class="doccomment">/// Returns the delta between the last two decoded sequences
+<a href=#940 id=940 data-nosnippet>940</a>    </span><span class="kw">pub fn </span>get_delta(
+<a href=#941 id=941 data-nosnippet>941</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#942 id=942 data-nosnippet>942</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;String&gt;, Box&lt;<span class="kw">dyn </span>std::error::Error + Send + Sync&gt;&gt; {
+<a href=#943 id=943 data-nosnippet>943</a>        <span class="kw">let </span>new_decoded = <span class="self">self</span>.peek_delta();
+<a href=#944 id=944 data-nosnippet>944</a>        <span class="kw">if </span><span class="macro">matches!</span>(new_decoded, <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(<span class="kw">_</span>))) {
+<a href=#945 id=945 data-nosnippet>945</a>            <span class="self">self</span>.stream_idx = <span class="self">self</span>.completion_bytes.len();
+<a href=#946 id=946 data-nosnippet>946</a>        }
+<a href=#947 id=947 data-nosnippet>947</a>        new_decoded
+<a href=#948 id=948 data-nosnippet>948</a>    }
+<a href=#949 id=949 data-nosnippet>949</a>
+<a href=#950 id=950 data-nosnippet>950</a>    <span class="doccomment">/// Peeks at the delta between the last two decoded sequences, but does not advance the stream index.
+<a href=#951 id=951 data-nosnippet>951</a>    </span><span class="kw">pub fn </span>peek_delta(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;String&gt;, Box&lt;<span class="kw">dyn </span>std::error::Error + Send + Sync&gt;&gt; {
+<a href=#952 id=952 data-nosnippet>952</a>        <span class="kw">let </span>is_first = <span class="self">self</span>.stream_idx == <span class="number">0</span>;
+<a href=#953 id=953 data-nosnippet>953</a>        <span class="kw">let </span>new_decoded = String::from_utf8_lossy(<span class="kw-2">&amp;</span><span class="self">self</span>.completion_bytes[<span class="self">self</span>.stream_idx..]);
+<a href=#954 id=954 data-nosnippet>954</a>        <span class="comment">// Check if the sequence ends with valid utf8, if not skip it as it probably is a multi token sequence
+<a href=#955 id=955 data-nosnippet>955</a>        </span><span class="kw">if </span>new_decoded.ends_with(<span class="string">'�'</span>) {
+<a href=#956 id=956 data-nosnippet>956</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+<a href=#957 id=957 data-nosnippet>957</a>        }
+<a href=#958 id=958 data-nosnippet>958</a>
+<a href=#959 id=959 data-nosnippet>959</a>        <span class="comment">// The first token usually starts with a space. We don't want to add that to the delta.
+<a href=#960 id=960 data-nosnippet>960</a>        // Since we're using the completion_bytes, we need to take care of that ourselves.
+<a href=#961 id=961 data-nosnippet>961</a>        // Had we used HF's Tokenizer, it would have taken care of that for us.
+<a href=#962 id=962 data-nosnippet>962</a>        </span><span class="kw">if </span>is_first {
+<a href=#963 id=963 data-nosnippet>963</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(new_decoded.trim_start().to_string()));
+<a href=#964 id=964 data-nosnippet>964</a>        }
+<a href=#965 id=965 data-nosnippet>965</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(new_decoded.to_string()))
+<a href=#966 id=966 data-nosnippet>966</a>    }
+<a href=#967 id=967 data-nosnippet>967</a>
+<a href=#968 id=968 data-nosnippet>968</a>    <span class="kw">pub fn </span>timestamp(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u128 {
+<a href=#969 id=969 data-nosnippet>969</a>        <span class="self">self</span>.timestamp
+<a href=#970 id=970 data-nosnippet>970</a>    }
+<a href=#971 id=971 data-nosnippet>971</a>
+<a href=#972 id=972 data-nosnippet>972</a>    <span class="kw">pub fn </span>prompt_timestamp(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;u128&gt; {
+<a href=#973 id=973 data-nosnippet>973</a>        <span class="self">self</span>.prompt_timestamp
+<a href=#974 id=974 data-nosnippet>974</a>    }
+<a href=#975 id=975 data-nosnippet>975</a>
+<a href=#976 id=976 data-nosnippet>976</a>    <span class="kw">fn </span>update_time_info(<span class="kw-2">&amp;</span><span class="self">self</span>) {
+<a href=#977 id=977 data-nosnippet>977</a>        <span class="kw">let </span>now = SystemTime::now()
+<a href=#978 id=978 data-nosnippet>978</a>            .duration_since(UNIX_EPOCH)
+<a href=#979 id=979 data-nosnippet>979</a>            .expect(<span class="string">"Time travel has occurred!"</span>)
+<a href=#980 id=980 data-nosnippet>980</a>            .as_millis();
+<a href=#981 id=981 data-nosnippet>981</a>
+<a href=#982 id=982 data-nosnippet>982</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(ts) = <span class="self">self</span>.prompt_timestamp {
+<a href=#983 id=983 data-nosnippet>983</a>            <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_completion_time = now - ts;
+<a href=#984 id=984 data-nosnippet>984</a>            <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_prompt_time = <span class="self">self</span>.total_prompt_time.unwrap();
+<a href=#985 id=985 data-nosnippet>985</a>        }
+<a href=#986 id=986 data-nosnippet>986</a>
+<a href=#987 id=987 data-nosnippet>987</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_time = now - <span class="self">self</span>.timestamp;
+<a href=#988 id=988 data-nosnippet>988</a>
+<a href=#989 id=989 data-nosnippet>989</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_prompt_toks = <span class="self">self</span>.prompt_len;
+<a href=#990 id=990 data-nosnippet>990</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_toks = <span class="self">self</span>.len();
+<a href=#991 id=991 data-nosnippet>991</a>    }
+<a href=#992 id=992 data-nosnippet>992</a>
+<a href=#993 id=993 data-nosnippet>993</a>    <span class="kw">pub fn </span>add_image_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, choice: ImageChoice) {
+<a href=#994 id=994 data-nosnippet>994</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).image_choices.push(choice);
+<a href=#995 id=995 data-nosnippet>995</a>    }
+<a href=#996 id=996 data-nosnippet>996</a>
+<a href=#997 id=997 data-nosnippet>997</a>    <span class="kw">pub fn </span>add_speech_pcm_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, pcm: Arc&lt;Vec&lt;f32&gt;&gt;, rate: usize, channels: usize) {
+<a href=#998 id=998 data-nosnippet>998</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).speech_pcms.push((pcm, rate, channels));
+<a href=#999 id=999 data-nosnippet>999</a>    }
+<a href=#1000 id=1000 data-nosnippet>1000</a>
+<a href=#1001 id=1001 data-nosnippet>1001</a>    <span class="kw">pub fn </span>add_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, choice: Choice) {
+<a href=#1002 id=1002 data-nosnippet>1002</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).choices.push(choice);
+<a href=#1003 id=1003 data-nosnippet>1003</a>        <span class="self">self</span>.update_time_info();
+<a href=#1004 id=1004 data-nosnippet>1004</a>    }
+<a href=#1005 id=1005 data-nosnippet>1005</a>
+<a href=#1006 id=1006 data-nosnippet>1006</a>    <span class="kw">pub fn </span>add_raw_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, logit_chunks: Vec&lt;Tensor&gt;) {
+<a href=#1007 id=1007 data-nosnippet>1007</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>)
+<a href=#1008 id=1008 data-nosnippet>1008</a>            .raw_choices
+<a href=#1009 id=1009 data-nosnippet>1009</a>            .push((logit_chunks, <span class="self">self</span>.tokens.clone()));
+<a href=#1010 id=1010 data-nosnippet>1010</a>        <span class="self">self</span>.update_time_info();
+<a href=#1011 id=1011 data-nosnippet>1011</a>    }
+<a href=#1012 id=1012 data-nosnippet>1012</a>
+<a href=#1013 id=1013 data-nosnippet>1013</a>    <span class="kw">pub fn </span>add_completion_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>choice: CompletionChoice) {
+<a href=#1014 id=1014 data-nosnippet>1014</a>        choice.text = <span class="macro">format!</span>(
+<a href=#1015 id=1015 data-nosnippet>1015</a>            <span class="string">"{}{}{}"</span>,
+<a href=#1016 id=1016 data-nosnippet>1016</a>            <span class="self">self</span>.prefix.as_deref().unwrap_or(<span class="string">""</span>),
+<a href=#1017 id=1017 data-nosnippet>1017</a>            choice.text,
+<a href=#1018 id=1018 data-nosnippet>1018</a>            <span class="self">self</span>.suffix.as_deref().unwrap_or(<span class="string">""</span>)
+<a href=#1019 id=1019 data-nosnippet>1019</a>        );
+<a href=#1020 id=1020 data-nosnippet>1020</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>)
+<a href=#1021 id=1021 data-nosnippet>1021</a>            .completion_choices
+<a href=#1022 id=1022 data-nosnippet>1022</a>            .push((<span class="self">self</span>.cumulative_logprob, choice));
+<a href=#1023 id=1023 data-nosnippet>1023</a>        <span class="self">self</span>.update_time_info();
+<a href=#1024 id=1024 data-nosnippet>1024</a>    }
+<a href=#1025 id=1025 data-nosnippet>1025</a>
+<a href=#1026 id=1026 data-nosnippet>1026</a>    <span class="kw">pub fn </span>get_response_index(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#1027 id=1027 data-nosnippet>1027</a>        <span class="self">self</span>.response_index
+<a href=#1028 id=1028 data-nosnippet>1028</a>    }
+<a href=#1029 id=1029 data-nosnippet>1029</a>
+<a href=#1030 id=1030 data-nosnippet>1030</a>    <span class="kw">pub fn </span>get_mut_group(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MutexGuard&lt;<span class="lifetime">'_</span>, SequenceGroup&gt; {
+<a href=#1031 id=1031 data-nosnippet>1031</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>)
+<a href=#1032 id=1032 data-nosnippet>1032</a>    }
+<a href=#1033 id=1033 data-nosnippet>1033</a>
+<a href=#1034 id=1034 data-nosnippet>1034</a>    <span class="kw">pub fn </span>add_streaming_chunk_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, chunk: ChunkChoice) {
+<a href=#1035 id=1035 data-nosnippet>1035</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).chat_streaming_chunks.push(chunk);
+<a href=#1036 id=1036 data-nosnippet>1036</a>        <span class="self">self</span>.update_time_info();
+<a href=#1037 id=1037 data-nosnippet>1037</a>    }
+<a href=#1038 id=1038 data-nosnippet>1038</a>
+<a href=#1039 id=1039 data-nosnippet>1039</a>    <span class="kw">pub fn </span>add_streaming_completion_chunk_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, chunk: CompletionChunkChoice) {
+<a href=#1040 id=1040 data-nosnippet>1040</a>        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).completion_streaming_chunks.push(chunk);
+<a href=#1041 id=1041 data-nosnippet>1041</a>        <span class="self">self</span>.update_time_info();
+<a href=#1042 id=1042 data-nosnippet>1042</a>    }
+<a href=#1043 id=1043 data-nosnippet>1043</a>
+<a href=#1044 id=1044 data-nosnippet>1044</a>    <span class="kw">pub fn </span>take_images(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;image::DynamicImage&gt;&gt; {
+<a href=#1045 id=1045 data-nosnippet>1045</a>        <span class="self">self</span>.multimodal.take_images()
+<a href=#1046 id=1046 data-nosnippet>1046</a>    }
+<a href=#1047 id=1047 data-nosnippet>1047</a>
+<a href=#1048 id=1048 data-nosnippet>1048</a>    <span class="kw">pub fn </span>clone_images(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;image::DynamicImage&gt;&gt; {
+<a href=#1049 id=1049 data-nosnippet>1049</a>        <span class="self">self</span>.multimodal.clone_images()
+<a href=#1050 id=1050 data-nosnippet>1050</a>    }
+<a href=#1051 id=1051 data-nosnippet>1051</a>
+<a href=#1052 id=1052 data-nosnippet>1052</a>    <span class="kw">pub fn </span>images(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[image::DynamicImage]&gt; {
+<a href=#1053 id=1053 data-nosnippet>1053</a>        <span class="self">self</span>.multimodal.images()
+<a href=#1054 id=1054 data-nosnippet>1054</a>    }
+<a href=#1055 id=1055 data-nosnippet>1055</a>
+<a href=#1056 id=1056 data-nosnippet>1056</a>    <span class="kw">pub fn </span>image_hashes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u64]&gt; {
+<a href=#1057 id=1057 data-nosnippet>1057</a>        <span class="self">self</span>.multimodal.image_hashes()
+<a href=#1058 id=1058 data-nosnippet>1058</a>    }
+<a href=#1059 id=1059 data-nosnippet>1059</a>
+<a href=#1060 id=1060 data-nosnippet>1060</a>    <span class="kw">pub fn </span>has_images(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#1061 id=1061 data-nosnippet>1061</a>        <span class="self">self</span>.multimodal.has_images()
+<a href=#1062 id=1062 data-nosnippet>1062</a>    }
+<a href=#1063 id=1063 data-nosnippet>1063</a>
+<a href=#1064 id=1064 data-nosnippet>1064</a>    <span class="kw">pub fn </span>take_audios(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;AudioInput&gt;&gt; {
+<a href=#1065 id=1065 data-nosnippet>1065</a>        <span class="self">self</span>.multimodal.take_audios()
+<a href=#1066 id=1066 data-nosnippet>1066</a>    }
+<a href=#1067 id=1067 data-nosnippet>1067</a>
+<a href=#1068 id=1068 data-nosnippet>1068</a>    <span class="kw">pub fn </span>clone_audios(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;AudioInput&gt;&gt; {
+<a href=#1069 id=1069 data-nosnippet>1069</a>        <span class="self">self</span>.multimodal.clone_audios()
+<a href=#1070 id=1070 data-nosnippet>1070</a>    }
+<a href=#1071 id=1071 data-nosnippet>1071</a>
+<a href=#1072 id=1072 data-nosnippet>1072</a>    <span class="kw">pub fn </span>audios(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[AudioInput]&gt; {
+<a href=#1073 id=1073 data-nosnippet>1073</a>        <span class="self">self</span>.multimodal.audios()
+<a href=#1074 id=1074 data-nosnippet>1074</a>    }
+<a href=#1075 id=1075 data-nosnippet>1075</a>
+<a href=#1076 id=1076 data-nosnippet>1076</a>    <span class="kw">pub fn </span>audio_hashes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u64]&gt; {
+<a href=#1077 id=1077 data-nosnippet>1077</a>        <span class="self">self</span>.multimodal.audio_hashes()
+<a href=#1078 id=1078 data-nosnippet>1078</a>    }
+<a href=#1079 id=1079 data-nosnippet>1079</a>
+<a href=#1080 id=1080 data-nosnippet>1080</a>    <span class="kw">pub fn </span>has_audios(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#1081 id=1081 data-nosnippet>1081</a>        <span class="self">self</span>.multimodal.has_audios()
+<a href=#1082 id=1082 data-nosnippet>1082</a>    }
+<a href=#1083 id=1083 data-nosnippet>1083</a>
+<a href=#1084 id=1084 data-nosnippet>1084</a>    <span class="doccomment">/// Keep these last n audios
+<a href=#1085 id=1085 data-nosnippet>1085</a>    </span><span class="kw">pub fn </span>keep_num_audios(<span class="kw-2">&amp;mut </span><span class="self">self</span>, audios_to_keep: usize) {
+<a href=#1086 id=1086 data-nosnippet>1086</a>        <span class="self">self</span>.multimodal.keep_num_audios(audios_to_keep)
+<a href=#1087 id=1087 data-nosnippet>1087</a>    }
+<a href=#1088 id=1088 data-nosnippet>1088</a>
+<a href=#1089 id=1089 data-nosnippet>1089</a>    <span class="doccomment">/// Keep these last n images
+<a href=#1090 id=1090 data-nosnippet>1090</a>    </span><span class="kw">pub fn </span>keep_num_images(<span class="kw-2">&amp;mut </span><span class="self">self</span>, images_to_keep: usize) {
+<a href=#1091 id=1091 data-nosnippet>1091</a>        <span class="self">self</span>.multimodal.keep_num_images(images_to_keep)
+<a href=#1092 id=1092 data-nosnippet>1092</a>    }
+<a href=#1093 id=1093 data-nosnippet>1093</a>
+<a href=#1094 id=1094 data-nosnippet>1094</a>    <span class="kw">pub fn </span>image_gen_response_format(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;ImageGenerationResponseFormat&gt; {
+<a href=#1095 id=1095 data-nosnippet>1095</a>        <span class="self">self</span>.multimodal.image_gen_response_format()
+<a href=#1096 id=1096 data-nosnippet>1096</a>    }
+<a href=#1097 id=1097 data-nosnippet>1097</a>
+<a href=#1098 id=1098 data-nosnippet>1098</a>    <span class="kw">pub fn </span>sequence_stepping_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>SeqStepType {
+<a href=#1099 id=1099 data-nosnippet>1099</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.sequence_stepping_type
+<a href=#1100 id=1100 data-nosnippet>1100</a>    }
+<a href=#1101 id=1101 data-nosnippet>1101</a>
+<a href=#1102 id=1102 data-nosnippet>1102</a>    <span class="kw">pub fn </span>get_diffusion_diffusion_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DiffusionGenerationParams&gt; {
+<a href=#1103 id=1103 data-nosnippet>1103</a>        <span class="self">self</span>.multimodal.diffusion_params()
+<a href=#1104 id=1104 data-nosnippet>1104</a>    }
+<a href=#1105 id=1105 data-nosnippet>1105</a>
+<a href=#1106 id=1106 data-nosnippet>1106</a>    <span class="kw">pub fn </span>eos_tokens(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[u32] {
+<a href=#1107 id=1107 data-nosnippet>1107</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.eos_tokens
+<a href=#1108 id=1108 data-nosnippet>1108</a>    }
+<a href=#1109 id=1109 data-nosnippet>1109</a>}
+<a href=#1110 id=1110 data-nosnippet>1110</a>
+<a href=#1111 id=1111 data-nosnippet>1111</a><span class="kw">pub struct </span>SequenceGroup {
+<a href=#1112 id=1112 data-nosnippet>1112</a>    n_choices: usize, <span class="comment">// The target number of choices to return. Can be decreased if an error is thrown.
+<a href=#1113 id=1113 data-nosnippet>1113</a>    </span>best_of: <span class="prelude-ty">Option</span>&lt;usize&gt;, <span class="comment">// Top n seqs based on cumulative logprobs.
+<a href=#1114 id=1114 data-nosnippet>1114</a>    </span><span class="kw">pub </span>total_prompt_toks: usize,
+<a href=#1115 id=1115 data-nosnippet>1115</a>    <span class="kw">pub </span>total_toks: usize,
+<a href=#1116 id=1116 data-nosnippet>1116</a>    <span class="kw">pub </span>total_prompt_time: u128,
+<a href=#1117 id=1117 data-nosnippet>1117</a>    <span class="kw">pub </span>total_time: u128,
+<a href=#1118 id=1118 data-nosnippet>1118</a>    <span class="kw">pub </span>total_completion_time: u128,
+<a href=#1119 id=1119 data-nosnippet>1119</a>    choices: Vec&lt;Choice&gt;,
+<a href=#1120 id=1120 data-nosnippet>1120</a>    image_choices: Vec&lt;ImageChoice&gt;,
+<a href=#1121 id=1121 data-nosnippet>1121</a>    speech_pcms: Vec&lt;(Arc&lt;Vec&lt;f32&gt;&gt;, usize, usize)&gt;, <span class="comment">// (pcm, rate, channels)
+<a href=#1122 id=1122 data-nosnippet>1122</a>    </span>raw_choices: Vec&lt;(Vec&lt;Tensor&gt;, Vec&lt;u32&gt;)&gt;,
+<a href=#1123 id=1123 data-nosnippet>1123</a>    completion_choices: Vec&lt;(f32, CompletionChoice)&gt;,
+<a href=#1124 id=1124 data-nosnippet>1124</a>    <span class="kw">pub </span>chat_streaming_chunks: Vec&lt;ChunkChoice&gt;,
+<a href=#1125 id=1125 data-nosnippet>1125</a>    <span class="kw">pub </span>completion_streaming_chunks: Vec&lt;CompletionChunkChoice&gt;,
+<a href=#1126 id=1126 data-nosnippet>1126</a>    <span class="kw">pub </span>is_streaming: bool,
+<a href=#1127 id=1127 data-nosnippet>1127</a>    <span class="kw">pub </span>is_chat: bool,
+<a href=#1128 id=1128 data-nosnippet>1128</a>}
+<a href=#1129 id=1129 data-nosnippet>1129</a>
+<a href=#1130 id=1130 data-nosnippet>1130</a><span class="kw">impl </span>SequenceGroup {
+<a href=#1131 id=1131 data-nosnippet>1131</a>    <span class="kw">pub fn </span>new(
+<a href=#1132 id=1132 data-nosnippet>1132</a>        n_choices: usize,
+<a href=#1133 id=1133 data-nosnippet>1133</a>        is_streaming: bool,
+<a href=#1134 id=1134 data-nosnippet>1134</a>        is_chat: bool,
+<a href=#1135 id=1135 data-nosnippet>1135</a>        best_of: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#1136 id=1136 data-nosnippet>1136</a>    ) -&gt; <span class="self">Self </span>{
+<a href=#1137 id=1137 data-nosnippet>1137</a>        <span class="self">Self </span>{
+<a href=#1138 id=1138 data-nosnippet>1138</a>            choices: Vec::new(),
+<a href=#1139 id=1139 data-nosnippet>1139</a>            image_choices: Vec::new(),
+<a href=#1140 id=1140 data-nosnippet>1140</a>            speech_pcms: Vec::new(),
+<a href=#1141 id=1141 data-nosnippet>1141</a>            raw_choices: Vec::new(),
+<a href=#1142 id=1142 data-nosnippet>1142</a>            completion_choices: Vec::new(),
+<a href=#1143 id=1143 data-nosnippet>1143</a>            n_choices,
+<a href=#1144 id=1144 data-nosnippet>1144</a>            total_prompt_toks: <span class="number">0</span>,
+<a href=#1145 id=1145 data-nosnippet>1145</a>            total_toks: <span class="number">0</span>,
+<a href=#1146 id=1146 data-nosnippet>1146</a>            total_prompt_time: <span class="number">0</span>,
+<a href=#1147 id=1147 data-nosnippet>1147</a>            total_time: <span class="number">0</span>,
+<a href=#1148 id=1148 data-nosnippet>1148</a>            total_completion_time: <span class="number">0</span>,
+<a href=#1149 id=1149 data-nosnippet>1149</a>            chat_streaming_chunks: Vec::new(),
+<a href=#1150 id=1150 data-nosnippet>1150</a>            completion_streaming_chunks: Vec::new(),
+<a href=#1151 id=1151 data-nosnippet>1151</a>            is_streaming,
+<a href=#1152 id=1152 data-nosnippet>1152</a>            is_chat,
+<a href=#1153 id=1153 data-nosnippet>1153</a>            best_of,
+<a href=#1154 id=1154 data-nosnippet>1154</a>        }
+<a href=#1155 id=1155 data-nosnippet>1155</a>    }
+<a href=#1156 id=1156 data-nosnippet>1156</a>
+<a href=#1157 id=1157 data-nosnippet>1157</a>    <span class="kw">pub fn </span>get_choices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[Choice] {
+<a href=#1158 id=1158 data-nosnippet>1158</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.choices
+<a href=#1159 id=1159 data-nosnippet>1159</a>    }
+<a href=#1160 id=1160 data-nosnippet>1160</a>
+<a href=#1161 id=1161 data-nosnippet>1161</a>    <span class="doccomment">/// This may apply the best_of.
+<a href=#1162 id=1162 data-nosnippet>1162</a>    </span><span class="kw">pub fn </span>get_completion_choices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;CompletionChoice&gt; {
+<a href=#1163 id=1163 data-nosnippet>1163</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(best_of) = <span class="self">self</span>.best_of {
+<a href=#1164 id=1164 data-nosnippet>1164</a>            <span class="kw">let </span><span class="kw-2">mut </span>choices = <span class="self">self</span>.completion_choices.clone();
+<a href=#1165 id=1165 data-nosnippet>1165</a>            <span class="comment">// Sort by descending logprobs
+<a href=#1166 id=1166 data-nosnippet>1166</a>            </span>choices.sort_by(|a, b| b.<span class="number">0</span>.partial_cmp(<span class="kw-2">&amp;</span>a.<span class="number">0</span>).expect(<span class="string">"No ordering."</span>));
+<a href=#1167 id=1167 data-nosnippet>1167</a>            choices
+<a href=#1168 id=1168 data-nosnippet>1168</a>                .into_iter()
+<a href=#1169 id=1169 data-nosnippet>1169</a>                .take(best_of)
+<a href=#1170 id=1170 data-nosnippet>1170</a>                .map(|(<span class="kw">_</span>, x)| x)
+<a href=#1171 id=1171 data-nosnippet>1171</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#1172 id=1172 data-nosnippet>1172</a>        } <span class="kw">else </span>{
+<a href=#1173 id=1173 data-nosnippet>1173</a>            <span class="self">self</span>.completion_choices
+<a href=#1174 id=1174 data-nosnippet>1174</a>                .clone()
+<a href=#1175 id=1175 data-nosnippet>1175</a>                .into_iter()
+<a href=#1176 id=1176 data-nosnippet>1176</a>                .map(|(<span class="kw">_</span>, x)| x)
+<a href=#1177 id=1177 data-nosnippet>1177</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#1178 id=1178 data-nosnippet>1178</a>        }
+<a href=#1179 id=1179 data-nosnippet>1179</a>    }
+<a href=#1180 id=1180 data-nosnippet>1180</a>
+<a href=#1181 id=1181 data-nosnippet>1181</a>    <span class="kw">pub fn </span>get_image_choices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[ImageChoice] {
+<a href=#1182 id=1182 data-nosnippet>1182</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.image_choices
+<a href=#1183 id=1183 data-nosnippet>1183</a>    }
+<a href=#1184 id=1184 data-nosnippet>1184</a>
+<a href=#1185 id=1185 data-nosnippet>1185</a>    <span class="kw">pub fn </span>get_usage(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Usage {
+<a href=#1186 id=1186 data-nosnippet>1186</a>        <span class="attr">#[allow(clippy::cast_precision_loss)]
+<a href=#1187 id=1187 data-nosnippet>1187</a>        </span>Usage {
+<a href=#1188 id=1188 data-nosnippet>1188</a>            completion_tokens: <span class="self">self</span>.total_toks.saturating_sub(<span class="self">self</span>.total_prompt_toks),
+<a href=#1189 id=1189 data-nosnippet>1189</a>            prompt_tokens: <span class="self">self</span>.total_prompt_toks,
+<a href=#1190 id=1190 data-nosnippet>1190</a>            total_tokens: <span class="self">self</span>.total_toks,
+<a href=#1191 id=1191 data-nosnippet>1191</a>            avg_tok_per_sec: (<span class="self">self</span>.total_toks <span class="kw">as </span>f32 / <span class="self">self</span>.total_time <span class="kw">as </span>f32) * <span class="number">1000.</span>,
+<a href=#1192 id=1192 data-nosnippet>1192</a>            avg_prompt_tok_per_sec: (<span class="self">self</span>.total_prompt_toks <span class="kw">as </span>f32 / <span class="self">self</span>.total_prompt_time <span class="kw">as </span>f32)
+<a href=#1193 id=1193 data-nosnippet>1193</a>                * <span class="number">1000.</span>,
+<a href=#1194 id=1194 data-nosnippet>1194</a>            avg_compl_tok_per_sec: (<span class="self">self</span>.total_toks.saturating_sub(<span class="self">self</span>.total_prompt_toks) <span class="kw">as </span>f32
+<a href=#1195 id=1195 data-nosnippet>1195</a>                / <span class="self">self</span>.total_completion_time <span class="kw">as </span>f32)
+<a href=#1196 id=1196 data-nosnippet>1196</a>                * <span class="number">1000.</span>,
+<a href=#1197 id=1197 data-nosnippet>1197</a>            total_time_sec: <span class="self">self</span>.total_time <span class="kw">as </span>f32 / <span class="number">1000.</span>,
+<a href=#1198 id=1198 data-nosnippet>1198</a>            total_completion_time_sec: <span class="self">self</span>.total_completion_time <span class="kw">as </span>f32 / <span class="number">1000.</span>,
+<a href=#1199 id=1199 data-nosnippet>1199</a>            total_prompt_time_sec: <span class="self">self</span>.total_prompt_time <span class="kw">as </span>f32 / <span class="number">1000.</span>,
+<a href=#1200 id=1200 data-nosnippet>1200</a>        }
+<a href=#1201 id=1201 data-nosnippet>1201</a>    }
+<a href=#1202 id=1202 data-nosnippet>1202</a>
+<a href=#1203 id=1203 data-nosnippet>1203</a>    <span class="kw">pub async fn </span>maybe_send_chat_done_response(
+<a href=#1204 id=1204 data-nosnippet>1204</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#1205 id=1205 data-nosnippet>1205</a>        response: ChatCompletionResponse,
+<a href=#1206 id=1206 data-nosnippet>1206</a>        sender: Sender&lt;Response&gt;,
+<a href=#1207 id=1207 data-nosnippet>1207</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), SendError&lt;Response&gt;&gt; {
+<a href=#1208 id=1208 data-nosnippet>1208</a>        <span class="kw">if </span><span class="self">self</span>.choices.len() == <span class="self">self</span>.n_choices {
+<a href=#1209 id=1209 data-nosnippet>1209</a>            sender.send(Response::Done(response)).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#1210 id=1210 data-nosnippet>1210</a>        }
+<a href=#1211 id=1211 data-nosnippet>1211</a>
+<a href=#1212 id=1212 data-nosnippet>1212</a>        <span class="prelude-val">Ok</span>(())
+<a href=#1213 id=1213 data-nosnippet>1213</a>    }
+<a href=#1214 id=1214 data-nosnippet>1214</a>
+<a href=#1215 id=1215 data-nosnippet>1215</a>    <span class="kw">pub async fn </span>maybe_send_raw_done_response(
+<a href=#1216 id=1216 data-nosnippet>1216</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#1217 id=1217 data-nosnippet>1217</a>        sender: Sender&lt;Response&gt;,
+<a href=#1218 id=1218 data-nosnippet>1218</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), SendError&lt;Response&gt;&gt; {
+<a href=#1219 id=1219 data-nosnippet>1219</a>        <span class="kw">if </span><span class="self">self</span>.raw_choices.len() == <span class="self">self</span>.n_choices {
+<a href=#1220 id=1220 data-nosnippet>1220</a>            <span class="macro">assert_eq!</span>(<span class="self">self</span>.raw_choices.len(), <span class="number">1</span>);
+<a href=#1221 id=1221 data-nosnippet>1221</a>            <span class="kw">let </span>(logits_chunks, tokens) = <span class="self">self</span>.raw_choices[<span class="number">0</span>].clone();
+<a href=#1222 id=1222 data-nosnippet>1222</a>            sender
+<a href=#1223 id=1223 data-nosnippet>1223</a>                .send(Response::Raw {
+<a href=#1224 id=1224 data-nosnippet>1224</a>                    logits_chunks,
+<a href=#1225 id=1225 data-nosnippet>1225</a>                    tokens,
+<a href=#1226 id=1226 data-nosnippet>1226</a>                })
+<a href=#1227 id=1227 data-nosnippet>1227</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#1228 id=1228 data-nosnippet>1228</a>        }
+<a href=#1229 id=1229 data-nosnippet>1229</a>
+<a href=#1230 id=1230 data-nosnippet>1230</a>        <span class="prelude-val">Ok</span>(())
+<a href=#1231 id=1231 data-nosnippet>1231</a>    }
+<a href=#1232 id=1232 data-nosnippet>1232</a>
+<a href=#1233 id=1233 data-nosnippet>1233</a>    <span class="kw">pub async fn </span>maybe_send_image_gen_response(
+<a href=#1234 id=1234 data-nosnippet>1234</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#1235 id=1235 data-nosnippet>1235</a>        response: ImageGenerationResponse,
+<a href=#1236 id=1236 data-nosnippet>1236</a>        sender: Sender&lt;Response&gt;,
+<a href=#1237 id=1237 data-nosnippet>1237</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), SendError&lt;Response&gt;&gt; {
+<a href=#1238 id=1238 data-nosnippet>1238</a>        <span class="kw">if </span><span class="self">self</span>.image_choices.len() == <span class="self">self</span>.n_choices {
+<a href=#1239 id=1239 data-nosnippet>1239</a>            sender.send(Response::ImageGeneration(response)).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#1240 id=1240 data-nosnippet>1240</a>        }
+<a href=#1241 id=1241 data-nosnippet>1241</a>
+<a href=#1242 id=1242 data-nosnippet>1242</a>        <span class="prelude-val">Ok</span>(())
+<a href=#1243 id=1243 data-nosnippet>1243</a>    }
+<a href=#1244 id=1244 data-nosnippet>1244</a>
+<a href=#1245 id=1245 data-nosnippet>1245</a>    <span class="kw">pub async fn </span>maybe_send_speech_response(
+<a href=#1246 id=1246 data-nosnippet>1246</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#1247 id=1247 data-nosnippet>1247</a>        sender: Sender&lt;Response&gt;,
+<a href=#1248 id=1248 data-nosnippet>1248</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), SendError&lt;Response&gt;&gt; {
+<a href=#1249 id=1249 data-nosnippet>1249</a>        <span class="macro">assert_eq!</span>(<span class="self">self</span>.speech_pcms.len(), <span class="number">1</span>);
+<a href=#1250 id=1250 data-nosnippet>1250</a>
+<a href=#1251 id=1251 data-nosnippet>1251</a>        <span class="kw">let </span>(pcm, rate, channels) = <span class="self">self</span>.speech_pcms[<span class="number">0</span>].clone();
+<a href=#1252 id=1252 data-nosnippet>1252</a>        sender
+<a href=#1253 id=1253 data-nosnippet>1253</a>            .send(Response::Speech {
+<a href=#1254 id=1254 data-nosnippet>1254</a>                pcm,
+<a href=#1255 id=1255 data-nosnippet>1255</a>                rate,
+<a href=#1256 id=1256 data-nosnippet>1256</a>                channels,
+<a href=#1257 id=1257 data-nosnippet>1257</a>            })
+<a href=#1258 id=1258 data-nosnippet>1258</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#1259 id=1259 data-nosnippet>1259</a>
+<a href=#1260 id=1260 data-nosnippet>1260</a>        <span class="prelude-val">Ok</span>(())
+<a href=#1261 id=1261 data-nosnippet>1261</a>    }
+<a href=#1262 id=1262 data-nosnippet>1262</a>
+<a href=#1263 id=1263 data-nosnippet>1263</a>    <span class="kw">pub async fn </span>maybe_send_streaming_response(
+<a href=#1264 id=1264 data-nosnippet>1264</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#1265 id=1265 data-nosnippet>1265</a>        seq: <span class="kw-2">&amp;</span>Sequence,
+<a href=#1266 id=1266 data-nosnippet>1266</a>        model: String,
+<a href=#1267 id=1267 data-nosnippet>1267</a>        usage_opt: <span class="prelude-ty">Option</span>&lt;Usage&gt;,
+<a href=#1268 id=1268 data-nosnippet>1268</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), Box&lt;SendError&lt;Response&gt;&gt;&gt; {
+<a href=#1269 id=1269 data-nosnippet>1269</a>        <span class="kw">if </span><span class="self">self</span>.chat_streaming_chunks.len() == <span class="self">self</span>.n_choices &amp;&amp; <span class="self">self</span>.is_streaming {
+<a href=#1270 id=1270 data-nosnippet>1270</a>            <span class="kw">let </span><span class="kw-2">mut </span>swap_streaming_chunks = <span class="macro">vec!</span>[];
+<a href=#1271 id=1271 data-nosnippet>1271</a>
+<a href=#1272 id=1272 data-nosnippet>1272</a>            std::mem::swap(<span class="kw-2">&amp;mut </span>swap_streaming_chunks, <span class="kw-2">&amp;mut </span><span class="self">self</span>.chat_streaming_chunks);
+<a href=#1273 id=1273 data-nosnippet>1273</a>
+<a href=#1274 id=1274 data-nosnippet>1274</a>            seq.responder()
+<a href=#1275 id=1275 data-nosnippet>1275</a>                .send(Response::Chunk(ChatCompletionChunkResponse {
+<a href=#1276 id=1276 data-nosnippet>1276</a>                    id: seq.id.to_string(),
+<a href=#1277 id=1277 data-nosnippet>1277</a>                    choices: swap_streaming_chunks,
+<a href=#1278 id=1278 data-nosnippet>1278</a>                    created: seq.timestamp,
+<a href=#1279 id=1279 data-nosnippet>1279</a>                    model: model.clone(),
+<a href=#1280 id=1280 data-nosnippet>1280</a>                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+<a href=#1281 id=1281 data-nosnippet>1281</a>                    object: <span class="string">"chat.completion.chunk"</span>.to_string(),
+<a href=#1282 id=1282 data-nosnippet>1282</a>                    usage: usage_opt,
+<a href=#1283 id=1283 data-nosnippet>1283</a>                }))
+<a href=#1284 id=1284 data-nosnippet>1284</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#1285 id=1285 data-nosnippet>1285</a>        } <span class="kw">else if </span><span class="self">self</span>.completion_streaming_chunks.len() == <span class="self">self</span>.n_choices &amp;&amp; <span class="self">self</span>.is_streaming {
+<a href=#1286 id=1286 data-nosnippet>1286</a>            <span class="kw">let </span><span class="kw-2">mut </span>swap_streaming_chunks = <span class="macro">vec!</span>[];
+<a href=#1287 id=1287 data-nosnippet>1287</a>
+<a href=#1288 id=1288 data-nosnippet>1288</a>            std::mem::swap(
+<a href=#1289 id=1289 data-nosnippet>1289</a>                <span class="kw-2">&amp;mut </span>swap_streaming_chunks,
+<a href=#1290 id=1290 data-nosnippet>1290</a>                <span class="kw-2">&amp;mut </span><span class="self">self</span>.completion_streaming_chunks,
+<a href=#1291 id=1291 data-nosnippet>1291</a>            );
+<a href=#1292 id=1292 data-nosnippet>1292</a>
+<a href=#1293 id=1293 data-nosnippet>1293</a>            seq.responder()
+<a href=#1294 id=1294 data-nosnippet>1294</a>                .send(Response::CompletionChunk(CompletionChunkResponse {
+<a href=#1295 id=1295 data-nosnippet>1295</a>                    id: seq.id.to_string(),
+<a href=#1296 id=1296 data-nosnippet>1296</a>                    choices: swap_streaming_chunks,
+<a href=#1297 id=1297 data-nosnippet>1297</a>                    created: seq.timestamp,
+<a href=#1298 id=1298 data-nosnippet>1298</a>                    model: model.clone(),
+<a href=#1299 id=1299 data-nosnippet>1299</a>                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+<a href=#1300 id=1300 data-nosnippet>1300</a>                    object: <span class="string">"text_completion"</span>.to_string(),
+<a href=#1301 id=1301 data-nosnippet>1301</a>                }))
+<a href=#1302 id=1302 data-nosnippet>1302</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#1303 id=1303 data-nosnippet>1303</a>        }
+<a href=#1304 id=1304 data-nosnippet>1304</a>        <span class="prelude-val">Ok</span>(())
+<a href=#1305 id=1305 data-nosnippet>1305</a>    }
+<a href=#1306 id=1306 data-nosnippet>1306</a>
+<a href=#1307 id=1307 data-nosnippet>1307</a>    <span class="kw">pub async fn </span>maybe_send_completion_done_response(
+<a href=#1308 id=1308 data-nosnippet>1308</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#1309 id=1309 data-nosnippet>1309</a>        response: CompletionResponse,
+<a href=#1310 id=1310 data-nosnippet>1310</a>        sender: Sender&lt;Response&gt;,
+<a href=#1311 id=1311 data-nosnippet>1311</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), Box&lt;SendError&lt;Response&gt;&gt;&gt; {
+<a href=#1312 id=1312 data-nosnippet>1312</a>        <span class="kw">if </span><span class="self">self</span>.completion_choices.len() == <span class="self">self</span>.n_choices {
+<a href=#1313 id=1313 data-nosnippet>1313</a>            sender.send(Response::CompletionDone(response)).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#1314 id=1314 data-nosnippet>1314</a>        }
+<a href=#1315 id=1315 data-nosnippet>1315</a>        <span class="prelude-val">Ok</span>(())
+<a href=#1316 id=1316 data-nosnippet>1316</a>    }
+<a href=#1317 id=1317 data-nosnippet>1317</a>}</code></pre></div></section></main></body></html>
