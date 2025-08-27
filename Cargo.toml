@@ -24,7 +24,7 @@ repository = "https://github.com/EricLBuehler/mistral.rs"
 keywords = ["machine-learning"]
 categories = ["science"]
 license = "MIT"
-rust-version = "1.82"
+rust-version = "1.86"
 
 [workspace.dependencies]
 candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.9.1", rev = "5e6c385" }

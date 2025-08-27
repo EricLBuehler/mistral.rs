@@ -2,6 +2,7 @@
 name = "mistralrs-web-chat"
 version = "0.1.0"
 edition = "2021"
+rust-version.workspace = true
 
 [dependencies]
 # async runtime + macros
