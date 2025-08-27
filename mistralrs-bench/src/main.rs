@@ -45,7 +45,7 @@ impl Display for UncertainTokSec {
     }
 }
 
-fn run_bench(
+async fn run_bench(
     mistralrs: Arc<MistralRs>,
     prompt: RequestMessage,
     n_gen: usize,
@@ -91,12 +91,12 @@ fn run_bench(
 
     for _ in 0..repetitions {
         for _ in 0..concurrency {
-            if sender.blocking_send(req.clone()).is_err() {
+            if sender.send(req.clone()).await.is_err() {
                 eprintln!("Receiver disconnected");
             }
         }
         for _ in 0..concurrency {
-            match rx.blocking_recv() {
+            match rx.recv().await {
                 Some(r) => match r {
                     Response::InternalError(e) => {
                         unreachable!("Got an internal error: {e:?}");
@@ -221,20 +221,10 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
     print_stdout(table).expect("print table");
 }
 
-fn warmup_run(mistralrs: Arc<MistralRs>) {
+async fn warmup_run(mistralrs: Arc<MistralRs>) {
     let sampling_params = SamplingParams {
-        temperature: Some(0.1),
-        top_k: Some(32),
-        top_p: Some(0.1),
-        min_p: Some(0.05),
-        top_n_logprobs: 0,
-        frequency_penalty: Some(0.1),
-        presence_penalty: Some(0.1),
-        max_len: Some(5),
-        stop_toks: None,
-        logits_bias: None,
-        n_choices: 1,
-        dry_params: Some(DrySamplingParams::default()),
+        max_len: Some(1),
+        ..SamplingParams::deterministic()
     };
     let sender = mistralrs.get_sender(None).unwrap();
     let (tx, mut rx) = channel(10_000);
@@ -260,11 +250,11 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         model_id: None,
     }));
 
-    if sender.blocking_send(req.clone()).is_err() {
+    if sender.send(req.clone()).await.is_err() {
         eprintln!("Receiver disconnected");
     }
 
-    let _ = rx.blocking_recv();
+    let _ = rx.recv().await;
 }
 
 fn parse_cache_type(s: &str) -> Result<PagedCacheType, String> {
@@ -514,7 +504,7 @@ async fn main() -> anyhow::Result<()> {
 
     let scheduler_config = if cache_config.is_some() {
         // Handle case where we may have device mapping
-        if let Some(ref cache_config) = pipeline.blocking_lock().get_metadata().cache_config {
+        if let Some(ref cache_config) = pipeline.lock().await.get_metadata().cache_config {
             SchedulerConfig::PagedAttentionMeta {
                 max_num_seqs: *args.concurrency.as_ref().unwrap().iter().max().unwrap(),
                 config: cache_config.clone(),
@@ -544,7 +534,7 @@ async fn main() -> anyhow::Result<()> {
         .await;
 
     info!("Starting warmup run.");
-    warmup_run(mistralrs.clone());
+    warmup_run(mistralrs.clone()).await;
     info!("Finished warmup run.");
     info!("Starting benchmarks.");
 
@@ -562,7 +552,8 @@ async fn main() -> anyhow::Result<()> {
                 *concurrency,
                 args.repetitions,
                 TestName::Gen(args.n_gen),
-            )?;
+            )
+            .await?;
             results.push(r);
         }
 
@@ -575,7 +566,8 @@ async fn main() -> anyhow::Result<()> {
                 *concurrency,
                 args.repetitions,
                 TestName::Prompt(args.n_prompt),
-            )?;
+            )
+            .await?;
 
             results.push(r);
         }
