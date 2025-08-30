@@ -252,6 +252,7 @@ impl VisionMessages {
     pub fn clear(mut self) -> Self {
         self.messages.clear();
         self.images.clear();
+        self.audios.clear();
 
         self
     }
@@ -687,7 +688,7 @@ impl RequestLike for RequestBuilder {
     }
 
     fn enable_search(&self) -> Option<bool> {
-        self.enable_thinking
+        self.web_search_options.as_ref().map(|_| true)
     }
 
     fn take_logits_processors(&mut self) -> Option<Vec<Arc<dyn CustomLogitsProcessor>>> {
