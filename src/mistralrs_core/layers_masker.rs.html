@@ -174,109 +174,120 @@
 <a href=#174 id=174 data-nosnippet>174</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
 <a href=#175 id=175 data-nosnippet>175</a>        }
 <a href=#176 id=176 data-nosnippet>176</a>
-<a href=#177 id=177 data-nosnippet>177</a>        <span class="kw">let </span><span class="kw-2">mut </span>causal_mask = <span class="self">self
-<a href=#178 id=178 data-nosnippet>178</a>            </span>.make_mask(tgt_len, past_kv_len, input_ids.device())<span class="question-mark">?
-<a href=#179 id=179 data-nosnippet>179</a>            </span>.to_dtype(DType::U8)<span class="question-mark">?</span>;
-<a href=#180 id=180 data-nosnippet>180</a>
-<a href=#181 id=181 data-nosnippet>181</a>        <span class="kw">let </span>zero = Tensor::new(<span class="number">0.0f32</span>, input_ids.device())<span class="question-mark">?</span>;
-<a href=#182 id=182 data-nosnippet>182</a>        causal_mask = {
-<a href=#183 id=183 data-nosnippet>183</a>            <span class="kw">let </span><span class="kw-2">mut </span>mask =
-<a href=#184 id=184 data-nosnippet>184</a>                causal_mask.broadcast_as((causal_mask.dims()[<span class="number">0</span>], causal_mask.dims()[<span class="number">1</span>]))<span class="question-mark">?</span>;
-<a href=#185 id=185 data-nosnippet>185</a>            <span class="comment">// Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
-<a href=#186 id=186 data-nosnippet>186</a>            </span>mask = masked_fill(
-<a href=#187 id=187 data-nosnippet>187</a>                <span class="kw-2">&amp;</span>zero.to_dtype(dtype)<span class="question-mark">?</span>.broadcast_as(mask.shape())<span class="question-mark">?</span>,
-<a href=#188 id=188 data-nosnippet>188</a>                <span class="kw-2">&amp;</span>mask,
-<a href=#189 id=189 data-nosnippet>189</a>                f32::NEG_INFINITY,
-<a href=#190 id=190 data-nosnippet>190</a>            )<span class="question-mark">?</span>;
-<a href=#191 id=191 data-nosnippet>191</a>            mask
-<a href=#192 id=192 data-nosnippet>192</a>        };
-<a href=#193 id=193 data-nosnippet>193</a>
-<a href=#194 id=194 data-nosnippet>194</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(causal_mask))
-<a href=#195 id=195 data-nosnippet>195</a>    }
-<a href=#196 id=196 data-nosnippet>196</a>
-<a href=#197 id=197 data-nosnippet>197</a>    <span class="kw">pub fn </span>make_chunked_mask_matrix(
-<a href=#198 id=198 data-nosnippet>198</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#199 id=199 data-nosnippet>199</a>        input_ids: <span class="kw-2">&amp;</span>Tensor,
-<a href=#200 id=200 data-nosnippet>200</a>        chunk_size: usize,
-<a href=#201 id=201 data-nosnippet>201</a>        cache: <span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache,
-<a href=#202 id=202 data-nosnippet>202</a>        dtype: DType,
-<a href=#203 id=203 data-nosnippet>203</a>        _n_attn_heads: usize,
-<a href=#204 id=204 data-nosnippet>204</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
-<a href=#205 id=205 data-nosnippet>205</a>        <span class="kw">let </span>past_kv_len = cache.get_past_kv_len()<span class="question-mark">?</span>;
-<a href=#206 id=206 data-nosnippet>206</a>        <span class="kw">let </span>(_b_sz, tgt_len) = input_ids.dims2()<span class="question-mark">?</span>;
-<a href=#207 id=207 data-nosnippet>207</a>        <span class="kw">if </span>tgt_len == <span class="number">1 </span>{
-<a href=#208 id=208 data-nosnippet>208</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
-<a href=#209 id=209 data-nosnippet>209</a>        }
-<a href=#210 id=210 data-nosnippet>210</a>
-<a href=#211 id=211 data-nosnippet>211</a>        <span class="kw">let </span><span class="kw-2">mut </span>causal_mask = <span class="self">self
-<a href=#212 id=212 data-nosnippet>212</a>            </span>.make_mask_chunked(tgt_len, past_kv_len, chunk_size, input_ids.device())<span class="question-mark">?
-<a href=#213 id=213 data-nosnippet>213</a>            </span>.to_dtype(DType::U8)<span class="question-mark">?</span>;
-<a href=#214 id=214 data-nosnippet>214</a>
-<a href=#215 id=215 data-nosnippet>215</a>        <span class="kw">let </span>zero = Tensor::new(<span class="number">0.0f32</span>, input_ids.device())<span class="question-mark">?</span>;
-<a href=#216 id=216 data-nosnippet>216</a>        causal_mask = {
-<a href=#217 id=217 data-nosnippet>217</a>            <span class="kw">let </span><span class="kw-2">mut </span>mask =
-<a href=#218 id=218 data-nosnippet>218</a>                causal_mask.broadcast_as((causal_mask.dims()[<span class="number">0</span>], causal_mask.dims()[<span class="number">1</span>]))<span class="question-mark">?</span>;
-<a href=#219 id=219 data-nosnippet>219</a>            <span class="comment">// Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
-<a href=#220 id=220 data-nosnippet>220</a>            </span>mask = masked_fill(
-<a href=#221 id=221 data-nosnippet>221</a>                <span class="kw-2">&amp;</span>zero.to_dtype(dtype)<span class="question-mark">?</span>.broadcast_as(mask.shape())<span class="question-mark">?</span>,
-<a href=#222 id=222 data-nosnippet>222</a>                <span class="kw-2">&amp;</span>mask,
-<a href=#223 id=223 data-nosnippet>223</a>                f32::NEG_INFINITY,
-<a href=#224 id=224 data-nosnippet>224</a>            )<span class="question-mark">?</span>;
-<a href=#225 id=225 data-nosnippet>225</a>            mask
-<a href=#226 id=226 data-nosnippet>226</a>        };
-<a href=#227 id=227 data-nosnippet>227</a>
-<a href=#228 id=228 data-nosnippet>228</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(causal_mask))
-<a href=#229 id=229 data-nosnippet>229</a>    }
-<a href=#230 id=230 data-nosnippet>230</a>
-<a href=#231 id=231 data-nosnippet>231</a>    <span class="kw">pub fn </span>make_sliding_window_causal_mask_matrix(
-<a href=#232 id=232 data-nosnippet>232</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#233 id=233 data-nosnippet>233</a>        input_ids: <span class="kw-2">&amp;</span>Tensor,
-<a href=#234 id=234 data-nosnippet>234</a>        cache: <span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache,
-<a href=#235 id=235 data-nosnippet>235</a>        sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#236 id=236 data-nosnippet>236</a>        dtype: DType,
-<a href=#237 id=237 data-nosnippet>237</a>        n_attn_heads: usize,
-<a href=#238 id=238 data-nosnippet>238</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
-<a href=#239 id=239 data-nosnippet>239</a>        <span class="kw">if </span>sliding_window.is_none() {
-<a href=#240 id=240 data-nosnippet>240</a>            <span class="kw">return </span><span class="self">self</span>.make_causal_mask_matrix(input_ids, cache, dtype, n_attn_heads);
-<a href=#241 id=241 data-nosnippet>241</a>        }
-<a href=#242 id=242 data-nosnippet>242</a>        <span class="kw">let </span>(_b_sz, tgt_len) = input_ids.dims2()<span class="question-mark">?</span>;
-<a href=#243 id=243 data-nosnippet>243</a>        <span class="kw">let </span>sliding_window = sliding_window.unwrap();
-<a href=#244 id=244 data-nosnippet>244</a>        <span class="comment">// Compare the past KV len to the sliding window size. If the past kv len is 0 (no prefix cache), then this will be 0.
-<a href=#245 id=245 data-nosnippet>245</a>        // Otherwise, this will be the number required such that the mask fits the size of the k/v seqlen (usually sliding window)
-<a href=#246 id=246 data-nosnippet>246</a>        </span><span class="kw">let </span>past_kv_len = cache
-<a href=#247 id=247 data-nosnippet>247</a>            .get_past_kv_len()<span class="question-mark">?
-<a href=#248 id=248 data-nosnippet>248</a>            </span>.min(sliding_window.saturating_sub(tgt_len));
-<a href=#249 id=249 data-nosnippet>249</a>        <span class="kw">if </span>tgt_len == <span class="number">1 </span>{
-<a href=#250 id=250 data-nosnippet>250</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
-<a href=#251 id=251 data-nosnippet>251</a>        }
-<a href=#252 id=252 data-nosnippet>252</a>
-<a href=#253 id=253 data-nosnippet>253</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(<span class="self">self</span>.make_swa_mask(
-<a href=#254 id=254 data-nosnippet>254</a>            tgt_len,
-<a href=#255 id=255 data-nosnippet>255</a>            past_kv_len,
-<a href=#256 id=256 data-nosnippet>256</a>            sliding_window,
-<a href=#257 id=257 data-nosnippet>257</a>            input_ids.device(),
-<a href=#258 id=258 data-nosnippet>258</a>            dtype,
-<a href=#259 id=259 data-nosnippet>259</a>        )<span class="question-mark">?</span>))
-<a href=#260 id=260 data-nosnippet>260</a>    }
-<a href=#261 id=261 data-nosnippet>261</a>
-<a href=#262 id=262 data-nosnippet>262</a>    <span class="kw">pub fn </span>apply_mask_one_and_zero(
-<a href=#263 id=263 data-nosnippet>263</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#264 id=264 data-nosnippet>264</a>        mask: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Tensor&gt;,
-<a href=#265 id=265 data-nosnippet>265</a>        att: Tensor,
-<a href=#266 id=266 data-nosnippet>266</a>        neg_inf: <span class="kw-2">&amp;</span>Tensor,
-<a href=#267 id=267 data-nosnippet>267</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#268 id=268 data-nosnippet>268</a>        <span class="kw">match </span>mask {
-<a href=#269 id=269 data-nosnippet>269</a>            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Ok</span>(att),
-<a href=#270 id=270 data-nosnippet>270</a>            <span class="prelude-val">Some</span>(mask) =&gt; {
-<a href=#271 id=271 data-nosnippet>271</a>                <span class="kw">let </span>mask = mask.broadcast_as(att.shape())<span class="question-mark">?</span>;
-<a href=#272 id=272 data-nosnippet>272</a>                mask.where_cond(
-<a href=#273 id=273 data-nosnippet>273</a>                    <span class="kw-2">&amp;</span>neg_inf
-<a href=#274 id=274 data-nosnippet>274</a>                        .to_device(att.device())<span class="question-mark">?
-<a href=#275 id=275 data-nosnippet>275</a>                        </span>.to_dtype(att.dtype())<span class="question-mark">?
-<a href=#276 id=276 data-nosnippet>276</a>                        </span>.broadcast_as(att.dims())<span class="question-mark">?</span>,
-<a href=#277 id=277 data-nosnippet>277</a>                    <span class="kw-2">&amp;</span>att,
-<a href=#278 id=278 data-nosnippet>278</a>                )
-<a href=#279 id=279 data-nosnippet>279</a>            }
-<a href=#280 id=280 data-nosnippet>280</a>        }
-<a href=#281 id=281 data-nosnippet>281</a>    }
-<a href=#282 id=282 data-nosnippet>282</a>}</code></pre></div></section></main></body></html>
+<a href=#177 id=177 data-nosnippet>177</a>        <span class="comment">// Avoid materializing large sliding-window masks when flash-attn on CUDA.
+<a href=#178 id=178 data-nosnippet>178</a>        </span><span class="kw">if </span><span class="kw">crate</span>::using_flash_attn() &amp;&amp; input_ids.device().is_cuda() {
+<a href=#179 id=179 data-nosnippet>179</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Tensor::zeros((<span class="number">1</span>, <span class="number">1</span>), dtype, input_ids.device())<span class="question-mark">?</span>));
+<a href=#180 id=180 data-nosnippet>180</a>        }
+<a href=#181 id=181 data-nosnippet>181</a>
+<a href=#182 id=182 data-nosnippet>182</a>        <span class="kw">let </span><span class="kw-2">mut </span>causal_mask = <span class="self">self
+<a href=#183 id=183 data-nosnippet>183</a>            </span>.make_mask(tgt_len, past_kv_len, input_ids.device())<span class="question-mark">?
+<a href=#184 id=184 data-nosnippet>184</a>            </span>.to_dtype(DType::U8)<span class="question-mark">?</span>;
+<a href=#185 id=185 data-nosnippet>185</a>
+<a href=#186 id=186 data-nosnippet>186</a>        <span class="kw">let </span>zero = Tensor::new(<span class="number">0.0f32</span>, input_ids.device())<span class="question-mark">?</span>;
+<a href=#187 id=187 data-nosnippet>187</a>        causal_mask = {
+<a href=#188 id=188 data-nosnippet>188</a>            <span class="kw">let </span><span class="kw-2">mut </span>mask =
+<a href=#189 id=189 data-nosnippet>189</a>                causal_mask.broadcast_as((causal_mask.dims()[<span class="number">0</span>], causal_mask.dims()[<span class="number">1</span>]))<span class="question-mark">?</span>;
+<a href=#190 id=190 data-nosnippet>190</a>            <span class="comment">// Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
+<a href=#191 id=191 data-nosnippet>191</a>            </span>mask = masked_fill(
+<a href=#192 id=192 data-nosnippet>192</a>                <span class="kw-2">&amp;</span>zero.to_dtype(dtype)<span class="question-mark">?</span>.broadcast_as(mask.shape())<span class="question-mark">?</span>,
+<a href=#193 id=193 data-nosnippet>193</a>                <span class="kw-2">&amp;</span>mask,
+<a href=#194 id=194 data-nosnippet>194</a>                f32::NEG_INFINITY,
+<a href=#195 id=195 data-nosnippet>195</a>            )<span class="question-mark">?</span>;
+<a href=#196 id=196 data-nosnippet>196</a>            mask
+<a href=#197 id=197 data-nosnippet>197</a>        };
+<a href=#198 id=198 data-nosnippet>198</a>
+<a href=#199 id=199 data-nosnippet>199</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(causal_mask))
+<a href=#200 id=200 data-nosnippet>200</a>    }
+<a href=#201 id=201 data-nosnippet>201</a>
+<a href=#202 id=202 data-nosnippet>202</a>    <span class="kw">pub fn </span>make_chunked_mask_matrix(
+<a href=#203 id=203 data-nosnippet>203</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#204 id=204 data-nosnippet>204</a>        input_ids: <span class="kw-2">&amp;</span>Tensor,
+<a href=#205 id=205 data-nosnippet>205</a>        chunk_size: usize,
+<a href=#206 id=206 data-nosnippet>206</a>        cache: <span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache,
+<a href=#207 id=207 data-nosnippet>207</a>        dtype: DType,
+<a href=#208 id=208 data-nosnippet>208</a>        _n_attn_heads: usize,
+<a href=#209 id=209 data-nosnippet>209</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
+<a href=#210 id=210 data-nosnippet>210</a>        <span class="kw">let </span>past_kv_len = cache.get_past_kv_len()<span class="question-mark">?</span>;
+<a href=#211 id=211 data-nosnippet>211</a>        <span class="kw">let </span>(_b_sz, tgt_len) = input_ids.dims2()<span class="question-mark">?</span>;
+<a href=#212 id=212 data-nosnippet>212</a>        <span class="kw">if </span>tgt_len == <span class="number">1 </span>{
+<a href=#213 id=213 data-nosnippet>213</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+<a href=#214 id=214 data-nosnippet>214</a>        }
+<a href=#215 id=215 data-nosnippet>215</a>
+<a href=#216 id=216 data-nosnippet>216</a>        <span class="kw">let </span><span class="kw-2">mut </span>causal_mask = <span class="self">self
+<a href=#217 id=217 data-nosnippet>217</a>            </span>.make_mask_chunked(tgt_len, past_kv_len, chunk_size, input_ids.device())<span class="question-mark">?
+<a href=#218 id=218 data-nosnippet>218</a>            </span>.to_dtype(DType::U8)<span class="question-mark">?</span>;
+<a href=#219 id=219 data-nosnippet>219</a>
+<a href=#220 id=220 data-nosnippet>220</a>        <span class="kw">let </span>zero = Tensor::new(<span class="number">0.0f32</span>, input_ids.device())<span class="question-mark">?</span>;
+<a href=#221 id=221 data-nosnippet>221</a>        causal_mask = {
+<a href=#222 id=222 data-nosnippet>222</a>            <span class="kw">let </span><span class="kw-2">mut </span>mask =
+<a href=#223 id=223 data-nosnippet>223</a>                causal_mask.broadcast_as((causal_mask.dims()[<span class="number">0</span>], causal_mask.dims()[<span class="number">1</span>]))<span class="question-mark">?</span>;
+<a href=#224 id=224 data-nosnippet>224</a>            <span class="comment">// Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
+<a href=#225 id=225 data-nosnippet>225</a>            </span>mask = masked_fill(
+<a href=#226 id=226 data-nosnippet>226</a>                <span class="kw-2">&amp;</span>zero.to_dtype(dtype)<span class="question-mark">?</span>.broadcast_as(mask.shape())<span class="question-mark">?</span>,
+<a href=#227 id=227 data-nosnippet>227</a>                <span class="kw-2">&amp;</span>mask,
+<a href=#228 id=228 data-nosnippet>228</a>                f32::NEG_INFINITY,
+<a href=#229 id=229 data-nosnippet>229</a>            )<span class="question-mark">?</span>;
+<a href=#230 id=230 data-nosnippet>230</a>            mask
+<a href=#231 id=231 data-nosnippet>231</a>        };
+<a href=#232 id=232 data-nosnippet>232</a>
+<a href=#233 id=233 data-nosnippet>233</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(causal_mask))
+<a href=#234 id=234 data-nosnippet>234</a>    }
+<a href=#235 id=235 data-nosnippet>235</a>
+<a href=#236 id=236 data-nosnippet>236</a>    <span class="kw">pub fn </span>make_sliding_window_causal_mask_matrix(
+<a href=#237 id=237 data-nosnippet>237</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#238 id=238 data-nosnippet>238</a>        input_ids: <span class="kw-2">&amp;</span>Tensor,
+<a href=#239 id=239 data-nosnippet>239</a>        cache: <span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache,
+<a href=#240 id=240 data-nosnippet>240</a>        sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#241 id=241 data-nosnippet>241</a>        dtype: DType,
+<a href=#242 id=242 data-nosnippet>242</a>        n_attn_heads: usize,
+<a href=#243 id=243 data-nosnippet>243</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
+<a href=#244 id=244 data-nosnippet>244</a>        <span class="kw">if </span>sliding_window.is_none() {
+<a href=#245 id=245 data-nosnippet>245</a>            <span class="kw">return </span><span class="self">self</span>.make_causal_mask_matrix(input_ids, cache, dtype, n_attn_heads);
+<a href=#246 id=246 data-nosnippet>246</a>        }
+<a href=#247 id=247 data-nosnippet>247</a>        <span class="kw">let </span>(_b_sz, tgt_len) = input_ids.dims2()<span class="question-mark">?</span>;
+<a href=#248 id=248 data-nosnippet>248</a>        <span class="kw">let </span>sliding_window = sliding_window.unwrap();
+<a href=#249 id=249 data-nosnippet>249</a>
+<a href=#250 id=250 data-nosnippet>250</a>        <span class="comment">// Avoid materializing large sliding-window masks when flash-attn on CUDA.
+<a href=#251 id=251 data-nosnippet>251</a>        </span><span class="kw">if </span>tgt_len &gt; <span class="number">1 </span>&amp;&amp; <span class="kw">crate</span>::using_flash_attn() &amp;&amp; input_ids.device().is_cuda() {
+<a href=#252 id=252 data-nosnippet>252</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Tensor::zeros((<span class="number">1</span>, <span class="number">1</span>), dtype, input_ids.device())<span class="question-mark">?</span>));
+<a href=#253 id=253 data-nosnippet>253</a>        }
+<a href=#254 id=254 data-nosnippet>254</a>
+<a href=#255 id=255 data-nosnippet>255</a>        <span class="comment">// Compare the past KV len to the sliding window size. If the past kv len is 0 (no prefix cache), then this will be 0.
+<a href=#256 id=256 data-nosnippet>256</a>        // Otherwise, this will be the number required such that the mask fits the size of the k/v seqlen (usually sliding window)
+<a href=#257 id=257 data-nosnippet>257</a>        </span><span class="kw">let </span>past_kv_len = cache
+<a href=#258 id=258 data-nosnippet>258</a>            .get_past_kv_len()<span class="question-mark">?
+<a href=#259 id=259 data-nosnippet>259</a>            </span>.min(sliding_window.saturating_sub(tgt_len));
+<a href=#260 id=260 data-nosnippet>260</a>        <span class="kw">if </span>tgt_len == <span class="number">1 </span>{
+<a href=#261 id=261 data-nosnippet>261</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+<a href=#262 id=262 data-nosnippet>262</a>        }
+<a href=#263 id=263 data-nosnippet>263</a>
+<a href=#264 id=264 data-nosnippet>264</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(<span class="self">self</span>.make_swa_mask(
+<a href=#265 id=265 data-nosnippet>265</a>            tgt_len,
+<a href=#266 id=266 data-nosnippet>266</a>            past_kv_len,
+<a href=#267 id=267 data-nosnippet>267</a>            sliding_window,
+<a href=#268 id=268 data-nosnippet>268</a>            input_ids.device(),
+<a href=#269 id=269 data-nosnippet>269</a>            dtype,
+<a href=#270 id=270 data-nosnippet>270</a>        )<span class="question-mark">?</span>))
+<a href=#271 id=271 data-nosnippet>271</a>    }
+<a href=#272 id=272 data-nosnippet>272</a>
+<a href=#273 id=273 data-nosnippet>273</a>    <span class="kw">pub fn </span>apply_mask_one_and_zero(
+<a href=#274 id=274 data-nosnippet>274</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#275 id=275 data-nosnippet>275</a>        mask: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+<a href=#276 id=276 data-nosnippet>276</a>        att: Tensor,
+<a href=#277 id=277 data-nosnippet>277</a>        neg_inf: <span class="kw-2">&amp;</span>Tensor,
+<a href=#278 id=278 data-nosnippet>278</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#279 id=279 data-nosnippet>279</a>        <span class="kw">match </span>mask {
+<a href=#280 id=280 data-nosnippet>280</a>            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Ok</span>(att),
+<a href=#281 id=281 data-nosnippet>281</a>            <span class="prelude-val">Some</span>(mask) =&gt; {
+<a href=#282 id=282 data-nosnippet>282</a>                <span class="kw">let </span>mask = mask.broadcast_as(att.shape())<span class="question-mark">?</span>;
+<a href=#283 id=283 data-nosnippet>283</a>                mask.where_cond(
+<a href=#284 id=284 data-nosnippet>284</a>                    <span class="kw-2">&amp;</span>neg_inf
+<a href=#285 id=285 data-nosnippet>285</a>                        .to_device(att.device())<span class="question-mark">?
+<a href=#286 id=286 data-nosnippet>286</a>                        </span>.to_dtype(att.dtype())<span class="question-mark">?
+<a href=#287 id=287 data-nosnippet>287</a>                        </span>.broadcast_as(att.dims())<span class="question-mark">?</span>,
+<a href=#288 id=288 data-nosnippet>288</a>                    <span class="kw-2">&amp;</span>att,
+<a href=#289 id=289 data-nosnippet>289</a>                )
+<a href=#290 id=290 data-nosnippet>290</a>            }
+<a href=#291 id=291 data-nosnippet>291</a>        }
+<a href=#292 id=292 data-nosnippet>292</a>    }
+<a href=#293 id=293 data-nosnippet>293</a>}</code></pre></div></section></main></body></html>
