@@ -295,13 +295,13 @@ OpenAI API compatible API server
 
 ### MCP Protocol
 
-Serve the same models over the open [MCP](docs/mcp/server.md) (Model Context Protocol) in parallel to the HTTP API:
+Serve the same models over the open [MCP](docs/MCP/server.md) (Model Context Protocol) in parallel to the HTTP API:
 
 ```bash
 ./mistralrs-server --mcp-port 4321 plain -m Qwen/Qwen3-4B
 ```
 
-See the [docs](docs/mcp/server.md) for feature flags, examples and limitations.
+See the [docs](docs/MCP/server.md) for feature flags, examples and limitations.
 
 
 ### Llama Index integration
