@@ -174,6 +174,11 @@ impl CausalMasker {
             return Ok(None);
         }
 
+        // Avoid materializing large sliding-window masks when flash-attn on CUDA.
+        if crate::using_flash_attn() && input_ids.device().is_cuda() {
+            return Ok(Some(Tensor::zeros((1, 1), dtype, input_ids.device())?));
+        }
+
         let mut causal_mask = self
             .make_mask(tgt_len, past_kv_len, input_ids.device())?
             .to_dtype(DType::U8)?;
@@ -241,6 +246,12 @@ impl CausalMasker {
         }
         let (_b_sz, tgt_len) = input_ids.dims2()?;
         let sliding_window = sliding_window.unwrap();
+
+        // Avoid materializing large sliding-window masks when flash-attn on CUDA.
+        if tgt_len > 1 && crate::using_flash_attn() && input_ids.device().is_cuda() {
+            return Ok(Some(Tensor::zeros((1, 1), dtype, input_ids.device())?));
+        }
+
         // Compare the past KV len to the sliding window size. If the past kv len is 0 (no prefix cache), then this will be 0.
         // Otherwise, this will be the number required such that the mask fits the size of the k/v seqlen (usually sliding window)
         let past_kv_len = cache
