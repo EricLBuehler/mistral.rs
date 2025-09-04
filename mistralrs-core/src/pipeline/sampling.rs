@@ -357,7 +357,7 @@ pub async fn sample_sequence(
     sample_speculative: bool,
     multiple_sequences: bool,
 ) -> Result<Logprobs> {
-    let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
+    let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
 
     let sampler = seq.sampler();
     let ctx_clone = seq.get_toks().to_vec();
