@@ -301,6 +301,7 @@ async fn parse_responses_request(
         n_choices: oairequest.n_choices,
         presence_penalty: oairequest.presence_penalty,
         frequency_penalty: oairequest.frequency_penalty,
+        repetition_penalty: oairequest.repetition_penalty,
         stop_seqs: oairequest.stop_seqs,
         temperature: oairequest.temperature,
         top_p: oairequest.top_p,
