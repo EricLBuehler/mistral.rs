@@ -231,121 +231,122 @@
 <a href=#231 id=231 data-nosnippet>231</a>                top_n_logprobs: <span class="number">1</span>,
 <a href=#232 id=232 data-nosnippet>232</a>                frequency_penalty: oairequest.frequency_penalty,
 <a href=#233 id=233 data-nosnippet>233</a>                presence_penalty: oairequest.presence_penalty,
-<a href=#234 id=234 data-nosnippet>234</a>                max_len: oairequest.max_tokens,
-<a href=#235 id=235 data-nosnippet>235</a>                stop_toks,
-<a href=#236 id=236 data-nosnippet>236</a>                logits_bias: oairequest.logit_bias,
-<a href=#237 id=237 data-nosnippet>237</a>                n_choices: oairequest.n_choices,
-<a href=#238 id=238 data-nosnippet>238</a>                dry_params,
-<a href=#239 id=239 data-nosnippet>239</a>            },
-<a href=#240 id=240 data-nosnippet>240</a>            response: tx,
-<a href=#241 id=241 data-nosnippet>241</a>            return_logprobs: <span class="bool-val">false</span>,
-<a href=#242 id=242 data-nosnippet>242</a>            is_streaming,
-<a href=#243 id=243 data-nosnippet>243</a>            suffix: oairequest.suffix,
-<a href=#244 id=244 data-nosnippet>244</a>            constraint: <span class="kw">match </span>oairequest.grammar {
-<a href=#245 id=245 data-nosnippet>245</a>                <span class="prelude-val">Some</span>(Grammar::Regex(regex)) =&gt; Constraint::Regex(regex),
-<a href=#246 id=246 data-nosnippet>246</a>                <span class="prelude-val">Some</span>(Grammar::Lark(lark)) =&gt; Constraint::Lark(lark),
-<a href=#247 id=247 data-nosnippet>247</a>                <span class="prelude-val">Some</span>(Grammar::JsonSchema(schema)) =&gt; Constraint::JsonSchema(schema),
-<a href=#248 id=248 data-nosnippet>248</a>                <span class="prelude-val">Some</span>(Grammar::Llguidance(llguidance)) =&gt; Constraint::Llguidance(llguidance),
-<a href=#249 id=249 data-nosnippet>249</a>                <span class="prelude-val">None </span>=&gt; Constraint::None,
-<a href=#250 id=250 data-nosnippet>250</a>            },
-<a href=#251 id=251 data-nosnippet>251</a>            tool_choice: oairequest.tool_choice,
-<a href=#252 id=252 data-nosnippet>252</a>            tools: oairequest.tools,
-<a href=#253 id=253 data-nosnippet>253</a>            logits_processors: <span class="prelude-val">None</span>,
-<a href=#254 id=254 data-nosnippet>254</a>            return_raw_logits: <span class="bool-val">false</span>,
-<a href=#255 id=255 data-nosnippet>255</a>            web_search_options: <span class="prelude-val">None</span>,
-<a href=#256 id=256 data-nosnippet>256</a>            model_id: <span class="kw">if </span>oairequest.model == <span class="string">"default" </span>{
-<a href=#257 id=257 data-nosnippet>257</a>                <span class="prelude-val">None
-<a href=#258 id=258 data-nosnippet>258</a>            </span>} <span class="kw">else </span>{
-<a href=#259 id=259 data-nosnippet>259</a>                <span class="prelude-val">Some</span>(oairequest.model.clone())
-<a href=#260 id=260 data-nosnippet>260</a>            },
-<a href=#261 id=261 data-nosnippet>261</a>        })),
-<a href=#262 id=262 data-nosnippet>262</a>        is_streaming,
-<a href=#263 id=263 data-nosnippet>263</a>    ))
-<a href=#264 id=264 data-nosnippet>264</a>}
-<a href=#265 id=265 data-nosnippet>265</a>
-<a href=#266 id=266 data-nosnippet>266</a><span class="doccomment">/// OpenAI-compatible completions endpoint handler.
-<a href=#267 id=267 data-nosnippet>267</a></span><span class="attr">#[utoipa::path(
-<a href=#268 id=268 data-nosnippet>268</a>    post,
-<a href=#269 id=269 data-nosnippet>269</a>    tag = <span class="string">"Mistral.rs"</span>,
-<a href=#270 id=270 data-nosnippet>270</a>    path = <span class="string">"/v1/completions"</span>,
-<a href=#271 id=271 data-nosnippet>271</a>    request_body = CompletionRequest,
-<a href=#272 id=272 data-nosnippet>272</a>    responses((status = <span class="number">200</span>, description = <span class="string">"Completions"</span>))
-<a href=#273 id=273 data-nosnippet>273</a>)]
-<a href=#274 id=274 data-nosnippet>274</a></span><span class="kw">pub async fn </span>completions(
-<a href=#275 id=275 data-nosnippet>275</a>    State(state): ExtractedMistralRsState,
-<a href=#276 id=276 data-nosnippet>276</a>    Json(oairequest): Json&lt;CompletionRequest&gt;,
-<a href=#277 id=277 data-nosnippet>277</a>) -&gt; CompletionResponder {
-<a href=#278 id=278 data-nosnippet>278</a>    <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = create_response_channel(<span class="prelude-val">None</span>);
-<a href=#279 id=279 data-nosnippet>279</a>
-<a href=#280 id=280 data-nosnippet>280</a>    <span class="kw">let </span>(request, is_streaming) = <span class="kw">match </span>parse_request(oairequest, state.clone(), tx) {
-<a href=#281 id=281 data-nosnippet>281</a>        <span class="prelude-val">Ok</span>(x) =&gt; x,
-<a href=#282 id=282 data-nosnippet>282</a>        <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span>handle_error(state, e.into()),
-<a href=#283 id=283 data-nosnippet>283</a>    };
-<a href=#284 id=284 data-nosnippet>284</a>
-<a href=#285 id=285 data-nosnippet>285</a>    <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = send_request(<span class="kw-2">&amp;</span>state, request).<span class="kw">await </span>{
-<a href=#286 id=286 data-nosnippet>286</a>        <span class="kw">return </span>handle_error(state, e.into());
-<a href=#287 id=287 data-nosnippet>287</a>    }
-<a href=#288 id=288 data-nosnippet>288</a>
-<a href=#289 id=289 data-nosnippet>289</a>    <span class="kw">if </span>is_streaming {
-<a href=#290 id=290 data-nosnippet>290</a>        CompletionResponder::Sse(create_streamer(rx, state, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>))
-<a href=#291 id=291 data-nosnippet>291</a>    } <span class="kw">else </span>{
-<a href=#292 id=292 data-nosnippet>292</a>        process_non_streaming_response(<span class="kw-2">&amp;mut </span>rx, state).<span class="kw">await
-<a href=#293 id=293 data-nosnippet>293</a>    </span>}
-<a href=#294 id=294 data-nosnippet>294</a>}
-<a href=#295 id=295 data-nosnippet>295</a>
-<a href=#296 id=296 data-nosnippet>296</a><span class="doccomment">/// Handle route / generation errors and logging them.
-<a href=#297 id=297 data-nosnippet>297</a></span><span class="kw">pub fn </span>handle_error(
-<a href=#298 id=298 data-nosnippet>298</a>    state: SharedMistralRsState,
-<a href=#299 id=299 data-nosnippet>299</a>    e: Box&lt;<span class="kw">dyn </span>std::error::Error + Send + Sync + <span class="lifetime">'static</span>&gt;,
-<a href=#300 id=300 data-nosnippet>300</a>) -&gt; CompletionResponder {
-<a href=#301 id=301 data-nosnippet>301</a>    handle_completion_error(state, e)
-<a href=#302 id=302 data-nosnippet>302</a>}
-<a href=#303 id=303 data-nosnippet>303</a>
-<a href=#304 id=304 data-nosnippet>304</a><span class="doccomment">/// Creates a SSE streamer for chat completions with optional callbacks.
-<a href=#305 id=305 data-nosnippet>305</a></span><span class="kw">pub fn </span>create_streamer(
-<a href=#306 id=306 data-nosnippet>306</a>    rx: Receiver&lt;Response&gt;,
-<a href=#307 id=307 data-nosnippet>307</a>    state: SharedMistralRsState,
-<a href=#308 id=308 data-nosnippet>308</a>    on_chunk: <span class="prelude-ty">Option</span>&lt;CompletionOnChunkCallback&gt;,
-<a href=#309 id=309 data-nosnippet>309</a>    on_done: <span class="prelude-ty">Option</span>&lt;CompletionOnDoneCallback&gt;,
-<a href=#310 id=310 data-nosnippet>310</a>) -&gt; Sse&lt;CompletionStreamer&gt; {
-<a href=#311 id=311 data-nosnippet>311</a>    <span class="kw">let </span>streamer = base_create_streamer(rx, state, on_chunk, on_done);
-<a href=#312 id=312 data-nosnippet>312</a>    <span class="kw">let </span>keep_alive_interval = get_keep_alive_interval();
-<a href=#313 id=313 data-nosnippet>313</a>
-<a href=#314 id=314 data-nosnippet>314</a>    Sse::new(streamer)
-<a href=#315 id=315 data-nosnippet>315</a>        .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval)))
-<a href=#316 id=316 data-nosnippet>316</a>}
-<a href=#317 id=317 data-nosnippet>317</a>
-<a href=#318 id=318 data-nosnippet>318</a><span class="doccomment">/// Process non-streaming completion responses.
-<a href=#319 id=319 data-nosnippet>319</a></span><span class="kw">pub async fn </span>process_non_streaming_response(
-<a href=#320 id=320 data-nosnippet>320</a>    rx: <span class="kw-2">&amp;mut </span>Receiver&lt;Response&gt;,
-<a href=#321 id=321 data-nosnippet>321</a>    state: SharedMistralRsState,
-<a href=#322 id=322 data-nosnippet>322</a>) -&gt; CompletionResponder {
-<a href=#323 id=323 data-nosnippet>323</a>    base_process_non_streaming_response(rx, state, match_responses, handle_error).<span class="kw">await
-<a href=#324 id=324 data-nosnippet>324</a></span>}
-<a href=#325 id=325 data-nosnippet>325</a>
-<a href=#326 id=326 data-nosnippet>326</a><span class="doccomment">/// Matches and processes different types of model responses into appropriate completion responses.
-<a href=#327 id=327 data-nosnippet>327</a></span><span class="kw">pub fn </span>match_responses(state: SharedMistralRsState, response: Response) -&gt; CompletionResponder {
-<a href=#328 id=328 data-nosnippet>328</a>    <span class="kw">match </span>response {
-<a href=#329 id=329 data-nosnippet>329</a>        Response::InternalError(e) =&gt; {
-<a href=#330 id=330 data-nosnippet>330</a>            MistralRs::maybe_log_error(state, <span class="kw-2">&amp;*</span>e);
-<a href=#331 id=331 data-nosnippet>331</a>            CompletionResponder::InternalError(e)
-<a href=#332 id=332 data-nosnippet>332</a>        }
-<a href=#333 id=333 data-nosnippet>333</a>        Response::CompletionModelError(msg, response) =&gt; {
-<a href=#334 id=334 data-nosnippet>334</a>            MistralRs::maybe_log_error(state.clone(), <span class="kw-2">&amp;</span>ModelErrorMessage(msg.to_string()));
-<a href=#335 id=335 data-nosnippet>335</a>            MistralRs::maybe_log_response(state, <span class="kw-2">&amp;</span>response);
-<a href=#336 id=336 data-nosnippet>336</a>            CompletionResponder::ModelError(msg, response)
-<a href=#337 id=337 data-nosnippet>337</a>        }
-<a href=#338 id=338 data-nosnippet>338</a>        Response::ValidationError(e) =&gt; CompletionResponder::ValidationError(e),
-<a href=#339 id=339 data-nosnippet>339</a>        Response::CompletionDone(response) =&gt; {
-<a href=#340 id=340 data-nosnippet>340</a>            MistralRs::maybe_log_response(state, <span class="kw-2">&amp;</span>response);
-<a href=#341 id=341 data-nosnippet>341</a>            CompletionResponder::Json(response)
-<a href=#342 id=342 data-nosnippet>342</a>        }
-<a href=#343 id=343 data-nosnippet>343</a>        Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#344 id=344 data-nosnippet>344</a>        Response::Chunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#345 id=345 data-nosnippet>345</a>        Response::Done(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#346 id=346 data-nosnippet>346</a>        Response::ModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#347 id=347 data-nosnippet>347</a>        Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#348 id=348 data-nosnippet>348</a>        Response::Speech { .. } =&gt; <span class="macro">unreachable!</span>(),
-<a href=#349 id=349 data-nosnippet>349</a>        Response::Raw { .. } =&gt; <span class="macro">unreachable!</span>(),
-<a href=#350 id=350 data-nosnippet>350</a>    }
-<a href=#351 id=351 data-nosnippet>351</a>}</code></pre></div></section></main></body></html>
+<a href=#234 id=234 data-nosnippet>234</a>                repetition_penalty: oairequest.repetition_penalty,
+<a href=#235 id=235 data-nosnippet>235</a>                max_len: oairequest.max_tokens,
+<a href=#236 id=236 data-nosnippet>236</a>                stop_toks,
+<a href=#237 id=237 data-nosnippet>237</a>                logits_bias: oairequest.logit_bias,
+<a href=#238 id=238 data-nosnippet>238</a>                n_choices: oairequest.n_choices,
+<a href=#239 id=239 data-nosnippet>239</a>                dry_params,
+<a href=#240 id=240 data-nosnippet>240</a>            },
+<a href=#241 id=241 data-nosnippet>241</a>            response: tx,
+<a href=#242 id=242 data-nosnippet>242</a>            return_logprobs: <span class="bool-val">false</span>,
+<a href=#243 id=243 data-nosnippet>243</a>            is_streaming,
+<a href=#244 id=244 data-nosnippet>244</a>            suffix: oairequest.suffix,
+<a href=#245 id=245 data-nosnippet>245</a>            constraint: <span class="kw">match </span>oairequest.grammar {
+<a href=#246 id=246 data-nosnippet>246</a>                <span class="prelude-val">Some</span>(Grammar::Regex(regex)) =&gt; Constraint::Regex(regex),
+<a href=#247 id=247 data-nosnippet>247</a>                <span class="prelude-val">Some</span>(Grammar::Lark(lark)) =&gt; Constraint::Lark(lark),
+<a href=#248 id=248 data-nosnippet>248</a>                <span class="prelude-val">Some</span>(Grammar::JsonSchema(schema)) =&gt; Constraint::JsonSchema(schema),
+<a href=#249 id=249 data-nosnippet>249</a>                <span class="prelude-val">Some</span>(Grammar::Llguidance(llguidance)) =&gt; Constraint::Llguidance(llguidance),
+<a href=#250 id=250 data-nosnippet>250</a>                <span class="prelude-val">None </span>=&gt; Constraint::None,
+<a href=#251 id=251 data-nosnippet>251</a>            },
+<a href=#252 id=252 data-nosnippet>252</a>            tool_choice: oairequest.tool_choice,
+<a href=#253 id=253 data-nosnippet>253</a>            tools: oairequest.tools,
+<a href=#254 id=254 data-nosnippet>254</a>            logits_processors: <span class="prelude-val">None</span>,
+<a href=#255 id=255 data-nosnippet>255</a>            return_raw_logits: <span class="bool-val">false</span>,
+<a href=#256 id=256 data-nosnippet>256</a>            web_search_options: <span class="prelude-val">None</span>,
+<a href=#257 id=257 data-nosnippet>257</a>            model_id: <span class="kw">if </span>oairequest.model == <span class="string">"default" </span>{
+<a href=#258 id=258 data-nosnippet>258</a>                <span class="prelude-val">None
+<a href=#259 id=259 data-nosnippet>259</a>            </span>} <span class="kw">else </span>{
+<a href=#260 id=260 data-nosnippet>260</a>                <span class="prelude-val">Some</span>(oairequest.model.clone())
+<a href=#261 id=261 data-nosnippet>261</a>            },
+<a href=#262 id=262 data-nosnippet>262</a>        })),
+<a href=#263 id=263 data-nosnippet>263</a>        is_streaming,
+<a href=#264 id=264 data-nosnippet>264</a>    ))
+<a href=#265 id=265 data-nosnippet>265</a>}
+<a href=#266 id=266 data-nosnippet>266</a>
+<a href=#267 id=267 data-nosnippet>267</a><span class="doccomment">/// OpenAI-compatible completions endpoint handler.
+<a href=#268 id=268 data-nosnippet>268</a></span><span class="attr">#[utoipa::path(
+<a href=#269 id=269 data-nosnippet>269</a>    post,
+<a href=#270 id=270 data-nosnippet>270</a>    tag = <span class="string">"Mistral.rs"</span>,
+<a href=#271 id=271 data-nosnippet>271</a>    path = <span class="string">"/v1/completions"</span>,
+<a href=#272 id=272 data-nosnippet>272</a>    request_body = CompletionRequest,
+<a href=#273 id=273 data-nosnippet>273</a>    responses((status = <span class="number">200</span>, description = <span class="string">"Completions"</span>))
+<a href=#274 id=274 data-nosnippet>274</a>)]
+<a href=#275 id=275 data-nosnippet>275</a></span><span class="kw">pub async fn </span>completions(
+<a href=#276 id=276 data-nosnippet>276</a>    State(state): ExtractedMistralRsState,
+<a href=#277 id=277 data-nosnippet>277</a>    Json(oairequest): Json&lt;CompletionRequest&gt;,
+<a href=#278 id=278 data-nosnippet>278</a>) -&gt; CompletionResponder {
+<a href=#279 id=279 data-nosnippet>279</a>    <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = create_response_channel(<span class="prelude-val">None</span>);
+<a href=#280 id=280 data-nosnippet>280</a>
+<a href=#281 id=281 data-nosnippet>281</a>    <span class="kw">let </span>(request, is_streaming) = <span class="kw">match </span>parse_request(oairequest, state.clone(), tx) {
+<a href=#282 id=282 data-nosnippet>282</a>        <span class="prelude-val">Ok</span>(x) =&gt; x,
+<a href=#283 id=283 data-nosnippet>283</a>        <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span>handle_error(state, e.into()),
+<a href=#284 id=284 data-nosnippet>284</a>    };
+<a href=#285 id=285 data-nosnippet>285</a>
+<a href=#286 id=286 data-nosnippet>286</a>    <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = send_request(<span class="kw-2">&amp;</span>state, request).<span class="kw">await </span>{
+<a href=#287 id=287 data-nosnippet>287</a>        <span class="kw">return </span>handle_error(state, e.into());
+<a href=#288 id=288 data-nosnippet>288</a>    }
+<a href=#289 id=289 data-nosnippet>289</a>
+<a href=#290 id=290 data-nosnippet>290</a>    <span class="kw">if </span>is_streaming {
+<a href=#291 id=291 data-nosnippet>291</a>        CompletionResponder::Sse(create_streamer(rx, state, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>))
+<a href=#292 id=292 data-nosnippet>292</a>    } <span class="kw">else </span>{
+<a href=#293 id=293 data-nosnippet>293</a>        process_non_streaming_response(<span class="kw-2">&amp;mut </span>rx, state).<span class="kw">await
+<a href=#294 id=294 data-nosnippet>294</a>    </span>}
+<a href=#295 id=295 data-nosnippet>295</a>}
+<a href=#296 id=296 data-nosnippet>296</a>
+<a href=#297 id=297 data-nosnippet>297</a><span class="doccomment">/// Handle route / generation errors and logging them.
+<a href=#298 id=298 data-nosnippet>298</a></span><span class="kw">pub fn </span>handle_error(
+<a href=#299 id=299 data-nosnippet>299</a>    state: SharedMistralRsState,
+<a href=#300 id=300 data-nosnippet>300</a>    e: Box&lt;<span class="kw">dyn </span>std::error::Error + Send + Sync + <span class="lifetime">'static</span>&gt;,
+<a href=#301 id=301 data-nosnippet>301</a>) -&gt; CompletionResponder {
+<a href=#302 id=302 data-nosnippet>302</a>    handle_completion_error(state, e)
+<a href=#303 id=303 data-nosnippet>303</a>}
+<a href=#304 id=304 data-nosnippet>304</a>
+<a href=#305 id=305 data-nosnippet>305</a><span class="doccomment">/// Creates a SSE streamer for chat completions with optional callbacks.
+<a href=#306 id=306 data-nosnippet>306</a></span><span class="kw">pub fn </span>create_streamer(
+<a href=#307 id=307 data-nosnippet>307</a>    rx: Receiver&lt;Response&gt;,
+<a href=#308 id=308 data-nosnippet>308</a>    state: SharedMistralRsState,
+<a href=#309 id=309 data-nosnippet>309</a>    on_chunk: <span class="prelude-ty">Option</span>&lt;CompletionOnChunkCallback&gt;,
+<a href=#310 id=310 data-nosnippet>310</a>    on_done: <span class="prelude-ty">Option</span>&lt;CompletionOnDoneCallback&gt;,
+<a href=#311 id=311 data-nosnippet>311</a>) -&gt; Sse&lt;CompletionStreamer&gt; {
+<a href=#312 id=312 data-nosnippet>312</a>    <span class="kw">let </span>streamer = base_create_streamer(rx, state, on_chunk, on_done);
+<a href=#313 id=313 data-nosnippet>313</a>    <span class="kw">let </span>keep_alive_interval = get_keep_alive_interval();
+<a href=#314 id=314 data-nosnippet>314</a>
+<a href=#315 id=315 data-nosnippet>315</a>    Sse::new(streamer)
+<a href=#316 id=316 data-nosnippet>316</a>        .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval)))
+<a href=#317 id=317 data-nosnippet>317</a>}
+<a href=#318 id=318 data-nosnippet>318</a>
+<a href=#319 id=319 data-nosnippet>319</a><span class="doccomment">/// Process non-streaming completion responses.
+<a href=#320 id=320 data-nosnippet>320</a></span><span class="kw">pub async fn </span>process_non_streaming_response(
+<a href=#321 id=321 data-nosnippet>321</a>    rx: <span class="kw-2">&amp;mut </span>Receiver&lt;Response&gt;,
+<a href=#322 id=322 data-nosnippet>322</a>    state: SharedMistralRsState,
+<a href=#323 id=323 data-nosnippet>323</a>) -&gt; CompletionResponder {
+<a href=#324 id=324 data-nosnippet>324</a>    base_process_non_streaming_response(rx, state, match_responses, handle_error).<span class="kw">await
+<a href=#325 id=325 data-nosnippet>325</a></span>}
+<a href=#326 id=326 data-nosnippet>326</a>
+<a href=#327 id=327 data-nosnippet>327</a><span class="doccomment">/// Matches and processes different types of model responses into appropriate completion responses.
+<a href=#328 id=328 data-nosnippet>328</a></span><span class="kw">pub fn </span>match_responses(state: SharedMistralRsState, response: Response) -&gt; CompletionResponder {
+<a href=#329 id=329 data-nosnippet>329</a>    <span class="kw">match </span>response {
+<a href=#330 id=330 data-nosnippet>330</a>        Response::InternalError(e) =&gt; {
+<a href=#331 id=331 data-nosnippet>331</a>            MistralRs::maybe_log_error(state, <span class="kw-2">&amp;*</span>e);
+<a href=#332 id=332 data-nosnippet>332</a>            CompletionResponder::InternalError(e)
+<a href=#333 id=333 data-nosnippet>333</a>        }
+<a href=#334 id=334 data-nosnippet>334</a>        Response::CompletionModelError(msg, response) =&gt; {
+<a href=#335 id=335 data-nosnippet>335</a>            MistralRs::maybe_log_error(state.clone(), <span class="kw-2">&amp;</span>ModelErrorMessage(msg.to_string()));
+<a href=#336 id=336 data-nosnippet>336</a>            MistralRs::maybe_log_response(state, <span class="kw-2">&amp;</span>response);
+<a href=#337 id=337 data-nosnippet>337</a>            CompletionResponder::ModelError(msg, response)
+<a href=#338 id=338 data-nosnippet>338</a>        }
+<a href=#339 id=339 data-nosnippet>339</a>        Response::ValidationError(e) =&gt; CompletionResponder::ValidationError(e),
+<a href=#340 id=340 data-nosnippet>340</a>        Response::CompletionDone(response) =&gt; {
+<a href=#341 id=341 data-nosnippet>341</a>            MistralRs::maybe_log_response(state, <span class="kw-2">&amp;</span>response);
+<a href=#342 id=342 data-nosnippet>342</a>            CompletionResponder::Json(response)
+<a href=#343 id=343 data-nosnippet>343</a>        }
+<a href=#344 id=344 data-nosnippet>344</a>        Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#345 id=345 data-nosnippet>345</a>        Response::Chunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#346 id=346 data-nosnippet>346</a>        Response::Done(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#347 id=347 data-nosnippet>347</a>        Response::ModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#348 id=348 data-nosnippet>348</a>        Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#349 id=349 data-nosnippet>349</a>        Response::Speech { .. } =&gt; <span class="macro">unreachable!</span>(),
+<a href=#350 id=350 data-nosnippet>350</a>        Response::Raw { .. } =&gt; <span class="macro">unreachable!</span>(),
+<a href=#351 id=351 data-nosnippet>351</a>    }
+<a href=#352 id=352 data-nosnippet>352</a>}</code></pre></div></section></main></body></html>
