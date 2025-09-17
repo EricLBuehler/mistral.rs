@@ -158,6 +158,7 @@ fn interactive_sample_parameters() -> SamplingParams {
         top_n_logprobs: 0,
         frequency_penalty: Some(0.1),
         presence_penalty: Some(0.1),
+        repetition_penalty: None,
         max_len: None,
         stop_toks: None,
         logits_bias: None,

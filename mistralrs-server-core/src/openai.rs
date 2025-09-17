@@ -503,6 +503,8 @@ pub struct ChatCompletionRequest {
     pub presence_penalty: Option<f32>,
     #[schema(example = json!(Option::None::<f32>))]
     pub frequency_penalty: Option<f32>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub repetition_penalty: Option<f32>,
     #[serde(rename = "stop")]
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
@@ -638,6 +640,8 @@ pub struct CompletionRequest {
     pub grammar: Option<Grammar>,
     #[schema(example = json!(Option::None::<f64>))]
     pub min_p: Option<f64>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub repetition_penalty: Option<f32>,
     #[schema(example = json!(Option::None::<f32>))]
     pub dry_multiplier: Option<f32>,
     #[schema(example = json!(Option::None::<f32>))]
@@ -839,6 +843,8 @@ pub struct ResponsesCreateRequest {
     pub grammar: Option<Grammar>,
     #[schema(example = json!(Option::None::<f64>))]
     pub min_p: Option<f64>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub repetition_penalty: Option<f32>,
     #[schema(example = json!(Option::None::<f32>))]
     pub dry_multiplier: Option<f32>,
     #[schema(example = json!(Option::None::<f32>))]

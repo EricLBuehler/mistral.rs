@@ -362,6 +362,7 @@ impl Engine {
             tokenizer,
             request.sampling_params.frequency_penalty,
             request.sampling_params.presence_penalty,
+            request.sampling_params.repetition_penalty,
             request.sampling_params.dry_params,
             topk,
             topp,

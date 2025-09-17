@@ -37,6 +37,7 @@ pub struct SamplingParams {
     pub top_n_logprobs: usize,
     pub frequency_penalty: Option<f32>,
     pub presence_penalty: Option<f32>,
+    pub repetition_penalty: Option<f32>,
     pub stop_toks: Option<StopTokens>,
     pub max_len: Option<usize>,
     pub logits_bias: Option<HashMap<u32, f32>>,
@@ -58,6 +59,7 @@ impl SamplingParams {
             top_n_logprobs: 0,
             frequency_penalty: None,
             presence_penalty: None,
+            repetition_penalty: None,
             stop_toks: None,
             max_len: None,
             logits_bias: None,
@@ -185,6 +187,7 @@ pub struct Sampler {
     tokenizer: Option<Arc<Tokenizer>>,
     frequency_penalty: Option<f32>,
     presence_penalty: Option<f32>,
+    repetition_penalty: Option<f32>,
     dry_params: Option<DrySamplingParamsInner>,
     top_k: i64,
     top_p: f64,
@@ -224,6 +227,7 @@ impl Sampler {
         tokenizer: Option<Arc<Tokenizer>>,
         frequency_penalty: Option<f32>,
         presence_penalty: Option<f32>,
+        repetition_penalty: Option<f32>,
         dry_params: Option<DrySamplingParams>,
         top_k: i64,
         top_p: f64,
@@ -250,6 +254,7 @@ impl Sampler {
             tokenizer,
             frequency_penalty,
             presence_penalty,
+            repetition_penalty,
             dry_params,
             top_k,
             top_p,
@@ -370,7 +375,20 @@ impl Sampler {
 
         match self.presence_penalty {
             Some(pres_penalty) if pres_penalty != 0. => {
-                probs = (probs - (pres_penalty as f64 * presence)?)?;
+                probs = (probs - (pres_penalty as f64 * &presence)?)?;
+            }
+            _ => (),
+        }
+
+        match self.repetition_penalty {
+            Some(rep_penalty) if rep_penalty != 1. => {
+                let pos_mask = probs.gt(0.)?;
+                let scaled_pos = (&probs / (rep_penalty as f64))?;
+                let scaled_neg = (&probs * (rep_penalty as f64))?;
+                let modified = pos_mask.where_cond(&scaled_pos, &scaled_neg)?;
+
+                let pres_mask = presence.gt(0.)?;
+                probs = pres_mask.where_cond(&modified, &probs)?;
             }
             _ => (),
         }
@@ -695,17 +713,21 @@ impl Sampler {
         // Dry penalty
         self.apply_dry_penalty(&mut logits, context)?;
 
-        // Frequency and Presence penalty
-        self.apply_freq_presc_penalty(&mut logits, context)?;
+        // Frequency, presence, repetition penalty
+        self.apply_freq_pres_rep_penalty(&mut logits, context)?;
 
         let vocab_size = logits.len();
         Tensor::from_vec(logits, vocab_size, &Device::Cpu)
     }
 
-    fn apply_freq_presc_penalty(&self, logits: &mut [f32], context: &[u32]) -> Result<()> {
-        if self.frequency_penalty.is_some() || self.presence_penalty.is_some() {
+    fn apply_freq_pres_rep_penalty(&self, logits: &mut [f32], context: &[u32]) -> Result<()> {
+        if self.frequency_penalty.is_some()
+            || self.presence_penalty.is_some()
+            || self.repetition_penalty.is_some()
+        {
             let frequency_penalty = self.frequency_penalty.unwrap_or(0.);
             let presence_penalty = self.presence_penalty.unwrap_or(0.);
+            let repetition_penalty = self.repetition_penalty.unwrap_or(1.);
 
             //mu[j] -> mu[j] - c[j] * alpha_frequency - float(c[j] > 0) * alpha_presence
 
@@ -723,6 +745,14 @@ impl Sampler {
                 *logit = *logit
                     - count * frequency_penalty
                     - if count > 0.0 { 1. } else { 0. } * presence_penalty;
+
+                if repetition_penalty != 1.0 && count > 0.0 {
+                    if *logit > 0.0 {
+                        *logit /= repetition_penalty;
+                    } else {
+                        *logit *= repetition_penalty;
+                    }
+                }
             }
         }
         Ok(())
@@ -886,8 +916,20 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        let sampler =
-            Sampler::new(None, 10, None, None, None, None, 32, 0.1, 0.05, vec![]).unwrap();
+        let sampler = Sampler::new(
+            None,
+            10,
+            None,
+            None,
+            None,
+            None,
+            None,
+            32,
+            0.1,
+            0.05,
+            vec![],
+        )
+        .unwrap();
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler
@@ -914,8 +956,20 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        let sampler =
-            Sampler::new(None, 10, None, None, None, None, 32, 0.1, 0.05, vec![]).unwrap();
+        let sampler = Sampler::new(
+            None,
+            10,
+            None,
+            None,
+            None,
+            None,
+            None,
+            32,
+            0.1,
+            0.05,
+            vec![],
+        )
+        .unwrap();
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler

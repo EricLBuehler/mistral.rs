@@ -231,6 +231,7 @@ pub fn parse_request(
                 top_n_logprobs: 1,
                 frequency_penalty: oairequest.frequency_penalty,
                 presence_penalty: oairequest.presence_penalty,
+                repetition_penalty: oairequest.repetition_penalty,
                 max_len: oairequest.max_tokens,
                 stop_toks,
                 logits_bias: oairequest.logit_bias,

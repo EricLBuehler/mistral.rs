@@ -61,6 +61,7 @@ async fn run_bench(
         top_n_logprobs: 0,
         frequency_penalty: Some(0.1),
         presence_penalty: Some(0.1),
+        repetition_penalty: None,
         max_len: Some(n_gen),
         stop_toks: None,
         logits_bias: None,

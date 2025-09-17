@@ -372,6 +372,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             None,
             None,
             None,
+            None,
             -1,
             0.0,
             0.0,
