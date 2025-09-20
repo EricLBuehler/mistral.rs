@@ -9,13 +9,6 @@ use crate::{
 };
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Phi4MMLoraConfig {
-    pub layer: String,
-    pub lora_alpha: f64,
-    pub r: usize,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Phi4MMImageEmbedConfig {
     pub n_embd: Option<usize>,
     pub crop_size: Option<usize>,
