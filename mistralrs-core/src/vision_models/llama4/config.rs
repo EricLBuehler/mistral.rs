@@ -53,12 +53,6 @@ impl TextConfig {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
-pub enum VisionFeatureSelectStrategy {
-    #[serde(rename = "default")]
-    Default,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
 pub struct VisionConfig {
     pub hidden_size: usize,
     pub hidden_act: Activation,
