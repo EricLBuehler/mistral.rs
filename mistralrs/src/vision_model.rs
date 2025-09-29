@@ -54,6 +54,7 @@ pub struct VisionModelBuilder {
     pub(crate) paged_attn_cfg: Option<PagedAttentionConfig>,
     pub(crate) max_num_seqs: usize,
     pub(crate) with_logging: bool,
+    pub(crate) prefix_cache_n: Option<usize>,
 }
 
 impl VisionModelBuilder {
@@ -93,6 +94,7 @@ impl VisionModelBuilder {
             device: None,
             matformer_config_path: None,
             matformer_slice_name: None,
+            prefix_cache_n: None,
         }
     }
 
@@ -223,6 +225,12 @@ impl VisionModelBuilder {
     /// Set the maximum number of sequences which can be run at once.
     pub fn with_max_num_seqs(mut self, max_num_seqs: usize) -> Self {
         self.max_num_seqs = max_num_seqs;
+        self
+    }
+
+    /// Set the number of sequences to hold in the prefix cache. Set to `None` to disable the prefix cacher.
+    pub fn with_prefix_cache_n(mut self, n_seqs: Option<usize>) -> Self {
+        self.prefix_cache_n = n_seqs;
         self
     }
 
@@ -383,7 +391,13 @@ impl VisionModelBuilder {
                 callback_with_tool.tool.clone(),
             );
         }
-        let runner = runner.with_no_kv_cache(false).with_no_prefix_cache(false);
+        let mut runner = runner
+            .with_no_kv_cache(false)
+            .with_no_prefix_cache(self.prefix_cache_n.is_none());
+
+        if let Some(n) = self.prefix_cache_n {
+            runner = runner.with_prefix_cache_n(n)
+        }
 
         Ok(Model::new(runner.build().await))
     }
