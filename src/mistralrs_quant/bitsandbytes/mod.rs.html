@@ -55,12 +55,12 @@
 <a href=#55 id=55 data-nosnippet>55</a>}
 <a href=#56 id=56 data-nosnippet>56</a>
 <a href=#57 id=57 data-nosnippet>57</a><span class="attr">#[derive(Debug, Clone)]
-<a href=#58 id=58 data-nosnippet>58</a></span><span class="kw">pub struct </span>BnbQuantParmas {
+<a href=#58 id=58 data-nosnippet>58</a></span><span class="kw">pub struct </span>BnbQuantParams {
 <a href=#59 id=59 data-nosnippet>59</a>    <span class="kw">pub </span>absmax: Tensor,
 <a href=#60 id=60 data-nosnippet>60</a>    <span class="kw">pub </span>code: Tensor,
 <a href=#61 id=61 data-nosnippet>61</a>    <span class="kw">pub </span>blocksize: usize,
 <a href=#62 id=62 data-nosnippet>62</a>    <span class="kw">pub </span>shape: <span class="prelude-ty">Option</span>&lt;Shape&gt;,
-<a href=#63 id=63 data-nosnippet>63</a>    <span class="kw">pub </span>nested: <span class="prelude-ty">Option</span>&lt;Arc&lt;BnbQuantParmas&gt;&gt;,
+<a href=#63 id=63 data-nosnippet>63</a>    <span class="kw">pub </span>nested: <span class="prelude-ty">Option</span>&lt;Arc&lt;BnbQuantParams&gt;&gt;,
 <a href=#64 id=64 data-nosnippet>64</a>    <span class="kw">pub </span>offset: <span class="prelude-ty">Option</span>&lt;f64&gt;,
 <a href=#65 id=65 data-nosnippet>65</a>    <span class="kw">pub </span>dtype: BnbDType,
 <a href=#66 id=66 data-nosnippet>66</a>}
@@ -69,7 +69,7 @@
 <a href=#69 id=69 data-nosnippet>69</a></span><span class="kw">pub struct </span>BnbLinear {
 <a href=#70 id=70 data-nosnippet>70</a>    weight: Tensor,
 <a href=#71 id=71 data-nosnippet>71</a>    bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
-<a href=#72 id=72 data-nosnippet>72</a>    params: BnbQuantParmas,
+<a href=#72 id=72 data-nosnippet>72</a>    params: BnbQuantParams,
 <a href=#73 id=73 data-nosnippet>73</a>    quant_ty: BnbQuantType,
 <a href=#74 id=74 data-nosnippet>74</a>}
 <a href=#75 id=75 data-nosnippet>75</a>
@@ -123,7 +123,7 @@
 <a href=#123 id=123 data-nosnippet>123</a>
 <a href=#124 id=124 data-nosnippet>124</a>        <span class="kw">let </span>nested = <span class="kw">if </span>vb_w.contains_tensor(<span class="string">"nested_absmax"</span>) {
 <a href=#125 id=125 data-nosnippet>125</a>            <span class="comment">// TODO: can `nested_blocksize` be None, default to 64 like bnb?
-<a href=#126 id=126 data-nosnippet>126</a>            </span><span class="prelude-val">Some</span>(Arc::new(BnbQuantParmas {
+<a href=#126 id=126 data-nosnippet>126</a>            </span><span class="prelude-val">Some</span>(Arc::new(BnbQuantParams {
 <a href=#127 id=127 data-nosnippet>127</a>                absmax: vb_w.get_unchecked_dtype(<span class="string">"nested_absmax"</span>, DType::F32)<span class="question-mark">?</span>,
 <a href=#128 id=128 data-nosnippet>128</a>                code: vb_w.get_unchecked_dtype(<span class="string">"nested_quant_map"</span>, DType::F32)<span class="question-mark">?</span>,
 <a href=#129 id=129 data-nosnippet>129</a>                blocksize: state
@@ -146,7 +146,7 @@
 <a href=#146 id=146 data-nosnippet>146</a>            vb_w.get_unchecked_dtype(<span class="string">"absmax"</span>, DType::F32)<span class="question-mark">?
 <a href=#147 id=147 data-nosnippet>147</a>        </span>};
 <a href=#148 id=148 data-nosnippet>148</a>
-<a href=#149 id=149 data-nosnippet>149</a>        <span class="kw">let </span>params = BnbQuantParmas {
+<a href=#149 id=149 data-nosnippet>149</a>        <span class="kw">let </span>params = BnbQuantParams {
 <a href=#150 id=150 data-nosnippet>150</a>            absmax,
 <a href=#151 id=151 data-nosnippet>151</a>            code: vb_w.get_unchecked_dtype(<span class="string">"quant_map"</span>, DType::F32)<span class="question-mark">?</span>,
 <a href=#152 id=152 data-nosnippet>152</a>            blocksize: state.blocksize,
@@ -167,7 +167,7 @@
 <a href=#167 id=167 data-nosnippet>167</a>    <span class="doccomment">/// Dequantize input (u8). Handles nested absmax dequantization.
 <a href=#168 id=168 data-nosnippet>168</a>    </span><span class="kw">fn </span>dequantize(
 <a href=#169 id=169 data-nosnippet>169</a>        input: <span class="kw-2">&amp;</span>Tensor,
-<a href=#170 id=170 data-nosnippet>170</a>        params: <span class="kw-2">&amp;</span>BnbQuantParmas,
+<a href=#170 id=170 data-nosnippet>170</a>        params: <span class="kw-2">&amp;</span>BnbQuantParams,
 <a href=#171 id=171 data-nosnippet>171</a>        quant_ty: BnbQuantType,
 <a href=#172 id=172 data-nosnippet>172</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
 <a href=#173 id=173 data-nosnippet>173</a>        <span class="kw">let </span><span class="kw-2">mut </span>absmax = params.absmax.clone();

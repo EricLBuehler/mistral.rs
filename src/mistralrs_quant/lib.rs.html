@@ -40,7 +40,7 @@
 <a href=#40 id=40 data-nosnippet>40</a><span class="kw">pub use </span>safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 <a href=#41 id=41 data-nosnippet>41</a>
 <a href=#42 id=42 data-nosnippet>42</a><span class="kw">pub use </span>afq::{AfqBits, AfqGroupSize, AfqLayer};
-<a href=#43 id=43 data-nosnippet>43</a><span class="kw">pub use </span>bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
+<a href=#43 id=43 data-nosnippet>43</a><span class="kw">pub use </span>bitsandbytes::{BnbLinear, BnbQuantParams, BnbQuantType};
 <a href=#44 id=44 data-nosnippet>44</a><span class="kw">pub use </span>blockwise_fp8::{fp8_blockwise_dequantize, fp8_blockwise_quantize};
 <a href=#45 id=45 data-nosnippet>45</a><span class="kw">pub use </span>distributed::{
 <a href=#46 id=46 data-nosnippet>46</a>    layers::{
@@ -295,7 +295,7 @@
 <a href=#295 id=295 data-nosnippet>295</a>    Bnb {
 <a href=#296 id=296 data-nosnippet>296</a>        weight: Tensor,
 <a href=#297 id=297 data-nosnippet>297</a>        bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
-<a href=#298 id=298 data-nosnippet>298</a>        params: BnbQuantParmas,
+<a href=#298 id=298 data-nosnippet>298</a>        params: BnbQuantParams,
 <a href=#299 id=299 data-nosnippet>299</a>        quant_ty: BnbQuantType,
 <a href=#300 id=300 data-nosnippet>300</a>    },
 <a href=#301 id=301 data-nosnippet>301</a>    BlockwiseFP8 {
