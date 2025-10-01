@@ -143,7 +143,7 @@ pub struct VisionConfig {
     #[serde(default = "default_0_0")]
     pub attn_dropout: f32,
     #[serde(default = "default_0_02")]
-    pub initiailizer_range: f32,
+    pub initializer_range: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

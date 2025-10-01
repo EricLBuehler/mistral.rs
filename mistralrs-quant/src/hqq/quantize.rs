@@ -24,7 +24,7 @@ impl HqqLayer {
             w
         };
 
-        // Get min and max valyes
+        // Get min and max values
         let (min, max) = if !cfg.channel_wise {
             // TODO we need min_all
             let mut min = w.min(0)?;
