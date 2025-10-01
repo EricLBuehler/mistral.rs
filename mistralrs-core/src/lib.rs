@@ -634,7 +634,13 @@ impl MistralRs {
                 let start = Instant::now();
                 clone_sender.blocking_send(req).unwrap();
 
-                if let Some(_resp) = rx.blocking_recv() {
+                // Drain all responses from the channel until it's closed
+                let mut received_any = false;
+                while let Some(_resp) = rx.blocking_recv() {
+                    received_any = true;
+                }
+
+                if received_any {
                     let end = Instant::now();
                     info!(
                         "Dummy run completed in {}s.",

@@ -40,7 +40,7 @@ use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
 pub use afq::{AfqBits, AfqGroupSize, AfqLayer};
-pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
+pub use bitsandbytes::{BnbLinear, BnbQuantParams, BnbQuantType};
 pub use blockwise_fp8::{fp8_blockwise_dequantize, fp8_blockwise_quantize};
 pub use distributed::{
     layers::{
@@ -295,7 +295,7 @@ pub enum QuantMethodConfig {
     Bnb {
         weight: Tensor,
         bias: Option<Tensor>,
-        params: BnbQuantParmas,
+        params: BnbQuantParams,
         quant_ty: BnbQuantType,
     },
     BlockwiseFP8 {

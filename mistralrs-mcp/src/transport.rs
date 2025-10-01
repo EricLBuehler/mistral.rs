@@ -20,7 +20,7 @@ pub trait McpTransport: Send + Sync {
     /// Close the transport connection
     async fn close(&self) -> Result<()>;
 
-    /// Send initialization noification
+    /// Send initialization notification
     async fn send_initialization_notification(&self) -> Result<()>;
 }
 
