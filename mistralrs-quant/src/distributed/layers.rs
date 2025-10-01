@@ -1101,12 +1101,12 @@ impl FusedExperts {
         quantization_config: &Option<QuantizedConfig>,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
-        if !vb.device().is_metal() {
-            candle_core::bail!("FastMoeMlp requires Metal.");
-        }
-
         let (fused_gate_proj, fused_up_proj, fused_down_proj) =
             if matches!(&quantization_config, Some(QuantizedConfig::Afq { .. })) {
+                if !vb.device().is_metal() {
+                    candle_core::bail!("FusedExperts requires Metal when used with Afq.");
+                }
+
                 let quantization_config = quantization_config.as_ref().unwrap();
 
                 let fused_gate_proj = AfqLayer::afq_packed_linear_b(
@@ -1167,17 +1167,29 @@ impl FusedExperts {
                     down_proj_vec.push(down_proj.dequantize_w()?);
                 }
 
+                // Need to transpose all weights to match expected CUDA kernel layout
+                // Loaded: gate/up are [intermediate_dim, hidden_dim], down is [hidden_dim, intermediate_dim]
+                // Expected: gate/up are [hidden_dim, intermediate_dim], down is [intermediate_dim, hidden_dim]
+                let mut gate_proj_transposed = Vec::new();
+                let mut up_proj_transposed = Vec::new();
+                let mut down_proj_transposed = Vec::new();
+                for i in 0..num_experts {
+                    gate_proj_transposed.push(gate_proj_vec[i].transpose(0, 1)?);
+                    up_proj_transposed.push(up_proj_vec[i].transpose(0, 1)?);
+                    down_proj_transposed.push(down_proj_vec[i].transpose(0, 1)?);
+                }
+
                 let mut gate_proj: Arc<dyn QuantMethod> =
                     Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                        Linear::new(Tensor::stack(&gate_proj_vec, 0)?, None),
+                        Linear::new(Tensor::stack(&gate_proj_transposed, 0)?, None),
                     ))?);
                 let mut up_proj: Arc<dyn QuantMethod> =
                     Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                        Linear::new(Tensor::stack(&up_proj_vec, 0)?, None),
+                        Linear::new(Tensor::stack(&up_proj_transposed, 0)?, None),
                     ))?);
                 let mut down_proj: Arc<dyn QuantMethod> =
                     Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                        Linear::new(Tensor::stack(&down_proj_vec, 0)?, None),
+                        Linear::new(Tensor::stack(&down_proj_transposed, 0)?, None),
                     ))?);
                 gate_proj = apply_immediate_isq(gate_proj, vb.pp("gate_proj"))?;
                 up_proj = apply_immediate_isq(up_proj, vb.pp("up_proj"))?;
@@ -1202,17 +1214,29 @@ impl FusedExperts {
                     down_proj_vec.push(down_proj);
                 }
 
+                // Need to transpose all weights to match expected CUDA kernel layout
+                // Loaded: gate/up are [intermediate_dim, hidden_dim], down is [hidden_dim, intermediate_dim]
+                // Expected: gate/up are [hidden_dim, intermediate_dim], down is [intermediate_dim, hidden_dim]
+                let mut gate_proj_transposed = Vec::new();
+                let mut up_proj_transposed = Vec::new();
+                let mut down_proj_transposed = Vec::new();
+                for i in 0..num_experts {
+                    gate_proj_transposed.push(gate_proj_vec[i].transpose(0, 1)?);
+                    up_proj_transposed.push(up_proj_vec[i].transpose(0, 1)?);
+                    down_proj_transposed.push(down_proj_vec[i].transpose(0, 1)?);
+                }
+                
                 let mut gate_proj: Arc<dyn QuantMethod> =
                     Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                        Linear::new(Tensor::stack(&gate_proj_vec, 0)?, None),
+                        Linear::new(Tensor::stack(&gate_proj_transposed, 0)?, None),
                     ))?);
                 let mut up_proj: Arc<dyn QuantMethod> =
                     Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                        Linear::new(Tensor::stack(&up_proj_vec, 0)?, None),
+                        Linear::new(Tensor::stack(&up_proj_transposed, 0)?, None),
                     ))?);
                 let mut down_proj: Arc<dyn QuantMethod> =
                     Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                        Linear::new(Tensor::stack(&down_proj_vec, 0)?, None),
+                        Linear::new(Tensor::stack(&down_proj_transposed, 0)?, None),
                     ))?);
                 gate_proj = apply_immediate_isq(gate_proj, vb.pp("gate_proj"))?;
                 up_proj = apply_immediate_isq(up_proj, vb.pp("up_proj"))?;
