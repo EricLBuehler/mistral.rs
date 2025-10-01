@@ -205,6 +205,40 @@ impl Engine {
         let rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
         let mut last_completion_ids: Vec<usize> = vec![];
         'lp: loop {
+            // If there are no active sequences (idle), block until a request arrives.
+            // This prevents spinning when there's no work to do.
+            {
+                let scheduler_idle = {
+                    let scheduler = get_mut_arcmutex!(self.scheduler);
+                    scheduler.waiting_len() == 0 && scheduler.running_len() == 0
+                };
+
+                if scheduler_idle {
+                    // Check for termination instruction before going to sleep
+                    if matches!(
+                        ENGINE_INSTRUCTIONS
+                            .lock()
+                            .expect("`ENGINE_INSTRUCTIONS` was poisoned")
+                            .get(get_mut_arcmutex!(self.id).deref()),
+                        Some(Some(EngineInstruction::Terminate))
+                    ) {
+                        self.replicate_request_to_daemons(&Request::Terminate);
+                        break 'lp;
+                    }
+
+                    // Block for the next request; exit if the channel is closed
+                    if let Some(request) = { self.rx.lock().await.recv().await } {
+                        self.replicate_request_to_daemons(&request);
+                        if matches!(request, Request::Terminate) {
+                            break 'lp;
+                        }
+                        self.clone().handle_request(request).await;
+                    } else {
+                        break 'lp;
+                    }
+                }
+            }
+
             if matches!(
                 ENGINE_INSTRUCTIONS
                     .lock()
