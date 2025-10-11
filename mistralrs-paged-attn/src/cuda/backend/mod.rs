@@ -1,11 +1,13 @@
 mod cache;
 mod paged_attention;
+mod scale_update;
 pub use cache::{copy_blocks, swap_blocks};
 use candle_core::cuda::cudarc::{
     self,
     driver::{CudaSlice, DevicePtr, DeviceRepr},
 };
 pub use paged_attention::{paged_attention, reshape_and_cache};
+pub use scale_update::kv_scale_update;
 
 pub fn slice_ptr<T: DeviceRepr>(
     v: &CudaSlice<T>,

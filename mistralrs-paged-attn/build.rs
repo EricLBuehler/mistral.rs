@@ -16,14 +16,14 @@ pub const USE_FP8: bool = false;
 mod backend;
 mod ffi;
 
-pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
+pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks, kv_scale_update};
     "#;
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/cuda/pagedattention.cuh");
     println!("cargo:rerun-if-changed=src/cuda/copy_blocks_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/reshape_and_cache_kernel.cu");
-
+    println!("cargo:rerun-if-changed=src/cuda/update_kvscales.cu");
     // Detect CUDA compute capability for FP8 support
     let compute_cap = {
         if let Ok(var) = std::env::var("CUDA_COMPUTE_CAP") {
