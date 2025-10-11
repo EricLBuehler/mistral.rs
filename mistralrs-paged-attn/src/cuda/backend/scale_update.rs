@@ -46,11 +46,11 @@ impl candle::InplaceOp2 for KvScaleUpdate {
                 inp_k.device_ptr(&dev.cuda_stream()).0 as *const c_void,
                 inp_v.device_ptr(&dev.cuda_stream()).0 as *const c_void,
             ),
-            (CudaStorageSlice::F16(inp_k), CudaStorageSlice::BF16(inp_v)) => (
+            (CudaStorageSlice::F16(inp_k), CudaStorageSlice::F16(inp_v)) => (
                 inp_k.device_ptr(&dev.cuda_stream()).0 as *const c_void,
                 inp_v.device_ptr(&dev.cuda_stream()).0 as *const c_void,
             ),
-            (CudaStorageSlice::F32(inp_k), CudaStorageSlice::BF16(inp_v)) => (
+            (CudaStorageSlice::F32(inp_k), CudaStorageSlice::F32(inp_v)) => (
                 inp_k.device_ptr(&dev.cuda_stream()).0 as *const c_void,
                 inp_v.device_ptr(&dev.cuda_stream()).0 as *const c_void,
             ),
