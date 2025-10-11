@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use mistralrs_quant::{linear_b, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{linear_b, Convolution, QuantMethod, ShardedVarBuilder};
 
 use crate::{
     layers::{self, GetFloatInfo, RmsNorm},
@@ -424,7 +424,7 @@ impl Mistral3VisionModel {
     }
 
     pub fn forward(&self, xs: &Tensor, image_sizes: Vec<(u32, u32)>) -> Result<Tensor> {
-        let patch_embeds = xs.apply(&self.patch_conv)?;
+        let patch_embeds = Convolution.forward_2d(&self.patch_conv, xs)?;
         let patch_embeds_list = image_sizes
             .iter()
             .enumerate()

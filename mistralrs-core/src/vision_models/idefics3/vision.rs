@@ -1,6 +1,6 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Linear, Module};
-use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{Convolution, QuantMethod, ShardedVarBuilder};
 use std::{ops::Mul, sync::Arc};
 
 use crate::{
@@ -138,7 +138,7 @@ impl VisionEmbeddings {
     fn forward(&self, pixel_values: &Tensor, patch_attention_mask: &Tensor) -> Result<Tensor> {
         let (bs, _, max_im_h, max_im_w) = pixel_values.dims4()?;
 
-        let patch_embeds = self.patch_embedding.forward(pixel_values)?;
+        let patch_embeds = Convolution.forward_2d(&self.patch_embedding, pixel_values)?;
 
         let embeddings = patch_embeds.flatten(2, D::Minus1)?.transpose(1, 2)?;
 

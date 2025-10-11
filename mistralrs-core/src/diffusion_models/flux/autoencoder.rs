@@ -2,7 +2,7 @@
 
 use candle_core::{Result, Tensor, D};
 use candle_nn::{Conv2d, GroupNorm};
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{Convolution, ShardedVarBuilder};
 use serde::Deserialize;
 
 use crate::layers::{conv2d, group_norm, MatMul};
@@ -55,17 +55,18 @@ impl AttnBlock {
 impl candle_core::Module for AttnBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let init_xs = xs;
-        let xs = xs.apply(&self.norm)?;
-        let q = xs.apply(&self.q)?;
-        let k = xs.apply(&self.k)?;
-        let v = xs.apply(&self.v)?;
+        let normed = self.norm.forward(xs)?;
+        let q = Convolution.forward_2d(&self.q, &normed)?;
+        let k = Convolution.forward_2d(&self.k, &normed)?;
+        let v = Convolution.forward_2d(&self.v, &normed)?;
         let (b, c, h, w) = q.dims4()?;
         let q = q.flatten_from(2)?.t()?.unsqueeze(1)?;
         let k = k.flatten_from(2)?.t()?.unsqueeze(1)?;
         let v = v.flatten_from(2)?.t()?.unsqueeze(1)?;
-        let xs = scaled_dot_product_attention(&q, &k, &v)?;
-        let xs = xs.squeeze(1)?.t()?.reshape((b, c, h, w))?;
-        xs.apply(&self.proj_out)? + init_xs
+        let attended = scaled_dot_product_attention(&q, &k, &v)?;
+        let attended = attended.squeeze(1)?.t()?.reshape((b, c, h, w))?;
+        let projected = Convolution.forward_2d(&self.proj_out, &attended)?;
+        projected + init_xs
     }
 }
 
@@ -111,16 +112,15 @@ impl ResnetBlock {
 
 impl candle_core::Module for ResnetBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let h = xs
-            .apply(&self.norm1)?
-            .apply(&candle_nn::Activation::Swish)?
-            .apply(&self.conv1)?
-            .apply(&self.norm2)?
-            .apply(&candle_nn::Activation::Swish)?
-            .apply(&self.conv2)?;
+        let mut h = self.norm1.forward(xs)?;
+        h = candle_nn::Activation::Swish.forward(&h)?;
+        h = Convolution.forward_2d(&self.conv1, &h)?;
+        h = self.norm2.forward(&h)?;
+        h = candle_nn::Activation::Swish.forward(&h)?;
+        h = Convolution.forward_2d(&self.conv2, &h)?;
         match self.nin_shortcut.as_ref() {
             None => xs + h,
-            Some(c) => xs.apply(c)? + h,
+            Some(c) => Convolution.forward_2d(c, xs)? + h,
         }
     }
 }
@@ -145,7 +145,7 @@ impl candle_core::Module for Downsample {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let xs = xs.pad_with_zeros(D::Minus1, 0, 1)?;
         let xs = xs.pad_with_zeros(D::Minus2, 0, 1)?;
-        xs.apply(&self.conv)
+        Convolution.forward_2d(&self.conv, &xs)
     }
 }
 
@@ -168,7 +168,8 @@ impl Upsample {
 impl candle_core::Module for Upsample {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (_, _, h, w) = xs.dims4()?;
-        xs.upsample_nearest2d(h * 2, w * 2)?.apply(&self.conv)
+        let upsampled = xs.upsample_nearest2d(h * 2, w * 2)?;
+        Convolution.forward_2d(&self.conv, &upsampled)
     }
 }
 
@@ -250,21 +251,21 @@ impl Encoder {
 
 impl candle_nn::Module for Encoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let mut h = xs.apply(&self.conv_in)?;
+        let mut h = Convolution.forward_2d(&self.conv_in, xs)?;
         for block in self.down.iter() {
             for b in block.block.iter() {
-                h = h.apply(b)?
+                h = b.forward(&h)?
             }
             if let Some(ds) = block.downsample.as_ref() {
-                h = h.apply(ds)?
+                h = ds.forward(&h)?
             }
         }
-        h.apply(&self.mid_block_1)?
-            .apply(&self.mid_attn_1)?
-            .apply(&self.mid_block_2)?
-            .apply(&self.norm_out)?
-            .apply(&candle_nn::Activation::Swish)?
-            .apply(&self.conv_out)
+        h = self.mid_block_1.forward(&h)?;
+        h = self.mid_attn_1.forward(&h)?;
+        h = self.mid_block_2.forward(&h)?;
+        h = self.norm_out.forward(&h)?;
+        h = candle_nn::Activation::Swish.forward(&h)?;
+        Convolution.forward_2d(&self.conv_out, &h)
     }
 }
 
@@ -336,22 +337,21 @@ impl Decoder {
 
 impl candle_nn::Module for Decoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let h = xs.apply(&self.conv_in)?;
-        let mut h = h
-            .apply(&self.mid_block_1)?
-            .apply(&self.mid_attn_1)?
-            .apply(&self.mid_block_2)?;
+        let mut h = Convolution.forward_2d(&self.conv_in, xs)?;
+        h = self.mid_block_1.forward(&h)?;
+        h = self.mid_attn_1.forward(&h)?;
+        h = self.mid_block_2.forward(&h)?;
         for block in self.up.iter().rev() {
             for b in block.block.iter() {
-                h = h.apply(b)?
+                h = b.forward(&h)?
             }
             if let Some(us) = block.upsample.as_ref() {
-                h = h.apply(us)?
+                h = us.forward(&h)?
             }
         }
-        h.apply(&self.norm_out)?
-            .apply(&candle_nn::Activation::Swish)?
-            .apply(&self.conv_out)
+        h = self.norm_out.forward(&h)?;
+        h = candle_nn::Activation::Swish.forward(&h)?;
+        Convolution.forward_2d(&self.conv_out, &h)
     }
 }
 

@@ -2,7 +2,7 @@
 
 use candle_core::{bail, DType, Module, Result, Tensor, D};
 use candle_nn::{Conv1d, Conv1dConfig, Conv2d, Conv2dConfig, ModuleT};
-use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{Convolution, QuantMethod, ShardedVarBuilder};
 use std::sync::Arc;
 
 use crate::{
@@ -1179,9 +1179,9 @@ impl Gemma3nAudioConformerLightConv1d {
             audio_encodings_transposed.pad_with_zeros(D::Minus1, self.causal_padding, 0)?;
 
         // Conv1d expects NCW format, apply directly
-        let audio_encodings_conv = self
-            .depthwise_conv1d
-            .forward(&audio_encodings_padded.to_dtype(DType::F32)?)?
+        let conv_input = audio_encodings_padded.to_dtype(DType::F32)?;
+        let audio_encodings_conv = Convolution
+            .forward_1d(&self.depthwise_conv1d, &conv_input)?
             .to_dtype(audio_encodings_padded.dtype())?;
 
         // Permute back: [B, D, T] -> [B, T, D]

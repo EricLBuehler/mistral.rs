@@ -45,6 +45,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             .decode(&[logprobs.token]),
         &is_done,
     );
+    println!("{}", logprobs.bytes.as_ref().unwrap());
 
     // If we can have a tool and we got a tool, stop the sequence early.
     // Doesn't conflict with the logic below because it does the same thing anyway.
