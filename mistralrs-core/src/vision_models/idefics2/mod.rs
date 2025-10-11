@@ -4,7 +4,7 @@ pub(crate) mod idefics2_input_processor;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{Convolution, ShardedVarBuilder};
 use serde::Deserialize;
 use std::{any::Any, ops::Mul};
 
@@ -277,7 +277,7 @@ impl VisionEmbeddings {
     fn forward(&self, pixel_values: &Tensor, patch_attention_mask: &Tensor) -> Result<Tensor> {
         let (bs, _, max_im_h, max_im_w) = pixel_values.dims4()?;
 
-        let patch_embeds = self.patch_embedding.forward(pixel_values)?;
+        let patch_embeds = Convolution.forward_2d(&self.patch_embedding, pixel_values)?;
 
         let embeddings = patch_embeds.flatten(2, D::Minus1)?.transpose(1, 2)?;
 

@@ -13,7 +13,7 @@ use candle_nn::{
 use float8::F8E4M3;
 use half::{bf16, f16};
 use mistralrs_quant::{
-    AfqLayer, ColumnParallelLayer, QuantMethod, QuantizedConfig, RowParallelLayer,
+    AfqLayer, ColumnParallelLayer, Convolution, QuantMethod, QuantizedConfig, RowParallelLayer,
     ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
@@ -2262,7 +2262,9 @@ impl Module for Conv3dNoBias {
         let xs1 = xs.i((.., .., 0, .., ..))?;
         let xs2 = xs.i((.., .., 1, .., ..))?;
 
-        (self.conv2d_1.forward(&xs1)? + self.conv2d_2.forward(&xs2)?)?.unsqueeze(2)
+        (Convolution.forward_2d(&self.conv2d_1, &xs1)?
+            + Convolution.forward_2d(&self.conv2d_2, &xs2)?)?
+        .unsqueeze(2)
     }
 }
 

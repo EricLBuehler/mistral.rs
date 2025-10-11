@@ -66,7 +66,7 @@ pub use utils::isq::apply_immediate_isq;
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
 pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 
-use candle_nn::{Linear, Module};
+use candle_nn::{Conv1d, Conv2d, Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Clone, Debug)]
@@ -367,6 +367,42 @@ impl MatMul {
     /// Compute quantized matrix-matrix product.
     pub fn qmethod_matmul(&self, x: &Tensor, matmul: &dyn QuantMethod) -> Result<Tensor> {
         matmul.forward(x)
+    }
+}
+
+/// Device/configurable intelligent convolution
+/// - Handles limitation of cpu which requires f32
+pub struct Convolution;
+
+impl Convolution {
+    pub fn forward_1d(&self, layer: &Conv1d, x: &Tensor) -> Result<Tensor> {
+        if x.device().is_cpu() {
+            let original_dtype = x.dtype();
+            Conv1d::new(
+                layer.weight().to_dtype(DType::F32)?,
+                layer.bias().map(|b| b.to_dtype(DType::F32)).transpose()?,
+                *layer.config(),
+            )
+            .forward(&x.to_dtype(DType::F32)?)?
+            .to_dtype(original_dtype)
+        } else {
+            layer.forward(x)
+        }
+    }
+
+    pub fn forward_2d(&self, layer: &Conv2d, x: &Tensor) -> Result<Tensor> {
+        if x.device().is_cpu() {
+            let original_dtype = x.dtype();
+            Conv2d::new(
+                layer.weight().to_dtype(DType::F32)?,
+                layer.bias().map(|b| b.to_dtype(DType::F32)).transpose()?,
+                *layer.config(),
+            )
+            .forward(&x.to_dtype(DType::F32)?)?
+            .to_dtype(original_dtype)
+        } else {
+            layer.forward(x)
+        }
     }
 }
 
