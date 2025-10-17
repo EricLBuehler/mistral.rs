@@ -107,7 +107,7 @@ impl Module for ClipVisionEmbeddings {
     fn forward(&self, pixel_values: &Tensor) -> Result<Tensor> {
         let batch_size = pixel_values.shape().dims();
         let patch_embeds = Convolution
-            .forward_2d(&self.patch_embedding, &pixel_values)?
+            .forward_2d(&self.patch_embedding, pixel_values)?
             .flatten_from(2)?
             .transpose(1, 2)?;
         let shape = Shape::from((batch_size[0], 1, self.class_embedding.dim(D::Minus1)?));
