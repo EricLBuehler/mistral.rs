@@ -107,7 +107,7 @@
 <a href=#107 id=107 data-nosnippet>107</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, pixel_values: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
 <a href=#108 id=108 data-nosnippet>108</a>        <span class="kw">let </span>batch_size = pixel_values.shape().dims();
 <a href=#109 id=109 data-nosnippet>109</a>        <span class="kw">let </span>patch_embeds = Convolution
-<a href=#110 id=110 data-nosnippet>110</a>            .forward_2d(<span class="kw-2">&amp;</span><span class="self">self</span>.patch_embedding, <span class="kw-2">&amp;</span>pixel_values)<span class="question-mark">?
+<a href=#110 id=110 data-nosnippet>110</a>            .forward_2d(<span class="kw-2">&amp;</span><span class="self">self</span>.patch_embedding, pixel_values)<span class="question-mark">?
 <a href=#111 id=111 data-nosnippet>111</a>            </span>.flatten_from(<span class="number">2</span>)<span class="question-mark">?
 <a href=#112 id=112 data-nosnippet>112</a>            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 <a href=#113 id=113 data-nosnippet>113</a>        <span class="kw">let </span>shape = Shape::from((batch_size[<span class="number">0</span>], <span class="number">1</span>, <span class="self">self</span>.class_embedding.dim(D::Minus1)<span class="question-mark">?</span>));
