@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use candle_core::{Result, Tensor};
-use candle_nn::Module;
-use mistralrs_quant::ShardedVarBuilder;
+use candle_nn::{Linear, Module};
+use mistralrs_quant::{QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear};
 
 use crate::{
     layers::{AvgPool2d, RmsNorm},
@@ -10,7 +12,7 @@ use crate::{
 use super::config::Gemma3Config;
 
 pub struct Gemma3MultiModalProjector {
-    mm_input_projection_weight: Tensor,
+    mm_input_projection_weight: Arc<dyn QuantMethod>,
     mm_soft_emb_norm: RmsNorm,
     patches_per_image: usize,
     avg_pool: AvgPool2d,
@@ -44,7 +46,9 @@ impl Gemma3MultiModalProjector {
         let avg_pool = AvgPool2d::new(kernel_size, kernel_size);
 
         Ok(Self {
-            mm_input_projection_weight,
+            mm_input_projection_weight: Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(Linear::new(mm_input_projection_weight.t()?, None)),
+            )?),
             mm_soft_emb_norm,
             patches_per_image,
             avg_pool,
@@ -69,16 +73,16 @@ impl Gemma3MultiModalProjector {
 
         let normed_vision_outputs = self.mm_soft_emb_norm.forward(&pooled_vision_outputs)?;
 
-        normed_vision_outputs.broadcast_matmul(&self.mm_input_projection_weight)
+        self.mm_input_projection_weight
+            .forward(&normed_vision_outputs)
+        // normed_vision_outputs.broadcast_matmul(&self.mm_input_projection_weight)
     }
 
     pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
-        uvb.add_tensor(
-            "mm_input_projection_weight",
-            self.mm_input_projection_weight.clone(),
-        );
+        uvb.pp("mm_input_projection_weight")
+            .add(&self.mm_input_projection_weight);
         uvb.pp("mm_soft_emb_norm")
             .add(&self.mm_soft_emb_norm.undo_gemma().unwrap());
 
