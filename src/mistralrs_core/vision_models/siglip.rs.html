@@ -2,7 +2,7 @@
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a></span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span>candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
-<a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+<a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>mistralrs_quant::{Convolution, QuantMethod, ShardedVarBuilder};
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>std::{ops::Mul, sync::Arc};
 <a href=#7 id=7 data-nosnippet>7</a>
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use crate</span>::{
@@ -134,7 +134,7 @@
 <a href=#134 id=134 data-nosnippet>134</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
 <a href=#135 id=135 data-nosnippet>135</a>        <span class="kw">let </span>(bs, <span class="kw">_</span>, max_im_h, max_im_w) = pixel_values.dims4()<span class="question-mark">?</span>;
 <a href=#136 id=136 data-nosnippet>136</a>
-<a href=#137 id=137 data-nosnippet>137</a>        <span class="kw">let </span>patch_embeds = <span class="self">self</span>.patch_embedding.forward(pixel_values)<span class="question-mark">?</span>;
+<a href=#137 id=137 data-nosnippet>137</a>        <span class="kw">let </span>patch_embeds = Convolution.forward_2d(<span class="kw-2">&amp;</span><span class="self">self</span>.patch_embedding, pixel_values)<span class="question-mark">?</span>;
 <a href=#138 id=138 data-nosnippet>138</a>
 <a href=#139 id=139 data-nosnippet>139</a>        <span class="kw">let </span>embeddings = patch_embeds.flatten(<span class="number">2</span>, D::Minus1)<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 <a href=#140 id=140 data-nosnippet>140</a>

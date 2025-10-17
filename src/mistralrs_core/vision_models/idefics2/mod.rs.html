@@ -4,7 +4,7 @@
 <a href=#4 id=4 data-nosnippet>4</a>
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
-<a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>mistralrs_quant::ShardedVarBuilder;
+<a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>mistralrs_quant::{Convolution, ShardedVarBuilder};
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>serde::Deserialize;
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>std::{any::Any, ops::Mul};
 <a href=#10 id=10 data-nosnippet>10</a>
@@ -277,7 +277,7 @@
 <a href=#277 id=277 data-nosnippet>277</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, pixel_values: <span class="kw-2">&amp;</span>Tensor, patch_attention_mask: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
 <a href=#278 id=278 data-nosnippet>278</a>        <span class="kw">let </span>(bs, <span class="kw">_</span>, max_im_h, max_im_w) = pixel_values.dims4()<span class="question-mark">?</span>;
 <a href=#279 id=279 data-nosnippet>279</a>
-<a href=#280 id=280 data-nosnippet>280</a>        <span class="kw">let </span>patch_embeds = <span class="self">self</span>.patch_embedding.forward(pixel_values)<span class="question-mark">?</span>;
+<a href=#280 id=280 data-nosnippet>280</a>        <span class="kw">let </span>patch_embeds = Convolution.forward_2d(<span class="kw-2">&amp;</span><span class="self">self</span>.patch_embedding, pixel_values)<span class="question-mark">?</span>;
 <a href=#281 id=281 data-nosnippet>281</a>
 <a href=#282 id=282 data-nosnippet>282</a>        <span class="kw">let </span>embeddings = patch_embeds.flatten(<span class="number">2</span>, D::Minus1)<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 <a href=#283 id=283 data-nosnippet>283</a>
