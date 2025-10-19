@@ -44,8 +44,9 @@ pub use model_selected::ModelSelected;
 pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_selected_model_dtype};
 
 mod amoe;
-#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
-mod dummy_paged_attention;
+mod attention;
+mod diffusion_models;
+pub mod distributed;
 mod embedding;
 mod gguf;
 pub mod layers;
@@ -53,13 +54,7 @@ mod layers_masker;
 mod layers_utils;
 pub mod matformer;
 mod models;
-#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
 mod paged_attention;
-#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
-use dummy_paged_attention as paged_attention;
-mod attention;
-mod diffusion_models;
-pub mod distributed;
 mod pipeline;
 mod prefix_cacher;
 mod request;
