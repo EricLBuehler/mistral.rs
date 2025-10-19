@@ -432,27 +432,27 @@ impl Attention {
                 let kv_seq_len = k.dims()[2];
                 let mask_dims = mask.dims();
 
-                // Check if we need to adjust the mask dimensions
+                // Only narrow when the target dimension is strictly longer; otherwise reuse as-is.
                 match mask.rank() {
                     2 => {
-                        // For 2D masks: (q_len, kv_len)
-                        if mask_dims[1] != kv_seq_len {
+                        // 2D masks: (q_len, kv_len)
+                        if mask_dims[1] > kv_seq_len {
                             Some(mask.narrow(1, 0, kv_seq_len)?)
                         } else {
                             Some(mask.clone())
                         }
                     }
                     3 => {
-                        // For 3D masks: (batch, q_len, kv_len)
-                        if mask_dims[2] != kv_seq_len {
+                        // 3D masks: (batch, q_len, kv_len)
+                        if mask_dims[2] > kv_seq_len {
                             Some(mask.narrow(2, 0, kv_seq_len)?)
                         } else {
                             Some(mask.clone())
                         }
                     }
                     4 => {
-                        // For 4D masks: (batch, heads, q_len, kv_len)
-                        if mask_dims[3] != kv_seq_len {
+                        // 4D masks: (batch, heads, q_len, kv_len)
+                        if mask_dims[3] > kv_seq_len {
                             Some(mask.narrow(3, 0, kv_seq_len)?)
                         } else {
                             Some(mask.clone())
