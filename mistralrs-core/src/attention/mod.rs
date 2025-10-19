@@ -123,6 +123,23 @@ impl Sdpa {
             return flash_attn(&q, &k, &v, flash_params, sdpa_params)?.transpose(1, 2);
         }
 
+        self.run_attention_noflash(q, k, v, mask, sdpa_params)
+    }
+
+    /// Same as `run_attention`, but no flash attention
+    #[allow(unused_variables, clippy::too_many_arguments)]
+    pub fn run_attention_noflash(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        mask: Option<&Tensor>,
+        sdpa_params: &SdpaParams,
+    ) -> Result<Tensor> {
+        let (b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()?;
+        let (_, _, _, k_head_dim) = k.dims4()?;
+        let (_, _, _, v_head_dim) = v.dims4()?;
+
         // We can use Metal SDPA (vector/full) if the mask is the correct size and head dims match.
         // If the mask is provided, then softcapping isn't allowed - default back to naive SDPA
         // Softcapping is implemented for vector SDPA.

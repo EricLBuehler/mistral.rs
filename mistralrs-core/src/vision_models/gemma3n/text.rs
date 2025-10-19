@@ -396,8 +396,13 @@ impl Attention {
         let ((k, v), is_shared_kv) = if let Some(kv_shared_layer_index) = self.kv_shared_layer_index
         {
             let shared_cache = &kv_caches[kv_shared_layer_index];
+            // Cast device because kv cache on prev layer might be different device
+            // https://github.com/EricLBuehler/mistral.rs/pull/1650#issuecomment-3393222444
             (
-                (shared_cache.k()?.unwrap(), shared_cache.v()?.unwrap()),
+                (
+                    shared_cache.k()?.unwrap().to_device(q.device())?,
+                    shared_cache.v()?.unwrap().to_device(q.device())?,
+                ),
                 true,
             )
         } else {
@@ -427,27 +432,27 @@ impl Attention {
                 let kv_seq_len = k.dims()[2];
                 let mask_dims = mask.dims();
 
-                // Check if we need to adjust the mask dimensions
+                // Only narrow when the target dimension is strictly longer; otherwise reuse as-is.
                 match mask.rank() {
                     2 => {
-                        // For 2D masks: (q_len, kv_len)
-                        if mask_dims[1] != kv_seq_len {
+                        // 2D masks: (q_len, kv_len)
+                        if mask_dims[1] > kv_seq_len {
                             Some(mask.narrow(1, 0, kv_seq_len)?)
                         } else {
                             Some(mask.clone())
                         }
                     }
                     3 => {
-                        // For 3D masks: (batch, q_len, kv_len)
-                        if mask_dims[2] != kv_seq_len {
+                        // 3D masks: (batch, q_len, kv_len)
+                        if mask_dims[2] > kv_seq_len {
                             Some(mask.narrow(2, 0, kv_seq_len)?)
                         } else {
                             Some(mask.clone())
                         }
                     }
                     4 => {
-                        // For 4D masks: (batch, heads, q_len, kv_len)
-                        if mask_dims[3] != kv_seq_len {
+                        // 4D masks: (batch, heads, q_len, kv_len)
+                        if mask_dims[3] > kv_seq_len {
                             Some(mask.narrow(3, 0, kv_seq_len)?)
                         } else {
                             Some(mask.clone())
