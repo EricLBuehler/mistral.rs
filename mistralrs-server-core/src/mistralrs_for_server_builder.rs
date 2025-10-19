@@ -619,8 +619,6 @@ impl MistralRsForServerBuilder {
         let mapper = init_mapper(&self.num_device_layers, &auto_device_map_params);
         let paged_attn = configure_paged_attn(&device, self.paged_attn);
 
-        // Allocate 0.5 GB of CPU memory just as a placeholder.
-        // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
         let cache_config = init_cache_config(
             self.paged_attn_block_size,
             self.paged_attn_gpu_mem,
@@ -1035,25 +1033,21 @@ fn init_cache_config(
     ) {
         (block_size, None, None, None, true, false) => Ok(Some(PagedAttentionConfig::new(
             block_size,
-            512,
             MemoryGpuConfig::ContextSize(max_seq_len),
             cache_type,
         )?)),
         (block_size, None, None, Some(ctxt), true, false) => Ok(Some(PagedAttentionConfig::new(
             block_size,
-            512,
             MemoryGpuConfig::ContextSize(ctxt),
             cache_type,
         )?)),
         (block_size, None, Some(f), None, true, false) => Ok(Some(PagedAttentionConfig::new(
             block_size,
-            512,
             MemoryGpuConfig::Utilization(f),
             cache_type,
         )?)),
         (block_size, Some(m), None, None, true, false) => Ok(Some(PagedAttentionConfig::new(
             block_size,
-            512,
             MemoryGpuConfig::MbAmount(m),
             cache_type,
         )?)),
@@ -1061,7 +1055,6 @@ fn init_cache_config(
             info!("Both memory size, and usage were specified, defaulting to the usage value.");
             Ok(Some(PagedAttentionConfig::new(
                 block_size,
-                512,
                 MemoryGpuConfig::Utilization(f),
                 cache_type,
             )?))
@@ -1070,7 +1063,6 @@ fn init_cache_config(
             info!("All memory size and ctxt len, defaulting to the context len value.");
             Ok(Some(PagedAttentionConfig::new(
                 block_size,
-                512,
                 MemoryGpuConfig::ContextSize(ctxt),
                 cache_type,
             )?))
@@ -1079,7 +1071,6 @@ fn init_cache_config(
             info!("Both ctxt len and usage were specified, defaulting to the usage value.");
             Ok(Some(PagedAttentionConfig::new(
                 block_size,
-                512,
                 MemoryGpuConfig::Utilization(f),
                 cache_type,
             )?))

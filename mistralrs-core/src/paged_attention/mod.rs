@@ -30,7 +30,6 @@ pub const DEFAULT_PAGED_ATTENTION_BLOCK_SIZE: usize = 32;
 #[derive(Clone, Copy)]
 pub struct PagedAttentionConfig {
     pub(crate) block_size: Option<usize>,
-    pub(crate) mem_cpu: usize,
     pub(crate) mem_gpu: MemoryGpuConfig,
     pub(crate) cache_type: PagedCacheType,
 }
@@ -38,13 +37,11 @@ pub struct PagedAttentionConfig {
 impl PagedAttentionConfig {
     pub fn new(
         block_size: Option<usize>,
-        mem_cpu: usize,
         mem_gpu: MemoryGpuConfig,
         cache_type: PagedCacheType,
     ) -> anyhow::Result<Self> {
         Ok(Self {
             block_size,
-            mem_cpu,
             mem_gpu,
             cache_type,
         })
@@ -97,7 +94,6 @@ macro_rules! ctxt_to_blocks {
 #[allow(clippy::too_many_arguments)]
 pub fn calculate_cache_config(
     mem_gpu: MemoryGpuConfig,
-    mem_cpu: usize,
     block_size: Option<usize>,
     dtype: DType,
     cache_type: PagedCacheType,
@@ -163,7 +159,6 @@ To raise this cap run: `sudo sysctl -w iogpu.wired_limit_mb=<desired_mb>`.",
     };
 
     let num_gpu_blocks = mb_to_blocks!(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
-    let num_cpu_blocks = mb_to_blocks!(mem_cpu * SIZE_IN_MB, dtype_size, block_size, config);
     if num_gpu_blocks == 0 {
         anyhow::bail!("Num GPU blocks is 0. This means there is not enough memory. Either reduce the memory amount/utilization/context size or disable PagedAttention.");
     }
@@ -176,7 +171,6 @@ To raise this cap run: `sudo sysctl -w iogpu.wired_limit_mb=<desired_mb>`.",
     Ok(CacheConfig {
         block_size,
         num_gpu_blocks,
-        num_cpu_blocks,
         cache_type,
     })
 }

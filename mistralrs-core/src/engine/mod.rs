@@ -449,8 +449,6 @@ impl Engine {
                                     CacheBackendMetadata::PagedAttention {
                                         metadata,
                                         blocks_to_copy: output.blocks_to_copy,
-                                        blocks_to_swap_in: output.blocks_to_swap_in,
-                                        blocks_to_swap_out: output.blocks_to_swap_out,
                                     },
                                 )
                                 .await

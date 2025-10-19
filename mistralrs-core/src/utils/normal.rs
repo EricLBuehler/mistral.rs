@@ -1,4 +1,5 @@
-#[allow(dead_code)]
+#![allow(dead_code, unused)]
+
 use std::{fmt::Display, str::FromStr};
 
 use anyhow::Result;

@@ -62,7 +62,6 @@ pub struct TextModelBuilder {
 /// Builder for PagedAttention metadata.
 pub struct PagedAttentionMetaBuilder {
     block_size: Option<usize>,
-    mem_cpu: usize,
     mem_gpu: MemoryGpuConfig,
     cache_type: PagedCacheType,
 }
@@ -71,7 +70,6 @@ impl Default for PagedAttentionMetaBuilder {
     fn default() -> Self {
         Self {
             block_size: None,
-            mem_cpu: 64,
             mem_gpu: MemoryGpuConfig::ContextSize(4096),
             cache_type: PagedCacheType::Auto,
         }
@@ -95,7 +93,7 @@ impl PagedAttentionMetaBuilder {
     }
 
     pub fn build(self) -> anyhow::Result<PagedAttentionConfig> {
-        PagedAttentionConfig::new(self.block_size, self.mem_cpu, self.mem_gpu, self.cache_type)
+        PagedAttentionConfig::new(self.block_size, self.mem_gpu, self.cache_type)
     }
 }
 

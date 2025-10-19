@@ -856,7 +856,6 @@ impl Loader for NormalLoader {
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
-                paged_attn_config.mem_cpu,
                 paged_attn_config.block_size,
                 dtype,
                 paged_attn_config.cache_type,
