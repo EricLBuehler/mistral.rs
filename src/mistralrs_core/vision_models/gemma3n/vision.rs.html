@@ -643,7 +643,7 @@
 <a href=#643 id=643 data-nosnippet>643</a>            softmax_scale: <span class="self">self</span>.scale <span class="kw">as </span>f32,
 <a href=#644 id=644 data-nosnippet>644</a>            sliding_window: <span class="prelude-val">None</span>,
 <a href=#645 id=645 data-nosnippet>645</a>        };
-<a href=#646 id=646 data-nosnippet>646</a>        <span class="kw">let </span><span class="kw-2">mut </span>o = Sdpa.run_attention(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>sdpa_params)<span class="question-mark">?</span>;
+<a href=#646 id=646 data-nosnippet>646</a>        <span class="kw">let </span><span class="kw-2">mut </span>o = Sdpa.run_attention_noflash(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>sdpa_params)<span class="question-mark">?</span>;
 <a href=#647 id=647 data-nosnippet>647</a>
 <a href=#648 id=648 data-nosnippet>648</a>        <span class="comment">// Reshape output back
 <a href=#649 id=649 data-nosnippet>649</a>        // [B, num_heads, H*W, value_dim] -&gt; [B, H*W, num_heads, value_dim] -&gt; [B, H, W, num_heads * value_dim]
