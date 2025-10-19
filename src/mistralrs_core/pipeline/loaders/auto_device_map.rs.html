@@ -192,155 +192,154 @@
 <a href=#192 id=192 data-nosnippet>192</a>        <span class="prelude-val">Some</span>(cfg) =&gt; {
 <a href=#193 id=193 data-nosnippet>193</a>            <span class="kw">let </span>cache = calculate_cache_config(
 <a href=#194 id=194 data-nosnippet>194</a>                cfg.mem_gpu,
-<a href=#195 id=195 data-nosnippet>195</a>                cfg.mem_cpu,
-<a href=#196 id=196 data-nosnippet>196</a>                <span class="prelude-val">Some</span>(cfg.block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE)),
-<a href=#197 id=197 data-nosnippet>197</a>                dtype,
-<a href=#198 id=198 data-nosnippet>198</a>                paged_attn_config
-<a href=#199 id=199 data-nosnippet>199</a>                    .map(|cfg| cfg.cache_type)
-<a href=#200 id=200 data-nosnippet>200</a>                    .unwrap_or_default(),
-<a href=#201 id=201 data-nosnippet>201</a>                <span class="kw-2">&amp;*</span>model_cfg,
-<a href=#202 id=202 data-nosnippet>202</a>                <span class="kw-2">&amp;</span>devices[<span class="number">0</span>],
-<a href=#203 id=203 data-nosnippet>203</a>                <span class="kw-2">&amp;</span>devices.iter().map(|d| <span class="prelude-val">Some</span>(d.clone())).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#204 id=204 data-nosnippet>204</a>                <span class="bool-val">true</span>,
-<a href=#205 id=205 data-nosnippet>205</a>            )<span class="question-mark">?</span>;
-<a href=#206 id=206 data-nosnippet>206</a>            <span class="kw">let </span>key_shape = calculate_key_block_shape(<span class="kw-2">&amp;*</span>model_cfg, dtype, cache.block_size);
-<a href=#207 id=207 data-nosnippet>207</a>            <span class="kw">let </span>key_sz =
-<a href=#208 id=208 data-nosnippet>208</a>                cache.num_gpu_blocks * key_shape.<span class="number">0 </span>* key_shape.<span class="number">1 </span>* key_shape.<span class="number">2 </span>* key_shape.<span class="number">3</span>;
-<a href=#209 id=209 data-nosnippet>209</a>            <span class="kw">let </span>val_shape = calculate_value_block_shape(<span class="kw-2">&amp;*</span>model_cfg, cache.block_size);
-<a href=#210 id=210 data-nosnippet>210</a>            <span class="kw">let </span>val_sz = cache.num_gpu_blocks * val_shape.<span class="number">0 </span>* val_shape.<span class="number">1 </span>* val_shape.<span class="number">2</span>;
-<a href=#211 id=211 data-nosnippet>211</a>            key_sz + val_sz
-<a href=#212 id=212 data-nosnippet>212</a>        }
-<a href=#213 id=213 data-nosnippet>213</a>        <span class="prelude-val">None </span>=&gt; {
-<a href=#214 id=214 data-nosnippet>214</a>            <span class="kw">let </span>key_shape = [
-<a href=#215 id=215 data-nosnippet>215</a>                max_batch_size,
-<a href=#216 id=216 data-nosnippet>216</a>                model_cfg.num_kv_heads(),
-<a href=#217 id=217 data-nosnippet>217</a>                max_seq_len,
-<a href=#218 id=218 data-nosnippet>218</a>                model_cfg.k_head_dim(),
-<a href=#219 id=219 data-nosnippet>219</a>            ];
-<a href=#220 id=220 data-nosnippet>220</a>            <span class="kw">let </span>val_shape = [
-<a href=#221 id=221 data-nosnippet>221</a>                max_batch_size,
-<a href=#222 id=222 data-nosnippet>222</a>                model_cfg.num_kv_heads(),
-<a href=#223 id=223 data-nosnippet>223</a>                max_seq_len,
-<a href=#224 id=224 data-nosnippet>224</a>                model_cfg.v_head_dim(),
-<a href=#225 id=225 data-nosnippet>225</a>            ];
-<a href=#226 id=226 data-nosnippet>226</a>            key_shape.iter().product::&lt;usize&gt;() + val_shape.iter().product::&lt;usize&gt;()
-<a href=#227 id=227 data-nosnippet>227</a>        }
-<a href=#228 id=228 data-nosnippet>228</a>    };
-<a href=#229 id=229 data-nosnippet>229</a>    <span class="kw">let </span>kv_cache_bytes = kv_cache_elems * dtype.size_in_bytes();
-<a href=#230 id=230 data-nosnippet>230</a>
-<a href=#231 id=231 data-nosnippet>231</a>    <span class="comment">// prepare available memory per device, CPU fallback last
-<a href=#232 id=232 data-nosnippet>232</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>avail = Vec::new();
-<a href=#233 id=233 data-nosnippet>233</a>    <span class="kw">for </span>dev <span class="kw">in </span>[devices, <span class="kw-2">&amp;</span>[Device::Cpu]].concat() {
-<a href=#234 id=234 data-nosnippet>234</a>        <span class="kw">let </span>a = MemoryUsage.get_memory_available(<span class="kw-2">&amp;</span>dev)<span class="question-mark">?</span>;
-<a href=#235 id=235 data-nosnippet>235</a>        avail.push((a, dev));
-<a href=#236 id=236 data-nosnippet>236</a>    }
-<a href=#237 id=237 data-nosnippet>237</a>    avail.reverse();
-<a href=#238 id=238 data-nosnippet>238</a>    layer_sizes_in_bytes.reverse();
-<a href=#239 id=239 data-nosnippet>239</a>
-<a href=#240 id=240 data-nosnippet>240</a>    <span class="kw">let </span><span class="kw-2">mut </span>mappings = Vec::new();
-<a href=#241 id=241 data-nosnippet>241</a>    <span class="macro">info!</span>(<span class="string">"Using automatic device mapping parameters: {params}."</span>);
-<a href=#242 id=242 data-nosnippet>242</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(subs) = loader.non_mapped_sub_models() {
-<a href=#243 id=243 data-nosnippet>243</a>        <span class="kw">let </span>(<span class="kw">_</span>, last) = avail.last().unwrap();
-<a href=#244 id=244 data-nosnippet>244</a>        <span class="macro">info!</span>(
-<a href=#245 id=245 data-nosnippet>245</a>            <span class="string">"The following sub-models will not be device mapped and will be loaded on {}: {}"</span>,
-<a href=#246 id=246 data-nosnippet>246</a>            last.device_pretty_repr(),
-<a href=#247 id=247 data-nosnippet>247</a>            subs.iter().map(|x| x.to_string()).join(<span class="string">", "</span>)
-<a href=#248 id=248 data-nosnippet>248</a>        );
-<a href=#249 id=249 data-nosnippet>249</a>    }
-<a href=#250 id=250 data-nosnippet>250</a>
-<a href=#251 id=251 data-nosnippet>251</a>    <span class="kw">let </span><span class="kw-2">mut </span>ordinal = <span class="number">0</span>;
-<a href=#252 id=252 data-nosnippet>252</a>    <span class="kw">let </span><span class="kw-2">mut </span>layer = <span class="number">0</span>;
-<a href=#253 id=253 data-nosnippet>253</a>    <span class="kw">let </span>avail_copy = avail.clone();
-<a href=#254 id=254 data-nosnippet>254</a>    <span class="kw">let </span><span class="kw-2">mut </span>includes_cpu = <span class="bool-val">false</span>;
-<a href=#255 id=255 data-nosnippet>255</a>    <span class="kw">while </span>remaining &gt; <span class="number">0 </span>&amp;&amp; !avail.is_empty() {
-<a href=#256 id=256 data-nosnippet>256</a>        <span class="kw">let </span>(cap, dev) = avail
-<a href=#257 id=257 data-nosnippet>257</a>            .pop()
-<a href=#258 id=258 data-nosnippet>258</a>            .context(<span class="string">"No more devices to map to. The model does not fit on this system."</span>)<span class="question-mark">?</span>;
-<a href=#259 id=259 data-nosnippet>259</a>
-<a href=#260 id=260 data-nosnippet>260</a>        <span class="comment">// All usage of 90% of the memory as a maximum.
-<a href=#261 id=261 data-nosnippet>261</a>        </span><span class="attr">#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-<a href=#262 id=262 data-nosnippet>262</a>        </span><span class="kw">let </span>cap = (cap <span class="kw">as </span>f64 * <span class="number">0.90</span>) <span class="kw">as </span>usize;
-<a href=#263 id=263 data-nosnippet>263</a>
-<a href=#264 id=264 data-nosnippet>264</a>        <span class="comment">// Algorithm is to check the following:
-<a href=#265 id=265 data-nosnippet>265</a>        // 1) (no mapping) if *everything* fits on the first dev (non mapped and mapped)
-<a href=#266 id=266 data-nosnippet>266</a>        // 2) if the mapped activations plus remaining fits on the nth device
-<a href=#267 id=267 data-nosnippet>267</a>        // 3) common case, iteratively find the optimal amount of layers to put on the nth device
-<a href=#268 id=268 data-nosnippet>268</a>        //   - if this is the first dev: must hold the non-mapped act and non-mapped model
-<a href=#269 id=269 data-nosnippet>269</a>        //   - otherwise, must hold the mapped act
-<a href=#270 id=270 data-nosnippet>270</a>        </span><span class="kw">let </span>required_whole_capacity = <span class="kw">if </span>ordinal == <span class="number">0 </span>{
-<a href=#271 id=271 data-nosnippet>271</a>            remaining
-<a href=#272 id=272 data-nosnippet>272</a>                + non_mapped_max.max(mapped_max)
-<a href=#273 id=273 data-nosnippet>273</a>                + non_mapped_size_in_bytes
-<a href=#274 id=274 data-nosnippet>274</a>                + kv_cache_bytes * (num_layers - layer)
-<a href=#275 id=275 data-nosnippet>275</a>        } <span class="kw">else </span>{
-<a href=#276 id=276 data-nosnippet>276</a>            remaining + mapped_max + kv_cache_bytes * (num_layers - layer)
-<a href=#277 id=277 data-nosnippet>277</a>        };
-<a href=#278 id=278 data-nosnippet>278</a>
-<a href=#279 id=279 data-nosnippet>279</a>        <span class="kw">let </span>layers_on_dev = <span class="kw">if </span>cap &gt;= required_whole_capacity {
-<a href=#280 id=280 data-nosnippet>280</a>            remaining = <span class="number">0</span>;
-<a href=#281 id=281 data-nosnippet>281</a>            num_layers - layer
-<a href=#282 id=282 data-nosnippet>282</a>        } <span class="kw">else </span>{
-<a href=#283 id=283 data-nosnippet>283</a>            <span class="kw">let </span><span class="kw-2">mut </span>used = mapped_max;
-<a href=#284 id=284 data-nosnippet>284</a>            <span class="kw">let </span><span class="kw-2">mut </span>used_no_act = <span class="number">0</span>;
-<a href=#285 id=285 data-nosnippet>285</a>            <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
-<a href=#286 id=286 data-nosnippet>286</a>            <span class="kw">if </span>ordinal == <span class="number">0 </span>{
-<a href=#287 id=287 data-nosnippet>287</a>                used = used.max(non_mapped_max) + non_mapped_size_in_bytes;
-<a href=#288 id=288 data-nosnippet>288</a>                used_no_act += non_mapped_size_in_bytes;
-<a href=#289 id=289 data-nosnippet>289</a>            }
-<a href=#290 id=290 data-nosnippet>290</a>            <span class="kw">while let </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>sz) = layer_sizes_in_bytes.last() {
-<a href=#291 id=291 data-nosnippet>291</a>                <span class="kw">let </span>delta = sz + kv_cache_bytes;
-<a href=#292 id=292 data-nosnippet>292</a>                <span class="kw">if </span>used + delta &gt; cap {
-<a href=#293 id=293 data-nosnippet>293</a>                    <span class="kw">break</span>;
-<a href=#294 id=294 data-nosnippet>294</a>                }
-<a href=#295 id=295 data-nosnippet>295</a>                layer_sizes_in_bytes.pop();
-<a href=#296 id=296 data-nosnippet>296</a>                used += delta;
-<a href=#297 id=297 data-nosnippet>297</a>                used_no_act += delta;
-<a href=#298 id=298 data-nosnippet>298</a>                count += <span class="number">1</span>;
-<a href=#299 id=299 data-nosnippet>299</a>            }
-<a href=#300 id=300 data-nosnippet>300</a>            <span class="kw">if </span>count &gt; <span class="number">0 </span>{
-<a href=#301 id=301 data-nosnippet>301</a>                remaining = remaining.saturating_sub(used_no_act);
-<a href=#302 id=302 data-nosnippet>302</a>            } <span class="kw">else </span>{
-<a href=#303 id=303 data-nosnippet>303</a>                <span class="macro">warn!</span>(
-<a href=#304 id=304 data-nosnippet>304</a>                    <span class="string">"Device {} can fit 0 layers. Consider reducing auto map params from current: {params} (ex. reducing max seq len or max num images)"</span>,
-<a href=#305 id=305 data-nosnippet>305</a>                    dev.device_pretty_repr(),
-<a href=#306 id=306 data-nosnippet>306</a>                );
-<a href=#307 id=307 data-nosnippet>307</a>                ordinal += <span class="number">1</span>;
-<a href=#308 id=308 data-nosnippet>308</a>                <span class="kw">continue</span>;
-<a href=#309 id=309 data-nosnippet>309</a>            }
-<a href=#310 id=310 data-nosnippet>310</a>            count
-<a href=#311 id=311 data-nosnippet>311</a>        };
-<a href=#312 id=312 data-nosnippet>312</a>        <span class="kw">if </span>!dev.is_cpu() {
-<a href=#313 id=313 data-nosnippet>313</a>            mappings.push(DeviceLayerMapMetadata {
-<a href=#314 id=314 data-nosnippet>314</a>                ordinal,
-<a href=#315 id=315 data-nosnippet>315</a>                layers: layers_on_dev,
-<a href=#316 id=316 data-nosnippet>316</a>            });
-<a href=#317 id=317 data-nosnippet>317</a>            ordinal += <span class="number">1</span>;
-<a href=#318 id=318 data-nosnippet>318</a>        } <span class="kw">else </span>{
-<a href=#319 id=319 data-nosnippet>319</a>            includes_cpu = <span class="bool-val">true</span>;
-<a href=#320 id=320 data-nosnippet>320</a>        }
-<a href=#321 id=321 data-nosnippet>321</a>        layer += layers_on_dev;
-<a href=#322 id=322 data-nosnippet>322</a>    }
-<a href=#323 id=323 data-nosnippet>323</a>    <span class="kw">if </span>remaining &gt; <span class="number">0 </span>{
-<a href=#324 id=324 data-nosnippet>324</a>        <span class="kw">let </span>over = <span class="macro">b_to_mb!</span>(remaining);
-<a href=#325 id=325 data-nosnippet>325</a>        <span class="macro">anyhow::bail!</span>(
-<a href=#326 id=326 data-nosnippet>326</a>            <span class="string">"This model does not fit on the devices {:?}, and exceeds total capacity by {}MB. Auto device mapping params: {params}"</span>,
-<a href=#327 id=327 data-nosnippet>327</a>            avail_copy.iter().rev().map(|(a, d)| <span class="macro">format!</span>(<span class="string">"{} (avail: {}MB)"</span>, d.device_pretty_repr(), <span class="macro">b_to_mb!</span>(a))).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#328 id=328 data-nosnippet>328</a>            over
-<a href=#329 id=329 data-nosnippet>329</a>        );
-<a href=#330 id=330 data-nosnippet>330</a>    }
-<a href=#331 id=331 data-nosnippet>331</a>    <span class="kw">if </span>paged_attn_config.is_some_and(|<span class="kw">_</span>| includes_cpu) {
-<a href=#332 id=332 data-nosnippet>332</a>        <span class="kw">return </span>get_device_layers(
-<a href=#333 id=333 data-nosnippet>333</a>            loader,
-<a href=#334 id=334 data-nosnippet>334</a>            config,
-<a href=#335 id=335 data-nosnippet>335</a>            num_layers,
-<a href=#336 id=336 data-nosnippet>336</a>            layer_sizes_in_bytes,
-<a href=#337 id=337 data-nosnippet>337</a>            non_mapped_size_in_bytes,
-<a href=#338 id=338 data-nosnippet>338</a>            total_model_size_in_bytes,
-<a href=#339 id=339 data-nosnippet>339</a>            devices,
-<a href=#340 id=340 data-nosnippet>340</a>            dtype,
-<a href=#341 id=341 data-nosnippet>341</a>            params,
-<a href=#342 id=342 data-nosnippet>342</a>            <span class="prelude-val">None</span>,
-<a href=#343 id=343 data-nosnippet>343</a>        );
-<a href=#344 id=344 data-nosnippet>344</a>    }
-<a href=#345 id=345 data-nosnippet>345</a>    <span class="prelude-val">Ok</span>(DeviceMapMetadata::from_num_device_layers(mappings))
-<a href=#346 id=346 data-nosnippet>346</a>}</code></pre></div></section></main></body></html>
+<a href=#195 id=195 data-nosnippet>195</a>                <span class="prelude-val">Some</span>(cfg.block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE)),
+<a href=#196 id=196 data-nosnippet>196</a>                dtype,
+<a href=#197 id=197 data-nosnippet>197</a>                paged_attn_config
+<a href=#198 id=198 data-nosnippet>198</a>                    .map(|cfg| cfg.cache_type)
+<a href=#199 id=199 data-nosnippet>199</a>                    .unwrap_or_default(),
+<a href=#200 id=200 data-nosnippet>200</a>                <span class="kw-2">&amp;*</span>model_cfg,
+<a href=#201 id=201 data-nosnippet>201</a>                <span class="kw-2">&amp;</span>devices[<span class="number">0</span>],
+<a href=#202 id=202 data-nosnippet>202</a>                <span class="kw-2">&amp;</span>devices.iter().map(|d| <span class="prelude-val">Some</span>(d.clone())).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#203 id=203 data-nosnippet>203</a>                <span class="bool-val">true</span>,
+<a href=#204 id=204 data-nosnippet>204</a>            )<span class="question-mark">?</span>;
+<a href=#205 id=205 data-nosnippet>205</a>            <span class="kw">let </span>key_shape = calculate_key_block_shape(<span class="kw-2">&amp;*</span>model_cfg, dtype, cache.block_size);
+<a href=#206 id=206 data-nosnippet>206</a>            <span class="kw">let </span>key_sz =
+<a href=#207 id=207 data-nosnippet>207</a>                cache.num_gpu_blocks * key_shape.<span class="number">0 </span>* key_shape.<span class="number">1 </span>* key_shape.<span class="number">2 </span>* key_shape.<span class="number">3</span>;
+<a href=#208 id=208 data-nosnippet>208</a>            <span class="kw">let </span>val_shape = calculate_value_block_shape(<span class="kw-2">&amp;*</span>model_cfg, cache.block_size);
+<a href=#209 id=209 data-nosnippet>209</a>            <span class="kw">let </span>val_sz = cache.num_gpu_blocks * val_shape.<span class="number">0 </span>* val_shape.<span class="number">1 </span>* val_shape.<span class="number">2</span>;
+<a href=#210 id=210 data-nosnippet>210</a>            key_sz + val_sz
+<a href=#211 id=211 data-nosnippet>211</a>        }
+<a href=#212 id=212 data-nosnippet>212</a>        <span class="prelude-val">None </span>=&gt; {
+<a href=#213 id=213 data-nosnippet>213</a>            <span class="kw">let </span>key_shape = [
+<a href=#214 id=214 data-nosnippet>214</a>                max_batch_size,
+<a href=#215 id=215 data-nosnippet>215</a>                model_cfg.num_kv_heads(),
+<a href=#216 id=216 data-nosnippet>216</a>                max_seq_len,
+<a href=#217 id=217 data-nosnippet>217</a>                model_cfg.k_head_dim(),
+<a href=#218 id=218 data-nosnippet>218</a>            ];
+<a href=#219 id=219 data-nosnippet>219</a>            <span class="kw">let </span>val_shape = [
+<a href=#220 id=220 data-nosnippet>220</a>                max_batch_size,
+<a href=#221 id=221 data-nosnippet>221</a>                model_cfg.num_kv_heads(),
+<a href=#222 id=222 data-nosnippet>222</a>                max_seq_len,
+<a href=#223 id=223 data-nosnippet>223</a>                model_cfg.v_head_dim(),
+<a href=#224 id=224 data-nosnippet>224</a>            ];
+<a href=#225 id=225 data-nosnippet>225</a>            key_shape.iter().product::&lt;usize&gt;() + val_shape.iter().product::&lt;usize&gt;()
+<a href=#226 id=226 data-nosnippet>226</a>        }
+<a href=#227 id=227 data-nosnippet>227</a>    };
+<a href=#228 id=228 data-nosnippet>228</a>    <span class="kw">let </span>kv_cache_bytes = kv_cache_elems * dtype.size_in_bytes();
+<a href=#229 id=229 data-nosnippet>229</a>
+<a href=#230 id=230 data-nosnippet>230</a>    <span class="comment">// prepare available memory per device, CPU fallback last
+<a href=#231 id=231 data-nosnippet>231</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>avail = Vec::new();
+<a href=#232 id=232 data-nosnippet>232</a>    <span class="kw">for </span>dev <span class="kw">in </span>[devices, <span class="kw-2">&amp;</span>[Device::Cpu]].concat() {
+<a href=#233 id=233 data-nosnippet>233</a>        <span class="kw">let </span>a = MemoryUsage.get_memory_available(<span class="kw-2">&amp;</span>dev)<span class="question-mark">?</span>;
+<a href=#234 id=234 data-nosnippet>234</a>        avail.push((a, dev));
+<a href=#235 id=235 data-nosnippet>235</a>    }
+<a href=#236 id=236 data-nosnippet>236</a>    avail.reverse();
+<a href=#237 id=237 data-nosnippet>237</a>    layer_sizes_in_bytes.reverse();
+<a href=#238 id=238 data-nosnippet>238</a>
+<a href=#239 id=239 data-nosnippet>239</a>    <span class="kw">let </span><span class="kw-2">mut </span>mappings = Vec::new();
+<a href=#240 id=240 data-nosnippet>240</a>    <span class="macro">info!</span>(<span class="string">"Using automatic device mapping parameters: {params}."</span>);
+<a href=#241 id=241 data-nosnippet>241</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(subs) = loader.non_mapped_sub_models() {
+<a href=#242 id=242 data-nosnippet>242</a>        <span class="kw">let </span>(<span class="kw">_</span>, last) = avail.last().unwrap();
+<a href=#243 id=243 data-nosnippet>243</a>        <span class="macro">info!</span>(
+<a href=#244 id=244 data-nosnippet>244</a>            <span class="string">"The following sub-models will not be device mapped and will be loaded on {}: {}"</span>,
+<a href=#245 id=245 data-nosnippet>245</a>            last.device_pretty_repr(),
+<a href=#246 id=246 data-nosnippet>246</a>            subs.iter().map(|x| x.to_string()).join(<span class="string">", "</span>)
+<a href=#247 id=247 data-nosnippet>247</a>        );
+<a href=#248 id=248 data-nosnippet>248</a>    }
+<a href=#249 id=249 data-nosnippet>249</a>
+<a href=#250 id=250 data-nosnippet>250</a>    <span class="kw">let </span><span class="kw-2">mut </span>ordinal = <span class="number">0</span>;
+<a href=#251 id=251 data-nosnippet>251</a>    <span class="kw">let </span><span class="kw-2">mut </span>layer = <span class="number">0</span>;
+<a href=#252 id=252 data-nosnippet>252</a>    <span class="kw">let </span>avail_copy = avail.clone();
+<a href=#253 id=253 data-nosnippet>253</a>    <span class="kw">let </span><span class="kw-2">mut </span>includes_cpu = <span class="bool-val">false</span>;
+<a href=#254 id=254 data-nosnippet>254</a>    <span class="kw">while </span>remaining &gt; <span class="number">0 </span>&amp;&amp; !avail.is_empty() {
+<a href=#255 id=255 data-nosnippet>255</a>        <span class="kw">let </span>(cap, dev) = avail
+<a href=#256 id=256 data-nosnippet>256</a>            .pop()
+<a href=#257 id=257 data-nosnippet>257</a>            .context(<span class="string">"No more devices to map to. The model does not fit on this system."</span>)<span class="question-mark">?</span>;
+<a href=#258 id=258 data-nosnippet>258</a>
+<a href=#259 id=259 data-nosnippet>259</a>        <span class="comment">// All usage of 90% of the memory as a maximum.
+<a href=#260 id=260 data-nosnippet>260</a>        </span><span class="attr">#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href=#261 id=261 data-nosnippet>261</a>        </span><span class="kw">let </span>cap = (cap <span class="kw">as </span>f64 * <span class="number">0.90</span>) <span class="kw">as </span>usize;
+<a href=#262 id=262 data-nosnippet>262</a>
+<a href=#263 id=263 data-nosnippet>263</a>        <span class="comment">// Algorithm is to check the following:
+<a href=#264 id=264 data-nosnippet>264</a>        // 1) (no mapping) if *everything* fits on the first dev (non mapped and mapped)
+<a href=#265 id=265 data-nosnippet>265</a>        // 2) if the mapped activations plus remaining fits on the nth device
+<a href=#266 id=266 data-nosnippet>266</a>        // 3) common case, iteratively find the optimal amount of layers to put on the nth device
+<a href=#267 id=267 data-nosnippet>267</a>        //   - if this is the first dev: must hold the non-mapped act and non-mapped model
+<a href=#268 id=268 data-nosnippet>268</a>        //   - otherwise, must hold the mapped act
+<a href=#269 id=269 data-nosnippet>269</a>        </span><span class="kw">let </span>required_whole_capacity = <span class="kw">if </span>ordinal == <span class="number">0 </span>{
+<a href=#270 id=270 data-nosnippet>270</a>            remaining
+<a href=#271 id=271 data-nosnippet>271</a>                + non_mapped_max.max(mapped_max)
+<a href=#272 id=272 data-nosnippet>272</a>                + non_mapped_size_in_bytes
+<a href=#273 id=273 data-nosnippet>273</a>                + kv_cache_bytes * (num_layers - layer)
+<a href=#274 id=274 data-nosnippet>274</a>        } <span class="kw">else </span>{
+<a href=#275 id=275 data-nosnippet>275</a>            remaining + mapped_max + kv_cache_bytes * (num_layers - layer)
+<a href=#276 id=276 data-nosnippet>276</a>        };
+<a href=#277 id=277 data-nosnippet>277</a>
+<a href=#278 id=278 data-nosnippet>278</a>        <span class="kw">let </span>layers_on_dev = <span class="kw">if </span>cap &gt;= required_whole_capacity {
+<a href=#279 id=279 data-nosnippet>279</a>            remaining = <span class="number">0</span>;
+<a href=#280 id=280 data-nosnippet>280</a>            num_layers - layer
+<a href=#281 id=281 data-nosnippet>281</a>        } <span class="kw">else </span>{
+<a href=#282 id=282 data-nosnippet>282</a>            <span class="kw">let </span><span class="kw-2">mut </span>used = mapped_max;
+<a href=#283 id=283 data-nosnippet>283</a>            <span class="kw">let </span><span class="kw-2">mut </span>used_no_act = <span class="number">0</span>;
+<a href=#284 id=284 data-nosnippet>284</a>            <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
+<a href=#285 id=285 data-nosnippet>285</a>            <span class="kw">if </span>ordinal == <span class="number">0 </span>{
+<a href=#286 id=286 data-nosnippet>286</a>                used = used.max(non_mapped_max) + non_mapped_size_in_bytes;
+<a href=#287 id=287 data-nosnippet>287</a>                used_no_act += non_mapped_size_in_bytes;
+<a href=#288 id=288 data-nosnippet>288</a>            }
+<a href=#289 id=289 data-nosnippet>289</a>            <span class="kw">while let </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>sz) = layer_sizes_in_bytes.last() {
+<a href=#290 id=290 data-nosnippet>290</a>                <span class="kw">let </span>delta = sz + kv_cache_bytes;
+<a href=#291 id=291 data-nosnippet>291</a>                <span class="kw">if </span>used + delta &gt; cap {
+<a href=#292 id=292 data-nosnippet>292</a>                    <span class="kw">break</span>;
+<a href=#293 id=293 data-nosnippet>293</a>                }
+<a href=#294 id=294 data-nosnippet>294</a>                layer_sizes_in_bytes.pop();
+<a href=#295 id=295 data-nosnippet>295</a>                used += delta;
+<a href=#296 id=296 data-nosnippet>296</a>                used_no_act += delta;
+<a href=#297 id=297 data-nosnippet>297</a>                count += <span class="number">1</span>;
+<a href=#298 id=298 data-nosnippet>298</a>            }
+<a href=#299 id=299 data-nosnippet>299</a>            <span class="kw">if </span>count &gt; <span class="number">0 </span>{
+<a href=#300 id=300 data-nosnippet>300</a>                remaining = remaining.saturating_sub(used_no_act);
+<a href=#301 id=301 data-nosnippet>301</a>            } <span class="kw">else </span>{
+<a href=#302 id=302 data-nosnippet>302</a>                <span class="macro">warn!</span>(
+<a href=#303 id=303 data-nosnippet>303</a>                    <span class="string">"Device {} can fit 0 layers. Consider reducing auto map params from current: {params} (ex. reducing max seq len or max num images)"</span>,
+<a href=#304 id=304 data-nosnippet>304</a>                    dev.device_pretty_repr(),
+<a href=#305 id=305 data-nosnippet>305</a>                );
+<a href=#306 id=306 data-nosnippet>306</a>                ordinal += <span class="number">1</span>;
+<a href=#307 id=307 data-nosnippet>307</a>                <span class="kw">continue</span>;
+<a href=#308 id=308 data-nosnippet>308</a>            }
+<a href=#309 id=309 data-nosnippet>309</a>            count
+<a href=#310 id=310 data-nosnippet>310</a>        };
+<a href=#311 id=311 data-nosnippet>311</a>        <span class="kw">if </span>!dev.is_cpu() {
+<a href=#312 id=312 data-nosnippet>312</a>            mappings.push(DeviceLayerMapMetadata {
+<a href=#313 id=313 data-nosnippet>313</a>                ordinal,
+<a href=#314 id=314 data-nosnippet>314</a>                layers: layers_on_dev,
+<a href=#315 id=315 data-nosnippet>315</a>            });
+<a href=#316 id=316 data-nosnippet>316</a>            ordinal += <span class="number">1</span>;
+<a href=#317 id=317 data-nosnippet>317</a>        } <span class="kw">else </span>{
+<a href=#318 id=318 data-nosnippet>318</a>            includes_cpu = <span class="bool-val">true</span>;
+<a href=#319 id=319 data-nosnippet>319</a>        }
+<a href=#320 id=320 data-nosnippet>320</a>        layer += layers_on_dev;
+<a href=#321 id=321 data-nosnippet>321</a>    }
+<a href=#322 id=322 data-nosnippet>322</a>    <span class="kw">if </span>remaining &gt; <span class="number">0 </span>{
+<a href=#323 id=323 data-nosnippet>323</a>        <span class="kw">let </span>over = <span class="macro">b_to_mb!</span>(remaining);
+<a href=#324 id=324 data-nosnippet>324</a>        <span class="macro">anyhow::bail!</span>(
+<a href=#325 id=325 data-nosnippet>325</a>            <span class="string">"This model does not fit on the devices {:?}, and exceeds total capacity by {}MB. Auto device mapping params: {params}"</span>,
+<a href=#326 id=326 data-nosnippet>326</a>            avail_copy.iter().rev().map(|(a, d)| <span class="macro">format!</span>(<span class="string">"{} (avail: {}MB)"</span>, d.device_pretty_repr(), <span class="macro">b_to_mb!</span>(a))).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#327 id=327 data-nosnippet>327</a>            over
+<a href=#328 id=328 data-nosnippet>328</a>        );
+<a href=#329 id=329 data-nosnippet>329</a>    }
+<a href=#330 id=330 data-nosnippet>330</a>    <span class="kw">if </span>paged_attn_config.is_some_and(|<span class="kw">_</span>| includes_cpu) {
+<a href=#331 id=331 data-nosnippet>331</a>        <span class="kw">return </span>get_device_layers(
+<a href=#332 id=332 data-nosnippet>332</a>            loader,
+<a href=#333 id=333 data-nosnippet>333</a>            config,
+<a href=#334 id=334 data-nosnippet>334</a>            num_layers,
+<a href=#335 id=335 data-nosnippet>335</a>            layer_sizes_in_bytes,
+<a href=#336 id=336 data-nosnippet>336</a>            non_mapped_size_in_bytes,
+<a href=#337 id=337 data-nosnippet>337</a>            total_model_size_in_bytes,
+<a href=#338 id=338 data-nosnippet>338</a>            devices,
+<a href=#339 id=339 data-nosnippet>339</a>            dtype,
+<a href=#340 id=340 data-nosnippet>340</a>            params,
+<a href=#341 id=341 data-nosnippet>341</a>            <span class="prelude-val">None</span>,
+<a href=#342 id=342 data-nosnippet>342</a>        );
+<a href=#343 id=343 data-nosnippet>343</a>    }
+<a href=#344 id=344 data-nosnippet>344</a>    <span class="prelude-val">Ok</span>(DeviceMapMetadata::from_num_device_layers(mappings))
+<a href=#345 id=345 data-nosnippet>345</a>}</code></pre></div></section></main></body></html>
