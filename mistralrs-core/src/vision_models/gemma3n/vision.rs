@@ -643,7 +643,7 @@ impl MultiQueryAttention2d {
             softmax_scale: self.scale as f32,
             sliding_window: None,
         };
-        let mut o = Sdpa.run_attention(&q, &k, &v, None, None, &sdpa_params)?;
+        let mut o = Sdpa.run_attention_noflash(&q, &k, &v, None, &sdpa_params)?;
 
         // Reshape output back
         // [B, num_heads, H*W, value_dim] -> [B, H*W, num_heads, value_dim] -> [B, H, W, num_heads * value_dim]
