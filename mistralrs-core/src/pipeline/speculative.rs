@@ -614,8 +614,6 @@ impl Pipeline for SpeculativePipeline {
             CacheBackendMetadata::PagedAttention {
                 metadata: _,
                 blocks_to_copy: _,
-                blocks_to_swap_in: _,
-                blocks_to_swap_out: _,
             } => unreachable!(),
         }
     }

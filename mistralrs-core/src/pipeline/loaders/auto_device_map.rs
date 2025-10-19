@@ -192,7 +192,6 @@ pub fn get_device_layers(
         Some(cfg) => {
             let cache = calculate_cache_config(
                 cfg.mem_gpu,
-                cfg.mem_cpu,
                 Some(cfg.block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE)),
                 dtype,
                 paged_attn_config

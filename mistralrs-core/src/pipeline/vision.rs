@@ -726,7 +726,6 @@ impl Loader for VisionLoader {
             );
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
-                paged_attn_config.mem_cpu,
                 paged_attn_config.block_size,
                 dtype,
                 paged_attn_config.cache_type,

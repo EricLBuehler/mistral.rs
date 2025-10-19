@@ -43,7 +43,6 @@ impl FromStr for PagedCacheType {
 pub struct CacheConfig {
     pub block_size: usize,
     pub num_gpu_blocks: usize,
-    pub num_cpu_blocks: usize,
     pub cache_type: PagedCacheType,
 }
 
@@ -76,29 +75,10 @@ impl CacheEngine {
 }
 
 impl CacheEngine {
-    pub fn execute_scheduler_ops(
-        &self,
-        blocks_to_swap_in: &HashMap<usize, usize>,
-        blocks_to_swap_out: &HashMap<usize, usize>,
-        blocks_to_copy: &HashMap<usize, Vec<usize>>,
-    ) -> Result<()> {
-        if !blocks_to_swap_in.is_empty() {
-            self.swap_in(blocks_to_swap_in)?;
-        }
-        if !blocks_to_swap_out.is_empty() {
-            self.swap_out(blocks_to_swap_out)?;
-        }
+    pub fn execute_scheduler_ops(&self, blocks_to_copy: &HashMap<usize, Vec<usize>>) -> Result<()> {
         if !blocks_to_copy.is_empty() {
             self.copy(blocks_to_copy)?;
         }
-        Ok(())
-    }
-
-    pub fn swap_in(&self, _src_to_dst: &HashMap<usize, usize>) -> Result<()> {
-        Ok(())
-    }
-
-    pub fn swap_out(&self, _src_to_dst: &HashMap<usize, usize>) -> Result<()> {
         Ok(())
     }
 
