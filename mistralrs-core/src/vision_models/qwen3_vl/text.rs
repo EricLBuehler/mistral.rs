@@ -1,9 +1,10 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
-    ColumnParallelLayer, MatMul, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+    ColumnParallelLayer, MatMul, NonZeroOp, QuantMethod, ReplicatedLayer, RowParallelLayer,
+    ShardedVarBuilder,
 };
 
 use super::config::TextConfig;
@@ -466,9 +467,11 @@ impl Qwen3VLTextModel {
         mut xs: Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        position_ids: &Tensor,
+        _position_ids: &Tensor,
         context_lens: Vec<(usize, usize)>,
         flash_params: &FlashParams,
+        visual_pos_masks: Option<&Tensor>,
+        deepstack_visual_embeds: Option<&[Tensor]>,
     ) -> Result<Tensor> {
         let cache = &mut self.cache.normal().0;
 
@@ -483,7 +486,16 @@ impl Qwen3VLTextModel {
                 seqlen_offsets,
                 &mut cache[i],
                 flash_params,
-            )?
+            )?;
+
+            // Integrate DeepStack visual features when provided.
+            if let (Some(visual_pos_masks), Some(deepstack)) =
+                (visual_pos_masks, deepstack_visual_embeds)
+            {
+                if i < deepstack.len() {
+                    xs = self.deepstack_process(xs, visual_pos_masks, &deepstack[i])?;
+                }
+            }
         }
         let xs = xs.to_device(&self.device)?;
         let mut xs = xs.apply(&self.norm)?;
@@ -491,6 +503,42 @@ impl Qwen3VLTextModel {
             xs = xs.to_dtype(t)?;
         }
         extract_logits(&self.lm_head.forward(&xs)?, context_lens)
+    }
+
+    fn deepstack_process(
+        &self,
+        hidden_states: Tensor,
+        visual_pos_masks: &Tensor,
+        visual_embeds: &Tensor,
+    ) -> Result<Tensor> {
+        let (batch, seq, hidden) = hidden_states.dims3()?;
+        let flat = hidden_states.reshape((batch * seq, hidden))?;
+        let visual_embeds = visual_embeds
+            .to_device(flat.device())?
+            .to_dtype(flat.dtype())?;
+        let mask = visual_pos_masks.to_dtype(DType::U8)?;
+        let indices = mask.flatten_all()?.nonzero()?.squeeze(1)?;
+        let indices_vec = indices.to_vec1::<i64>()?;
+
+        if indices_vec.len() != visual_embeds.dim(0)? {
+            candle_core::bail!(
+                "Mismatch between DeepStack visual embeds ({}) and mask positions ({})",
+                visual_embeds.dim(0)?,
+                indices_vec.len()
+            );
+        }
+
+        let mut updates = Tensor::zeros((batch * seq, hidden), flat.dtype(), flat.device())?;
+        for (row_idx, &flat_idx) in indices_vec.iter().enumerate() {
+            let emb_row = visual_embeds.i(row_idx)?;
+            updates = updates.slice_assign(
+                &[flat_idx as usize..flat_idx as usize + 1, 0..updates.dim(1)?],
+                &emb_row.unsqueeze(0)?,
+            )?;
+        }
+
+        let flat = (flat + updates)?;
+        flat.reshape((batch, seq, hidden))
     }
 }
 
