@@ -32,7 +32,10 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    sync::{mpsc::Receiver, Mutex},
+    sync::{
+        mpsc::{error::TryRecvError, Receiver},
+        Mutex,
+    },
     task::JoinHandle,
 };
 
@@ -205,23 +208,75 @@ impl Engine {
         let rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
         let mut last_completion_ids: Vec<usize> = vec![];
         'lp: loop {
-            if matches!(
-                ENGINE_INSTRUCTIONS
-                    .lock()
-                    .expect("`ENGINE_INSTRUCTIONS` was poisoned")
-                    .get(get_mut_arcmutex!(self.id).deref()),
-                Some(Some(EngineInstruction::Terminate))
-            ) {
+            let should_terminate = || {
+                matches!(
+                    ENGINE_INSTRUCTIONS
+                        .lock()
+                        .expect("`ENGINE_INSTRUCTIONS` was poisoned")
+                        .get(get_mut_arcmutex!(self.id).deref()),
+                    Some(Some(EngineInstruction::Terminate))
+                )
+            };
+
+            if should_terminate() {
                 self.replicate_request_to_daemons(&Request::Terminate);
                 break 'lp;
             }
 
-            while let Ok(request) = get_mut_arcmutex!(self.rx).try_recv() {
-                self.replicate_request_to_daemons(&request);
-                if matches!(request, Request::Terminate) {
+            let mut channel_disconnected = false;
+            loop {
+                let next_request = {
+                    let mut rx = self.rx.lock().await;
+                    rx.try_recv()
+                };
+
+                match next_request {
+                    Ok(request) => {
+                        self.replicate_request_to_daemons(&request);
+                        if matches!(request, Request::Terminate) {
+                            break 'lp;
+                        }
+                        self.clone().handle_request(request).await;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        channel_disconnected = true;
+                        break;
+                    }
+                }
+            }
+
+            if channel_disconnected {
+                break 'lp;
+            }
+
+            let scheduler_idle = {
+                let scheduler = get_mut_arcmutex!(self.scheduler);
+                scheduler.waiting_len() == 0 && scheduler.running_len() == 0
+            };
+
+            if scheduler_idle {
+                if should_terminate() {
+                    self.replicate_request_to_daemons(&Request::Terminate);
                     break 'lp;
                 }
-                self.clone().handle_request(request).await;
+
+                let next_request = {
+                    let mut rx = self.rx.lock().await;
+                    rx.recv().await
+                };
+
+                match next_request {
+                    Some(request) => {
+                        self.replicate_request_to_daemons(&request);
+                        if matches!(request, Request::Terminate) {
+                            break 'lp;
+                        }
+                        self.clone().handle_request(request).await;
+                        continue;
+                    }
+                    None => break 'lp,
+                }
             }
 
             if TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
