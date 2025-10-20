@@ -14,7 +14,7 @@ use crate::{
     },
 };
 use anyhow::Result;
-use candle_core::{Context, Device, IndexOp, Tensor};
+use candle_core::{Device, IndexOp, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use mistralrs_vision::{
     ApplyTensorTransforms, ApplyTransforms, Normalize, TensorTransforms, ToTensor, Transforms,
@@ -27,6 +27,36 @@ use super::Qwen3VLVisionSpecificArgs;
 // Input processor
 struct Qwen3VLImageProcessor {
     max_edge: Option<u32>,
+}
+
+impl Qwen3VLImageProcessor {
+    const DEFAULT_PATCH_SIZE: usize = 14;
+    const DEFAULT_MERGE_SIZE: usize = 2;
+    const DEFAULT_TEMPORAL_PATCH_SIZE: usize = 2;
+    const DEFAULT_MIN_PIXELS: usize = 256 * 256;
+    const DEFAULT_MAX_PIXELS: usize = 1536 * 1536;
+
+    fn patch_size(config: &PreProcessorConfig) -> usize {
+        config.patch_size.unwrap_or(Self::DEFAULT_PATCH_SIZE)
+    }
+
+    fn merge_size(config: &PreProcessorConfig) -> usize {
+        config.merge_size.unwrap_or(Self::DEFAULT_MERGE_SIZE)
+    }
+
+    fn temporal_patch_size(config: &PreProcessorConfig) -> usize {
+        config
+            .temporal_patch_size
+            .unwrap_or(Self::DEFAULT_TEMPORAL_PATCH_SIZE)
+    }
+
+    fn min_pixels(config: &PreProcessorConfig) -> usize {
+        config.min_pixels.unwrap_or(Self::DEFAULT_MIN_PIXELS)
+    }
+
+    fn max_pixels(config: &PreProcessorConfig) -> usize {
+        config.max_pixels.unwrap_or(Self::DEFAULT_MAX_PIXELS)
+    }
 }
 // Processor
 pub struct Qwen3VLProcessor {
@@ -243,7 +273,7 @@ impl InputsProcessor for Qwen3VLImageProcessor {
 
             if is_prompt {
                 if let Some(ref image_grid_thw_accum) = image_grid_thw_accum {
-                    let merge_length = config.merge_size.expect("Require `merge_size").pow(2);
+                    let merge_length = Qwen3VLImageProcessor::merge_size(config).pow(2);
                     for ((batch, text), seq) in
                         detok_seqs.iter_mut().enumerate().zip(input_seqs.iter_mut())
                     {
@@ -275,7 +305,7 @@ impl InputsProcessor for Qwen3VLImageProcessor {
                 }
 
                 if let Some(ref video_grid_thw_accum) = video_grid_thw_accum {
-                    let merge_length = config.merge_size.expect("Require `merge_size").pow(2);
+                    let merge_length = Qwen3VLImageProcessor::merge_size(config).pow(2);
                     let mut index = 0;
                     for ((batch, text), seq) in
                         detok_seqs.iter_mut().enumerate().zip(input_seqs.iter_mut())
@@ -543,10 +573,9 @@ impl Qwen3VLImageProcessor {
                 let (resized_height, resized_width) = self.smart_resize(
                     height as usize,
                     width as usize,
-                    config.patch_size.context("Require `patch_size`.")?
-                        * config.merge_size.context("Require `merge_size`")?,
-                    config.min_pixels.context("Require `min_pixels`")?,
-                    config.max_pixels.context("Require `max_pixels`")?,
+                    Self::patch_size(config) * Self::merge_size(config),
+                    Self::min_pixels(config),
+                    Self::max_pixels(config),
                 )?;
                 height = resized_height as u32;
                 width = resized_width as u32;
@@ -578,11 +607,9 @@ impl Qwen3VLImageProcessor {
         }
 
         let mut patches = Tensor::stack(&processed_images, 0)?;
-        let temporal_patch_size = config
-            .temporal_patch_size
-            .context("Require `temporal_patch_size")?;
-        let patch_size = config.patch_size.context("Require `patch_size")?;
-        let merge_size = config.merge_size.context("Require `merge_size")?;
+        let temporal_patch_size = Self::temporal_patch_size(config);
+        let patch_size = Self::patch_size(config);
+        let merge_size = Self::merge_size(config);
         // Image
         if patches.dim(0)? == 1 {
             patches = patches.repeat((temporal_patch_size, 1, 1, 1))?;

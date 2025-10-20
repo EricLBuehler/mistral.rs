@@ -516,8 +516,11 @@ impl Qwen3VLTextModel {
         let visual_embeds = visual_embeds
             .to_device(flat.device())?
             .to_dtype(flat.dtype())?;
-        let mask = visual_pos_masks.to_dtype(DType::U8)?;
-        let indices = mask.flatten_all()?.nonzero()?.squeeze(1)?;
+        let indices = visual_pos_masks
+            .flatten_all()?
+            .nonzero()?
+            .squeeze(1)?
+            .to_dtype(DType::I64)?;
         let indices_vec = indices.to_vec1::<i64>()?;
 
         if indices_vec.len() != visual_embeds.dim(0)? {

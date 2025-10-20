@@ -19,9 +19,6 @@ struct PatchEmbed {
 
 impl PatchEmbed {
     fn new(cfg: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        if cfg.temporal_patch_size != 2 {
-            candle_core::bail!("Only support temporal patch size of 2");
-        }
         let proj_vb = vb.pp("proj");
         let proj = Conv3dNoBias::new(
             cfg.in_chans,
@@ -54,7 +51,8 @@ impl PatchEmbed {
         ))?;
         let xs = self.proj.forward(&xs)?;
         let xs = xs.reshape(((), self.hidden_size))?;
-        xs + self.bias.unsqueeze(0)?
+        let bias = self.bias.unsqueeze(0)?;
+        xs.broadcast_add(&bias)
     }
 }
 
@@ -149,9 +147,9 @@ impl VisionAttention {
                 continue;
             }
             let len = end - start;
-            let q_chunk = q.narrow(0, start, len)?.transpose(0, 1)?;
-            let k_chunk = k.narrow(0, start, len)?.transpose(0, 1)?;
-            let v_chunk = v.narrow(0, start, len)?.transpose(0, 1)?;
+            let q_chunk = q.narrow(0, start, len)?.transpose(0, 1)?.contiguous()?;
+            let k_chunk = k.narrow(0, start, len)?.transpose(0, 1)?.contiguous()?;
+            let v_chunk = v.narrow(0, start, len)?.transpose(0, 1)?.contiguous()?;
 
             let mut att = MatMul.matmul(&q_chunk, &k_chunk.transpose(1, 2)?)?;
             att = (att / (self.head_dim as f64).sqrt())?;
