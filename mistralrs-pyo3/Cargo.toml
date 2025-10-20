@@ -49,3 +49,7 @@ accelerate = ["mistralrs-core/accelerate"]
 mkl = ["mistralrs-core/mkl"]
 nccl = ["mistralrs-core/nccl"]
 ring = ["mistralrs-core/ring"]
+
+[package.metadata.maturin]
+include = ["mistralrs.pyi", "py.typed"]
+sdist-include = ["mistralrs.pyi", "py.typed"]
