@@ -1,10 +1,9 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
-    ColumnParallelLayer, MatMul, NonZeroOp, QuantMethod, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder,
+    ColumnParallelLayer, MatMul, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
 
 use super::config::TextConfig;
@@ -506,37 +505,53 @@ impl Qwen3VLTextModel {
         visual_pos_masks: &Tensor,
         visual_embeds: &Tensor,
     ) -> Result<Tensor> {
-        let (batch, seq, hidden) = hidden_states.dims3()?;
-        let flat = hidden_states.reshape((batch * seq, hidden))?;
-        let visual_embeds = visual_embeds
-            .to_device(flat.device())?
-            .to_dtype(flat.dtype())?;
-        let indices = visual_pos_masks
-            .flatten_all()?
-            .nonzero()?
-            .squeeze(1)?
-            .to_dtype(DType::I64)?;
-        let indices_vec = indices.to_vec1::<i64>()?;
+        let device = hidden_states.device();
+        let dtype = hidden_states.dtype();
 
-        if indices_vec.len() != visual_embeds.dim(0)? {
+        let mask = visual_pos_masks.to_device(device)?.to_dtype(DType::F32)?;
+        let mask_flat = mask.flatten_all()?;
+
+        let masked_count = mask_flat.sum_all()?.to_scalar::<f32>()? as usize;
+        let visual_embeds = visual_embeds.to_device(device)?.to_dtype(dtype)?;
+
+        if masked_count == 0 {
+            if visual_embeds.dim(0)? != 0 {
+                candle_core::bail!(
+                    "DeepStack visual embeds ({}) provided but mask is empty",
+                    visual_embeds.dim(0)?
+                );
+            }
+            return Ok(hidden_states);
+        }
+
+        if visual_embeds.dim(0)? != masked_count {
             candle_core::bail!(
                 "Mismatch between DeepStack visual embeds ({}) and mask positions ({})",
                 visual_embeds.dim(0)?,
-                indices_vec.len()
+                masked_count
             );
         }
 
-        let mut updates = Tensor::zeros((batch * seq, hidden), flat.dtype(), flat.device())?;
-        for (row_idx, &flat_idx) in indices_vec.iter().enumerate() {
-            let emb_row = visual_embeds.i(row_idx)?;
-            updates = updates.slice_assign(
-                &[flat_idx as usize..flat_idx as usize + 1, 0..updates.dim(1)?],
-                &emb_row.unsqueeze(0)?,
-            )?;
-        }
+        let (batch, seq, hidden) = hidden_states.dims3()?;
+        let total_positions = batch * seq;
+        let mut hidden_flat = hidden_states.reshape((total_positions, hidden))?;
 
-        let flat = (flat + updates)?;
-        flat.reshape((batch, seq, hidden))
+        let prefix = mask_flat.cumsum(0)?;
+        let rank = (prefix - &mask_flat)?.mul(&mask_flat)?;
+        let rank_u32 = rank.to_dtype(DType::U32)?;
+
+        let positions = Tensor::arange(0u32, total_positions as u32, device)?;
+        let positions_f32 = positions.to_dtype(DType::F32)?;
+        let masked_positions = positions_f32.mul(&mask_flat)?;
+
+        let mut position_per_rank = Tensor::zeros((masked_count,), DType::F32, device)?;
+        position_per_rank = position_per_rank.scatter_add(&rank_u32, &masked_positions, 0)?;
+        let position_per_rank = position_per_rank.to_dtype(DType::U32)?;
+
+        let linear_index = position_per_rank.unsqueeze(1)?.repeat((1, hidden))?;
+
+        hidden_flat = hidden_flat.scatter_add(&linear_index, &visual_embeds, 0)?;
+        hidden_flat.reshape((batch, seq, hidden))
     }
 }
 
