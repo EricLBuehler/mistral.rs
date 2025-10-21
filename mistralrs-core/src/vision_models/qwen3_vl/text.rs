@@ -229,21 +229,16 @@ impl Attention {
 
         (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
-        let mut attn_output = {
-            let (k, v) = kv_cache.append(&k, &v)?;
+        (k, v) = kv_cache.append(&k, &v)?;
 
-            Sdpa.run_attention(
-                &q.contiguous()?.to_dtype(DType::F32)?,
-                &k.contiguous()?.to_dtype(DType::F32)?,
-                &v.contiguous()?.to_dtype(DType::F32)?,
-                attention_mask
-                    .map(|mask| mask.to_dtype(DType::F32).unwrap())
-                    .as_ref(),
-                Some(flash_params),
-                &self.sdpa_params,
-            )?
-            .to_dtype(q.dtype())?
-        };
+        let mut attn_output = Sdpa.run_attention(
+            &q.contiguous()?,
+            &k.contiguous()?,
+            &v.contiguous()?,
+            attention_mask,
+            Some(flash_params),
+            &self.sdpa_params,
+        )?;
 
         if let Some(t) = self.q_proj.quantized_act_type() {
             attn_output = attn_output.to_dtype(t)?;
