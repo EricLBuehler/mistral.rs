@@ -14,14 +14,8 @@ serde_default_fn!(usize, default_num_heads, 16);
 serde_default_fn!(usize, default_patch_size, 14);
 serde_default_fn!(usize, default_spatial_merge_size, 2);
 serde_default_fn!(usize, default_temporal_patch_size, 2);
-serde_default_fn!(usize, default_window_size, 112);
 serde_default_fn!(usize, default_num_position_embeddings, 576);
 serde_default_fn!(Vec<usize>, default_deepstack_visual_indexes, Vec::new());
-serde_default_fn!(
-    Vec<usize>,
-    default_fullatt_block_indexes,
-    vec![7, 15, 23, 31]
-);
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct VisionConfig {
@@ -45,10 +39,6 @@ pub struct VisionConfig {
     pub spatial_merge_size: usize,
     #[serde(default = "default_temporal_patch_size")]
     pub temporal_patch_size: usize,
-    #[serde(default = "default_window_size")]
-    pub window_size: usize,
-    #[serde(default = "default_fullatt_block_indexes")]
-    pub fullatt_block_indexes: Vec<usize>,
     #[serde(default = "default_num_position_embeddings")]
     pub num_position_embeddings: usize,
     #[serde(default = "default_deepstack_visual_indexes")]

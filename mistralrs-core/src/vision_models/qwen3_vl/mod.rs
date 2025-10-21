@@ -478,30 +478,26 @@ impl Qwen3VLModel {
         } else {
             input_ids_full
         };
-        let (position_ids, mrope_position_deltas) = self.get_rope_index(
-            ropeidx_input_ids,
-            image_grid_thw.as_ref(),
-            video_grid_thw.as_ref(),
-            Some(&ropeidx_attn_mask),
-            Some(&ropeidx_attn_mask_indices),
-            input_ids_searching,
-            image_nums,
-            video_nums,
-        )?;
 
         let position_ids = if attention_mask.is_some() {
-            position_ids
+            self.get_rope_index(
+                ropeidx_input_ids,
+                image_grid_thw.as_ref(),
+                video_grid_thw.as_ref(),
+                Some(&ropeidx_attn_mask),
+                Some(&ropeidx_attn_mask_indices),
+                input_ids_searching,
+                image_nums,
+                video_nums,
+            )?
+            .0
         } else {
-            let mut position_ids = Tensor::new(
+            Tensor::new(
                 seqlen_offsets.iter().map(|x| *x as i64).collect::<Vec<_>>(),
                 input_ids.device(),
             )?
             .reshape((1, (), 1))?
-            .repeat((3, 1, 1))?;
-
-            position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
-
-            position_ids
+            .repeat((3, 1, 1))?
         };
 
         let out = self.text.forward_embeds(

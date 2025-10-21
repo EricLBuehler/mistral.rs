@@ -301,7 +301,6 @@ pub struct Qwen3VLVisionModel {
     deepstack_lookup: Vec<Option<usize>>,
     rotary_pos_emb: VisionRotaryEmbedding,
     spatial_merge_size: usize,
-    spatial_merge_unit: usize,
     num_grid_per_side: usize,
     hidden_size: usize,
 }
@@ -357,7 +356,6 @@ impl Qwen3VLVisionModel {
             deepstack_lookup,
             rotary_pos_emb,
             spatial_merge_size: cfg.spatial_merge_size,
-            spatial_merge_unit: cfg.spatial_merge_size.pow(2),
             num_grid_per_side,
             hidden_size: cfg.hidden_size,
         })
