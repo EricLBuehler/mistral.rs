@@ -1,4 +1,4 @@
 '/model\.language_model\.layers\.(\d+)\.self_attn\..*$/':
-  isq: q4k
+  isq: afq3
 '/model\.language_model\.layers\.(\d+)\.mlp\..*$/':
-  isq: q3k
+  isq: afq4
