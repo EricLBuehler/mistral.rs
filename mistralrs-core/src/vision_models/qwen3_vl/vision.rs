@@ -4,7 +4,10 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, LayerNorm, LayerNormConfig, Linear, Module};
 use mistralrs_quant::{QuantizedConfig, ShardedVarBuilder};
 
-use crate::layers::{self, Activation, Conv3dConfig, Conv3dNoBias, MatMul};
+use crate::{
+    attention::SdpaParams,
+    layers::{self, Activation, Conv3dConfig, Conv3dNoBias, Sdpa},
+};
 
 use super::config::VisionConfig;
 
@@ -151,12 +154,24 @@ impl VisionAttention {
             let k_chunk = k.narrow(0, start, len)?.transpose(0, 1)?.contiguous()?;
             let v_chunk = v.narrow(0, start, len)?.transpose(0, 1)?.contiguous()?;
 
-            let mut att = MatMul.matmul(&q_chunk, &k_chunk.transpose(1, 2)?)?;
-            att = (att / (self.head_dim as f64).sqrt())?;
-            att = candle_nn::ops::softmax_last_dim(&att)?;
-            let mut chunk_out = MatMul.matmul(&att, &v_chunk)?;
-            chunk_out = chunk_out.transpose(0, 1)?;
-            let chunk_out = chunk_out.reshape((len, self.num_heads * self.head_dim))?;
+            let mut chunk_out = Sdpa
+                .run_attention(
+                    &q_chunk.unsqueeze(0)?,
+                    &k_chunk.unsqueeze(0)?,
+                    &v_chunk.unsqueeze(0)?,
+                    None,
+                    None,
+                    &SdpaParams {
+                        n_kv_groups: 1,
+                        sliding_window: None,
+                        softcap: None,
+                        softmax_scale: 1.0 / (self.head_dim as f32).sqrt(),
+                    },
+                )?
+                .squeeze(0)?
+                .transpose(0, 1)?;
+            chunk_out.device().synchronize()?;
+            chunk_out = chunk_out.reshape((len, self.num_heads * self.head_dim))?;
             outputs.push(chunk_out.to_dtype(xs.dtype())?);
         }
         let attn_output = Tensor::cat(&outputs, 0)?;
