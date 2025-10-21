@@ -322,268 +322,273 @@ pub trait IsqModel {
         silent: bool,
         imatrix_source: Option<ImatrixDataSource<'_>>,
         organization: IsqOrganization,
+        apply_quantization: bool,
         write_artifacts: Option<&PathBuf>,
         full_ser: UqffFullSer<'_>,
         multi_progress: Arc<MultiProgress>,
     ) -> candle_core::Result<()> {
         {
-            let imatrix_to_weight = match imatrix_source {
-                Some(ImatrixDataSource::File(imatrix)) => {
-                    let ext = imatrix.extension().ok_or(candle_core::Error::msg(
-                        "Expected an extension for the imatrix source file.",
-                    ))?;
-                    if ext == "cimatrix" {
-                        info!(
-                            "Loading collected imatrix source file: `{}`",
-                            imatrix.display()
-                        );
-                        Some(CollectedImatrixData::load_imatrix(imatrix)?.0)
-                    } else if ext == "imatrix" {
-                        info!(
-                            "Loading GGUF-format imatrix source file: `{}`",
-                            imatrix.display()
-                        );
-                        let mut imatrix_data =
-                            quantized::imatrix_file::load_imatrix(imatrix.clone())?;
-                        let imatrix_mapping = self
-                            .imatrix_names()?
-                            .into_iter()
-                            .enumerate()
-                            .collect::<HashMap<_, _>>();
-
-                        let layer_to_weight = imatrix_mapping
-                            .into_iter()
-                            .map(|(i, name)| {
-                                if let Some(name) = name {
-                                    (i, Some(imatrix_data.remove(&name).unwrap()))
-                                } else {
-                                    (i, None)
+            let mut imatrix_source = imatrix_source;
+            let mut imatrix_to_weight_map: Option<HashMap<usize, Option<Vec<f32>>>> =
+                if apply_quantization {
+                    match imatrix_source.take() {
+                        Some(ImatrixDataSource::File(imatrix)) => {
+                            let ext = imatrix.extension().ok_or(candle_core::Error::msg(
+                                "Expected an extension for the imatrix source file.",
+                            ))?;
+                            if ext == "cimatrix" {
+                                info!(
+                                    "Loading collected imatrix source file: `{}`",
+                                    imatrix.display()
+                                );
+                                let data = CollectedImatrixData::load_imatrix(imatrix)?;
+                                info!(
+                                    "Quantizing with collected imatrix data, {} imatrix weights",
+                                    data.0.iter().filter(|(_, x)| x.is_some()).count()
+                                );
+                                Some(data.0)
+                            } else {
+                                if ext != "imatrix" {
+                                    warn!("Imatrix source file extension is {ext:?}, expected .imatrix/.cimatrix. Assuming GGUF specification");
                                 }
-                            })
-                            .collect::<HashMap<_, _>>();
-                        info!(
-                            "Quantizing with imatrix file `{}`, {} imatrix weights",
-                            imatrix.display(),
-                            layer_to_weight.iter().filter(|(_, x)| x.is_some()).count()
-                        );
-                        Some(layer_to_weight)
-                    } else {
-                        warn!("Imatrix source file extension is {ext:?}, expected .imatrix/.cimatrix. Assuming GGUF specification");
-                        info!(
-                            "Loading GGUF-format imatrix source file: `{}`",
-                            imatrix.display()
-                        );
+                                info!(
+                                    "Loading GGUF-format imatrix source file: `{}`",
+                                    imatrix.display()
+                                );
+                                let mut imatrix_data =
+                                    quantized::imatrix_file::load_imatrix(imatrix.clone())?;
+                                let imatrix_mapping = self
+                                    .imatrix_names()?
+                                    .into_iter()
+                                    .enumerate()
+                                    .collect::<HashMap<_, _>>();
 
-                        let mut imatrix_data =
-                            quantized::imatrix_file::load_imatrix(imatrix.clone())?;
-                        let imatrix_mapping = self
-                            .imatrix_names()?
-                            .into_iter()
-                            .enumerate()
-                            .collect::<HashMap<_, _>>();
-
-                        let layer_to_weight = imatrix_mapping
-                            .into_iter()
-                            .map(|(i, name)| {
-                                if let Some(name) = name {
-                                    (i, Some(imatrix_data.remove(&name).unwrap()))
-                                } else {
-                                    (i, None)
-                                }
-                            })
-                            .collect::<HashMap<_, _>>();
-                        info!(
-                            "Quantizing with imatrix file `{}`, {} imatrix weights",
-                            imatrix.display(),
-                            layer_to_weight.iter().filter(|(_, x)| x.is_some()).count()
-                        );
-                        Some(layer_to_weight)
-                    }
-                }
-                Some(ImatrixDataSource::Collected) => {
-                    let data = match organization {
-                        IsqOrganization::Default => self.extract_imatrix_data()?,
-                        IsqOrganization::MoeExpertsOnly => {
-                            self.extract_imatrix_data_moe_experts_only()?
+                                let layer_to_weight = imatrix_mapping
+                                    .into_iter()
+                                    .map(|(i, name)| {
+                                        if let Some(name) = name {
+                                            (i, Some(imatrix_data.remove(&name).unwrap()))
+                                        } else {
+                                            (i, None)
+                                        }
+                                    })
+                                    .collect::<HashMap<_, _>>();
+                                info!(
+                                    "Quantizing with imatrix file `{}`, {} imatrix weights",
+                                    imatrix.display(),
+                                    layer_to_weight.iter().filter(|(_, x)| x.is_some()).count()
+                                );
+                                Some(layer_to_weight)
+                            }
                         }
-                    };
-                    // Save the collected imatrix data so users can reuse it
-                    let count = data.0.iter().filter(|(_, x)| x.is_some()).count();
-                    let save_path = format!("collected-{count}.cimatrix");
-                    info!("Saving collected imatrix data to `{save_path}`");
-                    data.save_imatrix(save_path)?;
-                    info!("Quantizing with collected imatrix data, {count} imatrix weights");
-                    Some(data.0)
-                }
-                None => {
-                    // Dummy, just for zip
+                        Some(ImatrixDataSource::Collected) => {
+                            let data = match organization {
+                                IsqOrganization::Default => self.extract_imatrix_data()?,
+                                IsqOrganization::MoeExpertsOnly => {
+                                    self.extract_imatrix_data_moe_experts_only()?
+                                }
+                            };
+                            // Save the collected imatrix data so users can reuse it
+                            let count = data.0.iter().filter(|(_, x)| x.is_some()).count();
+                            let save_path = format!("collected-{count}.cimatrix");
+                            info!("Saving collected imatrix data to `{save_path}`");
+                            data.save_imatrix(save_path)?;
+                            info!(
+                                "Quantizing with collected imatrix data, {count} imatrix weights"
+                            );
+                            Some(data.0)
+                        }
+                        None => None,
+                    }
+                } else {
+                    if imatrix_source.is_some() {
+                        info!("Imatrix source provided but quantization disabled; ignoring input.");
+                    }
                     None
-                }
-            };
+                };
 
             let (mut tensors, mapper) = match organization {
                 IsqOrganization::Default => self.get_layers(),
                 IsqOrganization::MoeExpertsOnly => self.get_layers_moe_experts_only(),
             };
 
-            let imatrix_to_weight: Vec<Option<Vec<f32>>> =
-                if let Some(mut imatrix_to_weight) = imatrix_to_weight {
-                    let ordered_keys = imatrix_to_weight
-                        .keys()
-                        .copied()
-                        .sorted()
-                        .collect::<Vec<_>>();
-                    ordered_keys
-                        .into_iter()
-                        .map(|layer| imatrix_to_weight.remove(&layer).unwrap())
-                        .collect()
-                } else {
-                    vec![None; tensors.len()]
-                };
-
             let total_tensors = tensors.len();
-            let n_quantized = AtomicUsize::new(0);
-            if let Some(topology) = topology {
-                let mut dtypes = HashSet::new();
-                for layer in topology.0.iter().flatten() {
-                    if let LayerTopology {
-                        isq: Some(isq_dtype),
-                        device: _,
-                    } = layer
-                    {
-                        dtypes.insert(isq_dtype);
+
+            if apply_quantization {
+                let imatrix_to_weight: Vec<Option<Vec<f32>>> =
+                    if let Some(mut imatrix_to_weight) = imatrix_to_weight_map.take() {
+                        let ordered_keys = imatrix_to_weight
+                            .keys()
+                            .copied()
+                            .sorted()
+                            .collect::<Vec<_>>();
+                        ordered_keys
+                            .into_iter()
+                            .map(|layer| imatrix_to_weight.remove(&layer).unwrap())
+                            .collect()
+                    } else {
+                        vec![None; tensors.len()]
+                    };
+
+                let n_quantized = AtomicUsize::new(0);
+                if let Some(topology) = topology {
+                    let mut dtypes = HashSet::new();
+                    for layer in topology.layers.iter().flatten() {
+                        if let LayerTopology {
+                            isq: Some(isq_dtype),
+                            device: _,
+                        } = layer
+                        {
+                            dtypes.insert(isq_dtype);
+                        }
                     }
+                    info!("Applying in-situ quantization into {:?} to {total_tensors} tensors according to topology.", dtypes.into_iter().collect::<Vec<_>>());
+                } else {
+                    info!(
+                        "Applying in-situ quantization into {dtype:?} to {total_tensors} tensors."
+                    );
                 }
-                info!("Applying in-situ quantization into {:?} to {total_tensors} tensors according to topology.", dtypes.into_iter().collect::<Vec<_>>());
-            } else {
-                info!("Applying in-situ quantization into {dtype:?} to {total_tensors} tensors.");
-            }
-            let bar = ProgressBar::new(total_tensors as u64);
-            bar.set_style(
-                ProgressStyle::default_bar()
-                    .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
-                    .unwrap()
-                    .progress_chars("#>-"),
-            );
-            multi_progress.add(bar.clone());
+                let bar = ProgressBar::new(total_tensors as u64);
+                bar.set_style(
+                    ProgressStyle::default_bar()
+                        .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+                        .unwrap()
+                        .progress_chars("#>-"),
+                );
+                multi_progress.add(bar.clone());
 
-            let layers = topology.map(|x| {
-                x.0.iter()
-                    .filter_map(|topo| topo.as_ref().map(|x| (x.isq, x.device.clone())))
-                    .collect::<Vec<_>>()
-            });
+                let layers = topology.map(|x| {
+                    x.layers
+                        .iter()
+                        .filter_map(|topo| topo.as_ref().map(|x| (x.isq, x.device.clone())))
+                        .collect::<Vec<_>>()
+                });
 
-            let mut devices_and_dtypes = Vec::new();
-            for (_, layer_num) in &tensors {
-                let device = if let Some(ref layers) = layers {
-                    if let Some(layer) = layer_num {
-                        layers
-                            .get(*layer)
-                            .as_ref()
-                            .map(|x| x.1.clone())
-                            .unwrap_or(Some(device.clone()))
+                let mut devices_and_dtypes = Vec::new();
+                for (_, layer_num) in &tensors {
+                    let device = if let Some(ref layers) = layers {
+                        if let Some(layer) = layer_num {
+                            layers
+                                .get(*layer)
+                                .as_ref()
+                                .map(|x| x.1.clone())
+                                .unwrap_or(Some(device.clone()))
+                                .unwrap_or(device.clone())
+                        } else {
+                            device.clone()
+                        }
+                    } else if let Some(layer_num) = layer_num {
+                        mapper
+                            .device_for(*layer_num, false)
+                            .cloned()
                             .unwrap_or(device.clone())
                     } else {
                         device.clone()
-                    }
-                } else if let Some(layer_num) = layer_num {
-                    mapper
-                        .device_for(*layer_num, false)
-                        .cloned()
-                        .unwrap_or(device.clone())
-                } else {
-                    device.clone()
-                };
-                let dtype = if let Some(ref layers) = layers {
-                    if let Some(layer) = layer_num {
-                        layers.get(*layer).cloned().map(|x| x.0).unwrap_or(dtype)
+                    };
+                    let dtype = if let Some(ref layers) = layers {
+                        if let Some(layer) = layer_num {
+                            layers.get(*layer).cloned().map(|x| x.0).unwrap_or(dtype)
+                        } else {
+                            dtype
+                        }
                     } else {
                         dtype
+                    };
+                    devices_and_dtypes.push((device, dtype));
+                }
+
+                let t_start = Instant::now();
+
+                // Get the MINIMUM of the max isq threads the quant method
+                let mut minimum_max_threads = {
+                    let current_rayon_threads = rayon::current_num_threads();
+                    if let Some(dtype) = dtype {
+                        dtype
+                            .get_max_isq_cpu_threads()
+                            .map(usize::from)
+                            .unwrap_or(current_rayon_threads)
+                    } else {
+                        current_rayon_threads
                     }
-                } else {
-                    dtype
                 };
-                devices_and_dtypes.push((device, dtype));
-            }
-
-            let t_start = Instant::now();
-
-            use rayon::iter::IntoParallelRefIterator;
-
-            // Get the MINIMUM of the max isq threads the quant method
-            let mut minimum_max_threads = {
-                let current_rayon_threads = rayon::current_num_threads();
-                if let Some(dtype) = dtype {
-                    dtype
-                        .get_max_isq_cpu_threads()
-                        .map(usize::from)
-                        .unwrap_or(current_rayon_threads)
-                } else {
-                    current_rayon_threads
+                if env::var("MISTRALRS_ISQ_SINGLETHREAD").is_ok() {
+                    minimum_max_threads = 1;
                 }
-            };
-            if env::var("MISTRALRS_ISQ_SINGLETHREAD").is_ok() {
-                minimum_max_threads = 1;
-            }
 
-            if matches!(imatrix_source, Some(ImatrixDataSource::Collected)) {
-                // Collected imatrix means that the model is potentially on the gpu already
-                minimum_max_threads = 1;
-            }
-
-            info!("Applying ISQ on {minimum_max_threads} threads.");
-
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(minimum_max_threads)
-                .build()
-                .map_err(candle_core::Error::msg)?;
-
-            let guard = QuantizeOntoGuard::new();
-
-            pool.install(|| {
-                use indicatif::ParallelProgressIterator;
-                use rayon::iter::{
-                    IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
-                };
-                if silent {
-                    tensors
-                        .par_iter_mut()
-                        .zip(devices_and_dtypes)
-                        .zip(imatrix_to_weight)
-                        .for_each(|(((tensor, _), (device, dtype)), imatrix_weight)| {
-                            **tensor = tensor
-                                .clone()
-                                .apply_isq(
-                                    dtype,
-                                    device.clone(),
-                                    &n_quantized,
-                                    imatrix_weight,
-                                    guard.clone(),
-                                )
-                                .unwrap();
-                            device.synchronize().unwrap();
-                        });
-                } else {
-                    tensors
-                        .par_iter_mut()
-                        .zip(devices_and_dtypes)
-                        .zip(imatrix_to_weight)
-                        .progress_with(bar)
-                        .for_each(|(((tensor, _), (device, dtype)), imatrix_weight)| {
-                            **tensor = tensor
-                                .clone()
-                                .apply_isq(
-                                    dtype,
-                                    device.clone(),
-                                    &n_quantized,
-                                    imatrix_weight,
-                                    guard.clone(),
-                                )
-                                .unwrap();
-                            device.synchronize().unwrap();
-                        });
+                if matches!(imatrix_source, Some(ImatrixDataSource::Collected)) {
+                    // Collected imatrix means that the model is potentially on the gpu already
+                    minimum_max_threads = 1;
                 }
-            });
+
+                info!("Applying ISQ on {minimum_max_threads} threads.");
+
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(minimum_max_threads)
+                    .build()
+                    .map_err(candle_core::Error::msg)?;
+
+                let guard = QuantizeOntoGuard::new();
+
+                pool.install(|| {
+                    use indicatif::ParallelProgressIterator;
+                    use rayon::iter::{
+                        IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
+                    };
+                    if silent {
+                        tensors
+                            .par_iter_mut()
+                            .zip(devices_and_dtypes)
+                            .zip(imatrix_to_weight)
+                            .for_each(|(((tensor, _), (device, dtype)), imatrix_weight)| {
+                                **tensor = tensor
+                                    .clone()
+                                    .apply_isq(
+                                        dtype,
+                                        device.clone(),
+                                        &n_quantized,
+                                        imatrix_weight,
+                                        guard.clone(),
+                                    )
+                                    .unwrap();
+                                device.synchronize().unwrap();
+                            });
+                    } else {
+                        tensors
+                            .par_iter_mut()
+                            .zip(devices_and_dtypes)
+                            .zip(imatrix_to_weight)
+                            .progress_with(bar)
+                            .for_each(|(((tensor, _), (device, dtype)), imatrix_weight)| {
+                                **tensor = tensor
+                                    .clone()
+                                    .apply_isq(
+                                        dtype,
+                                        device.clone(),
+                                        &n_quantized,
+                                        imatrix_weight,
+                                        guard.clone(),
+                                    )
+                                    .unwrap();
+                                device.synchronize().unwrap();
+                            });
+                    }
+                });
+
+                let t_end = Instant::now();
+                info!(
+                    "Finished quantization pass in {:.2}s ({} tensors).",
+                    t_end.duration_since(t_start).as_secs_f32(),
+                    total_tensors
+                );
+            } else if imatrix_source.is_some() {
+                info!(
+                    "Imatrix data provided but quantization was skipped; existing tensors will be serialized as-is."
+                );
+            } else if write_artifacts.is_some() {
+                info!(
+                    "Skipping additional quantization; serializing {total_tensors} existing tensors."
+                );
+            }
 
             if let Some(serialized) = write_artifacts {
                 info!(
@@ -614,6 +619,7 @@ pub trait IsqModel {
                     .map_err(candle_core::Error::msg)?;
 
                 let quantized_values = pool.install(|| {
+                    use rayon::iter::IntoParallelRefIterator;
                     if silent {
                         tensors
                             .par_iter()
@@ -793,8 +799,6 @@ pub trait IsqModel {
                     std::fs::write(&preprocessor_out, cfg).map_err(candle_core::Error::msg)?;
                 }
             }
-            let delta = Instant::now().duration_since(t_start).as_secs_f32();
-            info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors. Took {delta:.2}s", );
         }
         Ok(())
     }
@@ -810,7 +814,8 @@ pub trait IsqModel {
         let total_tensors = tensors.len();
 
         let layers = topology.map(|x| {
-            x.0.iter()
+            x.layers
+                .iter()
                 .filter_map(|topo| topo.as_ref().map(|x| (x.isq, x.device.clone())))
                 .collect::<Vec<_>>()
         });

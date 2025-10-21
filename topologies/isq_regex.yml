@@ -1,0 +1,4 @@
+'/model\.language_model\.layers\.(\d+)\.self_attn\..*$/':
+  isq: q4k
+'/model\.language_model\.layers\.(\d+)\.mlp\..*$/':
+  isq: q3k

@@ -479,16 +479,18 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
             return;
         }
 
-        let layer_devices = if let Some(device_mapper) = pipeline.device_mapper() {
-            let mut layer_devices = Vec::new();
-            for layer in 0..device_mapper.num_device_mapping_layers() {
-                let device = device_mapper.device_for(layer, false).cloned();
-                layer_devices.push(device.expect("Internal bug, layer out of range!"));
+        let layer_devices = pipeline.device_mapper().map(|device_mapper| {
+            let total_layers = pipeline.cache().normal().0.len();
+            let mut layer_devices = Vec::with_capacity(total_layers);
+            for layer in 0..total_layers {
+                let device = device_mapper
+                    .device_for(layer, false)
+                    .cloned()
+                    .expect("Internal bug, layer out of range!");
+                layer_devices.push(device);
             }
-            Some(layer_devices)
-        } else {
-            None
-        };
+            layer_devices
+        });
 
         let old_caches = pipeline.cache().normal().0.clone();
 

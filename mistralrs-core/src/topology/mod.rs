@@ -1,6 +1,7 @@
-use std::{collections::HashMap, fs, io::Read, ops::Range, path::Path};
+use std::{fs, io::Read, ops::Range, path::Path};
 
 use candle_core::Device;
+use indexmap::IndexMap;
 use itertools::Itertools;
 use mistralrs_quant::IsqType;
 use regex::Regex;
@@ -17,7 +18,7 @@ pub struct DeserLayerTopology {
 }
 
 #[derive(Deserialize)]
-pub struct DeserTopology(HashMap<String, DeserLayerTopology>);
+pub struct DeserTopology(IndexMap<String, DeserLayerTopology>);
 
 #[derive(Clone, Debug)]
 pub struct LayerTopology {
@@ -54,30 +55,44 @@ impl PartialOrd for CustomRange {
 }
 
 #[derive(Clone, Debug)]
-pub struct Topology(pub Vec<Option<LayerTopology>>);
+pub struct Topology {
+    pub layers: Vec<Option<LayerTopology>>,
+    pub patterns: Vec<(Regex, LayerTopology)>,
+}
 
 impl Topology {
     /// Create an empty topology.
     pub fn empty() -> Self {
-        Topology(Vec::new())
+        Topology {
+            layers: Vec::new(),
+            patterns: Vec::new(),
+        }
     }
 
     pub fn with_capacity(cap: usize) -> Self {
-        Topology(vec![None; cap])
+        Topology {
+            layers: vec![None; cap],
+            patterns: Vec::new(),
+        }
     }
 
     pub fn is_dummy_device_map(&self) -> bool {
-        self.0
+        self.layers
             .iter()
             .all(|l| l.is_none() || l.as_ref().is_some_and(|l| l.device.is_none()))
+            && self
+                .patterns
+                .iter()
+                .all(|(_, topo)| topo.device.as_ref().is_none())
     }
 
     pub fn with_range(mut self, range: Range<usize>, layer: LayerTopology) -> Self {
-        if self.0.len() < range.end {
-            self.0.extend(vec![None; range.end - self.0.len()]);
+        if self.layers.len() < range.end {
+            self.layers
+                .extend(vec![None; range.end - self.layers.len()]);
         }
         for i in range.start..range.end {
-            self.0[i] = Some(layer.clone());
+            self.layers[i] = Some(layer.clone());
         }
         self
     }
@@ -87,35 +102,20 @@ impl Topology {
         let deser: DeserTopology = serde_yaml::from_str(topology)?;
         let device_regex = Regex::new(DEVICE_PATTERN)?;
 
-        let mut layers = Vec::new();
-        for (range, DeserLayerTopology { isq, device }) in deser.0 {
-            // Parse isq
-            let (start, end) = if range.contains('-') {
-                // Range (inclusive, exclusive)
-                let Some((start, end)) = range.splitn(2, '-').collect_tuple() else {
-                    anyhow::bail!("Topology range segment must follow the format START-END")
-                };
-                (start.parse::<usize>()?, end.parse::<usize>()?)
-            } else {
-                // Single layer here
-                let layer = range.parse::<usize>()?;
-                (layer, layer + 1)
-            };
-
-            if end <= start {
-                anyhow::bail!("Topology range end must be > start, got {end} <= {start}");
-            }
-            let range = CustomRange { start, end };
-            let isq = if let Some(isq) = isq {
+        let mut range_layers = Vec::new();
+        let mut pattern_layers = Vec::new();
+        for (selector, DeserLayerTopology { isq, device }) in deser.0 {
+            let parsed_isq = if let Some(isq) = isq {
                 Some(parse_isq_value(&isq, None).map_err(anyhow::Error::msg)?)
             } else {
                 None
             };
 
-            // Parse device
-            let device = if let Some(device) = device {
+            let parsed_device = if let Some(device) = device {
                 let Some(captures) = device_regex.captures(&device) else {
-                    anyhow::bail!("Device specifier must match regex {DEVICE_PATTERN}. Examples: `cpu`, `cuda[ORD]`, `metal[ORD]`");
+                    anyhow::bail!(
+                        "Device specifier must match regex {DEVICE_PATTERN}. Examples: `cpu`, `cuda[ORD]`, `metal[ORD]`"
+                    );
                 };
                 let device = if let Some(val) = captures.get(2).or(captures.get(3)) {
                     let ord = val.as_str().parse::<usize>()?;
@@ -134,18 +134,60 @@ impl Topology {
                 None
             };
 
-            let layer_topo = LayerTopology { isq, device };
-            layers.push((range, layer_topo));
+            if selector.starts_with('/') && selector.ends_with('/') && selector.len() >= 2 {
+                let pattern = &selector[1..selector.len() - 1];
+                let regex = Regex::new(pattern)
+                    .map_err(|err| anyhow::anyhow!("Invalid topology regex `{pattern}`: {err}"))?;
+                pattern_layers.push((
+                    regex,
+                    LayerTopology {
+                        isq: parsed_isq,
+                        device: parsed_device,
+                    },
+                ));
+                continue;
+            }
+
+            let (start, end) = if selector.contains('-') {
+                // Range (inclusive, exclusive)
+                let Some((start, end)) = selector.splitn(2, '-').collect_tuple() else {
+                    anyhow::bail!("Topology range segment must follow the format START-END")
+                };
+                (start.parse::<usize>()?, end.parse::<usize>()?)
+            } else {
+                // Single layer here
+                let layer = selector.parse::<usize>()?;
+                (layer, layer + 1)
+            };
+
+            if end <= start {
+                anyhow::bail!("Topology range end must be > start, got {end} <= {start}");
+            }
+            let range = CustomRange { start, end };
+
+            range_layers.push((
+                range,
+                LayerTopology {
+                    isq: parsed_isq,
+                    device: parsed_device,
+                },
+            ));
         }
         // Sort so that we increase in end points
-        layers.sort_by(|(r1, _), (r2, _)| r1.cmp(r2));
+        range_layers.sort_by(|(r1, _), (r2, _)| r1.cmp(r2));
 
-        let mut this = Self::with_capacity(layers.last().unwrap().0.end);
-        for (range, layer) in layers {
+        let capacity = range_layers.iter().map(|(r, _)| r.end).max().unwrap_or(0);
+        let mut this = if capacity == 0 {
+            Self::empty()
+        } else {
+            Self::with_capacity(capacity)
+        };
+        for (range, layer) in range_layers {
             for i in range.start..range.end {
-                this.0[i] = Some(layer.clone());
+                this.layers[i] = Some(layer.clone());
             }
         }
+        this.patterns = pattern_layers;
         Ok(this)
     }
 
@@ -167,5 +209,34 @@ impl Topology {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn layer_for(&self, layer: usize) -> Option<&LayerTopology> {
+        self.layers.get(layer).and_then(|lt| lt.as_ref())
+    }
+
+    pub fn match_for_name(&self, name: &str) -> Option<LayerTopology> {
+        let mut matched = None;
+        for (regex, layer) in &self.patterns {
+            if regex.is_match(name) {
+                matched = Some(layer.clone());
+            }
+        }
+        matched
+    }
+
+    pub fn pattern_overrides(&self) -> Vec<(Regex, LayerTopology)> {
+        self.patterns
+            .iter()
+            .map(|(regex, topo)| (regex.clone(), topo.clone()))
+            .collect()
+    }
+
+    pub fn requires_post_quantization(&self) -> bool {
+        self.layers.iter().any(|layer| {
+            layer
+                .as_ref()
+                .is_some_and(|layer| layer.isq.is_some() || layer.device.is_some())
+        })
     }
 }

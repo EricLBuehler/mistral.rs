@@ -29,6 +29,18 @@ Note that:
 - The topology device mapping will override any other device mapping.
 - When using UQFF, only the device mapping is relevant.
 
+### Regex selectors
+
+Layer ranges are convenient when you know the numeric index, but you can also target weights by name. Keys wrapped in `/.../` are interpreted as regular expressions that are matched against the fully qualified tensor name (for example, `model.layers.3.attn.q_proj.weight`). Regex selectors may override both `isq` and `device`.
+
+```yml
+'/attn\.q_proj$/':
+  isq: Q4K
+'/ffn_.*\.weight$/':
+  isq: Q3K
+```
+
+Regex-based ISQ overrides are applied through the immediate ISQ system, so they quantize weights as they are loaded. Numeric layer ranges continue to be handled by the post-load topology pass.
 
 ```yml
 0-8:

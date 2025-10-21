@@ -88,13 +88,13 @@ impl DeviceMapSetting {
                 host_layers,
             }) => {
                 if let Some(topology) = topology {
-                    if topology.0.iter().all(|x| x.is_none()) {
+                    if topology.layers.iter().all(|x| x.is_none()) {
                         return Ok(Box::new(DummyDeviceMapper {
                             nm_device: device.clone(),
                         }));
                     } else {
                         let layers = topology
-                            .0
+                            .layers
                             .iter()
                             .map(|layer| {
                                 layer
