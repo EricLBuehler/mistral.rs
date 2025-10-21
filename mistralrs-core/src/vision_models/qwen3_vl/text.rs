@@ -579,16 +579,25 @@ impl IsqModel for Qwen3VLTextModel {
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
-        let uvb_m = uvb.pp("model");
-        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
-        uvb_m.pp("norm").add(&self.norm);
+        let uvb_lm = uvb.pp("model").pp("language_model");
+        uvb_lm.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_lm.pp("norm").add(&self.norm);
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
-            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            let uvb_l = uvb_lm.pp("layers").pp(layer_idx);
             uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
             uvb_l
                 .pp("post_attention_layernorm")
                 .add(&layer.post_attention_layernorm);
+
+            uvb_l
+                .pp("self_attn")
+                .pp("q_norm")
+                .add(&layer.self_attn.q_norm);
+            uvb_l
+                .pp("self_attn")
+                .pp("k_norm")
+                .add(&layer.self_attn.k_norm);
         }
 
         uvb.to_safetensors()

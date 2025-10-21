@@ -5559,14 +5559,14 @@ impl IsqModelLoader for Qwen3VLLoader {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention
-            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
-            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {

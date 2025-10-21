@@ -7,6 +7,7 @@ use mistralrs_quant::{QuantizedConfig, ShardedVarBuilder};
 use crate::{
     attention::SdpaParams,
     layers::{self, Activation, Conv3dConfig, Conv3dNoBias, Sdpa},
+    utils::unvarbuilder::UnVarBuilder,
 };
 
 use super::config::VisionConfig;
@@ -57,6 +58,21 @@ impl PatchEmbed {
         let bias = self.bias.unsqueeze(0)?;
         xs.broadcast_add(&bias)
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        let weight = self
+            .proj
+            .weight()
+            .expect("patch embedding weight reconstruction should succeed");
+
+        let uvb_proj = uvb.pp("proj");
+        uvb_proj.add_tensor("weight", weight);
+        uvb_proj.add_tensor("bias", self.bias.clone());
+
+        uvb.to_safetensors()
+    }
 }
 
 struct VisionMlp {
@@ -78,6 +94,13 @@ impl VisionMlp {
         let xs = self.fc1.forward(xs)?;
         let xs = xs.apply(&self.act)?;
         self.fc2.forward(&xs)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        uvb.pp("linear_fc1").add(&self.fc1);
+        uvb.pp("linear_fc2").add(&self.fc2);
+        uvb.to_safetensors()
     }
 }
 
@@ -177,6 +200,13 @@ impl VisionAttention {
         let attn_output = Tensor::cat(&outputs, 0)?;
         self.proj.forward(&attn_output)
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        uvb.pp("qkv").add(&self.qkv);
+        uvb.pp("proj").add(&self.proj);
+        uvb.to_safetensors()
+    }
 }
 
 struct VisionBlock {
@@ -221,6 +251,15 @@ impl VisionBlock {
         let xs_att = xs.add(&attn_out)?;
         let mlp_out = self.mlp.forward(&self.norm2.forward(&xs_att)?)?;
         xs_att.add(&mlp_out)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        uvb.pp("norm1").add(&self.norm1);
+        uvb.pp("norm2").add(&self.norm2);
+        uvb.pp("attn").extend(self.attn.residual_tensors());
+        uvb.pp("mlp").extend(self.mlp.residual_tensors());
+        uvb.to_safetensors()
     }
 }
 
@@ -279,6 +318,14 @@ impl PatchMerger {
         let xs = self.fc1.forward(&reshaped)?;
         let xs = xs.gelu()?;
         self.fc2.forward(&xs)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        uvb.pp("norm").add(&self.norm);
+        uvb.pp("linear_fc1").add(&self.fc1);
+        uvb.pp("linear_fc2").add(&self.fc2);
+        uvb.to_safetensors()
     }
 }
 
@@ -587,5 +634,31 @@ impl Qwen3VLVisionModel {
 
         let hidden_states = self.merger.forward(&hidden_states)?;
         Ok((hidden_states, deepstack_features))
+    }
+
+    pub(super) fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        let uvb_visual = uvb.pp("model").pp("visual");
+
+        uvb_visual
+            .pp("patch_embed")
+            .extend(self.patch_embed.residual_tensors());
+        uvb_visual.pp("pos_embed").add(&self.pos_embed);
+
+        let uvb_blocks = uvb_visual.pp("blocks");
+        for (i, block) in self.blocks.iter().enumerate() {
+            uvb_blocks.pp(i).extend(block.residual_tensors());
+        }
+
+        uvb_visual
+            .pp("merger")
+            .extend(self.merger.residual_tensors());
+
+        let uvb_deepstack = uvb_visual.pp("deepstack_merger_list");
+        for (i, merger) in self.deepstack_mergers.iter().enumerate() {
+            uvb_deepstack.pp(i).extend(merger.residual_tensors());
+        }
+
+        uvb.to_safetensors()
     }
 }

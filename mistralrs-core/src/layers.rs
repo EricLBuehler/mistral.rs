@@ -2331,6 +2331,12 @@ impl Conv3dNoBias {
             conv2d_2: Conv2d::new(w2.contiguous()?, None, cfg),
         })
     }
+
+    pub fn weight(&self) -> Result<Tensor> {
+        let w1 = self.conv2d_1.weight().clone().unsqueeze(2)?;
+        let w2 = self.conv2d_2.weight().clone().unsqueeze(2)?;
+        Tensor::cat(&[w1, w2], 2)
+    }
 }
 
 impl Module for Conv3dNoBias {

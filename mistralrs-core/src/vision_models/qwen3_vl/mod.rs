@@ -711,7 +711,9 @@ impl IsqModel for Qwen3VLModel {
         self.text.get_layers()
     }
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        self.text.residual_tensors()
+        let mut tensors = self.text.residual_tensors();
+        tensors.extend(self.vision.residual_tensors());
+        tensors
     }
 }
 
