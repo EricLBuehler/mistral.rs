@@ -123,20 +123,6 @@ fn find_sequences(nums: &[u32], needle: u32) -> Vec<(usize, usize)> {
     sequences
 }
 
-// index + needle length
-fn find_substring_indices(haystack: &str, needle: &str) -> Vec<usize> {
-    let mut indices = Vec::new();
-    let mut start = 0;
-
-    while let Some(pos) = haystack[start..].find(needle) {
-        let index = start + pos;
-        indices.push(index + needle.len());
-        start = index + needle.len(); // Move past the last found occurrence
-    }
-
-    indices
-}
-
 impl InputsProcessor for Qwen3VLImageProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
@@ -184,9 +170,6 @@ impl InputsProcessor for Qwen3VLImageProcessor {
             video_grid_thw,
             continuous_img_pad,
             continuous_vid_pad,
-            input_ids_searching,
-            image_nums,
-            video_nums,
         ) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut image_grid_thw_accum = Vec::new();
@@ -371,34 +354,6 @@ impl InputsProcessor for Qwen3VLImageProcessor {
                 all_continuous_vid_pad.push(continuous_vid_pad);
             }
 
-            let mut input_ids_searching = Vec::new();
-            let mut image_nums = Vec::new();
-            let mut video_nums = Vec::new();
-            for (seq, ids) in input_seqs.iter().zip(&all_ids) {
-                let prompt = seq.get_initial_prompt();
-                let match_indices = find_substring_indices(prompt, Qwen3VLProcessor::VISION_START);
-                image_nums.push(
-                    match_indices
-                        .iter()
-                        .filter(|&&idx| {
-                            prompt[idx..idx + Qwen3VLProcessor::IMAGE_PAD.len()]
-                                == *Qwen3VLProcessor::IMAGE_PAD
-                        })
-                        .count(),
-                );
-                video_nums.push(
-                    match_indices
-                        .iter()
-                        .filter(|&&idx| {
-                            prompt[idx..idx + Qwen3VLProcessor::VIDEO_PAD.len()]
-                                == *Qwen3VLProcessor::VIDEO_PAD
-                        })
-                        .count(),
-                );
-
-                input_ids_searching.push(ids.to_vec());
-            }
-
             let mut all_ids_new = Vec::new();
             let max_len = all_ids.iter().map(|ids| ids.len()).max().unwrap();
             for ids in all_ids {
@@ -413,9 +368,6 @@ impl InputsProcessor for Qwen3VLImageProcessor {
                 video_grid_thw_accum.map(|vid| Tensor::cat(&vid, 0).unwrap()),
                 all_continuous_img_pad,
                 all_continuous_vid_pad,
-                input_ids_searching,
-                image_nums,
-                video_nums,
             )
         } else {
             (
@@ -423,11 +375,8 @@ impl InputsProcessor for Qwen3VLImageProcessor {
                 None,
                 None,
                 None,
-                vec![],
-                vec![],
                 vec![vec![]; input_seqs.len()],
-                vec![0; input_seqs.len()],
-                vec![0; input_seqs.len()],
+                vec![vec![]; input_seqs.len()],
             )
         };
 
@@ -496,9 +445,6 @@ impl InputsProcessor for Qwen3VLImageProcessor {
                 seqlens,
                 continuous_img_pad,
                 continuous_vid_pad,
-                input_ids_searching,
-                image_nums,
-                video_nums,
             }),
             paged_attn_meta,
             flash_meta,
