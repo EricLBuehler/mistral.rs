@@ -45,10 +45,10 @@ pub struct VisionConfig {
     pub deepstack_visual_indexes: Vec<usize>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct MRopeScaling {
-    pub mrope_section: Vec<usize>,
-}
+// #[derive(Debug, Clone, serde::Deserialize)]
+// pub struct MRopeScaling {
+//     pub mrope_section: Vec<usize>,
+// }
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct TextConfig {
@@ -65,7 +65,7 @@ pub struct TextConfig {
     pub tie_word_embeddings: bool,
     pub rope_theta: f64,
     pub sliding_window: Option<usize>,
-    pub rope_scaling: MRopeScaling,
+    // pub rope_scaling: MRopeScaling,
     pub quantization_config: Option<QuantizedConfig>,
     // pub vision_start_token_id: usize,
     // pub max_window_layers: usize,
