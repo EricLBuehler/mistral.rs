@@ -391,15 +391,21 @@ impl Qwen3VLModel {
         continuous_vid_pad: Vec<Vec<(usize, usize)>>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+        let mut attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             &seqlen_offsets as &dyn PastKvLenCache,
             self.text.cfg.sliding_window,
             self.text.dtype,
             self.text.cfg.num_attn_heads,
         )?;
+        let is_first_chunk = metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(true);
+        attention_mask = attention_mask.filter(|_| is_first_chunk);
 
         let mut input_embeds = self.text.embed_tokens(input_ids)?;
         let (batch_size, seq_len, hidden_dim) = input_embeds.dims3()?;
@@ -609,6 +615,7 @@ impl Qwen3VLModel {
             seqlen_offsets,
             &position_ids,
             context_lens,
+            metadata,
             flash_params,
             visual_pos_masks.as_ref(),
             deepstack_visual_embeds
@@ -637,7 +644,7 @@ impl VisionModel for Qwen3VLModel {
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let Qwen3VLVisionSpecificArgs {
@@ -670,6 +677,7 @@ impl VisionModel for Qwen3VLModel {
             continuous_vid_pad,
             seqlen_offsets,
             context_lens,
+            metadata,
             flash_params,
         )
     }

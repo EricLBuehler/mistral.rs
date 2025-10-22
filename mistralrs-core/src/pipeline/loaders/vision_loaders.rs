@@ -5541,7 +5541,7 @@ impl VisionModelLoader for Qwen3VLLoader {
         Arc::new(Qwen3VLProcessor::new(max_edge))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        false
+        true
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen3VLPrefixer)
