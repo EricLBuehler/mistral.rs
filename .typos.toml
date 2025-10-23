@@ -26,6 +26,7 @@ extend-ignore-re = [
     "elem_to_loc_2_nd",
     "elem_to_loc_3_nd",
     "thr_reduce",
+    "thw",
 ]
 
 [type.rust.extend-identifiers]
