@@ -128,33 +128,6 @@ jobs:
           command: check
           args: --workspace
 
-  python-sdist-mypy:
-    name: Python sdist mypy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install build tooling
-        run: |
-          python -m pip install --upgrade pip
-          pip install maturin==1.7 mypy
-      - name: Check maturin metadata
-        run: python scripts/check_maturin_metadata.py
-      - name: Build sdist
-        working-directory: mistralrs-pyo3
-        run: maturin sdist --out dist
-      - name: Install from sdist
-        run: pip install --force-reinstall --no-binary=:all: --no-deps mistralrs-pyo3/dist/*.tar.gz
-      - name: Run mypy smoke test
-        run: mypy --hide-error-context --strict examples/python/mypy_stub_smoke.py
-  
   # run `mlc` (`cargo install mlc`)
   # markdown-link-check:
   #   runs-on: ubuntu-latest

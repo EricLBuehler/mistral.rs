@@ -84,6 +84,15 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
       --matformer-slice-name "Config for E2.49B (block-level)"
     ```
   </details>
+
+- 🧠+📷 Run the **Qwen 3 VL** reasoning vision models with full tool-calling support: [documentation](docs/QWEN3VL.md)  
+  <details>
+    <summary>Show command</summary>
+
+    ```bash
+    ./mistralrs-server -i --isq 8 run -m Qwen/Qwen3-VL-4B-Thinking
+    ```
+  </details>
   
 
 - 🤗🤗🤗 Run the **SmolLM 3** long-context hybrid-reasoning model with full tool-calling support: [documentation](docs/SMOLLM3.md)  
@@ -553,6 +562,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `mistral3`
 - `llama4`
 - `gemma3n`
+- `qwen3vl`
 
 </details>
 
@@ -616,6 +626,7 @@ Please submit more benchmarks via raising an issue!
 |SmolLM3| | |✅|
 |Dia 1.6b| | |✅|
 |Gemma 3n| | |✅|
+|Qwen 3 VL | |✅|
 </details>
 
 <details>
@@ -663,6 +674,7 @@ Please submit more benchmarks via raising an issue!
 |Qwen 3| | | |
 |SmolLM3|✅| | |
 |Gemma 3n| | | |
+|Qwen 3 VL | | |
 </details>
 
 <details>
@@ -697,7 +709,8 @@ Please submit more benchmarks via raising an issue!
 |Llama 4| |
 |Qwen 3| |
 |SmolLM3|✅|
-|Gemma 3n| | | |
+|Gemma 3n| |
+|Qwen 3 VL | |
 </details>
 
 ### Using derivative and adapter models
