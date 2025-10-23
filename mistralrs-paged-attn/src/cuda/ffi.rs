@@ -219,4 +219,31 @@ extern "C" {
         numel_per_block: i32,
         stream: i64,
     );
+
+    pub fn update_kv_scales_f32(
+        k: *const c_void,
+        v: *const c_void,
+        elements: c_long,
+        k_scales: *const f32,
+        v_scales: *const f32,
+        stream: i64,
+    );
+
+    pub fn update_kv_scales_f16(
+        k: *const c_void,
+        v: *const c_void,
+        elements: c_long,
+        k_scales: *const f32,
+        v_scales: *const f32,
+        stream: i64,
+    );
+
+    pub fn update_kv_scales_bf16(
+        k: *const c_void,
+        v: *const c_void,
+        elements: c_long,
+        k_scales: *const f32,
+        v_scales: *const f32,
+        stream: i64,
+    );
 }
