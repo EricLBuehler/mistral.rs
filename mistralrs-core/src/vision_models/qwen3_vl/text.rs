@@ -97,6 +97,7 @@ struct Attention {
 }
 
 impl Attention {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &TextConfig,
@@ -306,6 +307,7 @@ pub struct DecoderLayer {
 }
 
 impl DecoderLayer {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &TextConfig,
@@ -511,6 +513,7 @@ impl Qwen3VLTextModel {
         self.embed_tokens.forward(input_ids)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn forward_embeds(
         &self,
         mut xs: Tensor,

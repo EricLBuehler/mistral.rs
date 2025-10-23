@@ -138,7 +138,7 @@ impl Qwen3VLModel {
                 {
                     if mask_val != 0.0 {
                         valid_indices.push(idx);
-                        filtered_tokens.push(token as u32);
+                        filtered_tokens.push(token);
                     }
                 }
 
@@ -176,14 +176,13 @@ impl Qwen3VLModel {
                         continue;
                     }
 
-                    let mut placeholder_start = None;
-                    for pos in start_idx + 1..end_idx {
-                        let tok = filtered_tokens[pos];
-                        if tok == self.image_token_id || tok == self.video_token_id {
-                            placeholder_start = Some(pos);
-                            break;
-                        }
-                    }
+                    let placeholder_start = filtered_tokens[start_idx + 1..end_idx]
+                        .iter()
+                        .enumerate()
+                        .find_map(|(offset, &tok)| {
+                            (tok == self.image_token_id || tok == self.video_token_id)
+                                .then_some(offset + start_idx + 1)
+                        });
                     let placeholder_start = match placeholder_start {
                         Some(pos) => pos,
                         None => {
@@ -343,9 +342,9 @@ impl Qwen3VLModel {
             }
 
             let mut flat_positions = Vec::with_capacity(3 * batch * seq_len);
-            for axis in 0..3 {
-                for batch_idx in 0..batch {
-                    flat_positions.extend_from_slice(&position_ids_data[axis][batch_idx]);
+            for plane in position_ids_data.iter().take(3) {
+                for row in plane.iter().take(batch) {
+                    flat_positions.extend_from_slice(row);
                 }
             }
             let position_ids = Tensor::from_vec(flat_positions, (3, batch, seq_len), &device)?;
@@ -428,7 +427,7 @@ impl Qwen3VLModel {
             let (image_embeds, deepstack_image_embeds) =
                 self.vision.forward(&pixel_values, image_grid_thw_ref)?;
             let image_embeds = image_embeds.to_device(&device)?.to_dtype(self.text.dtype)?;
-            let mut deepstack_image_embeds = deepstack_image_embeds
+            let deepstack_image_embeds = deepstack_image_embeds
                 .into_iter()
                 .map(|t| t.to_device(&device)?.to_dtype(self.text.dtype))
                 .collect::<Result<Vec<_>>>()?;
@@ -462,7 +461,7 @@ impl Qwen3VLModel {
                 }
             }
             image_mask_opt = Some(image_mask.to_dtype(DType::U8)?);
-            deepstack_image_opt = Some(deepstack_image_embeds.drain(..).collect());
+            deepstack_image_opt = Some(deepstack_image_embeds);
         }
 
         if let Some(pixel_values_videos) = &pixel_values_videos {
@@ -477,7 +476,7 @@ impl Qwen3VLModel {
             let (video_embeds, deepstack_video_embeds) =
                 self.vision.forward(&pixel_values, video_grid_thw_ref)?;
             let video_embeds = video_embeds.to_device(&device)?.to_dtype(self.text.dtype)?;
-            let mut deepstack_video_embeds = deepstack_video_embeds
+            let deepstack_video_embeds = deepstack_video_embeds
                 .into_iter()
                 .map(|t| t.to_device(&device)?.to_dtype(self.text.dtype))
                 .collect::<Result<Vec<_>>>()?;
@@ -511,7 +510,7 @@ impl Qwen3VLModel {
                 }
             }
             video_mask_opt = Some(video_mask.to_dtype(DType::U8)?);
-            deepstack_video_opt = Some(deepstack_video_embeds.drain(..).collect());
+            deepstack_video_opt = Some(deepstack_video_embeds);
         }
 
         let (visual_pos_masks, deepstack_visual_embeds) = match (
@@ -618,9 +617,7 @@ impl Qwen3VLModel {
             metadata,
             flash_params,
             visual_pos_masks.as_ref(),
-            deepstack_visual_embeds
-                .as_ref()
-                .map(|embeds| embeds.as_slice()),
+            deepstack_visual_embeds.as_deref(),
         )?;
         Ok(out)
     }
