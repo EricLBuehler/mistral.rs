@@ -1,9 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
+use candle_nn::Linear;
 use mistralrs_quant::{
-    ColumnParallelLayer, FusedExperts, QuantMethod, QuantizedConfig, ReplicatedLayer,
-    RowParallelLayer, ShardedVarBuilder,
+    apply_immediate_isq, ColumnParallelLayer, FusedExperts, QuantMethod, QuantMethodConfig,
+    QuantizedConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, UnquantLinear,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -452,6 +453,192 @@ impl FastMoeMlp {
     }
 }
 
+struct GroupedMoeMlp {
+    gate: Arc<dyn QuantMethod>,
+    gate_proj_vec: Vec<Arc<dyn QuantMethod>>,
+    up_proj_vec: Vec<Arc<dyn QuantMethod>>,
+    down_proj_vec: Vec<Arc<dyn QuantMethod>>,
+    act: Activation,
+    norm_topk_prob: bool,
+    num_experts_per_tok: usize,
+}
+
+impl GroupedMoeMlp {
+    fn new(
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        layer_device: Device,
+        _comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        let num_experts = cfg.num_experts;
+        let gate = mistralrs_quant::linear_no_bias(
+            cfg.hidden_size,
+            num_experts,
+            &cfg.quantization_config,
+            vb.pp("gate").set_device(layer_device),
+        )?;
+
+        let experts_vb = vb.pp("experts");
+        let mut gate_proj_vec: Vec<Arc<dyn QuantMethod>> = Vec::new();
+        let mut up_proj_vec: Vec<Arc<dyn QuantMethod>> = Vec::new();
+        let mut down_proj_vec: Vec<Arc<dyn QuantMethod>> = Vec::new();
+        for i in 0..num_experts {
+            let vb = experts_vb.pp(i);
+            let gate_proj = vb.get(
+                (cfg.moe_intermediate_size, cfg.hidden_size),
+                "gate_proj.weight",
+            )?;
+            let up_proj = vb.get(
+                (cfg.moe_intermediate_size, cfg.hidden_size),
+                "up_proj.weight",
+            )?;
+            let down_proj = vb.get(
+                (cfg.hidden_size, cfg.moe_intermediate_size),
+                "down_proj.weight",
+            )?;
+
+            gate_proj_vec.push(apply_immediate_isq(
+                Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                    Linear::new(gate_proj, None),
+                ))?),
+                vb.pp("gate_proj"),
+            )?);
+            up_proj_vec.push(apply_immediate_isq(
+                Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                    Linear::new(up_proj, None),
+                ))?),
+                vb.pp("up_proj"),
+            )?);
+            down_proj_vec.push(apply_immediate_isq(
+                Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                    Linear::new(down_proj, None),
+                ))?),
+                vb.pp("down_proj"),
+            )?);
+        }
+
+        Ok(Self {
+            gate,
+            gate_proj_vec,
+            up_proj_vec,
+            down_proj_vec,
+            act: cfg.hidden_act,
+            norm_topk_prob: cfg.norm_topk_prob,
+            num_experts_per_tok: cfg.num_experts_per_tok,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let original_dtype = xs.dtype();
+
+        let (b_size, seq_len, hidden_dim) = xs.dims3()?;
+
+        let router_logits = self.gate.forward_autocast(xs)?;
+        let routing_weights =
+            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
+
+        let indices = routing_weights.arg_sort_last_dim(false)?.narrow(
+            D::Minus1,
+            0,
+            self.num_experts_per_tok,
+        )?;
+        let mut scores = routing_weights.gather(&indices.contiguous()?, D::Minus1)?;
+
+        if self.norm_topk_prob {
+            scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
+        }
+
+        let ys = {
+            let gate = grouped_mat_mul(&xs, &self.gate_proj_vec, &indices)?;
+            let up = grouped_mat_mul(&xs, &self.up_proj_vec, &indices)?;
+            let xs = grouped_mat_mul(
+                &(up * gate.apply(&self.act)?)?,
+                &self.down_proj_vec,
+                &indices,
+            )?;
+            xs.squeeze(D::Minus2)?
+        };
+
+        ys.to_dtype(DType::F32)?
+            .broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
+            .sum(D::Minus2)?
+            .reshape((b_size, seq_len, hidden_dim))?
+            .to_dtype(original_dtype)
+    }
+}
+
+/// - `xs`: (bs, seqlen, hidden) or (tokens, hidden)
+/// - `ids`: (bs, seqlen, topk) or (tokens, topk)
+fn grouped_mat_mul(
+    xs: &Tensor,
+    experts: &Vec<Arc<dyn QuantMethod>>,
+    ids: &Tensor,
+) -> Result<Tensor> {
+    // Handle both 2D and 3D inputs
+    let (original_shape, xs_2d, ids_2d) = match xs.dims().len() {
+        2 => {
+            // Already 2D: (tokens, hidden)
+            (None, xs.clone(), ids.clone())
+        }
+        3 => {
+            // 3D: (bs, seqlen, hidden) -> reshape to (bs * seqlen, hidden)
+            let (bs, seqlen, hidden) = xs.dims3()?;
+            let xs_2d = xs.reshape((bs * seqlen, hidden))?;
+            let ids_2d = ids.reshape((bs * seqlen, ()))?; // (bs * seqlen, topk)
+            (Some((bs, seqlen)), xs_2d, ids_2d)
+        }
+        _ => candle_core::bail!(
+            "grouped_mat_mul expects xs to be 2D or 3D, got shape {:?}",
+            xs.dims()
+        ),
+    };
+
+    let (_n_tok, hidden) = xs_2d.dims2()?;
+    let ids_vec = ids_2d.to_vec2::<u32>()?;
+
+    // Build mapping: expert_id -> list of token indices
+    let mut ids_to_sorted = vec![vec![]; experts.len()];
+    for expert_id in 0..experts.len() {
+        for (i, token) in ids_vec.iter().enumerate() {
+            for selected in token {
+                if *selected as usize == expert_id {
+                    ids_to_sorted[expert_id].push(i as u32);
+                }
+            }
+        }
+    }
+
+    // Initialize output tensor with zeros
+    let mut ys = xs_2d.zeros_like()?;
+
+    // Process each expert
+    for (expert_idx, expert_layer) in experts.iter().enumerate() {
+        let expert_tokens = &ids_to_sorted[expert_idx];
+        if expert_tokens.is_empty() {
+            continue;
+        }
+
+        // Gather tokens for this expert
+        let token_indices = Tensor::new(expert_tokens.as_slice(), xs_2d.device())?;
+        let expert_input = xs_2d
+            .index_select(&token_indices, 0)?
+            .reshape(((), hidden))?;
+
+        // Run expert forward pass
+        let expert_output = MatMul.qmethod_matmul(&expert_input, &**expert_layer)?;
+
+        // Add expert outputs back to their original positions
+        ys = ys.index_add(&token_indices, &expert_output, 0)?;
+    }
+
+    // Reshape back to original shape if needed
+    if let Some((bs, seqlen)) = original_shape {
+        ys = ys.reshape((bs, seqlen, hidden))?;
+    }
+
+    Ok(ys)
+}
+
 struct SlowMoeMlp {
     gate: candle_nn::Linear,
     experts: Vec<Mlp>,
@@ -554,7 +741,7 @@ impl SlowMoeMlp {
 
 enum MoeOrMlp {
     FastMoe(FastMoeMlp),
-    SlowMoe(SlowMoeMlp),
+    SlowMoe(GroupedMoeMlp),
     Mlp(Mlp),
 }
 
@@ -614,7 +801,7 @@ impl DecoderLayer {
                     comm,
                 )?)
             } else {
-                MoeOrMlp::SlowMoe(SlowMoeMlp::new(
+                MoeOrMlp::SlowMoe(GroupedMoeMlp::new(
                     cfg,
                     vb,
                     mapper
@@ -947,10 +1134,14 @@ impl IsqModel for Model {
                     tensors.push((&mut layer.fused_down_proj, Some(i)));
                 }
                 MoeOrMlp::SlowMoe(layer) => {
-                    for expert in &mut layer.experts {
-                        tensors.push((&mut expert.gate_proj, Some(i)));
-                        tensors.push((&mut expert.up_proj, Some(i)));
-                        tensors.push((&mut expert.down_proj, Some(i)));
+                    for expert in &mut layer.gate_proj_vec {
+                        tensors.push((expert, Some(i)));
+                    }
+                    for expert in &mut layer.up_proj_vec {
+                        tensors.push((expert, Some(i)));
+                    }
+                    for expert in &mut layer.down_proj_vec {
+                        tensors.push((expert, Some(i)));
                     }
                 }
             }
