@@ -551,13 +551,13 @@ impl GroupedMoeMlp {
         let ys = {
             let gate = grouped_mat_mul(&xs, &self.gate_proj_vec, &indices)?;
             let up = grouped_mat_mul(&xs, &self.up_proj_vec, &indices)?;
-            let xs = grouped_mat_mul(
+            grouped_mat_mul(
                 &(up * gate.apply(&self.act)?)?,
                 &self.down_proj_vec,
                 &indices,
-            )?;
-            xs.squeeze(D::Minus2)?
+            )?
         };
+        dbg!(&ys, &scores);
 
         ys.to_dtype(DType::F32)?
             .broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
