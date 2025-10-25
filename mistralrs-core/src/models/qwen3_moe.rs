@@ -625,7 +625,7 @@ fn grouped_mat_mul(
             .reshape(((), hidden))?;
 
         // Run expert forward pass
-        let expert_output = MatMul.qmethod_matmul(&expert_input, &**expert_layer)?;
+        let expert_output = expert_layer.forward_autocast(&expert_input)?;
 
         // Add expert outputs back to their original positions
         ys = ys.index_add(&token_indices, &expert_output, 0)?;
