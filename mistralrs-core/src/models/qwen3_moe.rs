@@ -593,7 +593,7 @@ fn grouped_mat_mul(
         ),
     };
 
-    let (_n_tok, hidden) = xs_2d.dims2()?;
+    let (n_tok, _in_dim) = xs_2d.dims2()?;
     let ids_vec = ids_2d.to_vec2::<u32>()?;
 
     // Build mapping: expert_id -> list of token indices
@@ -608,10 +608,8 @@ fn grouped_mat_mul(
         }
     }
 
-    // Initialize output tensor with zeros
-    let mut ys = xs_2d.zeros_like()?;
+    let mut ys: Option<Tensor> = None;
 
-    // Process each expert
     for (expert_idx, expert_layer) in experts.iter().enumerate() {
         let expert_tokens = &ids_to_sorted[expert_idx];
         if expert_tokens.is_empty() {
@@ -620,20 +618,26 @@ fn grouped_mat_mul(
 
         // Gather tokens for this expert
         let token_indices = Tensor::new(expert_tokens.as_slice(), xs_2d.device())?;
-        let expert_input = xs_2d
-            .index_select(&token_indices, 0)?
-            .reshape(((), hidden))?;
+        let expert_input = xs_2d.index_select(&token_indices, 0)?;
 
         // Run expert forward pass
         let expert_output = expert_layer.forward_autocast(&expert_input)?;
 
+        if ys.is_none() {
+            let out_dim = expert_output.dim(D::Minus1)?;
+            ys = Some(Tensor::zeros((n_tok, out_dim), expert_output.dtype(), xs_2d.device())?);
+        }
+
         // Add expert outputs back to their original positions
-        ys = ys.index_add(&token_indices, &expert_output, 0)?;
+        let ys_tensor = ys.as_ref().unwrap();
+        ys = Some(ys_tensor.index_add(&token_indices, &expert_output, 0)?);
     }
 
-    // Reshape back to original shape if needed
+    let mut ys = ys.ok_or_else(|| candle_core::Error::Msg("No experts were selected".to_string()))?;
+
     if let Some((bs, seqlen)) = original_shape {
-        ys = ys.reshape((bs, seqlen, hidden))?;
+        let out_dim = ys.dim(D::Minus1)?;
+        ys = ys.reshape((bs, seqlen, out_dim))?;
     }
 
     Ok(ys)
