@@ -573,7 +573,10 @@ impl GroupedMoeMlp {
 /// For each token, applies the selected experts and returns their outputs separately
 /// (not accumulated), preserving the topk dimension for later weighting.
 ///
-/// - `xs`: (bs, seqlen, hidden) or (tokens, hidden)
+/// - `xs`: Input tensor - can be:
+///   - 2D: (tokens, hidden)
+///   - 3D: (bs, seqlen, hidden)
+///   - 4D: (bs, seqlen, topk, intermediate) - for down_proj after gate*up
 /// - `ids`: (bs, seqlen, topk) - expert indices for each token
 ///
 /// Returns: (bs, seqlen, topk, output_dim) where each token has topk expert outputs
@@ -582,42 +585,75 @@ fn grouped_mat_mul(
     experts: &Vec<Arc<dyn QuantMethod>>,
     ids: &Tensor,
 ) -> Result<Tensor> {
-    let (bs, seqlen, hidden, topk) = match xs.dims().len() {
+    let (bs, seqlen, hidden, topk, is_4d) = match xs.dims().len() {
         2 => {
             let (tokens, hidden) = xs.dims2()?;
             let topk = ids.dim(D::Minus1)?;
-            (1, tokens, hidden, topk)
+            (1, tokens, hidden, topk, false)
         }
         3 => {
             let (bs, seqlen, hidden) = xs.dims3()?;
             let topk = ids.dim(D::Minus1)?;
-            (bs, seqlen, hidden, topk)
+            (bs, seqlen, hidden, topk, false)
+        }
+        4 => {
+            // Input is (bs, seqlen, topk, hidden) - intermediate activations
+            // In this case, ids should still be (bs, seqlen, topk)
+            let dims4 = xs.dims4()?;
+            (dims4.0, dims4.1, dims4.3, dims4.2, true)
         }
         _ => candle_core::bail!(
-            "grouped_mat_mul expects xs to be 2D or 3D, got shape {:?}",
+            "grouped_mat_mul expects xs to be 2D, 3D, or 4D, got shape {:?}",
             xs.dims()
         ),
     };
 
-    // Flatten to (bs * seqlen, hidden) and (bs * seqlen, topk)
-    let xs_2d = xs.reshape((bs * seqlen, hidden))?;
-    let ids_2d = ids.reshape((bs * seqlen, topk))?;
-    let ids_vec = ids_2d.to_vec2::<u32>()?;
+    // Flatten to (bs * seqlen, hidden) or (bs * seqlen * topk, hidden) for 4D case
+    let (xs_2d, ids_vec) = if is_4d {
+        // For 4D input (bs, seqlen, topk, hidden), reshape to (bs * seqlen * topk, hidden)
+        let xs_flat = xs.reshape((bs * seqlen * topk, hidden))?;
+        // ids is (bs, seqlen, topk)
+        let ids_2d = ids.reshape((bs * seqlen, topk))?;
+        let ids_vec = ids_2d.to_vec2::<u32>()?;
+        (xs_flat, ids_vec)
+    } else {
+        // For 2D/3D input, flatten to (bs * seqlen, hidden)
+        let xs_2d = xs.reshape((bs * seqlen, hidden))?;
+        let ids_2d = ids.reshape((bs * seqlen, topk))?;
+        let ids_vec = ids_2d.to_vec2::<u32>()?;
+        (xs_2d, ids_vec)
+    };
 
-    // Build a map: (token_idx, topk_idx) -> expert_id
-    // We need to track which expert corresponds to which position in the topk dimension
-    let mut expert_token_map: Vec<Vec<(usize, usize)>> = vec![vec![]; experts.len()];
-    for (token_idx, expert_ids) in ids_vec.iter().enumerate() {
-        for (topk_idx, &expert_id) in expert_ids.iter().enumerate() {
-            expert_token_map[expert_id as usize].push((token_idx, topk_idx));
+    // Build a map based on whether input is 4D or not
+    let expert_indices_map: Vec<Vec<usize>> = if is_4d {
+        // For 4D input: map expert_id -> flat indices into (bs*seqlen*topk) dimension
+        let mut map: Vec<Vec<usize>> = vec![vec![]; experts.len()];
+        for (token_idx, expert_ids) in ids_vec.iter().enumerate() {
+            for (topk_idx, &expert_id) in expert_ids.iter().enumerate() {
+                let flat_idx = token_idx * topk + topk_idx;
+                map[expert_id as usize].push(flat_idx);
+            }
         }
-    }
+        map
+    } else {
+        // For 2D/3D input: build the (token_idx, topk_idx) mapping as before
+        // We'll convert this to flat indices later
+        let mut map: Vec<Vec<usize>> = vec![vec![]; experts.len()];
+        for (token_idx, expert_ids) in ids_vec.iter().enumerate() {
+            for (topk_idx, &expert_id) in expert_ids.iter().enumerate() {
+                // For non-4D, we'll use a different approach - store the flat output index
+                let flat_output_idx = token_idx * topk + topk_idx;
+                map[expert_id as usize].push(flat_output_idx);
+            }
+        }
+        map
+    };
+
 
     // Determine output dimension by processing first non-empty expert
     let mut out_dim: Option<usize> = None;
     let mut dtype: Option<DType> = None;
     for expert_layer in experts.iter() {
-        // Take a single token as a test
         let test_input = xs_2d.narrow(0, 0, 1)?;
         let test_output = expert_layer.forward_autocast(&test_input)?;
         out_dim = Some(test_output.dim(D::Minus1)?);
@@ -627,31 +663,32 @@ fn grouped_mat_mul(
     let out_dim = out_dim.ok_or_else(|| candle_core::Error::Msg("No experts available".to_string()))?;
     let dtype = dtype.unwrap();
 
-    // Build output by collecting all (token, topk) outputs
-    // Use a Vec to build the output, then convert to tensor
+    // Build output
     let mut output_data: Vec<f32> = vec![0.0; bs * seqlen * topk * out_dim];
 
-    // Process each expert and place outputs in the correct positions
+    // Process each expert
     for (expert_idx, expert_layer) in experts.iter().enumerate() {
-        let token_topk_pairs = &expert_token_map[expert_idx];
-        if token_topk_pairs.is_empty() {
+        let flat_indices = &expert_indices_map[expert_idx];
+        if flat_indices.is_empty() {
             continue;
         }
 
         // Gather inputs for this expert
-        let token_indices: Vec<u32> = token_topk_pairs.iter().map(|(t, _)| *t as u32).collect();
-        let token_indices_tensor = Tensor::new(token_indices.as_slice(), xs_2d.device())?;
-        let expert_input = xs_2d.index_select(&token_indices_tensor, 0)?;
+        let indices_tensor = Tensor::new(
+            flat_indices.iter().map(|&x| x as u32).collect::<Vec<_>>().as_slice(),
+            xs_2d.device(),
+        )?;
+        let expert_input = xs_2d.index_select(&indices_tensor, 0)?;
 
         // Run expert forward pass
-        let expert_output = expert_layer.forward_autocast(&expert_input)?; // (n_tokens_for_expert, out_dim)
+        let expert_output = expert_layer.forward_autocast(&expert_input)?;
 
-        // Convert to f32 on CPU for easy manipulation
+        // Convert to f32 on CPU
         let expert_output_f32 = expert_output.to_dtype(DType::F32)?.to_device(&candle_core::Device::Cpu)?.to_vec2::<f32>()?;
 
-        // Place outputs in the correct (token_idx, topk_idx) positions
-        for (i, &(token_idx, topk_idx)) in token_topk_pairs.iter().enumerate() {
-            let base_idx = (token_idx * topk * out_dim) + (topk_idx * out_dim);
+        // Place outputs in correct positions
+        for (i, &flat_idx) in flat_indices.iter().enumerate() {
+            let base_idx = flat_idx * out_dim;
             for j in 0..out_dim {
                 output_data[base_idx + j] = expert_output_f32[i][j];
             }
