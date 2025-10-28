@@ -1,8 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use crate::pipeline::text_models_inputs_processor::FlashParams;
+use crate::{attention::backends::cpu, pipeline::text_models_inputs_processor::FlashParams};
 
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 
 mod backends;
 
@@ -115,12 +115,40 @@ impl Sdpa {
         let (b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()?;
         let (_, _, _, k_head_dim) = k.dims4()?;
         let (_, _, _, v_head_dim) = v.dims4()?;
-        if crate::using_flash_attn() && q.device().is_cuda() {
+
+        let can_use_flash =
+            q.device().is_cpu() || q.device().is_cuda() && crate::using_flash_attn();
+
+        if can_use_flash {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
             let v = v.transpose(1, 2)?;
-            return flash_attn(&q, &k, &v, flash_params, sdpa_params)?.transpose(1, 2);
+
+            if q.device().is_cpu() {
+                match q.dtype() {
+                    DType::F32 => {
+                        return cpu::run_flash_attn_cpu::<f32>(&q, &k, &v, mask, sdpa_params);
+                    }
+                    DType::F16 => {
+                        return cpu::run_flash_attn_cpu::<half::f16>(&q, &k, &v, mask, sdpa_params)
+                    }
+                    DType::BF16 => {
+                        return cpu::run_flash_attn_cpu::<half::bf16>(
+                            &q,
+                            &k,
+                            &v,
+                            mask,
+                            sdpa_params,
+                        );
+                    }
+                    _ => {
+                        return Err(candle_core::Error::Msg("Unsupported data type".into()));
+                    }
+                }
+            } else {
+                return flash_attn(&q, &k, &v, flash_params, sdpa_params)?.transpose(1, 2);
+            }
         }
 
         self.run_attention_noflash(q, k, v, mask, sdpa_params)

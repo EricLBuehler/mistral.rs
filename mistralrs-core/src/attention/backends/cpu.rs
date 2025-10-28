@@ -229,7 +229,7 @@ impl<'a> MaskInfo<'a> {
     }
 }
 
-pub(super) trait DowncastF32 {
+pub(crate) trait DowncastF32 {
     fn cast(x: f32) -> Self;
 }
 
@@ -253,7 +253,7 @@ impl DowncastF32 for bf16 {
 
 /// Up‑cast helper: convert any supported element type to `f32` once so that the
 /// hot kernels can run entirely in `f32` and only down‑cast when writing out.
-pub(super) trait UpcastF32 {
+pub trait UpcastF32 {
     fn to_f32(self) -> f32;
 }
 
