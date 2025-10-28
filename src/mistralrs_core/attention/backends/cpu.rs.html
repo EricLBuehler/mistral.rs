@@ -88,7 +88,7 @@
 <a href=#88 id=88 data-nosnippet>88</a>    sum
 <a href=#89 id=89 data-nosnippet>89</a>}
 <a href=#90 id=90 data-nosnippet>90</a>
-<a href=#91 id=91 data-nosnippet>91</a><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">trait </span>DowncastF32 {
+<a href=#91 id=91 data-nosnippet>91</a><span class="kw">pub trait </span>DowncastF32 {
 <a href=#92 id=92 data-nosnippet>92</a>    <span class="kw">fn </span>cast(x: f32) -&gt; <span class="self">Self</span>;
 <a href=#93 id=93 data-nosnippet>93</a>}
 <a href=#94 id=94 data-nosnippet>94</a>
@@ -112,7 +112,7 @@
 <a href=#112 id=112 data-nosnippet>112</a>
 <a href=#113 id=113 data-nosnippet>113</a><span class="doccomment">/// Up‑cast helper: convert any supported element type to `f32` once so that the
 <a href=#114 id=114 data-nosnippet>114</a>/// hot kernels can run entirely in `f32` and only down‑cast when writing out.
-<a href=#115 id=115 data-nosnippet>115</a></span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">trait </span>UpcastF32 {
+<a href=#115 id=115 data-nosnippet>115</a></span><span class="kw">pub trait </span>UpcastF32 {
 <a href=#116 id=116 data-nosnippet>116</a>    <span class="kw">fn </span>to_f32(<span class="self">self</span>) -&gt; f32;
 <a href=#117 id=117 data-nosnippet>117</a>}
 <a href=#118 id=118 data-nosnippet>118</a>
