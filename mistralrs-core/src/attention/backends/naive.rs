@@ -27,7 +27,7 @@ pub(crate) fn naive_sdpa(
     maybe_synchronize(q.device())?;
 
     // Use chunked attention with a closure that captures the necessary parameters
-    chunked_attention(q, &k, &v, mask, |q_chunk, k, v, mask_chunk| {
+    chunked_attention(q, k, v, mask, |q_chunk, k, v, mask_chunk| {
         let mut att =
             MatMul.matmul_affine_mul(q_chunk, &k.t()?, sdpa_params.softmax_scale.into())?;
 
