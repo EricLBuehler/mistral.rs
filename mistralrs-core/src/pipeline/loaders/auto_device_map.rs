@@ -256,9 +256,15 @@ pub fn get_device_layers(
             .pop()
             .context("No more devices to map to. The model does not fit on this system.")?;
 
-        // All usage of 90% of the memory as a maximum.
+        // For CPU: effectively unlimited capacity since it can use swap memory
+        // For GPU/accelerators: use 90% of available memory as maximum
         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-        let cap = (cap as f64 * 0.90) as usize;
+        let cap = if dev.is_cpu() {
+            // Allow unlimited capacity for CPU - swap will handle it
+            usize::MAX
+        } else {
+            (cap as f64 * 0.90) as usize
+        };
 
         // Algorithm is to check the following:
         // 1) (no mapping) if *everything* fits on the first dev (non mapped and mapped)
