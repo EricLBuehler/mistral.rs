@@ -844,18 +844,18 @@
 <a href=#844 id=844 data-nosnippet>844</a>        sample_speculative: bool,
 <a href=#845 id=845 data-nosnippet>845</a>        multiple_sequences: bool,
 <a href=#846 id=846 data-nosnippet>846</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
-<a href=#847 id=847 data-nosnippet>847</a>        <span class="comment">// if cfg!(feature = "metal") &amp;&amp; !multiple_sequences {
-<a href=#848 id=848 data-nosnippet>848</a>        //     return self.sample_fast(
-<a href=#849 id=849 data-nosnippet>849</a>        //         logits,
-<a href=#850 id=850 data-nosnippet>850</a>        //         context,
-<a href=#851 id=851 data-nosnippet>851</a>        //         return_logprobs,
-<a href=#852 id=852 data-nosnippet>852</a>        //         self.top_k,
-<a href=#853 id=853 data-nosnippet>853</a>        //         self.top_p,
-<a href=#854 id=854 data-nosnippet>854</a>        //         self.min_p,
-<a href=#855 id=855 data-nosnippet>855</a>        //     );
-<a href=#856 id=856 data-nosnippet>856</a>        // }
+<a href=#847 id=847 data-nosnippet>847</a>        <span class="kw">if </span><span class="macro">cfg!</span>(feature = <span class="string">"metal"</span>) &amp;&amp; !multiple_sequences {
+<a href=#848 id=848 data-nosnippet>848</a>            <span class="kw">return </span><span class="self">self</span>.sample_fast(
+<a href=#849 id=849 data-nosnippet>849</a>                logits,
+<a href=#850 id=850 data-nosnippet>850</a>                context,
+<a href=#851 id=851 data-nosnippet>851</a>                return_logprobs,
+<a href=#852 id=852 data-nosnippet>852</a>                <span class="self">self</span>.top_k,
+<a href=#853 id=853 data-nosnippet>853</a>                <span class="self">self</span>.top_p,
+<a href=#854 id=854 data-nosnippet>854</a>                <span class="self">self</span>.min_p,
+<a href=#855 id=855 data-nosnippet>855</a>            );
+<a href=#856 id=856 data-nosnippet>856</a>        }
 <a href=#857 id=857 data-nosnippet>857</a>
-<a href=#858 id=858 data-nosnippet>858</a>        </span><span class="kw">let </span>logits = logits.to_vec1()<span class="question-mark">?</span>;
+<a href=#858 id=858 data-nosnippet>858</a>        <span class="kw">let </span>logits = logits.to_vec1()<span class="question-mark">?</span>;
 <a href=#859 id=859 data-nosnippet>859</a>        <span class="kw">let </span><span class="kw-2">mut </span>logits = <span class="self">self</span>.apply_penalties(logits, context)<span class="question-mark">?</span>;
 <a href=#860 id=860 data-nosnippet>860</a>        <span class="kw">for </span>processor <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.logits_processors {
 <a href=#861 id=861 data-nosnippet>861</a>            logits = processor.apply(<span class="kw-2">&amp;</span>logits, context)<span class="question-mark">?</span>;
