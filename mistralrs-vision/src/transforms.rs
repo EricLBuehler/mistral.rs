@@ -54,11 +54,13 @@ impl ImageTransform for Normalize {
                 self.std.len()
             );
         }
-        let mut accum = Vec::new();
-        for (i, channel) in x.chunk(num_channels, D::Minus(3))?.iter().enumerate() {
-            accum.push(((channel - self.mean[i])? / self.std[i])?);
-        }
-        Tensor::cat(&accum, D::Minus(3))
+        let dtype = x.dtype();
+        let device = x.device();
+        let mean = Tensor::from_slice(&self.mean, (num_channels,), device)?.to_dtype(dtype)?;
+        let std = Tensor::from_slice(&self.std, (num_channels,), device)?.to_dtype(dtype)?;
+        let mean = mean.reshape((num_channels, 1, 1))?;
+        let std = std.reshape((num_channels, 1, 1))?;
+        (x - mean)? / std
     }
 }
 
