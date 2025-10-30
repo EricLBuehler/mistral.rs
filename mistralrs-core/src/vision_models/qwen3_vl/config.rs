@@ -62,7 +62,6 @@ pub struct TextConfig {
     pub hidden_act: Activation,
     pub max_position_embeddings: usize,
     pub rms_norm_eps: f64,
-    pub tie_word_embeddings: bool,
     pub rope_theta: f64,
     pub sliding_window: Option<usize>,
     // pub rope_scaling: MRopeScaling,
@@ -79,4 +78,5 @@ pub struct Config {
     pub video_token_id: u32,
     pub vision_start_token_id: u32,
     pub vision_end_token_id: u32,
+    pub tie_word_embeddings: bool,
 }

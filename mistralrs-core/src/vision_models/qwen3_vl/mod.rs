@@ -41,7 +41,7 @@ impl Qwen3VLModel {
     pub fn new(
         cfg: &Config,
         vb: ShardedVarBuilder,
-        is_gptx: bool,
+        _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
@@ -54,7 +54,7 @@ impl Qwen3VLModel {
         let text = Qwen3VLTextModel::new(
             &cfg.text_config,
             vb.clone(),
-            is_gptx,
+            cfg.tie_word_embeddings,
             normal_loading_metadata,
             attention_mechanism,
         )?;

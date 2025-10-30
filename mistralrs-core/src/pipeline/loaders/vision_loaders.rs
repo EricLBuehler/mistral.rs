@@ -5652,11 +5652,12 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Qwen3VLConfig = serde_json::from_str(config)?;
+        let tie = cfg.tie_word_embeddings;
         let text_elems = {
             let cfg = &cfg.text_config;
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+            let lm_head = if !tie || weight_pack_factor != 1 {
                 cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
