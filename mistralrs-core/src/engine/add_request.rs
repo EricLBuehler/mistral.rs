@@ -251,18 +251,20 @@ impl Engine {
                 let max_len = get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len;
                 let currently_over = prompt_len - max_len;
 
-                // Cap sampling_max to max_len to prevent overflow when calculating slice position
+                // Reserve space for generation tokens
+                // If user specified max_len (generation length), reserve that many tokens (capped to max_len)
+                // Otherwise, reserve just 1 token minimum to allow at least some generation
                 let sampling_max = if let Some(sampling_max) = request.sampling_params.max_len {
                     sampling_max.min(max_len)
                 } else {
-                    10.min(max_len)
+                    1
                 };
 
-                // Calculate how many tokens to keep: max_len - sampling_max
+                // Calculate how many prompt tokens to keep: max_len - sampling_max
                 // This ensures we have room for generation
                 let tokens_to_keep = max_len.saturating_sub(sampling_max);
 
-                // Safely calculate slice start position
+                // Safely calculate slice start position - keep the end of the prompt
                 let slice_start = prompt_len.saturating_sub(tokens_to_keep);
 
                 prompt_tokens = prompt_tokens[slice_start..].to_vec();
