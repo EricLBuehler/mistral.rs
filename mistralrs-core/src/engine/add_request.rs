@@ -250,16 +250,24 @@ impl Engine {
                 let prompt_len = prompt_tokens.len();
                 let max_len = get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len;
                 let currently_over = prompt_len - max_len;
+
+                // Reserve space for generation tokens
+                // If user specified max_len (generation length), reserve that many tokens (capped to max_len)
+                // Otherwise, reserve just 1 token minimum to allow at least some generation
                 let sampling_max = if let Some(sampling_max) = request.sampling_params.max_len {
-                    if currently_over + sampling_max >= prompt_len {
-                        10
-                    } else {
-                        sampling_max
-                    }
+                    sampling_max.min(max_len)
                 } else {
-                    10
+                    1
                 };
-                prompt_tokens = prompt_tokens[(currently_over + sampling_max)..].to_vec();
+
+                // Calculate how many prompt tokens to keep: max_len - sampling_max
+                // This ensures we have room for generation
+                let tokens_to_keep = max_len.saturating_sub(sampling_max);
+
+                // Safely calculate slice start position - keep the end of the prompt
+                let slice_start = prompt_len.saturating_sub(tokens_to_keep);
+
+                prompt_tokens = prompt_tokens[slice_start..].to_vec();
                 warn!("Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation.", request.id, currently_over, prompt_len - prompt_tokens.len());
             }
         }
