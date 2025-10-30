@@ -133,9 +133,9 @@ impl DrySamplingParamsInner {
                             .map(|enc| {
                                 let ids = enc.get_ids();
                                 if !ids.is_empty() {
-                                    None
-                                } else {
                                     Some(ids[ids.len() - 1])
+                                } else {
+                                    None
                                 }
                             })
                     })
