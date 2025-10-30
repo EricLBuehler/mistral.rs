@@ -397,7 +397,7 @@ impl Qwen3VLTextModel {
     pub fn new(
         cfg: &TextConfig,
         vb: ShardedVarBuilder,
-        _is_gptx: bool,
+        tie: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
@@ -465,7 +465,7 @@ impl Qwen3VLTextModel {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = if !cfg.tie_word_embeddings {
+        let lm_head = if !tie {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
