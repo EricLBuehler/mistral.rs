@@ -56,11 +56,21 @@ impl ImageTransform for Normalize {
         }
         let dtype = x.dtype();
         let device = x.device();
-        let mean = Tensor::from_slice(&self.mean, (num_channels,), device)?.to_dtype(dtype)?;
-        let std = Tensor::from_slice(&self.std, (num_channels,), device)?.to_dtype(dtype)?;
+        let mean = Tensor::from_slice(
+            &self.mean.iter().map(|x| *x as f32).collect::<Vec<_>>(),
+            (num_channels,),
+            device,
+        )?
+        .to_dtype(dtype)?;
+        let std = Tensor::from_slice(
+            &self.std.iter().map(|x| *x as f32).collect::<Vec<_>>(),
+            (num_channels,),
+            device,
+        )?
+        .to_dtype(dtype)?;
         let mean = mean.reshape((num_channels, 1, 1))?;
         let std = std.reshape((num_channels, 1, 1))?;
-        (x - mean)? / std
+        x.broadcast_sub(&mean)?.broadcast_div(&std)
     }
 }
 
