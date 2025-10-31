@@ -142,9 +142,9 @@
 <a href=#142 id=142 data-nosnippet>142</a>    <span class="attr">#[test]
 <a href=#143 id=143 data-nosnippet>143</a>    </span><span class="kw">fn </span>test_normalize() {
 <a href=#144 id=144 data-nosnippet>144</a>        <span class="kw">use crate</span>::{ImageTransform, Normalize};
-<a href=#145 id=145 data-nosnippet>145</a>        <span class="kw">use </span>candle_core::{DType, Device, Tensor};
+<a href=#145 id=145 data-nosnippet>145</a>        <span class="kw">use </span>candle_core::{Device, Tensor};
 <a href=#146 id=146 data-nosnippet>146</a>
-<a href=#147 id=147 data-nosnippet>147</a>        <span class="kw">let </span>image = Tensor::zeros((<span class="number">3</span>, <span class="number">5</span>, <span class="number">4</span>), DType::U8, <span class="kw-2">&amp;</span>Device::Cpu).unwrap();
+<a href=#147 id=147 data-nosnippet>147</a>        <span class="kw">let </span>image = Tensor::randn(<span class="number">1f32</span>, <span class="number">0f32</span>, (<span class="number">3</span>, <span class="number">5</span>, <span class="number">4</span>), <span class="kw-2">&amp;</span>Device::Cpu).unwrap();
 <a href=#148 id=148 data-nosnippet>148</a>        <span class="kw">let </span>res = Normalize {
 <a href=#149 id=149 data-nosnippet>149</a>            mean: <span class="macro">vec!</span>[<span class="number">0.5</span>, <span class="number">0.5</span>, <span class="number">0.5</span>],
 <a href=#150 id=150 data-nosnippet>150</a>            std: <span class="macro">vec!</span>[<span class="number">0.5</span>, <span class="number">0.5</span>, <span class="number">0.5</span>],

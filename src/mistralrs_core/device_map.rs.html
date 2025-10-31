@@ -88,14 +88,14 @@
 <a href=#88 id=88 data-nosnippet>88</a>                host_layers,
 <a href=#89 id=89 data-nosnippet>89</a>            }) =&gt; {
 <a href=#90 id=90 data-nosnippet>90</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(topology) = topology {
-<a href=#91 id=91 data-nosnippet>91</a>                    <span class="kw">if </span>topology.<span class="number">0</span>.iter().all(|x| x.is_none()) {
+<a href=#91 id=91 data-nosnippet>91</a>                    <span class="kw">if </span>topology.layers.iter().all(|x| x.is_none()) {
 <a href=#92 id=92 data-nosnippet>92</a>                        <span class="kw">return </span><span class="prelude-val">Ok</span>(Box::new(DummyDeviceMapper {
 <a href=#93 id=93 data-nosnippet>93</a>                            nm_device: device.clone(),
 <a href=#94 id=94 data-nosnippet>94</a>                        }));
 <a href=#95 id=95 data-nosnippet>95</a>                    } <span class="kw">else </span>{
 <a href=#96 id=96 data-nosnippet>96</a>                        <span class="kw">let </span>layers = topology
-<a href=#97 id=97 data-nosnippet>97</a>                            .<span class="number">0
-<a href=#98 id=98 data-nosnippet>98</a>                            </span>.iter()
+<a href=#97 id=97 data-nosnippet>97</a>                            .layers
+<a href=#98 id=98 data-nosnippet>98</a>                            .iter()
 <a href=#99 id=99 data-nosnippet>99</a>                            .map(|layer| {
 <a href=#100 id=100 data-nosnippet>100</a>                                layer
 <a href=#101 id=101 data-nosnippet>101</a>                                    .as_ref()

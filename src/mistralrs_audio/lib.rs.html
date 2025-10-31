@@ -202,30 +202,15 @@
 <a href=#202 id=202 data-nosnippet>202</a>    }
 <a href=#203 id=203 data-nosnippet>203</a>
 <a href=#204 id=204 data-nosnippet>204</a>    <span class="attr">#[test]
-<a href=#205 id=205 data-nosnippet>205</a>    </span><span class="kw">fn </span>test_apply_fade() {
+<a href=#205 id=205 data-nosnippet>205</a>    </span><span class="kw">fn </span>test_remove_dc_offset() {
 <a href=#206 id=206 data-nosnippet>206</a>        <span class="kw">let </span><span class="kw-2">mut </span>input = AudioInput {
-<a href=#207 id=207 data-nosnippet>207</a>            samples: <span class="macro">vec!</span>[<span class="number">1.0</span>; <span class="number">10</span>],
+<a href=#207 id=207 data-nosnippet>207</a>            samples: <span class="macro">vec!</span>[<span class="number">1.0</span>, <span class="number">1.0</span>, <span class="number">1.0</span>, <span class="number">1.0</span>],
 <a href=#208 id=208 data-nosnippet>208</a>            sample_rate: <span class="number">16000</span>,
 <a href=#209 id=209 data-nosnippet>209</a>            channels: <span class="number">1</span>,
 <a href=#210 id=210 data-nosnippet>210</a>        };
-<a href=#211 id=211 data-nosnippet>211</a>        input.apply_fade(<span class="number">3</span>, <span class="number">3</span>);
-<a href=#212 id=212 data-nosnippet>212</a>        <span class="macro">assert!</span>((input.samples[<span class="number">0</span>] - <span class="number">0.0</span>).abs() &lt; <span class="number">1e-6</span>);
-<a href=#213 id=213 data-nosnippet>213</a>        <span class="macro">assert!</span>(input.samples[<span class="number">1</span>] &gt; <span class="number">0.0 </span>&amp;&amp; input.samples[<span class="number">1</span>] &lt; <span class="number">1.0</span>);
-<a href=#214 id=214 data-nosnippet>214</a>        <span class="macro">assert!</span>(input.samples[<span class="number">2</span>] &gt; <span class="number">0.0 </span>&amp;&amp; input.samples[<span class="number">2</span>] &lt; <span class="number">1.0</span>);
-<a href=#215 id=215 data-nosnippet>215</a>        <span class="macro">assert!</span>(input.samples[<span class="number">3</span>] == <span class="number">1.0</span>);
-<a href=#216 id=216 data-nosnippet>216</a>        <span class="macro">assert!</span>((input.samples[<span class="number">9</span>] - <span class="number">0.0</span>).abs() &lt; <span class="number">1e-6</span>);
-<a href=#217 id=217 data-nosnippet>217</a>    }
-<a href=#218 id=218 data-nosnippet>218</a>
-<a href=#219 id=219 data-nosnippet>219</a>    <span class="attr">#[test]
-<a href=#220 id=220 data-nosnippet>220</a>    </span><span class="kw">fn </span>test_remove_dc_offset() {
-<a href=#221 id=221 data-nosnippet>221</a>        <span class="kw">let </span><span class="kw-2">mut </span>input = AudioInput {
-<a href=#222 id=222 data-nosnippet>222</a>            samples: <span class="macro">vec!</span>[<span class="number">1.0</span>, <span class="number">1.0</span>, <span class="number">1.0</span>, <span class="number">1.0</span>],
-<a href=#223 id=223 data-nosnippet>223</a>            sample_rate: <span class="number">16000</span>,
-<a href=#224 id=224 data-nosnippet>224</a>            channels: <span class="number">1</span>,
-<a href=#225 id=225 data-nosnippet>225</a>        };
-<a href=#226 id=226 data-nosnippet>226</a>        input.remove_dc_offset();
-<a href=#227 id=227 data-nosnippet>227</a>        <span class="kw">for </span>s <span class="kw">in </span>input.samples {
-<a href=#228 id=228 data-nosnippet>228</a>            <span class="macro">assert!</span>((s - <span class="number">0.0</span>).abs() &lt; <span class="number">1e-6</span>);
-<a href=#229 id=229 data-nosnippet>229</a>        }
-<a href=#230 id=230 data-nosnippet>230</a>    }
-<a href=#231 id=231 data-nosnippet>231</a>}</code></pre></div></section></main></body></html>
+<a href=#211 id=211 data-nosnippet>211</a>        input.remove_dc_offset();
+<a href=#212 id=212 data-nosnippet>212</a>        <span class="kw">for </span>s <span class="kw">in </span>input.samples {
+<a href=#213 id=213 data-nosnippet>213</a>            <span class="macro">assert!</span>((s - <span class="number">0.0</span>).abs() &lt; <span class="number">1e-6</span>);
+<a href=#214 id=214 data-nosnippet>214</a>        }
+<a href=#215 id=215 data-nosnippet>215</a>    }
+<a href=#216 id=216 data-nosnippet>216</a>}</code></pre></div></section></main></body></html>
