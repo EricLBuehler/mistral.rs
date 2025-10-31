@@ -41,7 +41,7 @@
 <a href=#41 id=41 data-nosnippet>41</a>    <span class="kw">pub fn </span>new(
 <a href=#42 id=42 data-nosnippet>42</a>        cfg: <span class="kw-2">&amp;</span>Config,
 <a href=#43 id=43 data-nosnippet>43</a>        vb: ShardedVarBuilder,
-<a href=#44 id=44 data-nosnippet>44</a>        is_gptx: bool,
+<a href=#44 id=44 data-nosnippet>44</a>        _is_gptx: bool,
 <a href=#45 id=45 data-nosnippet>45</a>        normal_loading_metadata: NormalLoadingMetadata,
 <a href=#46 id=46 data-nosnippet>46</a>        attention_mechanism: AttentionImplementation,
 <a href=#47 id=47 data-nosnippet>47</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
@@ -54,7 +54,7 @@
 <a href=#54 id=54 data-nosnippet>54</a>        <span class="kw">let </span>text = Qwen3VLTextModel::new(
 <a href=#55 id=55 data-nosnippet>55</a>            <span class="kw-2">&amp;</span>cfg.text_config,
 <a href=#56 id=56 data-nosnippet>56</a>            vb.clone(),
-<a href=#57 id=57 data-nosnippet>57</a>            is_gptx,
+<a href=#57 id=57 data-nosnippet>57</a>            cfg.tie_word_embeddings,
 <a href=#58 id=58 data-nosnippet>58</a>            normal_loading_metadata,
 <a href=#59 id=59 data-nosnippet>59</a>            attention_mechanism,
 <a href=#60 id=60 data-nosnippet>60</a>        )<span class="question-mark">?</span>;
