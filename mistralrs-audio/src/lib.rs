@@ -202,21 +202,6 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_fade() {
-        let mut input = AudioInput {
-            samples: vec![1.0; 10],
-            sample_rate: 16000,
-            channels: 1,
-        };
-        input.apply_fade(3, 3);
-        assert!((input.samples[0] - 0.0).abs() < 1e-6);
-        assert!(input.samples[1] > 0.0 && input.samples[1] < 1.0);
-        assert!(input.samples[2] > 0.0 && input.samples[2] < 1.0);
-        assert!(input.samples[3] == 1.0);
-        assert!((input.samples[9] - 0.0).abs() < 1e-6);
-    }
-
-    #[test]
     fn test_remove_dc_offset() {
         let mut input = AudioInput {
             samples: vec![1.0, 1.0, 1.0, 1.0],

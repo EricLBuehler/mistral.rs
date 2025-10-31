@@ -43,7 +43,9 @@ use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
 use mistralrs_quant::log::once_log_info;
-use mistralrs_quant::{AfqLayer, GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
+use mistralrs_quant::{
+    AfqLayer, GgufMatMul, HqqLayer, ImmediateIsqOverride, IsqType, QuantizedSerdeType,
+};
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
@@ -468,30 +470,66 @@ impl Loader for VisionLoader {
             once_log_info("FlashAttention is enabled.");
         }
 
-        // Logic for ISQ here: if no calibration (i.e imatrix), then allow immediate ISQ. Otherwise, back to normal.
-        let mut loading_isq = if self.config.imatrix.is_none()
+        let topology_overrides = self
+            .config
+            .topology
+            .as_ref()
+            .map(|topology| {
+                topology
+                    .pattern_overrides()
+                    .into_iter()
+                    .map(|(regex, layer)| ImmediateIsqOverride {
+                        predicate: regex,
+                        ty: layer.isq,
+                        device: layer.device.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let has_override_isq = topology_overrides
+            .iter()
+            .any(|override_entry| override_entry.ty.is_some());
+        let topology_requires_post_quant = self
+            .config
+            .topology
+            .as_ref()
+            .is_some_and(|topology| topology.requires_post_quantization());
+
+        let allow_immediate_cli = self.config.imatrix.is_none()
             && self.config.calibration_file.is_none()
             && !device.is_cuda()
-            && self.config.write_uqff.is_none()
-            && in_situ_quant.is_some()
-        {
-            let predicates = self.inner.immediate_isq_predicates(&config)?;
+            && in_situ_quant.is_some();
+
+        let mut immediate_ty = None;
+        let mut immediate_predicates = Vec::new();
+        if allow_immediate_cli {
+            immediate_ty = in_situ_quant;
+            immediate_predicates = self.inner.immediate_isq_predicates(&config)?;
             info!("Applying ISQ to {in_situ_quant:?}");
-            if predicates.is_empty() {
+            if immediate_predicates.is_empty() {
                 warn!("No predicates for this model and ISQ setting detected. ISQ will not be applied to any weights!");
             }
-            mistralrs_quant::set_immediate_isq(in_situ_quant, predicates);
+        }
+
+        let use_immediate = allow_immediate_cli || has_override_isq;
+        if use_immediate {
+            mistralrs_quant::set_immediate_isq_with_overrides(
+                immediate_ty,
+                immediate_predicates.clone(),
+                topology_overrides.clone(),
+            );
+        }
+
+        // Logic for ISQ here: if no calibration (i.e imatrix), then allow immediate ISQ. Otherwise, back to normal.
+        let mut loading_isq = if use_immediate {
             false
         } else {
             in_situ_quant.is_some()
         };
-
-        if let Some(ref topology) = self.config.topology {
-            loading_isq |= topology
-                .0
-                .iter()
-                .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()));
+        if self.config.imatrix.is_some() || self.config.calibration_file.is_some() {
+            loading_isq = true;
         }
+        loading_isq |= topology_requires_post_quant;
 
         if self.config.imatrix.is_some() && self.config.calibration_file.is_some() {
             anyhow::bail!(
@@ -683,17 +721,28 @@ impl Loader for VisionLoader {
             );
         }
 
-        // Only if loading from UQFF
-        if (loading_isq || self.config.topology.is_some()) && self.config.from_uqff.is_none() {
-            let imatrix_source = match (
-                self.config.imatrix.as_ref(),
-                self.config.calibration_file.is_some(),
-            ) {
-                (None, false) => None,
-                (Some(file), false) => Some(ImatrixDataSource::File(file)),
-                (None, true) => Some(ImatrixDataSource::Collected),
-                (Some(_), true) => unreachable!(),
+        let should_serialize = self.config.write_uqff.is_some();
+        let should_quantize_pass = loading_isq;
+
+        if (should_quantize_pass || should_serialize) && self.config.from_uqff.is_none() {
+            let imatrix_source = if should_quantize_pass {
+                match (
+                    self.config.imatrix.as_ref(),
+                    self.config.calibration_file.is_some(),
+                ) {
+                    (None, false) => None,
+                    (Some(file), false) => Some(ImatrixDataSource::File(file)),
+                    (None, true) => Some(ImatrixDataSource::Collected),
+                    (Some(_), true) => unreachable!(),
+                }
+            } else {
+                None
             };
+            if should_quantize_pass {
+                info!("Applying ISQ to all ranks.");
+            } else {
+                info!("Serializing existing ISQ tensors without additional quantization.");
+            }
             model.quantize(
                 in_situ_quant,
                 device.clone(),
@@ -701,6 +750,7 @@ impl Loader for VisionLoader {
                 silent,
                 imatrix_source,
                 IsqOrganization::Default,
+                should_quantize_pass,
                 self.config.write_uqff.as_ref(),
                 UqffFullSer {
                     tokenizer: &tokenizer,
@@ -820,6 +870,7 @@ impl IsqPipelineMixin for VisionPipeline {
                 self.silent,
                 self.imatrix.as_ref().map(ImatrixDataSource::File),
                 IsqOrganization::Default,
+                true,
                 None,
                 UqffFullSer {
                     tokenizer: &self.tokenizer,

@@ -21,7 +21,7 @@ Blazingly fast LLM inference.
 - All-in-one multimodal workflow: text↔text, text+vision↔text, text+vision+audio↔text, text→speech, text→image
 - APIs: Rust, Python, OpenAI HTTP server (with Chat Completions, Responses API), MCP server
 - 🔗 **MCP Client**: Connect to external tools and services automatically (file systems, web search, databases, APIs)
-- Performance: ISQ, PagedAttention, FlashAttention
+- Performance: ISQ, PagedAttention, FlashAttention, **per-layer topology optimization**
 
 Please submit requests for new models [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
 
@@ -170,7 +170,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ```
   </details>
 
-- 🔗 **MCP Client** - Connect to external tools and services automatically: [**Quick Start Guide**](examples/MCP_QUICK_START.md)  
+- 🔗 **MCP Client** - Connect to external tools and services automatically: [**Quick Start Guide**](examples/MCP_QUICK_START.md)
   <details>
     <summary>Show examples</summary>
 
@@ -193,7 +193,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ```bash
     ./mistralrs-server --mcp-config mcp-config.json --port 1234 run -m Qwen/Qwen3-4B
     ```
-    
+
     **3. Tools work automatically:**
     ```bash
     curl -X POST http://localhost:1234/v1/chat/completions \
@@ -206,13 +206,13 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
         servers=[mistralrs.McpServerConfigPy(
             name="Filesystem",
             source=mistralrs.McpServerSourcePy.Process(
-                command="npx", 
+                command="npx",
                 args=["@modelcontextprotocol/server-filesystem", "/tmp", "-y"]
             )
         )],
         auto_register_tools=True
     )
-    
+
     runner = mistralrs.Runner(
         which=mistralrs.Which.Plain(model_id="Qwen/Qwen3-4B"),
         mcp_client_config=mcp_config
@@ -225,6 +225,60 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     let model = TextModelBuilder::new("Qwen/Qwen3-4B")
         .with_mcp_client(mcp_config) // Tools automatically available!
         .build().await?;
+    ```
+  </details>
+
+- ⚡ **Smart Per-Layer Optimization** - Fine-tune quantization and device placement per layer: [documentation](docs/TOPOLOGY.md)
+  <details>
+    <summary>Show examples</summary>
+
+    **Optimize memory usage with mixed quantization (fits large models in limited VRAM):**
+    ```bash
+    # Use aggressive quantization on less important layers, preserve quality on critical ones
+    ./mistralrs-server -i --topology topologies/isq.yml run -m meta-llama/Llama-3.2-8B-Instruct
+    ```
+
+    **Example topology file (`topologies/isq.yml`):**
+    ```yaml
+    # Early layers: lower quantization for embeddings
+    0-8:
+      isq: Q3K
+    # Middle layers: balanced quantization
+    8-24:
+      isq: Q4K
+    # Final layers: higher quality for output
+    24-32:
+      isq: Q6K
+    ```
+
+    **Advanced: Target specific components with regex patterns:**
+    ```yaml
+    # Quantize attention layers differently from FFN layers
+    '/attn\.q_proj$/':
+      isq: Q4K
+    '/ffn_.*\.weight$/':
+      isq: Q3K
+    ```
+
+    **Multi-device deployment (split across GPUs/CPU):**
+    ```yaml
+    0-16:
+      isq: Q4K
+      device: cuda[0]
+    16-32:
+      isq: Q4K
+      device: cuda[1]
+    # Or offload some layers to CPU for very large models
+    ```
+
+    **Python example:**
+    ```python
+    runner = mistralrs.Runner(
+        which=mistralrs.Which.Plain(
+            model_id="meta-llama/Llama-3.2-8B-Instruct",
+            topology="topologies/isq.yml",
+        ),
+    )
     ```
   </details>
 
@@ -249,7 +303,8 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
      - CUDA-specialized [NCCL](docs/DISTRIBUTED/NCCL.md)
      - Heterogeneous, flexible [Ring backend](docs/DISTRIBUTED/RING.md)
 
-3. **Quantization**
+3. **Quantization & Optimization**
+   - ⭐ [**Per-layer topology**](docs/TOPOLOGY.md): Fine-tune quantization per layer for optimal quality/speed balance
    - [In-place quantization (ISQ)](docs/ISQ.md) of Hugging Face models
    - [GGML & GGUF support](docs/QUANTS.md): 2–8 bit
    - [GPTQ](docs/QUANTS.md), [AWQ](scripts/convert_awq_marlin.py), [AFQ](docs/QUANTS.md), [HQQ](docs/QUANTS.md), [FP8](docs/QUANTS.md), [BNB](https://github.com/TimDettmers/bitsandbytes) (int8/fp4/nf4)
@@ -266,7 +321,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 5. **Advanced Features**
    - High-throughput with [PagedAttention](docs/PAGED_ATTENTION.md) & FlashAttention V2/V3
    - Prefix caching (including multimodal)
-   - Customizable quantization with [topology](docs/TOPOLOGY.md) & [UQFF format](docs/UQFF.md)
+   - [UQFF format](docs/UQFF.md) for custom quantization
    - Speculative decoding across models
    - ⭐ Agentic [web search integration](docs/WEB_SEARCH.md)
 

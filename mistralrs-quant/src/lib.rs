@@ -74,6 +74,20 @@ pub struct ImmediateIsqParams {
     pub guard: QuantizeOntoGuard,
     pub ty: Option<IsqType>,
     pub predicates: Vec<Regex>,
+    pub overrides: Vec<ImmediateIsqOverride>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ImmediateIsqOverride {
+    pub predicate: Regex,
+    pub ty: Option<IsqType>,
+    pub device: Option<Device>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ImmediateIsqMatch {
+    pub ty: IsqType,
+    pub device: Option<Device>,
 }
 
 thread_local! {
@@ -81,11 +95,20 @@ thread_local! {
 }
 
 pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>) {
+    set_immediate_isq_with_overrides(isq, predicates, Vec::new());
+}
+
+pub fn set_immediate_isq_with_overrides(
+    isq: Option<IsqType>,
+    predicates: Vec<Regex>,
+    overrides: Vec<ImmediateIsqOverride>,
+) {
     ENGINE_IMMEDIATE_ISQ.with(|cell| {
         *cell.borrow_mut() = Some(ImmediateIsqParams {
             guard: QuantizeOntoGuard::new(),
             ty: isq,
             predicates,
+            overrides,
         });
     });
 }
@@ -101,16 +124,42 @@ pub fn clear_immediate_isq() {
 }
 
 pub fn should_apply_immediate_isq(vb: &ShardedVarBuilder) -> bool {
-    let Some(immediate_isq) = get_immediate_isq() else {
-        return false;
-    };
+    immediate_isq_match(vb).is_some()
+}
+
+pub fn immediate_isq_match(vb: &ShardedVarBuilder) -> Option<ImmediateIsqMatch> {
+    let immediate_isq = get_immediate_isq()?;
     // Add a .weight to match the ISQ regexes!
     let prefix = format!("{}.weight", vb.prefix());
-    immediate_isq.ty.is_some()
-        && immediate_isq
+    resolve_immediate_isq(&immediate_isq, &prefix)
+}
+
+fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<ImmediateIsqMatch> {
+    if let Some(override_hit) = params
+        .overrides
+        .iter()
+        .find(|override_pred| override_pred.predicate.is_match(prefix))
+    {
+        if let Some(ty) = override_hit.ty.or(params.ty) {
+            return Some(ImmediateIsqMatch {
+                ty,
+                device: override_hit.device.clone(),
+            });
+        }
+        return None;
+    }
+
+    if let Some(ty) = params.ty {
+        if params
             .predicates
             .iter()
-            .any(|predicate| predicate.is_match(&prefix))
+            .any(|predicate| predicate.is_match(prefix))
+        {
+            return Some(ImmediateIsqMatch { ty, device: None });
+        }
+    }
+
+    None
 }
 
 #[derive(Debug, Clone, Serialize)]

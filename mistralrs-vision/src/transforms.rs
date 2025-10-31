@@ -142,9 +142,9 @@ mod tests {
     #[test]
     fn test_normalize() {
         use crate::{ImageTransform, Normalize};
-        use candle_core::{DType, Device, Tensor};
+        use candle_core::{Device, Tensor};
 
-        let image = Tensor::zeros((3, 5, 4), DType::U8, &Device::Cpu).unwrap();
+        let image = Tensor::randn(1f32, 0f32, (3, 5, 4), &Device::Cpu).unwrap();
         let res = Normalize {
             mean: vec![0.5, 0.5, 0.5],
             std: vec![0.5, 0.5, 0.5],
