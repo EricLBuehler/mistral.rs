@@ -138,7 +138,7 @@ fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<Im
     if let Some(override_hit) = params
         .overrides
         .iter()
-        .find(|override_pred| override_pred.predicate.is_match(&prefix))
+        .find(|override_pred| override_pred.predicate.is_match(prefix))
     {
         if let Some(ty) = override_hit.ty.or(params.ty) {
             return Some(ImmediateIsqMatch {
@@ -153,7 +153,7 @@ fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<Im
         if params
             .predicates
             .iter()
-            .any(|predicate| predicate.is_match(&prefix))
+            .any(|predicate| predicate.is_match(prefix))
         {
             return Some(ImmediateIsqMatch { ty, device: None });
         }
