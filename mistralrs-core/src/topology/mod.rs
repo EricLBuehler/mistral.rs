@@ -30,6 +30,7 @@ pub struct LayerTopology {
 struct CustomRange {
     start: usize,
     end: usize,
+    index: usize,
 }
 
 impl From<CustomRange> for Range<usize> {
@@ -43,8 +44,10 @@ impl From<CustomRange> for Range<usize> {
 
 impl Ord for CustomRange {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Order based on end position
-        self.end.cmp(&other.end)
+        // Order based on end position followed by declaration order so later ranges override
+        self.end
+            .cmp(&other.end)
+            .then_with(|| self.index.cmp(&other.index))
     }
 }
 
@@ -104,7 +107,9 @@ impl Topology {
 
         let mut range_layers = Vec::new();
         let mut pattern_layers = Vec::new();
-        for (selector, DeserLayerTopology { isq, device }) in deser.0 {
+        for (index, (selector, DeserLayerTopology { isq, device })) in
+            deser.0.into_iter().enumerate()
+        {
             let parsed_isq = if let Some(isq) = isq {
                 Some(parse_isq_value(&isq, None).map_err(anyhow::Error::msg)?)
             } else {
@@ -163,7 +168,7 @@ impl Topology {
             if end <= start {
                 anyhow::bail!("Topology range end must be > start, got {end} <= {start}");
             }
-            let range = CustomRange { start, end };
+            let range = CustomRange { start, end, index };
 
             range_layers.push((
                 range,
@@ -216,18 +221,18 @@ impl Topology {
     }
 
     pub fn match_for_name(&self, name: &str) -> Option<LayerTopology> {
-        let mut matched = None;
-        for (regex, layer) in &self.patterns {
+        for (regex, layer) in self.patterns.iter().rev() {
             if regex.is_match(name) {
-                matched = Some(layer.clone());
+                return Some(layer.clone());
             }
         }
-        matched
+        None
     }
 
     pub fn pattern_overrides(&self) -> Vec<(Regex, LayerTopology)> {
         self.patterns
             .iter()
+            .rev()
             .map(|(regex, topo)| (regex.clone(), topo.clone()))
             .collect()
     }
@@ -238,5 +243,63 @@ impl Topology {
                 .as_ref()
                 .is_some_and(|layer| layer.isq.is_some() || layer.device.is_some())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layer_isq(topology: &Topology, layer: usize) -> Option<IsqType> {
+        topology
+            .layer_for(layer)
+            .and_then(|lt| lt.isq.as_ref().copied())
+    }
+
+    #[test]
+    fn highest_end_range_overrides_lower_end() {
+        let yaml = "0-4:\n  isq: Q4K\n2-6:\n  isq: Q6K\n";
+        let topology = Topology::from_str(yaml).expect("topology parses");
+
+        assert_eq!(layer_isq(&topology, 0), Some(IsqType::Q4K));
+        assert_eq!(layer_isq(&topology, 2), Some(IsqType::Q6K));
+        assert_eq!(layer_isq(&topology, 5), Some(IsqType::Q6K));
+    }
+
+    #[test]
+    fn later_range_with_same_end_wins() {
+        let yaml = "0-4:\n  isq: Q4K\n2-4:\n  isq: Q3K\n";
+        let topology = Topology::from_str(yaml).expect("topology parses");
+
+        assert_eq!(layer_isq(&topology, 1), Some(IsqType::Q4K));
+        assert_eq!(layer_isq(&topology, 2), Some(IsqType::Q3K));
+        assert_eq!(layer_isq(&topology, 3), Some(IsqType::Q3K));
+    }
+
+    #[test]
+    fn regex_overrides_respect_declaration_order() {
+        let yaml = r#"'/ffn\./':
+  isq: Q4K
+'/ffn\.weight$/':
+  isq: Q6K
+"#;
+        let topology = Topology::from_str(yaml).expect("topology parses");
+
+        let match_exact = topology
+            .match_for_name("model.layers.2.ffn.weight")
+            .expect("regex match");
+        assert_eq!(match_exact.isq, Some(IsqType::Q6K));
+
+        let overrides = topology.pattern_overrides();
+        assert_eq!(overrides.len(), 2);
+        assert_eq!(overrides[0].0.as_str(), "ffn\\.weight$");
+        assert_eq!(overrides[1].0.as_str(), "ffn\\.");
+    }
+
+    #[test]
+    fn match_for_name_returns_none_when_unmatched() {
+        let yaml = "0-2:\n  isq: Q4K\n";
+        let topology = Topology::from_str(yaml).expect("topology parses");
+        assert!(topology.match_for_name("transformer.wte.weight").is_none());
     }
 }

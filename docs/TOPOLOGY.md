@@ -3,9 +3,7 @@
 <h3>Quantization and device mapping in one file.</h3>
 
 > [!NOTE]
-> Manual device mapping is deprecated in favor of automatic device mapping due to the possibility for user error in manual.
-> The topology system will remain and be used only for quantization settings.
-> Please see the [device mapping documentation](DEVICE_MAPPING.md) for more information.
+> Manual device mapping flags are deprecated in favor of automatic placement because it is easy to misconfigure them. Topology files remain the preferred way to express per-layer quantization, and you can still provide `device` overrides here when you truly need to. Those overrides win over the automatic mapper, so apply them sparingly. See the [device mapping documentation](DEVICE_MAPPING.md) for guidance.
 
 Use a simple model topology to configure ISQ and device mapping for *per-layer* with a single [YAML file](../topologies/isq_and_device.yml) (examples [here](../topologies))!
 
@@ -23,7 +21,7 @@ To support per-layer mix of ISQ, Mistral.rs supports loading a model topology YA
 
 Note that:
 - The topology for the range is expanded to fill the range
-- If ranges overlap, the range with the higher end layer takes precedence and will overwrite
+- If ranges overlap, the range with the higher end layer takes precedence. When two ranges share the same end layer, the one that appears later in the topology file wins.
 - Any layers which are not covered will have no topology mapping. They will inherit any other ISQ (e.g. with `--isq`/`in_situ_quant`) set.
 - Unless the layer is not covered by the topology, the topology value will override any other ISQ (e.g. with `--isq`/`in_situ_quant`).
 - The topology device mapping will override any other device mapping.
@@ -40,7 +38,7 @@ Layer ranges are convenient when you know the numeric index, but you can also ta
   isq: Q3K
 ```
 
-Regex-based ISQ overrides are applied through the immediate ISQ system, so they quantize weights as they are loaded. Numeric layer ranges continue to be handled by the post-load topology pass.
+Regex-based ISQ overrides are applied through the immediate ISQ system, so they quantize weights as they are loaded. Numeric layer ranges continue to be handled by the post-load topology pass. Regex selectors are evaluated top-to-bottom as they appear in the YAML file, so a selector that comes later in the file overrides earlier matches.
 
 ```yml
 0-8:
