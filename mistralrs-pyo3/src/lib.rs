@@ -5,7 +5,7 @@ use anymoe::{AnyMoeConfig, AnyMoeExpertType};
 use either::Either;
 use indexmap::IndexMap;
 use itertools::Itertools;
-use requests::{ChatCompletionRequest, CompletionRequest, ToolChoice};
+use requests::{ChatCompletionRequest, CompletionRequest, EmbeddingRequest, ToolChoice};
 use serde_json::Value;
 use std::{
     cell::RefCell,
@@ -1223,6 +1223,80 @@ impl Runner {
         })
     }
 
+    /// Send an embeddings request, returning the embedding vector.
+    #[pyo3(signature = (request, model_id = None))]
+    fn send_embedding_request(
+        &mut self,
+        request: Py<EmbeddingRequest>,
+        model_id: Option<String>,
+    ) -> PyApiResult<Vec<f32>> {
+        let (tx, mut rx) = channel(1);
+        Python::with_gil(|py| {
+            let request = request.bind(py).borrow();
+            let prompt = request.input.clone();
+            let model_request = _Request::Normal(Box::new(NormalRequest {
+                id: {
+                    let l = NEXT_REQUEST_ID.lock().unwrap();
+                    let last = &mut *l.borrow_mut();
+                    let last_v = *last;
+                    *last += 1;
+                    last_v
+                },
+                messages: RequestMessage::Embedding { prompt },
+                sampling_params: SamplingParams::deterministic(),
+                response: tx,
+                return_logprobs: false,
+                is_streaming: false,
+                constraint: Constraint::None,
+                suffix: None,
+                tool_choice: None,
+                tools: None,
+                logits_processors: None,
+                return_raw_logits: false,
+                web_search_options: None,
+                model_id: model_id.clone(),
+            }));
+
+            MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
+            let sender = self.runner.get_sender(model_id.as_deref())?;
+            sender.blocking_send(model_request).unwrap();
+
+            let response = rx.blocking_recv().unwrap();
+
+            match response {
+                Response::Embeddings { embeddings } => Ok(embeddings),
+                Response::ValidationError(e) | Response::InternalError(e) => {
+                    Err(PyApiErr::from(e.to_string()))
+                }
+                Response::ModelError(msg, _) => Err(PyApiErr::from(msg.to_string())),
+                Response::Done(_) => Err(PyApiErr::from(
+                    "Received chat completion response from embeddings request.",
+                )),
+                Response::Chunk(_) => Err(PyApiErr::from(
+                    "Received chat completion chunk from embeddings request.",
+                )),
+                Response::CompletionDone(_) => Err(PyApiErr::from(
+                    "Received completion response from embeddings request.",
+                )),
+                Response::CompletionChunk(_) => Err(PyApiErr::from(
+                    "Received completion chunk from embeddings request.",
+                )),
+                Response::CompletionModelError(_, _) => Err(PyApiErr::from(
+                    "Received completion model error from embeddings request.",
+                )),
+                Response::ImageGeneration(_) => Err(PyApiErr::from(
+                    "Received image generation response from embeddings request.",
+                )),
+                Response::Speech { .. } => Err(PyApiErr::from(
+                    "Received speech response from embeddings request.",
+                )),
+                Response::Raw { .. } => Err(PyApiErr::from(
+                    "Received raw logits response from embeddings request.",
+                )),
+            }
+        })
+    }
+
     /// Send an OpenAI API compatible request, returning the result.
     #[pyo3(signature = (request, model_id = None))]
     fn send_completion_request(
@@ -1980,6 +2054,17 @@ impl MultiModelRunner {
         self.runner.send_completion_request(request, Some(model_id))
     }
 
+    /// Send an embeddings request to a specific model.
+    #[pyo3(signature = (request, model_id))]
+    fn send_embedding_request_to_model(
+        &mut self,
+        request: Py<EmbeddingRequest>,
+        model_id: String,
+    ) -> PyApiResult<Vec<f32>> {
+        self.runner
+            .send_embedding_request(request, Some(model_id))
+    }
+
     /// List all available model IDs.
     fn list_models(&self) -> PyApiResult<Vec<String>> {
         self.runner.list_models()
@@ -2018,6 +2103,16 @@ impl MultiModelRunner {
         model_id: Option<String>,
     ) -> PyApiResult<CompletionResponse> {
         self.runner.send_completion_request(request, model_id)
+    }
+
+    /// Send an embeddings request to the default model.
+    #[pyo3(signature = (request, model_id = None))]
+    fn send_embedding_request(
+        &mut self,
+        request: Py<EmbeddingRequest>,
+        model_id: Option<String>,
+    ) -> PyApiResult<Vec<f32>> {
+        self.runner.send_embedding_request(request, model_id)
     }
 
     /// Generate an image using the default model.
@@ -2263,6 +2358,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<CompletionRequest>()?;
+    m.add_class::<EmbeddingRequest>()?;
     m.add_class::<Architecture>()?;
     m.add_class::<VisionArchitecture>()?;
     m.add_class::<DiffusionArchitecture>()?;

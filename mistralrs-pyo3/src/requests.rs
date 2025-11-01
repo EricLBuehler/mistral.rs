@@ -132,6 +132,23 @@ impl CompletionRequest {
 
 #[pyclass]
 #[derive(Debug)]
+pub struct EmbeddingRequest {
+    pub(crate) input: String,
+}
+
+#[pymethods]
+impl EmbeddingRequest {
+    #[new]
+    #[pyo3(signature = (input,))]
+    fn new(input: String) -> Self {
+        Self {
+            input,
+        }
+    }
+}
+
+#[pyclass]
+#[derive(Debug)]
 /// An OpenAI API compatible chat completion request.
 pub struct ChatCompletionRequest {
     #[allow(clippy::type_complexity)]
