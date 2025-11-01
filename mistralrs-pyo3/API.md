@@ -8,6 +8,7 @@ These are API docs for the `mistralrs` package.
 - Multi-model support: [here](#multi-model-support)
 - MCP Client Configuration: [here](#mcp-client)
 - Example: [here](#example)
+- Embeddings example: [here](#embeddings-example)
 
 ## `Which`
 
@@ -59,6 +60,9 @@ If you do not specify the architecture, an attempt will be made to use the model
 
 ### Architecture for speech models
 - `Dia`
+
+### Architecture for embedding models
+- `EmbeddingGemma`
 
 ### ISQ Organization
 - `Default`
@@ -182,6 +186,17 @@ class Which(Enum):
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = (None,)
+
+    @dataclass
+    class Embedding:
+        model_id: str
+        arch: EmbeddingArchitecture | None = None
+        tokenizer_json: str | None = None
+        topology: str | None = None
+        from_uqff: str | list[str] | None = None
+        write_uqff: str | None = None
+        dtype: ModelDType = ModelDType.Auto
+        hf_cache_path: str | None = None
 
     @dataclass
     class VisionPlain:
@@ -404,4 +419,29 @@ res = runner.send_chat_completion_request(
 )
 print(res.choices[0].message.content)
 print(res.usage)
+```
+
+## Embeddings example
+
+```python
+from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
+
+runner = Runner(
+    which=Which.Embedding(
+        model_id="google/embeddinggemma-300m",
+        arch=EmbeddingArchitecture.EmbeddingGemma,
+    )
+)
+
+embeddings = runner.send_embedding_request(
+    EmbeddingRequest(
+        input=[
+            "task: query | text: superconductors",
+            "task: query | text: graphene",
+        ],
+        truncate_sequence=True,
+    )
+)
+
+print(len(embeddings), len(embeddings[0]))
 ```

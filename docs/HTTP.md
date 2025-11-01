@@ -144,6 +144,14 @@ curl http://localhost:8080/v1/completions \
 > ℹ️ The `truncate_sequence` flag behaves the same way for the completions endpoint: keep it `false` (default) to receive a validation error, or set it to `true` to trim the prompt automatically.
 
 ## `POST`: `/v1/embeddings`
+Serve an embedding model (for example, EmbeddingGemma) to enable this endpoint:
+
+```bash
+./mistralrs-server embedding -m google/embeddinggemma-300m
+```
+
+In multi-model mode, include an `Embedding` entry in your selector config to expose it alongside chat models.
+
 Create vector embeddings via the OpenAI-compatible endpoint. Supported request fields:
 
 - `input`: a single string, an array of strings, an array of token IDs (`[123, 456]`), or a batch of token arrays (`[[...], [...]]`).
@@ -166,8 +174,8 @@ client = openai.OpenAI(
 result = client.embeddings.create(
     model="default",
     input=[
-        "Vector search is great for semantic retrieval.",
-        "Rust ownership keeps data races away.",
+        "Embeddings capture semantic relationships between texts.",
+        "What is graphene?",
     ],
     truncate_sequence=True,
 )
@@ -184,7 +192,7 @@ curl http://localhost:8080/v1/embeddings \
   -H "Authorization: Bearer EMPTY" \
   -d '{
     "model": "default",
-    "input": ["semantic search", "document reranking"],
+    "input": ["graphene conductivity", "superconductor basics"],
     "encoding_format": "base64",
     "truncate_sequence": false
   }'

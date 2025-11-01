@@ -18,10 +18,11 @@ Blazingly fast LLM inference.
 </p>
 
 **Mistral.rs is a cross-platform, highly-multimodal inference engine that brings you:**
-- All-in-one multimodal workflow: text↔text, text+vision↔text, text+vision+audio↔text, text→speech, text→image
+- All-in-one multimodal workflow: text↔text, text+vision↔text, text+vision+audio↔text, text→speech, text→image, text→embeddings
 - APIs: Rust, Python, OpenAI HTTP server (with Chat Completions, Responses API), MCP server
 - 🔗 **MCP Client**: Connect to external tools and services automatically (file systems, web search, databases, APIs)
 - Performance: ISQ, PagedAttention, FlashAttention, **per-layer topology optimization**
+- Support for embedding, speech generation, and image generation models
 
 Please submit requests for new models [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
 
@@ -67,6 +68,22 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 ## Quick examples
 
 *After following installation instructions*
+
+- 🔎 Generate embeddings with **EmbeddingGemma** across APIs: [guide](docs/EMBEDDINGGEMMA.md) | [overview](docs/EMBEDDINGS.md)  
+  <details>
+    <summary>Show commands</summary>
+
+    ```bash
+    # HTTP API (OpenAI-compatible)
+    ./mistralrs-server --port 1234 embedding -m google/embeddinggemma-300m
+
+    # Python API example
+    python examples/python/embedding_gemma.py
+
+    # Rust API example
+    cargo run --package mistralrs --example embedding_gemma
+    ```
+  </details>
 
 - 💎🪆💎🪆💎 Run the **Gemma 3n** family (E2B, E4B) with **vision**, **audio**, and **MatFormer** support: [documentation](docs/GEMMA3N.md)  
   <details>
@@ -544,7 +561,7 @@ You can find documentation about the server itself [here](docs/HTTP.md).
 
 ### Multi-model support
 
-Serve multiple models simultaneously from a single server instance. Perfect for comparing models, A/B testing, or serving different models for different use cases.
+Serve multiple models simultaneously from a single server instance. This is useful for comparing models, A/B testing, or serving different models for different use cases.
 
 ```bash
 ./mistralrs-server --port 1234 multi-model --config example-multi-model-config.json --default-model-id meta-llama/Llama-3.2-3B-Instruct
@@ -618,6 +635,17 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `llama4`
 - `gemma3n`
 - `qwen3vl`
+
+</details>
+
+### Architecture for embedding models
+
+> Note: for embedding models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`vision-plain`).
+
+<details>
+  <summary>Show embedding architectures</summary>
+
+- `embeddinggemma`
 
 </details>
 
