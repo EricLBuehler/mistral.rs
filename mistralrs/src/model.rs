@@ -5,7 +5,7 @@ use mistralrs_core::*;
 use std::sync::Arc;
 use tokio::sync::mpsc::{channel, Receiver};
 
-use crate::{RequestLike, TextMessages};
+use crate::{EmbeddingRequest, EmbeddingRequestBuilder, RequestLike, TextMessages};
 
 /// Gets the best device, cpu, cuda if compiled with CUDA, or Metal
 pub fn best_device(force_cpu: bool) -> Result<Device> {
@@ -287,42 +287,68 @@ impl Model {
         Ok((pcm, rate, channels))
     }
 
-    /// Generate embeddings given a prompt.
-    pub async fn generate_embeddings(&self, prompt: impl ToString) -> anyhow::Result<Vec<f32>> {
-        let (tx, mut rx) = channel(1);
+    /// Generate embeddings for one or more inputs configured via an [`EmbeddingRequestBuilder`].
+    ///
+    /// Returns one embedding vector per input in the same order they were added.
+    pub async fn generate_embeddings(
+        &self,
+        request: EmbeddingRequestBuilder,
+    ) -> anyhow::Result<Vec<Vec<f32>>> {
+        let request = request.build()?;
+        let EmbeddingRequest {
+            inputs,
+            truncate_sequence,
+        } = request;
 
-        let request = Request::Normal(Box::new(NormalRequest {
-            id: 0,
-            messages: RequestMessage::Embedding {
-                prompt: prompt.to_string(),
-            },
-            sampling_params: SamplingParams::deterministic(),
-            response: tx,
-            return_logprobs: false,
-            is_streaming: false,
-            suffix: None,
-            constraint: Constraint::None,
-            tool_choice: None,
-            tools: None,
-            logits_processors: None,
-            return_raw_logits: false,
-            web_search_options: None,
-            model_id: None,
-            truncate_sequence: false,
-        }));
+        let mut results = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let message = input.into_request_message();
+            let (tx, mut rx) = channel(1);
 
-        self.runner.get_sender(None)?.send(request).await?;
+            let request = Request::Normal(Box::new(NormalRequest {
+                id: 0,
+                messages: message,
+                sampling_params: SamplingParams::deterministic(),
+                response: tx,
+                return_logprobs: false,
+                is_streaming: false,
+                suffix: None,
+                constraint: Constraint::None,
+                tool_choice: None,
+                tools: None,
+                logits_processors: None,
+                return_raw_logits: false,
+                web_search_options: None,
+                model_id: None,
+                truncate_sequence,
+            }));
 
-        let ResponseOk::Embeddings { embeddings } = rx
-            .recv()
-            .await
-            .context("Channel was erroneously closed!")?
-            .as_result()?
-        else {
-            anyhow::bail!("Got unexpected response type.")
-        };
+            self.runner.get_sender(None)?.send(request).await?;
 
-        Ok(embeddings)
+            let ResponseOk::Embeddings { embeddings } = rx
+                .recv()
+                .await
+                .context("Channel was erroneously closed!")?
+                .as_result()?
+            else {
+                anyhow::bail!("Got unexpected response type.")
+            };
+
+            results.push(embeddings);
+        }
+
+        Ok(results)
+    }
+
+    /// Convenience wrapper for generating a single embedding.
+    pub async fn generate_embedding(&self, prompt: impl ToString) -> anyhow::Result<Vec<f32>> {
+        let mut embeddings = self
+            .generate_embeddings(EmbeddingRequest::builder().add_prompt(prompt.to_string()))
+            .await?;
+
+        Ok(embeddings
+            .pop()
+            .expect("EmbeddingRequestBuilder should guarantee at least one input"))
     }
 
     /// Reapply ISQ to the model. This will be done on whatever device the model is already on.

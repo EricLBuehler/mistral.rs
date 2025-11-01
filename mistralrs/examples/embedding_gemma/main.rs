@@ -1,5 +1,5 @@
 use anyhow::Result;
-use mistralrs::EmbeddingModelBuilder;
+use mistralrs::{EmbeddingModelBuilder, EmbeddingRequest};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -8,10 +8,13 @@ async fn main() -> Result<()> {
         .build()
         .await?;
 
-    let response = model
-        .generate_embeddings("task: search result | query: What is graphene?".to_string())
+    let embeddings = model
+        .generate_embeddings(
+            EmbeddingRequest::builder()
+                .add_prompt("task: search result | query: What is graphene?"),
+        )
         .await?;
-    println!("{response:?}");
+    println!("{:?}", embeddings.first());
 
     Ok(())
 }

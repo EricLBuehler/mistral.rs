@@ -98,7 +98,7 @@ class EmbeddingRequest:
     An EmbeddingRequest represents a request to compute embeddings for the provided input text.
     """
 
-    input: str
+    input: str | list[str] | list[int] | list[list[int]]
     truncate_sequence: bool = False
 
 @dataclass
@@ -431,9 +431,9 @@ class Runner:
         Send a chat completion request to the mistral.rs engine, returning the response object.
         """
 
-    def send_embedding_request(self, request: EmbeddingRequest) -> list[float]:
+    def send_embedding_request(self, request: EmbeddingRequest) -> list[list[float]]:
         """
-        Generate embeddings for the supplied input text and return the embedding vector.
+        Generate embeddings for the supplied inputs and return one embedding vector per input.
         """
 
     def generate_image(
@@ -495,7 +495,7 @@ class MultiModelRunner:
 
     def send_embedding_request_to_model(
         self, request: EmbeddingRequest, model_id: str
-    ) -> list[float]:
+    ) -> list[list[float]]:
         """
         Generate embeddings using the specified model ID.
         """
@@ -542,9 +542,9 @@ class MultiModelRunner:
         self,
         request: EmbeddingRequest,
         model_id: str | None = None,
-    ) -> list[float]:
+    ) -> list[list[float]]:
         """
-        Generate embeddings, optionally targeting a specific model ID.
+        Generate embeddings, optionally targeting a specific model ID. The result contains one vector per input.
         """
 
     def generate_image(

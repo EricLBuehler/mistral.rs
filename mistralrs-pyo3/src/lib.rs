@@ -5,7 +5,9 @@ use anymoe::{AnyMoeConfig, AnyMoeExpertType};
 use either::Either;
 use indexmap::IndexMap;
 use itertools::Itertools;
-use requests::{ChatCompletionRequest, CompletionRequest, EmbeddingRequest, ToolChoice};
+use requests::{
+    ChatCompletionRequest, CompletionRequest, EmbeddingRequest, PythonEmbeddingInputs, ToolChoice,
+};
 use serde_json::Value;
 use std::{
     cell::RefCell,
@@ -1224,78 +1226,114 @@ impl Runner {
         })
     }
 
-    /// Send an embeddings request, returning the embedding vector.
+    /// Send an embeddings request, returning embedding vectors in the same order they were provided.
+    /// This returns the embeddings as [batch size, embedding dim]
     #[pyo3(signature = (request, model_id = None))]
     fn send_embedding_request(
         &mut self,
         request: Py<EmbeddingRequest>,
         model_id: Option<String>,
-    ) -> PyApiResult<Vec<f32>> {
-        let (tx, mut rx) = channel(1);
+    ) -> PyApiResult<Vec<Vec<f32>>> {
         Python::with_gil(|py| {
-            let request = request.bind(py).borrow();
-            let prompt = request.input.clone();
-            let model_request = _Request::Normal(Box::new(NormalRequest {
-                id: {
-                    let l = NEXT_REQUEST_ID.lock().unwrap();
-                    let last = &mut *l.borrow_mut();
-                    let last_v = *last;
-                    *last += 1;
-                    last_v
-                },
-                messages: RequestMessage::Embedding { prompt },
-                sampling_params: SamplingParams::deterministic(),
-                response: tx,
-                return_logprobs: false,
-                is_streaming: false,
-                constraint: Constraint::None,
-                suffix: None,
-                tool_choice: None,
-                tools: None,
-                logits_processors: None,
-                return_raw_logits: false,
-                web_search_options: None,
-                model_id: model_id.clone(),
-                truncate_sequence: request.truncate_sequence,
-            }));
+            let (inputs, truncate_sequence, debug_repr) = {
+                let request_ref = request.bind(py).borrow();
+                (
+                    request_ref.inputs.clone(),
+                    request_ref.truncate_sequence,
+                    format!("{:?}", &*request_ref),
+                )
+            };
 
-            MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
+            MistralRs::maybe_log_request(self.runner.clone(), debug_repr);
             let sender = self.runner.get_sender(model_id.as_deref())?;
-            sender.blocking_send(model_request).unwrap();
 
-            let response = rx.blocking_recv().unwrap();
+            let expected = match &inputs {
+                PythonEmbeddingInputs::Prompts(prompts) => prompts.len(),
+                PythonEmbeddingInputs::Tokens(batches) => batches.len(),
+            };
+            let mut all_embeddings = Vec::with_capacity(expected);
 
-            match response {
-                Response::Embeddings { embeddings } => Ok(embeddings),
-                Response::ValidationError(e) | Response::InternalError(e) => {
-                    Err(PyApiErr::from(e.to_string()))
+            let dispatch = |message: RequestMessage| -> PyApiResult<Vec<f32>> {
+                let (tx, mut rx) = channel(1);
+
+                let model_request = _Request::Normal(Box::new(NormalRequest {
+                    id: {
+                        let l = NEXT_REQUEST_ID.lock().unwrap();
+                        let last = &mut *l.borrow_mut();
+                        let last_v = *last;
+                        *last += 1;
+                        last_v
+                    },
+                    messages: message,
+                    sampling_params: SamplingParams::deterministic(),
+                    response: tx,
+                    return_logprobs: false,
+                    is_streaming: false,
+                    constraint: Constraint::None,
+                    suffix: None,
+                    tool_choice: None,
+                    tools: None,
+                    logits_processors: None,
+                    return_raw_logits: false,
+                    web_search_options: None,
+                    model_id: model_id.clone(),
+                    truncate_sequence,
+                }));
+
+                sender.blocking_send(model_request).unwrap();
+
+                let response = rx.blocking_recv().unwrap();
+
+                match response {
+                    Response::Embeddings { embeddings } => Ok(embeddings),
+                    Response::ValidationError(e) | Response::InternalError(e) => {
+                        Err(PyApiErr::from(e.to_string()))
+                    }
+                    Response::ModelError(msg, _) => Err(PyApiErr::from(msg.to_string())),
+                    Response::Done(_) => Err(PyApiErr::from(
+                        "Received chat completion response from embeddings request.",
+                    )),
+                    Response::Chunk(_) => Err(PyApiErr::from(
+                        "Received chat completion chunk from embeddings request.",
+                    )),
+                    Response::CompletionDone(_) => Err(PyApiErr::from(
+                        "Received completion response from embeddings request.",
+                    )),
+                    Response::CompletionChunk(_) => Err(PyApiErr::from(
+                        "Received completion chunk from embeddings request.",
+                    )),
+                    Response::CompletionModelError(_, _) => Err(PyApiErr::from(
+                        "Received completion model error from embeddings request.",
+                    )),
+                    Response::ImageGeneration(_) => Err(PyApiErr::from(
+                        "Received image generation response from embeddings request.",
+                    )),
+                    Response::Speech { .. } => Err(PyApiErr::from(
+                        "Received speech response from embeddings request.",
+                    )),
+                    Response::Raw { .. } => Err(PyApiErr::from(
+                        "Received raw logits response from embeddings request.",
+                    )),
                 }
-                Response::ModelError(msg, _) => Err(PyApiErr::from(msg.to_string())),
-                Response::Done(_) => Err(PyApiErr::from(
-                    "Received chat completion response from embeddings request.",
-                )),
-                Response::Chunk(_) => Err(PyApiErr::from(
-                    "Received chat completion chunk from embeddings request.",
-                )),
-                Response::CompletionDone(_) => Err(PyApiErr::from(
-                    "Received completion response from embeddings request.",
-                )),
-                Response::CompletionChunk(_) => Err(PyApiErr::from(
-                    "Received completion chunk from embeddings request.",
-                )),
-                Response::CompletionModelError(_, _) => Err(PyApiErr::from(
-                    "Received completion model error from embeddings request.",
-                )),
-                Response::ImageGeneration(_) => Err(PyApiErr::from(
-                    "Received image generation response from embeddings request.",
-                )),
-                Response::Speech { .. } => Err(PyApiErr::from(
-                    "Received speech response from embeddings request.",
-                )),
-                Response::Raw { .. } => Err(PyApiErr::from(
-                    "Received raw logits response from embeddings request.",
-                )),
+            };
+
+            match inputs {
+                PythonEmbeddingInputs::Prompts(prompts) => {
+                    for prompt in prompts {
+                        let embedding = dispatch(RequestMessage::Embedding { prompt })?;
+                        all_embeddings.push(embedding);
+                    }
+                }
+                PythonEmbeddingInputs::Tokens(batches) => {
+                    for tokens in batches {
+                        let embedding =
+                            dispatch(RequestMessage::EmbeddingTokens { prompt: tokens })?;
+                        all_embeddings.push(embedding);
+                    }
+                }
             }
+
+            Ok(all_embeddings)
         })
     }
 
@@ -2067,7 +2105,7 @@ impl MultiModelRunner {
         &mut self,
         request: Py<EmbeddingRequest>,
         model_id: String,
-    ) -> PyApiResult<Vec<f32>> {
+    ) -> PyApiResult<Vec<Vec<f32>>> {
         self.runner.send_embedding_request(request, Some(model_id))
     }
 
@@ -2091,7 +2129,7 @@ impl MultiModelRunner {
         self.runner.remove_model(model_id)
     }
 
-    /// Send a chat completion request to the default model.
+    /// Send a chat completion request to the specified model.
     #[pyo3(signature = (request, model_id = None))]
     fn send_chat_completion_request(
         &mut self,
@@ -2101,7 +2139,7 @@ impl MultiModelRunner {
         self.runner.send_chat_completion_request(request, model_id)
     }
 
-    /// Send a completion request to the default model.
+    /// Send a completion request to the specified model.
     #[pyo3(signature = (request, model_id = None))]
     fn send_completion_request(
         &mut self,
@@ -2111,17 +2149,18 @@ impl MultiModelRunner {
         self.runner.send_completion_request(request, model_id)
     }
 
-    /// Send an embeddings request to the default model.
+    /// Send an embeddings request to the specified model.
+    /// This returns the embeddings as [batch size, embedding dim]
     #[pyo3(signature = (request, model_id = None))]
     fn send_embedding_request(
         &mut self,
         request: Py<EmbeddingRequest>,
         model_id: Option<String>,
-    ) -> PyApiResult<Vec<f32>> {
+    ) -> PyApiResult<Vec<Vec<f32>>> {
         self.runner.send_embedding_request(request, model_id)
     }
 
-    /// Generate an image using the default model.
+    /// Generate an image using the specified model.
     #[pyo3(signature = (
         prompt,
         response_format,
@@ -2141,7 +2180,7 @@ impl MultiModelRunner {
             .generate_image(prompt, response_format, height, width, model_id)
     }
 
-    /// Generate audio using the default model.
+    /// Generate audio using the specified model.
     #[pyo3(signature = (prompt, model_id = None))]
     fn generate_audio(
         &self,
@@ -2151,13 +2190,13 @@ impl MultiModelRunner {
         self.runner.generate_audio(prompt, model_id)
     }
 
-    /// Send a request to re-ISQ the default model.
+    /// Send a request to re-ISQ the specified model.
     #[pyo3(signature = (dtype, model_id = None))]
     fn send_re_isq(&self, dtype: String, model_id: Option<String>) -> PyApiResult<()> {
         self.runner.send_re_isq(dtype, model_id)
     }
 
-    /// Tokenize some text using the default model.
+    /// Tokenize some text using the specified model.
     #[pyo3(signature = (text, add_special_tokens, enable_thinking, model_id = None))]
     fn tokenize_text(
         &self,
@@ -2170,7 +2209,7 @@ impl MultiModelRunner {
             .tokenize_text(text, add_special_tokens, enable_thinking, model_id)
     }
 
-    /// Detokenize some tokens using the default model.
+    /// Detokenize some tokens using the specified model.
     #[pyo3(signature = (tokens, skip_special_tokens, model_id = None))]
     fn detokenize_text(
         &self,

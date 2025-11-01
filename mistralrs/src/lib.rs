@@ -148,7 +148,10 @@ pub use gguf::GgufModelBuilder;
 pub use gguf_lora_model::GgufLoraModelBuilder;
 pub use gguf_xlora_model::GgufXLoraModelBuilder;
 pub use lora_model::LoraModelBuilder;
-pub use messages::{RequestBuilder, RequestLike, TextMessageRole, TextMessages, VisionMessages};
+pub use messages::{
+    EmbeddingRequest, EmbeddingRequestBuilder, EmbeddingRequestInput, RequestBuilder, RequestLike,
+    TextMessageRole, TextMessages, VisionMessages,
+};
 pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
