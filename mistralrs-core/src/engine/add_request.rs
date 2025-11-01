@@ -74,7 +74,8 @@ impl Engine {
             | RequestMessage::CompletionTokens(_)
             | RequestMessage::VisionChat { .. }
             | RequestMessage::ImageGeneration { .. }
-            | RequestMessage::SpeechGeneration { .. } => None,
+            | RequestMessage::SpeechGeneration { .. }
+            | RequestMessage::Embedding { .. } => None,
         };
         if is_chat
             && !get_mut_arcmutex!(self.pipeline)
@@ -106,6 +107,7 @@ impl Engine {
             ) => (),
             (ModelCategory::Diffusion, RequestMessage::ImageGeneration { .. }) => (),
             (ModelCategory::Speech, RequestMessage::SpeechGeneration { .. }) => (),
+            (ModelCategory::Embedding, RequestMessage::Embedding { .. }) => (),
             _ => {
                 request
                     .response
@@ -149,9 +151,9 @@ impl Engine {
         };
 
         let seq_step_type = match &request.messages {
-            RequestMessage::ImageGeneration { .. } | RequestMessage::SpeechGeneration { .. } => {
-                SeqStepType::OneShot
-            }
+            RequestMessage::ImageGeneration { .. }
+            | RequestMessage::SpeechGeneration { .. }
+            | RequestMessage::Embedding { .. } => SeqStepType::OneShot,
             _ => SeqStepType::PromptAndDecode,
         };
 
@@ -185,7 +187,8 @@ impl Engine {
                 );
                 handle_seq_error!(template, request.response)
             }
-            RequestMessage::Completion { text, .. } => {
+            RequestMessage::Completion { text, .. }
+            | RequestMessage::Embedding { prompt: text } => {
                 let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
                     request
                         .response
@@ -236,7 +239,11 @@ impl Engine {
             return;
         }
 
-        if prompt_tokens.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len {
+        if matches!(
+            get_mut_arcmutex!(self.pipeline).category(),
+            ModelCategory::Text | ModelCategory::Vision { .. }
+        ) && prompt_tokens.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len
+        {
             if !self.truncate_sequence {
                 request
                     .response
@@ -421,7 +428,11 @@ impl Engine {
                 .eos_tok
                 .clone();
 
-            let seq_preallocated_cache = if get_mut_arcmutex!(self.pipeline).do_preallocated_cache()
+            let seq_preallocated_cache = if matches!(
+                get_mut_arcmutex!(self.pipeline).category(),
+                ModelCategory::Text | ModelCategory::Vision { .. }
+            ) && get_mut_arcmutex!(self.pipeline)
+                .do_preallocated_cache()
             {
                 let metadata = get_mut_arcmutex!(self.pipeline).get_metadata();
                 let model_metadata = metadata

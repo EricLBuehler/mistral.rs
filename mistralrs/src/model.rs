@@ -279,6 +279,49 @@ impl Model {
         Ok((pcm, rate, channels))
     }
 
+    /// Generate embeddings given a prompt.
+    ///
+    /// This returns: (pcm, sampling rate, channels)
+    pub async fn generate_embeddings(&self, prompt: impl ToString) -> anyhow::Result<Tensor> {
+        let (tx, mut rx) = channel(1);
+
+        let request = Request::Normal(Box::new(NormalRequest {
+            id: 0,
+            messages: RequestMessage::Embedding {
+                prompt: prompt.to_string(),
+            },
+            sampling_params: SamplingParams::deterministic(),
+            response: tx,
+            return_logprobs: false,
+            is_streaming: false,
+            suffix: None,
+            constraint: Constraint::None,
+            tool_choice: None,
+            tools: None,
+            logits_processors: None,
+            return_raw_logits: false,
+            web_search_options: None,
+            model_id: None,
+        }));
+
+        self.runner.get_sender(None)?.send(request).await?;
+
+        let ResponseOk::Raw {
+            logits_chunks,
+            tokens,
+        } = rx
+            .recv()
+            .await
+            .context("Channel was erroneously closed!")?
+            .as_result()?
+        else {
+            anyhow::bail!("Got unexpected response type.")
+        };
+        dbg!(&logits_chunks, &tokens);
+
+        Ok(logits_chunks[0].clone())
+    }
+
     /// Reapply ISQ to the model. This will be done on whatever device the model is already on.
     pub async fn re_isq_model(&self, isq_type: IsqType) -> anyhow::Result<()> {
         let request = Request::ReIsq(isq_type);

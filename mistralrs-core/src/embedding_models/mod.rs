@@ -59,7 +59,7 @@ impl Module for Normalize {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let norm = (xs.sqr()?.sum(1)? + 1e-12)?.sqrt()?;
 
-        xs / norm
+        xs.broadcast_div(&norm)
     }
 }
 

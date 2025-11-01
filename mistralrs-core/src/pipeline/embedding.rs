@@ -15,6 +15,7 @@ use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
+use crate::pipeline::text_models_inputs_processor::ModelInputs;
 use crate::pipeline::EmbeddingGemmaLoader;
 use crate::pipeline::EmbeddingLoaderType;
 use crate::pipeline::EmbeddingModel;
@@ -25,7 +26,6 @@ use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
-use crate::vision_models::ModelInputs;
 use crate::Modalities;
 use crate::SupportedModality;
 use crate::{
@@ -88,7 +88,6 @@ pub struct EmbeddingLoaderBuilder {
     config: EmbeddingSpecificConfig,
     kind: ModelKind,
     tokenizer_json: Option<String>,
-    jinja_explicit: Option<String>,
     hf_cache_path: Option<PathBuf>,
     lora_adapter_ids: Option<Vec<String>>,
 }
@@ -702,13 +701,14 @@ impl Pipeline for EmbeddingPipeline {
         // TODO: make a custom model inputs
         let ModelInputs {
             input_ids,
+            input_ids_full: _,
             seqlen_offsets: _,
+            seqlen_offsets_full: _,
             context_lens: _,
             position_ids: _,
-            pixel_values: _,
-            model_specific_args: _,
             paged_attn_meta: _,
             flash_meta,
+            flash_meta_full: _,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
 
         let mut xs = self.model.forward(&input_ids, &flash_meta)?;

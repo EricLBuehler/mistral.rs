@@ -202,10 +202,7 @@ impl VisionMessages {
         let config = model.config().unwrap();
         let prefixer = match &config.category {
             ModelCategory::Vision { prefixer } => prefixer,
-            ModelCategory::Text
-            | ModelCategory::Diffusion
-            | ModelCategory::Speech
-            | ModelCategory::Audio => {
+            _ => {
                 anyhow::bail!("`add_image_message` expects a vision model.")
             }
         };
@@ -494,10 +491,7 @@ impl RequestBuilder {
         let config = model.config().unwrap();
         let prefixer = match &config.category {
             ModelCategory::Vision { prefixer } => prefixer,
-            ModelCategory::Text
-            | ModelCategory::Diffusion
-            | ModelCategory::Speech
-            | ModelCategory::Audio => {
+            _ => {
                 anyhow::bail!("`add_image_message` expects a vision model.")
             }
         };
