@@ -41,7 +41,7 @@ curl http://localhost:1234/v1/embeddings \
   -d '{"model": "default", "input": ["task: search result | query: What is graphene?", "task: search result | query: What is an apple?"]}'
 ```
 
-An example with the OpenAI client can be found [here](../examples/server/embeddinggemma.py).
+An example with the OpenAI client can be found [here](../examples/server/embedding_gemma.py).
 
 By default the server registers the model as `default`. To expose it under a custom name or alongside chat
 models, run in multi-model mode and assign an identifier in the selector configuration:
@@ -83,7 +83,7 @@ embeddings = runner.send_embedding_request(request)
 print(len(embeddings), len(embeddings[0]))
 ```
 
-Refer to [this example](../examples/python/embeddinggemma.py) for a complete runnable script.
+Refer to [this example](../examples/python/embedding_gemma.py) for a complete runnable script.
 
 ## Rust API
 

@@ -33,6 +33,12 @@ pub enum EmbeddingResponder {
     ValidationError(AnyhowError),
 }
 
+struct EmbeddingWithUsage {
+    embedding: Vec<f32>,
+    prompt_tokens: usize,
+    total_tokens: usize,
+}
+
 impl IntoResponse for EmbeddingResponder {
     fn into_response(self) -> axum::response::Response {
         match self {
@@ -93,6 +99,8 @@ pub async fn embeddings(
     let return_base64 = matches!(encoding, EmbeddingEncodingFormat::Base64);
 
     let mut data = Vec::with_capacity(inputs.len());
+    let mut total_prompt_tokens: usize = 0;
+    let mut total_tokens: usize = 0;
 
     match inputs {
         Inputs::Prompt(prompts) => {
@@ -113,7 +121,11 @@ pub async fn embeddings(
             let results = join_all(futures).await;
             for (index, result) in results.into_iter().enumerate() {
                 match result {
-                    Ok(embedding) => {
+                    Ok(EmbeddingWithUsage {
+                        embedding,
+                        prompt_tokens,
+                        total_tokens: item_total_tokens,
+                    }) => {
                         let embedding = if return_base64 {
                             EmbeddingVector::Base64(encode_embedding_base64(&embedding))
                         } else {
@@ -124,6 +136,9 @@ pub async fn embeddings(
                             embedding,
                             index,
                         });
+                        total_prompt_tokens =
+                            total_prompt_tokens.saturating_add(prompt_tokens);
+                        total_tokens = total_tokens.saturating_add(item_total_tokens);
                     }
                     Err(e) => {
                         MistralRs::maybe_log_error(state.clone(), e.as_ref());
@@ -150,7 +165,11 @@ pub async fn embeddings(
             let results = join_all(futures).await;
             for (index, result) in results.into_iter().enumerate() {
                 match result {
-                    Ok(embedding) => {
+                    Ok(EmbeddingWithUsage {
+                        embedding,
+                        prompt_tokens,
+                        total_tokens: item_total_tokens,
+                    }) => {
                         let embedding = if return_base64 {
                             EmbeddingVector::Base64(encode_embedding_base64(&embedding))
                         } else {
@@ -161,6 +180,9 @@ pub async fn embeddings(
                             embedding,
                             index,
                         });
+                        total_prompt_tokens =
+                            total_prompt_tokens.saturating_add(prompt_tokens);
+                        total_tokens = total_tokens.saturating_add(item_total_tokens);
                     }
                     Err(e) => {
                         MistralRs::maybe_log_error(state.clone(), e.as_ref());
@@ -172,8 +194,8 @@ pub async fn embeddings(
     }
 
     let usage = EmbeddingUsage {
-        prompt_tokens: 0,
-        total_tokens: 0,
+        prompt_tokens: saturating_to_u32(total_prompt_tokens),
+        total_tokens: saturating_to_u32(total_tokens),
     };
 
     let response = EmbeddingResponse {
@@ -223,7 +245,7 @@ async fn fetch_embedding(
     prompt: String,
     model_id: Option<&str>,
     truncate_sequence: bool,
-) -> Result<Vec<f32>> {
+) -> Result<EmbeddingWithUsage> {
     let (tx, mut rx) = create_response_channel(Some(1));
 
     let request = Request::Normal(Box::new(NormalRequest {
@@ -256,7 +278,7 @@ async fn fetch_embedding_tokens(
     tokens: Vec<u32>,
     model_id: Option<&str>,
     truncate_sequence: bool,
-) -> Result<Vec<f32>> {
+) -> Result<EmbeddingWithUsage> {
     let (tx, mut rx) = create_response_channel(Some(1));
 
     let request = Request::Normal(Box::new(NormalRequest {
@@ -287,12 +309,20 @@ async fn fetch_embedding_tokens(
 async fn process_embedding_response(
     rx: &mut Receiver<Response>,
     state: SharedMistralRsState,
-) -> Result<Vec<f32>> {
+) -> Result<EmbeddingWithUsage> {
     base_process_non_streaming_response(
         rx,
         state.clone(),
         |_, response| match response {
-            Response::Embeddings { embeddings } => Ok(embeddings),
+            Response::Embeddings {
+                embeddings,
+                prompt_tokens,
+                total_tokens,
+            } => Ok(EmbeddingWithUsage {
+                embedding: embeddings,
+                prompt_tokens,
+                total_tokens,
+            }),
             Response::ValidationError(e) | Response::InternalError(e) => Err(anyhow!(e)),
             Response::ModelError(msg, _) => Err(anyhow!(msg)),
             Response::Done(_)
@@ -333,4 +363,12 @@ fn encode_embedding_base64(embedding: &[f32]) -> String {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     BASE64_STANDARD.encode(bytes)
+}
+
+fn saturating_to_u32(value: usize) -> u32 {
+    if value > u32::MAX as usize {
+        u32::MAX
+    } else {
+        value as u32
+    }
 }

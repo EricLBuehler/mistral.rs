@@ -1337,7 +1337,7 @@ impl Runner {
                 })?;
 
                 match response {
-                    Response::Embeddings { embeddings } => all_embeddings.push(embeddings),
+                    Response::Embeddings { embeddings, .. } => all_embeddings.push(embeddings),
                     Response::ValidationError(e) | Response::InternalError(e) => {
                         return Err(PyApiErr::from(e.to_string()))
                     }

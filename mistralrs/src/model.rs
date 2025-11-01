@@ -332,7 +332,7 @@ impl Model {
                     .await
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-                let ResponseOk::Embeddings { embeddings } = rx
+                let ResponseOk::Embeddings { embeddings, .. } = rx
                     .recv()
                     .await
                     .context("Channel was erroneously closed!")?

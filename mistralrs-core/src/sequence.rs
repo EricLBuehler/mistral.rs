@@ -1244,7 +1244,15 @@ impl SequenceGroup {
         if self.embedding_choices.len() == self.n_choices {
             assert_eq!(self.embedding_choices.len(), 1);
             let embeddings = self.embedding_choices[0].clone();
-            sender.send(Response::Embeddings { embeddings }).await?;
+            let prompt_tokens = self.total_prompt_toks;
+            let total_tokens = self.total_toks;
+            sender
+                .send(Response::Embeddings {
+                    embeddings,
+                    prompt_tokens,
+                    total_tokens,
+                })
+                .await?;
         }
 
         Ok(())

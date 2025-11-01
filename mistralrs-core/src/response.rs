@@ -255,6 +255,8 @@ pub enum Response {
     },
     Embeddings {
         embeddings: Vec<f32>,
+        prompt_tokens: usize,
+        total_tokens: usize,
     },
 }
 
@@ -282,6 +284,8 @@ pub enum ResponseOk {
     // Embeddings
     Embeddings {
         embeddings: Vec<f32>,
+        prompt_tokens: usize,
+        total_tokens: usize,
     },
 }
 
@@ -361,7 +365,15 @@ impl Response {
                 logits_chunks,
                 tokens,
             }),
-            Self::Embeddings { embeddings } => Ok(ResponseOk::Embeddings { embeddings }),
+            Self::Embeddings {
+                embeddings,
+                prompt_tokens,
+                total_tokens,
+            } => Ok(ResponseOk::Embeddings {
+                embeddings,
+                prompt_tokens,
+                total_tokens,
+            }),
         }
     }
 }

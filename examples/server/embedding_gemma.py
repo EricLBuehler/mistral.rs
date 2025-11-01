@@ -45,3 +45,4 @@ res = client.embeddings.create(
 
 print(res.data[0].embedding[:10])
 print(res.data[1].embedding[:10])
+print(res.usage)
