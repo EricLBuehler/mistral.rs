@@ -719,7 +719,7 @@ impl Pipeline for EmbeddingPipeline {
             xs = module.forward(&xs)?;
         }
 
-        Ok(ForwardInputsResult::RawLogits { logits: xs })
+        Ok(ForwardInputsResult::Embeddings { embeddings: xs })
     }
     async fn sample_causal_gen(
         &self,

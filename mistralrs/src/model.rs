@@ -306,10 +306,7 @@ impl Model {
 
         self.runner.get_sender(None)?.send(request).await?;
 
-        let ResponseOk::Raw {
-            logits_chunks,
-            tokens,
-        } = rx
+        let ResponseOk::Embeddings { embeddings } = rx
             .recv()
             .await
             .context("Channel was erroneously closed!")?
@@ -317,9 +314,8 @@ impl Model {
         else {
             anyhow::bail!("Got unexpected response type.")
         };
-        dbg!(&logits_chunks, &tokens);
 
-        Ok(logits_chunks[0].clone())
+        Ok(embeddings)
     }
 
     /// Reapply ISQ to the model. This will be done on whatever device the model is already on.

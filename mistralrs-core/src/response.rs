@@ -253,6 +253,9 @@ pub enum Response {
         logits_chunks: Vec<Tensor>,
         tokens: Vec<u32>,
     },
+    Embeddings {
+        embeddings: Tensor,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -275,6 +278,10 @@ pub enum ResponseOk {
     Raw {
         logits_chunks: Vec<Tensor>,
         tokens: Vec<u32>,
+    },
+    // Embeddings
+    Embeddings {
+        embeddings: Tensor,
     },
 }
 
@@ -354,6 +361,7 @@ impl Response {
                 logits_chunks,
                 tokens,
             }),
+            Self::Embeddings { embeddings } => Ok(ResponseOk::Embeddings { embeddings }),
         }
     }
 }

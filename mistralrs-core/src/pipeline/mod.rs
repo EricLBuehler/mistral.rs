@@ -320,6 +320,9 @@ pub enum ForwardInputsResult {
     RawLogits {
         logits: Tensor,
     },
+    Embeddings {
+        embeddings: Tensor,
+    },
     CausalGeneration {
         logits: Tensor,
     },
@@ -338,6 +341,9 @@ impl ForwardInputsResult {
         match self {
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
                 logits: logits.i(bs_idx)?,
+            }),
+            Self::Embeddings { embeddings } => Ok(Self::Embeddings {
+                embeddings: embeddings.i(bs_idx)?,
             }),
             Self::RawLogits { logits } => Ok(Self::RawLogits {
                 logits: logits.i(bs_idx)?,
@@ -364,6 +370,9 @@ impl ForwardInputsResult {
             }),
             Self::RawLogits { logits } => Ok(Self::RawLogits {
                 logits: logits.to_device(device)?,
+            }),
+            Self::Embeddings { embeddings } => Ok(Self::Embeddings {
+                embeddings: embeddings.to_device(device)?,
             }),
             Self::Image { .. } => Ok(self.clone()),
             Self::Speech { .. } => Ok(self.clone()),
@@ -424,6 +433,7 @@ pub trait Pipeline:
                 let mut logits = vec![None; input_seqs.len()];
                 let len_inputs = 1;
                 let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
+                let mut embedding_logits = vec![None; input_seqs.len()];
 
                 let mut exec_duration = Duration::ZERO;
                 for (i, inputs) in inputs_iter.into_iter().enumerate() {
@@ -457,6 +467,9 @@ pub trait Pipeline:
                         if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
                             raw_out_logits[seq_idx][i] =
                                 Some(logits.i(logit_idx)?.to_device(&Device::Cpu)?);
+                        } else if let ForwardInputsResult::Embeddings { embeddings } = &raw_logits {
+                            embedding_logits[seq_idx] =
+                                Some(embeddings.i(logit_idx)?.to_device(&Device::Cpu)?);
                         } else {
                             logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
                         }
@@ -493,6 +506,21 @@ pub trait Pipeline:
 
                     return Ok(exec_duration);
                 }
+                if embedding_logits[0].is_some() {
+                    let start = Instant::now();
+                    response::send_embedding_responses(
+                        input_seqs,
+                        embedding_logits
+                            .into_iter()
+                            .map(|raw| raw.unwrap())
+                            .collect(),
+                    )
+                    .await?;
+                    let end = Instant::now();
+                    exec_duration += end.duration_since(start);
+
+                    return Ok(exec_duration);
+                }
 
                 let start = Instant::now();
                 let logits_on_cpu = logits.len() > 1;
@@ -509,7 +537,8 @@ pub trait Pipeline:
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
                 match &logits[0] {
-                    ForwardInputsResult::RawLogits { .. } => unreachable!(),
+                    ForwardInputsResult::RawLogits { .. }
+                    | ForwardInputsResult::Embeddings { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
                         self.sample_causal_gen(
                             input_seqs,
@@ -631,6 +660,7 @@ pub trait Pipeline:
                 let mut logits = vec![None; input_seqs.len()];
                 let len_inputs = 1;
                 let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
+                let mut embedding_logits = vec![None; input_seqs.len()];
 
                 let mut exec_duration = Duration::ZERO;
                 for (i, inputs) in inputs_iter.into_iter().enumerate() {
@@ -648,6 +678,9 @@ pub trait Pipeline:
                         if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
                             raw_out_logits[seq_idx][i] =
                                 Some(logits.i(logit_idx)?.to_device(&Device::Cpu)?);
+                        } else if let ForwardInputsResult::Embeddings { embeddings } = &raw_logits {
+                            embedding_logits[seq_idx] =
+                                Some(embeddings.i(logit_idx)?.to_device(&Device::Cpu)?);
                         } else {
                             logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
                         }
@@ -661,6 +694,21 @@ pub trait Pipeline:
                         raw_out_logits
                             .into_iter()
                             .map(|raw| raw.into_iter().flatten().collect::<Vec<_>>())
+                            .collect(),
+                    )
+                    .await?;
+                    let end = Instant::now();
+                    exec_duration += end.duration_since(start);
+
+                    return Ok(exec_duration);
+                }
+                if embedding_logits[0].is_some() {
+                    let start = Instant::now();
+                    response::send_embedding_responses(
+                        input_seqs,
+                        embedding_logits
+                            .into_iter()
+                            .map(|raw| raw.unwrap())
                             .collect(),
                     )
                     .await?;
@@ -685,7 +733,8 @@ pub trait Pipeline:
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
                 match &logits[0] {
-                    ForwardInputsResult::RawLogits { .. } => unreachable!(),
+                    ForwardInputsResult::RawLogits { .. }
+                    | ForwardInputsResult::Embeddings { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
                         self.sample_causal_gen(
                             input_seqs,
