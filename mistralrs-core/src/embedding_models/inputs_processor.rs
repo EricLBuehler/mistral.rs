@@ -49,6 +49,7 @@ pub fn make_prompt_chunk<T: WithDType + Debug>(
     toks: Vec<&[T]>,
     device: &Device,
     mapper: Option<&dyn DeviceMapper>,
+    has_causal_attention: bool,
 ) -> Result<InputMetadata> {
     let max_len = toks
         .iter()
@@ -110,6 +111,7 @@ pub fn make_prompt_chunk<T: WithDType + Debug>(
             max_q,
             cumulative_seqlens_k: seqlens_k_map,
             cumulative_seqlens_q: seqlens_q_map,
+            causal: has_causal_attention,
         },
     })
 }
@@ -120,11 +122,14 @@ pub(crate) fn get_prompt_input<T: WithDType + std::fmt::Debug>(
     input_seqs: &[&mut Sequence],
     device: &Device,
     mapper: Option<&dyn DeviceMapper>,
+    has_causal_attention: bool,
 ) -> Result<InnerInputProcessorOutput> {
     let offset = input_seqs[0].token_offset();
-    make_prompt_chunk(offset, toks, device, mapper).map(|inputs| InnerInputProcessorOutput {
-        inputs,
-        seq_indices: (0..input_seqs.len()).collect(),
+    make_prompt_chunk(offset, toks, device, mapper, has_causal_attention).map(|inputs| {
+        InnerInputProcessorOutput {
+            inputs,
+            seq_indices: (0..input_seqs.len()).collect(),
+        }
     })
 }
 
@@ -134,7 +139,9 @@ pub struct ModelInputs {
     pub flash_meta: FlashParams,
 }
 
-pub struct EmbeddingInputsProcessor;
+pub struct EmbeddingInputsProcessor {
+    pub has_causal_attention: bool,
+}
 
 impl InputsProcessor for EmbeddingInputsProcessor {
     fn process_inputs(
@@ -161,6 +168,7 @@ impl InputsProcessor for EmbeddingInputsProcessor {
             input_seqs,
             device,
             mapper,
+            self.has_causal_attention,
         )?;
         let InnerInputProcessorOutput {
             inputs:
@@ -185,11 +193,15 @@ impl InputsProcessor for EmbeddingInputsProcessor {
     }
 }
 
-pub struct EmbeddingProcessor;
+pub struct EmbeddingProcessor {
+    pub has_causal_attention: bool,
+}
 
 impl Processor for EmbeddingProcessor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
-        Arc::new(EmbeddingInputsProcessor)
+        Arc::new(EmbeddingInputsProcessor {
+            has_causal_attention: self.has_causal_attention,
+        })
     }
     fn get_special_tokens(&self) -> &[&'static str] {
         &[]

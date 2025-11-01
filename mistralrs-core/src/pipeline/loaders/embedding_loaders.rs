@@ -51,6 +51,7 @@ pub trait EmbeddingModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModel
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn EmbeddingModel + Send + Sync>>;
     fn is_gptx(&self, config: &str) -> Result<bool>;
+    fn has_causal_attention(&self, config: &str) -> Result<bool>;
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>>;
     fn get_device_for_tensor(
         &self,
@@ -276,6 +277,9 @@ impl EmbeddingModelLoader for AutoEmbeddingLoader {
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         Self::get_loader(config)?.get_config_repr(config)
     }
+    fn has_causal_attention(&self, config: &str) -> Result<bool> {
+        Self::get_loader(config)?.has_causal_attention(config)
+    }
     fn is_gptx(&self, config: &str) -> Result<bool> {
         Self::get_loader(config)?.is_gptx(config)
     }
@@ -371,6 +375,9 @@ impl EmbeddingModelLoader for EmbeddingGemmaLoader {
     }
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
+    }
+    fn has_causal_attention(&self, _: &str) -> Result<bool> {
+        Ok(false)
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: EmbeddingGemmaConfig = serde_json::from_str(config)?;

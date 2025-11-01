@@ -16,12 +16,12 @@ use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
-use crate::pipeline::EmbeddingGemmaLoader;
 use crate::pipeline::EmbeddingLoaderType;
 use crate::pipeline::EmbeddingModel;
 use crate::pipeline::EmbeddingModelLoader;
 use crate::pipeline::{AutoEmbeddingLoader, EmbeddingModulePaths};
 use crate::pipeline::{ChatTemplate, EmbeddingModelPaths, IsqOrganization};
+use crate::pipeline::{EmbeddingGemmaLoader, Processor};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
@@ -66,6 +66,7 @@ pub struct EmbeddingPipeline {
     modules_ser: String,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     modules: Vec<Box<dyn Module + Send + Sync>>,
+    processor: Arc<dyn Processor + Send + Sync>,
 }
 
 /// A loader for a vision (non-quantized) model.
@@ -593,6 +594,7 @@ impl Loader for EmbeddingLoader {
             )?;
         }
 
+        let has_causal_attention = self.inner.has_causal_attention(&config)?;
         Ok(Arc::new(Mutex::new(EmbeddingPipeline {
             model,
             modules,
@@ -622,6 +624,9 @@ impl Loader for EmbeddingLoader {
             config,
             mapper: pipeline_mapper,
             modules_ser,
+            processor: Arc::new(EmbeddingProcessor {
+                has_causal_attention,
+            }),
         })))
     }
 
@@ -635,8 +640,8 @@ impl Loader for EmbeddingLoader {
 }
 
 impl PreProcessingMixin for EmbeddingPipeline {
-    fn get_processor(&self) -> Arc<dyn super::Processor> {
-        Arc::new(EmbeddingProcessor)
+    fn get_processor(&self) -> Arc<dyn Processor> {
+        self.processor.clone()
     }
     fn get_chat_template(&self) -> Option<Arc<ChatTemplate>> {
         None
