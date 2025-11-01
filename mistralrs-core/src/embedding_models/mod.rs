@@ -1,4 +1,4 @@
-use candle_core::{Result, Tensor};
+use candle_core::{Result, Tensor, D};
 use candle_nn::Module;
 use serde::Deserialize;
 
@@ -22,6 +22,9 @@ impl Module for Pooling {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         if !self.include_prompt {
             candle_core::bail!("Only support include_prompt==true");
+        }
+        if xs.dim(D::Minus1)? != self.word_embedding_dimension {
+            candle_core::bail!("xs does not match the expected embedding dimension.");
         }
 
         let mut outputs = Vec::new();

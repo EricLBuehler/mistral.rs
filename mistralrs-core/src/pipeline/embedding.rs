@@ -7,7 +7,7 @@ use super::{
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
-use crate::embedding_models::{Dense, Normalize, Pooling};
+use crate::embedding_models::{Dense, DenseActivation, Normalize, Pooling};
 use crate::embedding_normal_model_loader;
 use crate::embedding_normal_model_loader_sharded;
 use crate::get_embedding_paths;
@@ -490,6 +490,9 @@ impl Loader for EmbeddingLoader {
                     };
                     let (out_f, in_f) = weight.dims2()?;
                     assert_eq!((out_f, in_f), (config.out_features, config.in_features));
+                    if !matches!(config.activation_function, DenseActivation::Identity) {
+                        anyhow::bail!("Expected Indentity activation function.");
+                    }
 
                     modules.push(Box::new(Linear::new(weight, bias)));
                 }

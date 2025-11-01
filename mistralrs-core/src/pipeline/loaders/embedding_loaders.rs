@@ -40,7 +40,6 @@ pub trait EmbeddingModel: IsqModel + AnyMoeBaseModelMixin {
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor>;
     fn device(&self) -> &Device;
-    fn config(&self) -> &ModelConfigMetadata;
 }
 
 pub trait EmbeddingModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {

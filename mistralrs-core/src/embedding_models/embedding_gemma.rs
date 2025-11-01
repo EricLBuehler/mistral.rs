@@ -12,7 +12,7 @@ use crate::{
         Sdpa,
     },
     layers_masker::BidirectionalMasker,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::AttentionImplementation,
     pipeline::{
         text_models_inputs_processor::FlashParams, EmbeddingModel, IsqModel, NormalLoadingMetadata,
     },
@@ -377,7 +377,6 @@ pub struct EmbeddingGemma {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: usize,
     final_logit_softcapping: Option<f64>,
-    cfg: ModelConfigMetadata,
 }
 
 impl EmbeddingGemma {
@@ -489,17 +488,6 @@ impl EmbeddingGemma {
             device: normal_loading_metadata.real_device,
             sliding_window: cfg.sliding_window,
             final_logit_softcapping: cfg.final_logit_softcapping,
-            cfg: ModelConfigMetadata {
-                max_seq_len: cfg.max_position_embeddings,
-                num_layers: cfg.num_hidden_layers,
-                hidden_size: cfg.hidden_size,
-                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
-                num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
-                    .max(1),
-                sliding_window: None,
-                k_head_dim: cfg.head_dim,
-                v_head_dim: cfg.head_dim,
-            },
             mapper,
         })
     }
@@ -634,9 +622,6 @@ impl EmbeddingModel for EmbeddingGemma {
     }
     fn device(&self) -> &Device {
         &self.device
-    }
-    fn config(&self) -> &ModelConfigMetadata {
-        &self.cfg
     }
 }
 
