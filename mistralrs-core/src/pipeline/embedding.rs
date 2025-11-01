@@ -493,7 +493,7 @@ impl Loader for EmbeddingLoader {
                     let (out_f, in_f) = weight.dims2()?;
                     assert_eq!((out_f, in_f), (config.out_features, config.in_features));
                     if !matches!(config.activation_function, DenseActivation::Identity) {
-                        anyhow::bail!("Expected Indentity activation function.");
+                        anyhow::bail!("Expected Identity activation function.");
                     }
 
                     modules.push(Box::new(Linear::new(weight, bias)));

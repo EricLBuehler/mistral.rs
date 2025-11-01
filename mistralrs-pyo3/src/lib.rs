@@ -2061,8 +2061,7 @@ impl MultiModelRunner {
         request: Py<EmbeddingRequest>,
         model_id: String,
     ) -> PyApiResult<Vec<f32>> {
-        self.runner
-            .send_embedding_request(request, Some(model_id))
+        self.runner.send_embedding_request(request, Some(model_id))
     }
 
     /// List all available model IDs.

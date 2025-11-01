@@ -141,9 +141,7 @@ impl EmbeddingRequest {
     #[new]
     #[pyo3(signature = (input,))]
     fn new(input: String) -> Self {
-        Self {
-            input,
-        }
+        Self { input }
     }
 }
 
