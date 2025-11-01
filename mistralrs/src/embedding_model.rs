@@ -226,7 +226,7 @@ impl UqffEmbeddingModelBuilder {
         self.0.build().await
     }
 
-    /// This wraps the VisionModelBuilder, so users should take care to not call UQFF-related methods.
+    /// This wraps the EmbeddingModelBuilder, so users should take care to not call UQFF-related methods.
     pub fn into_inner(self) -> EmbeddingModelBuilder {
         self.0
     }
