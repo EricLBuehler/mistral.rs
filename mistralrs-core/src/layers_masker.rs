@@ -324,7 +324,6 @@ impl BidirectionalMasker {
 
         // Avoid materializing large sliding-window masks when flash-attn on CUDA.
         if crate::using_flash_attn() && input_ids.device().is_cuda() {
-            todo!();
             return Ok(Tensor::zeros((1, 1), dtype, input_ids.device())?);
         }
 
@@ -343,7 +342,6 @@ impl BidirectionalMasker {
 
         // Avoid materializing large sliding-window masks when flash-attn on CUDA.
         if crate::using_flash_attn() && input_ids.device().is_cuda() {
-            todo!();
             return Ok(Tensor::zeros((1, 1), dtype, input_ids.device())?);
         }
 

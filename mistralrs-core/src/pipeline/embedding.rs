@@ -7,6 +7,7 @@ use super::{
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
+use crate::embedding_models::inputs_processor::{EmbeddingProcessor, ModelInputs};
 use crate::embedding_models::{Dense, DenseActivation, Normalize, Pooling};
 use crate::embedding_normal_model_loader;
 use crate::embedding_normal_model_loader_sharded;
@@ -15,7 +16,6 @@ use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
-use crate::pipeline::text_models_inputs_processor::ModelInputs;
 use crate::pipeline::EmbeddingGemmaLoader;
 use crate::pipeline::EmbeddingLoaderType;
 use crate::pipeline::EmbeddingModel;
@@ -635,6 +635,9 @@ impl Loader for EmbeddingLoader {
 }
 
 impl PreProcessingMixin for EmbeddingPipeline {
+    fn get_processor(&self) -> Arc<dyn super::Processor> {
+        Arc::new(EmbeddingProcessor)
+    }
     fn get_chat_template(&self) -> Option<Arc<ChatTemplate>> {
         None
     }
@@ -713,17 +716,9 @@ impl Pipeline for EmbeddingPipeline {
         inputs: Box<dyn Any>,
         _return_raw_logits: bool,
     ) -> candle_core::Result<ForwardInputsResult> {
-        // TODO: make a custom model inputs
         let ModelInputs {
             input_ids,
-            input_ids_full: _,
-            seqlen_offsets: _,
-            seqlen_offsets_full: _,
-            context_lens: _,
-            position_ids: _,
-            paged_attn_meta: _,
             flash_meta,
-            flash_meta_full: _,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
 
         let mut xs = self.model.forward(&input_ids, &flash_meta)?;

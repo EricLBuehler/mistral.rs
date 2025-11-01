@@ -13,6 +13,7 @@ use crate::{device_map::DeviceMapper, sequence::Sequence};
 pub enum InputsProcessorType {
     Text,
     Vision,
+    Embedding,
 }
 
 pub struct InputProcessorOutput {
