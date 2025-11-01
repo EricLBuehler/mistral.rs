@@ -2,6 +2,7 @@ mod amoe;
 mod auto;
 pub mod chat_template;
 mod diffusion;
+mod embedding;
 mod ggml;
 mod gguf;
 mod inputs_processor;
@@ -27,6 +28,7 @@ pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 pub use auto::{AutoLoader, AutoLoaderBuilder};
 use chat_template::ChatTemplate;
 pub use diffusion::{DiffusionLoader, DiffusionLoaderBuilder};
+pub use embedding::{EmbeddingLoader, EmbeddingLoaderBuilder, EmbeddingSpecificConfig};
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 use image::DynamicImage;
@@ -35,16 +37,17 @@ pub(crate) use isq::IsqModelLoader;
 pub use isq::{parse_isq_value, IsqModel, IsqOrganization, UQFF_MULTI_FILE_DELIMITER};
 use llguidance::toktrie::TokEnv;
 pub use loaders::{
-    AdapterKind, AutoDeviceMapParams, AutoNormalLoader, AutoVisionLoader, DeepSeekV2Loader,
-    DeepSeekV3Loader, DeviceMappedModelLoader, DiffusionLoaderType, DiffusionModel,
-    DiffusionModelLoader, FluxLoader, GLM4Loader, Gemma2Loader, Gemma3Loader, Gemma3nLoader,
-    GemmaLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
-    LocalModelPaths, MiniCpmOLoader, Mistral3Loader, MistralLoader, MixtralLoader, ModelKind,
-    ModelPaths, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
-    Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName,
-    QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3Loader, Qwen3MoELoader,
-    Qwen3VLLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
-    VisionLoaderType, VisionModel, VisionModelLoader,
+    AdapterKind, AutoDeviceMapParams, AutoEmbeddingLoader, AutoNormalLoader, AutoVisionLoader,
+    DeepSeekV2Loader, DeepSeekV3Loader, DeviceMappedModelLoader, DiffusionLoaderType,
+    DiffusionModel, DiffusionModelLoader, EmbeddingGemmaLoader, EmbeddingLoaderType,
+    EmbeddingModel, EmbeddingModelLoader, EmbeddingModelPaths, FluxLoader, GLM4Loader,
+    Gemma2Loader, Gemma3Loader, Gemma3nLoader, GemmaLoader, Idefics2Loader, Idefics3Loader,
+    LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader,
+    Mistral3Loader, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType,
+    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
+    Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader,
+    Qwen2_5VLLoader, Qwen3Loader, Qwen3MoELoader, Qwen3VLLoader, SmolLm3Loader, Starcoder2Loader,
+    TokenSource, VLlama4Loader, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
 };
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -82,6 +85,7 @@ pub enum SupportedModality {
     Text,
     Audio,
     Vision,
+    Embedding,
 }
 
 impl Debug for SupportedModality {
@@ -90,6 +94,7 @@ impl Debug for SupportedModality {
             Self::Text => write!(f, "📝 Text"),
             Self::Audio => write!(f, "🔊 Audio"),
             Self::Vision => write!(f, "🖼️ Vision"),
+            Self::Embedding => write!(f, "🔢 Embedding"),
         }
     }
 }
@@ -248,6 +253,7 @@ pub enum ModelCategory {
     Diffusion,
     Audio,
     Speech,
+    Embedding,
 }
 
 impl std::fmt::Debug for ModelCategory {
@@ -258,6 +264,7 @@ impl std::fmt::Debug for ModelCategory {
             ModelCategory::Diffusion => write!(f, "ModelCategory::Diffusion"),
             ModelCategory::Audio => write!(f, "ModelCategory::Audio"),
             ModelCategory::Speech => write!(f, "ModelCategory::Speech"),
+            ModelCategory::Embedding => write!(f, "ModelCategory::Embedding"),
         }
     }
 }
@@ -270,8 +277,14 @@ impl PartialEq for ModelCategory {
             (Self::Audio, Self::Audio) => true,
             (Self::Speech, Self::Speech) => true,
             (Self::Diffusion, Self::Diffusion) => true,
+            (Self::Embedding, Self::Embedding) => true,
             (
-                Self::Text | Self::Vision { .. } | Self::Diffusion | Self::Audio | Self::Speech,
+                Self::Text
+                | Self::Vision { .. }
+                | Self::Diffusion
+                | Self::Audio
+                | Self::Speech
+                | Self::Embedding,
                 _,
             ) => false,
         }

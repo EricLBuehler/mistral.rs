@@ -65,6 +65,9 @@ impl ModelPaths for SpeechModelPaths {
     fn get_adapter_paths(&self) -> &AdapterPaths {
         unreachable!("Use `std::any::Any`.")
     }
+    fn get_modules(&self) -> Option<&PathBuf> {
+        unreachable!("Use `std::any::Any`.")
+    }
 }
 
 pub struct SpeechProcessor;

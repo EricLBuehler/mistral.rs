@@ -1,0 +1,535 @@
+use std::{
+    fmt::{Debug, Display},
+    str::FromStr,
+    sync::Arc,
+};
+
+use crate::{
+    attention::ATTENTION_CHUNK_SIZE,
+    matformer::MatformerSliceConfig,
+    pipeline::{loaders::auto_device_map::NonMappedSubModel, NormalLoadingMetadata},
+    vision_models::gemma3::config::Gemma3Config,
+};
+
+use crate::{
+    amoe::AnyMoeBaseModelMixin,
+    device_map::DeviceMapper,
+    paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata},
+    pipeline::{isq::IsqModelLoader, text_models_inputs_processor::FlashParams, IsqModel},
+    utils::varbuilder_utils::DeviceForLoadTensor,
+};
+use anyhow::Result;
+use candle_core::{DType, Device, Tensor};
+use candle_nn::Conv2dConfig;
+use mistralrs_quant::log::once_log_info;
+
+use mistralrs_quant::ShardedVarBuilder;
+#[cfg(feature = "pyo3_macros")]
+use pyo3::pyclass;
+
+use regex::Regex;
+use serde::Deserialize;
+
+use super::{AutoDeviceMapParams, DeviceMappedModelLoader};
+
+pub trait EmbeddingModel: IsqModel + AnyMoeBaseModelMixin {
+    #[allow(clippy::too_many_arguments)]
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        flash_params: &FlashParams,
+    ) -> candle_core::Result<Tensor>;
+    fn device(&self) -> &Device;
+    fn config(&self) -> &ModelConfigMetadata;
+}
+
+pub trait EmbeddingModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn EmbeddingModel + Send + Sync>>;
+    fn is_gptx(&self, config: &str) -> Result<bool>;
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>>;
+    fn get_device_for_tensor(
+        &self,
+        config: &str,
+        _mapper: &dyn DeviceMapper,
+        loading_isq: bool,
+    ) -> Result<Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>> {
+        if loading_isq {
+            Ok(Arc::new(|_| DeviceForLoadTensor::Base))
+        } else {
+            let re = Regex::new(r"\.layers\.(\d+)\.").unwrap();
+            let num_layers = self.model_config(config)?.num_layers();
+            let closure = move |name: String| {
+                if let Some(captures) = re.captures(&name) {
+                    captures
+                        .get(1)
+                        .and_then(|m| m.as_str().parse::<usize>().ok())
+                        .map(|l| l.min(num_layers))
+                        .map(DeviceForLoadTensor::Idx)
+                        .unwrap_or(DeviceForLoadTensor::Base)
+                } else {
+                    DeviceForLoadTensor::Base
+                }
+            };
+
+            Ok(Arc::new(closure))
+        }
+    }
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+/// The architecture to load the embedding model as.
+pub enum EmbeddingLoaderType {
+    #[serde(rename = "embeddinggemma")]
+    EmbeddingGemma,
+}
+
+// https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
+impl EmbeddingLoaderType {
+    pub fn from_causal_lm_name(name: &str) -> Result<Self> {
+        match name {
+            "Gemma3TextModel" => Ok(Self::EmbeddingGemma),
+            other => anyhow::bail!(
+                "Unsupported Hugging Face Transformers model class `{other}`. Please raise an issue."
+            ),
+        }
+    }
+}
+
+impl FromStr for EmbeddingLoaderType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "embeddinggemma" => Ok(Self::EmbeddingGemma),
+            a => Err(format!(
+                "Unknown architecture `{a}`. Possible architectures: `embeddinggemma`."
+            )),
+        }
+    }
+}
+
+impl Display for EmbeddingLoaderType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmbeddingGemma => write!(f, "embeddinggemma"),
+        }
+    }
+}
+
+macro_rules! bias_if {
+    ($cond:expr, $size:expr) => {
+        if $cond {
+            $size
+        } else {
+            0
+        }
+    };
+}
+
+/// Load a model based on the Hugging Face Transformers -CausalLM model class
+pub struct AutoEmbeddingLoader;
+
+#[derive(Deserialize)]
+struct AutoEmbeddingLoaderConfig {
+    architectures: Vec<String>,
+}
+
+impl AutoEmbeddingLoader {
+    fn get_loader(config: &str) -> Result<Box<dyn EmbeddingModelLoader>> {
+        let auto_cfg: AutoEmbeddingLoaderConfig = serde_json::from_str(config)?;
+        if auto_cfg.architectures.len() != 1 {
+            anyhow::bail!("Expected to have one name for `architectures` config field.")
+        }
+
+        let name = &auto_cfg.architectures[0];
+
+        let tp = EmbeddingLoaderType::from_causal_lm_name(name)?;
+
+        once_log_info(format!("Automatic loader type determined to be `{tp}`"));
+
+        match tp {
+            EmbeddingLoaderType::EmbeddingGemma => Ok(Box::new(EmbeddingGemmaLoader)),
+        }
+    }
+}
+
+impl EmbeddingModelLoader for AutoEmbeddingLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn EmbeddingModel + Send + Sync>> {
+        Self::get_loader(config)?.load(config, vb, normal_loading_metadata, attention_mechanism)
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        Self::get_loader(config)?.get_config_repr(config)
+    }
+    fn is_gptx(&self, config: &str) -> Result<bool> {
+        Self::get_loader(config)?.is_gptx(config)
+    }
+}
+
+impl IsqModelLoader for AutoEmbeddingLoader {
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.immediate_isq_predicates(config)
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.immediate_isq_predicates_moqe(config)
+    }
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.isq_layer_regexes(config)
+    }
+    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.isq_layer_regexes_moqe(config)
+    }
+}
+
+impl DeviceMappedModelLoader for AutoEmbeddingLoader {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        Self::get_loader(config)?.non_mapped_size_in_bytes(
+            config,
+            dtype,
+            weight_pack_factor,
+            _matformer_config,
+        )
+    }
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        Self::get_loader(config)?.num_layers(config)
+    }
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        Self::get_loader(config)?.layer_sizes_in_bytes(
+            config,
+            dtype,
+            weight_pack_factor,
+            _matformer_config,
+        )
+    }
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &super::AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Self::get_loader(config)?.mapped_max_act_size_elems(config, params)
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        Self::get_loader(config)?.model_config(config)
+    }
+}
+
+// ======================== EmbeddingGemma loader
+
+pub struct EmbeddingGemmaLoader;
+
+impl EmbeddingModelLoader for EmbeddingGemmaLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn EmbeddingModel + Send + Sync>> {
+        todo!()
+    }
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::mistral::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
+    }
+}
+
+impl IsqModelLoader for EmbeddingGemmaLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+}
+
+impl DeviceMappedModelLoader for EmbeddingGemmaLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Vision {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape: _,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: Gemma3Config = serde_json::from_str(config)?;
+
+        match cfg {
+            Gemma3Config::Text(text_config) => Ok(max_batch_size
+                * text_config.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2)),
+            Gemma3Config::WithVision {
+                text_config,
+                vision_config,
+                ..
+            } => {
+                let num_patches = (vision_config.image_size / vision_config.patch_size).pow(2);
+                let img_seq_len = (num_patches + 1) * max_num_images;
+
+                let max_text_attn = {
+                    // This model injects the vision information directly into the input embeddings
+                    let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
+                    max_batch_size * text_config.num_attention_heads * max_seq_len * max_seq_len
+                };
+                Ok(max_text_attn)
+            }
+        }
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Vision {
+            max_seq_len: _,
+            max_batch_size,
+            max_image_shape: _,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: Gemma3Config = serde_json::from_str(config)?;
+
+        match cfg {
+            Gemma3Config::WithVision { vision_config, .. } => {
+                let num_patches = (vision_config.image_size / vision_config.patch_size).pow(2);
+                let img_seq_len = num_patches + 1;
+
+                let max_vision_attn = {
+                    (max_batch_size * max_num_images)
+                        * vision_config.num_attention_heads
+                        * img_seq_len
+                        * img_seq_len
+                };
+
+                Ok(max_vision_attn)
+            }
+            Gemma3Config::Text(_) => Ok(0),
+        }
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: Gemma3Config = serde_json::from_str(config)?;
+
+        let text_elems = {
+            let cfg = match &cfg {
+                Gemma3Config::Text(cfg) => cfg,
+                Gemma3Config::WithVision { text_config, .. } => text_config,
+            };
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+
+        let vision_transformer = if let Gemma3Config::WithVision {
+            vision_config: cfg, ..
+        } = &cfg
+        {
+            let post_layernorm = cfg.hidden_size;
+
+            let conv_config = Conv2dConfig {
+                stride: cfg.patch_size,
+                ..Default::default()
+            };
+            let patch_embedding = cfg.num_channels * cfg.hidden_size / conv_config.groups
+                * cfg.patch_size
+                * cfg.patch_size;
+
+            let num_patches_per_side = cfg.image_size / cfg.patch_size;
+            let num_patches = num_patches_per_side.pow(2);
+            let position_embedding = num_patches * cfg.hidden_size;
+
+            let layer_elems = {
+                let layer_norm_1 = cfg.hidden_size + bias_if!(true, cfg.hidden_size);
+                let layer_norm_2 = cfg.hidden_size + bias_if!(true, cfg.hidden_size);
+
+                let fc1 = cfg.hidden_size * cfg.intermediate_size + cfg.intermediate_size;
+                let fc2 = cfg.intermediate_size * cfg.hidden_size + cfg.hidden_size;
+
+                let q_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+                let k_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+                let v_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+                let o_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+
+                layer_norm_1 + layer_norm_2 + fc1 + fc2 + q_proj + k_proj + v_proj + o_proj
+            };
+
+            post_layernorm
+                + patch_embedding
+                + position_embedding
+                + layer_elems * cfg.num_hidden_layers
+        } else {
+            0
+        };
+
+        let elems = text_elems + vision_transformer;
+
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: Gemma3Config = serde_json::from_str(config)?;
+
+        let txt_cfg = match &cfg {
+            Gemma3Config::Text(cfg) => cfg,
+            Gemma3Config::WithVision { text_config, .. } => text_config,
+        };
+        let per_layer_elems = {
+            let cfg = txt_cfg;
+
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = cfg.head_dim * cfg.num_attention_heads;
+            let size_kv = cfg.head_dim * cfg.num_key_value_heads;
+            let q_proj =
+                size_in * size_q / weight_pack_factor + bias_if!(cfg.attention_bias, size_q);
+            let k_proj =
+                size_in * size_kv / weight_pack_factor + bias_if!(cfg.attention_bias, size_kv);
+            let v_proj =
+                size_in * size_kv / weight_pack_factor + bias_if!(cfg.attention_bias, size_kv);
+            let o_proj =
+                size_q * size_in / weight_pack_factor + bias_if!(cfg.attention_bias, size_in);
+
+            let h_size = cfg.hidden_size;
+            let i_size = cfg.intermediate_size;
+            let gate_proj = h_size * i_size / weight_pack_factor;
+            let up_proj = h_size * i_size / weight_pack_factor;
+            let down_proj = i_size * h_size / weight_pack_factor;
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + gate_proj
+                + up_proj
+                + down_proj
+        };
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            txt_cfg.num_hidden_layers
+        ])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: Gemma3Config = serde_json::from_str(config)?;
+
+        let txt_cfg = match &cfg {
+            Gemma3Config::Text(cfg) => cfg,
+            Gemma3Config::WithVision { text_config, .. } => text_config,
+        };
+
+        Ok(txt_cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: Gemma3Config = serde_json::from_str(config)?;
+
+        let cfg = match &cfg {
+            Gemma3Config::Text(cfg) => cfg,
+            Gemma3Config::WithVision { text_config, .. } => text_config,
+        };
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: None, // None to be more forgiving, some do not
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+        };
+
+        Ok(Box::new(cfg))
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        None // todo
+    }
+}

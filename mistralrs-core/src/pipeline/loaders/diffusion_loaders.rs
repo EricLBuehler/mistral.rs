@@ -119,6 +119,9 @@ impl ModelPaths for DiffusionModelPaths {
     fn get_adapter_paths(&self) -> &AdapterPaths {
         unreachable!("Use `std::any::Any`.")
     }
+    fn get_modules(&self) -> Option<&PathBuf> {
+        unreachable!("Use `std::any::Any`.")
+    }
 }
 
 // ======================== Flux loader
