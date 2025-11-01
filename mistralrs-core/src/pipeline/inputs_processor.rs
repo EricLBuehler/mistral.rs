@@ -13,6 +13,7 @@ use crate::{device_map::DeviceMapper, sequence::Sequence};
 pub enum InputsProcessorType {
     Text,
     Vision,
+    Embedding,
 }
 
 pub struct InputProcessorOutput {
@@ -115,6 +116,7 @@ pub mod text_models_inputs_processor {
         pub max_k: u32,
         pub cumulative_seqlens_q: HashMap<DeviceLocation, Tensor>,
         pub cumulative_seqlens_k: HashMap<DeviceLocation, Tensor>,
+        pub causal: bool,
     }
 
     pub struct InputMetadata {
@@ -342,6 +344,7 @@ pub mod text_models_inputs_processor {
                 max_q,
                 cumulative_seqlens_k: seqlens_k_map,
                 cumulative_seqlens_q: seqlens_q_map,
+                causal: true,
             },
         })
     }
@@ -512,6 +515,7 @@ pub mod text_models_inputs_processor {
                 max_q,
                 cumulative_seqlens_k: seqlens_k_map,
                 cumulative_seqlens_q: seqlens_q_map,
+                causal: true,
             },
         })
     }

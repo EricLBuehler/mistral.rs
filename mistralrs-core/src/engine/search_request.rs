@@ -491,6 +491,10 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                                 })
                                 .await
                                 .unwrap(),
+                            ResponseOk::Embeddings { embeddings } => user_sender
+                                .send(Response::Embeddings { embeddings })
+                                .await
+                                .unwrap(),
                             ResponseOk::Speech {
                                 pcm,
                                 rate,
@@ -600,6 +604,10 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                                         logits_chunks,
                                         tokens,
                                     })
+                                    .await
+                                    .unwrap(),
+                                ResponseOk::Embeddings { embeddings } => user_sender
+                                    .send(Response::Embeddings { embeddings })
                                     .await
                                     .unwrap(),
                                 ResponseOk::Speech {

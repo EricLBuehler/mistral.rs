@@ -64,6 +64,9 @@ pub enum RequestMessage {
     SpeechGeneration {
         prompt: String,
     },
+    Embedding {
+        prompt: String,
+    },
 }
 
 fn default_responder<T>() -> Sender<T> {

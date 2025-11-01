@@ -192,6 +192,7 @@ impl FromStr for IsqOrganization {
 pub struct UqffFullSer<'a> {
     pub tokenizer: &'a Tokenizer,
     pub template_filename: &'a Option<PathBuf>,
+    pub modules: Option<&'a String>,
     pub generation_config: Option<&'a PathBuf>,
     pub config: String,
     pub processor_filename: &'a Option<PathBuf>,
@@ -714,6 +715,7 @@ pub trait IsqModel {
 
                 let residual_out = parent.join(UQFF_RESIDUAL_SAFETENSORS);
                 let config_out = parent.join("config.json");
+                let modules_out = parent.join("modules.json");
                 let tokenizer_out = parent.join("tokenizer.json");
                 let tokenizer_cfg_out = parent.join("tokenizer_config.json");
                 let chat_template_jinja_out = parent.join("chat_template.jinja");
@@ -736,6 +738,7 @@ pub trait IsqModel {
                     config,
                     processor_filename,
                     preprocessor_filename,
+                    modules,
                 } = full_ser;
 
                 info!("Serializing configuration to `{}`.", config_out.display());
@@ -797,6 +800,15 @@ pub trait IsqModel {
                     let cfg =
                         std::fs::read(preprocessor_config).map_err(candle_core::Error::msg)?;
                     std::fs::write(&preprocessor_out, cfg).map_err(candle_core::Error::msg)?;
+                }
+
+                if let Some(modules) = modules {
+                    info!(
+                        "Serializing preprocessor config to `{}`.",
+                        modules_out.display()
+                    );
+
+                    std::fs::write(&modules_out, modules).map_err(candle_core::Error::msg)?;
                 }
             }
         }

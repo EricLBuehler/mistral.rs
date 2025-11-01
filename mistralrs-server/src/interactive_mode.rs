@@ -91,6 +91,9 @@ pub async fn interactive_mode(
             audio_interactive_mode(mistralrs, do_search, enable_thinking).await
         }
         Ok(ModelCategory::Speech) => speech_interactive_mode(mistralrs, do_search).await,
+        Ok(ModelCategory::Embedding) => error!(
+            "Embedding models do not support interactive mode. Use the server or Python/Rust APIs."
+        ),
         Err(e) => eprintln!("Error getting model category: {e}"),
     }
 }
@@ -386,6 +389,7 @@ async fn text_interactive_mode(
                 Response::ImageGeneration(_) => unreachable!(),
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
+                Response::Embeddings { .. } => unreachable!(),
             }
         }
 
@@ -455,10 +459,7 @@ async fn vision_interactive_mode(
     let config = mistralrs.config(None).unwrap();
     let prefixer = match &config.category {
         ModelCategory::Vision { prefixer } => prefixer,
-        ModelCategory::Text
-        | ModelCategory::Diffusion
-        | ModelCategory::Speech
-        | ModelCategory::Audio => {
+        _ => {
             panic!("`add_image_message` expects a vision model.")
         }
     };
@@ -691,6 +692,7 @@ async fn vision_interactive_mode(
                 Response::ImageGeneration(_) => unreachable!(),
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
+                Response::Embeddings { .. } => unreachable!(),
             }
         }
 

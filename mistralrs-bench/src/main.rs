@@ -120,6 +120,7 @@ async fn run_bench(
                     Response::ImageGeneration(_) => unreachable!(),
                     Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
+                    Response::Embeddings { .. } => unreachable!(),
                 },
                 None => unreachable!("Expected a Done response, got None",),
             }
