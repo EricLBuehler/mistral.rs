@@ -11,8 +11,8 @@ use crate::embedding_normal_model_loader;
 use crate::embedding_normal_model_loader_sharded;
 use crate::get_embedding_paths;
 use crate::paged_attention::AttentionImplementation;
+use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
-use crate::pipeline::loaders::{auto_device_map, EmbeddingModule};
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::AutoEmbeddingLoader;
 use crate::pipeline::EmbeddingGemmaLoader;
@@ -83,7 +83,6 @@ pub struct EmbeddingLoaderBuilder {
     model_id: Option<String>,
     config: EmbeddingSpecificConfig,
     kind: ModelKind,
-    chat_template: Option<String>,
     tokenizer_json: Option<String>,
     jinja_explicit: Option<String>,
     hf_cache_path: Option<PathBuf>,
@@ -468,9 +467,6 @@ impl Loader for EmbeddingLoader {
             .get_modules()
             .context("Embedding models require the `modules.json` file.")?;
 
-        dbg!(modules_config);
-        unimplemented!();
-
         let mut model = if use_nccl {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
@@ -667,35 +663,23 @@ impl Pipeline for EmbeddingPipeline {
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
-        return_raw_logits: bool,
+        _return_raw_logits: bool,
     ) -> candle_core::Result<ForwardInputsResult> {
+        // TODO: make a custom model inputs
         let ModelInputs {
             input_ids,
-            seqlen_offsets,
-            context_lens,
-            position_ids,
-            pixel_values,
-            model_specific_args,
+            seqlen_offsets: _,
+            context_lens: _,
+            position_ids: _,
+            pixel_values: _,
+            model_specific_args: _,
             paged_attn_meta: _,
             flash_meta,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
-        let metadata = self.get_metadata();
-        todo!();
-        // let logits = self.model.forward(
-        //     &input_ids,
-        //     pixel_values,
-        //     &seqlen_offsets,
-        //     context_lens,
-        //     position_ids,
-        //     model_specific_args,
-        //     paged_attn_meta,
-        //     &flash_meta,
-        // )?;
-        // if return_raw_logits {
-        //     Ok(ForwardInputsResult::RawLogits { logits })
-        // } else {
-        //     Ok(ForwardInputsResult::CausalGeneration { logits })
-        // }
+
+        let logits = self.model.forward(&input_ids, &flash_meta)?;
+
+        Ok(ForwardInputsResult::RawLogits { logits })
     }
     async fn sample_causal_gen(
         &self,

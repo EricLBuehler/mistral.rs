@@ -7,9 +7,9 @@ use std::{
 
 use crate::{
     attention::ATTENTION_CHUNK_SIZE,
+    embedding_models::embedding_gemma::{EmbeddingGemma, EmbeddingGemmaConfig},
     matformer::MatformerSliceConfig,
     pipeline::{loaders::auto_device_map::NonMappedSubModel, NormalLoadingMetadata},
-    vision_models::gemma3::config::Gemma3Config,
 };
 
 use crate::{
@@ -21,7 +21,6 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
-use candle_nn::Conv2dConfig;
 use mistralrs_quant::log::once_log_info;
 
 use mistralrs_quant::ShardedVarBuilder;
@@ -314,14 +313,22 @@ impl EmbeddingModelLoader for EmbeddingGemmaLoader {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn EmbeddingModel + Send + Sync>> {
-        todo!()
+        let cfg: EmbeddingGemmaConfig = serde_json::from_str(config)?;
+
+        Ok(Box::new(EmbeddingGemma::new(
+            &cfg,
+            vb,
+            self.is_gptx(config)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
     }
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
-        // TODO
-        Ok(Box::new(()))
+        let cfg: EmbeddingGemmaConfig = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
     }
 }
 
@@ -362,73 +369,29 @@ impl DeviceMappedModelLoader for EmbeddingGemmaLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Text {
             max_seq_len,
             max_batch_size,
-            max_image_shape: _,
-            max_num_images,
         } = params
         else {
             anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
-        let cfg: Gemma3Config = serde_json::from_str(config)?;
+        let cfg: EmbeddingGemmaConfig = serde_json::from_str(config)?;
 
-        match cfg {
-            Gemma3Config::Text(text_config) => Ok(max_batch_size
-                * text_config.num_attention_heads
-                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2)),
-            Gemma3Config::WithVision {
-                text_config,
-                vision_config,
-                ..
-            } => {
-                let num_patches = (vision_config.image_size / vision_config.patch_size).pow(2);
-                let img_seq_len = (num_patches + 1) * max_num_images;
-
-                let max_text_attn = {
-                    // This model injects the vision information directly into the input embeddings
-                    let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
-                    max_batch_size * text_config.num_attention_heads * max_seq_len * max_seq_len
-                };
-                Ok(max_text_attn)
-            }
-        }
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
 
     fn non_mapped_max_act_size_elems(
         &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
-            max_seq_len: _,
-            max_batch_size,
-            max_image_shape: _,
-            max_num_images,
-        } = params
-        else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
-        };
-
-        let cfg: Gemma3Config = serde_json::from_str(config)?;
-
-        match cfg {
-            Gemma3Config::WithVision { vision_config, .. } => {
-                let num_patches = (vision_config.image_size / vision_config.patch_size).pow(2);
-                let img_seq_len = num_patches + 1;
-
-                let max_vision_attn = {
-                    (max_batch_size * max_num_images)
-                        * vision_config.num_attention_heads
-                        * img_seq_len
-                        * img_seq_len
-                };
-
-                Ok(max_vision_attn)
-            }
-            Gemma3Config::Text(_) => Ok(0),
-        }
+        Ok(0)
     }
 
     fn non_mapped_size_in_bytes(
@@ -438,67 +401,13 @@ impl DeviceMappedModelLoader for EmbeddingGemmaLoader {
         weight_pack_factor: usize,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
-        let cfg: Gemma3Config = serde_json::from_str(config)?;
+        let cfg: EmbeddingGemmaConfig = serde_json::from_str(config)?;
 
-        let text_elems = {
-            let cfg = match &cfg {
-                Gemma3Config::Text(cfg) => cfg,
-                Gemma3Config::WithVision { text_config, .. } => text_config,
-            };
+        let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
-            } else {
-                0
-            };
             let norm = cfg.hidden_size;
-            embed_tokens + lm_head + norm
+            embed_tokens + norm
         };
-
-        let vision_transformer = if let Gemma3Config::WithVision {
-            vision_config: cfg, ..
-        } = &cfg
-        {
-            let post_layernorm = cfg.hidden_size;
-
-            let conv_config = Conv2dConfig {
-                stride: cfg.patch_size,
-                ..Default::default()
-            };
-            let patch_embedding = cfg.num_channels * cfg.hidden_size / conv_config.groups
-                * cfg.patch_size
-                * cfg.patch_size;
-
-            let num_patches_per_side = cfg.image_size / cfg.patch_size;
-            let num_patches = num_patches_per_side.pow(2);
-            let position_embedding = num_patches * cfg.hidden_size;
-
-            let layer_elems = {
-                let layer_norm_1 = cfg.hidden_size + bias_if!(true, cfg.hidden_size);
-                let layer_norm_2 = cfg.hidden_size + bias_if!(true, cfg.hidden_size);
-
-                let fc1 = cfg.hidden_size * cfg.intermediate_size + cfg.intermediate_size;
-                let fc2 = cfg.intermediate_size * cfg.hidden_size + cfg.hidden_size;
-
-                let q_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
-                let k_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
-                let v_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
-                let o_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
-
-                layer_norm_1 + layer_norm_2 + fc1 + fc2 + q_proj + k_proj + v_proj + o_proj
-            };
-
-            post_layernorm
-                + patch_embedding
-                + position_embedding
-                + layer_elems * cfg.num_hidden_layers
-        } else {
-            0
-        };
-
-        let elems = text_elems + vision_transformer;
-
         Ok(elems * dtype.size_in_bytes())
     }
 
@@ -509,15 +418,9 @@ impl DeviceMappedModelLoader for EmbeddingGemmaLoader {
         weight_pack_factor: usize,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<Vec<usize>> {
-        let cfg: Gemma3Config = serde_json::from_str(config)?;
+        let cfg: EmbeddingGemmaConfig = serde_json::from_str(config)?;
 
-        let txt_cfg = match &cfg {
-            Gemma3Config::Text(cfg) => cfg,
-            Gemma3Config::WithVision { text_config, .. } => text_config,
-        };
         let per_layer_elems = {
-            let cfg = txt_cfg;
-
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
 
@@ -551,28 +454,18 @@ impl DeviceMappedModelLoader for EmbeddingGemmaLoader {
         };
         Ok(vec![
             per_layer_elems * dtype.size_in_bytes();
-            txt_cfg.num_hidden_layers
+            cfg.num_hidden_layers
         ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg: Gemma3Config = serde_json::from_str(config)?;
+        let cfg: EmbeddingGemmaConfig = serde_json::from_str(config)?;
 
-        let txt_cfg = match &cfg {
-            Gemma3Config::Text(cfg) => cfg,
-            Gemma3Config::WithVision { text_config, .. } => text_config,
-        };
-
-        Ok(txt_cfg.num_hidden_layers)
+        Ok(cfg.num_hidden_layers)
     }
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg: Gemma3Config = serde_json::from_str(config)?;
-
-        let cfg = match &cfg {
-            Gemma3Config::Text(cfg) => cfg,
-            Gemma3Config::WithVision { text_config, .. } => text_config,
-        };
+        let cfg: EmbeddingGemmaConfig = serde_json::from_str(config)?;
 
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
