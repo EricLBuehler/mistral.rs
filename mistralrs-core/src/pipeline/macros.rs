@@ -284,7 +284,7 @@ macro_rules! get_embedding_paths {
             None, // no xlora
         )?;
 
-        let modules_config = crate::api_get_file!(api, "modules.json", model_id);
+        let modules_config = $crate::api_get_file!(api, "modules.json", model_id);
         let modules: Vec<$crate::pipeline::EmbeddingModule> =
             serde_json::from_str(&std::fs::read_to_string(modules_config)?)?;
         let mut parsed_modules = Vec::new();

@@ -307,7 +307,7 @@ impl BidirectionalMasker {
                 (0..tgt_len).map(move |j| {
                     // https://github.com/huggingface/transformers/blob/a0bf5a82eebf88ee9f52145be427f6f1541329f6/src/transformers/models/gemma3/modeling_gemma3.py#L478
                     // A token can attend to any other token if their absolute distance is within the (exclusive) sliding window size (distance < sliding_window)."
-                    if (i as isize - j as isize).abs() as usize >= sliding_window {
+                    if (i as isize - j as isize).unsigned_abs() >= sliding_window {
                         f32::NEG_INFINITY
                     } else {
                         0.
@@ -324,7 +324,7 @@ impl BidirectionalMasker {
 
         // Avoid materializing large sliding-window masks when flash-attn on CUDA.
         if crate::using_flash_attn() && input_ids.device().is_cuda() {
-            return Ok(Tensor::zeros((1, 1), dtype, input_ids.device())?);
+            return Tensor::zeros((1, 1), dtype, input_ids.device());
         }
 
         // Do not make any -inf
@@ -342,7 +342,7 @@ impl BidirectionalMasker {
 
         // Avoid materializing large sliding-window masks when flash-attn on CUDA.
         if crate::using_flash_attn() && input_ids.device().is_cuda() {
-            return Ok(Tensor::zeros((1, 1), dtype, input_ids.device())?);
+            return Tensor::zeros((1, 1), dtype, input_ids.device());
         }
 
         let mask = self.make_swa_mask(tgt_len, sliding_window, input_ids.device(), dtype)?;
