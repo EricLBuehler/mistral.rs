@@ -114,65 +114,6 @@ pub fn make_prompt_chunk<T: WithDType + Debug>(
     })
 }
 
-fn make_completion_chunk<T: WithDType>(
-    toks: Vec<&[T]>,
-    device: &Device,
-    mapper: Option<&dyn DeviceMapper>,
-) -> Result<InputMetadata> {
-    // Pad each sequence by the padding token to the max len.
-    let flash_attn = crate::using_flash_attn();
-    let mut seqs_tensors = Vec::new();
-
-    let mut seqlens_q = if flash_attn { vec![0] } else { Vec::new() };
-    let mut seqlens_k = if flash_attn { vec![0] } else { Vec::new() };
-    for ctxt in toks {
-        let start_pos = ctxt.len().saturating_sub(1);
-        let ctxt = ctxt[start_pos..].to_vec();
-
-        if flash_attn {
-            seqlens_q.push(ctxt.len() as u32);
-            seqlens_k.push((ctxt.len() + start_pos) as u32);
-        }
-
-        seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
-    }
-
-    let (max_q, max_k, seqlens_q_map, seqlens_k_map) = if flash_attn {
-        let max_q = *seqlens_q.iter().max().unwrap();
-        let max_k = *seqlens_k.iter().max().unwrap();
-        let seqlens_q = Tensor::new(seqlens_q, device)?
-            .to_dtype(DType::F32)?
-            .cumsum(0)?
-            .to_dtype(DType::U32)?;
-        let seqlens_k = Tensor::new(seqlens_k, device)?
-            .to_dtype(DType::F32)?
-            .cumsum(0)?
-            .to_dtype(DType::U32)?;
-
-        let mut seqlens_q_map = HashMap::new();
-        let mut seqlens_k_map = HashMap::new();
-
-        let devices = mapper.unwrap().get_unique_devices();
-        for device in devices {
-            seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
-            seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
-        }
-        (max_q, max_k, seqlens_q_map, seqlens_k_map)
-    } else {
-        (0, 0, HashMap::new(), HashMap::new())
-    };
-
-    Ok(InputMetadata {
-        input: Tensor::cat(&seqs_tensors, 0).unwrap(),
-        flash_meta: FlashParams {
-            max_k,
-            max_q,
-            cumulative_seqlens_k: seqlens_k_map,
-            cumulative_seqlens_q: seqlens_q_map,
-        },
-    })
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_prompt_input<T: WithDType + std::fmt::Debug>(
     toks: Vec<&[T]>,
@@ -182,24 +123,6 @@ pub(crate) fn get_prompt_input<T: WithDType + std::fmt::Debug>(
 ) -> Result<InnerInputProcessorOutput> {
     let offset = input_seqs[0].token_offset();
     make_prompt_chunk(offset, toks, device, mapper).map(|inputs| InnerInputProcessorOutput {
-        inputs,
-        seq_indices: (0..input_seqs.len()).collect(),
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn get_completion_input<T: WithDType + std::fmt::Debug>(
-    toks: Vec<&[T]>,
-    input_seqs: &[&mut Sequence],
-    device: &Device,
-    no_kv_cache: bool,
-    mapper: Option<&dyn DeviceMapper>,
-) -> Result<InnerInputProcessorOutput> {
-    if no_kv_cache {
-        return get_prompt_input(toks, input_seqs, device, mapper);
-    }
-
-    make_completion_chunk(toks, device, mapper).map(|inputs| InnerInputProcessorOutput {
         inputs,
         seq_indices: (0..input_seqs.len()).collect(),
     })
@@ -221,67 +144,40 @@ impl InputsProcessor for EmbeddingInputsProcessor {
         is_prompt: bool,
         _is_xlora: bool,
         device: &Device,
-        no_kv_cache: bool,
+        _no_kv_cache: bool,
         _last_n_context_len: Option<(usize, usize)>,
         _return_raw_logits: bool,
         _: Option<Arc<dyn Any>>,
         _paged_attn_metadata: Option<PagedAttentionMeta>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Result<InputProcessorOutput> {
-        if is_prompt {
-            let metadata = get_prompt_input(
-                input_seqs
-                    .iter()
-                    .map(|seq| seq.get_toks())
-                    .collect::<Vec<_>>(),
-                input_seqs,
-                device,
-                mapper,
-            )?;
-            let InnerInputProcessorOutput {
-                inputs:
-                    InputMetadata {
-                        input: input_ids,
-                        flash_meta,
-                    },
-                seq_indices,
-            } = metadata;
-            let inputs: Box<dyn Any> = Box::new(ModelInputs {
-                input_ids,
-                flash_meta,
-            });
-            Ok(InputProcessorOutput {
-                inputs,
-                seq_indices,
-            })
-        } else {
-            let metadata = get_completion_input(
-                input_seqs
-                    .iter()
-                    .map(|seq| seq.get_toks())
-                    .collect::<Vec<_>>(),
-                input_seqs,
-                device,
-                no_kv_cache,
-                mapper,
-            )?;
-            let InnerInputProcessorOutput {
-                inputs:
-                    InputMetadata {
-                        input: input_ids,
-                        flash_meta,
-                    },
-                seq_indices,
-            } = metadata;
-            let inputs: Box<dyn Any> = Box::new(ModelInputs {
-                input_ids,
-                flash_meta,
-            });
-            Ok(InputProcessorOutput {
-                inputs,
-                seq_indices,
-            })
-        }
+        assert!(is_prompt);
+
+        let metadata = get_prompt_input(
+            input_seqs
+                .iter()
+                .map(|seq| seq.get_toks())
+                .collect::<Vec<_>>(),
+            input_seqs,
+            device,
+            mapper,
+        )?;
+        let InnerInputProcessorOutput {
+            inputs:
+                InputMetadata {
+                    input: input_ids,
+                    flash_meta,
+                },
+            seq_indices,
+        } = metadata;
+        let inputs: Box<dyn Any> = Box::new(ModelInputs {
+            input_ids,
+            flash_meta,
+        });
+        Ok(InputProcessorOutput {
+            inputs,
+            seq_indices,
+        })
     }
 
     fn get_type(&self) -> InputsProcessorType {
