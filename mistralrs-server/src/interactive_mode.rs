@@ -91,6 +91,7 @@ pub async fn interactive_mode(
             audio_interactive_mode(mistralrs, do_search, enable_thinking).await
         }
         Ok(ModelCategory::Speech) => speech_interactive_mode(mistralrs, do_search).await,
+        Ok(ModelCategory::Embedding) => todo!(),
         Err(e) => eprintln!("Error getting model category: {e}"),
     }
 }
@@ -455,10 +456,7 @@ async fn vision_interactive_mode(
     let config = mistralrs.config(None).unwrap();
     let prefixer = match &config.category {
         ModelCategory::Vision { prefixer } => prefixer,
-        ModelCategory::Text
-        | ModelCategory::Diffusion
-        | ModelCategory::Speech
-        | ModelCategory::Audio => {
+        _ => {
             panic!("`add_image_message` expects a vision model.")
         }
     };

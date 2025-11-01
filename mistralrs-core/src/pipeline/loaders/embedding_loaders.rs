@@ -261,8 +261,8 @@ impl EmbeddingModelLoader for EmbeddingGemmaLoader {
         Ok(true)
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
-        let cfg: crate::models::mistral::Config = serde_json::from_str(config)?;
-        Ok(Box::new(cfg))
+        // TODO
+        Ok(Box::new(()))
     }
 }
 

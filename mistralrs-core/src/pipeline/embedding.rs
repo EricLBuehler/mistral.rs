@@ -150,7 +150,6 @@ pub struct EmbeddingSpecificConfig {
     pub topology: Option<Topology>,
     pub write_uqff: Option<PathBuf>,
     pub from_uqff: Option<Vec<PathBuf>>,
-    pub max_edge: Option<u32>,
     pub hf_cache_path: Option<PathBuf>,
 }
 
