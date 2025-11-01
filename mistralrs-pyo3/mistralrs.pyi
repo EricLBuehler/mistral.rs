@@ -120,6 +120,10 @@ class Architecture(Enum):
     SmolLm3 = "smollm3"
 
 @dataclass
+class EmbeddingArchitecture(Enum):
+    EmbeddingGemma = "embeddinggemma"
+
+@dataclass
 class VisionArchitecture(Enum):
     Phi3V = "phi3v"
     Idefics2 = "idefics2"
@@ -214,6 +218,17 @@ class Which(Enum):
         imatrix: str | None = None
         hf_cache_path: str | None = None
         matformer_config_path: str | None = None
+
+    @dataclass
+    class Embedding:
+        model_id: str
+        arch: EmbeddingArchitecture | None = None
+        tokenizer_json: str | None = None
+        topology: str | None = None
+        from_uqff: str | list[str] | None = None
+        write_uqff: str | None = None
+        dtype: ModelDType = ModelDType.Auto
+        hf_cache_path: str | None = None
 
     @dataclass
     class XLora:
@@ -431,7 +446,9 @@ class Runner:
         Send a chat completion request to the mistral.rs engine, returning the response object.
         """
 
-    def send_embedding_request(self, request: EmbeddingRequest) -> list[list[float]]:
+    def send_embedding_request(
+        self, request: EmbeddingRequest, model_id: str | None = None
+    ) -> list[list[float]]:
         """
         Generate embeddings for the supplied inputs and return one embedding vector per input.
         """

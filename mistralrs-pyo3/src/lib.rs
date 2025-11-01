@@ -25,10 +25,10 @@ use mistralrs_core::{
     BertEmbeddingModel, ChatCompletionResponse, CompletionResponse, Constraint,
     DefaultSchedulerMethod, DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata,
     DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams,
-    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
-    ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar, Loader,
-    MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
-    NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, Request as _Request,
+    EmbeddingLoaderBuilder, EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
+    LlguidanceGrammar, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
+    NormalRequest, NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, Request as _Request,
     RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig,
     SpeculativeLoader, SpeechLoader, StopTokens, TokenSource, TokenizationRequest, Tool, Topology,
     VisionLoaderBuilder, VisionSpecificConfig,
@@ -199,6 +199,31 @@ fn parse_which(
             jinja_explicit,
         )
         .build(arch.map(Into::into))?,
+        Which::Embedding {
+            model_id,
+            tokenizer_json,
+            arch,
+            topology,
+            write_uqff,
+            from_uqff,
+            dtype: _,
+            hf_cache_path,
+        } => EmbeddingLoaderBuilder::new(
+            EmbeddingSpecificConfig {
+                topology: Topology::from_option_path(topology)?,
+                write_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.right_or_else(|l| vec![l])
+                        .iter()
+                        .map(|path| PathBuf::from_str(path).unwrap())
+                        .collect::<Vec<_>>()
+                }),
+                hf_cache_path,
+            },
+            tokenizer_json,
+            Some(model_id),
+        )
+        .build(arch.map(Into::into)),
         Which::XLora {
             model_id,
             xlora_model_id,
@@ -604,6 +629,7 @@ impl Runner {
             | Which::LoraGGUF { .. }
             | Which::GGML { .. }
             | Which::LoraGGML { .. }
+            | Which::Embedding { .. }
             | Which::VisionPlain { .. }
             | Which::DiffusionPlain { .. }
             | Which::Speech { .. } => None,
@@ -627,6 +653,7 @@ impl Runner {
             | Which::LoraGGUF { dtype, .. }
             | Which::GGML { dtype, .. }
             | Which::LoraGGML { dtype, .. }
+            | Which::Embedding { dtype, .. }
             | Which::VisionPlain { dtype, .. }
             | Which::DiffusionPlain { dtype, .. }
             | Which::Speech { dtype, .. }
@@ -679,7 +706,7 @@ impl Runner {
                     max_num_images: p.max_num_images,
                 })
                 .unwrap_or(AutoDeviceMapParams::default_vision()),
-            Which::DiffusionPlain { .. } | Which::Speech { .. } => {
+            Which::Embedding { .. } | Which::DiffusionPlain { .. } | Which::Speech { .. } => {
                 AutoDeviceMapParams::default_text()
             }
         };
@@ -2430,6 +2457,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CompletionRequest>()?;
     m.add_class::<EmbeddingRequest>()?;
     m.add_class::<Architecture>()?;
+    m.add_class::<which::EmbeddingArchitecture>()?;
     m.add_class::<VisionArchitecture>()?;
     m.add_class::<DiffusionArchitecture>()?;
     m.add_class::<AnyMoeConfig>()?;
