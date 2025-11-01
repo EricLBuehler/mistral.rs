@@ -710,7 +710,7 @@ fn embedding_input_schema() -> Schema {
                             .schema_type(SchemaType::Type(Type::Integer))
                             .build(),
                     )))
-                    .description(Some("Single token array (unsupported)"))
+                    .description(Some("Single token array"))
                     .build(),
             ))
             .item(Schema::Array(
@@ -724,7 +724,7 @@ fn embedding_input_schema() -> Schema {
                             )))
                             .build(),
                     )))
-                    .description(Some("Multiple token arrays (unsupported)"))
+                    .description(Some("Multiple token arrays"))
                     .build(),
             ))
             .build(),

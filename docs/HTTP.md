@@ -151,7 +151,7 @@ Create vector embeddings via the OpenAI-compatible endpoint. Supported request f
 - `dimensions`: currently unsupported; providing it yields a validation error.
 - `truncate_sequence`: `bool`, default `false`. Set to `true` to clip over-length prompts instead of receiving a validation error.
 
-> ℹ️ Requests whose prompt exceeds the model's maximum context length now fail unless you opt in to truncation. Eembedding requests truncate tokens from the end of the prompt.
+> ℹ️ Requests whose prompt exceeds the model's maximum context length now fail unless you opt in to truncation. Embedding requests truncate tokens from the end of the prompt.
 
 Example (Python `openai` client):
 

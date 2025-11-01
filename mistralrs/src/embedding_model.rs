@@ -157,7 +157,7 @@ impl EmbeddingModelBuilder {
     }
 
     /// Cache path for Hugging Face models downloaded locally
-    pub fn from_hf_cache_pathf(mut self, hf_cache_path: PathBuf) -> Self {
+    pub fn from_hf_cache_path(mut self, hf_cache_path: PathBuf) -> Self {
         self.hf_cache_path = Some(hf_cache_path);
         self
     }
