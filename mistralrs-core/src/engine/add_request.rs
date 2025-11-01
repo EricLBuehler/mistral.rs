@@ -247,7 +247,7 @@ impl Engine {
 
         if matches!(
             get_mut_arcmutex!(self.pipeline).category(),
-            ModelCategory::Text | ModelCategory::Vision { .. }
+            ModelCategory::Text | ModelCategory::Vision { .. } | ModelCategory::Embedding
         ) && prompt_tokens.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len
         {
             if !self.truncate_sequence {

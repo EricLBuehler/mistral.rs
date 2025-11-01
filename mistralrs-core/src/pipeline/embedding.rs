@@ -595,13 +595,14 @@ impl Loader for EmbeddingLoader {
         }
 
         let has_causal_attention = self.inner.has_causal_attention(&config)?;
+        let max_seq_len = self.inner.model_config(&config)?.max_seq_len();
         Ok(Arc::new(Mutex::new(EmbeddingPipeline {
             model,
             modules,
             tokenizer: tokenizer.into(),
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
-                max_seq_len: 1,
+                max_seq_len,
                 llg_factory: None,
                 is_xlora: false,
                 no_prefix_cache: false,
