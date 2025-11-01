@@ -78,6 +78,7 @@ impl Engine {
             | RequestMessage::Embedding { .. }
             | RequestMessage::EmbeddingTokens { .. } => None,
         };
+        let truncate_sequence = request.truncate_sequence;
         if is_chat
             && !get_mut_arcmutex!(self.pipeline)
                 .get_chat_template()
@@ -250,7 +251,7 @@ impl Engine {
             ModelCategory::Text | ModelCategory::Vision { .. } | ModelCategory::Embedding
         ) && prompt_tokens.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len
         {
-            if !self.truncate_sequence {
+            if !truncate_sequence {
                 request
                     .response
                     .send(Response::ValidationError(

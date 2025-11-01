@@ -333,6 +333,7 @@ async fn text_interactive_mode(
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             model_id: None,
+            truncate_sequence: false,
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -636,6 +637,7 @@ async fn vision_interactive_mode(
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             model_id: None,
+            truncate_sequence: false,
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -796,6 +798,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             model_id: None,
+            truncate_sequence: false,
         }));
 
         let start = Instant::now();
@@ -884,6 +887,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             model_id: None,
+            truncate_sequence: false,
         }));
 
         let start = Instant::now();

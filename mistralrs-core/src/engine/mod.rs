@@ -123,7 +123,6 @@ pub struct Engine {
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
     scheduler: Arc<Mutex<dyn Scheduler>>,
     id: Arc<Mutex<usize>>,
-    truncate_sequence: bool,
     no_kv_cache: bool,
     prefix_cacher: Arc<Mutex<PrefixCacheManagerV2>>,
     is_debug: bool,
@@ -147,7 +146,6 @@ impl Engine {
         rx: Receiver<Request>,
         pipeline: Arc<Mutex<dyn Pipeline>>,
         config: SchedulerConfig,
-        truncate_sequence: bool,
         mut no_kv_cache: bool,
         mut no_prefix_cache: bool,
         prefix_cache_n: usize,
@@ -185,7 +183,6 @@ impl Engine {
             tool_callbacks_with_tools,
             scheduler: scheduler.clone(),
             id: Arc::new(Mutex::new(0)),
-            truncate_sequence,
             no_kv_cache,
             prefix_cacher: Arc::new(Mutex::new(PrefixCacheManagerV2::new(
                 prefix_cache_n,

@@ -70,6 +70,7 @@ impl Model {
     ) -> anyhow::Result<Stream<'_>> {
         let (tx, rx) = channel(1);
 
+        let truncate_sequence = request.truncate_sequence();
         let (tools, tool_choice) = if let Some((a, b)) = request.take_tools() {
             (Some(a), Some(b))
         } else {
@@ -90,6 +91,7 @@ impl Model {
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
             model_id: None,
+            truncate_sequence,
         }));
 
         self.runner.get_sender(None)?.send(request).await?;
@@ -106,6 +108,7 @@ impl Model {
     ) -> anyhow::Result<ChatCompletionResponse> {
         let (tx, mut rx) = channel(1);
 
+        let truncate_sequence = request.truncate_sequence();
         let (tools, tool_choice) = if let Some((a, b)) = request.take_tools() {
             (Some(a), Some(b))
         } else {
@@ -126,6 +129,7 @@ impl Model {
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
             model_id: None,
+            truncate_sequence,
         }));
 
         self.runner.get_sender(None)?.send(request).await?;
@@ -151,6 +155,7 @@ impl Model {
     ) -> anyhow::Result<(Vec<Tensor>, Vec<u32>)> {
         let (tx, mut rx) = channel(1);
 
+        let truncate_sequence = request.truncate_sequence();
         let (tools, tool_choice) = if let Some((a, b)) = request.take_tools() {
             (Some(a), Some(b))
         } else {
@@ -171,6 +176,7 @@ impl Model {
             return_raw_logits: true,
             web_search_options: request.take_web_search_options(),
             model_id: None,
+            truncate_sequence,
         }));
 
         self.runner.get_sender(None)?.send(request).await?;
@@ -217,6 +223,7 @@ impl Model {
             return_raw_logits: false,
             web_search_options: None,
             model_id: None,
+            truncate_sequence: false,
         }));
 
         self.runner.get_sender(None)?.send(request).await?;
@@ -259,6 +266,7 @@ impl Model {
             return_raw_logits: false,
             web_search_options: None,
             model_id: None,
+            truncate_sequence: false,
         }));
 
         self.runner.get_sender(None)?.send(request).await?;
@@ -300,6 +308,7 @@ impl Model {
             return_raw_logits: false,
             web_search_options: None,
             model_id: None,
+            truncate_sequence: false,
         }));
 
         self.runner.get_sender(None)?.send(request).await?;

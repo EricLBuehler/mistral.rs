@@ -99,7 +99,15 @@ pub async fn embeddings(
             let futures = prompts.into_iter().map(|prompt| {
                 let state = state.clone();
                 let model_override = model_override.clone();
-                async move { fetch_embedding(state, prompt, model_override.as_deref()).await }
+                async move {
+                    fetch_embedding(
+                        state,
+                        prompt,
+                        model_override.as_deref(),
+                        oairequest.truncate_sequence.unwrap_or(false),
+                    )
+                    .await
+                }
             });
 
             let results = join_all(futures).await;
@@ -129,7 +137,13 @@ pub async fn embeddings(
                 let state = state.clone();
                 let model_override = model_override.clone();
                 async move {
-                    fetch_embedding_tokens(state, tokens, model_override.as_deref()).await
+                    fetch_embedding_tokens(
+                        state,
+                        tokens,
+                        model_override.as_deref(),
+                        oairequest.truncate_sequence.unwrap_or(false),
+                    )
+                    .await
                 }
             });
 
@@ -208,6 +222,7 @@ async fn fetch_embedding(
     state: SharedMistralRsState,
     prompt: String,
     model_id: Option<&str>,
+    truncate_sequence: bool,
 ) -> Result<Vec<f32>> {
     let (tx, mut rx) = create_response_channel(Some(1));
 
@@ -226,6 +241,7 @@ async fn fetch_embedding(
         return_raw_logits: false,
         web_search_options: None,
         model_id: model_id.map(|m| m.to_string()),
+        truncate_sequence,
     }));
 
     send_request_with_model(&state, request, model_id)
@@ -239,6 +255,7 @@ async fn fetch_embedding_tokens(
     state: SharedMistralRsState,
     tokens: Vec<u32>,
     model_id: Option<&str>,
+    truncate_sequence: bool,
 ) -> Result<Vec<f32>> {
     let (tx, mut rx) = create_response_channel(Some(1));
 
@@ -257,6 +274,7 @@ async fn fetch_embedding_tokens(
         return_raw_logits: false,
         web_search_options: None,
         model_id: model_id.map(|m| m.to_string()),
+        truncate_sequence,
     }));
 
     send_request_with_model(&state, request, model_id)

@@ -540,6 +540,9 @@ pub struct ChatCompletionRequest {
     pub dry_sequence_breakers: Option<Vec<String>>,
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
+    #[schema(example = json!(Option::None::<bool>))]
+    #[serde(default)]
+    pub truncate_sequence: Option<bool>,
 }
 
 /// Function for ChatCompletionRequest.messages Schema generation to handle `Either`
@@ -650,6 +653,9 @@ pub struct CompletionRequest {
     pub dry_allowed_length: Option<usize>,
     #[schema(example = json!(Option::None::<String>))]
     pub dry_sequence_breakers: Option<Vec<String>>,
+    #[schema(example = json!(Option::None::<bool>))]
+    #[serde(default)]
+    pub truncate_sequence: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -752,6 +758,11 @@ pub struct EmbeddingRequest {
     #[schema(example = json!(Option::None::<String>))]
     #[serde(rename = "user")]
     pub _user: Option<String>,
+
+    // mistral.rs additional
+    #[schema(example = json!(Option::None::<bool>))]
+    #[serde(default)]
+    pub truncate_sequence: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -1025,6 +1036,9 @@ pub struct ResponsesCreateRequest {
     pub dry_sequence_breakers: Option<Vec<String>>,
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
+    #[schema(example = json!(Option::None::<bool>))]
+    #[serde(default)]
+    pub truncate_sequence: Option<bool>,
 }
 
 /// Response object

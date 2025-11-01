@@ -19,6 +19,9 @@ pub trait RequestLike {
     fn take_tools(&mut self) -> Option<(Vec<Tool>, ToolChoice)>;
     fn take_sampling_params(&mut self) -> SamplingParams;
     fn take_web_search_options(&mut self) -> Option<WebSearchOptions>;
+    fn truncate_sequence(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -330,6 +333,7 @@ pub struct RequestBuilder {
     sampling_params: SamplingParams,
     web_search_options: Option<WebSearchOptions>,
     enable_thinking: Option<bool>,
+    truncate_sequence: bool,
 }
 
 impl Default for RequestBuilder {
@@ -353,6 +357,7 @@ impl From<TextMessages> for RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_thinking: None,
+            truncate_sequence: false,
         }
     }
 }
@@ -372,6 +377,7 @@ impl From<VisionMessages> for RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_thinking: None,
+            truncate_sequence: false,
         }
     }
 }
@@ -391,6 +397,7 @@ impl RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_thinking: None,
+            truncate_sequence: false,
         }
     }
 
@@ -646,6 +653,12 @@ impl RequestBuilder {
         self.enable_thinking = Some(enable_thinking);
         self
     }
+
+    /// Truncate prompts that exceed the model's maximum context length.
+    pub fn with_truncate_sequence(mut self, truncate_sequence: bool) -> Self {
+        self.truncate_sequence = truncate_sequence;
+        self
+    }
 }
 
 impl RequestLike for RequestBuilder {
@@ -737,5 +750,9 @@ impl RequestLike for RequestBuilder {
         let mut other = None;
         std::mem::swap(&mut other, &mut self.web_search_options);
         other
+    }
+
+    fn truncate_sequence(&self) -> bool {
+        self.truncate_sequence
     }
 }

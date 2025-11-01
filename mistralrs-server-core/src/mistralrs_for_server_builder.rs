@@ -77,7 +77,6 @@ pub mod defaults {
     pub const DEVICE: Option<candle_core::Device> = None;
     pub const SEED: Option<u64> = None;
     pub const LOG: Option<String> = None;
-    pub const TRUNCATE_SEQUENCE: bool = false;
     pub const MODEL: Option<mistralrs_core::ModelSelected> = None;
     pub const MAX_SEQS: usize = 16;
     pub const NO_KV_CACHE: bool = false;
@@ -114,7 +113,6 @@ pub mod defaults {
 /// let args = Args::parse();
 ///
 /// let mistralrs = MistralRsForServerBuilder::new()
-///        .with_truncate_sequence(args.truncate_sequence)
 ///        .with_model(args.model)
 ///        .with_max_seqs(args.max_seqs)
 ///        .with_no_kv_cache(args.no_kv_cache)
@@ -146,11 +144,6 @@ pub struct MistralRsForServerBuilder {
 
     /// Log all responses and requests to this file
     log: Option<String>,
-
-    /// If a sequence is larger than the maximum model length, truncate the number
-    /// of tokens such that the sequence will fit at most the maximum length.
-    /// If `max_tokens` is not specified in the request, space for 10 tokens will be reserved instead.
-    truncate_sequence: bool,
 
     /// Model selector (for single-model mode, deprecated in favor of models)
     model: Option<ModelSelected>,
@@ -244,7 +237,6 @@ impl Default for MistralRsForServerBuilder {
             device: defaults::DEVICE,
             seed: defaults::SEED,
             log: defaults::LOG,
-            truncate_sequence: defaults::TRUNCATE_SEQUENCE,
             model: defaults::MODEL,
             models: Vec::new(),
             default_model_id: None,
@@ -319,12 +311,6 @@ impl MistralRsForServerBuilder {
         if let Some(log) = log {
             self = self.with_log(log);
         }
-        self
-    }
-
-    /// Sets whether to truncate sequences that exceed the maximum model length.
-    pub fn with_truncate_sequence(mut self, truncate_sequence: bool) -> Self {
-        self.truncate_sequence = truncate_sequence;
         self
     }
 
@@ -666,7 +652,6 @@ impl MistralRsForServerBuilder {
             bert_model,
         )
         .with_opt_log(self.log)
-        .with_truncate_sequence(self.truncate_sequence)
         .with_no_kv_cache(self.no_kv_cache)
         .with_prefix_cache_n(self.prefix_cache_n);
 
@@ -780,7 +765,6 @@ impl MistralRsForServerBuilder {
             bert_model.clone(),
         )
         .with_opt_log(self.log.clone())
-        .with_truncate_sequence(self.truncate_sequence)
         .with_no_kv_cache(self.no_kv_cache)
         .with_prefix_cache_n(self.prefix_cache_n);
 
@@ -857,7 +841,6 @@ impl MistralRsForServerBuilder {
 
             // Add the model to the MistralRs instance
             let engine_config = mistralrs_core::EngineConfig {
-                truncate_sequence: self.truncate_sequence,
                 no_kv_cache: self.no_kv_cache,
                 no_prefix_cache: false,
                 prefix_cache_n: self.prefix_cache_n,

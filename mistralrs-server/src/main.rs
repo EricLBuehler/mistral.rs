@@ -39,12 +39,6 @@ struct Args {
     #[clap(long, short)]
     log: Option<String>,
 
-    /// If a sequence is larger than the maximum model length, truncate the number
-    /// of tokens such that the sequence will fit at most the maximum length.
-    /// If `max_tokens` is not specified in the request, space for 10 tokens will be reserved instead.
-    #[clap(long, short, action)]
-    truncate_sequence: bool,
-
     /// Model selector
     #[clap(subcommand)]
     model: ModelSelected,
@@ -348,7 +342,6 @@ async fn main() -> Result<()> {
             let model_configs = load_multi_model_config(&config)?;
 
             let mut builder = MistralRsForServerBuilder::new()
-                .with_truncate_sequence(args.truncate_sequence)
                 .with_max_seqs(args.max_seqs)
                 .with_no_kv_cache(args.no_kv_cache)
                 .with_token_source(args.token_source)
@@ -377,7 +370,6 @@ async fn main() -> Result<()> {
         model => {
             // Single-model mode
             MistralRsForServerBuilder::new()
-                .with_truncate_sequence(args.truncate_sequence)
                 .with_model(model)
                 .with_max_seqs(args.max_seqs)
                 .with_no_kv_cache(args.no_kv_cache)

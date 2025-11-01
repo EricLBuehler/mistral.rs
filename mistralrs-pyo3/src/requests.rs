@@ -44,6 +44,7 @@ pub struct CompletionRequest {
     pub(crate) dry_base: Option<f32>,
     pub(crate) dry_allowed_length: Option<usize>,
     pub(crate) dry_sequence_breakers: Option<Vec<String>>,
+    pub(crate) truncate_sequence: bool,
 }
 
 #[pymethods]
@@ -74,6 +75,7 @@ impl CompletionRequest {
         dry_base=None,
         dry_allowed_length=None,
         dry_sequence_breakers=None,
+        truncate_sequence=false,
     ))]
     fn new(
         prompt: String,
@@ -100,6 +102,7 @@ impl CompletionRequest {
         dry_base: Option<f32>,
         dry_allowed_length: Option<usize>,
         dry_sequence_breakers: Option<Vec<String>>,
+        truncate_sequence: Option<bool>,
     ) -> PyResult<Self> {
         Ok(Self {
             prompt,
@@ -126,6 +129,7 @@ impl CompletionRequest {
             dry_allowed_length,
             dry_base,
             dry_sequence_breakers,
+            truncate_sequence: truncate_sequence.unwrap_or(false),
         })
     }
 }
@@ -134,14 +138,18 @@ impl CompletionRequest {
 #[derive(Debug)]
 pub struct EmbeddingRequest {
     pub(crate) input: String,
+    pub(crate) truncate_sequence: bool,
 }
 
 #[pymethods]
 impl EmbeddingRequest {
     #[new]
-    #[pyo3(signature = (input,))]
-    fn new(input: String) -> Self {
-        Self { input }
+    #[pyo3(signature = (input, truncate_sequence=false))]
+    fn new(input: String, truncate_sequence: bool) -> Self {
+        Self {
+            input,
+            truncate_sequence,
+        }
     }
 }
 
@@ -184,6 +192,7 @@ pub struct ChatCompletionRequest {
     pub(crate) dry_sequence_breakers: Option<Vec<String>>,
     pub(crate) web_search_options: Option<WebSearchOptions>,
     pub(crate) enable_thinking: Option<bool>,
+    pub(crate) truncate_sequence: bool,
 }
 
 #[pymethods]
@@ -216,6 +225,7 @@ impl ChatCompletionRequest {
         dry_sequence_breakers=None,
         web_search_options=None,
         enable_thinking=false,
+        truncate_sequence=false,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -244,6 +254,7 @@ impl ChatCompletionRequest {
         dry_sequence_breakers: Option<Vec<String>>,
         web_search_options: Option<WebSearchOptions>,
         enable_thinking: Option<bool>,
+        truncate_sequence: Option<bool>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -320,6 +331,7 @@ impl ChatCompletionRequest {
             dry_sequence_breakers,
             web_search_options,
             enable_thinking,
+            truncate_sequence: truncate_sequence.unwrap_or(false),
         })
     }
 }

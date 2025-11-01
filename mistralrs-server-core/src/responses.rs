@@ -318,6 +318,7 @@ async fn parse_responses_request(
         dry_allowed_length: oairequest.dry_allowed_length,
         dry_sequence_breakers: oairequest.dry_sequence_breakers,
         enable_thinking: oairequest.enable_thinking,
+        truncate_sequence: oairequest.truncate_sequence,
     };
 
     // Prepend previous messages if available

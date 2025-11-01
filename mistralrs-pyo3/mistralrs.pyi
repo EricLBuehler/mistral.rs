@@ -62,6 +62,7 @@ class ChatCompletionRequest:
     tool_choice: ToolChoice | None = None
     web_search_options: WebSearchOptions | None = None
     enable_thinking: bool | None = None
+    truncate_sequence: bool = False
 
 @dataclass
 class CompletionRequest:
@@ -87,6 +88,7 @@ class CompletionRequest:
     grammar: str | None = None
     grammar_type: str | None = None
     min_p: float | None = None
+    truncate_sequence: bool = False
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
 
@@ -97,6 +99,7 @@ class EmbeddingRequest:
     """
 
     input: str
+    truncate_sequence: bool = False
 
 @dataclass
 class Architecture(Enum):

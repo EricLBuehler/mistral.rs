@@ -86,6 +86,7 @@ async fn run_bench(
         return_raw_logits: false,
         web_search_options: None,
         model_id: None,
+        truncate_sequence: false,
     }));
 
     let mut usages = Vec::new();
@@ -250,6 +251,7 @@ async fn warmup_run(mistralrs: Arc<MistralRs>) {
         return_raw_logits: false,
         web_search_options: None,
         model_id: None,
+        truncate_sequence: false,
     }));
 
     if sender.send(req.clone()).await.is_err() {

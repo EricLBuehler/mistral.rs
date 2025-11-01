@@ -15,6 +15,7 @@ To support additional features, we have extended the completion and chat complet
 - `grammar`: `{"type" : "regex" | "lark" | "json_schema" | "llguidance", "value": string}` or `null`. Grammar to use. This is mutually exclusive to the OpenAI-compatible `response_format`.
 - `min_p`: `float` | `null`. If non null, it is only relevant if 1 >= min_p >= 0.
 - `enable_thinking`: `bool`, default to `false`. Enable thinking for models that support it.
+- `truncate_sequence`: `bool` | `null`. When `true`, requests that exceed the model context length will be truncated instead of rejected; otherwise the server returns a validation error.
 
 ## Model Parameter Validation
 
@@ -78,6 +79,8 @@ curl http://localhost:8080/v1/chat/completions \
 
 A streaming request can also be created by setting `"stream": true` in the request JSON. Please see [this](https://cookbook.openai.com/examples/how_to_stream_completions) guide.
 
+> ℹ️ Requests whose prompt exceeds the model's maximum context length now fail unless you opt in to truncation. Set `"truncate_sequence": true` to drop the oldest prompt tokens while reserving room (equal to `max_tokens` when provided, otherwise one token) for generation.
+
 ## `GET`: `/v1/models`
 Returns the running models. 
 
@@ -138,6 +141,8 @@ curl http://localhost:8080/v1/completions \
 }'
 ```
 
+> ℹ️ The `truncate_sequence` flag behaves the same way for the completions endpoint: keep it `false` (default) to receive a validation error, or set it to `true` to trim the prompt automatically.
+
 
 ## `POST`: `/v1/responses`
 Create a response using the OpenAI-compatible Responses API. Please find the official OpenAI API documentation [here](https://platform.openai.com/docs/api-reference/responses). 
@@ -190,6 +195,8 @@ curl http://localhost:8080/v1/responses \
 ```
 
 The API also supports multimodal inputs (images, audio) and streaming responses by setting `"stream": true` in the request JSON.
+
+> ℹ️ The Responses API forwards `truncate_sequence` to underlying chat completions. Enable it if you want over-length conversations to be truncated rather than rejected.
 
 ## `GET`: `/v1/responses/{response_id}`
 Retrieve a previously created response by its ID.

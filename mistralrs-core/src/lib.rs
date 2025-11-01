@@ -131,7 +131,6 @@ pub static GLOBAL_HF_CACHE: OnceLock<Cache> = OnceLock::new();
 /// Configuration for creating an engine instance
 #[derive(Clone)]
 pub struct EngineConfig {
-    pub truncate_sequence: bool,
     pub no_kv_cache: bool,
     pub no_prefix_cache: bool,
     pub prefix_cache_n: usize,
@@ -146,7 +145,6 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            truncate_sequence: false,
             no_kv_cache: false,
             no_prefix_cache: false,
             prefix_cache_n: 16,
@@ -215,7 +213,6 @@ pub struct MistralRs {
 struct RebootState {
     pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     method: SchedulerConfig,
-    truncate_sequence: bool,
     no_kv_cache: bool,
     no_prefix_cache: bool,
     prefix_cache_n: usize,
@@ -256,7 +253,6 @@ pub struct MistralRsBuilder {
     pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     method: SchedulerConfig,
     log: Option<String>,
-    truncate_sequence: Option<bool>,
     no_kv_cache: Option<bool>,
     no_prefix_cache: Option<bool>,
     prefix_cache_n: Option<usize>,
@@ -283,7 +279,6 @@ impl MistralRsBuilder {
             pipeline,
             method,
             log: None,
-            truncate_sequence: None,
             no_kv_cache: None,
             no_prefix_cache: None,
             prefix_cache_n: None,
@@ -302,10 +297,6 @@ impl MistralRsBuilder {
     }
     pub fn with_opt_log(mut self, log: Option<String>) -> Self {
         self.log = log;
-        self
-    }
-    pub fn with_truncate_sequence(mut self, truncate_sequence: bool) -> Self {
-        self.truncate_sequence = Some(truncate_sequence);
         self
     }
     pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
@@ -422,7 +413,6 @@ impl MistralRs {
                         rx,
                         pipeline,
                         method,
-                        config.truncate_sequence,
                         config.no_kv_cache,
                         config.no_prefix_cache,
                         config.prefix_cache_n,
@@ -446,7 +436,6 @@ impl MistralRs {
                         rx,
                         pipeline,
                         method,
-                        config.truncate_sequence,
                         config.no_kv_cache,
                         config.no_prefix_cache,
                         config.prefix_cache_n,
@@ -477,7 +466,6 @@ impl MistralRs {
             pipeline,
             method,
             log,
-            truncate_sequence,
             no_kv_cache,
             no_prefix_cache,
             prefix_cache_n,
@@ -494,7 +482,6 @@ impl MistralRs {
             get_mut_arcmutex!(pipeline).device(),
         );
 
-        let truncate_sequence = truncate_sequence.unwrap_or(false);
         let no_kv_cache = no_kv_cache.unwrap_or(false);
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
@@ -540,7 +527,6 @@ impl MistralRs {
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
             method: method.clone(),
-            truncate_sequence,
             no_kv_cache,
             no_prefix_cache,
             prefix_cache_n,
@@ -555,7 +541,6 @@ impl MistralRs {
 
         // Create the engine configuration
         let engine_config = EngineConfig {
-            truncate_sequence,
             no_kv_cache,
             no_prefix_cache,
             prefix_cache_n,
@@ -626,6 +611,7 @@ impl MistralRs {
                     return_raw_logits: false,
                     web_search_options: None,
                     model_id: None,
+                    truncate_sequence: false,
                 }));
                 info!("Beginning dummy run.");
                 let start = Instant::now();
@@ -681,7 +667,6 @@ impl MistralRs {
 
             let reboot_state = engine_instance.reboot_state.clone();
             let engine_config = EngineConfig {
-                truncate_sequence: reboot_state.truncate_sequence,
                 no_kv_cache: reboot_state.no_kv_cache,
                 no_prefix_cache: reboot_state.no_prefix_cache,
                 prefix_cache_n: reboot_state.prefix_cache_n,
@@ -813,7 +798,6 @@ impl MistralRs {
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
             method: method.clone(),
-            truncate_sequence: config.engine_config.truncate_sequence,
             no_kv_cache: config.engine_config.no_kv_cache,
             no_prefix_cache: config.engine_config.no_prefix_cache,
             prefix_cache_n: config.engine_config.prefix_cache_n,
