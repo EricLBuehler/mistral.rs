@@ -1,6 +1,7 @@
 use anyhow::Context;
 use candle_core::{Device, Result, Tensor};
 use either::Either;
+use futures::future::join_all;
 use mistralrs_core::*;
 use std::sync::Arc;
 use tokio::sync::mpsc::{channel, Receiver};
@@ -300,44 +301,56 @@ impl Model {
             truncate_sequence,
         } = request;
 
-        let mut results = Vec::with_capacity(inputs.len());
-        for input in inputs {
-            let message = input.into_request_message();
-            let (tx, mut rx) = channel(1);
+        let runner = self.runner.clone();
+        let futures = inputs.into_iter().map(|input| {
+            let runner = runner.clone();
+            async move {
+                let message = input.into_request_message();
+                let (tx, mut rx) = channel(1);
 
-            let request = Request::Normal(Box::new(NormalRequest {
-                id: 0,
-                messages: message,
-                sampling_params: SamplingParams::deterministic(),
-                response: tx,
-                return_logprobs: false,
-                is_streaming: false,
-                suffix: None,
-                constraint: Constraint::None,
-                tool_choice: None,
-                tools: None,
-                logits_processors: None,
-                return_raw_logits: false,
-                web_search_options: None,
-                model_id: None,
-                truncate_sequence,
-            }));
+                let request = Request::Normal(Box::new(NormalRequest {
+                    id: 0,
+                    messages: message,
+                    sampling_params: SamplingParams::deterministic(),
+                    response: tx,
+                    return_logprobs: false,
+                    is_streaming: false,
+                    suffix: None,
+                    constraint: Constraint::None,
+                    tool_choice: None,
+                    tools: None,
+                    logits_processors: None,
+                    return_raw_logits: false,
+                    web_search_options: None,
+                    model_id: None,
+                    truncate_sequence,
+                }));
 
-            self.runner.get_sender(None)?.send(request).await?;
+                runner
+                    .get_sender(None)?
+                    .send(request)
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-            let ResponseOk::Embeddings { embeddings } = rx
-                .recv()
-                .await
-                .context("Channel was erroneously closed!")?
-                .as_result()?
-            else {
-                anyhow::bail!("Got unexpected response type.")
-            };
+                let ResponseOk::Embeddings { embeddings } = rx
+                    .recv()
+                    .await
+                    .context("Channel was erroneously closed!")?
+                    .as_result()?
+                else {
+                    anyhow::bail!("Got unexpected response type.")
+                };
 
-            results.push(embeddings);
+                Ok::<Vec<f32>, anyhow::Error>(embeddings)
+            }
+        });
+
+        let results = join_all(futures).await;
+        let mut embeddings = Vec::with_capacity(results.len());
+        for result in results {
+            embeddings.push(result?);
         }
-
-        Ok(results)
+        Ok(embeddings)
     }
 
     /// Convenience wrapper for generating a single embedding.

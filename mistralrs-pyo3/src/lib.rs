@@ -1251,19 +1251,21 @@ impl Runner {
                 PythonEmbeddingInputs::Prompts(prompts) => prompts.len(),
                 PythonEmbeddingInputs::Tokens(batches) => batches.len(),
             };
-            let mut all_embeddings = Vec::with_capacity(expected);
 
-            let dispatch = |message: RequestMessage| -> PyApiResult<Vec<f32>> {
-                let (tx, mut rx) = channel(1);
+            let mut receivers = Vec::with_capacity(expected);
+
+            let mut enqueue = |message: RequestMessage| -> PyApiResult<()> {
+                let (tx, rx) = channel(1);
+                let request_id = {
+                    let l = NEXT_REQUEST_ID.lock().unwrap();
+                    let last = &mut *l.borrow_mut();
+                    let last_v = *last;
+                    *last += 1;
+                    last_v
+                };
 
                 let model_request = _Request::Normal(Box::new(NormalRequest {
-                    id: {
-                        let l = NEXT_REQUEST_ID.lock().unwrap();
-                        let last = &mut *l.borrow_mut();
-                        let last_v = *last;
-                        *last += 1;
-                        last_v
-                    },
+                    id: request_id,
                     messages: message,
                     sampling_params: SamplingParams::deterministic(),
                     response: tx,
@@ -1280,55 +1282,78 @@ impl Runner {
                     truncate_sequence,
                 }));
 
-                sender.blocking_send(model_request).unwrap();
-
-                let response = rx.blocking_recv().unwrap();
-
-                match response {
-                    Response::Embeddings { embeddings } => Ok(embeddings),
-                    Response::ValidationError(e) | Response::InternalError(e) => {
-                        Err(PyApiErr::from(e.to_string()))
-                    }
-                    Response::ModelError(msg, _) => Err(PyApiErr::from(msg.to_string())),
-                    Response::Done(_) => Err(PyApiErr::from(
-                        "Received chat completion response from embeddings request.",
-                    )),
-                    Response::Chunk(_) => Err(PyApiErr::from(
-                        "Received chat completion chunk from embeddings request.",
-                    )),
-                    Response::CompletionDone(_) => Err(PyApiErr::from(
-                        "Received completion response from embeddings request.",
-                    )),
-                    Response::CompletionChunk(_) => Err(PyApiErr::from(
-                        "Received completion chunk from embeddings request.",
-                    )),
-                    Response::CompletionModelError(_, _) => Err(PyApiErr::from(
-                        "Received completion model error from embeddings request.",
-                    )),
-                    Response::ImageGeneration(_) => Err(PyApiErr::from(
-                        "Received image generation response from embeddings request.",
-                    )),
-                    Response::Speech { .. } => Err(PyApiErr::from(
-                        "Received speech response from embeddings request.",
-                    )),
-                    Response::Raw { .. } => Err(PyApiErr::from(
-                        "Received raw logits response from embeddings request.",
-                    )),
-                }
+                sender
+                    .blocking_send(model_request)
+                    .map_err(|e| PyApiErr::from(e.to_string()))?;
+                receivers.push(rx);
+                Ok(())
             };
 
             match inputs {
                 PythonEmbeddingInputs::Prompts(prompts) => {
                     for prompt in prompts {
-                        let embedding = dispatch(RequestMessage::Embedding { prompt })?;
-                        all_embeddings.push(embedding);
+                        enqueue(RequestMessage::Embedding { prompt })?;
                     }
                 }
                 PythonEmbeddingInputs::Tokens(batches) => {
                     for tokens in batches {
-                        let embedding =
-                            dispatch(RequestMessage::EmbeddingTokens { prompt: tokens })?;
-                        all_embeddings.push(embedding);
+                        enqueue(RequestMessage::EmbeddingTokens { prompt: tokens })?;
+                    }
+                }
+            }
+
+            let mut all_embeddings = Vec::with_capacity(receivers.len());
+
+            for mut rx in receivers {
+                let response = rx.blocking_recv().ok_or_else(|| {
+                    PyApiErr::from("Embedding response channel closed unexpectedly")
+                })?;
+
+                match response {
+                    Response::Embeddings { embeddings } => all_embeddings.push(embeddings),
+                    Response::ValidationError(e) | Response::InternalError(e) => {
+                        return Err(PyApiErr::from(e.to_string()))
+                    }
+                    Response::ModelError(msg, _) => return Err(PyApiErr::from(msg.to_string())),
+                    Response::Done(_) => {
+                        return Err(PyApiErr::from(
+                            "Received chat completion response from embeddings request.",
+                        ))
+                    }
+                    Response::Chunk(_) => {
+                        return Err(PyApiErr::from(
+                            "Received chat completion chunk from embeddings request.",
+                        ))
+                    }
+                    Response::CompletionDone(_) => {
+                        return Err(PyApiErr::from(
+                            "Received completion response from embeddings request.",
+                        ))
+                    }
+                    Response::CompletionChunk(_) => {
+                        return Err(PyApiErr::from(
+                            "Received completion chunk from embeddings request.",
+                        ))
+                    }
+                    Response::CompletionModelError(_, _) => {
+                        return Err(PyApiErr::from(
+                            "Received completion model error from embeddings request.",
+                        ))
+                    }
+                    Response::ImageGeneration(_) => {
+                        return Err(PyApiErr::from(
+                            "Received image generation response from embeddings request.",
+                        ))
+                    }
+                    Response::Speech { .. } => {
+                        return Err(PyApiErr::from(
+                            "Received speech response from embeddings request.",
+                        ))
+                    }
+                    Response::Raw { .. } => {
+                        return Err(PyApiErr::from(
+                            "Received raw logits response from embeddings request.",
+                        ))
                     }
                 }
             }
