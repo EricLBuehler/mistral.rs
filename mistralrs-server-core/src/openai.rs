@@ -731,17 +731,12 @@ fn embedding_input_schema() -> Schema {
     )
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum EmbeddingEncodingFormat {
+    #[default]
     Float,
     Base64,
-}
-
-impl Default for EmbeddingEncodingFormat {
-    fn default() -> Self {
-        Self::Float
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]

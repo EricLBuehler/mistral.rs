@@ -143,6 +143,54 @@ curl http://localhost:8080/v1/completions \
 
 > ℹ️ The `truncate_sequence` flag behaves the same way for the completions endpoint: keep it `false` (default) to receive a validation error, or set it to `true` to trim the prompt automatically.
 
+## `POST`: `/v1/embeddings`
+Create vector embeddings via the OpenAI-compatible endpoint. Supported request fields:
+
+- `input`: a single string, an array of strings, an array of token IDs (`[123, 456]`), or a batch of token arrays (`[[...], [...]]`).
+- `encoding_format`: `"float"` (default) returns arrays of `f32`; `"base64"` returns Base64 strings.
+- `dimensions`: currently unsupported; providing it yields a validation error.
+- `truncate_sequence`: `bool`, default `false`. Set to `true` to clip over-length prompts instead of receiving a validation error.
+
+> ℹ️ Requests whose prompt exceeds the model's maximum context length now fail unless you opt in to truncation. Set `"truncate_sequence": true` to drop the oldest prompt tokens while reserving room (equal to `max_tokens` when provided, otherwise one token) for generation.
+
+Example (Python `openai` client):
+
+```python
+import openai
+
+client = openai.OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="EMPTY",
+)
+
+result = client.embeddings.create(
+    model="default",
+    input=[
+        "Vector search is great for semantic retrieval.",
+        "Rust ownership keeps data races away.",
+    ],
+    truncate_sequence=True,
+)
+
+for item in result.data:
+    print(item.index, len(item.embedding))
+```
+
+Example with `curl`:
+
+```bash
+curl http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer EMPTY" \
+  -d '{
+    "model": "default",
+    "input": ["semantic search", "document reranking"],
+    "encoding_format": "base64",
+    "truncate_sequence": false
+  }'
+```
+
+Responses follow the OpenAI schema: `object: "list"`, `data[*].embedding` containing either float arrays or Base64 strings depending on `encoding_format`, and a `usage` block (`prompt_tokens`, `total_tokens`). At present those counters report `0` because token accounting for embeddings is not yet implemented.
 
 ## `POST`: `/v1/responses`
 Create a response using the OpenAI-compatible Responses API. Please find the official OpenAI API documentation [here](https://platform.openai.com/docs/api-reference/responses). 

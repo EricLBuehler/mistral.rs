@@ -328,7 +328,7 @@ where
 }
 
 fn encode_embedding_base64(embedding: &[f32]) -> String {
-    let mut bytes = Vec::with_capacity(embedding.len() * std::mem::size_of::<f32>());
+    let mut bytes = Vec::with_capacity(std::mem::size_of_val(embedding));
     for value in embedding {
         bytes.extend_from_slice(&value.to_le_bytes());
     }

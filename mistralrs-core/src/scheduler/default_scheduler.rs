@@ -75,7 +75,7 @@ type BucketKey = (usize, bool, usize);
 struct FixedBucketingManager;
 
 impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
-    /// Move the seuqences into buckets, and run the ones with the shortest lengths.
+    /// Move the sequences into buckets, and run the ones with the shortest lengths.
     /// The others are moved to the waiting list (retaining high priority due to start time),
     /// without a state modification.
     fn bucket_and_waitlist_seqs_waiting(
@@ -190,7 +190,7 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
         }
     }
 
-    /// Move the seuqences into buckets, and run the ones with the shortest lengths.
+    /// Move the sequences into buckets, and run the ones with the shortest lengths.
     /// The others are moved to the waiting list (retaining high priority due to start time),
     /// without a state modification.
     fn bucket_and_waitlist_seqs(&mut self, running: Vec<Sequence>) -> Vec<Sequence> {
