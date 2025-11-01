@@ -37,7 +37,11 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 res = client.embeddings.create(
     model="default",
-    input="task: search result | query: What is graphene?",
+    input=[
+        "task: search result | query: What is graphene?",
+        "task: search result | query: What is an apple?",
+    ],
 )
 
-print(res)
+print(res.data[0].embedding[:10])
+print(res.data[1].embedding[:10])
