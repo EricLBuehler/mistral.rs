@@ -28,7 +28,7 @@ use mistralrs_quant::ShardedVarBuilder;
 use pyo3::pyclass;
 
 use regex::Regex;
-use serde::{de::Visitor, Deserialize, Deserializer};
+use serde::{de::Visitor, Deserialize, Deserializer, Serialize};
 
 use super::{AutoDeviceMapParams, DeviceMappedModelLoader};
 
@@ -127,6 +127,53 @@ pub enum EmbeddingModulePaths {
     Pooling { config: PathBuf },
     Dense { config: PathBuf, model: PathBuf },
     Normalize,
+}
+
+impl EmbeddingModulePaths {
+    pub fn serialize_modules(modules: &[EmbeddingModulePaths]) -> String {
+        #[derive(Serialize)]
+        struct OutputModule {
+            idx: usize,
+            name: String,
+            path: String,
+            #[serde(rename = "type")]
+            ty: String,
+        }
+
+        let mapped: Vec<OutputModule> = modules
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let (path, ty) = match m {
+                    EmbeddingModulePaths::Transformer => (
+                        "".to_string(),
+                        "sentence_transformers.models.Transformer".to_string(),
+                    ),
+                    EmbeddingModulePaths::Pooling { config } => (
+                        config.display().to_string(),
+                        "sentence_transformers.models.Pooling".to_string(),
+                    ),
+                    EmbeddingModulePaths::Dense { config, .. } => (
+                        config.display().to_string(),
+                        "sentence_transformers.models.Dense".to_string(),
+                    ),
+                    EmbeddingModulePaths::Normalize => (
+                        "".to_string(),
+                        "sentence_transformers.models.Normalize".to_string(),
+                    ),
+                };
+
+                OutputModule {
+                    idx: i,
+                    name: i.to_string(),
+                    path,
+                    ty,
+                }
+            })
+            .collect();
+
+        serde_json::to_string_pretty(&mapped).unwrap()
+    }
 }
 
 #[derive(Debug, Deserialize)]

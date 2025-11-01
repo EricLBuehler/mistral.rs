@@ -63,6 +63,7 @@ pub struct EmbeddingPipeline {
     topology: Option<Topology>,
     silent: bool,
     config: String,
+    modules_ser: String,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     modules: Vec<Box<dyn Module + Send + Sync>>,
 }
@@ -501,6 +502,7 @@ impl Loader for EmbeddingLoader {
                 }
             }
         }
+        let modules_ser = EmbeddingModulePaths::serialize_modules(modules_config);
 
         let mut model = if use_nccl {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
@@ -578,6 +580,7 @@ impl Loader for EmbeddingLoader {
                     config: config.clone(),
                     processor_filename: paths.get_processor_config(),
                     preprocessor_filename: paths.get_preprocessor_config(),
+                    modules: Some(&modules_ser),
                 },
                 Arc::new(MultiProgress::new()),
             )?;
@@ -618,6 +621,7 @@ impl Loader for EmbeddingLoader {
             silent,
             config,
             mapper: pipeline_mapper,
+            modules_ser,
         })))
     }
 
@@ -652,7 +656,15 @@ impl IsqPipelineMixin for EmbeddingPipeline {
                 IsqOrganization::Default,
                 true,
                 None,
-                todo!(),
+                UqffFullSer {
+                    tokenizer: &self.tokenizer,
+                    template_filename: &None,
+                    generation_config: None,
+                    config: self.config.clone(),
+                    processor_filename: &None,
+                    preprocessor_filename: &None,
+                    modules: Some(&self.modules_ser),
+                },
                 Arc::new(MultiProgress::new()),
             )
             .map_err(anyhow::Error::msg)
