@@ -7,6 +7,7 @@ use super::{
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
+use crate::embedding_models::{Dense, Normalize, Pooling};
 use crate::embedding_normal_model_loader;
 use crate::embedding_normal_model_loader_sharded;
 use crate::get_embedding_paths;
@@ -14,11 +15,11 @@ use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
-use crate::pipeline::AutoEmbeddingLoader;
 use crate::pipeline::EmbeddingGemmaLoader;
 use crate::pipeline::EmbeddingLoaderType;
 use crate::pipeline::EmbeddingModel;
 use crate::pipeline::EmbeddingModelLoader;
+use crate::pipeline::{AutoEmbeddingLoader, EmbeddingModulePaths};
 use crate::pipeline::{ChatTemplate, EmbeddingModelPaths, IsqOrganization};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
@@ -34,10 +35,12 @@ use crate::{
 use anyhow::Context;
 use anyhow::Result;
 use candle_core::{Device, Tensor};
+use candle_nn::{Linear, Module};
 use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
 use mistralrs_quant::log::once_log_info;
+use mistralrs_quant::safetensors::MmapedSafetensors;
 use mistralrs_quant::{
     AfqLayer, GgufMatMul, HqqLayer, ImmediateIsqOverride, IsqType, QuantizedSerdeType,
 };
@@ -61,6 +64,7 @@ pub struct EmbeddingPipeline {
     silent: bool,
     config: String,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    modules: Vec<Box<dyn Module + Send + Sync>>,
 }
 
 /// A loader for a vision (non-quantized) model.
@@ -244,10 +248,7 @@ impl Loader for EmbeddingLoader {
             mapper = DeviceMapSetting::DummyNccl {
                 nm_device: available_devices[0].clone(),
             };
-        } else if let DeviceMapSetting::Auto(mut params) = mapper.clone() {
-            // We can promote to vision params if we get text params
-            params = params.maybe_promote_to_vision();
-
+        } else if let DeviceMapSetting::Auto(params) = mapper.clone() {
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
 
@@ -466,6 +467,38 @@ impl Loader for EmbeddingLoader {
         let modules_config = paths
             .get_modules()
             .context("Embedding models require the `modules.json` file.")?;
+        assert!(matches!(
+            modules_config[0],
+            EmbeddingModulePaths::Transformer
+        ));
+
+        let mut modules: Vec<Box<dyn Module + Send + Sync>> = Vec::new();
+        for module in modules_config {
+            match module {
+                EmbeddingModulePaths::Transformer => (),
+                EmbeddingModulePaths::Pooling { config } => {
+                    let layer: Pooling = serde_json::from_str(&std::fs::read_to_string(config)?)?;
+                    modules.push(Box::new(layer));
+                }
+                EmbeddingModulePaths::Dense { config, model } => {
+                    let config: Dense = serde_json::from_str(&std::fs::read_to_string(config)?)?;
+                    let safetensors = unsafe { MmapedSafetensors::new(model)? };
+                    let weight = safetensors.load("linear.weight", &device, Some(dtype))?;
+                    let bias = if config.bias {
+                        Some(safetensors.load("linear.bias", &device, Some(dtype))?)
+                    } else {
+                        None
+                    };
+                    let (out_f, in_f) = weight.dims2()?;
+                    assert_eq!((out_f, in_f), (config.out_features, config.in_features));
+
+                    modules.push(Box::new(Linear::new(weight, bias)));
+                }
+                EmbeddingModulePaths::Normalize => {
+                    modules.push(Box::new(Normalize));
+                }
+            }
+        }
 
         let mut model = if use_nccl {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
@@ -557,6 +590,7 @@ impl Loader for EmbeddingLoader {
 
         Ok(Arc::new(Mutex::new(EmbeddingPipeline {
             model,
+            modules,
             tokenizer: tokenizer.into(),
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
@@ -677,9 +711,12 @@ impl Pipeline for EmbeddingPipeline {
             flash_meta,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
 
-        let logits = self.model.forward(&input_ids, &flash_meta)?;
+        let mut xs = self.model.forward(&input_ids, &flash_meta)?;
+        for module in &self.modules {
+            xs = module.forward(&xs)?;
+        }
 
-        Ok(ForwardInputsResult::RawLogits { logits })
+        Ok(ForwardInputsResult::RawLogits { logits: xs })
     }
     async fn sample_causal_gen(
         &self,

@@ -374,7 +374,7 @@ impl DeviceMappedModelLoader for EmbeddingGemmaLoader {
             max_batch_size,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
         let cfg: EmbeddingGemmaConfig = serde_json::from_str(config)?;
