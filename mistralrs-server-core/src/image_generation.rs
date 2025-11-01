@@ -164,5 +164,6 @@ pub fn match_responses(
         Response::ModelError(_, _) => unreachable!(),
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
+        Response::Embeddings { .. } => unreachable!(),
     }
 }

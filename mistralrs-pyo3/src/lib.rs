@@ -1217,6 +1217,7 @@ impl Runner {
                     Response::ImageGeneration(_) => unreachable!(),
                     Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
+                    Response::Embeddings { .. } => unreachable!(),
                 }
             }
         })
@@ -1324,6 +1325,7 @@ impl Runner {
                 Response::ImageGeneration(_) => unreachable!(),
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
+                Response::Embeddings { .. } => unreachable!(),
             }
         })
     }
@@ -1828,6 +1830,7 @@ impl Runner {
                     Response::ImageGeneration(_) => unreachable!(),
                     Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
+                    Response::Embeddings { .. } => unreachable!(),
                 }
             }
         })
@@ -1934,6 +1937,7 @@ impl Runner {
                 Response::ImageGeneration(_) => unreachable!(),
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
+                Response::Embeddings { .. } => unreachable!(),
             }
         })
     }

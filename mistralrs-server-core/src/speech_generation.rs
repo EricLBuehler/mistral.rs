@@ -212,5 +212,6 @@ pub fn match_responses(
             SpeechGenerationResponder::RawResponse((StatusCode::OK, headers, bytes).into_response())
         }
         Response::Raw { .. } => unreachable!(),
+        Response::Embeddings { .. } => unreachable!(),
     }
 }
