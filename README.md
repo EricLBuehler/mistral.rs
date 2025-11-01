@@ -3,10 +3,21 @@
   mistral.rs
 </h1>
 
+
 <h3 align="center">
 Blazingly fast LLM inference.
 </h3>
+<div align = "center">
+  
+[![Stars](https://img.shields.io/github/stars/ericlbuehler/mistral.rs?label=Stars&color=af68ff&logo=github&logoColor=white&labelColor=464646&style=for-the-badge)](https://github.com/ericlbuehler/mistral.rs/stargazers)
+[![Forks](https://img.shields.io/github/forks/ericlbuehler/mistral.rs?label=Forks&color=ff7b72&logo=github&logoColor=white&labelColor=464646&style=for-the-badge)](https://github.com/ericlbuehler/mistral.rs/network)
+[![Watchers](https://img.shields.io/github/watchers/ericlbuehler/mistral.rs?label=Watchers&color=2ea043&logo=github&logoColor=white&labelColor=464646&style=for-the-badge)](https://github.com/ericlbuehler/mistral.rs/watchers)
+[![License](https://img.shields.io/github/license/ericlbuehler/mistral.rs?label=License&color=8957e5&logo=github&logoColor=white&labelColor=464646&style=for-the-badge)](https://github.com/ericlbuehler/mistral.rs/blob/main/LICENSE)
+[![Downloads](https://img.shields.io/github/downloads/ericlbuehler/mistral.rs/total?label=Downloads&color=f0883e&logo=github&logoColor=white&labelColor=464646&style=for-the-badge)](https://github.com/ericlbuehler/mistral.rs/releases)
+[![Release](https://img.shields.io/github/v/release/ericlbuehler/mistral.rs?label=Release&color=fd8c73&logo=github&logoColor=white&labelColor=464646&style=for-the-badge)](https://github.com/ericlbuehler/mistral.rs/releases)
+[![Made with Rust](https://img.shields.io/badge/Made_with-Rust-f74c00?style=for-the-badge&logo=rust&logoColor=white&labelColor=464646)](https://www.rust-lang.org/)
 
+</div>
 <p align="center">
 | <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Documentation</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Documentation</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> | <a href="https://matrix.to/#/#mistral.rs:matrix.org"><b>Matrix</b></a> |
 </p>
