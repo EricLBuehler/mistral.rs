@@ -11,8 +11,8 @@ use crate::embedding_normal_model_loader;
 use crate::embedding_normal_model_loader_sharded;
 use crate::get_embedding_paths;
 use crate::paged_attention::AttentionImplementation;
-use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
+use crate::pipeline::loaders::{auto_device_map, EmbeddingModule};
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::AutoEmbeddingLoader;
 use crate::pipeline::EmbeddingGemmaLoader;
@@ -42,69 +42,15 @@ use mistralrs_quant::{
     AfqLayer, GgufMatMul, HqqLayer, ImmediateIsqOverride, IsqType, QuantizedSerdeType,
 };
 use rand_isaac::Isaac64Rng;
-use serde::de::Visitor;
-use serde::{Deserialize, Deserializer};
 use std::any::Any;
 use std::borrow::Cow;
+use std::env;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
-use std::{env, fmt};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
-
-#[derive(Debug, Deserialize)]
-struct Module {
-    idx: u32,
-    name: String,
-    path: String,
-    #[serde(rename = "type", deserialize_with = "deserialize_module_type")]
-    r#type: ModuleType,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ModuleType {
-    Transformer,
-    Pooling,
-    Dense,
-    Normalize,
-}
-
-fn deserialize_module_type<'de, D>(deserializer: D) -> Result<ModuleType, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    struct ModuleTypeVisitor;
-
-    impl<'de> Visitor<'de> for ModuleTypeVisitor {
-        type Value = ModuleType;
-
-        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            f.write_str("a sentence-transformers module type string")
-        }
-
-        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            // Accept fully-qualified ("sentence_transformers.models.X") or just "X".
-            let last = v.rsplit('.').next().unwrap_or(v).to_ascii_lowercase();
-            match last.as_str() {
-                "transformer" => Ok(ModuleType::Transformer),
-                "pooling" => Ok(ModuleType::Pooling),
-                "dense" => Ok(ModuleType::Dense),
-                "normalize" => Ok(ModuleType::Normalize),
-                _ => Err(E::invalid_value(
-                    serde::de::Unexpected::Str(v),
-                    &"Transformer/Pooling/Dense/Normalize",
-                )),
-            }
-        }
-    }
-
-    deserializer.deserialize_str(ModuleTypeVisitor)
-}
 
 pub struct EmbeddingPipeline {
     model: Box<dyn EmbeddingModel + Send + Sync>,
@@ -522,8 +468,7 @@ impl Loader for EmbeddingLoader {
             .get_modules()
             .context("Embedding models require the `modules.json` file.")?;
 
-        let modules: Vec<Module> = serde_json::from_str(&std::fs::read_to_string(modules_config)?)?;
-        dbg!(&modules);
+        dbg!(modules_config);
         unimplemented!();
 
         let mut model = if use_nccl {

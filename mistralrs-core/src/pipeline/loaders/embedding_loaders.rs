@@ -1,5 +1,6 @@
 use std::{
-    fmt::{Debug, Display},
+    fmt::{self, Debug, Display},
+    path::PathBuf,
     str::FromStr,
     sync::Arc,
 };
@@ -28,7 +29,7 @@ use mistralrs_quant::ShardedVarBuilder;
 use pyo3::pyclass;
 
 use regex::Regex;
-use serde::Deserialize;
+use serde::{de::Visitor, Deserialize, Deserializer};
 
 use super::{AutoDeviceMapParams, DeviceMappedModelLoader};
 
@@ -120,6 +121,64 @@ impl Display for EmbeddingLoaderType {
             Self::EmbeddingGemma => write!(f, "embeddinggemma"),
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub enum EmbeddingModulePaths {
+    Transformer,
+    Pooling { config: PathBuf },
+    Dense { config: PathBuf, model: PathBuf },
+    Normalize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EmbeddingModule {
+    pub path: String,
+    #[serde(rename = "type", deserialize_with = "deserialize_module_type")]
+    pub ty: EmbeddingModuleType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddingModuleType {
+    Transformer,
+    Pooling,
+    Dense,
+    Normalize,
+}
+
+fn deserialize_module_type<'de, D>(deserializer: D) -> Result<EmbeddingModuleType, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct ModuleTypeVisitor;
+
+    impl<'de> Visitor<'de> for ModuleTypeVisitor {
+        type Value = EmbeddingModuleType;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a sentence-transformers module type string")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            // Accept fully-qualified ("sentence_transformers.models.X") or just "X".
+            let last = v.rsplit('.').next().unwrap_or(v).to_ascii_lowercase();
+            match last.as_str() {
+                "transformer" => Ok(EmbeddingModuleType::Transformer),
+                "pooling" => Ok(EmbeddingModuleType::Pooling),
+                "dense" => Ok(EmbeddingModuleType::Dense),
+                "normalize" => Ok(EmbeddingModuleType::Normalize),
+                _ => Err(E::invalid_value(
+                    serde::de::Unexpected::Str(v),
+                    &"Transformer/Pooling/Dense/Normalize",
+                )),
+            }
+        }
+    }
+
+    deserializer.deserialize_str(ModuleTypeVisitor)
 }
 
 macro_rules! bias_if {

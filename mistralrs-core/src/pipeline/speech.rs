@@ -6,7 +6,7 @@ use super::{
     PreProcessingMixin, Processor, TokenSource,
 };
 use crate::device_map::DeviceMapper;
-use crate::pipeline::{ChatTemplate, Modalities, SupportedModality};
+use crate::pipeline::{ChatTemplate, EmbeddingModulePaths, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::speech_models::{DiaConfig, DiaPipeline, SpeechGenerationOutput, SpeechLoaderType};
@@ -65,7 +65,7 @@ impl ModelPaths for SpeechModelPaths {
     fn get_adapter_paths(&self) -> &AdapterPaths {
         unreachable!("Use `std::any::Any`.")
     }
-    fn get_modules(&self) -> Option<&PathBuf> {
+    fn get_modules(&self) -> Option<&[EmbeddingModulePaths]> {
         unreachable!("Use `std::any::Any`.")
     }
 }

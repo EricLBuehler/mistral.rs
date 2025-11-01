@@ -36,7 +36,7 @@ pub use vision_loaders::{
 
 pub use embedding_loaders::{
     AutoEmbeddingLoader, EmbeddingGemmaLoader, EmbeddingLoaderType, EmbeddingModel,
-    EmbeddingModelLoader,
+    EmbeddingModelLoader, EmbeddingModule, EmbeddingModulePaths, EmbeddingModuleType,
 };
 
 pub use diffusion_loaders::{
@@ -88,7 +88,7 @@ pub trait ModelPaths: AsAny + Debug + Send + Sync {
     fn get_adapter_paths(&self) -> &AdapterPaths;
 
     /// Get embedding model `modules.json` compatible with sentence-transformers
-    fn get_modules(&self) -> Option<&PathBuf>;
+    fn get_modules(&self) -> Option<&[EmbeddingModulePaths]>;
 }
 
 #[derive(Clone, Debug)]
@@ -160,7 +160,7 @@ impl ModelPaths for LocalModelPaths<PathBuf> {
     fn get_adapter_paths(&self) -> &AdapterPaths {
         &self.adapter_paths
     }
-    fn get_modules(&self) -> Option<&PathBuf> {
+    fn get_modules(&self) -> Option<&[EmbeddingModulePaths]> {
         None
     }
 }
@@ -170,7 +170,7 @@ impl ModelPaths for LocalModelPaths<PathBuf> {
 pub struct EmbeddingModelPaths<P: Debug> {
     pub tokenizer_filename: P,
     pub config_filename: P,
-    pub modules_config: P,
+    pub modules: Vec<EmbeddingModulePaths>,
     pub filenames: Vec<P>,
     pub adapter_paths: AdapterPaths,
 }
@@ -182,14 +182,14 @@ impl<P: Debug> EmbeddingModelPaths<P> {
         config_filename: P,
         filenames: Vec<P>,
         adapter_paths: AdapterPaths,
-        modules_config: P,
+        modules: Vec<EmbeddingModulePaths>,
     ) -> Self {
         Self {
             tokenizer_filename,
             config_filename,
             filenames,
             adapter_paths,
-            modules_config,
+            modules,
         }
     }
 }
@@ -222,8 +222,8 @@ impl ModelPaths for EmbeddingModelPaths<PathBuf> {
     fn get_adapter_paths(&self) -> &AdapterPaths {
         &self.adapter_paths
     }
-    fn get_modules(&self) -> Option<&PathBuf> {
-        Some(&self.modules_config)
+    fn get_modules(&self) -> Option<&[EmbeddingModulePaths]> {
+        Some(&self.modules)
     }
 }
 

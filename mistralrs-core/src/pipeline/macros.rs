@@ -285,13 +285,49 @@ macro_rules! get_embedding_paths {
         )?;
 
         let modules_config = crate::api_get_file!(api, "modules.json", model_id);
+        let modules: Vec<$crate::pipeline::EmbeddingModule> =
+            serde_json::from_str(&std::fs::read_to_string(modules_config)?)?;
+        let mut parsed_modules = Vec::new();
+        for module in modules {
+            match module.ty {
+                $crate::pipeline::EmbeddingModuleType::Transformer => {
+                    parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Transformer);
+                }
+                $crate::pipeline::EmbeddingModuleType::Pooling => {
+                    parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Pooling {
+                        config: $crate::api_get_file!(
+                            api,
+                            &format!("{}/config.json", module.path),
+                            model_id
+                        ),
+                    });
+                }
+                $crate::pipeline::EmbeddingModuleType::Dense => {
+                    parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Dense {
+                        config: $crate::api_get_file!(
+                            api,
+                            &format!("{}/config.json", module.path),
+                            model_id
+                        ),
+                        model: $crate::api_get_file!(
+                            api,
+                            &format!("{}/model.safetensors", module.path),
+                            model_id
+                        ),
+                    });
+                }
+                $crate::pipeline::EmbeddingModuleType::Normalize => {
+                    parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Normalize);
+                }
+            }
+        }
 
         Ok(Box::new($path_name {
             tokenizer_filename,
             config_filename,
             filenames,
             adapter_paths,
-            modules_config,
+            modules: parsed_modules,
         }))
     }};
 }
