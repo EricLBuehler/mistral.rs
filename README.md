@@ -75,7 +75,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
     ```bash
     # HTTP API (OpenAI-compatible)
-    ./mistralrs-server --port 1234 embedding -m google/embeddinggemma-300m
+    ./mistralrs-server --port 1234 run -m google/embeddinggemma-300m
 
     # Python API example
     python examples/python/embedding_gemma.py

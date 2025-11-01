@@ -147,7 +147,7 @@ curl http://localhost:8080/v1/completions \
 Serve an embedding model (for example, EmbeddingGemma) to enable this endpoint:
 
 ```bash
-./mistralrs-server embedding -m google/embeddinggemma-300m
+./mistralrs-server run -m google/embeddinggemma-300m
 ```
 
 In multi-model mode, include an `Embedding` entry in your selector config to expose it alongside chat models.

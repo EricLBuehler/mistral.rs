@@ -309,9 +309,9 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     matformer_slice_name: matformer_slice_name.clone(),
                 },
                 VisionSpecificConfig {
-                    topology: Topology::from_option_path(topology)?,
-                    write_uqff,
-                    from_uqff: from_uqff.map(|x| {
+                    topology: Topology::from_option_path(topology.clone())?,
+                    write_uqff: write_uqff.clone(),
+                    from_uqff: from_uqff.clone().map(|x| {
                         x.split(UQFF_MULTI_FILE_DELIMITER)
                             .map(PathBuf::from_str)
                             .map(|x| x.unwrap())
@@ -323,6 +323,17 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     hf_cache_path: hf_cache_path.clone(),
                     matformer_config_path,
                     matformer_slice_name,
+                },
+                EmbeddingSpecificConfig {
+                    topology: Topology::from_option_path(topology)?,
+                    write_uqff,
+                    from_uqff: from_uqff.map(|x| {
+                        x.split(UQFF_MULTI_FILE_DELIMITER)
+                            .map(PathBuf::from_str)
+                            .map(|x| x.unwrap())
+                            .collect::<Vec<_>>()
+                    }),
+                    hf_cache_path: hf_cache_path.clone(),
                 },
                 args.chat_template,
                 tokenizer_json,
