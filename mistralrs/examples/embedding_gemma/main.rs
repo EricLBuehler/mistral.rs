@@ -1,10 +1,5 @@
-use std::time::Instant;
-
 use anyhow::Result;
-use mistralrs::{
-    DiffusionGenerationParams, DiffusionLoaderType, EmbeddingModelBuilder,
-    ImageGenerationResponseFormat, Tensor,
-};
+use mistralrs::EmbeddingModelBuilder;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -14,12 +9,9 @@ async fn main() -> Result<()> {
         .await?;
 
     let response = model
-        .generate_embeddings("What is graphene?".to_string())
+        .generate_embeddings("task: search result | query: What is graphene?".to_string())
         .await?;
     println!("{response}");
-
-    let xs = Tensor::read_npy("embeddings.npy")?;
-    println!("{xs}");
 
     Ok(())
 }
