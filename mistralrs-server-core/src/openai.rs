@@ -652,6 +652,176 @@ pub struct CompletionRequest {
     pub dry_sequence_breakers: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum EmbeddingInput {
+    Single(String),
+    Multiple(Vec<String>),
+    Tokens(Vec<u32>),
+    TokensBatch(Vec<Vec<u32>>),
+}
+
+impl PartialSchema for EmbeddingInput {
+    fn schema() -> RefOr<Schema> {
+        RefOr::T(embedding_input_schema())
+    }
+}
+
+impl ToSchema for EmbeddingInput {
+    fn schemas(
+        schemas: &mut Vec<(
+            String,
+            utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+        )>,
+    ) {
+        schemas.push((EmbeddingInput::name().into(), EmbeddingInput::schema()));
+    }
+}
+
+fn embedding_input_schema() -> Schema {
+    Schema::OneOf(
+        OneOfBuilder::new()
+            .item(Schema::Object(
+                ObjectBuilder::new()
+                    .schema_type(SchemaType::Type(Type::String))
+                    .description(Some("Single input string"))
+                    .build(),
+            ))
+            .item(Schema::Array(
+                ArrayBuilder::new()
+                    .items(RefOr::T(Schema::Object(
+                        ObjectBuilder::new()
+                            .schema_type(SchemaType::Type(Type::String))
+                            .build(),
+                    )))
+                    .description(Some("Multiple input strings"))
+                    .build(),
+            ))
+            .item(Schema::Array(
+                ArrayBuilder::new()
+                    .items(RefOr::T(Schema::Object(
+                        ObjectBuilder::new()
+                            .schema_type(SchemaType::Type(Type::Integer))
+                            .build(),
+                    )))
+                    .description(Some("Single token array (unsupported)"))
+                    .build(),
+            ))
+            .item(Schema::Array(
+                ArrayBuilder::new()
+                    .items(RefOr::T(Schema::Array(
+                        ArrayBuilder::new()
+                            .items(RefOr::T(Schema::Object(
+                                ObjectBuilder::new()
+                                    .schema_type(SchemaType::Type(Type::Integer))
+                                    .build(),
+                            )))
+                            .build(),
+                    )))
+                    .description(Some("Multiple token arrays (unsupported)"))
+                    .build(),
+            ))
+            .build(),
+    )
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddingEncodingFormat {
+    Float,
+    Base64,
+}
+
+impl Default for EmbeddingEncodingFormat {
+    fn default() -> Self {
+        Self::Float
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct EmbeddingRequest {
+    #[schema(example = "default")]
+    #[serde(default = "default_model")]
+    pub model: String,
+    pub input: EmbeddingInput,
+    #[schema(example = "float")]
+    #[serde(default)]
+    pub encoding_format: Option<EmbeddingEncodingFormat>,
+    #[schema(example = json!(Option::None::<usize>))]
+    pub dimensions: Option<usize>,
+    #[schema(example = json!(Option::None::<String>))]
+    #[serde(rename = "user")]
+    pub _user: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct EmbeddingUsage {
+    pub prompt_tokens: u32,
+    pub total_tokens: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum EmbeddingVector {
+    Float(Vec<f32>),
+    Base64(String),
+}
+
+impl PartialSchema for EmbeddingVector {
+    fn schema() -> RefOr<Schema> {
+        RefOr::T(embedding_vector_schema())
+    }
+}
+
+impl ToSchema for EmbeddingVector {
+    fn schemas(
+        schemas: &mut Vec<(
+            String,
+            utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+        )>,
+    ) {
+        schemas.push((EmbeddingVector::name().into(), EmbeddingVector::schema()));
+    }
+}
+
+fn embedding_vector_schema() -> Schema {
+    Schema::OneOf(
+        OneOfBuilder::new()
+            .item(Schema::Array(
+                ArrayBuilder::new()
+                    .items(RefOr::T(Schema::Object(
+                        ObjectBuilder::new()
+                            .schema_type(SchemaType::Type(Type::Number))
+                            .build(),
+                    )))
+                    .description(Some("Embedding returned as an array of floats"))
+                    .build(),
+            ))
+            .item(Schema::Object(
+                ObjectBuilder::new()
+                    .schema_type(SchemaType::Type(Type::String))
+                    .description(Some("Embedding returned as a base64-encoded string"))
+                    .build(),
+            ))
+            .build(),
+    )
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct EmbeddingData {
+    pub object: &'static str,
+    pub embedding: EmbeddingVector,
+    pub index: usize,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct EmbeddingResponse {
+    pub object: &'static str,
+    pub data: Vec<EmbeddingData>,
+    pub model: String,
+    pub usage: EmbeddingUsage,
+}
+
 /// Image generation request
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ImageGenerationRequest {

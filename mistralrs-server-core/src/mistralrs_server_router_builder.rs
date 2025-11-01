@@ -13,6 +13,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::{
     chat_completion::chatcompletions,
     completions::completions,
+    embeddings::embeddings,
     handlers::{health, models, re_isq},
     image_generation::image_generation,
     openapi_doc::get_openapi_doc,
@@ -196,6 +197,7 @@ fn init_router(
     let mut router = Router::new()
         .route("/v1/chat/completions", post(chatcompletions))
         .route("/v1/completions", post(completions))
+        .route("/v1/embeddings", post(embeddings))
         .route("/v1/models", get(models))
         .route("/health", get(health))
         .route("/", get(health))

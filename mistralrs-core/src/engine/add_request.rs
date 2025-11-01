@@ -75,7 +75,8 @@ impl Engine {
             | RequestMessage::VisionChat { .. }
             | RequestMessage::ImageGeneration { .. }
             | RequestMessage::SpeechGeneration { .. }
-            | RequestMessage::Embedding { .. } => None,
+            | RequestMessage::Embedding { .. }
+            | RequestMessage::EmbeddingTokens { .. } => None,
         };
         if is_chat
             && !get_mut_arcmutex!(self.pipeline)
@@ -107,7 +108,10 @@ impl Engine {
             ) => (),
             (ModelCategory::Diffusion, RequestMessage::ImageGeneration { .. }) => (),
             (ModelCategory::Speech, RequestMessage::SpeechGeneration { .. }) => (),
-            (ModelCategory::Embedding, RequestMessage::Embedding { .. }) => (),
+            (
+                ModelCategory::Embedding,
+                RequestMessage::Embedding { .. } | RequestMessage::EmbeddingTokens { .. },
+            ) => (),
             _ => {
                 request
                     .response
@@ -153,7 +157,8 @@ impl Engine {
         let seq_step_type = match &request.messages {
             RequestMessage::ImageGeneration { .. }
             | RequestMessage::SpeechGeneration { .. }
-            | RequestMessage::Embedding { .. } => SeqStepType::OneShot,
+            | RequestMessage::Embedding { .. }
+            | RequestMessage::EmbeddingTokens { .. } => SeqStepType::OneShot,
             _ => SeqStepType::PromptAndDecode,
         };
 
@@ -211,7 +216,8 @@ impl Engine {
             }
             RequestMessage::ImageGeneration { prompt, .. }
             | RequestMessage::SpeechGeneration { prompt } => (vec![u32::MAX], prompt),
-            RequestMessage::CompletionTokens(it) => {
+            RequestMessage::CompletionTokens(it)
+            | RequestMessage::EmbeddingTokens { prompt: it } => {
                 let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
                     request
                         .response

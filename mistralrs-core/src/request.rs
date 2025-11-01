@@ -67,6 +67,9 @@ pub enum RequestMessage {
     Embedding {
         prompt: String,
     },
+    EmbeddingTokens {
+        prompt: Vec<u32>,
+    },
 }
 
 fn default_responder<T>() -> Sender<T> {

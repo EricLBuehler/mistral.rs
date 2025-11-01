@@ -3234,6 +3234,7 @@ dependencies = [
  "accelerate-src",
  "anyhow",
  "axum 0.8.4",
+ "base64 0.22.1",
  "candle-core",
  "data-url",
  "either",
