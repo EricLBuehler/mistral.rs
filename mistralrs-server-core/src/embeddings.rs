@@ -7,6 +7,7 @@ use axum::{
     response::IntoResponse,
 };
 use base64::{prelude::BASE64_STANDARD, Engine};
+use futures::future::join_all;
 use mistralrs_core::{
     Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response, SamplingParams,
 };
@@ -95,8 +96,15 @@ pub async fn embeddings(
 
     match inputs {
         Inputs::Prompt(prompts) => {
-            for (index, prompt) in prompts.into_iter().enumerate() {
-                match fetch_embedding(state.clone(), prompt, model_override.as_deref()).await {
+            let futures = prompts.into_iter().map(|prompt| {
+                let state = state.clone();
+                let model_override = model_override.clone();
+                async move { fetch_embedding(state, prompt, model_override.as_deref()).await }
+            });
+
+            let results = join_all(futures).await;
+            for (index, result) in results.into_iter().enumerate() {
+                match result {
                     Ok(embedding) => {
                         let embedding = if return_base64 {
                             EmbeddingVector::Base64(encode_embedding_base64(&embedding))
@@ -117,9 +125,17 @@ pub async fn embeddings(
             }
         }
         Inputs::Tokens(batches) => {
-            for (index, tokens) in batches.into_iter().enumerate() {
-                match fetch_embedding_tokens(state.clone(), tokens, model_override.as_deref()).await
-                {
+            let futures = batches.into_iter().map(|tokens| {
+                let state = state.clone();
+                let model_override = model_override.clone();
+                async move {
+                    fetch_embedding_tokens(state, tokens, model_override.as_deref()).await
+                }
+            });
+
+            let results = join_all(futures).await;
+            for (index, result) in results.into_iter().enumerate() {
+                match result {
                     Ok(embedding) => {
                         let embedding = if return_base64 {
                             EmbeddingVector::Base64(encode_embedding_base64(&embedding))
