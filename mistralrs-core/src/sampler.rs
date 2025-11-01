@@ -844,16 +844,16 @@ impl Sampler {
         sample_speculative: bool,
         multiple_sequences: bool,
     ) -> Result<Logprobs> {
-        if cfg!(feature = "metal") && !multiple_sequences {
-            return self.sample_fast(
-                logits,
-                context,
-                return_logprobs,
-                self.top_k,
-                self.top_p,
-                self.min_p,
-            );
-        }
+        // if cfg!(feature = "metal") && !multiple_sequences {
+        //     return self.sample_fast(
+        //         logits,
+        //         context,
+        //         return_logprobs,
+        //         self.top_k,
+        //         self.top_p,
+        //         self.min_p,
+        //     );
+        // }
 
         let logits = logits.to_vec1()?;
         let mut logits = self.apply_penalties(logits, context)?;
