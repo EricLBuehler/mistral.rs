@@ -254,7 +254,7 @@ pub enum Response {
         tokens: Vec<u32>,
     },
     Embeddings {
-        embeddings: Tensor,
+        embeddings: Vec<f32>,
     },
 }
 
@@ -281,7 +281,7 @@ pub enum ResponseOk {
     },
     // Embeddings
     Embeddings {
-        embeddings: Tensor,
+        embeddings: Vec<f32>,
     },
 }
 

@@ -1010,7 +1010,7 @@ impl Sequence {
         self.update_time_info();
     }
 
-    pub fn add_embedding_choice_to_group(&self, embedding: Tensor) {
+    pub fn add_embedding_choice_to_group(&self, embedding: Vec<f32>) {
         get_mut_group!(self).embedding_choices.push(embedding);
         self.update_time_info();
     }
@@ -1125,7 +1125,7 @@ pub struct SequenceGroup {
     image_choices: Vec<ImageChoice>,
     speech_pcms: Vec<(Arc<Vec<f32>>, usize, usize)>, // (pcm, rate, channels)
     raw_choices: Vec<(Vec<Tensor>, Vec<u32>)>,
-    embedding_choices: Vec<Tensor>,
+    embedding_choices: Vec<Vec<f32>>,
     completion_choices: Vec<(f32, CompletionChoice)>,
     pub chat_streaming_chunks: Vec<ChunkChoice>,
     pub completion_streaming_chunks: Vec<CompletionChunkChoice>,

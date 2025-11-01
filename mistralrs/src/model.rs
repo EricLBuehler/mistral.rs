@@ -282,7 +282,7 @@ impl Model {
     /// Generate embeddings given a prompt.
     ///
     /// This returns: (pcm, sampling rate, channels)
-    pub async fn generate_embeddings(&self, prompt: impl ToString) -> anyhow::Result<Tensor> {
+    pub async fn generate_embeddings(&self, prompt: impl ToString) -> anyhow::Result<Vec<f32>> {
         let (tx, mut rx) = channel(1);
 
         let request = Request::Normal(Box::new(NormalRequest {

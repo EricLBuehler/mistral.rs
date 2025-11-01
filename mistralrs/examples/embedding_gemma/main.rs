@@ -11,7 +11,7 @@ async fn main() -> Result<()> {
     let response = model
         .generate_embeddings("task: search result | query: What is graphene?".to_string())
         .await?;
-    println!("{response}");
+    println!("{response:?}");
 
     Ok(())
 }

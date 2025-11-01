@@ -130,7 +130,7 @@ pub async fn send_raw_responses(
 
 pub async fn send_embedding_responses(
     input_seqs: &mut [&mut Sequence],
-    embedings: Vec<Tensor>,
+    embedings: Vec<Vec<f32>>,
 ) -> candle_core::Result<()> {
     if embedings.len() != input_seqs.len() {
         candle_core::bail!("Number of embeddings must match number of sequences..");

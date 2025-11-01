@@ -512,7 +512,13 @@ pub trait Pipeline:
                         input_seqs,
                         embedding_logits
                             .into_iter()
-                            .map(|raw| raw.unwrap())
+                            .map(|raw| {
+                                raw.unwrap()
+                                    .to_dtype(DType::F32)
+                                    .unwrap()
+                                    .to_vec1::<f32>()
+                                    .unwrap()
+                            })
                             .collect(),
                     )
                     .await?;
@@ -708,7 +714,13 @@ pub trait Pipeline:
                         input_seqs,
                         embedding_logits
                             .into_iter()
-                            .map(|raw| raw.unwrap())
+                            .map(|raw| {
+                                raw.unwrap()
+                                    .to_dtype(DType::F32)
+                                    .unwrap()
+                                    .to_vec1::<f32>()
+                                    .unwrap()
+                            })
                             .collect(),
                     )
                     .await?;
