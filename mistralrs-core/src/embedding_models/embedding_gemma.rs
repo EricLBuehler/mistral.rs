@@ -200,8 +200,8 @@ impl Attention {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
-        sliding_attention_mask: Option<&Tensor>,
+        attention_mask: &Tensor,
+        sliding_attention_mask: &Tensor,
         seqlen_offsets: &[usize],
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -221,23 +221,15 @@ impl Attention {
             v = v.to_dtype(original_dtype)?;
         }
 
-        (q, k, v) = if q_len != 1 {
-            let q = q
-                .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            let k = k
-                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            let v = v
-                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            (q, k, v)
-        } else {
-            let q = q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?;
-            let k = k.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
-            let v = v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
-            (q, k, v)
-        };
+        q = q
+            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        k = k
+            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        v = v
+            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?;
 
         q = q.apply(&self.q_norm)?;
         k = k.apply(&self.k_norm)?;
@@ -253,17 +245,19 @@ impl Attention {
             attention_mask
         };
 
-        let mut attn_output =
-            Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?;
+        let mut attn_output = Sdpa.run_attention(
+            &q,
+            &k,
+            &v,
+            Some(mask),
+            Some(flash_params),
+            &self.sdpa_params,
+        )?;
 
         if let Some(t) = self.q_proj.quantized_act_type() {
             attn_output = attn_output.to_dtype(t)?;
         }
-        attn_output = if attention_mask.is_some() {
-            attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
-        } else {
-            attn_output.reshape((b_sz, q_len, ()))?
-        };
+        attn_output = attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?;
         let mut res = MatMul.qmethod_matmul(&attn_output, &*self.o_proj)?;
         if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
@@ -344,8 +338,8 @@ impl DecoderLayer {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
-        sliding_attention_mask: Option<&Tensor>,
+        attention_mask: &Tensor,
+        sliding_attention_mask: &Tensor,
         seqlen_offsets: &[usize],
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -515,8 +509,8 @@ impl EmbeddingGemma {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                Some(&attention_mask.to_device(xs.device())?),
-                Some(&sliding_mask.to_device(xs.device())?),
+                &attention_mask.to_device(xs.device())?,
+                &sliding_mask.to_device(xs.device())?,
                 &seqlen_offsets,
                 flash_params,
             )?;
