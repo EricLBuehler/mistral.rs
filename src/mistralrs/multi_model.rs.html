@@ -71,42 +71,44 @@
 <a href=#71 id=71 data-nosnippet>71</a>        } <span class="kw">else </span>{
 <a href=#72 id=72 data-nosnippet>72</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
 <a href=#73 id=73 data-nosnippet>73</a>        };
-<a href=#74 id=74 data-nosnippet>74</a>
-<a href=#75 id=75 data-nosnippet>75</a>        <span class="kw">let </span>request = Request::Normal(Box::new(NormalRequest {
-<a href=#76 id=76 data-nosnippet>76</a>            messages: request.take_messages(),
-<a href=#77 id=77 data-nosnippet>77</a>            sampling_params: request.take_sampling_params(),
-<a href=#78 id=78 data-nosnippet>78</a>            response: tx,
-<a href=#79 id=79 data-nosnippet>79</a>            return_logprobs: request.return_logprobs(),
-<a href=#80 id=80 data-nosnippet>80</a>            is_streaming: <span class="bool-val">false</span>,
-<a href=#81 id=81 data-nosnippet>81</a>            id: <span class="number">0</span>,
-<a href=#82 id=82 data-nosnippet>82</a>            constraint: request.take_constraint(),
-<a href=#83 id=83 data-nosnippet>83</a>            suffix: <span class="prelude-val">None</span>,
-<a href=#84 id=84 data-nosnippet>84</a>            tools,
-<a href=#85 id=85 data-nosnippet>85</a>            tool_choice,
-<a href=#86 id=86 data-nosnippet>86</a>            logits_processors: request.take_logits_processors(),
-<a href=#87 id=87 data-nosnippet>87</a>            return_raw_logits: <span class="bool-val">false</span>,
-<a href=#88 id=88 data-nosnippet>88</a>            web_search_options: request.take_web_search_options(),
-<a href=#89 id=89 data-nosnippet>89</a>            model_id: model_id.map(|s| s.to_string()),
-<a href=#90 id=90 data-nosnippet>90</a>        }));
-<a href=#91 id=91 data-nosnippet>91</a>
-<a href=#92 id=92 data-nosnippet>92</a>        <span class="self">self</span>.runner.get_sender(model_id)<span class="question-mark">?</span>.send(request).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#74 id=74 data-nosnippet>74</a>        <span class="kw">let </span>truncate_sequence = request.truncate_sequence();
+<a href=#75 id=75 data-nosnippet>75</a>
+<a href=#76 id=76 data-nosnippet>76</a>        <span class="kw">let </span>request = Request::Normal(Box::new(NormalRequest {
+<a href=#77 id=77 data-nosnippet>77</a>            messages: request.take_messages(),
+<a href=#78 id=78 data-nosnippet>78</a>            sampling_params: request.take_sampling_params(),
+<a href=#79 id=79 data-nosnippet>79</a>            response: tx,
+<a href=#80 id=80 data-nosnippet>80</a>            return_logprobs: request.return_logprobs(),
+<a href=#81 id=81 data-nosnippet>81</a>            is_streaming: <span class="bool-val">false</span>,
+<a href=#82 id=82 data-nosnippet>82</a>            id: <span class="number">0</span>,
+<a href=#83 id=83 data-nosnippet>83</a>            constraint: request.take_constraint(),
+<a href=#84 id=84 data-nosnippet>84</a>            suffix: <span class="prelude-val">None</span>,
+<a href=#85 id=85 data-nosnippet>85</a>            tools,
+<a href=#86 id=86 data-nosnippet>86</a>            tool_choice,
+<a href=#87 id=87 data-nosnippet>87</a>            logits_processors: request.take_logits_processors(),
+<a href=#88 id=88 data-nosnippet>88</a>            return_raw_logits: <span class="bool-val">false</span>,
+<a href=#89 id=89 data-nosnippet>89</a>            web_search_options: request.take_web_search_options(),
+<a href=#90 id=90 data-nosnippet>90</a>            model_id: model_id.map(|s| s.to_string()),
+<a href=#91 id=91 data-nosnippet>91</a>            truncate_sequence,
+<a href=#92 id=92 data-nosnippet>92</a>        }));
 <a href=#93 id=93 data-nosnippet>93</a>
-<a href=#94 id=94 data-nosnippet>94</a>        <span class="kw">let </span>Response::Done(response) =
-<a href=#95 id=95 data-nosnippet>95</a>            rx.recv().<span class="kw">await</span>.context(<span class="string">"Channel was erroneously closed!"</span>)<span class="question-mark">?
-<a href=#96 id=96 data-nosnippet>96</a>        </span><span class="kw">else </span>{
-<a href=#97 id=97 data-nosnippet>97</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"Got unexpected response, expected `Response::Done`"</span>);
-<a href=#98 id=98 data-nosnippet>98</a>        };
-<a href=#99 id=99 data-nosnippet>99</a>
-<a href=#100 id=100 data-nosnippet>100</a>        <span class="prelude-val">Ok</span>(response)
-<a href=#101 id=101 data-nosnippet>101</a>    }
-<a href=#102 id=102 data-nosnippet>102</a>
-<a href=#103 id=103 data-nosnippet>103</a>    <span class="doccomment">/// Get the underlying MistralRs instance.
-<a href=#104 id=104 data-nosnippet>104</a>    </span><span class="kw">pub fn </span>inner(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>MistralRs {
-<a href=#105 id=105 data-nosnippet>105</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.runner
-<a href=#106 id=106 data-nosnippet>106</a>    }
-<a href=#107 id=107 data-nosnippet>107</a>
-<a href=#108 id=108 data-nosnippet>108</a>    <span class="doccomment">/// Get configuration for a specific model.
-<a href=#109 id=109 data-nosnippet>109</a>    </span><span class="kw">pub fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>, model_id: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>str&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;MistralRsConfig, String&gt; {
-<a href=#110 id=110 data-nosnippet>110</a>        <span class="self">self</span>.runner.config(model_id)
-<a href=#111 id=111 data-nosnippet>111</a>    }
-<a href=#112 id=112 data-nosnippet>112</a>}</code></pre></div></section></main></body></html>
+<a href=#94 id=94 data-nosnippet>94</a>        <span class="self">self</span>.runner.get_sender(model_id)<span class="question-mark">?</span>.send(request).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#95 id=95 data-nosnippet>95</a>
+<a href=#96 id=96 data-nosnippet>96</a>        <span class="kw">let </span>Response::Done(response) =
+<a href=#97 id=97 data-nosnippet>97</a>            rx.recv().<span class="kw">await</span>.context(<span class="string">"Channel was erroneously closed!"</span>)<span class="question-mark">?
+<a href=#98 id=98 data-nosnippet>98</a>        </span><span class="kw">else </span>{
+<a href=#99 id=99 data-nosnippet>99</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"Got unexpected response, expected `Response::Done`"</span>);
+<a href=#100 id=100 data-nosnippet>100</a>        };
+<a href=#101 id=101 data-nosnippet>101</a>
+<a href=#102 id=102 data-nosnippet>102</a>        <span class="prelude-val">Ok</span>(response)
+<a href=#103 id=103 data-nosnippet>103</a>    }
+<a href=#104 id=104 data-nosnippet>104</a>
+<a href=#105 id=105 data-nosnippet>105</a>    <span class="doccomment">/// Get the underlying MistralRs instance.
+<a href=#106 id=106 data-nosnippet>106</a>    </span><span class="kw">pub fn </span>inner(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>MistralRs {
+<a href=#107 id=107 data-nosnippet>107</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.runner
+<a href=#108 id=108 data-nosnippet>108</a>    }
+<a href=#109 id=109 data-nosnippet>109</a>
+<a href=#110 id=110 data-nosnippet>110</a>    <span class="doccomment">/// Get configuration for a specific model.
+<a href=#111 id=111 data-nosnippet>111</a>    </span><span class="kw">pub fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>, model_id: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>str&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;MistralRsConfig, String&gt; {
+<a href=#112 id=112 data-nosnippet>112</a>        <span class="self">self</span>.runner.config(model_id)
+<a href=#113 id=113 data-nosnippet>113</a>    }
+<a href=#114 id=114 data-nosnippet>114</a>}</code></pre></div></section></main></body></html>

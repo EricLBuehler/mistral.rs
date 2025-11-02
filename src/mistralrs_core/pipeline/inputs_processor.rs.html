@@ -13,788 +13,792 @@
 <a href=#13 id=13 data-nosnippet>13</a></span><span class="kw">pub enum </span>InputsProcessorType {
 <a href=#14 id=14 data-nosnippet>14</a>    Text,
 <a href=#15 id=15 data-nosnippet>15</a>    Vision,
-<a href=#16 id=16 data-nosnippet>16</a>}
-<a href=#17 id=17 data-nosnippet>17</a>
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">pub struct </span>InputProcessorOutput {
-<a href=#19 id=19 data-nosnippet>19</a>    <span class="kw">pub </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
-<a href=#20 id=20 data-nosnippet>20</a>    <span class="kw">pub </span>seq_indices: Vec&lt;usize&gt;,
-<a href=#21 id=21 data-nosnippet>21</a>}
-<a href=#22 id=22 data-nosnippet>22</a>
-<a href=#23 id=23 data-nosnippet>23</a><span class="doccomment">/// Processor: Prepare inputs for the model (potentially preparing the images if applicable)
-<a href=#24 id=24 data-nosnippet>24</a></span><span class="kw">pub trait </span>InputsProcessor {
-<a href=#25 id=25 data-nosnippet>25</a>    <span class="doccomment">/// This should also enable matmul via f16 if prompt and the sequence length is greater than 32.
-<a href=#26 id=26 data-nosnippet>26</a>    /// Otherwise, matmul via f16 is disabled.
-<a href=#27 id=27 data-nosnippet>27</a>    ///
-<a href=#28 id=28 data-nosnippet>28</a>    /// This should return a type which can be downcasted to the proper type as used in `forward_inputs`
-<a href=#29 id=29 data-nosnippet>29</a>    </span><span class="attr">#[allow(clippy::too_many_arguments)]
-<a href=#30 id=30 data-nosnippet>30</a>    </span><span class="kw">fn </span>process_inputs(
-<a href=#31 id=31 data-nosnippet>31</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#32 id=32 data-nosnippet>32</a>        tokenizer: <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;,
-<a href=#33 id=33 data-nosnippet>33</a>        input_seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-<a href=#34 id=34 data-nosnippet>34</a>        is_prompt: bool,
-<a href=#35 id=35 data-nosnippet>35</a>        is_xlora: bool,
-<a href=#36 id=36 data-nosnippet>36</a>        device: <span class="kw-2">&amp;</span>Device,
-<a href=#37 id=37 data-nosnippet>37</a>        no_kv_cache: bool,
-<a href=#38 id=38 data-nosnippet>38</a>        last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
-<a href=#39 id=39 data-nosnippet>39</a>        return_raw_logits: bool,
-<a href=#40 id=40 data-nosnippet>40</a>        other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
-<a href=#41 id=41 data-nosnippet>41</a>        paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&gt;,
-<a href=#42 id=42 data-nosnippet>42</a>        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
-<a href=#43 id=43 data-nosnippet>43</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;InputProcessorOutput&gt;;
-<a href=#44 id=44 data-nosnippet>44</a>
-<a href=#45 id=45 data-nosnippet>45</a>    <span class="kw">fn </span>get_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; InputsProcessorType;
-<a href=#46 id=46 data-nosnippet>46</a>}
-<a href=#47 id=47 data-nosnippet>47</a>
-<a href=#48 id=48 data-nosnippet>48</a><span class="comment">// ========================= Test models input processor
-<a href=#49 id=49 data-nosnippet>49</a>
-<a href=#50 id=50 data-nosnippet>50</a></span><span class="kw">pub mod </span>text_models_inputs_processor {
-<a href=#51 id=51 data-nosnippet>51</a>    <span class="kw">use </span>std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
-<a href=#52 id=52 data-nosnippet>52</a>
-<a href=#53 id=53 data-nosnippet>53</a>    <span class="kw">use </span>anyhow::Result;
-<a href=#54 id=54 data-nosnippet>54</a>    <span class="kw">use </span>candle_core::{DType, Device, DeviceLocation, Tensor, WithDType};
-<a href=#55 id=55 data-nosnippet>55</a>    <span class="kw">use </span>tokenizers::Tokenizer;
-<a href=#56 id=56 data-nosnippet>56</a>
-<a href=#57 id=57 data-nosnippet>57</a>    <span class="kw">use crate</span>::{
-<a href=#58 id=58 data-nosnippet>58</a>        device_map::DeviceMapper,
-<a href=#59 id=59 data-nosnippet>59</a>        get_mut_arcmutex,
-<a href=#60 id=60 data-nosnippet>60</a>        paged_attention::{BlockEngine, _PAD_SLOT_ID},
-<a href=#61 id=61 data-nosnippet>61</a>        sequence::Sequence,
-<a href=#62 id=62 data-nosnippet>62</a>    };
-<a href=#63 id=63 data-nosnippet>63</a>
-<a href=#64 id=64 data-nosnippet>64</a>    <span class="kw">use super</span>::{InputProcessorOutput, InputsProcessor, InputsProcessorType};
-<a href=#65 id=65 data-nosnippet>65</a>
-<a href=#66 id=66 data-nosnippet>66</a>    <span class="kw">fn </span>_make_tensor_with_pad&lt;D: WithDType&gt;(
-<a href=#67 id=67 data-nosnippet>67</a>        x: Vec&lt;Vec&lt;D&gt;&gt;,
-<a href=#68 id=68 data-nosnippet>68</a>        max_len: usize,
-<a href=#69 id=69 data-nosnippet>69</a>        pad: D,
-<a href=#70 id=70 data-nosnippet>70</a>        device: <span class="kw-2">&amp;</span>Device,
-<a href=#71 id=71 data-nosnippet>71</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#72 id=72 data-nosnippet>72</a>        <span class="kw">let </span><span class="kw-2">mut </span>padded_x = Vec::new();
-<a href=#73 id=73 data-nosnippet>73</a>        <span class="kw">for </span><span class="kw-2">mut </span>x_i <span class="kw">in </span>x {
-<a href=#74 id=74 data-nosnippet>74</a>            <span class="macro">assert!</span>(x_i.len() &lt;= max_len);
-<a href=#75 id=75 data-nosnippet>75</a>            x_i.extend([pad].repeat(max_len - x_i.len()));
-<a href=#76 id=76 data-nosnippet>76</a>            <span class="kw">let </span>shape = (x_i.len(),);
-<a href=#77 id=77 data-nosnippet>77</a>            padded_x.push(Tensor::from_vec(x_i, shape, device)<span class="question-mark">?</span>);
-<a href=#78 id=78 data-nosnippet>78</a>        }
-<a href=#79 id=79 data-nosnippet>79</a>        Tensor::cat(<span class="kw-2">&amp;</span>padded_x[..], <span class="number">0</span>).map_err(anyhow::Error::msg)
-<a href=#80 id=80 data-nosnippet>80</a>    }
-<a href=#81 id=81 data-nosnippet>81</a>
-<a href=#82 id=82 data-nosnippet>82</a>    <span class="kw">pub struct </span>PagedAttentionMeta {
-<a href=#83 id=83 data-nosnippet>83</a>        <span class="kw">pub </span>sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#84 id=84 data-nosnippet>84</a>        <span class="kw">pub </span>block_size: usize,
-<a href=#85 id=85 data-nosnippet>85</a>        <span class="kw">pub </span>block_engine: Arc&lt;tokio::sync::Mutex&lt;BlockEngine&gt;&gt;,
-<a href=#86 id=86 data-nosnippet>86</a>    }
-<a href=#87 id=87 data-nosnippet>87</a>
-<a href=#88 id=88 data-nosnippet>88</a>    <span class="attr">#[derive(Clone, Debug)]
-<a href=#89 id=89 data-nosnippet>89</a>    #[allow(dead_code)]
-<a href=#90 id=90 data-nosnippet>90</a>    </span><span class="kw">pub struct </span>PagedAttentionInputMetadata {
-<a href=#91 id=91 data-nosnippet>91</a>        <span class="kw">pub </span>block_tables: <span class="prelude-ty">Option</span>&lt;HashMap&lt;DeviceLocation, Tensor&gt;&gt;,
-<a href=#92 id=92 data-nosnippet>92</a>        <span class="kw">pub </span>context_lens: <span class="prelude-ty">Option</span>&lt;HashMap&lt;DeviceLocation, Tensor&gt;&gt;,
-<a href=#93 id=93 data-nosnippet>93</a>        <span class="kw">pub </span>slot_mappings: HashMap&lt;DeviceLocation, Tensor&gt;,
-<a href=#94 id=94 data-nosnippet>94</a>        <span class="kw">pub </span>max_context_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#95 id=95 data-nosnippet>95</a>        <span class="kw">pub </span>is_first_prompt_chunk: bool,
-<a href=#96 id=96 data-nosnippet>96</a>    }
-<a href=#97 id=97 data-nosnippet>97</a>
-<a href=#98 id=98 data-nosnippet>98</a>    <span class="kw">impl </span>PagedAttentionInputMetadata {
-<a href=#99 id=99 data-nosnippet>99</a>        <span class="doccomment">/// Create a dummy input metadata, assuming that this will NOT be used for decoding.
-<a href=#100 id=100 data-nosnippet>100</a>        /// This is used for the case of imatrix generation.
-<a href=#101 id=101 data-nosnippet>101</a>        </span><span class="kw">pub fn </span>dummy(dev: <span class="kw-2">&amp;</span>Device) -&gt; candle_core::Result&lt;<span class="self">Self</span>&gt; {
-<a href=#102 id=102 data-nosnippet>102</a>            <span class="prelude-val">Ok</span>(PagedAttentionInputMetadata {
-<a href=#103 id=103 data-nosnippet>103</a>                block_tables: <span class="prelude-val">None</span>,
-<a href=#104 id=104 data-nosnippet>104</a>                context_lens: <span class="prelude-val">None</span>,
-<a href=#105 id=105 data-nosnippet>105</a>                max_context_len: <span class="prelude-val">None</span>,
-<a href=#106 id=106 data-nosnippet>106</a>                slot_mappings: HashMap::from([(dev.location(), Tensor::new(<span class="kw-2">&amp;</span>[<span class="number">0f32</span>], dev)<span class="question-mark">?</span>)]),
-<a href=#107 id=107 data-nosnippet>107</a>                is_first_prompt_chunk: <span class="bool-val">true</span>,
-<a href=#108 id=108 data-nosnippet>108</a>            })
-<a href=#109 id=109 data-nosnippet>109</a>        }
-<a href=#110 id=110 data-nosnippet>110</a>    }
-<a href=#111 id=111 data-nosnippet>111</a>
-<a href=#112 id=112 data-nosnippet>112</a>    <span class="attr">#[derive(Clone, Debug)]
-<a href=#113 id=113 data-nosnippet>113</a>    </span><span class="kw">pub struct </span>FlashParams {
-<a href=#114 id=114 data-nosnippet>114</a>        <span class="kw">pub </span>max_q: u32,
-<a href=#115 id=115 data-nosnippet>115</a>        <span class="kw">pub </span>max_k: u32,
-<a href=#116 id=116 data-nosnippet>116</a>        <span class="kw">pub </span>cumulative_seqlens_q: HashMap&lt;DeviceLocation, Tensor&gt;,
-<a href=#117 id=117 data-nosnippet>117</a>        <span class="kw">pub </span>cumulative_seqlens_k: HashMap&lt;DeviceLocation, Tensor&gt;,
-<a href=#118 id=118 data-nosnippet>118</a>    }
-<a href=#119 id=119 data-nosnippet>119</a>
-<a href=#120 id=120 data-nosnippet>120</a>    <span class="kw">pub struct </span>InputMetadata {
-<a href=#121 id=121 data-nosnippet>121</a>        <span class="kw">pub </span>input: Tensor,
-<a href=#122 id=122 data-nosnippet>122</a>        <span class="kw">pub </span>positions: Vec&lt;usize&gt;,
-<a href=#123 id=123 data-nosnippet>123</a>        <span class="kw">pub </span>context_lens: Vec&lt;(usize, usize)&gt;, <span class="comment">// (start index, len)
-<a href=#124 id=124 data-nosnippet>124</a>        </span><span class="kw">pub </span>position_ids: Vec&lt;usize&gt;,
-<a href=#125 id=125 data-nosnippet>125</a>        <span class="kw">pub </span>paged_attn_meta: <span class="prelude-ty">Option</span>&lt;PagedAttentionInputMetadata&gt;, <span class="comment">// For paged attention
-<a href=#126 id=126 data-nosnippet>126</a>        </span><span class="kw">pub </span>flash_meta: FlashParams,
-<a href=#127 id=127 data-nosnippet>127</a>    }
-<a href=#128 id=128 data-nosnippet>128</a>
-<a href=#129 id=129 data-nosnippet>129</a>    <span class="kw">pub struct </span>InnerInputProcessorOutput {
-<a href=#130 id=130 data-nosnippet>130</a>        <span class="kw">pub </span>inputs: InputMetadata,
-<a href=#131 id=131 data-nosnippet>131</a>        <span class="kw">pub </span>seq_indices: Vec&lt;usize&gt;,
-<a href=#132 id=132 data-nosnippet>132</a>    }
-<a href=#133 id=133 data-nosnippet>133</a>
-<a href=#134 id=134 data-nosnippet>134</a>    <span class="comment">// chunk_offset_toks is the number of tokens by which the tokens are offset,
-<a href=#135 id=135 data-nosnippet>135</a>    // chunk_offset_toks / prompt_chunksize = number of batches
-<a href=#136 id=136 data-nosnippet>136</a>    </span><span class="attr">#[allow(clippy::too_many_arguments)]
-<a href=#137 id=137 data-nosnippet>137</a>    </span><span class="kw">pub fn </span>make_prompt_chunk&lt;T: WithDType + Debug&gt;(
-<a href=#138 id=138 data-nosnippet>138</a>        chunk_offset_toks: usize,
-<a href=#139 id=139 data-nosnippet>139</a>        toks: Vec&lt;<span class="kw-2">&amp;</span>[T]&gt;,
-<a href=#140 id=140 data-nosnippet>140</a>        seq_ids: <span class="kw-2">&amp;</span>[usize],
-<a href=#141 id=141 data-nosnippet>141</a>        device: <span class="kw-2">&amp;</span>Device,
-<a href=#142 id=142 data-nosnippet>142</a>        last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
-<a href=#143 id=143 data-nosnippet>143</a>        return_raw_logits: bool,
-<a href=#144 id=144 data-nosnippet>144</a>        <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&gt;,
-<a href=#145 id=145 data-nosnippet>145</a>        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
-<a href=#146 id=146 data-nosnippet>146</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
-<a href=#147 id=147 data-nosnippet>147</a>        <span class="kw">let </span>max_len = toks
-<a href=#148 id=148 data-nosnippet>148</a>            .iter()
-<a href=#149 id=149 data-nosnippet>149</a>            .map(|seq| seq.len())
-<a href=#150 id=150 data-nosnippet>150</a>            .max()
-<a href=#151 id=151 data-nosnippet>151</a>            .expect(<span class="string">"No sequences"</span>);
-<a href=#152 id=152 data-nosnippet>152</a>        <span class="kw">let </span>padding_tok = T::zero();
-<a href=#153 id=153 data-nosnippet>153</a>        <span class="comment">// Pad each sequence by the padding token to the max len.
-<a href=#154 id=154 data-nosnippet>154</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
-<a href=#155 id=155 data-nosnippet>155</a>        <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
-<a href=#156 id=156 data-nosnippet>156</a>        <span class="kw">let </span><span class="kw-2">mut </span>context_lens = Vec::new();
-<a href=#157 id=157 data-nosnippet>157</a>        <span class="kw">let </span><span class="kw-2">mut </span>position_ids = Vec::new();
-<a href=#158 id=158 data-nosnippet>158</a>        <span class="kw">let </span><span class="kw-2">mut </span>slot_mappings = Vec::new();
-<a href=#159 id=159 data-nosnippet>159</a>        <span class="kw">let </span><span class="kw-2">mut </span>block_tables = Vec::new();
-<a href=#160 id=160 data-nosnippet>160</a>        <span class="kw">let </span><span class="kw-2">mut </span>paged_attn_context_lens = Vec::new();
-<a href=#161 id=161 data-nosnippet>161</a>        <span class="kw">let </span>flash_attn = <span class="kw">crate</span>::using_flash_attn();
-<a href=#162 id=162 data-nosnippet>162</a>        <span class="kw">let </span><span class="kw-2">mut </span>seqlens_q = <span class="kw">if </span>flash_attn { <span class="macro">vec!</span>[<span class="number">0</span>] } <span class="kw">else </span>{ Vec::new() };
-<a href=#163 id=163 data-nosnippet>163</a>        <span class="kw">let </span><span class="kw-2">mut </span>seqlens_k = <span class="kw">if </span>flash_attn { <span class="macro">vec!</span>[<span class="number">0</span>] } <span class="kw">else </span>{ Vec::new() };
-<a href=#164 id=164 data-nosnippet>164</a>        <span class="kw">for </span>(seq_id, ctxt) <span class="kw">in </span>seq_ids.iter().zip(toks) {
-<a href=#165 id=165 data-nosnippet>165</a>            <span class="kw">let </span>prompt_len = ctxt.len();
-<a href=#166 id=166 data-nosnippet>166</a>            <span class="kw">let </span>offset = last_n_context_len.unwrap_or_default();
-<a href=#167 id=167 data-nosnippet>167</a>            seqlen_offsets.push(offset.<span class="number">1 </span>+ chunk_offset_toks);
-<a href=#168 id=168 data-nosnippet>168</a>
-<a href=#169 id=169 data-nosnippet>169</a>            position_ids.push(ctxt.len() + chunk_offset_toks);
-<a href=#170 id=170 data-nosnippet>170</a>            <span class="kw">let </span><span class="kw-2">mut </span>ctxt = ctxt.to_vec();
-<a href=#171 id=171 data-nosnippet>171</a>            ctxt.extend(std::iter::repeat_n(
-<a href=#172 id=172 data-nosnippet>172</a>                padding_tok,
-<a href=#173 id=173 data-nosnippet>173</a>                max_len.saturating_sub(ctxt.len()),
-<a href=#174 id=174 data-nosnippet>174</a>            ));
-<a href=#175 id=175 data-nosnippet>175</a>            <span class="comment">// If we are returning raw logits, we want to not trim the logits at all.
-<a href=#176 id=176 data-nosnippet>176</a>            </span><span class="kw">if </span>return_raw_logits {
-<a href=#177 id=177 data-nosnippet>177</a>                <span class="kw">if </span>last_n_context_len.is_some() {
-<a href=#178 id=178 data-nosnippet>178</a>                    <span class="macro">anyhow::bail!</span>(<span class="string">"`return_raw_logits` is incompatible with `last_n_context_len`"</span>);
-<a href=#179 id=179 data-nosnippet>179</a>                }
-<a href=#180 id=180 data-nosnippet>180</a>
-<a href=#181 id=181 data-nosnippet>181</a>                context_lens.push((<span class="number">0</span>, ctxt.len()));
-<a href=#182 id=182 data-nosnippet>182</a>            } <span class="kw">else </span>{
-<a href=#183 id=183 data-nosnippet>183</a>                context_lens.push((
-<a href=#184 id=184 data-nosnippet>184</a>                    ctxt.len()
-<a href=#185 id=185 data-nosnippet>185</a>                        .saturating_sub(last_n_context_len.map(|(a, <span class="kw">_</span>)| a).unwrap_or(<span class="number">1</span>)),
-<a href=#186 id=186 data-nosnippet>186</a>                    last_n_context_len.map(|(a, <span class="kw">_</span>)| a).unwrap_or(<span class="number">1</span>),
-<a href=#187 id=187 data-nosnippet>187</a>                ));
-<a href=#188 id=188 data-nosnippet>188</a>            }
-<a href=#189 id=189 data-nosnippet>189</a>
-<a href=#190 id=190 data-nosnippet>190</a>            <span class="kw">if </span>flash_attn {
-<a href=#191 id=191 data-nosnippet>191</a>                seqlens_q.push(ctxt.len() <span class="kw">as </span>u32);
-<a href=#192 id=192 data-nosnippet>192</a>                seqlens_k.push((ctxt.len() + chunk_offset_toks) <span class="kw">as </span>u32);
-<a href=#193 id=193 data-nosnippet>193</a>            }
-<a href=#194 id=194 data-nosnippet>194</a>
-<a href=#195 id=195 data-nosnippet>195</a>            seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
+<a href=#16 id=16 data-nosnippet>16</a>    Embedding,
+<a href=#17 id=17 data-nosnippet>17</a>}
+<a href=#18 id=18 data-nosnippet>18</a>
+<a href=#19 id=19 data-nosnippet>19</a><span class="kw">pub struct </span>InputProcessorOutput {
+<a href=#20 id=20 data-nosnippet>20</a>    <span class="kw">pub </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
+<a href=#21 id=21 data-nosnippet>21</a>    <span class="kw">pub </span>seq_indices: Vec&lt;usize&gt;,
+<a href=#22 id=22 data-nosnippet>22</a>}
+<a href=#23 id=23 data-nosnippet>23</a>
+<a href=#24 id=24 data-nosnippet>24</a><span class="doccomment">/// Processor: Prepare inputs for the model (potentially preparing the images if applicable)
+<a href=#25 id=25 data-nosnippet>25</a></span><span class="kw">pub trait </span>InputsProcessor {
+<a href=#26 id=26 data-nosnippet>26</a>    <span class="doccomment">/// This should also enable matmul via f16 if prompt and the sequence length is greater than 32.
+<a href=#27 id=27 data-nosnippet>27</a>    /// Otherwise, matmul via f16 is disabled.
+<a href=#28 id=28 data-nosnippet>28</a>    ///
+<a href=#29 id=29 data-nosnippet>29</a>    /// This should return a type which can be downcasted to the proper type as used in `forward_inputs`
+<a href=#30 id=30 data-nosnippet>30</a>    </span><span class="attr">#[allow(clippy::too_many_arguments)]
+<a href=#31 id=31 data-nosnippet>31</a>    </span><span class="kw">fn </span>process_inputs(
+<a href=#32 id=32 data-nosnippet>32</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#33 id=33 data-nosnippet>33</a>        tokenizer: <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;,
+<a href=#34 id=34 data-nosnippet>34</a>        input_seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+<a href=#35 id=35 data-nosnippet>35</a>        is_prompt: bool,
+<a href=#36 id=36 data-nosnippet>36</a>        is_xlora: bool,
+<a href=#37 id=37 data-nosnippet>37</a>        device: <span class="kw-2">&amp;</span>Device,
+<a href=#38 id=38 data-nosnippet>38</a>        no_kv_cache: bool,
+<a href=#39 id=39 data-nosnippet>39</a>        last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+<a href=#40 id=40 data-nosnippet>40</a>        return_raw_logits: bool,
+<a href=#41 id=41 data-nosnippet>41</a>        other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
+<a href=#42 id=42 data-nosnippet>42</a>        paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&gt;,
+<a href=#43 id=43 data-nosnippet>43</a>        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
+<a href=#44 id=44 data-nosnippet>44</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;InputProcessorOutput&gt;;
+<a href=#45 id=45 data-nosnippet>45</a>
+<a href=#46 id=46 data-nosnippet>46</a>    <span class="kw">fn </span>get_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; InputsProcessorType;
+<a href=#47 id=47 data-nosnippet>47</a>}
+<a href=#48 id=48 data-nosnippet>48</a>
+<a href=#49 id=49 data-nosnippet>49</a><span class="comment">// ========================= Test models input processor
+<a href=#50 id=50 data-nosnippet>50</a>
+<a href=#51 id=51 data-nosnippet>51</a></span><span class="kw">pub mod </span>text_models_inputs_processor {
+<a href=#52 id=52 data-nosnippet>52</a>    <span class="kw">use </span>std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
+<a href=#53 id=53 data-nosnippet>53</a>
+<a href=#54 id=54 data-nosnippet>54</a>    <span class="kw">use </span>anyhow::Result;
+<a href=#55 id=55 data-nosnippet>55</a>    <span class="kw">use </span>candle_core::{DType, Device, DeviceLocation, Tensor, WithDType};
+<a href=#56 id=56 data-nosnippet>56</a>    <span class="kw">use </span>tokenizers::Tokenizer;
+<a href=#57 id=57 data-nosnippet>57</a>
+<a href=#58 id=58 data-nosnippet>58</a>    <span class="kw">use crate</span>::{
+<a href=#59 id=59 data-nosnippet>59</a>        device_map::DeviceMapper,
+<a href=#60 id=60 data-nosnippet>60</a>        get_mut_arcmutex,
+<a href=#61 id=61 data-nosnippet>61</a>        paged_attention::{BlockEngine, _PAD_SLOT_ID},
+<a href=#62 id=62 data-nosnippet>62</a>        sequence::Sequence,
+<a href=#63 id=63 data-nosnippet>63</a>    };
+<a href=#64 id=64 data-nosnippet>64</a>
+<a href=#65 id=65 data-nosnippet>65</a>    <span class="kw">use super</span>::{InputProcessorOutput, InputsProcessor, InputsProcessorType};
+<a href=#66 id=66 data-nosnippet>66</a>
+<a href=#67 id=67 data-nosnippet>67</a>    <span class="kw">fn </span>_make_tensor_with_pad&lt;D: WithDType&gt;(
+<a href=#68 id=68 data-nosnippet>68</a>        x: Vec&lt;Vec&lt;D&gt;&gt;,
+<a href=#69 id=69 data-nosnippet>69</a>        max_len: usize,
+<a href=#70 id=70 data-nosnippet>70</a>        pad: D,
+<a href=#71 id=71 data-nosnippet>71</a>        device: <span class="kw-2">&amp;</span>Device,
+<a href=#72 id=72 data-nosnippet>72</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#73 id=73 data-nosnippet>73</a>        <span class="kw">let </span><span class="kw-2">mut </span>padded_x = Vec::new();
+<a href=#74 id=74 data-nosnippet>74</a>        <span class="kw">for </span><span class="kw-2">mut </span>x_i <span class="kw">in </span>x {
+<a href=#75 id=75 data-nosnippet>75</a>            <span class="macro">assert!</span>(x_i.len() &lt;= max_len);
+<a href=#76 id=76 data-nosnippet>76</a>            x_i.extend([pad].repeat(max_len - x_i.len()));
+<a href=#77 id=77 data-nosnippet>77</a>            <span class="kw">let </span>shape = (x_i.len(),);
+<a href=#78 id=78 data-nosnippet>78</a>            padded_x.push(Tensor::from_vec(x_i, shape, device)<span class="question-mark">?</span>);
+<a href=#79 id=79 data-nosnippet>79</a>        }
+<a href=#80 id=80 data-nosnippet>80</a>        Tensor::cat(<span class="kw-2">&amp;</span>padded_x[..], <span class="number">0</span>).map_err(anyhow::Error::msg)
+<a href=#81 id=81 data-nosnippet>81</a>    }
+<a href=#82 id=82 data-nosnippet>82</a>
+<a href=#83 id=83 data-nosnippet>83</a>    <span class="kw">pub struct </span>PagedAttentionMeta {
+<a href=#84 id=84 data-nosnippet>84</a>        <span class="kw">pub </span>sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#85 id=85 data-nosnippet>85</a>        <span class="kw">pub </span>block_size: usize,
+<a href=#86 id=86 data-nosnippet>86</a>        <span class="kw">pub </span>block_engine: Arc&lt;tokio::sync::Mutex&lt;BlockEngine&gt;&gt;,
+<a href=#87 id=87 data-nosnippet>87</a>    }
+<a href=#88 id=88 data-nosnippet>88</a>
+<a href=#89 id=89 data-nosnippet>89</a>    <span class="attr">#[derive(Clone, Debug)]
+<a href=#90 id=90 data-nosnippet>90</a>    #[allow(dead_code)]
+<a href=#91 id=91 data-nosnippet>91</a>    </span><span class="kw">pub struct </span>PagedAttentionInputMetadata {
+<a href=#92 id=92 data-nosnippet>92</a>        <span class="kw">pub </span>block_tables: <span class="prelude-ty">Option</span>&lt;HashMap&lt;DeviceLocation, Tensor&gt;&gt;,
+<a href=#93 id=93 data-nosnippet>93</a>        <span class="kw">pub </span>context_lens: <span class="prelude-ty">Option</span>&lt;HashMap&lt;DeviceLocation, Tensor&gt;&gt;,
+<a href=#94 id=94 data-nosnippet>94</a>        <span class="kw">pub </span>slot_mappings: HashMap&lt;DeviceLocation, Tensor&gt;,
+<a href=#95 id=95 data-nosnippet>95</a>        <span class="kw">pub </span>max_context_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#96 id=96 data-nosnippet>96</a>        <span class="kw">pub </span>is_first_prompt_chunk: bool,
+<a href=#97 id=97 data-nosnippet>97</a>    }
+<a href=#98 id=98 data-nosnippet>98</a>
+<a href=#99 id=99 data-nosnippet>99</a>    <span class="kw">impl </span>PagedAttentionInputMetadata {
+<a href=#100 id=100 data-nosnippet>100</a>        <span class="doccomment">/// Create a dummy input metadata, assuming that this will NOT be used for decoding.
+<a href=#101 id=101 data-nosnippet>101</a>        /// This is used for the case of imatrix generation.
+<a href=#102 id=102 data-nosnippet>102</a>        </span><span class="kw">pub fn </span>dummy(dev: <span class="kw-2">&amp;</span>Device) -&gt; candle_core::Result&lt;<span class="self">Self</span>&gt; {
+<a href=#103 id=103 data-nosnippet>103</a>            <span class="prelude-val">Ok</span>(PagedAttentionInputMetadata {
+<a href=#104 id=104 data-nosnippet>104</a>                block_tables: <span class="prelude-val">None</span>,
+<a href=#105 id=105 data-nosnippet>105</a>                context_lens: <span class="prelude-val">None</span>,
+<a href=#106 id=106 data-nosnippet>106</a>                max_context_len: <span class="prelude-val">None</span>,
+<a href=#107 id=107 data-nosnippet>107</a>                slot_mappings: HashMap::from([(dev.location(), Tensor::new(<span class="kw-2">&amp;</span>[<span class="number">0f32</span>], dev)<span class="question-mark">?</span>)]),
+<a href=#108 id=108 data-nosnippet>108</a>                is_first_prompt_chunk: <span class="bool-val">true</span>,
+<a href=#109 id=109 data-nosnippet>109</a>            })
+<a href=#110 id=110 data-nosnippet>110</a>        }
+<a href=#111 id=111 data-nosnippet>111</a>    }
+<a href=#112 id=112 data-nosnippet>112</a>
+<a href=#113 id=113 data-nosnippet>113</a>    <span class="attr">#[derive(Clone, Debug)]
+<a href=#114 id=114 data-nosnippet>114</a>    </span><span class="kw">pub struct </span>FlashParams {
+<a href=#115 id=115 data-nosnippet>115</a>        <span class="kw">pub </span>max_q: u32,
+<a href=#116 id=116 data-nosnippet>116</a>        <span class="kw">pub </span>max_k: u32,
+<a href=#117 id=117 data-nosnippet>117</a>        <span class="kw">pub </span>cumulative_seqlens_q: HashMap&lt;DeviceLocation, Tensor&gt;,
+<a href=#118 id=118 data-nosnippet>118</a>        <span class="kw">pub </span>cumulative_seqlens_k: HashMap&lt;DeviceLocation, Tensor&gt;,
+<a href=#119 id=119 data-nosnippet>119</a>        <span class="kw">pub </span>causal: bool,
+<a href=#120 id=120 data-nosnippet>120</a>    }
+<a href=#121 id=121 data-nosnippet>121</a>
+<a href=#122 id=122 data-nosnippet>122</a>    <span class="kw">pub struct </span>InputMetadata {
+<a href=#123 id=123 data-nosnippet>123</a>        <span class="kw">pub </span>input: Tensor,
+<a href=#124 id=124 data-nosnippet>124</a>        <span class="kw">pub </span>positions: Vec&lt;usize&gt;,
+<a href=#125 id=125 data-nosnippet>125</a>        <span class="kw">pub </span>context_lens: Vec&lt;(usize, usize)&gt;, <span class="comment">// (start index, len)
+<a href=#126 id=126 data-nosnippet>126</a>        </span><span class="kw">pub </span>position_ids: Vec&lt;usize&gt;,
+<a href=#127 id=127 data-nosnippet>127</a>        <span class="kw">pub </span>paged_attn_meta: <span class="prelude-ty">Option</span>&lt;PagedAttentionInputMetadata&gt;, <span class="comment">// For paged attention
+<a href=#128 id=128 data-nosnippet>128</a>        </span><span class="kw">pub </span>flash_meta: FlashParams,
+<a href=#129 id=129 data-nosnippet>129</a>    }
+<a href=#130 id=130 data-nosnippet>130</a>
+<a href=#131 id=131 data-nosnippet>131</a>    <span class="kw">pub struct </span>InnerInputProcessorOutput {
+<a href=#132 id=132 data-nosnippet>132</a>        <span class="kw">pub </span>inputs: InputMetadata,
+<a href=#133 id=133 data-nosnippet>133</a>        <span class="kw">pub </span>seq_indices: Vec&lt;usize&gt;,
+<a href=#134 id=134 data-nosnippet>134</a>    }
+<a href=#135 id=135 data-nosnippet>135</a>
+<a href=#136 id=136 data-nosnippet>136</a>    <span class="comment">// chunk_offset_toks is the number of tokens by which the tokens are offset,
+<a href=#137 id=137 data-nosnippet>137</a>    // chunk_offset_toks / prompt_chunksize = number of batches
+<a href=#138 id=138 data-nosnippet>138</a>    </span><span class="attr">#[allow(clippy::too_many_arguments)]
+<a href=#139 id=139 data-nosnippet>139</a>    </span><span class="kw">pub fn </span>make_prompt_chunk&lt;T: WithDType + Debug&gt;(
+<a href=#140 id=140 data-nosnippet>140</a>        chunk_offset_toks: usize,
+<a href=#141 id=141 data-nosnippet>141</a>        toks: Vec&lt;<span class="kw-2">&amp;</span>[T]&gt;,
+<a href=#142 id=142 data-nosnippet>142</a>        seq_ids: <span class="kw-2">&amp;</span>[usize],
+<a href=#143 id=143 data-nosnippet>143</a>        device: <span class="kw-2">&amp;</span>Device,
+<a href=#144 id=144 data-nosnippet>144</a>        last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+<a href=#145 id=145 data-nosnippet>145</a>        return_raw_logits: bool,
+<a href=#146 id=146 data-nosnippet>146</a>        <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&gt;,
+<a href=#147 id=147 data-nosnippet>147</a>        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
+<a href=#148 id=148 data-nosnippet>148</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
+<a href=#149 id=149 data-nosnippet>149</a>        <span class="kw">let </span>max_len = toks
+<a href=#150 id=150 data-nosnippet>150</a>            .iter()
+<a href=#151 id=151 data-nosnippet>151</a>            .map(|seq| seq.len())
+<a href=#152 id=152 data-nosnippet>152</a>            .max()
+<a href=#153 id=153 data-nosnippet>153</a>            .expect(<span class="string">"No sequences"</span>);
+<a href=#154 id=154 data-nosnippet>154</a>        <span class="kw">let </span>padding_tok = T::zero();
+<a href=#155 id=155 data-nosnippet>155</a>        <span class="comment">// Pad each sequence by the padding token to the max len.
+<a href=#156 id=156 data-nosnippet>156</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
+<a href=#157 id=157 data-nosnippet>157</a>        <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
+<a href=#158 id=158 data-nosnippet>158</a>        <span class="kw">let </span><span class="kw-2">mut </span>context_lens = Vec::new();
+<a href=#159 id=159 data-nosnippet>159</a>        <span class="kw">let </span><span class="kw-2">mut </span>position_ids = Vec::new();
+<a href=#160 id=160 data-nosnippet>160</a>        <span class="kw">let </span><span class="kw-2">mut </span>slot_mappings = Vec::new();
+<a href=#161 id=161 data-nosnippet>161</a>        <span class="kw">let </span><span class="kw-2">mut </span>block_tables = Vec::new();
+<a href=#162 id=162 data-nosnippet>162</a>        <span class="kw">let </span><span class="kw-2">mut </span>paged_attn_context_lens = Vec::new();
+<a href=#163 id=163 data-nosnippet>163</a>        <span class="kw">let </span>flash_attn = <span class="kw">crate</span>::using_flash_attn();
+<a href=#164 id=164 data-nosnippet>164</a>        <span class="kw">let </span><span class="kw-2">mut </span>seqlens_q = <span class="kw">if </span>flash_attn { <span class="macro">vec!</span>[<span class="number">0</span>] } <span class="kw">else </span>{ Vec::new() };
+<a href=#165 id=165 data-nosnippet>165</a>        <span class="kw">let </span><span class="kw-2">mut </span>seqlens_k = <span class="kw">if </span>flash_attn { <span class="macro">vec!</span>[<span class="number">0</span>] } <span class="kw">else </span>{ Vec::new() };
+<a href=#166 id=166 data-nosnippet>166</a>        <span class="kw">for </span>(seq_id, ctxt) <span class="kw">in </span>seq_ids.iter().zip(toks) {
+<a href=#167 id=167 data-nosnippet>167</a>            <span class="kw">let </span>prompt_len = ctxt.len();
+<a href=#168 id=168 data-nosnippet>168</a>            <span class="kw">let </span>offset = last_n_context_len.unwrap_or_default();
+<a href=#169 id=169 data-nosnippet>169</a>            seqlen_offsets.push(offset.<span class="number">1 </span>+ chunk_offset_toks);
+<a href=#170 id=170 data-nosnippet>170</a>
+<a href=#171 id=171 data-nosnippet>171</a>            position_ids.push(ctxt.len() + chunk_offset_toks);
+<a href=#172 id=172 data-nosnippet>172</a>            <span class="kw">let </span><span class="kw-2">mut </span>ctxt = ctxt.to_vec();
+<a href=#173 id=173 data-nosnippet>173</a>            ctxt.extend(std::iter::repeat_n(
+<a href=#174 id=174 data-nosnippet>174</a>                padding_tok,
+<a href=#175 id=175 data-nosnippet>175</a>                max_len.saturating_sub(ctxt.len()),
+<a href=#176 id=176 data-nosnippet>176</a>            ));
+<a href=#177 id=177 data-nosnippet>177</a>            <span class="comment">// If we are returning raw logits, we want to not trim the logits at all.
+<a href=#178 id=178 data-nosnippet>178</a>            </span><span class="kw">if </span>return_raw_logits {
+<a href=#179 id=179 data-nosnippet>179</a>                <span class="kw">if </span>last_n_context_len.is_some() {
+<a href=#180 id=180 data-nosnippet>180</a>                    <span class="macro">anyhow::bail!</span>(<span class="string">"`return_raw_logits` is incompatible with `last_n_context_len`"</span>);
+<a href=#181 id=181 data-nosnippet>181</a>                }
+<a href=#182 id=182 data-nosnippet>182</a>
+<a href=#183 id=183 data-nosnippet>183</a>                context_lens.push((<span class="number">0</span>, ctxt.len()));
+<a href=#184 id=184 data-nosnippet>184</a>            } <span class="kw">else </span>{
+<a href=#185 id=185 data-nosnippet>185</a>                context_lens.push((
+<a href=#186 id=186 data-nosnippet>186</a>                    ctxt.len()
+<a href=#187 id=187 data-nosnippet>187</a>                        .saturating_sub(last_n_context_len.map(|(a, <span class="kw">_</span>)| a).unwrap_or(<span class="number">1</span>)),
+<a href=#188 id=188 data-nosnippet>188</a>                    last_n_context_len.map(|(a, <span class="kw">_</span>)| a).unwrap_or(<span class="number">1</span>),
+<a href=#189 id=189 data-nosnippet>189</a>                ));
+<a href=#190 id=190 data-nosnippet>190</a>            }
+<a href=#191 id=191 data-nosnippet>191</a>
+<a href=#192 id=192 data-nosnippet>192</a>            <span class="kw">if </span>flash_attn {
+<a href=#193 id=193 data-nosnippet>193</a>                seqlens_q.push(ctxt.len() <span class="kw">as </span>u32);
+<a href=#194 id=194 data-nosnippet>194</a>                seqlens_k.push((ctxt.len() + chunk_offset_toks) <span class="kw">as </span>u32);
+<a href=#195 id=195 data-nosnippet>195</a>            }
 <a href=#196 id=196 data-nosnippet>196</a>
-<a href=#197 id=197 data-nosnippet>197</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_metadata) = <span class="kw-2">&amp;mut </span>paged_attn_metadata {
-<a href=#198 id=198 data-nosnippet>198</a>                <span class="kw">let </span>block_engine = <span class="macro">get_mut_arcmutex!</span>(paged_attn_metadata.block_engine);
-<a href=#199 id=199 data-nosnippet>199</a>                <span class="kw">let </span>table = block_engine.block_tables.get(seq_id);
-<a href=#200 id=200 data-nosnippet>200</a>
-<a href=#201 id=201 data-nosnippet>201</a>                <span class="kw">if </span>table.is_none() {
-<a href=#202 id=202 data-nosnippet>202</a>                    <span class="comment">// Will be None during profiling.
-<a href=#203 id=203 data-nosnippet>203</a>                    </span>slot_mappings.push([_PAD_SLOT_ID].repeat(prompt_len));
-<a href=#204 id=204 data-nosnippet>204</a>                    <span class="kw">continue</span>;
-<a href=#205 id=205 data-nosnippet>205</a>                }
-<a href=#206 id=206 data-nosnippet>206</a>                <span class="kw">let </span>table = table
-<a href=#207 id=207 data-nosnippet>207</a>                    .unwrap()
-<a href=#208 id=208 data-nosnippet>208</a>                    .iter()
-<a href=#209 id=209 data-nosnippet>209</a>                    .map(|block| block.deref_mut().block_id)
-<a href=#210 id=210 data-nosnippet>210</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#211 id=211 data-nosnippet>211</a>
-<a href=#212 id=212 data-nosnippet>212</a>                <span class="kw">let </span>start_idx = <span class="kw">if let </span><span class="prelude-val">Some</span>(sliding_window) = paged_attn_metadata.sliding_window {
-<a href=#213 id=213 data-nosnippet>213</a>                    prompt_len.saturating_sub(sliding_window)
-<a href=#214 id=214 data-nosnippet>214</a>                } <span class="kw">else </span>{
-<a href=#215 id=215 data-nosnippet>215</a>                    <span class="number">0
-<a href=#216 id=216 data-nosnippet>216</a>                </span>};
-<a href=#217 id=217 data-nosnippet>217</a>
-<a href=#218 id=218 data-nosnippet>218</a>                <span class="kw">let </span><span class="kw-2">mut </span>slot_mapping = Vec::new();
-<a href=#219 id=219 data-nosnippet>219</a>                <span class="kw">let </span><span class="kw-2">mut </span>ctxt_len = Vec::new();
-<a href=#220 id=220 data-nosnippet>220</a>                <span class="kw">for </span>i <span class="kw">in </span>chunk_offset_toks..prompt_len + chunk_offset_toks {
-<a href=#221 id=221 data-nosnippet>221</a>                    <span class="kw">if </span>i &lt; start_idx {
-<a href=#222 id=222 data-nosnippet>222</a>                        <span class="comment">// Pad [0,start_idx) with _PAD_TOKEN_ID
-<a href=#223 id=223 data-nosnippet>223</a>                        </span>slot_mapping.push(_PAD_SLOT_ID);
-<a href=#224 id=224 data-nosnippet>224</a>                    }
-<a href=#225 id=225 data-nosnippet>225</a>                    ctxt_len.push(i);
-<a href=#226 id=226 data-nosnippet>226</a>
-<a href=#227 id=227 data-nosnippet>227</a>                    <span class="kw">let </span>block_number = <span class="kw">if </span>i / paged_attn_metadata.block_size &gt;= table.len() {
-<a href=#228 id=228 data-nosnippet>228</a>                        <span class="macro">panic!</span>(
-<a href=#229 id=229 data-nosnippet>229</a>                            <span class="string">"Block table is too small (prompt)! i={} block_size={} table_len={}"</span>,
-<a href=#230 id=230 data-nosnippet>230</a>                            i,
-<a href=#231 id=231 data-nosnippet>231</a>                            paged_attn_metadata.block_size,
-<a href=#232 id=232 data-nosnippet>232</a>                            table.len()
-<a href=#233 id=233 data-nosnippet>233</a>                        );
-<a href=#234 id=234 data-nosnippet>234</a>                    } <span class="kw">else </span>{
-<a href=#235 id=235 data-nosnippet>235</a>                        table.get(i / paged_attn_metadata.block_size).unwrap()
-<a href=#236 id=236 data-nosnippet>236</a>                    };
-<a href=#237 id=237 data-nosnippet>237</a>                    <span class="kw">let </span>block_offset = i % paged_attn_metadata.block_size;
-<a href=#238 id=238 data-nosnippet>238</a>                    <span class="kw">let </span>slot = block_number * paged_attn_metadata.block_size + block_offset;
-<a href=#239 id=239 data-nosnippet>239</a>                    slot_mapping.push(slot.try_into().unwrap());
-<a href=#240 id=240 data-nosnippet>240</a>                    block_tables.push(table.clone());
-<a href=#241 id=241 data-nosnippet>241</a>                }
-<a href=#242 id=242 data-nosnippet>242</a>                slot_mappings.push(slot_mapping);
-<a href=#243 id=243 data-nosnippet>243</a>                paged_attn_context_lens.push(ctxt_len);
-<a href=#244 id=244 data-nosnippet>244</a>            }
-<a href=#245 id=245 data-nosnippet>245</a>        }
-<a href=#246 id=246 data-nosnippet>246</a>
-<a href=#247 id=247 data-nosnippet>247</a>        <span class="kw">let </span>(max_q, max_k, seqlens_q_map, seqlens_k_map) = <span class="kw">if </span>flash_attn {
-<a href=#248 id=248 data-nosnippet>248</a>            <span class="kw">let </span>max_q = <span class="kw-2">*</span>seqlens_q.iter().max().unwrap();
-<a href=#249 id=249 data-nosnippet>249</a>            <span class="kw">let </span>max_k = <span class="kw-2">*</span>seqlens_k.iter().max().unwrap();
-<a href=#250 id=250 data-nosnippet>250</a>            <span class="kw">let </span>seqlens_q = Tensor::new(seqlens_q, device)<span class="question-mark">?
-<a href=#251 id=251 data-nosnippet>251</a>                </span>.to_dtype(DType::F32)<span class="question-mark">?
-<a href=#252 id=252 data-nosnippet>252</a>                </span>.cumsum(<span class="number">0</span>)<span class="question-mark">?
-<a href=#253 id=253 data-nosnippet>253</a>                </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
-<a href=#254 id=254 data-nosnippet>254</a>            <span class="kw">let </span>seqlens_k = Tensor::new(seqlens_k, device)<span class="question-mark">?
-<a href=#255 id=255 data-nosnippet>255</a>                </span>.to_dtype(DType::F32)<span class="question-mark">?
-<a href=#256 id=256 data-nosnippet>256</a>                </span>.cumsum(<span class="number">0</span>)<span class="question-mark">?
-<a href=#257 id=257 data-nosnippet>257</a>                </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
-<a href=#258 id=258 data-nosnippet>258</a>
-<a href=#259 id=259 data-nosnippet>259</a>            <span class="kw">let </span><span class="kw-2">mut </span>seqlens_q_map = HashMap::new();
-<a href=#260 id=260 data-nosnippet>260</a>            <span class="kw">let </span><span class="kw-2">mut </span>seqlens_k_map = HashMap::new();
-<a href=#261 id=261 data-nosnippet>261</a>
-<a href=#262 id=262 data-nosnippet>262</a>            <span class="kw">let </span>devices = mapper.unwrap().get_unique_devices();
-<a href=#263 id=263 data-nosnippet>263</a>            <span class="kw">for </span>device <span class="kw">in </span>devices {
-<a href=#264 id=264 data-nosnippet>264</a>                seqlens_q_map.insert(device.location(), seqlens_q.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
-<a href=#265 id=265 data-nosnippet>265</a>                seqlens_k_map.insert(device.location(), seqlens_k.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
-<a href=#266 id=266 data-nosnippet>266</a>            }
-<a href=#267 id=267 data-nosnippet>267</a>            (max_q, max_k, seqlens_q_map, seqlens_k_map)
-<a href=#268 id=268 data-nosnippet>268</a>        } <span class="kw">else </span>{
-<a href=#269 id=269 data-nosnippet>269</a>            (<span class="number">0</span>, <span class="number">0</span>, HashMap::new(), HashMap::new())
-<a href=#270 id=270 data-nosnippet>270</a>        };
-<a href=#271 id=271 data-nosnippet>271</a>
-<a href=#272 id=272 data-nosnippet>272</a>        <span class="kw">let </span>input = Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap();
+<a href=#197 id=197 data-nosnippet>197</a>            seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
+<a href=#198 id=198 data-nosnippet>198</a>
+<a href=#199 id=199 data-nosnippet>199</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_metadata) = <span class="kw-2">&amp;mut </span>paged_attn_metadata {
+<a href=#200 id=200 data-nosnippet>200</a>                <span class="kw">let </span>block_engine = <span class="macro">get_mut_arcmutex!</span>(paged_attn_metadata.block_engine);
+<a href=#201 id=201 data-nosnippet>201</a>                <span class="kw">let </span>table = block_engine.block_tables.get(seq_id);
+<a href=#202 id=202 data-nosnippet>202</a>
+<a href=#203 id=203 data-nosnippet>203</a>                <span class="kw">if </span>table.is_none() {
+<a href=#204 id=204 data-nosnippet>204</a>                    <span class="comment">// Will be None during profiling.
+<a href=#205 id=205 data-nosnippet>205</a>                    </span>slot_mappings.push([_PAD_SLOT_ID].repeat(prompt_len));
+<a href=#206 id=206 data-nosnippet>206</a>                    <span class="kw">continue</span>;
+<a href=#207 id=207 data-nosnippet>207</a>                }
+<a href=#208 id=208 data-nosnippet>208</a>                <span class="kw">let </span>table = table
+<a href=#209 id=209 data-nosnippet>209</a>                    .unwrap()
+<a href=#210 id=210 data-nosnippet>210</a>                    .iter()
+<a href=#211 id=211 data-nosnippet>211</a>                    .map(|block| block.deref_mut().block_id)
+<a href=#212 id=212 data-nosnippet>212</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#213 id=213 data-nosnippet>213</a>
+<a href=#214 id=214 data-nosnippet>214</a>                <span class="kw">let </span>start_idx = <span class="kw">if let </span><span class="prelude-val">Some</span>(sliding_window) = paged_attn_metadata.sliding_window {
+<a href=#215 id=215 data-nosnippet>215</a>                    prompt_len.saturating_sub(sliding_window)
+<a href=#216 id=216 data-nosnippet>216</a>                } <span class="kw">else </span>{
+<a href=#217 id=217 data-nosnippet>217</a>                    <span class="number">0
+<a href=#218 id=218 data-nosnippet>218</a>                </span>};
+<a href=#219 id=219 data-nosnippet>219</a>
+<a href=#220 id=220 data-nosnippet>220</a>                <span class="kw">let </span><span class="kw-2">mut </span>slot_mapping = Vec::new();
+<a href=#221 id=221 data-nosnippet>221</a>                <span class="kw">let </span><span class="kw-2">mut </span>ctxt_len = Vec::new();
+<a href=#222 id=222 data-nosnippet>222</a>                <span class="kw">for </span>i <span class="kw">in </span>chunk_offset_toks..prompt_len + chunk_offset_toks {
+<a href=#223 id=223 data-nosnippet>223</a>                    <span class="kw">if </span>i &lt; start_idx {
+<a href=#224 id=224 data-nosnippet>224</a>                        <span class="comment">// Pad [0,start_idx) with _PAD_TOKEN_ID
+<a href=#225 id=225 data-nosnippet>225</a>                        </span>slot_mapping.push(_PAD_SLOT_ID);
+<a href=#226 id=226 data-nosnippet>226</a>                    }
+<a href=#227 id=227 data-nosnippet>227</a>                    ctxt_len.push(i);
+<a href=#228 id=228 data-nosnippet>228</a>
+<a href=#229 id=229 data-nosnippet>229</a>                    <span class="kw">let </span>block_number = <span class="kw">if </span>i / paged_attn_metadata.block_size &gt;= table.len() {
+<a href=#230 id=230 data-nosnippet>230</a>                        <span class="macro">panic!</span>(
+<a href=#231 id=231 data-nosnippet>231</a>                            <span class="string">"Block table is too small (prompt)! i={} block_size={} table_len={}"</span>,
+<a href=#232 id=232 data-nosnippet>232</a>                            i,
+<a href=#233 id=233 data-nosnippet>233</a>                            paged_attn_metadata.block_size,
+<a href=#234 id=234 data-nosnippet>234</a>                            table.len()
+<a href=#235 id=235 data-nosnippet>235</a>                        );
+<a href=#236 id=236 data-nosnippet>236</a>                    } <span class="kw">else </span>{
+<a href=#237 id=237 data-nosnippet>237</a>                        table.get(i / paged_attn_metadata.block_size).unwrap()
+<a href=#238 id=238 data-nosnippet>238</a>                    };
+<a href=#239 id=239 data-nosnippet>239</a>                    <span class="kw">let </span>block_offset = i % paged_attn_metadata.block_size;
+<a href=#240 id=240 data-nosnippet>240</a>                    <span class="kw">let </span>slot = block_number * paged_attn_metadata.block_size + block_offset;
+<a href=#241 id=241 data-nosnippet>241</a>                    slot_mapping.push(slot.try_into().unwrap());
+<a href=#242 id=242 data-nosnippet>242</a>                    block_tables.push(table.clone());
+<a href=#243 id=243 data-nosnippet>243</a>                }
+<a href=#244 id=244 data-nosnippet>244</a>                slot_mappings.push(slot_mapping);
+<a href=#245 id=245 data-nosnippet>245</a>                paged_attn_context_lens.push(ctxt_len);
+<a href=#246 id=246 data-nosnippet>246</a>            }
+<a href=#247 id=247 data-nosnippet>247</a>        }
+<a href=#248 id=248 data-nosnippet>248</a>
+<a href=#249 id=249 data-nosnippet>249</a>        <span class="kw">let </span>(max_q, max_k, seqlens_q_map, seqlens_k_map) = <span class="kw">if </span>flash_attn {
+<a href=#250 id=250 data-nosnippet>250</a>            <span class="kw">let </span>max_q = <span class="kw-2">*</span>seqlens_q.iter().max().unwrap();
+<a href=#251 id=251 data-nosnippet>251</a>            <span class="kw">let </span>max_k = <span class="kw-2">*</span>seqlens_k.iter().max().unwrap();
+<a href=#252 id=252 data-nosnippet>252</a>            <span class="kw">let </span>seqlens_q = Tensor::new(seqlens_q, device)<span class="question-mark">?
+<a href=#253 id=253 data-nosnippet>253</a>                </span>.to_dtype(DType::F32)<span class="question-mark">?
+<a href=#254 id=254 data-nosnippet>254</a>                </span>.cumsum(<span class="number">0</span>)<span class="question-mark">?
+<a href=#255 id=255 data-nosnippet>255</a>                </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
+<a href=#256 id=256 data-nosnippet>256</a>            <span class="kw">let </span>seqlens_k = Tensor::new(seqlens_k, device)<span class="question-mark">?
+<a href=#257 id=257 data-nosnippet>257</a>                </span>.to_dtype(DType::F32)<span class="question-mark">?
+<a href=#258 id=258 data-nosnippet>258</a>                </span>.cumsum(<span class="number">0</span>)<span class="question-mark">?
+<a href=#259 id=259 data-nosnippet>259</a>                </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
+<a href=#260 id=260 data-nosnippet>260</a>
+<a href=#261 id=261 data-nosnippet>261</a>            <span class="kw">let </span><span class="kw-2">mut </span>seqlens_q_map = HashMap::new();
+<a href=#262 id=262 data-nosnippet>262</a>            <span class="kw">let </span><span class="kw-2">mut </span>seqlens_k_map = HashMap::new();
+<a href=#263 id=263 data-nosnippet>263</a>
+<a href=#264 id=264 data-nosnippet>264</a>            <span class="kw">let </span>devices = mapper.unwrap().get_unique_devices();
+<a href=#265 id=265 data-nosnippet>265</a>            <span class="kw">for </span>device <span class="kw">in </span>devices {
+<a href=#266 id=266 data-nosnippet>266</a>                seqlens_q_map.insert(device.location(), seqlens_q.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+<a href=#267 id=267 data-nosnippet>267</a>                seqlens_k_map.insert(device.location(), seqlens_k.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+<a href=#268 id=268 data-nosnippet>268</a>            }
+<a href=#269 id=269 data-nosnippet>269</a>            (max_q, max_k, seqlens_q_map, seqlens_k_map)
+<a href=#270 id=270 data-nosnippet>270</a>        } <span class="kw">else </span>{
+<a href=#271 id=271 data-nosnippet>271</a>            (<span class="number">0</span>, <span class="number">0</span>, HashMap::new(), HashMap::new())
+<a href=#272 id=272 data-nosnippet>272</a>        };
 <a href=#273 id=273 data-nosnippet>273</a>
-<a href=#274 id=274 data-nosnippet>274</a>        <span class="kw">let </span>paged_attn_meta = <span class="kw">if </span>paged_attn_metadata.is_some() {
-<a href=#275 id=275 data-nosnippet>275</a>            <span class="kw">let </span>max_slot_mapping_len = slot_mappings.iter().map(|x| x.len()).max().unwrap();
-<a href=#276 id=276 data-nosnippet>276</a>            <span class="kw">let </span>slot_mappings =
-<a href=#277 id=277 data-nosnippet>277</a>                _make_tensor_with_pad(slot_mappings, max_slot_mapping_len, _PAD_SLOT_ID, device)<span class="question-mark">?</span>;
-<a href=#278 id=278 data-nosnippet>278</a>
-<a href=#279 id=279 data-nosnippet>279</a>            <span class="kw">let </span>max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
-<a href=#280 id=280 data-nosnippet>280</a>            <span class="kw">let </span>block_tables = _make_tensor_with_pad(
-<a href=#281 id=281 data-nosnippet>281</a>                block_tables
-<a href=#282 id=282 data-nosnippet>282</a>                    .iter()
-<a href=#283 id=283 data-nosnippet>283</a>                    .map(|x| x.iter().map(|x| <span class="kw-2">*</span>x <span class="kw">as </span>u32).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
-<a href=#284 id=284 data-nosnippet>284</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#285 id=285 data-nosnippet>285</a>                max_block_table_len,
-<a href=#286 id=286 data-nosnippet>286</a>                <span class="number">0</span>,
-<a href=#287 id=287 data-nosnippet>287</a>                device,
-<a href=#288 id=288 data-nosnippet>288</a>            )<span class="question-mark">?</span>;
-<a href=#289 id=289 data-nosnippet>289</a>            <span class="kw">let </span>block_tables = block_tables.reshape(((), max_block_table_len))<span class="question-mark">?</span>;
-<a href=#290 id=290 data-nosnippet>290</a>
-<a href=#291 id=291 data-nosnippet>291</a>            <span class="kw">let </span>max_context_len = paged_attn_context_lens
-<a href=#292 id=292 data-nosnippet>292</a>                .iter()
-<a href=#293 id=293 data-nosnippet>293</a>                .map(|x| x.len())
-<a href=#294 id=294 data-nosnippet>294</a>                .max()
-<a href=#295 id=295 data-nosnippet>295</a>                .unwrap();
-<a href=#296 id=296 data-nosnippet>296</a>
-<a href=#297 id=297 data-nosnippet>297</a>            <span class="kw">let </span>context_lens = _make_tensor_with_pad(
-<a href=#298 id=298 data-nosnippet>298</a>                paged_attn_context_lens
-<a href=#299 id=299 data-nosnippet>299</a>                    .iter()
-<a href=#300 id=300 data-nosnippet>300</a>                    .map(|x| x.iter().map(|x| <span class="kw-2">*</span>x <span class="kw">as </span>u32).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
-<a href=#301 id=301 data-nosnippet>301</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#302 id=302 data-nosnippet>302</a>                max_context_len,
-<a href=#303 id=303 data-nosnippet>303</a>                <span class="number">0</span>,
-<a href=#304 id=304 data-nosnippet>304</a>                device,
-<a href=#305 id=305 data-nosnippet>305</a>            )<span class="question-mark">?
-<a href=#306 id=306 data-nosnippet>306</a>            </span>.reshape(((),))<span class="question-mark">?</span>;
-<a href=#307 id=307 data-nosnippet>307</a>
-<a href=#308 id=308 data-nosnippet>308</a>            <span class="comment">// For device mapping, make a copy of each tensor for each device
-<a href=#309 id=309 data-nosnippet>309</a>            </span><span class="kw">let </span>devices = mapper.unwrap().get_unique_devices();
-<a href=#310 id=310 data-nosnippet>310</a>            <span class="kw">let </span><span class="kw-2">mut </span>slot_mappings_map = HashMap::new();
-<a href=#311 id=311 data-nosnippet>311</a>            <span class="kw">let </span><span class="kw-2">mut </span>block_tables_map = HashMap::new();
-<a href=#312 id=312 data-nosnippet>312</a>            <span class="kw">let </span><span class="kw-2">mut </span>context_lens_map = HashMap::new();
-<a href=#313 id=313 data-nosnippet>313</a>
-<a href=#314 id=314 data-nosnippet>314</a>            <span class="kw">for </span>device <span class="kw">in </span>devices {
-<a href=#315 id=315 data-nosnippet>315</a>                slot_mappings_map
-<a href=#316 id=316 data-nosnippet>316</a>                    .insert(device.location(), slot_mappings.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
-<a href=#317 id=317 data-nosnippet>317</a>                block_tables_map
-<a href=#318 id=318 data-nosnippet>318</a>                    .insert(device.location(), block_tables.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
-<a href=#319 id=319 data-nosnippet>319</a>                context_lens_map
-<a href=#320 id=320 data-nosnippet>320</a>                    .insert(device.location(), context_lens.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
-<a href=#321 id=321 data-nosnippet>321</a>            }
-<a href=#322 id=322 data-nosnippet>322</a>
-<a href=#323 id=323 data-nosnippet>323</a>            <span class="prelude-val">Some</span>(PagedAttentionInputMetadata {
-<a href=#324 id=324 data-nosnippet>324</a>                slot_mappings: slot_mappings_map,
-<a href=#325 id=325 data-nosnippet>325</a>                block_tables: <span class="prelude-val">Some</span>(block_tables_map),
-<a href=#326 id=326 data-nosnippet>326</a>                context_lens: <span class="prelude-val">Some</span>(context_lens_map),
-<a href=#327 id=327 data-nosnippet>327</a>                max_context_len: <span class="prelude-val">Some</span>(max_context_len),
-<a href=#328 id=328 data-nosnippet>328</a>                is_first_prompt_chunk: chunk_offset_toks == <span class="number">0</span>,
-<a href=#329 id=329 data-nosnippet>329</a>            })
-<a href=#330 id=330 data-nosnippet>330</a>        } <span class="kw">else </span>{
-<a href=#331 id=331 data-nosnippet>331</a>            <span class="prelude-val">None
-<a href=#332 id=332 data-nosnippet>332</a>        </span>};
-<a href=#333 id=333 data-nosnippet>333</a>
-<a href=#334 id=334 data-nosnippet>334</a>        <span class="prelude-val">Ok</span>(InputMetadata {
-<a href=#335 id=335 data-nosnippet>335</a>            input,
-<a href=#336 id=336 data-nosnippet>336</a>            positions: seqlen_offsets,
-<a href=#337 id=337 data-nosnippet>337</a>            context_lens,
-<a href=#338 id=338 data-nosnippet>338</a>            position_ids,
-<a href=#339 id=339 data-nosnippet>339</a>            paged_attn_meta,
-<a href=#340 id=340 data-nosnippet>340</a>            flash_meta: FlashParams {
-<a href=#341 id=341 data-nosnippet>341</a>                max_k,
-<a href=#342 id=342 data-nosnippet>342</a>                max_q,
-<a href=#343 id=343 data-nosnippet>343</a>                cumulative_seqlens_k: seqlens_k_map,
-<a href=#344 id=344 data-nosnippet>344</a>                cumulative_seqlens_q: seqlens_q_map,
-<a href=#345 id=345 data-nosnippet>345</a>            },
-<a href=#346 id=346 data-nosnippet>346</a>        })
-<a href=#347 id=347 data-nosnippet>347</a>    }
-<a href=#348 id=348 data-nosnippet>348</a>
-<a href=#349 id=349 data-nosnippet>349</a>    <span class="kw">fn </span>make_completion_chunk&lt;T: WithDType&gt;(
-<a href=#350 id=350 data-nosnippet>350</a>        toks: Vec&lt;<span class="kw-2">&amp;</span>[T]&gt;,
-<a href=#351 id=351 data-nosnippet>351</a>        input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
-<a href=#352 id=352 data-nosnippet>352</a>        device: <span class="kw-2">&amp;</span>Device,
-<a href=#353 id=353 data-nosnippet>353</a>        <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&gt;,
-<a href=#354 id=354 data-nosnippet>354</a>        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
-<a href=#355 id=355 data-nosnippet>355</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
-<a href=#356 id=356 data-nosnippet>356</a>        <span class="comment">// Pad each sequence by the padding token to the max len.
-<a href=#357 id=357 data-nosnippet>357</a>        </span><span class="kw">let </span>flash_attn = <span class="kw">crate</span>::using_flash_attn();
-<a href=#358 id=358 data-nosnippet>358</a>        <span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
-<a href=#359 id=359 data-nosnippet>359</a>        <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
-<a href=#360 id=360 data-nosnippet>360</a>        <span class="kw">let </span><span class="kw-2">mut </span>context_lens = Vec::new();
-<a href=#361 id=361 data-nosnippet>361</a>        <span class="kw">let </span><span class="kw-2">mut </span>position_ids = Vec::new();
-<a href=#362 id=362 data-nosnippet>362</a>
-<a href=#363 id=363 data-nosnippet>363</a>        <span class="kw">let </span><span class="kw-2">mut </span>slot_mappings = Vec::new();
-<a href=#364 id=364 data-nosnippet>364</a>        <span class="kw">let </span><span class="kw-2">mut </span>block_tables = Vec::new();
-<a href=#365 id=365 data-nosnippet>365</a>        <span class="kw">let </span><span class="kw-2">mut </span>paged_attn_context_lens = Vec::new();
-<a href=#366 id=366 data-nosnippet>366</a>        <span class="kw">let </span><span class="kw-2">mut </span>seqlens_q = <span class="kw">if </span>flash_attn { <span class="macro">vec!</span>[<span class="number">0</span>] } <span class="kw">else </span>{ Vec::new() };
-<a href=#367 id=367 data-nosnippet>367</a>        <span class="kw">let </span><span class="kw-2">mut </span>seqlens_k = <span class="kw">if </span>flash_attn { <span class="macro">vec!</span>[<span class="number">0</span>] } <span class="kw">else </span>{ Vec::new() };
-<a href=#368 id=368 data-nosnippet>368</a>        <span class="kw">for </span>(seq, ctxt) <span class="kw">in </span>input_seqs.iter().zip(toks) {
-<a href=#369 id=369 data-nosnippet>369</a>            <span class="kw">let </span>start_pos = ctxt.len().saturating_sub(<span class="number">1</span>);
-<a href=#370 id=370 data-nosnippet>370</a>            <span class="kw">let </span>ctxt = ctxt[start_pos..].to_vec();
-<a href=#371 id=371 data-nosnippet>371</a>            seqlen_offsets.push(start_pos);
-<a href=#372 id=372 data-nosnippet>372</a>            context_lens.push((<span class="number">0</span>, <span class="number">1</span>));
-<a href=#373 id=373 data-nosnippet>373</a>            position_ids.push(seq.len());
-<a href=#374 id=374 data-nosnippet>374</a>
-<a href=#375 id=375 data-nosnippet>375</a>            <span class="kw">if </span>flash_attn {
-<a href=#376 id=376 data-nosnippet>376</a>                seqlens_q.push(ctxt.len() <span class="kw">as </span>u32);
-<a href=#377 id=377 data-nosnippet>377</a>                seqlens_k.push((ctxt.len() + start_pos) <span class="kw">as </span>u32);
-<a href=#378 id=378 data-nosnippet>378</a>            }
-<a href=#379 id=379 data-nosnippet>379</a>
-<a href=#380 id=380 data-nosnippet>380</a>            seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
-<a href=#381 id=381 data-nosnippet>381</a>
-<a href=#382 id=382 data-nosnippet>382</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_metadata) = <span class="kw-2">&amp;mut </span>paged_attn_metadata {
-<a href=#383 id=383 data-nosnippet>383</a>                <span class="kw">let </span>block_engine = <span class="macro">get_mut_arcmutex!</span>(paged_attn_metadata.block_engine);
-<a href=#384 id=384 data-nosnippet>384</a>                <span class="kw">let </span>table = block_engine.block_tables.get(seq.id()).unwrap();
-<a href=#385 id=385 data-nosnippet>385</a>
-<a href=#386 id=386 data-nosnippet>386</a>                <span class="kw">let </span>table = table
-<a href=#387 id=387 data-nosnippet>387</a>                    .iter()
-<a href=#388 id=388 data-nosnippet>388</a>                    .map(|block| block.deref_mut().block_id)
-<a href=#389 id=389 data-nosnippet>389</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#390 id=390 data-nosnippet>390</a>
-<a href=#391 id=391 data-nosnippet>391</a>                <span class="kw">let </span>block_pos = start_pos - seq.token_offset();
-<a href=#392 id=392 data-nosnippet>392</a>                <span class="kw">let </span>block_number = <span class="kw">if </span>block_pos / paged_attn_metadata.block_size &gt;= table.len() {
-<a href=#393 id=393 data-nosnippet>393</a>                    <span class="macro">panic!</span>(<span class="string">"Block table is too small (completion)! start_pos={} block_size={} table_len={}"</span>, block_pos, paged_attn_metadata.block_size, table.len());
-<a href=#394 id=394 data-nosnippet>394</a>                } <span class="kw">else </span>{
-<a href=#395 id=395 data-nosnippet>395</a>                    table
-<a href=#396 id=396 data-nosnippet>396</a>                        .get(block_pos / paged_attn_metadata.block_size)
-<a href=#397 id=397 data-nosnippet>397</a>                        .unwrap()
-<a href=#398 id=398 data-nosnippet>398</a>                };
-<a href=#399 id=399 data-nosnippet>399</a>                <span class="kw">let </span>block_offset = block_pos % paged_attn_metadata.block_size;
-<a href=#400 id=400 data-nosnippet>400</a>                <span class="kw">let </span>slot = block_number * paged_attn_metadata.block_size + block_offset;
-<a href=#401 id=401 data-nosnippet>401</a>                <span class="kw">let </span>slot = slot.try_into().unwrap();
-<a href=#402 id=402 data-nosnippet>402</a>                slot_mappings.push(<span class="macro">vec!</span>[slot]);
-<a href=#403 id=403 data-nosnippet>403</a>
-<a href=#404 id=404 data-nosnippet>404</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(sliding_window) = paged_attn_metadata.sliding_window {
-<a href=#405 id=405 data-nosnippet>405</a>                    <span class="kw">let </span>sliding_window_blocks = sliding_window / paged_attn_metadata.block_size;
-<a href=#406 id=406 data-nosnippet>406</a>                    <span class="kw">let </span>slide_idx = <span class="kw">if </span>table.len() &gt; sliding_window_blocks {
-<a href=#407 id=407 data-nosnippet>407</a>                        table.len() - sliding_window_blocks
-<a href=#408 id=408 data-nosnippet>408</a>                    } <span class="kw">else </span>{
-<a href=#409 id=409 data-nosnippet>409</a>                        <span class="number">0
-<a href=#410 id=410 data-nosnippet>410</a>                    </span>};
-<a href=#411 id=411 data-nosnippet>411</a>                    block_tables.push(table.get(slide_idx..).unwrap().to_vec());
-<a href=#412 id=412 data-nosnippet>412</a>                } <span class="kw">else </span>{
-<a href=#413 id=413 data-nosnippet>413</a>                    block_tables.push(table);
-<a href=#414 id=414 data-nosnippet>414</a>                }
-<a href=#415 id=415 data-nosnippet>415</a>
-<a href=#416 id=416 data-nosnippet>416</a>                <span class="kw">let </span>paged_attn_context_len =
-<a href=#417 id=417 data-nosnippet>417</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(sliding_window) = paged_attn_metadata.sliding_window {
-<a href=#418 id=418 data-nosnippet>418</a>                        seq.len().min(sliding_window)
-<a href=#419 id=419 data-nosnippet>419</a>                    } <span class="kw">else </span>{
-<a href=#420 id=420 data-nosnippet>420</a>                        seq.len()
-<a href=#421 id=421 data-nosnippet>421</a>                    };
-<a href=#422 id=422 data-nosnippet>422</a>                paged_attn_context_lens.push(paged_attn_context_len);
-<a href=#423 id=423 data-nosnippet>423</a>            }
-<a href=#424 id=424 data-nosnippet>424</a>        }
-<a href=#425 id=425 data-nosnippet>425</a>
-<a href=#426 id=426 data-nosnippet>426</a>        <span class="kw">let </span>(max_q, max_k, seqlens_q_map, seqlens_k_map) = <span class="kw">if </span>flash_attn {
-<a href=#427 id=427 data-nosnippet>427</a>            <span class="kw">let </span>max_q = <span class="kw-2">*</span>seqlens_q.iter().max().unwrap();
-<a href=#428 id=428 data-nosnippet>428</a>            <span class="kw">let </span>max_k = <span class="kw-2">*</span>seqlens_k.iter().max().unwrap();
-<a href=#429 id=429 data-nosnippet>429</a>            <span class="kw">let </span>seqlens_q = Tensor::new(seqlens_q, device)<span class="question-mark">?
-<a href=#430 id=430 data-nosnippet>430</a>                </span>.to_dtype(DType::F32)<span class="question-mark">?
-<a href=#431 id=431 data-nosnippet>431</a>                </span>.cumsum(<span class="number">0</span>)<span class="question-mark">?
-<a href=#432 id=432 data-nosnippet>432</a>                </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
-<a href=#433 id=433 data-nosnippet>433</a>            <span class="kw">let </span>seqlens_k = Tensor::new(seqlens_k, device)<span class="question-mark">?
-<a href=#434 id=434 data-nosnippet>434</a>                </span>.to_dtype(DType::F32)<span class="question-mark">?
-<a href=#435 id=435 data-nosnippet>435</a>                </span>.cumsum(<span class="number">0</span>)<span class="question-mark">?
-<a href=#436 id=436 data-nosnippet>436</a>                </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
-<a href=#437 id=437 data-nosnippet>437</a>
-<a href=#438 id=438 data-nosnippet>438</a>            <span class="kw">let </span><span class="kw-2">mut </span>seqlens_q_map = HashMap::new();
-<a href=#439 id=439 data-nosnippet>439</a>            <span class="kw">let </span><span class="kw-2">mut </span>seqlens_k_map = HashMap::new();
+<a href=#274 id=274 data-nosnippet>274</a>        <span class="kw">let </span>input = Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap();
+<a href=#275 id=275 data-nosnippet>275</a>
+<a href=#276 id=276 data-nosnippet>276</a>        <span class="kw">let </span>paged_attn_meta = <span class="kw">if </span>paged_attn_metadata.is_some() {
+<a href=#277 id=277 data-nosnippet>277</a>            <span class="kw">let </span>max_slot_mapping_len = slot_mappings.iter().map(|x| x.len()).max().unwrap();
+<a href=#278 id=278 data-nosnippet>278</a>            <span class="kw">let </span>slot_mappings =
+<a href=#279 id=279 data-nosnippet>279</a>                _make_tensor_with_pad(slot_mappings, max_slot_mapping_len, _PAD_SLOT_ID, device)<span class="question-mark">?</span>;
+<a href=#280 id=280 data-nosnippet>280</a>
+<a href=#281 id=281 data-nosnippet>281</a>            <span class="kw">let </span>max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
+<a href=#282 id=282 data-nosnippet>282</a>            <span class="kw">let </span>block_tables = _make_tensor_with_pad(
+<a href=#283 id=283 data-nosnippet>283</a>                block_tables
+<a href=#284 id=284 data-nosnippet>284</a>                    .iter()
+<a href=#285 id=285 data-nosnippet>285</a>                    .map(|x| x.iter().map(|x| <span class="kw-2">*</span>x <span class="kw">as </span>u32).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
+<a href=#286 id=286 data-nosnippet>286</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#287 id=287 data-nosnippet>287</a>                max_block_table_len,
+<a href=#288 id=288 data-nosnippet>288</a>                <span class="number">0</span>,
+<a href=#289 id=289 data-nosnippet>289</a>                device,
+<a href=#290 id=290 data-nosnippet>290</a>            )<span class="question-mark">?</span>;
+<a href=#291 id=291 data-nosnippet>291</a>            <span class="kw">let </span>block_tables = block_tables.reshape(((), max_block_table_len))<span class="question-mark">?</span>;
+<a href=#292 id=292 data-nosnippet>292</a>
+<a href=#293 id=293 data-nosnippet>293</a>            <span class="kw">let </span>max_context_len = paged_attn_context_lens
+<a href=#294 id=294 data-nosnippet>294</a>                .iter()
+<a href=#295 id=295 data-nosnippet>295</a>                .map(|x| x.len())
+<a href=#296 id=296 data-nosnippet>296</a>                .max()
+<a href=#297 id=297 data-nosnippet>297</a>                .unwrap();
+<a href=#298 id=298 data-nosnippet>298</a>
+<a href=#299 id=299 data-nosnippet>299</a>            <span class="kw">let </span>context_lens = _make_tensor_with_pad(
+<a href=#300 id=300 data-nosnippet>300</a>                paged_attn_context_lens
+<a href=#301 id=301 data-nosnippet>301</a>                    .iter()
+<a href=#302 id=302 data-nosnippet>302</a>                    .map(|x| x.iter().map(|x| <span class="kw-2">*</span>x <span class="kw">as </span>u32).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
+<a href=#303 id=303 data-nosnippet>303</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#304 id=304 data-nosnippet>304</a>                max_context_len,
+<a href=#305 id=305 data-nosnippet>305</a>                <span class="number">0</span>,
+<a href=#306 id=306 data-nosnippet>306</a>                device,
+<a href=#307 id=307 data-nosnippet>307</a>            )<span class="question-mark">?
+<a href=#308 id=308 data-nosnippet>308</a>            </span>.reshape(((),))<span class="question-mark">?</span>;
+<a href=#309 id=309 data-nosnippet>309</a>
+<a href=#310 id=310 data-nosnippet>310</a>            <span class="comment">// For device mapping, make a copy of each tensor for each device
+<a href=#311 id=311 data-nosnippet>311</a>            </span><span class="kw">let </span>devices = mapper.unwrap().get_unique_devices();
+<a href=#312 id=312 data-nosnippet>312</a>            <span class="kw">let </span><span class="kw-2">mut </span>slot_mappings_map = HashMap::new();
+<a href=#313 id=313 data-nosnippet>313</a>            <span class="kw">let </span><span class="kw-2">mut </span>block_tables_map = HashMap::new();
+<a href=#314 id=314 data-nosnippet>314</a>            <span class="kw">let </span><span class="kw-2">mut </span>context_lens_map = HashMap::new();
+<a href=#315 id=315 data-nosnippet>315</a>
+<a href=#316 id=316 data-nosnippet>316</a>            <span class="kw">for </span>device <span class="kw">in </span>devices {
+<a href=#317 id=317 data-nosnippet>317</a>                slot_mappings_map
+<a href=#318 id=318 data-nosnippet>318</a>                    .insert(device.location(), slot_mappings.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+<a href=#319 id=319 data-nosnippet>319</a>                block_tables_map
+<a href=#320 id=320 data-nosnippet>320</a>                    .insert(device.location(), block_tables.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+<a href=#321 id=321 data-nosnippet>321</a>                context_lens_map
+<a href=#322 id=322 data-nosnippet>322</a>                    .insert(device.location(), context_lens.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+<a href=#323 id=323 data-nosnippet>323</a>            }
+<a href=#324 id=324 data-nosnippet>324</a>
+<a href=#325 id=325 data-nosnippet>325</a>            <span class="prelude-val">Some</span>(PagedAttentionInputMetadata {
+<a href=#326 id=326 data-nosnippet>326</a>                slot_mappings: slot_mappings_map,
+<a href=#327 id=327 data-nosnippet>327</a>                block_tables: <span class="prelude-val">Some</span>(block_tables_map),
+<a href=#328 id=328 data-nosnippet>328</a>                context_lens: <span class="prelude-val">Some</span>(context_lens_map),
+<a href=#329 id=329 data-nosnippet>329</a>                max_context_len: <span class="prelude-val">Some</span>(max_context_len),
+<a href=#330 id=330 data-nosnippet>330</a>                is_first_prompt_chunk: chunk_offset_toks == <span class="number">0</span>,
+<a href=#331 id=331 data-nosnippet>331</a>            })
+<a href=#332 id=332 data-nosnippet>332</a>        } <span class="kw">else </span>{
+<a href=#333 id=333 data-nosnippet>333</a>            <span class="prelude-val">None
+<a href=#334 id=334 data-nosnippet>334</a>        </span>};
+<a href=#335 id=335 data-nosnippet>335</a>
+<a href=#336 id=336 data-nosnippet>336</a>        <span class="prelude-val">Ok</span>(InputMetadata {
+<a href=#337 id=337 data-nosnippet>337</a>            input,
+<a href=#338 id=338 data-nosnippet>338</a>            positions: seqlen_offsets,
+<a href=#339 id=339 data-nosnippet>339</a>            context_lens,
+<a href=#340 id=340 data-nosnippet>340</a>            position_ids,
+<a href=#341 id=341 data-nosnippet>341</a>            paged_attn_meta,
+<a href=#342 id=342 data-nosnippet>342</a>            flash_meta: FlashParams {
+<a href=#343 id=343 data-nosnippet>343</a>                max_k,
+<a href=#344 id=344 data-nosnippet>344</a>                max_q,
+<a href=#345 id=345 data-nosnippet>345</a>                cumulative_seqlens_k: seqlens_k_map,
+<a href=#346 id=346 data-nosnippet>346</a>                cumulative_seqlens_q: seqlens_q_map,
+<a href=#347 id=347 data-nosnippet>347</a>                causal: <span class="bool-val">true</span>,
+<a href=#348 id=348 data-nosnippet>348</a>            },
+<a href=#349 id=349 data-nosnippet>349</a>        })
+<a href=#350 id=350 data-nosnippet>350</a>    }
+<a href=#351 id=351 data-nosnippet>351</a>
+<a href=#352 id=352 data-nosnippet>352</a>    <span class="kw">fn </span>make_completion_chunk&lt;T: WithDType&gt;(
+<a href=#353 id=353 data-nosnippet>353</a>        toks: Vec&lt;<span class="kw-2">&amp;</span>[T]&gt;,
+<a href=#354 id=354 data-nosnippet>354</a>        input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
+<a href=#355 id=355 data-nosnippet>355</a>        device: <span class="kw-2">&amp;</span>Device,
+<a href=#356 id=356 data-nosnippet>356</a>        <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&gt;,
+<a href=#357 id=357 data-nosnippet>357</a>        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
+<a href=#358 id=358 data-nosnippet>358</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
+<a href=#359 id=359 data-nosnippet>359</a>        <span class="comment">// Pad each sequence by the padding token to the max len.
+<a href=#360 id=360 data-nosnippet>360</a>        </span><span class="kw">let </span>flash_attn = <span class="kw">crate</span>::using_flash_attn();
+<a href=#361 id=361 data-nosnippet>361</a>        <span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
+<a href=#362 id=362 data-nosnippet>362</a>        <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
+<a href=#363 id=363 data-nosnippet>363</a>        <span class="kw">let </span><span class="kw-2">mut </span>context_lens = Vec::new();
+<a href=#364 id=364 data-nosnippet>364</a>        <span class="kw">let </span><span class="kw-2">mut </span>position_ids = Vec::new();
+<a href=#365 id=365 data-nosnippet>365</a>
+<a href=#366 id=366 data-nosnippet>366</a>        <span class="kw">let </span><span class="kw-2">mut </span>slot_mappings = Vec::new();
+<a href=#367 id=367 data-nosnippet>367</a>        <span class="kw">let </span><span class="kw-2">mut </span>block_tables = Vec::new();
+<a href=#368 id=368 data-nosnippet>368</a>        <span class="kw">let </span><span class="kw-2">mut </span>paged_attn_context_lens = Vec::new();
+<a href=#369 id=369 data-nosnippet>369</a>        <span class="kw">let </span><span class="kw-2">mut </span>seqlens_q = <span class="kw">if </span>flash_attn { <span class="macro">vec!</span>[<span class="number">0</span>] } <span class="kw">else </span>{ Vec::new() };
+<a href=#370 id=370 data-nosnippet>370</a>        <span class="kw">let </span><span class="kw-2">mut </span>seqlens_k = <span class="kw">if </span>flash_attn { <span class="macro">vec!</span>[<span class="number">0</span>] } <span class="kw">else </span>{ Vec::new() };
+<a href=#371 id=371 data-nosnippet>371</a>        <span class="kw">for </span>(seq, ctxt) <span class="kw">in </span>input_seqs.iter().zip(toks) {
+<a href=#372 id=372 data-nosnippet>372</a>            <span class="kw">let </span>start_pos = ctxt.len().saturating_sub(<span class="number">1</span>);
+<a href=#373 id=373 data-nosnippet>373</a>            <span class="kw">let </span>ctxt = ctxt[start_pos..].to_vec();
+<a href=#374 id=374 data-nosnippet>374</a>            seqlen_offsets.push(start_pos);
+<a href=#375 id=375 data-nosnippet>375</a>            context_lens.push((<span class="number">0</span>, <span class="number">1</span>));
+<a href=#376 id=376 data-nosnippet>376</a>            position_ids.push(seq.len());
+<a href=#377 id=377 data-nosnippet>377</a>
+<a href=#378 id=378 data-nosnippet>378</a>            <span class="kw">if </span>flash_attn {
+<a href=#379 id=379 data-nosnippet>379</a>                seqlens_q.push(ctxt.len() <span class="kw">as </span>u32);
+<a href=#380 id=380 data-nosnippet>380</a>                seqlens_k.push((ctxt.len() + start_pos) <span class="kw">as </span>u32);
+<a href=#381 id=381 data-nosnippet>381</a>            }
+<a href=#382 id=382 data-nosnippet>382</a>
+<a href=#383 id=383 data-nosnippet>383</a>            seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
+<a href=#384 id=384 data-nosnippet>384</a>
+<a href=#385 id=385 data-nosnippet>385</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_metadata) = <span class="kw-2">&amp;mut </span>paged_attn_metadata {
+<a href=#386 id=386 data-nosnippet>386</a>                <span class="kw">let </span>block_engine = <span class="macro">get_mut_arcmutex!</span>(paged_attn_metadata.block_engine);
+<a href=#387 id=387 data-nosnippet>387</a>                <span class="kw">let </span>table = block_engine.block_tables.get(seq.id()).unwrap();
+<a href=#388 id=388 data-nosnippet>388</a>
+<a href=#389 id=389 data-nosnippet>389</a>                <span class="kw">let </span>table = table
+<a href=#390 id=390 data-nosnippet>390</a>                    .iter()
+<a href=#391 id=391 data-nosnippet>391</a>                    .map(|block| block.deref_mut().block_id)
+<a href=#392 id=392 data-nosnippet>392</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#393 id=393 data-nosnippet>393</a>
+<a href=#394 id=394 data-nosnippet>394</a>                <span class="kw">let </span>block_pos = start_pos - seq.token_offset();
+<a href=#395 id=395 data-nosnippet>395</a>                <span class="kw">let </span>block_number = <span class="kw">if </span>block_pos / paged_attn_metadata.block_size &gt;= table.len() {
+<a href=#396 id=396 data-nosnippet>396</a>                    <span class="macro">panic!</span>(<span class="string">"Block table is too small (completion)! start_pos={} block_size={} table_len={}"</span>, block_pos, paged_attn_metadata.block_size, table.len());
+<a href=#397 id=397 data-nosnippet>397</a>                } <span class="kw">else </span>{
+<a href=#398 id=398 data-nosnippet>398</a>                    table
+<a href=#399 id=399 data-nosnippet>399</a>                        .get(block_pos / paged_attn_metadata.block_size)
+<a href=#400 id=400 data-nosnippet>400</a>                        .unwrap()
+<a href=#401 id=401 data-nosnippet>401</a>                };
+<a href=#402 id=402 data-nosnippet>402</a>                <span class="kw">let </span>block_offset = block_pos % paged_attn_metadata.block_size;
+<a href=#403 id=403 data-nosnippet>403</a>                <span class="kw">let </span>slot = block_number * paged_attn_metadata.block_size + block_offset;
+<a href=#404 id=404 data-nosnippet>404</a>                <span class="kw">let </span>slot = slot.try_into().unwrap();
+<a href=#405 id=405 data-nosnippet>405</a>                slot_mappings.push(<span class="macro">vec!</span>[slot]);
+<a href=#406 id=406 data-nosnippet>406</a>
+<a href=#407 id=407 data-nosnippet>407</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(sliding_window) = paged_attn_metadata.sliding_window {
+<a href=#408 id=408 data-nosnippet>408</a>                    <span class="kw">let </span>sliding_window_blocks = sliding_window / paged_attn_metadata.block_size;
+<a href=#409 id=409 data-nosnippet>409</a>                    <span class="kw">let </span>slide_idx = <span class="kw">if </span>table.len() &gt; sliding_window_blocks {
+<a href=#410 id=410 data-nosnippet>410</a>                        table.len() - sliding_window_blocks
+<a href=#411 id=411 data-nosnippet>411</a>                    } <span class="kw">else </span>{
+<a href=#412 id=412 data-nosnippet>412</a>                        <span class="number">0
+<a href=#413 id=413 data-nosnippet>413</a>                    </span>};
+<a href=#414 id=414 data-nosnippet>414</a>                    block_tables.push(table.get(slide_idx..).unwrap().to_vec());
+<a href=#415 id=415 data-nosnippet>415</a>                } <span class="kw">else </span>{
+<a href=#416 id=416 data-nosnippet>416</a>                    block_tables.push(table);
+<a href=#417 id=417 data-nosnippet>417</a>                }
+<a href=#418 id=418 data-nosnippet>418</a>
+<a href=#419 id=419 data-nosnippet>419</a>                <span class="kw">let </span>paged_attn_context_len =
+<a href=#420 id=420 data-nosnippet>420</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(sliding_window) = paged_attn_metadata.sliding_window {
+<a href=#421 id=421 data-nosnippet>421</a>                        seq.len().min(sliding_window)
+<a href=#422 id=422 data-nosnippet>422</a>                    } <span class="kw">else </span>{
+<a href=#423 id=423 data-nosnippet>423</a>                        seq.len()
+<a href=#424 id=424 data-nosnippet>424</a>                    };
+<a href=#425 id=425 data-nosnippet>425</a>                paged_attn_context_lens.push(paged_attn_context_len);
+<a href=#426 id=426 data-nosnippet>426</a>            }
+<a href=#427 id=427 data-nosnippet>427</a>        }
+<a href=#428 id=428 data-nosnippet>428</a>
+<a href=#429 id=429 data-nosnippet>429</a>        <span class="kw">let </span>(max_q, max_k, seqlens_q_map, seqlens_k_map) = <span class="kw">if </span>flash_attn {
+<a href=#430 id=430 data-nosnippet>430</a>            <span class="kw">let </span>max_q = <span class="kw-2">*</span>seqlens_q.iter().max().unwrap();
+<a href=#431 id=431 data-nosnippet>431</a>            <span class="kw">let </span>max_k = <span class="kw-2">*</span>seqlens_k.iter().max().unwrap();
+<a href=#432 id=432 data-nosnippet>432</a>            <span class="kw">let </span>seqlens_q = Tensor::new(seqlens_q, device)<span class="question-mark">?
+<a href=#433 id=433 data-nosnippet>433</a>                </span>.to_dtype(DType::F32)<span class="question-mark">?
+<a href=#434 id=434 data-nosnippet>434</a>                </span>.cumsum(<span class="number">0</span>)<span class="question-mark">?
+<a href=#435 id=435 data-nosnippet>435</a>                </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
+<a href=#436 id=436 data-nosnippet>436</a>            <span class="kw">let </span>seqlens_k = Tensor::new(seqlens_k, device)<span class="question-mark">?
+<a href=#437 id=437 data-nosnippet>437</a>                </span>.to_dtype(DType::F32)<span class="question-mark">?
+<a href=#438 id=438 data-nosnippet>438</a>                </span>.cumsum(<span class="number">0</span>)<span class="question-mark">?
+<a href=#439 id=439 data-nosnippet>439</a>                </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
 <a href=#440 id=440 data-nosnippet>440</a>
-<a href=#441 id=441 data-nosnippet>441</a>            <span class="kw">let </span>devices = mapper.unwrap().get_unique_devices();
-<a href=#442 id=442 data-nosnippet>442</a>            <span class="kw">for </span>device <span class="kw">in </span>devices {
-<a href=#443 id=443 data-nosnippet>443</a>                seqlens_q_map.insert(device.location(), seqlens_q.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
-<a href=#444 id=444 data-nosnippet>444</a>                seqlens_k_map.insert(device.location(), seqlens_k.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
-<a href=#445 id=445 data-nosnippet>445</a>            }
-<a href=#446 id=446 data-nosnippet>446</a>            (max_q, max_k, seqlens_q_map, seqlens_k_map)
-<a href=#447 id=447 data-nosnippet>447</a>        } <span class="kw">else </span>{
-<a href=#448 id=448 data-nosnippet>448</a>            (<span class="number">0</span>, <span class="number">0</span>, HashMap::new(), HashMap::new())
-<a href=#449 id=449 data-nosnippet>449</a>        };
-<a href=#450 id=450 data-nosnippet>450</a>
-<a href=#451 id=451 data-nosnippet>451</a>        <span class="kw">let </span>paged_attn_meta = <span class="kw">if </span>paged_attn_metadata.is_some() {
-<a href=#452 id=452 data-nosnippet>452</a>            <span class="kw">let </span>slot_mappings = _make_tensor_with_pad(slot_mappings, <span class="number">1</span>, _PAD_SLOT_ID, device)<span class="question-mark">?</span>;
+<a href=#441 id=441 data-nosnippet>441</a>            <span class="kw">let </span><span class="kw-2">mut </span>seqlens_q_map = HashMap::new();
+<a href=#442 id=442 data-nosnippet>442</a>            <span class="kw">let </span><span class="kw-2">mut </span>seqlens_k_map = HashMap::new();
+<a href=#443 id=443 data-nosnippet>443</a>
+<a href=#444 id=444 data-nosnippet>444</a>            <span class="kw">let </span>devices = mapper.unwrap().get_unique_devices();
+<a href=#445 id=445 data-nosnippet>445</a>            <span class="kw">for </span>device <span class="kw">in </span>devices {
+<a href=#446 id=446 data-nosnippet>446</a>                seqlens_q_map.insert(device.location(), seqlens_q.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+<a href=#447 id=447 data-nosnippet>447</a>                seqlens_k_map.insert(device.location(), seqlens_k.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+<a href=#448 id=448 data-nosnippet>448</a>            }
+<a href=#449 id=449 data-nosnippet>449</a>            (max_q, max_k, seqlens_q_map, seqlens_k_map)
+<a href=#450 id=450 data-nosnippet>450</a>        } <span class="kw">else </span>{
+<a href=#451 id=451 data-nosnippet>451</a>            (<span class="number">0</span>, <span class="number">0</span>, HashMap::new(), HashMap::new())
+<a href=#452 id=452 data-nosnippet>452</a>        };
 <a href=#453 id=453 data-nosnippet>453</a>
-<a href=#454 id=454 data-nosnippet>454</a>            <span class="kw">let </span>max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
-<a href=#455 id=455 data-nosnippet>455</a>
-<a href=#456 id=456 data-nosnippet>456</a>            <span class="kw">let </span>block_tables = _make_tensor_with_pad(
-<a href=#457 id=457 data-nosnippet>457</a>                block_tables
-<a href=#458 id=458 data-nosnippet>458</a>                    .iter()
-<a href=#459 id=459 data-nosnippet>459</a>                    .map(|x| x.iter().map(|x| <span class="kw-2">*</span>x <span class="kw">as </span>u32).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
-<a href=#460 id=460 data-nosnippet>460</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#461 id=461 data-nosnippet>461</a>                max_block_table_len,
-<a href=#462 id=462 data-nosnippet>462</a>                <span class="number">0</span>,
-<a href=#463 id=463 data-nosnippet>463</a>                device,
-<a href=#464 id=464 data-nosnippet>464</a>            )<span class="question-mark">?</span>;
-<a href=#465 id=465 data-nosnippet>465</a>            <span class="kw">let </span>block_tables = block_tables.reshape(((), max_block_table_len))<span class="question-mark">?</span>;
-<a href=#466 id=466 data-nosnippet>466</a>
-<a href=#467 id=467 data-nosnippet>467</a>            <span class="kw">let </span>max_context_len = paged_attn_context_lens.iter().max().unwrap();
-<a href=#468 id=468 data-nosnippet>468</a>
-<a href=#469 id=469 data-nosnippet>469</a>            <span class="kw">let </span>context_lens = Tensor::from_vec(
-<a href=#470 id=470 data-nosnippet>470</a>                paged_attn_context_lens
-<a href=#471 id=471 data-nosnippet>471</a>                    .iter()
-<a href=#472 id=472 data-nosnippet>472</a>                    .map(|x| <span class="kw-2">*</span>x <span class="kw">as </span>u32)
-<a href=#473 id=473 data-nosnippet>473</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#474 id=474 data-nosnippet>474</a>                (paged_attn_context_lens.len(),),
-<a href=#475 id=475 data-nosnippet>475</a>                device,
-<a href=#476 id=476 data-nosnippet>476</a>            )<span class="question-mark">?</span>;
-<a href=#477 id=477 data-nosnippet>477</a>
-<a href=#478 id=478 data-nosnippet>478</a>            <span class="comment">// For device mapping, make a copy of each tensor for each device
-<a href=#479 id=479 data-nosnippet>479</a>            </span><span class="kw">let </span>devices = mapper.unwrap().get_unique_devices();
-<a href=#480 id=480 data-nosnippet>480</a>            <span class="kw">let </span><span class="kw-2">mut </span>slot_mappings_map = HashMap::new();
-<a href=#481 id=481 data-nosnippet>481</a>            <span class="kw">let </span><span class="kw-2">mut </span>block_tables_map = HashMap::new();
-<a href=#482 id=482 data-nosnippet>482</a>            <span class="kw">let </span><span class="kw-2">mut </span>context_lens_map = HashMap::new();
-<a href=#483 id=483 data-nosnippet>483</a>
-<a href=#484 id=484 data-nosnippet>484</a>            <span class="kw">for </span>device <span class="kw">in </span>devices {
-<a href=#485 id=485 data-nosnippet>485</a>                slot_mappings_map
-<a href=#486 id=486 data-nosnippet>486</a>                    .insert(device.location(), slot_mappings.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
-<a href=#487 id=487 data-nosnippet>487</a>                block_tables_map
-<a href=#488 id=488 data-nosnippet>488</a>                    .insert(device.location(), block_tables.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
-<a href=#489 id=489 data-nosnippet>489</a>                context_lens_map
-<a href=#490 id=490 data-nosnippet>490</a>                    .insert(device.location(), context_lens.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
-<a href=#491 id=491 data-nosnippet>491</a>            }
-<a href=#492 id=492 data-nosnippet>492</a>
-<a href=#493 id=493 data-nosnippet>493</a>            <span class="prelude-val">Some</span>(PagedAttentionInputMetadata {
-<a href=#494 id=494 data-nosnippet>494</a>                slot_mappings: slot_mappings_map,
-<a href=#495 id=495 data-nosnippet>495</a>                block_tables: <span class="prelude-val">Some</span>(block_tables_map),
-<a href=#496 id=496 data-nosnippet>496</a>                context_lens: <span class="prelude-val">Some</span>(context_lens_map),
-<a href=#497 id=497 data-nosnippet>497</a>                max_context_len: <span class="prelude-val">Some</span>(<span class="kw-2">*</span>max_context_len),
-<a href=#498 id=498 data-nosnippet>498</a>                is_first_prompt_chunk: <span class="bool-val">false</span>,
-<a href=#499 id=499 data-nosnippet>499</a>            })
-<a href=#500 id=500 data-nosnippet>500</a>        } <span class="kw">else </span>{
-<a href=#501 id=501 data-nosnippet>501</a>            <span class="prelude-val">None
-<a href=#502 id=502 data-nosnippet>502</a>        </span>};
-<a href=#503 id=503 data-nosnippet>503</a>
-<a href=#504 id=504 data-nosnippet>504</a>        <span class="prelude-val">Ok</span>(InputMetadata {
-<a href=#505 id=505 data-nosnippet>505</a>            input: Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap(),
-<a href=#506 id=506 data-nosnippet>506</a>            positions: seqlen_offsets,
-<a href=#507 id=507 data-nosnippet>507</a>            context_lens,
-<a href=#508 id=508 data-nosnippet>508</a>            position_ids,
-<a href=#509 id=509 data-nosnippet>509</a>            paged_attn_meta,
-<a href=#510 id=510 data-nosnippet>510</a>            flash_meta: FlashParams {
-<a href=#511 id=511 data-nosnippet>511</a>                max_k,
-<a href=#512 id=512 data-nosnippet>512</a>                max_q,
-<a href=#513 id=513 data-nosnippet>513</a>                cumulative_seqlens_k: seqlens_k_map,
-<a href=#514 id=514 data-nosnippet>514</a>                cumulative_seqlens_q: seqlens_q_map,
-<a href=#515 id=515 data-nosnippet>515</a>            },
-<a href=#516 id=516 data-nosnippet>516</a>        })
-<a href=#517 id=517 data-nosnippet>517</a>    }
-<a href=#518 id=518 data-nosnippet>518</a>
-<a href=#519 id=519 data-nosnippet>519</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
-<a href=#520 id=520 data-nosnippet>520</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_prompt_input&lt;T: WithDType + std::fmt::Debug&gt;(
-<a href=#521 id=521 data-nosnippet>521</a>        toks: Vec&lt;<span class="kw-2">&amp;</span>[T]&gt;,
-<a href=#522 id=522 data-nosnippet>522</a>        input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
-<a href=#523 id=523 data-nosnippet>523</a>        device: <span class="kw-2">&amp;</span>Device,
-<a href=#524 id=524 data-nosnippet>524</a>        last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
-<a href=#525 id=525 data-nosnippet>525</a>        return_raw_logits: bool,
-<a href=#526 id=526 data-nosnippet>526</a>        paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&gt;,
-<a href=#527 id=527 data-nosnippet>527</a>        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
-<a href=#528 id=528 data-nosnippet>528</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;InnerInputProcessorOutput&gt; {
-<a href=#529 id=529 data-nosnippet>529</a>        <span class="kw">let </span>offset = input_seqs[<span class="number">0</span>].token_offset();
-<a href=#530 id=530 data-nosnippet>530</a>        make_prompt_chunk(
-<a href=#531 id=531 data-nosnippet>531</a>            offset,
-<a href=#532 id=532 data-nosnippet>532</a>            toks,
-<a href=#533 id=533 data-nosnippet>533</a>            <span class="kw-2">&amp;</span>input_seqs.iter().map(|s| <span class="kw-2">*</span>s.id()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#534 id=534 data-nosnippet>534</a>            device,
-<a href=#535 id=535 data-nosnippet>535</a>            last_n_context_len,
-<a href=#536 id=536 data-nosnippet>536</a>            return_raw_logits,
-<a href=#537 id=537 data-nosnippet>537</a>            paged_attn_metadata,
-<a href=#538 id=538 data-nosnippet>538</a>            mapper,
-<a href=#539 id=539 data-nosnippet>539</a>        )
-<a href=#540 id=540 data-nosnippet>540</a>        .map(|inputs| InnerInputProcessorOutput {
-<a href=#541 id=541 data-nosnippet>541</a>            inputs,
-<a href=#542 id=542 data-nosnippet>542</a>            seq_indices: (<span class="number">0</span>..input_seqs.len()).collect(),
-<a href=#543 id=543 data-nosnippet>543</a>        })
-<a href=#544 id=544 data-nosnippet>544</a>    }
-<a href=#545 id=545 data-nosnippet>545</a>
-<a href=#546 id=546 data-nosnippet>546</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
-<a href=#547 id=547 data-nosnippet>547</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_completion_input&lt;T: WithDType + std::fmt::Debug&gt;(
-<a href=#548 id=548 data-nosnippet>548</a>        toks: Vec&lt;<span class="kw-2">&amp;</span>[T]&gt;,
-<a href=#549 id=549 data-nosnippet>549</a>        input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
-<a href=#550 id=550 data-nosnippet>550</a>        device: <span class="kw-2">&amp;</span>Device,
-<a href=#551 id=551 data-nosnippet>551</a>        no_kv_cache: bool,
-<a href=#552 id=552 data-nosnippet>552</a>        last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
-<a href=#553 id=553 data-nosnippet>553</a>        return_raw_logits: bool,
-<a href=#554 id=554 data-nosnippet>554</a>        paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&gt;,
-<a href=#555 id=555 data-nosnippet>555</a>        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
-<a href=#556 id=556 data-nosnippet>556</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;InnerInputProcessorOutput&gt; {
-<a href=#557 id=557 data-nosnippet>557</a>        <span class="kw">if </span>no_kv_cache {
-<a href=#558 id=558 data-nosnippet>558</a>            <span class="kw">return </span>get_prompt_input(
-<a href=#559 id=559 data-nosnippet>559</a>                toks,
-<a href=#560 id=560 data-nosnippet>560</a>                input_seqs,
-<a href=#561 id=561 data-nosnippet>561</a>                device,
-<a href=#562 id=562 data-nosnippet>562</a>                last_n_context_len,
-<a href=#563 id=563 data-nosnippet>563</a>                return_raw_logits,
-<a href=#564 id=564 data-nosnippet>564</a>                paged_attn_metadata,
-<a href=#565 id=565 data-nosnippet>565</a>                mapper,
-<a href=#566 id=566 data-nosnippet>566</a>            );
-<a href=#567 id=567 data-nosnippet>567</a>        }
-<a href=#568 id=568 data-nosnippet>568</a>
-<a href=#569 id=569 data-nosnippet>569</a>        make_completion_chunk(toks, input_seqs, device, paged_attn_metadata, mapper).map(|inputs| {
-<a href=#570 id=570 data-nosnippet>570</a>            InnerInputProcessorOutput {
-<a href=#571 id=571 data-nosnippet>571</a>                inputs,
-<a href=#572 id=572 data-nosnippet>572</a>                seq_indices: (<span class="number">0</span>..input_seqs.len()).collect(),
-<a href=#573 id=573 data-nosnippet>573</a>            }
-<a href=#574 id=574 data-nosnippet>574</a>        })
-<a href=#575 id=575 data-nosnippet>575</a>    }
-<a href=#576 id=576 data-nosnippet>576</a>
-<a href=#577 id=577 data-nosnippet>577</a>    <span class="attr">#[derive(Clone)]
-<a href=#578 id=578 data-nosnippet>578</a>    </span><span class="kw">pub struct </span>ModelInputs {
-<a href=#579 id=579 data-nosnippet>579</a>        <span class="kw">pub </span>input_ids: Tensor,
-<a href=#580 id=580 data-nosnippet>580</a>        <span class="kw">pub </span>input_ids_full: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
-<a href=#581 id=581 data-nosnippet>581</a>        <span class="kw">pub </span>seqlen_offsets: Vec&lt;usize&gt;,
-<a href=#582 id=582 data-nosnippet>582</a>        <span class="kw">pub </span>seqlen_offsets_full: <span class="prelude-ty">Option</span>&lt;Vec&lt;usize&gt;&gt;,
-<a href=#583 id=583 data-nosnippet>583</a>        <span class="kw">pub </span>context_lens: Vec&lt;(usize, usize)&gt;,
-<a href=#584 id=584 data-nosnippet>584</a>        <span class="kw">pub </span>position_ids: Vec&lt;usize&gt;,
-<a href=#585 id=585 data-nosnippet>585</a>        <span class="kw">pub </span>paged_attn_meta: <span class="prelude-ty">Option</span>&lt;PagedAttentionInputMetadata&gt;,
-<a href=#586 id=586 data-nosnippet>586</a>        <span class="kw">pub </span>flash_meta: FlashParams,
-<a href=#587 id=587 data-nosnippet>587</a>        <span class="kw">pub </span>flash_meta_full: <span class="prelude-ty">Option</span>&lt;FlashParams&gt;,
-<a href=#588 id=588 data-nosnippet>588</a>    }
-<a href=#589 id=589 data-nosnippet>589</a>
-<a href=#590 id=590 data-nosnippet>590</a>    <span class="kw">pub struct </span>TextInputsProcessor;
-<a href=#591 id=591 data-nosnippet>591</a>
-<a href=#592 id=592 data-nosnippet>592</a>    <span class="kw">impl </span>InputsProcessor <span class="kw">for </span>TextInputsProcessor {
-<a href=#593 id=593 data-nosnippet>593</a>        <span class="kw">fn </span>process_inputs(
-<a href=#594 id=594 data-nosnippet>594</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#595 id=595 data-nosnippet>595</a>            <span class="kw">_</span>: <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;,
-<a href=#596 id=596 data-nosnippet>596</a>            input_seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-<a href=#597 id=597 data-nosnippet>597</a>            is_prompt: bool,
-<a href=#598 id=598 data-nosnippet>598</a>            is_xlora: bool,
-<a href=#599 id=599 data-nosnippet>599</a>            device: <span class="kw-2">&amp;</span>Device,
-<a href=#600 id=600 data-nosnippet>600</a>            no_kv_cache: bool,
-<a href=#601 id=601 data-nosnippet>601</a>            last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
-<a href=#602 id=602 data-nosnippet>602</a>            return_raw_logits: bool,
-<a href=#603 id=603 data-nosnippet>603</a>            <span class="kw">_</span>: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
-<a href=#604 id=604 data-nosnippet>604</a>            <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&gt;,
-<a href=#605 id=605 data-nosnippet>605</a>            mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
-<a href=#606 id=606 data-nosnippet>606</a>        ) -&gt; <span class="prelude-ty">Result</span>&lt;InputProcessorOutput&gt; {
-<a href=#607 id=607 data-nosnippet>607</a>            <span class="kw">if </span>is_xlora &amp;&amp; !is_prompt {
-<a href=#608 id=608 data-nosnippet>608</a>                <span class="kw">let </span>prompt = get_prompt_input(
-<a href=#609 id=609 data-nosnippet>609</a>                    input_seqs
-<a href=#610 id=610 data-nosnippet>610</a>                        .iter()
-<a href=#611 id=611 data-nosnippet>611</a>                        .map(|seq| seq.get_toks())
-<a href=#612 id=612 data-nosnippet>612</a>                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#613 id=613 data-nosnippet>613</a>                    input_seqs,
-<a href=#614 id=614 data-nosnippet>614</a>                    device,
-<a href=#615 id=615 data-nosnippet>615</a>                    last_n_context_len,
-<a href=#616 id=616 data-nosnippet>616</a>                    return_raw_logits,
-<a href=#617 id=617 data-nosnippet>617</a>                    paged_attn_metadata.as_mut(),
-<a href=#618 id=618 data-nosnippet>618</a>                    mapper,
-<a href=#619 id=619 data-nosnippet>619</a>                )<span class="question-mark">?</span>;
-<a href=#620 id=620 data-nosnippet>620</a>                <span class="kw">let </span>completion = get_completion_input(
-<a href=#621 id=621 data-nosnippet>621</a>                    input_seqs
-<a href=#622 id=622 data-nosnippet>622</a>                        .iter()
-<a href=#623 id=623 data-nosnippet>623</a>                        .map(|seq| seq.get_toks())
-<a href=#624 id=624 data-nosnippet>624</a>                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#625 id=625 data-nosnippet>625</a>                    input_seqs,
-<a href=#626 id=626 data-nosnippet>626</a>                    device,
-<a href=#627 id=627 data-nosnippet>627</a>                    no_kv_cache,
-<a href=#628 id=628 data-nosnippet>628</a>                    last_n_context_len,
-<a href=#629 id=629 data-nosnippet>629</a>                    return_raw_logits,
-<a href=#630 id=630 data-nosnippet>630</a>                    paged_attn_metadata.as_mut(),
-<a href=#631 id=631 data-nosnippet>631</a>                    mapper,
-<a href=#632 id=632 data-nosnippet>632</a>                )<span class="question-mark">?</span>;
-<a href=#633 id=633 data-nosnippet>633</a>                <span class="kw">let </span>InnerInputProcessorOutput {
-<a href=#634 id=634 data-nosnippet>634</a>                    inputs:
-<a href=#635 id=635 data-nosnippet>635</a>                        InputMetadata {
-<a href=#636 id=636 data-nosnippet>636</a>                            input: input_ids_full,
-<a href=#637 id=637 data-nosnippet>637</a>                            positions: seqlen_offsets_full,
-<a href=#638 id=638 data-nosnippet>638</a>                            context_lens: <span class="kw">_</span>,
-<a href=#639 id=639 data-nosnippet>639</a>                            position_ids,
-<a href=#640 id=640 data-nosnippet>640</a>                            paged_attn_meta: <span class="kw">_</span>,
-<a href=#641 id=641 data-nosnippet>641</a>                            flash_meta: flash_meta_full,
-<a href=#642 id=642 data-nosnippet>642</a>                        },
-<a href=#643 id=643 data-nosnippet>643</a>                    seq_indices,
-<a href=#644 id=644 data-nosnippet>644</a>                } = prompt;
-<a href=#645 id=645 data-nosnippet>645</a>                <span class="kw">let </span>InnerInputProcessorOutput {
-<a href=#646 id=646 data-nosnippet>646</a>                    inputs:
-<a href=#647 id=647 data-nosnippet>647</a>                        InputMetadata {
-<a href=#648 id=648 data-nosnippet>648</a>                            input: input_ids,
-<a href=#649 id=649 data-nosnippet>649</a>                            positions: seqlen_offsets,
-<a href=#650 id=650 data-nosnippet>650</a>                            context_lens,
-<a href=#651 id=651 data-nosnippet>651</a>                            position_ids: <span class="kw">_</span>,
-<a href=#652 id=652 data-nosnippet>652</a>                            paged_attn_meta,
-<a href=#653 id=653 data-nosnippet>653</a>                            flash_meta,
-<a href=#654 id=654 data-nosnippet>654</a>                        },
-<a href=#655 id=655 data-nosnippet>655</a>                    seq_indices: <span class="kw">_</span>,
-<a href=#656 id=656 data-nosnippet>656</a>                } = completion;
-<a href=#657 id=657 data-nosnippet>657</a>                <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
-<a href=#658 id=658 data-nosnippet>658</a>                    input_ids,
-<a href=#659 id=659 data-nosnippet>659</a>                    input_ids_full: <span class="prelude-val">Some</span>(input_ids_full),
-<a href=#660 id=660 data-nosnippet>660</a>                    seqlen_offsets,
-<a href=#661 id=661 data-nosnippet>661</a>                    seqlen_offsets_full: <span class="prelude-val">Some</span>(seqlen_offsets_full),
-<a href=#662 id=662 data-nosnippet>662</a>                    context_lens,
-<a href=#663 id=663 data-nosnippet>663</a>                    position_ids,
-<a href=#664 id=664 data-nosnippet>664</a>                    paged_attn_meta,
-<a href=#665 id=665 data-nosnippet>665</a>                    flash_meta,
-<a href=#666 id=666 data-nosnippet>666</a>                    flash_meta_full: <span class="prelude-val">Some</span>(flash_meta_full),
-<a href=#667 id=667 data-nosnippet>667</a>                });
-<a href=#668 id=668 data-nosnippet>668</a>                <span class="prelude-val">Ok</span>(InputProcessorOutput {
-<a href=#669 id=669 data-nosnippet>669</a>                    inputs,
-<a href=#670 id=670 data-nosnippet>670</a>                    seq_indices,
-<a href=#671 id=671 data-nosnippet>671</a>                })
-<a href=#672 id=672 data-nosnippet>672</a>            } <span class="kw">else if </span>is_xlora &amp;&amp; is_prompt {
-<a href=#673 id=673 data-nosnippet>673</a>                <span class="kw">let </span>metadata = get_prompt_input(
-<a href=#674 id=674 data-nosnippet>674</a>                    input_seqs
-<a href=#675 id=675 data-nosnippet>675</a>                        .iter()
-<a href=#676 id=676 data-nosnippet>676</a>                        .map(|seq| seq.get_toks())
-<a href=#677 id=677 data-nosnippet>677</a>                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#678 id=678 data-nosnippet>678</a>                    input_seqs,
-<a href=#679 id=679 data-nosnippet>679</a>                    device,
-<a href=#680 id=680 data-nosnippet>680</a>                    last_n_context_len,
-<a href=#681 id=681 data-nosnippet>681</a>                    return_raw_logits,
-<a href=#682 id=682 data-nosnippet>682</a>                    paged_attn_metadata.as_mut(),
-<a href=#683 id=683 data-nosnippet>683</a>                    mapper,
-<a href=#684 id=684 data-nosnippet>684</a>                )<span class="question-mark">?</span>;
-<a href=#685 id=685 data-nosnippet>685</a>                <span class="kw">let </span>InnerInputProcessorOutput {
-<a href=#686 id=686 data-nosnippet>686</a>                    inputs:
-<a href=#687 id=687 data-nosnippet>687</a>                        InputMetadata {
-<a href=#688 id=688 data-nosnippet>688</a>                            input: input_ids,
-<a href=#689 id=689 data-nosnippet>689</a>                            positions: seqlen_offsets,
-<a href=#690 id=690 data-nosnippet>690</a>                            context_lens,
-<a href=#691 id=691 data-nosnippet>691</a>                            position_ids,
-<a href=#692 id=692 data-nosnippet>692</a>                            paged_attn_meta,
-<a href=#693 id=693 data-nosnippet>693</a>                            flash_meta,
-<a href=#694 id=694 data-nosnippet>694</a>                        },
-<a href=#695 id=695 data-nosnippet>695</a>                    seq_indices,
-<a href=#696 id=696 data-nosnippet>696</a>                } = metadata;
-<a href=#697 id=697 data-nosnippet>697</a>                <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
-<a href=#698 id=698 data-nosnippet>698</a>                    input_ids: input_ids.clone(),
-<a href=#699 id=699 data-nosnippet>699</a>                    input_ids_full: <span class="prelude-val">Some</span>(input_ids),
-<a href=#700 id=700 data-nosnippet>700</a>                    seqlen_offsets: seqlen_offsets.clone(),
-<a href=#701 id=701 data-nosnippet>701</a>                    seqlen_offsets_full: <span class="prelude-val">Some</span>(seqlen_offsets),
-<a href=#702 id=702 data-nosnippet>702</a>                    context_lens,
-<a href=#703 id=703 data-nosnippet>703</a>                    position_ids,
-<a href=#704 id=704 data-nosnippet>704</a>                    paged_attn_meta,
-<a href=#705 id=705 data-nosnippet>705</a>                    flash_meta: flash_meta.clone(),
-<a href=#706 id=706 data-nosnippet>706</a>                    flash_meta_full: <span class="prelude-val">Some</span>(flash_meta),
-<a href=#707 id=707 data-nosnippet>707</a>                });
-<a href=#708 id=708 data-nosnippet>708</a>                <span class="prelude-val">Ok</span>(InputProcessorOutput {
-<a href=#709 id=709 data-nosnippet>709</a>                    inputs,
-<a href=#710 id=710 data-nosnippet>710</a>                    seq_indices,
-<a href=#711 id=711 data-nosnippet>711</a>                })
-<a href=#712 id=712 data-nosnippet>712</a>            } <span class="kw">else if </span>is_prompt {
-<a href=#713 id=713 data-nosnippet>713</a>                <span class="kw">let </span>metadata = get_prompt_input(
-<a href=#714 id=714 data-nosnippet>714</a>                    input_seqs
-<a href=#715 id=715 data-nosnippet>715</a>                        .iter()
-<a href=#716 id=716 data-nosnippet>716</a>                        .map(|seq| seq.get_toks())
-<a href=#717 id=717 data-nosnippet>717</a>                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#718 id=718 data-nosnippet>718</a>                    input_seqs,
-<a href=#719 id=719 data-nosnippet>719</a>                    device,
-<a href=#720 id=720 data-nosnippet>720</a>                    last_n_context_len,
-<a href=#721 id=721 data-nosnippet>721</a>                    return_raw_logits,
-<a href=#722 id=722 data-nosnippet>722</a>                    paged_attn_metadata.as_mut(),
-<a href=#723 id=723 data-nosnippet>723</a>                    mapper,
-<a href=#724 id=724 data-nosnippet>724</a>                )<span class="question-mark">?</span>;
-<a href=#725 id=725 data-nosnippet>725</a>                <span class="kw">let </span>InnerInputProcessorOutput {
-<a href=#726 id=726 data-nosnippet>726</a>                    inputs:
-<a href=#727 id=727 data-nosnippet>727</a>                        InputMetadata {
-<a href=#728 id=728 data-nosnippet>728</a>                            input: input_ids,
-<a href=#729 id=729 data-nosnippet>729</a>                            positions: seqlen_offsets,
-<a href=#730 id=730 data-nosnippet>730</a>                            context_lens,
-<a href=#731 id=731 data-nosnippet>731</a>                            position_ids,
-<a href=#732 id=732 data-nosnippet>732</a>                            paged_attn_meta,
-<a href=#733 id=733 data-nosnippet>733</a>                            flash_meta,
-<a href=#734 id=734 data-nosnippet>734</a>                        },
-<a href=#735 id=735 data-nosnippet>735</a>                    seq_indices,
-<a href=#736 id=736 data-nosnippet>736</a>                } = metadata;
-<a href=#737 id=737 data-nosnippet>737</a>                <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
-<a href=#738 id=738 data-nosnippet>738</a>                    input_ids,
-<a href=#739 id=739 data-nosnippet>739</a>                    input_ids_full: <span class="prelude-val">None</span>,
-<a href=#740 id=740 data-nosnippet>740</a>                    seqlen_offsets,
-<a href=#741 id=741 data-nosnippet>741</a>                    seqlen_offsets_full: <span class="prelude-val">None</span>,
-<a href=#742 id=742 data-nosnippet>742</a>                    context_lens,
-<a href=#743 id=743 data-nosnippet>743</a>                    position_ids,
-<a href=#744 id=744 data-nosnippet>744</a>                    paged_attn_meta,
-<a href=#745 id=745 data-nosnippet>745</a>                    flash_meta,
-<a href=#746 id=746 data-nosnippet>746</a>                    flash_meta_full: <span class="prelude-val">None</span>,
-<a href=#747 id=747 data-nosnippet>747</a>                });
-<a href=#748 id=748 data-nosnippet>748</a>                <span class="prelude-val">Ok</span>(InputProcessorOutput {
-<a href=#749 id=749 data-nosnippet>749</a>                    inputs,
-<a href=#750 id=750 data-nosnippet>750</a>                    seq_indices,
-<a href=#751 id=751 data-nosnippet>751</a>                })
-<a href=#752 id=752 data-nosnippet>752</a>            } <span class="kw">else </span>{
-<a href=#753 id=753 data-nosnippet>753</a>                <span class="kw">let </span>metadata = get_completion_input(
-<a href=#754 id=754 data-nosnippet>754</a>                    input_seqs
-<a href=#755 id=755 data-nosnippet>755</a>                        .iter()
-<a href=#756 id=756 data-nosnippet>756</a>                        .map(|seq| seq.get_toks())
-<a href=#757 id=757 data-nosnippet>757</a>                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#758 id=758 data-nosnippet>758</a>                    input_seqs,
-<a href=#759 id=759 data-nosnippet>759</a>                    device,
-<a href=#760 id=760 data-nosnippet>760</a>                    no_kv_cache,
-<a href=#761 id=761 data-nosnippet>761</a>                    last_n_context_len,
-<a href=#762 id=762 data-nosnippet>762</a>                    return_raw_logits,
-<a href=#763 id=763 data-nosnippet>763</a>                    paged_attn_metadata.as_mut(),
-<a href=#764 id=764 data-nosnippet>764</a>                    mapper,
-<a href=#765 id=765 data-nosnippet>765</a>                )<span class="question-mark">?</span>;
-<a href=#766 id=766 data-nosnippet>766</a>                <span class="kw">let </span>InnerInputProcessorOutput {
-<a href=#767 id=767 data-nosnippet>767</a>                    inputs:
-<a href=#768 id=768 data-nosnippet>768</a>                        InputMetadata {
-<a href=#769 id=769 data-nosnippet>769</a>                            input: input_ids,
-<a href=#770 id=770 data-nosnippet>770</a>                            positions: seqlen_offsets,
-<a href=#771 id=771 data-nosnippet>771</a>                            context_lens,
-<a href=#772 id=772 data-nosnippet>772</a>                            position_ids,
-<a href=#773 id=773 data-nosnippet>773</a>                            paged_attn_meta,
-<a href=#774 id=774 data-nosnippet>774</a>                            flash_meta,
-<a href=#775 id=775 data-nosnippet>775</a>                        },
-<a href=#776 id=776 data-nosnippet>776</a>                    seq_indices,
-<a href=#777 id=777 data-nosnippet>777</a>                } = metadata;
-<a href=#778 id=778 data-nosnippet>778</a>                <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
-<a href=#779 id=779 data-nosnippet>779</a>                    input_ids,
-<a href=#780 id=780 data-nosnippet>780</a>                    input_ids_full: <span class="prelude-val">None</span>,
-<a href=#781 id=781 data-nosnippet>781</a>                    seqlen_offsets,
-<a href=#782 id=782 data-nosnippet>782</a>                    seqlen_offsets_full: <span class="prelude-val">None</span>,
-<a href=#783 id=783 data-nosnippet>783</a>                    context_lens,
-<a href=#784 id=784 data-nosnippet>784</a>                    position_ids,
-<a href=#785 id=785 data-nosnippet>785</a>                    paged_attn_meta,
-<a href=#786 id=786 data-nosnippet>786</a>                    flash_meta,
-<a href=#787 id=787 data-nosnippet>787</a>                    flash_meta_full: <span class="prelude-val">None</span>,
-<a href=#788 id=788 data-nosnippet>788</a>                });
-<a href=#789 id=789 data-nosnippet>789</a>                <span class="prelude-val">Ok</span>(InputProcessorOutput {
-<a href=#790 id=790 data-nosnippet>790</a>                    inputs,
-<a href=#791 id=791 data-nosnippet>791</a>                    seq_indices,
-<a href=#792 id=792 data-nosnippet>792</a>                })
-<a href=#793 id=793 data-nosnippet>793</a>            }
-<a href=#794 id=794 data-nosnippet>794</a>        }
-<a href=#795 id=795 data-nosnippet>795</a>
-<a href=#796 id=796 data-nosnippet>796</a>        <span class="kw">fn </span>get_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; InputsProcessorType {
-<a href=#797 id=797 data-nosnippet>797</a>            InputsProcessorType::Text
+<a href=#454 id=454 data-nosnippet>454</a>        <span class="kw">let </span>paged_attn_meta = <span class="kw">if </span>paged_attn_metadata.is_some() {
+<a href=#455 id=455 data-nosnippet>455</a>            <span class="kw">let </span>slot_mappings = _make_tensor_with_pad(slot_mappings, <span class="number">1</span>, _PAD_SLOT_ID, device)<span class="question-mark">?</span>;
+<a href=#456 id=456 data-nosnippet>456</a>
+<a href=#457 id=457 data-nosnippet>457</a>            <span class="kw">let </span>max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
+<a href=#458 id=458 data-nosnippet>458</a>
+<a href=#459 id=459 data-nosnippet>459</a>            <span class="kw">let </span>block_tables = _make_tensor_with_pad(
+<a href=#460 id=460 data-nosnippet>460</a>                block_tables
+<a href=#461 id=461 data-nosnippet>461</a>                    .iter()
+<a href=#462 id=462 data-nosnippet>462</a>                    .map(|x| x.iter().map(|x| <span class="kw-2">*</span>x <span class="kw">as </span>u32).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
+<a href=#463 id=463 data-nosnippet>463</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#464 id=464 data-nosnippet>464</a>                max_block_table_len,
+<a href=#465 id=465 data-nosnippet>465</a>                <span class="number">0</span>,
+<a href=#466 id=466 data-nosnippet>466</a>                device,
+<a href=#467 id=467 data-nosnippet>467</a>            )<span class="question-mark">?</span>;
+<a href=#468 id=468 data-nosnippet>468</a>            <span class="kw">let </span>block_tables = block_tables.reshape(((), max_block_table_len))<span class="question-mark">?</span>;
+<a href=#469 id=469 data-nosnippet>469</a>
+<a href=#470 id=470 data-nosnippet>470</a>            <span class="kw">let </span>max_context_len = paged_attn_context_lens.iter().max().unwrap();
+<a href=#471 id=471 data-nosnippet>471</a>
+<a href=#472 id=472 data-nosnippet>472</a>            <span class="kw">let </span>context_lens = Tensor::from_vec(
+<a href=#473 id=473 data-nosnippet>473</a>                paged_attn_context_lens
+<a href=#474 id=474 data-nosnippet>474</a>                    .iter()
+<a href=#475 id=475 data-nosnippet>475</a>                    .map(|x| <span class="kw-2">*</span>x <span class="kw">as </span>u32)
+<a href=#476 id=476 data-nosnippet>476</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#477 id=477 data-nosnippet>477</a>                (paged_attn_context_lens.len(),),
+<a href=#478 id=478 data-nosnippet>478</a>                device,
+<a href=#479 id=479 data-nosnippet>479</a>            )<span class="question-mark">?</span>;
+<a href=#480 id=480 data-nosnippet>480</a>
+<a href=#481 id=481 data-nosnippet>481</a>            <span class="comment">// For device mapping, make a copy of each tensor for each device
+<a href=#482 id=482 data-nosnippet>482</a>            </span><span class="kw">let </span>devices = mapper.unwrap().get_unique_devices();
+<a href=#483 id=483 data-nosnippet>483</a>            <span class="kw">let </span><span class="kw-2">mut </span>slot_mappings_map = HashMap::new();
+<a href=#484 id=484 data-nosnippet>484</a>            <span class="kw">let </span><span class="kw-2">mut </span>block_tables_map = HashMap::new();
+<a href=#485 id=485 data-nosnippet>485</a>            <span class="kw">let </span><span class="kw-2">mut </span>context_lens_map = HashMap::new();
+<a href=#486 id=486 data-nosnippet>486</a>
+<a href=#487 id=487 data-nosnippet>487</a>            <span class="kw">for </span>device <span class="kw">in </span>devices {
+<a href=#488 id=488 data-nosnippet>488</a>                slot_mappings_map
+<a href=#489 id=489 data-nosnippet>489</a>                    .insert(device.location(), slot_mappings.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+<a href=#490 id=490 data-nosnippet>490</a>                block_tables_map
+<a href=#491 id=491 data-nosnippet>491</a>                    .insert(device.location(), block_tables.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+<a href=#492 id=492 data-nosnippet>492</a>                context_lens_map
+<a href=#493 id=493 data-nosnippet>493</a>                    .insert(device.location(), context_lens.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+<a href=#494 id=494 data-nosnippet>494</a>            }
+<a href=#495 id=495 data-nosnippet>495</a>
+<a href=#496 id=496 data-nosnippet>496</a>            <span class="prelude-val">Some</span>(PagedAttentionInputMetadata {
+<a href=#497 id=497 data-nosnippet>497</a>                slot_mappings: slot_mappings_map,
+<a href=#498 id=498 data-nosnippet>498</a>                block_tables: <span class="prelude-val">Some</span>(block_tables_map),
+<a href=#499 id=499 data-nosnippet>499</a>                context_lens: <span class="prelude-val">Some</span>(context_lens_map),
+<a href=#500 id=500 data-nosnippet>500</a>                max_context_len: <span class="prelude-val">Some</span>(<span class="kw-2">*</span>max_context_len),
+<a href=#501 id=501 data-nosnippet>501</a>                is_first_prompt_chunk: <span class="bool-val">false</span>,
+<a href=#502 id=502 data-nosnippet>502</a>            })
+<a href=#503 id=503 data-nosnippet>503</a>        } <span class="kw">else </span>{
+<a href=#504 id=504 data-nosnippet>504</a>            <span class="prelude-val">None
+<a href=#505 id=505 data-nosnippet>505</a>        </span>};
+<a href=#506 id=506 data-nosnippet>506</a>
+<a href=#507 id=507 data-nosnippet>507</a>        <span class="prelude-val">Ok</span>(InputMetadata {
+<a href=#508 id=508 data-nosnippet>508</a>            input: Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap(),
+<a href=#509 id=509 data-nosnippet>509</a>            positions: seqlen_offsets,
+<a href=#510 id=510 data-nosnippet>510</a>            context_lens,
+<a href=#511 id=511 data-nosnippet>511</a>            position_ids,
+<a href=#512 id=512 data-nosnippet>512</a>            paged_attn_meta,
+<a href=#513 id=513 data-nosnippet>513</a>            flash_meta: FlashParams {
+<a href=#514 id=514 data-nosnippet>514</a>                max_k,
+<a href=#515 id=515 data-nosnippet>515</a>                max_q,
+<a href=#516 id=516 data-nosnippet>516</a>                cumulative_seqlens_k: seqlens_k_map,
+<a href=#517 id=517 data-nosnippet>517</a>                cumulative_seqlens_q: seqlens_q_map,
+<a href=#518 id=518 data-nosnippet>518</a>                causal: <span class="bool-val">true</span>,
+<a href=#519 id=519 data-nosnippet>519</a>            },
+<a href=#520 id=520 data-nosnippet>520</a>        })
+<a href=#521 id=521 data-nosnippet>521</a>    }
+<a href=#522 id=522 data-nosnippet>522</a>
+<a href=#523 id=523 data-nosnippet>523</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
+<a href=#524 id=524 data-nosnippet>524</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_prompt_input&lt;T: WithDType + std::fmt::Debug&gt;(
+<a href=#525 id=525 data-nosnippet>525</a>        toks: Vec&lt;<span class="kw-2">&amp;</span>[T]&gt;,
+<a href=#526 id=526 data-nosnippet>526</a>        input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
+<a href=#527 id=527 data-nosnippet>527</a>        device: <span class="kw-2">&amp;</span>Device,
+<a href=#528 id=528 data-nosnippet>528</a>        last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+<a href=#529 id=529 data-nosnippet>529</a>        return_raw_logits: bool,
+<a href=#530 id=530 data-nosnippet>530</a>        paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&gt;,
+<a href=#531 id=531 data-nosnippet>531</a>        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
+<a href=#532 id=532 data-nosnippet>532</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;InnerInputProcessorOutput&gt; {
+<a href=#533 id=533 data-nosnippet>533</a>        <span class="kw">let </span>offset = input_seqs[<span class="number">0</span>].token_offset();
+<a href=#534 id=534 data-nosnippet>534</a>        make_prompt_chunk(
+<a href=#535 id=535 data-nosnippet>535</a>            offset,
+<a href=#536 id=536 data-nosnippet>536</a>            toks,
+<a href=#537 id=537 data-nosnippet>537</a>            <span class="kw-2">&amp;</span>input_seqs.iter().map(|s| <span class="kw-2">*</span>s.id()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#538 id=538 data-nosnippet>538</a>            device,
+<a href=#539 id=539 data-nosnippet>539</a>            last_n_context_len,
+<a href=#540 id=540 data-nosnippet>540</a>            return_raw_logits,
+<a href=#541 id=541 data-nosnippet>541</a>            paged_attn_metadata,
+<a href=#542 id=542 data-nosnippet>542</a>            mapper,
+<a href=#543 id=543 data-nosnippet>543</a>        )
+<a href=#544 id=544 data-nosnippet>544</a>        .map(|inputs| InnerInputProcessorOutput {
+<a href=#545 id=545 data-nosnippet>545</a>            inputs,
+<a href=#546 id=546 data-nosnippet>546</a>            seq_indices: (<span class="number">0</span>..input_seqs.len()).collect(),
+<a href=#547 id=547 data-nosnippet>547</a>        })
+<a href=#548 id=548 data-nosnippet>548</a>    }
+<a href=#549 id=549 data-nosnippet>549</a>
+<a href=#550 id=550 data-nosnippet>550</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
+<a href=#551 id=551 data-nosnippet>551</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_completion_input&lt;T: WithDType + std::fmt::Debug&gt;(
+<a href=#552 id=552 data-nosnippet>552</a>        toks: Vec&lt;<span class="kw-2">&amp;</span>[T]&gt;,
+<a href=#553 id=553 data-nosnippet>553</a>        input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
+<a href=#554 id=554 data-nosnippet>554</a>        device: <span class="kw-2">&amp;</span>Device,
+<a href=#555 id=555 data-nosnippet>555</a>        no_kv_cache: bool,
+<a href=#556 id=556 data-nosnippet>556</a>        last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+<a href=#557 id=557 data-nosnippet>557</a>        return_raw_logits: bool,
+<a href=#558 id=558 data-nosnippet>558</a>        paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&gt;,
+<a href=#559 id=559 data-nosnippet>559</a>        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
+<a href=#560 id=560 data-nosnippet>560</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;InnerInputProcessorOutput&gt; {
+<a href=#561 id=561 data-nosnippet>561</a>        <span class="kw">if </span>no_kv_cache {
+<a href=#562 id=562 data-nosnippet>562</a>            <span class="kw">return </span>get_prompt_input(
+<a href=#563 id=563 data-nosnippet>563</a>                toks,
+<a href=#564 id=564 data-nosnippet>564</a>                input_seqs,
+<a href=#565 id=565 data-nosnippet>565</a>                device,
+<a href=#566 id=566 data-nosnippet>566</a>                last_n_context_len,
+<a href=#567 id=567 data-nosnippet>567</a>                return_raw_logits,
+<a href=#568 id=568 data-nosnippet>568</a>                paged_attn_metadata,
+<a href=#569 id=569 data-nosnippet>569</a>                mapper,
+<a href=#570 id=570 data-nosnippet>570</a>            );
+<a href=#571 id=571 data-nosnippet>571</a>        }
+<a href=#572 id=572 data-nosnippet>572</a>
+<a href=#573 id=573 data-nosnippet>573</a>        make_completion_chunk(toks, input_seqs, device, paged_attn_metadata, mapper).map(|inputs| {
+<a href=#574 id=574 data-nosnippet>574</a>            InnerInputProcessorOutput {
+<a href=#575 id=575 data-nosnippet>575</a>                inputs,
+<a href=#576 id=576 data-nosnippet>576</a>                seq_indices: (<span class="number">0</span>..input_seqs.len()).collect(),
+<a href=#577 id=577 data-nosnippet>577</a>            }
+<a href=#578 id=578 data-nosnippet>578</a>        })
+<a href=#579 id=579 data-nosnippet>579</a>    }
+<a href=#580 id=580 data-nosnippet>580</a>
+<a href=#581 id=581 data-nosnippet>581</a>    <span class="attr">#[derive(Clone)]
+<a href=#582 id=582 data-nosnippet>582</a>    </span><span class="kw">pub struct </span>ModelInputs {
+<a href=#583 id=583 data-nosnippet>583</a>        <span class="kw">pub </span>input_ids: Tensor,
+<a href=#584 id=584 data-nosnippet>584</a>        <span class="kw">pub </span>input_ids_full: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+<a href=#585 id=585 data-nosnippet>585</a>        <span class="kw">pub </span>seqlen_offsets: Vec&lt;usize&gt;,
+<a href=#586 id=586 data-nosnippet>586</a>        <span class="kw">pub </span>seqlen_offsets_full: <span class="prelude-ty">Option</span>&lt;Vec&lt;usize&gt;&gt;,
+<a href=#587 id=587 data-nosnippet>587</a>        <span class="kw">pub </span>context_lens: Vec&lt;(usize, usize)&gt;,
+<a href=#588 id=588 data-nosnippet>588</a>        <span class="kw">pub </span>position_ids: Vec&lt;usize&gt;,
+<a href=#589 id=589 data-nosnippet>589</a>        <span class="kw">pub </span>paged_attn_meta: <span class="prelude-ty">Option</span>&lt;PagedAttentionInputMetadata&gt;,
+<a href=#590 id=590 data-nosnippet>590</a>        <span class="kw">pub </span>flash_meta: FlashParams,
+<a href=#591 id=591 data-nosnippet>591</a>        <span class="kw">pub </span>flash_meta_full: <span class="prelude-ty">Option</span>&lt;FlashParams&gt;,
+<a href=#592 id=592 data-nosnippet>592</a>    }
+<a href=#593 id=593 data-nosnippet>593</a>
+<a href=#594 id=594 data-nosnippet>594</a>    <span class="kw">pub struct </span>TextInputsProcessor;
+<a href=#595 id=595 data-nosnippet>595</a>
+<a href=#596 id=596 data-nosnippet>596</a>    <span class="kw">impl </span>InputsProcessor <span class="kw">for </span>TextInputsProcessor {
+<a href=#597 id=597 data-nosnippet>597</a>        <span class="kw">fn </span>process_inputs(
+<a href=#598 id=598 data-nosnippet>598</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#599 id=599 data-nosnippet>599</a>            <span class="kw">_</span>: <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;,
+<a href=#600 id=600 data-nosnippet>600</a>            input_seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+<a href=#601 id=601 data-nosnippet>601</a>            is_prompt: bool,
+<a href=#602 id=602 data-nosnippet>602</a>            is_xlora: bool,
+<a href=#603 id=603 data-nosnippet>603</a>            device: <span class="kw-2">&amp;</span>Device,
+<a href=#604 id=604 data-nosnippet>604</a>            no_kv_cache: bool,
+<a href=#605 id=605 data-nosnippet>605</a>            last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+<a href=#606 id=606 data-nosnippet>606</a>            return_raw_logits: bool,
+<a href=#607 id=607 data-nosnippet>607</a>            <span class="kw">_</span>: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
+<a href=#608 id=608 data-nosnippet>608</a>            <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&gt;,
+<a href=#609 id=609 data-nosnippet>609</a>            mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
+<a href=#610 id=610 data-nosnippet>610</a>        ) -&gt; <span class="prelude-ty">Result</span>&lt;InputProcessorOutput&gt; {
+<a href=#611 id=611 data-nosnippet>611</a>            <span class="kw">if </span>is_xlora &amp;&amp; !is_prompt {
+<a href=#612 id=612 data-nosnippet>612</a>                <span class="kw">let </span>prompt = get_prompt_input(
+<a href=#613 id=613 data-nosnippet>613</a>                    input_seqs
+<a href=#614 id=614 data-nosnippet>614</a>                        .iter()
+<a href=#615 id=615 data-nosnippet>615</a>                        .map(|seq| seq.get_toks())
+<a href=#616 id=616 data-nosnippet>616</a>                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#617 id=617 data-nosnippet>617</a>                    input_seqs,
+<a href=#618 id=618 data-nosnippet>618</a>                    device,
+<a href=#619 id=619 data-nosnippet>619</a>                    last_n_context_len,
+<a href=#620 id=620 data-nosnippet>620</a>                    return_raw_logits,
+<a href=#621 id=621 data-nosnippet>621</a>                    paged_attn_metadata.as_mut(),
+<a href=#622 id=622 data-nosnippet>622</a>                    mapper,
+<a href=#623 id=623 data-nosnippet>623</a>                )<span class="question-mark">?</span>;
+<a href=#624 id=624 data-nosnippet>624</a>                <span class="kw">let </span>completion = get_completion_input(
+<a href=#625 id=625 data-nosnippet>625</a>                    input_seqs
+<a href=#626 id=626 data-nosnippet>626</a>                        .iter()
+<a href=#627 id=627 data-nosnippet>627</a>                        .map(|seq| seq.get_toks())
+<a href=#628 id=628 data-nosnippet>628</a>                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#629 id=629 data-nosnippet>629</a>                    input_seqs,
+<a href=#630 id=630 data-nosnippet>630</a>                    device,
+<a href=#631 id=631 data-nosnippet>631</a>                    no_kv_cache,
+<a href=#632 id=632 data-nosnippet>632</a>                    last_n_context_len,
+<a href=#633 id=633 data-nosnippet>633</a>                    return_raw_logits,
+<a href=#634 id=634 data-nosnippet>634</a>                    paged_attn_metadata.as_mut(),
+<a href=#635 id=635 data-nosnippet>635</a>                    mapper,
+<a href=#636 id=636 data-nosnippet>636</a>                )<span class="question-mark">?</span>;
+<a href=#637 id=637 data-nosnippet>637</a>                <span class="kw">let </span>InnerInputProcessorOutput {
+<a href=#638 id=638 data-nosnippet>638</a>                    inputs:
+<a href=#639 id=639 data-nosnippet>639</a>                        InputMetadata {
+<a href=#640 id=640 data-nosnippet>640</a>                            input: input_ids_full,
+<a href=#641 id=641 data-nosnippet>641</a>                            positions: seqlen_offsets_full,
+<a href=#642 id=642 data-nosnippet>642</a>                            context_lens: <span class="kw">_</span>,
+<a href=#643 id=643 data-nosnippet>643</a>                            position_ids,
+<a href=#644 id=644 data-nosnippet>644</a>                            paged_attn_meta: <span class="kw">_</span>,
+<a href=#645 id=645 data-nosnippet>645</a>                            flash_meta: flash_meta_full,
+<a href=#646 id=646 data-nosnippet>646</a>                        },
+<a href=#647 id=647 data-nosnippet>647</a>                    seq_indices,
+<a href=#648 id=648 data-nosnippet>648</a>                } = prompt;
+<a href=#649 id=649 data-nosnippet>649</a>                <span class="kw">let </span>InnerInputProcessorOutput {
+<a href=#650 id=650 data-nosnippet>650</a>                    inputs:
+<a href=#651 id=651 data-nosnippet>651</a>                        InputMetadata {
+<a href=#652 id=652 data-nosnippet>652</a>                            input: input_ids,
+<a href=#653 id=653 data-nosnippet>653</a>                            positions: seqlen_offsets,
+<a href=#654 id=654 data-nosnippet>654</a>                            context_lens,
+<a href=#655 id=655 data-nosnippet>655</a>                            position_ids: <span class="kw">_</span>,
+<a href=#656 id=656 data-nosnippet>656</a>                            paged_attn_meta,
+<a href=#657 id=657 data-nosnippet>657</a>                            flash_meta,
+<a href=#658 id=658 data-nosnippet>658</a>                        },
+<a href=#659 id=659 data-nosnippet>659</a>                    seq_indices: <span class="kw">_</span>,
+<a href=#660 id=660 data-nosnippet>660</a>                } = completion;
+<a href=#661 id=661 data-nosnippet>661</a>                <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
+<a href=#662 id=662 data-nosnippet>662</a>                    input_ids,
+<a href=#663 id=663 data-nosnippet>663</a>                    input_ids_full: <span class="prelude-val">Some</span>(input_ids_full),
+<a href=#664 id=664 data-nosnippet>664</a>                    seqlen_offsets,
+<a href=#665 id=665 data-nosnippet>665</a>                    seqlen_offsets_full: <span class="prelude-val">Some</span>(seqlen_offsets_full),
+<a href=#666 id=666 data-nosnippet>666</a>                    context_lens,
+<a href=#667 id=667 data-nosnippet>667</a>                    position_ids,
+<a href=#668 id=668 data-nosnippet>668</a>                    paged_attn_meta,
+<a href=#669 id=669 data-nosnippet>669</a>                    flash_meta,
+<a href=#670 id=670 data-nosnippet>670</a>                    flash_meta_full: <span class="prelude-val">Some</span>(flash_meta_full),
+<a href=#671 id=671 data-nosnippet>671</a>                });
+<a href=#672 id=672 data-nosnippet>672</a>                <span class="prelude-val">Ok</span>(InputProcessorOutput {
+<a href=#673 id=673 data-nosnippet>673</a>                    inputs,
+<a href=#674 id=674 data-nosnippet>674</a>                    seq_indices,
+<a href=#675 id=675 data-nosnippet>675</a>                })
+<a href=#676 id=676 data-nosnippet>676</a>            } <span class="kw">else if </span>is_xlora &amp;&amp; is_prompt {
+<a href=#677 id=677 data-nosnippet>677</a>                <span class="kw">let </span>metadata = get_prompt_input(
+<a href=#678 id=678 data-nosnippet>678</a>                    input_seqs
+<a href=#679 id=679 data-nosnippet>679</a>                        .iter()
+<a href=#680 id=680 data-nosnippet>680</a>                        .map(|seq| seq.get_toks())
+<a href=#681 id=681 data-nosnippet>681</a>                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#682 id=682 data-nosnippet>682</a>                    input_seqs,
+<a href=#683 id=683 data-nosnippet>683</a>                    device,
+<a href=#684 id=684 data-nosnippet>684</a>                    last_n_context_len,
+<a href=#685 id=685 data-nosnippet>685</a>                    return_raw_logits,
+<a href=#686 id=686 data-nosnippet>686</a>                    paged_attn_metadata.as_mut(),
+<a href=#687 id=687 data-nosnippet>687</a>                    mapper,
+<a href=#688 id=688 data-nosnippet>688</a>                )<span class="question-mark">?</span>;
+<a href=#689 id=689 data-nosnippet>689</a>                <span class="kw">let </span>InnerInputProcessorOutput {
+<a href=#690 id=690 data-nosnippet>690</a>                    inputs:
+<a href=#691 id=691 data-nosnippet>691</a>                        InputMetadata {
+<a href=#692 id=692 data-nosnippet>692</a>                            input: input_ids,
+<a href=#693 id=693 data-nosnippet>693</a>                            positions: seqlen_offsets,
+<a href=#694 id=694 data-nosnippet>694</a>                            context_lens,
+<a href=#695 id=695 data-nosnippet>695</a>                            position_ids,
+<a href=#696 id=696 data-nosnippet>696</a>                            paged_attn_meta,
+<a href=#697 id=697 data-nosnippet>697</a>                            flash_meta,
+<a href=#698 id=698 data-nosnippet>698</a>                        },
+<a href=#699 id=699 data-nosnippet>699</a>                    seq_indices,
+<a href=#700 id=700 data-nosnippet>700</a>                } = metadata;
+<a href=#701 id=701 data-nosnippet>701</a>                <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
+<a href=#702 id=702 data-nosnippet>702</a>                    input_ids: input_ids.clone(),
+<a href=#703 id=703 data-nosnippet>703</a>                    input_ids_full: <span class="prelude-val">Some</span>(input_ids),
+<a href=#704 id=704 data-nosnippet>704</a>                    seqlen_offsets: seqlen_offsets.clone(),
+<a href=#705 id=705 data-nosnippet>705</a>                    seqlen_offsets_full: <span class="prelude-val">Some</span>(seqlen_offsets),
+<a href=#706 id=706 data-nosnippet>706</a>                    context_lens,
+<a href=#707 id=707 data-nosnippet>707</a>                    position_ids,
+<a href=#708 id=708 data-nosnippet>708</a>                    paged_attn_meta,
+<a href=#709 id=709 data-nosnippet>709</a>                    flash_meta: flash_meta.clone(),
+<a href=#710 id=710 data-nosnippet>710</a>                    flash_meta_full: <span class="prelude-val">Some</span>(flash_meta),
+<a href=#711 id=711 data-nosnippet>711</a>                });
+<a href=#712 id=712 data-nosnippet>712</a>                <span class="prelude-val">Ok</span>(InputProcessorOutput {
+<a href=#713 id=713 data-nosnippet>713</a>                    inputs,
+<a href=#714 id=714 data-nosnippet>714</a>                    seq_indices,
+<a href=#715 id=715 data-nosnippet>715</a>                })
+<a href=#716 id=716 data-nosnippet>716</a>            } <span class="kw">else if </span>is_prompt {
+<a href=#717 id=717 data-nosnippet>717</a>                <span class="kw">let </span>metadata = get_prompt_input(
+<a href=#718 id=718 data-nosnippet>718</a>                    input_seqs
+<a href=#719 id=719 data-nosnippet>719</a>                        .iter()
+<a href=#720 id=720 data-nosnippet>720</a>                        .map(|seq| seq.get_toks())
+<a href=#721 id=721 data-nosnippet>721</a>                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#722 id=722 data-nosnippet>722</a>                    input_seqs,
+<a href=#723 id=723 data-nosnippet>723</a>                    device,
+<a href=#724 id=724 data-nosnippet>724</a>                    last_n_context_len,
+<a href=#725 id=725 data-nosnippet>725</a>                    return_raw_logits,
+<a href=#726 id=726 data-nosnippet>726</a>                    paged_attn_metadata.as_mut(),
+<a href=#727 id=727 data-nosnippet>727</a>                    mapper,
+<a href=#728 id=728 data-nosnippet>728</a>                )<span class="question-mark">?</span>;
+<a href=#729 id=729 data-nosnippet>729</a>                <span class="kw">let </span>InnerInputProcessorOutput {
+<a href=#730 id=730 data-nosnippet>730</a>                    inputs:
+<a href=#731 id=731 data-nosnippet>731</a>                        InputMetadata {
+<a href=#732 id=732 data-nosnippet>732</a>                            input: input_ids,
+<a href=#733 id=733 data-nosnippet>733</a>                            positions: seqlen_offsets,
+<a href=#734 id=734 data-nosnippet>734</a>                            context_lens,
+<a href=#735 id=735 data-nosnippet>735</a>                            position_ids,
+<a href=#736 id=736 data-nosnippet>736</a>                            paged_attn_meta,
+<a href=#737 id=737 data-nosnippet>737</a>                            flash_meta,
+<a href=#738 id=738 data-nosnippet>738</a>                        },
+<a href=#739 id=739 data-nosnippet>739</a>                    seq_indices,
+<a href=#740 id=740 data-nosnippet>740</a>                } = metadata;
+<a href=#741 id=741 data-nosnippet>741</a>                <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
+<a href=#742 id=742 data-nosnippet>742</a>                    input_ids,
+<a href=#743 id=743 data-nosnippet>743</a>                    input_ids_full: <span class="prelude-val">None</span>,
+<a href=#744 id=744 data-nosnippet>744</a>                    seqlen_offsets,
+<a href=#745 id=745 data-nosnippet>745</a>                    seqlen_offsets_full: <span class="prelude-val">None</span>,
+<a href=#746 id=746 data-nosnippet>746</a>                    context_lens,
+<a href=#747 id=747 data-nosnippet>747</a>                    position_ids,
+<a href=#748 id=748 data-nosnippet>748</a>                    paged_attn_meta,
+<a href=#749 id=749 data-nosnippet>749</a>                    flash_meta,
+<a href=#750 id=750 data-nosnippet>750</a>                    flash_meta_full: <span class="prelude-val">None</span>,
+<a href=#751 id=751 data-nosnippet>751</a>                });
+<a href=#752 id=752 data-nosnippet>752</a>                <span class="prelude-val">Ok</span>(InputProcessorOutput {
+<a href=#753 id=753 data-nosnippet>753</a>                    inputs,
+<a href=#754 id=754 data-nosnippet>754</a>                    seq_indices,
+<a href=#755 id=755 data-nosnippet>755</a>                })
+<a href=#756 id=756 data-nosnippet>756</a>            } <span class="kw">else </span>{
+<a href=#757 id=757 data-nosnippet>757</a>                <span class="kw">let </span>metadata = get_completion_input(
+<a href=#758 id=758 data-nosnippet>758</a>                    input_seqs
+<a href=#759 id=759 data-nosnippet>759</a>                        .iter()
+<a href=#760 id=760 data-nosnippet>760</a>                        .map(|seq| seq.get_toks())
+<a href=#761 id=761 data-nosnippet>761</a>                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#762 id=762 data-nosnippet>762</a>                    input_seqs,
+<a href=#763 id=763 data-nosnippet>763</a>                    device,
+<a href=#764 id=764 data-nosnippet>764</a>                    no_kv_cache,
+<a href=#765 id=765 data-nosnippet>765</a>                    last_n_context_len,
+<a href=#766 id=766 data-nosnippet>766</a>                    return_raw_logits,
+<a href=#767 id=767 data-nosnippet>767</a>                    paged_attn_metadata.as_mut(),
+<a href=#768 id=768 data-nosnippet>768</a>                    mapper,
+<a href=#769 id=769 data-nosnippet>769</a>                )<span class="question-mark">?</span>;
+<a href=#770 id=770 data-nosnippet>770</a>                <span class="kw">let </span>InnerInputProcessorOutput {
+<a href=#771 id=771 data-nosnippet>771</a>                    inputs:
+<a href=#772 id=772 data-nosnippet>772</a>                        InputMetadata {
+<a href=#773 id=773 data-nosnippet>773</a>                            input: input_ids,
+<a href=#774 id=774 data-nosnippet>774</a>                            positions: seqlen_offsets,
+<a href=#775 id=775 data-nosnippet>775</a>                            context_lens,
+<a href=#776 id=776 data-nosnippet>776</a>                            position_ids,
+<a href=#777 id=777 data-nosnippet>777</a>                            paged_attn_meta,
+<a href=#778 id=778 data-nosnippet>778</a>                            flash_meta,
+<a href=#779 id=779 data-nosnippet>779</a>                        },
+<a href=#780 id=780 data-nosnippet>780</a>                    seq_indices,
+<a href=#781 id=781 data-nosnippet>781</a>                } = metadata;
+<a href=#782 id=782 data-nosnippet>782</a>                <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
+<a href=#783 id=783 data-nosnippet>783</a>                    input_ids,
+<a href=#784 id=784 data-nosnippet>784</a>                    input_ids_full: <span class="prelude-val">None</span>,
+<a href=#785 id=785 data-nosnippet>785</a>                    seqlen_offsets,
+<a href=#786 id=786 data-nosnippet>786</a>                    seqlen_offsets_full: <span class="prelude-val">None</span>,
+<a href=#787 id=787 data-nosnippet>787</a>                    context_lens,
+<a href=#788 id=788 data-nosnippet>788</a>                    position_ids,
+<a href=#789 id=789 data-nosnippet>789</a>                    paged_attn_meta,
+<a href=#790 id=790 data-nosnippet>790</a>                    flash_meta,
+<a href=#791 id=791 data-nosnippet>791</a>                    flash_meta_full: <span class="prelude-val">None</span>,
+<a href=#792 id=792 data-nosnippet>792</a>                });
+<a href=#793 id=793 data-nosnippet>793</a>                <span class="prelude-val">Ok</span>(InputProcessorOutput {
+<a href=#794 id=794 data-nosnippet>794</a>                    inputs,
+<a href=#795 id=795 data-nosnippet>795</a>                    seq_indices,
+<a href=#796 id=796 data-nosnippet>796</a>                })
+<a href=#797 id=797 data-nosnippet>797</a>            }
 <a href=#798 id=798 data-nosnippet>798</a>        }
-<a href=#799 id=799 data-nosnippet>799</a>    }
-<a href=#800 id=800 data-nosnippet>800</a>}</code></pre></div></section></main></body></html>
+<a href=#799 id=799 data-nosnippet>799</a>
+<a href=#800 id=800 data-nosnippet>800</a>        <span class="kw">fn </span>get_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; InputsProcessorType {
+<a href=#801 id=801 data-nosnippet>801</a>            InputsProcessorType::Text
+<a href=#802 id=802 data-nosnippet>802</a>        }
+<a href=#803 id=803 data-nosnippet>803</a>    }
+<a href=#804 id=804 data-nosnippet>804</a>}</code></pre></div></section></main></body></html>

@@ -126,4 +126,27 @@
 <a href=#126 id=126 data-nosnippet>126</a>    seq.set_state(SequenceState::Done(StopReason::Length(<span class="number">0</span>)));
 <a href=#127 id=127 data-nosnippet>127</a>
 <a href=#128 id=128 data-nosnippet>128</a>    <span class="prelude-val">Ok</span>(())
-<a href=#129 id=129 data-nosnippet>129</a>}</code></pre></div></section></main></body></html>
+<a href=#129 id=129 data-nosnippet>129</a>}
+<a href=#130 id=130 data-nosnippet>130</a>
+<a href=#131 id=131 data-nosnippet>131</a><span class="kw">pub async fn </span>send_embedding_responses(
+<a href=#132 id=132 data-nosnippet>132</a>    input_seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+<a href=#133 id=133 data-nosnippet>133</a>    embedings: Vec&lt;Vec&lt;f32&gt;&gt;,
+<a href=#134 id=134 data-nosnippet>134</a>) -&gt; candle_core::Result&lt;()&gt; {
+<a href=#135 id=135 data-nosnippet>135</a>    <span class="kw">if </span>embedings.len() != input_seqs.len() {
+<a href=#136 id=136 data-nosnippet>136</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"Number of embeddings must match number of sequences.."</span>);
+<a href=#137 id=137 data-nosnippet>137</a>    }
+<a href=#138 id=138 data-nosnippet>138</a>
+<a href=#139 id=139 data-nosnippet>139</a>    <span class="kw">for </span>(seq, embeddings) <span class="kw">in </span>input_seqs.iter_mut().zip(embedings) {
+<a href=#140 id=140 data-nosnippet>140</a>        seq.add_embedding_choice_to_group(embeddings);
+<a href=#141 id=141 data-nosnippet>141</a>
+<a href=#142 id=142 data-nosnippet>142</a>        <span class="kw">let </span>group = seq.get_mut_group();
+<a href=#143 id=143 data-nosnippet>143</a>        group
+<a href=#144 id=144 data-nosnippet>144</a>            .maybe_send_embedding_done_response(seq.responder())
+<a href=#145 id=145 data-nosnippet>145</a>            .<span class="kw">await
+<a href=#146 id=146 data-nosnippet>146</a>            </span>.map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+<a href=#147 id=147 data-nosnippet>147</a>
+<a href=#148 id=148 data-nosnippet>148</a>        seq.set_state(SequenceState::Done(StopReason::Length(<span class="number">0</span>)));
+<a href=#149 id=149 data-nosnippet>149</a>    }
+<a href=#150 id=150 data-nosnippet>150</a>
+<a href=#151 id=151 data-nosnippet>151</a>    <span class="prelude-val">Ok</span>(())
+<a href=#152 id=152 data-nosnippet>152</a>}</code></pre></div></section></main></body></html>

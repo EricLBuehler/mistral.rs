@@ -75,7 +75,7 @@
 <a href=#75 id=75 data-nosnippet>75</a><span class="kw">struct </span>FixedBucketingManager;
 <a href=#76 id=76 data-nosnippet>76</a>
 <a href=#77 id=77 data-nosnippet>77</a><span class="kw">impl</span>&lt;Backer: FcfsBacker&gt; BucketingManager&lt;Backer&gt; <span class="kw">for </span>FixedBucketingManager {
-<a href=#78 id=78 data-nosnippet>78</a>    <span class="doccomment">/// Move the seuqences into buckets, and run the ones with the shortest lengths.
+<a href=#78 id=78 data-nosnippet>78</a>    <span class="doccomment">/// Move the sequences into buckets, and run the ones with the shortest lengths.
 <a href=#79 id=79 data-nosnippet>79</a>    /// The others are moved to the waiting list (retaining high priority due to start time),
 <a href=#80 id=80 data-nosnippet>80</a>    /// without a state modification.
 <a href=#81 id=81 data-nosnippet>81</a>    </span><span class="kw">fn </span>bucket_and_waitlist_seqs_waiting(
@@ -190,7 +190,7 @@
 <a href=#190 id=190 data-nosnippet>190</a>        }
 <a href=#191 id=191 data-nosnippet>191</a>    }
 <a href=#192 id=192 data-nosnippet>192</a>
-<a href=#193 id=193 data-nosnippet>193</a>    <span class="doccomment">/// Move the seuqences into buckets, and run the ones with the shortest lengths.
+<a href=#193 id=193 data-nosnippet>193</a>    <span class="doccomment">/// Move the sequences into buckets, and run the ones with the shortest lengths.
 <a href=#194 id=194 data-nosnippet>194</a>    /// The others are moved to the waiting list (retaining high priority due to start time),
 <a href=#195 id=195 data-nosnippet>195</a>    /// without a state modification.
 <a href=#196 id=196 data-nosnippet>196</a>    </span><span class="kw">fn </span>bucket_and_waitlist_seqs(<span class="kw-2">&amp;mut </span><span class="self">self</span>, running: Vec&lt;Sequence&gt;) -&gt; Vec&lt;Sequence&gt; {

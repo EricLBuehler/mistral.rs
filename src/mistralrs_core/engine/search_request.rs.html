@@ -491,164 +491,188 @@
 <a href=#491 id=491 data-nosnippet>491</a>                                })
 <a href=#492 id=492 data-nosnippet>492</a>                                .<span class="kw">await
 <a href=#493 id=493 data-nosnippet>493</a>                                </span>.unwrap(),
-<a href=#494 id=494 data-nosnippet>494</a>                            ResponseOk::Speech {
-<a href=#495 id=495 data-nosnippet>495</a>                                pcm,
-<a href=#496 id=496 data-nosnippet>496</a>                                rate,
-<a href=#497 id=497 data-nosnippet>497</a>                                channels,
+<a href=#494 id=494 data-nosnippet>494</a>                            ResponseOk::Embeddings {
+<a href=#495 id=495 data-nosnippet>495</a>                                embeddings,
+<a href=#496 id=496 data-nosnippet>496</a>                                prompt_tokens,
+<a href=#497 id=497 data-nosnippet>497</a>                                total_tokens,
 <a href=#498 id=498 data-nosnippet>498</a>                            } =&gt; user_sender
-<a href=#499 id=499 data-nosnippet>499</a>                                .send(Response::Speech {
-<a href=#500 id=500 data-nosnippet>500</a>                                    pcm,
-<a href=#501 id=501 data-nosnippet>501</a>                                    rate,
-<a href=#502 id=502 data-nosnippet>502</a>                                    channels,
+<a href=#499 id=499 data-nosnippet>499</a>                                .send(Response::Embeddings {
+<a href=#500 id=500 data-nosnippet>500</a>                                    embeddings,
+<a href=#501 id=501 data-nosnippet>501</a>                                    prompt_tokens,
+<a href=#502 id=502 data-nosnippet>502</a>                                    total_tokens,
 <a href=#503 id=503 data-nosnippet>503</a>                                })
 <a href=#504 id=504 data-nosnippet>504</a>                                .<span class="kw">await
 <a href=#505 id=505 data-nosnippet>505</a>                                </span>.unwrap(),
-<a href=#506 id=506 data-nosnippet>506</a>                        };
-<a href=#507 id=507 data-nosnippet>507</a>                        <span class="kw">return</span>;
-<a href=#508 id=508 data-nosnippet>508</a>                    }
-<a href=#509 id=509 data-nosnippet>509</a>                };
-<a href=#510 id=510 data-nosnippet>510</a>
-<a href=#511 id=511 data-nosnippet>511</a>                <span class="comment">// Did the assistant ask to run a tool?
-<a href=#512 id=512 data-nosnippet>512</a>                </span><span class="kw">let </span>tc_opt = <span class="kw">match </span><span class="kw-2">&amp;</span>done.choices[<span class="number">0</span>].message.tool_calls {
-<a href=#513 id=513 data-nosnippet>513</a>                    <span class="prelude-val">Some</span>(calls) <span class="kw">if </span>calls.len() == <span class="number">1 </span>=&gt; <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>calls[<span class="number">0</span>]),
-<a href=#514 id=514 data-nosnippet>514</a>                    <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
-<a href=#515 id=515 data-nosnippet>515</a>                };
-<a href=#516 id=516 data-nosnippet>516</a>
-<a href=#517 id=517 data-nosnippet>517</a>                <span class="comment">// No tool call? We are finished.
-<a href=#518 id=518 data-nosnippet>518</a>                </span><span class="kw">if </span>tc_opt.is_none() {
-<a href=#519 id=519 data-nosnippet>519</a>                    user_sender
-<a href=#520 id=520 data-nosnippet>520</a>                        .send(Response::Done(done.clone()))
-<a href=#521 id=521 data-nosnippet>521</a>                        .<span class="kw">await
-<a href=#522 id=522 data-nosnippet>522</a>                        </span>.unwrap();
-<a href=#523 id=523 data-nosnippet>523</a>                    <span class="kw">return</span>;
-<a href=#524 id=524 data-nosnippet>524</a>                }
-<a href=#525 id=525 data-nosnippet>525</a>
-<a href=#526 id=526 data-nosnippet>526</a>                <span class="comment">// Tool requested → build the next turn.
-<a href=#527 id=527 data-nosnippet>527</a>                </span><span class="kw">let </span>tc = tc_opt.unwrap();
-<a href=#528 id=528 data-nosnippet>528</a>                <span class="kw">let </span>next_visible = <span class="kw">if </span>search::search_tool_called(<span class="kw-2">&amp;</span>tc.function.name) {
-<a href=#529 id=529 data-nosnippet>529</a>                    <span class="kw">let </span>web_search_options = web_search_options.as_ref().unwrap();
-<a href=#530 id=530 data-nosnippet>530</a>                    <span class="kw">if </span>tc.function.name == search::SEARCH_TOOL_NAME {
-<a href=#531 id=531 data-nosnippet>531</a>                        do_search(this_clone.clone(), visible_req, tc, web_search_options).<span class="kw">await
-<a href=#532 id=532 data-nosnippet>532</a>                    </span>} <span class="kw">else </span>{
-<a href=#533 id=533 data-nosnippet>533</a>                        do_extraction(this_clone.clone(), visible_req, tc, web_search_options).<span class="kw">await
-<a href=#534 id=534 data-nosnippet>534</a>                    </span>}
-<a href=#535 id=535 data-nosnippet>535</a>                } <span class="kw">else </span>{
-<a href=#536 id=536 data-nosnippet>536</a>                    do_custom_tool(this_clone.clone(), visible_req, tc).<span class="kw">await
-<a href=#537 id=537 data-nosnippet>537</a>                </span>};
-<a href=#538 id=538 data-nosnippet>538</a>
-<a href=#539 id=539 data-nosnippet>539</a>                <span class="comment">// The fresh request becomes both the user-visible context and
-<a href=#540 id=540 data-nosnippet>540</a>                // the next `current` we will dispatch.
-<a href=#541 id=541 data-nosnippet>541</a>                </span>visible_req = next_visible.clone();
-<a href=#542 id=542 data-nosnippet>542</a>                visible_req.response = user_sender.clone();
-<a href=#543 id=543 data-nosnippet>543</a>                current = visible_req.clone();
-<a href=#544 id=544 data-nosnippet>544</a>            }
-<a href=#545 id=545 data-nosnippet>545</a>            <span class="comment">// ------------------------- STREAMING -------------------------
-<a href=#546 id=546 data-nosnippet>546</a>            </span><span class="kw">else </span>{
-<a href=#547 id=547 data-nosnippet>547</a>                <span class="comment">// We need the *last* chunk to see whether a tool was called.
-<a href=#548 id=548 data-nosnippet>548</a>                </span><span class="kw">let </span><span class="kw-2">mut </span>last_choice = <span class="prelude-val">None</span>;
-<a href=#549 id=549 data-nosnippet>549</a>
-<a href=#550 id=550 data-nosnippet>550</a>                <span class="kw">while let </span><span class="prelude-val">Some</span>(resp) = receiver.recv().<span class="kw">await </span>{
-<a href=#551 id=551 data-nosnippet>551</a>                    <span class="kw">match </span>resp.as_result().unwrap() {
-<a href=#552 id=552 data-nosnippet>552</a>                        ResponseOk::Chunk(chunk) =&gt; {
-<a href=#553 id=553 data-nosnippet>553</a>                            <span class="comment">// Forward every content‑bearing chunk immediately, but
-<a href=#554 id=554 data-nosnippet>554</a>                            // *suppress* the ones that initiate a tool call. This ensures
-<a href=#555 id=555 data-nosnippet>555</a>                            // the user sees the assistant’s streamed text from the very
-<a href=#556 id=556 data-nosnippet>556</a>                            // first probe turn while still hiding the internal
-<a href=#557 id=557 data-nosnippet>557</a>                            // search/extract trigger.
-<a href=#558 id=558 data-nosnippet>558</a>                            </span><span class="kw">let </span>first_choice = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>];
-<a href=#559 id=559 data-nosnippet>559</a>                            <span class="kw">if </span>first_choice.delta.tool_calls.is_none() {
-<a href=#560 id=560 data-nosnippet>560</a>                                user_sender
-<a href=#561 id=561 data-nosnippet>561</a>                                    .send(Response::Chunk(chunk.clone()))
-<a href=#562 id=562 data-nosnippet>562</a>                                    .<span class="kw">await
-<a href=#563 id=563 data-nosnippet>563</a>                                    </span>.unwrap();
-<a href=#564 id=564 data-nosnippet>564</a>                            }
-<a href=#565 id=565 data-nosnippet>565</a>
-<a href=#566 id=566 data-nosnippet>566</a>                            last_choice = <span class="prelude-val">Some</span>(first_choice.clone());
-<a href=#567 id=567 data-nosnippet>567</a>
-<a href=#568 id=568 data-nosnippet>568</a>                            <span class="comment">// Stop once the model marks completion.
-<a href=#569 id=569 data-nosnippet>569</a>                            </span><span class="kw">if </span>last_choice
-<a href=#570 id=570 data-nosnippet>570</a>                                .as_ref()
-<a href=#571 id=571 data-nosnippet>571</a>                                .and_then(|c| c.finish_reason.as_ref())
-<a href=#572 id=572 data-nosnippet>572</a>                                .is_some()
-<a href=#573 id=573 data-nosnippet>573</a>                            {
-<a href=#574 id=574 data-nosnippet>574</a>                                <span class="kw">break</span>;
-<a href=#575 id=575 data-nosnippet>575</a>                            }
-<a href=#576 id=576 data-nosnippet>576</a>                        }
-<a href=#577 id=577 data-nosnippet>577</a>                        other =&gt; {
-<a href=#578 id=578 data-nosnippet>578</a>                            <span class="kw">match </span>other {
-<a href=#579 id=579 data-nosnippet>579</a>                                ResponseOk::Chunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#580 id=580 data-nosnippet>580</a>                                ResponseOk::CompletionChunk(res) =&gt; user_sender
-<a href=#581 id=581 data-nosnippet>581</a>                                    .send(Response::CompletionChunk(res))
-<a href=#582 id=582 data-nosnippet>582</a>                                    .<span class="kw">await
-<a href=#583 id=583 data-nosnippet>583</a>                                    </span>.unwrap(),
-<a href=#584 id=584 data-nosnippet>584</a>                                ResponseOk::Done(res) =&gt; {
-<a href=#585 id=585 data-nosnippet>585</a>                                    user_sender.send(Response::Done(res)).<span class="kw">await</span>.unwrap()
-<a href=#586 id=586 data-nosnippet>586</a>                                }
-<a href=#587 id=587 data-nosnippet>587</a>                                ResponseOk::CompletionDone(res) =&gt; user_sender
-<a href=#588 id=588 data-nosnippet>588</a>                                    .send(Response::CompletionDone(res))
-<a href=#589 id=589 data-nosnippet>589</a>                                    .<span class="kw">await
-<a href=#590 id=590 data-nosnippet>590</a>                                    </span>.unwrap(),
-<a href=#591 id=591 data-nosnippet>591</a>                                ResponseOk::ImageGeneration(res) =&gt; user_sender
-<a href=#592 id=592 data-nosnippet>592</a>                                    .send(Response::ImageGeneration(res))
-<a href=#593 id=593 data-nosnippet>593</a>                                    .<span class="kw">await
-<a href=#594 id=594 data-nosnippet>594</a>                                    </span>.unwrap(),
-<a href=#595 id=595 data-nosnippet>595</a>                                ResponseOk::Raw {
-<a href=#596 id=596 data-nosnippet>596</a>                                    logits_chunks,
-<a href=#597 id=597 data-nosnippet>597</a>                                    tokens,
-<a href=#598 id=598 data-nosnippet>598</a>                                } =&gt; user_sender
-<a href=#599 id=599 data-nosnippet>599</a>                                    .send(Response::Raw {
-<a href=#600 id=600 data-nosnippet>600</a>                                        logits_chunks,
-<a href=#601 id=601 data-nosnippet>601</a>                                        tokens,
-<a href=#602 id=602 data-nosnippet>602</a>                                    })
-<a href=#603 id=603 data-nosnippet>603</a>                                    .<span class="kw">await
-<a href=#604 id=604 data-nosnippet>604</a>                                    </span>.unwrap(),
-<a href=#605 id=605 data-nosnippet>605</a>                                ResponseOk::Speech {
-<a href=#606 id=606 data-nosnippet>606</a>                                    pcm,
-<a href=#607 id=607 data-nosnippet>607</a>                                    rate,
-<a href=#608 id=608 data-nosnippet>608</a>                                    channels,
-<a href=#609 id=609 data-nosnippet>609</a>                                } =&gt; user_sender
-<a href=#610 id=610 data-nosnippet>610</a>                                    .send(Response::Speech {
-<a href=#611 id=611 data-nosnippet>611</a>                                        pcm,
-<a href=#612 id=612 data-nosnippet>612</a>                                        rate,
-<a href=#613 id=613 data-nosnippet>613</a>                                        channels,
+<a href=#506 id=506 data-nosnippet>506</a>                            ResponseOk::Speech {
+<a href=#507 id=507 data-nosnippet>507</a>                                pcm,
+<a href=#508 id=508 data-nosnippet>508</a>                                rate,
+<a href=#509 id=509 data-nosnippet>509</a>                                channels,
+<a href=#510 id=510 data-nosnippet>510</a>                            } =&gt; user_sender
+<a href=#511 id=511 data-nosnippet>511</a>                                .send(Response::Speech {
+<a href=#512 id=512 data-nosnippet>512</a>                                    pcm,
+<a href=#513 id=513 data-nosnippet>513</a>                                    rate,
+<a href=#514 id=514 data-nosnippet>514</a>                                    channels,
+<a href=#515 id=515 data-nosnippet>515</a>                                })
+<a href=#516 id=516 data-nosnippet>516</a>                                .<span class="kw">await
+<a href=#517 id=517 data-nosnippet>517</a>                                </span>.unwrap(),
+<a href=#518 id=518 data-nosnippet>518</a>                        };
+<a href=#519 id=519 data-nosnippet>519</a>                        <span class="kw">return</span>;
+<a href=#520 id=520 data-nosnippet>520</a>                    }
+<a href=#521 id=521 data-nosnippet>521</a>                };
+<a href=#522 id=522 data-nosnippet>522</a>
+<a href=#523 id=523 data-nosnippet>523</a>                <span class="comment">// Did the assistant ask to run a tool?
+<a href=#524 id=524 data-nosnippet>524</a>                </span><span class="kw">let </span>tc_opt = <span class="kw">match </span><span class="kw-2">&amp;</span>done.choices[<span class="number">0</span>].message.tool_calls {
+<a href=#525 id=525 data-nosnippet>525</a>                    <span class="prelude-val">Some</span>(calls) <span class="kw">if </span>calls.len() == <span class="number">1 </span>=&gt; <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>calls[<span class="number">0</span>]),
+<a href=#526 id=526 data-nosnippet>526</a>                    <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
+<a href=#527 id=527 data-nosnippet>527</a>                };
+<a href=#528 id=528 data-nosnippet>528</a>
+<a href=#529 id=529 data-nosnippet>529</a>                <span class="comment">// No tool call? We are finished.
+<a href=#530 id=530 data-nosnippet>530</a>                </span><span class="kw">if </span>tc_opt.is_none() {
+<a href=#531 id=531 data-nosnippet>531</a>                    user_sender
+<a href=#532 id=532 data-nosnippet>532</a>                        .send(Response::Done(done.clone()))
+<a href=#533 id=533 data-nosnippet>533</a>                        .<span class="kw">await
+<a href=#534 id=534 data-nosnippet>534</a>                        </span>.unwrap();
+<a href=#535 id=535 data-nosnippet>535</a>                    <span class="kw">return</span>;
+<a href=#536 id=536 data-nosnippet>536</a>                }
+<a href=#537 id=537 data-nosnippet>537</a>
+<a href=#538 id=538 data-nosnippet>538</a>                <span class="comment">// Tool requested → build the next turn.
+<a href=#539 id=539 data-nosnippet>539</a>                </span><span class="kw">let </span>tc = tc_opt.unwrap();
+<a href=#540 id=540 data-nosnippet>540</a>                <span class="kw">let </span>next_visible = <span class="kw">if </span>search::search_tool_called(<span class="kw-2">&amp;</span>tc.function.name) {
+<a href=#541 id=541 data-nosnippet>541</a>                    <span class="kw">let </span>web_search_options = web_search_options.as_ref().unwrap();
+<a href=#542 id=542 data-nosnippet>542</a>                    <span class="kw">if </span>tc.function.name == search::SEARCH_TOOL_NAME {
+<a href=#543 id=543 data-nosnippet>543</a>                        do_search(this_clone.clone(), visible_req, tc, web_search_options).<span class="kw">await
+<a href=#544 id=544 data-nosnippet>544</a>                    </span>} <span class="kw">else </span>{
+<a href=#545 id=545 data-nosnippet>545</a>                        do_extraction(this_clone.clone(), visible_req, tc, web_search_options).<span class="kw">await
+<a href=#546 id=546 data-nosnippet>546</a>                    </span>}
+<a href=#547 id=547 data-nosnippet>547</a>                } <span class="kw">else </span>{
+<a href=#548 id=548 data-nosnippet>548</a>                    do_custom_tool(this_clone.clone(), visible_req, tc).<span class="kw">await
+<a href=#549 id=549 data-nosnippet>549</a>                </span>};
+<a href=#550 id=550 data-nosnippet>550</a>
+<a href=#551 id=551 data-nosnippet>551</a>                <span class="comment">// The fresh request becomes both the user-visible context and
+<a href=#552 id=552 data-nosnippet>552</a>                // the next `current` we will dispatch.
+<a href=#553 id=553 data-nosnippet>553</a>                </span>visible_req = next_visible.clone();
+<a href=#554 id=554 data-nosnippet>554</a>                visible_req.response = user_sender.clone();
+<a href=#555 id=555 data-nosnippet>555</a>                current = visible_req.clone();
+<a href=#556 id=556 data-nosnippet>556</a>            }
+<a href=#557 id=557 data-nosnippet>557</a>            <span class="comment">// ------------------------- STREAMING -------------------------
+<a href=#558 id=558 data-nosnippet>558</a>            </span><span class="kw">else </span>{
+<a href=#559 id=559 data-nosnippet>559</a>                <span class="comment">// We need the *last* chunk to see whether a tool was called.
+<a href=#560 id=560 data-nosnippet>560</a>                </span><span class="kw">let </span><span class="kw-2">mut </span>last_choice = <span class="prelude-val">None</span>;
+<a href=#561 id=561 data-nosnippet>561</a>
+<a href=#562 id=562 data-nosnippet>562</a>                <span class="kw">while let </span><span class="prelude-val">Some</span>(resp) = receiver.recv().<span class="kw">await </span>{
+<a href=#563 id=563 data-nosnippet>563</a>                    <span class="kw">match </span>resp.as_result().unwrap() {
+<a href=#564 id=564 data-nosnippet>564</a>                        ResponseOk::Chunk(chunk) =&gt; {
+<a href=#565 id=565 data-nosnippet>565</a>                            <span class="comment">// Forward every content‑bearing chunk immediately, but
+<a href=#566 id=566 data-nosnippet>566</a>                            // *suppress* the ones that initiate a tool call. This ensures
+<a href=#567 id=567 data-nosnippet>567</a>                            // the user sees the assistant’s streamed text from the very
+<a href=#568 id=568 data-nosnippet>568</a>                            // first probe turn while still hiding the internal
+<a href=#569 id=569 data-nosnippet>569</a>                            // search/extract trigger.
+<a href=#570 id=570 data-nosnippet>570</a>                            </span><span class="kw">let </span>first_choice = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>];
+<a href=#571 id=571 data-nosnippet>571</a>                            <span class="kw">if </span>first_choice.delta.tool_calls.is_none() {
+<a href=#572 id=572 data-nosnippet>572</a>                                user_sender
+<a href=#573 id=573 data-nosnippet>573</a>                                    .send(Response::Chunk(chunk.clone()))
+<a href=#574 id=574 data-nosnippet>574</a>                                    .<span class="kw">await
+<a href=#575 id=575 data-nosnippet>575</a>                                    </span>.unwrap();
+<a href=#576 id=576 data-nosnippet>576</a>                            }
+<a href=#577 id=577 data-nosnippet>577</a>
+<a href=#578 id=578 data-nosnippet>578</a>                            last_choice = <span class="prelude-val">Some</span>(first_choice.clone());
+<a href=#579 id=579 data-nosnippet>579</a>
+<a href=#580 id=580 data-nosnippet>580</a>                            <span class="comment">// Stop once the model marks completion.
+<a href=#581 id=581 data-nosnippet>581</a>                            </span><span class="kw">if </span>last_choice
+<a href=#582 id=582 data-nosnippet>582</a>                                .as_ref()
+<a href=#583 id=583 data-nosnippet>583</a>                                .and_then(|c| c.finish_reason.as_ref())
+<a href=#584 id=584 data-nosnippet>584</a>                                .is_some()
+<a href=#585 id=585 data-nosnippet>585</a>                            {
+<a href=#586 id=586 data-nosnippet>586</a>                                <span class="kw">break</span>;
+<a href=#587 id=587 data-nosnippet>587</a>                            }
+<a href=#588 id=588 data-nosnippet>588</a>                        }
+<a href=#589 id=589 data-nosnippet>589</a>                        other =&gt; {
+<a href=#590 id=590 data-nosnippet>590</a>                            <span class="kw">match </span>other {
+<a href=#591 id=591 data-nosnippet>591</a>                                ResponseOk::Chunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#592 id=592 data-nosnippet>592</a>                                ResponseOk::CompletionChunk(res) =&gt; user_sender
+<a href=#593 id=593 data-nosnippet>593</a>                                    .send(Response::CompletionChunk(res))
+<a href=#594 id=594 data-nosnippet>594</a>                                    .<span class="kw">await
+<a href=#595 id=595 data-nosnippet>595</a>                                    </span>.unwrap(),
+<a href=#596 id=596 data-nosnippet>596</a>                                ResponseOk::Done(res) =&gt; {
+<a href=#597 id=597 data-nosnippet>597</a>                                    user_sender.send(Response::Done(res)).<span class="kw">await</span>.unwrap()
+<a href=#598 id=598 data-nosnippet>598</a>                                }
+<a href=#599 id=599 data-nosnippet>599</a>                                ResponseOk::CompletionDone(res) =&gt; user_sender
+<a href=#600 id=600 data-nosnippet>600</a>                                    .send(Response::CompletionDone(res))
+<a href=#601 id=601 data-nosnippet>601</a>                                    .<span class="kw">await
+<a href=#602 id=602 data-nosnippet>602</a>                                    </span>.unwrap(),
+<a href=#603 id=603 data-nosnippet>603</a>                                ResponseOk::ImageGeneration(res) =&gt; user_sender
+<a href=#604 id=604 data-nosnippet>604</a>                                    .send(Response::ImageGeneration(res))
+<a href=#605 id=605 data-nosnippet>605</a>                                    .<span class="kw">await
+<a href=#606 id=606 data-nosnippet>606</a>                                    </span>.unwrap(),
+<a href=#607 id=607 data-nosnippet>607</a>                                ResponseOk::Raw {
+<a href=#608 id=608 data-nosnippet>608</a>                                    logits_chunks,
+<a href=#609 id=609 data-nosnippet>609</a>                                    tokens,
+<a href=#610 id=610 data-nosnippet>610</a>                                } =&gt; user_sender
+<a href=#611 id=611 data-nosnippet>611</a>                                    .send(Response::Raw {
+<a href=#612 id=612 data-nosnippet>612</a>                                        logits_chunks,
+<a href=#613 id=613 data-nosnippet>613</a>                                        tokens,
 <a href=#614 id=614 data-nosnippet>614</a>                                    })
 <a href=#615 id=615 data-nosnippet>615</a>                                    .<span class="kw">await
 <a href=#616 id=616 data-nosnippet>616</a>                                    </span>.unwrap(),
-<a href=#617 id=617 data-nosnippet>617</a>                            };
-<a href=#618 id=618 data-nosnippet>618</a>                            <span class="kw">return</span>;
-<a href=#619 id=619 data-nosnippet>619</a>                        }
-<a href=#620 id=620 data-nosnippet>620</a>                    }
-<a href=#621 id=621 data-nosnippet>621</a>                }
-<a href=#622 id=622 data-nosnippet>622</a>
-<a href=#623 id=623 data-nosnippet>623</a>                <span class="kw">let </span><span class="prelude-val">Some</span>(choice) = last_choice <span class="kw">else </span>{ <span class="kw">break </span>};
-<a href=#624 id=624 data-nosnippet>624</a>
-<a href=#625 id=625 data-nosnippet>625</a>                <span class="kw">let </span>tc_opt = <span class="kw">match </span><span class="kw-2">&amp;</span>choice.delta.tool_calls {
-<a href=#626 id=626 data-nosnippet>626</a>                    <span class="prelude-val">Some</span>(calls) <span class="kw">if </span>calls.len() == <span class="number">1 </span>=&gt; <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>calls[<span class="number">0</span>]),
-<a href=#627 id=627 data-nosnippet>627</a>                    <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
-<a href=#628 id=628 data-nosnippet>628</a>                };
-<a href=#629 id=629 data-nosnippet>629</a>
-<a href=#630 id=630 data-nosnippet>630</a>                <span class="kw">if </span>tc_opt.is_none() {
-<a href=#631 id=631 data-nosnippet>631</a>                    <span class="kw">break</span>; <span class="comment">// No more tool calls → done.
-<a href=#632 id=632 data-nosnippet>632</a>                </span>}
-<a href=#633 id=633 data-nosnippet>633</a>
-<a href=#634 id=634 data-nosnippet>634</a>                <span class="kw">let </span>tc = tc_opt.unwrap();
-<a href=#635 id=635 data-nosnippet>635</a>                <span class="kw">let </span>next_visible = <span class="kw">if </span>search::search_tool_called(<span class="kw-2">&amp;</span>tc.function.name) {
-<a href=#636 id=636 data-nosnippet>636</a>                    <span class="kw">let </span>web_search_options = web_search_options.as_ref().unwrap();
-<a href=#637 id=637 data-nosnippet>637</a>                    <span class="kw">if </span>tc.function.name == search::SEARCH_TOOL_NAME {
-<a href=#638 id=638 data-nosnippet>638</a>                        do_search(this_clone.clone(), visible_req, tc, web_search_options).<span class="kw">await
-<a href=#639 id=639 data-nosnippet>639</a>                    </span>} <span class="kw">else </span>{
-<a href=#640 id=640 data-nosnippet>640</a>                        do_extraction(this_clone.clone(), visible_req, tc, web_search_options).<span class="kw">await
-<a href=#641 id=641 data-nosnippet>641</a>                    </span>}
-<a href=#642 id=642 data-nosnippet>642</a>                } <span class="kw">else </span>{
-<a href=#643 id=643 data-nosnippet>643</a>                    do_custom_tool(this_clone.clone(), visible_req, tc).<span class="kw">await
-<a href=#644 id=644 data-nosnippet>644</a>                </span>};
-<a href=#645 id=645 data-nosnippet>645</a>
-<a href=#646 id=646 data-nosnippet>646</a>                visible_req = next_visible.clone();
-<a href=#647 id=647 data-nosnippet>647</a>                visible_req.response = user_sender.clone();
-<a href=#648 id=648 data-nosnippet>648</a>                current = visible_req.clone();
-<a href=#649 id=649 data-nosnippet>649</a>            }
-<a href=#650 id=650 data-nosnippet>650</a>        }
-<a href=#651 id=651 data-nosnippet>651</a>    });
-<a href=#652 id=652 data-nosnippet>652</a>
-<a href=#653 id=653 data-nosnippet>653</a>    <span class="macro">get_mut_arcmutex!</span>(this.handles).push(handle);
-<a href=#654 id=654 data-nosnippet>654</a>}</code></pre></div></section></main></body></html>
+<a href=#617 id=617 data-nosnippet>617</a>                                ResponseOk::Embeddings {
+<a href=#618 id=618 data-nosnippet>618</a>                                    embeddings,
+<a href=#619 id=619 data-nosnippet>619</a>                                    prompt_tokens,
+<a href=#620 id=620 data-nosnippet>620</a>                                    total_tokens,
+<a href=#621 id=621 data-nosnippet>621</a>                                } =&gt; user_sender
+<a href=#622 id=622 data-nosnippet>622</a>                                    .send(Response::Embeddings {
+<a href=#623 id=623 data-nosnippet>623</a>                                        embeddings,
+<a href=#624 id=624 data-nosnippet>624</a>                                        prompt_tokens,
+<a href=#625 id=625 data-nosnippet>625</a>                                        total_tokens,
+<a href=#626 id=626 data-nosnippet>626</a>                                    })
+<a href=#627 id=627 data-nosnippet>627</a>                                    .<span class="kw">await
+<a href=#628 id=628 data-nosnippet>628</a>                                    </span>.unwrap(),
+<a href=#629 id=629 data-nosnippet>629</a>                                ResponseOk::Speech {
+<a href=#630 id=630 data-nosnippet>630</a>                                    pcm,
+<a href=#631 id=631 data-nosnippet>631</a>                                    rate,
+<a href=#632 id=632 data-nosnippet>632</a>                                    channels,
+<a href=#633 id=633 data-nosnippet>633</a>                                } =&gt; user_sender
+<a href=#634 id=634 data-nosnippet>634</a>                                    .send(Response::Speech {
+<a href=#635 id=635 data-nosnippet>635</a>                                        pcm,
+<a href=#636 id=636 data-nosnippet>636</a>                                        rate,
+<a href=#637 id=637 data-nosnippet>637</a>                                        channels,
+<a href=#638 id=638 data-nosnippet>638</a>                                    })
+<a href=#639 id=639 data-nosnippet>639</a>                                    .<span class="kw">await
+<a href=#640 id=640 data-nosnippet>640</a>                                    </span>.unwrap(),
+<a href=#641 id=641 data-nosnippet>641</a>                            };
+<a href=#642 id=642 data-nosnippet>642</a>                            <span class="kw">return</span>;
+<a href=#643 id=643 data-nosnippet>643</a>                        }
+<a href=#644 id=644 data-nosnippet>644</a>                    }
+<a href=#645 id=645 data-nosnippet>645</a>                }
+<a href=#646 id=646 data-nosnippet>646</a>
+<a href=#647 id=647 data-nosnippet>647</a>                <span class="kw">let </span><span class="prelude-val">Some</span>(choice) = last_choice <span class="kw">else </span>{ <span class="kw">break </span>};
+<a href=#648 id=648 data-nosnippet>648</a>
+<a href=#649 id=649 data-nosnippet>649</a>                <span class="kw">let </span>tc_opt = <span class="kw">match </span><span class="kw-2">&amp;</span>choice.delta.tool_calls {
+<a href=#650 id=650 data-nosnippet>650</a>                    <span class="prelude-val">Some</span>(calls) <span class="kw">if </span>calls.len() == <span class="number">1 </span>=&gt; <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>calls[<span class="number">0</span>]),
+<a href=#651 id=651 data-nosnippet>651</a>                    <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
+<a href=#652 id=652 data-nosnippet>652</a>                };
+<a href=#653 id=653 data-nosnippet>653</a>
+<a href=#654 id=654 data-nosnippet>654</a>                <span class="kw">if </span>tc_opt.is_none() {
+<a href=#655 id=655 data-nosnippet>655</a>                    <span class="kw">break</span>; <span class="comment">// No more tool calls → done.
+<a href=#656 id=656 data-nosnippet>656</a>                </span>}
+<a href=#657 id=657 data-nosnippet>657</a>
+<a href=#658 id=658 data-nosnippet>658</a>                <span class="kw">let </span>tc = tc_opt.unwrap();
+<a href=#659 id=659 data-nosnippet>659</a>                <span class="kw">let </span>next_visible = <span class="kw">if </span>search::search_tool_called(<span class="kw-2">&amp;</span>tc.function.name) {
+<a href=#660 id=660 data-nosnippet>660</a>                    <span class="kw">let </span>web_search_options = web_search_options.as_ref().unwrap();
+<a href=#661 id=661 data-nosnippet>661</a>                    <span class="kw">if </span>tc.function.name == search::SEARCH_TOOL_NAME {
+<a href=#662 id=662 data-nosnippet>662</a>                        do_search(this_clone.clone(), visible_req, tc, web_search_options).<span class="kw">await
+<a href=#663 id=663 data-nosnippet>663</a>                    </span>} <span class="kw">else </span>{
+<a href=#664 id=664 data-nosnippet>664</a>                        do_extraction(this_clone.clone(), visible_req, tc, web_search_options).<span class="kw">await
+<a href=#665 id=665 data-nosnippet>665</a>                    </span>}
+<a href=#666 id=666 data-nosnippet>666</a>                } <span class="kw">else </span>{
+<a href=#667 id=667 data-nosnippet>667</a>                    do_custom_tool(this_clone.clone(), visible_req, tc).<span class="kw">await
+<a href=#668 id=668 data-nosnippet>668</a>                </span>};
+<a href=#669 id=669 data-nosnippet>669</a>
+<a href=#670 id=670 data-nosnippet>670</a>                visible_req = next_visible.clone();
+<a href=#671 id=671 data-nosnippet>671</a>                visible_req.response = user_sender.clone();
+<a href=#672 id=672 data-nosnippet>672</a>                current = visible_req.clone();
+<a href=#673 id=673 data-nosnippet>673</a>            }
+<a href=#674 id=674 data-nosnippet>674</a>        }
+<a href=#675 id=675 data-nosnippet>675</a>    });
+<a href=#676 id=676 data-nosnippet>676</a>
+<a href=#677 id=677 data-nosnippet>677</a>    <span class="macro">get_mut_arcmutex!</span>(this.handles).push(handle);
+<a href=#678 id=678 data-nosnippet>678</a>}</code></pre></div></section></main></body></html>
