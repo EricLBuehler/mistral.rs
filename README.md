@@ -31,60 +31,60 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 <details>
 <summary><b>Text Models</b></summary>
 
-- **SmolLM 3**
-- **DeepSeek V3**
-- **DeepSeek V2**
-- **Qwen 3 MoE**
-- **Phi 3.5 MoE**
-- **Qwen 3**
-- **GLM 4**
-- **Gemma 2**
-- **Qwen 2**
-- **Starcoder 2**
-- **Phi 3**
-- **Mixtral**
-- **Phi 2**
-- **Gemma**
-- **Llama**
-- **Mistral**
+- SmolLM 3
+- DeepSeek V3
+- DeepSeek V2
+- Qwen 3 MoE
+- Phi 3.5 MoE
+- Qwen 3
+- GLM 4
+- Gemma 2
+- Qwen 2
+- Starcoder 2
+- Phi 3
+- Mixtral
+- Phi 2
+- Gemma
+- Llama
+- Mistral
 </details>
 
 <details>
 <summary><b>Vision Models</b></summary>
 
-- **Qwen 3-VL**
-- **Gemma 3n**
-- **Llama 4 (M-LLaMA)**
-- **Gemma 3**
-- **Mistral 3**
-- **Phi 4 multimodal**
-- **Qwen 2.5-VL**
-- **MiniCPM-O**
-- **Llama 3.2 Vision**
-- **Qwen 2-VL**
-- **Idefics 3**
-- **Idefics 2**
-- **LLaVA Next**
-- **LLaVA**
-- **Phi 3V**
+- Qwen 3-VL**
+- Gemma 3n
+- Llama 4
+- Gemma 3
+- Mistral 3
+- Phi 4 multimodal
+- Qwen 2.5-VL
+- MiniCPM-O
+- Llama 3.2 Vision
+- Qwen 2-VL
+- Idefics 3
+- Idefics 2
+- LLaVA Next
+- LLaVA
+- Phi 3V
 </details>
 
 <details>
 <summary><b>Speech Models</b></summary>
 
-- **Dia**
+- Dia
 </details>
 
 <details>
 <summary><b>Image Generation Models</b></summary>
 
-- **FLUX**
+- FLUX
 </details>
 
 <details>
 <summary><b>Embedding Models</b></summary>
 
-- **Embedding Gemma**
+- Embedding Gemma
 </details>
 
 ## Get started fast 🚀
