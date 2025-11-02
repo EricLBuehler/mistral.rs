@@ -760,6 +760,7 @@ impl Loader for VisionLoader {
                     processor_filename: paths.get_processor_config(),
                     preprocessor_filename: paths.get_preprocessor_config(),
                     modules: None,
+                    module_paths: None,
                 },
                 Arc::new(MultiProgress::new()),
             )?;
@@ -881,6 +882,7 @@ impl IsqPipelineMixin for VisionPipeline {
                     processor_filename: &self.processor_filename,
                     preprocessor_filename: &self.preprocessor_filename,
                     modules: None,
+                    module_paths: None,
                 },
                 Arc::new(MultiProgress::new()),
             )

@@ -64,6 +64,7 @@ pub struct EmbeddingPipeline {
     silent: bool,
     config: String,
     modules_ser: String,
+    modules_manifest: Vec<EmbeddingModulePaths>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     modules: Vec<Box<dyn Module + Send + Sync>>,
     processor: Arc<dyn Processor + Send + Sync>,
@@ -465,23 +466,24 @@ impl Loader for EmbeddingLoader {
 
         let multi_progress = Arc::new(MultiProgress::new());
 
-        let modules_config = paths
+        let modules_config: Vec<_> = paths
             .get_modules()
-            .context("Embedding models require the `modules.json` file.")?;
+            .context("Embedding models require the `modules.json` file.")?
+            .to_vec();
         assert!(matches!(
-            modules_config[0],
-            EmbeddingModulePaths::Transformer
+            modules_config.first(),
+            Some(EmbeddingModulePaths::Transformer { .. })
         ));
 
         let mut modules: Vec<Box<dyn Module + Send + Sync>> = Vec::new();
-        for module in modules_config {
+        for module in &modules_config {
             match module {
-                EmbeddingModulePaths::Transformer => (),
-                EmbeddingModulePaths::Pooling { config } => {
+                EmbeddingModulePaths::Transformer { .. } => (),
+                EmbeddingModulePaths::Pooling { config, .. } => {
                     let layer: Pooling = serde_json::from_str(&std::fs::read_to_string(config)?)?;
                     modules.push(Box::new(layer));
                 }
-                EmbeddingModulePaths::Dense { config, model } => {
+                EmbeddingModulePaths::Dense { config, model, .. } => {
                     let config: Dense = serde_json::from_str(&std::fs::read_to_string(config)?)?;
                     let safetensors = unsafe { MmapedSafetensors::new(model)? };
                     let weight = safetensors.load("linear.weight", &device, Some(dtype))?;
@@ -498,12 +500,12 @@ impl Loader for EmbeddingLoader {
 
                     modules.push(Box::new(Linear::new(weight, bias)));
                 }
-                EmbeddingModulePaths::Normalize => {
+                EmbeddingModulePaths::Normalize { .. } => {
                     modules.push(Box::new(Normalize));
                 }
             }
         }
-        let modules_ser = EmbeddingModulePaths::serialize_modules(modules_config);
+        let modules_ser = EmbeddingModulePaths::serialize_modules(&modules_config);
 
         let mut model = if use_nccl {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
@@ -582,6 +584,7 @@ impl Loader for EmbeddingLoader {
                     processor_filename: paths.get_processor_config(),
                     preprocessor_filename: paths.get_preprocessor_config(),
                     modules: Some(&modules_ser),
+                    module_paths: Some(&modules_config),
                 },
                 Arc::new(MultiProgress::new()),
             )?;
@@ -598,7 +601,6 @@ impl Loader for EmbeddingLoader {
         let max_seq_len = self.inner.model_config(&config)?.max_seq_len();
         Ok(Arc::new(Mutex::new(EmbeddingPipeline {
             model,
-            modules,
             tokenizer: tokenizer.into(),
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
@@ -623,8 +625,10 @@ impl Loader for EmbeddingLoader {
             topology: self.config.topology.clone(),
             silent,
             config,
-            mapper: pipeline_mapper,
             modules_ser,
+            modules_manifest: modules_config,
+            mapper: pipeline_mapper,
+            modules,
             processor: Arc::new(EmbeddingProcessor {
                 has_causal_attention,
             }),
@@ -673,6 +677,7 @@ impl IsqPipelineMixin for EmbeddingPipeline {
                     processor_filename: &None,
                     preprocessor_filename: &None,
                     modules: Some(&self.modules_ser),
+                    module_paths: Some(&self.modules_manifest),
                 },
                 Arc::new(MultiProgress::new()),
             )

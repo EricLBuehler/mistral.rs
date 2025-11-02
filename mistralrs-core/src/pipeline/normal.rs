@@ -878,6 +878,7 @@ impl Loader for NormalLoader {
                     processor_filename: &None,
                     preprocessor_filename: &None,
                     modules: None,
+                    module_paths: None,
                 },
                 multi_progress.clone(),
             )?;
@@ -1029,6 +1030,7 @@ impl IsqPipelineMixin for NormalPipeline {
                 processor_filename: &None,
                 preprocessor_filename: &None,
                 modules: None,
+                module_paths: None,
             },
             multi_progress.clone(),
         )?;

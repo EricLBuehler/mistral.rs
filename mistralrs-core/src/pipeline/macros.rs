@@ -291,10 +291,13 @@ macro_rules! get_embedding_paths {
         for module in modules {
             match module.ty {
                 $crate::pipeline::EmbeddingModuleType::Transformer => {
-                    parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Transformer);
+                    parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Transformer {
+                        path: module.path.clone(),
+                    });
                 }
                 $crate::pipeline::EmbeddingModuleType::Pooling => {
                     parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Pooling {
+                        path: module.path.clone(),
                         config: $crate::api_get_file!(
                             api,
                             &format!("{}/config.json", module.path),
@@ -304,6 +307,7 @@ macro_rules! get_embedding_paths {
                 }
                 $crate::pipeline::EmbeddingModuleType::Dense => {
                     parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Dense {
+                        path: module.path.clone(),
                         config: $crate::api_get_file!(
                             api,
                             &format!("{}/config.json", module.path),
@@ -317,7 +321,9 @@ macro_rules! get_embedding_paths {
                     });
                 }
                 $crate::pipeline::EmbeddingModuleType::Normalize => {
-                    parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Normalize);
+                    parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Normalize {
+                        path: module.path.clone(),
+                    });
                 }
             }
         }

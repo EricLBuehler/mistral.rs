@@ -124,10 +124,21 @@ impl Display for EmbeddingLoaderType {
 
 #[derive(Clone, Debug, Deserialize)]
 pub enum EmbeddingModulePaths {
-    Transformer,
-    Pooling { config: PathBuf },
-    Dense { config: PathBuf, model: PathBuf },
-    Normalize,
+    Transformer {
+        path: String,
+    },
+    Pooling {
+        path: String,
+        config: PathBuf,
+    },
+    Dense {
+        path: String,
+        config: PathBuf,
+        model: PathBuf,
+    },
+    Normalize {
+        path: String,
+    },
 }
 
 impl EmbeddingModulePaths {
@@ -146,20 +157,20 @@ impl EmbeddingModulePaths {
             .enumerate()
             .map(|(i, m)| {
                 let (path, ty) = match m {
-                    EmbeddingModulePaths::Transformer => (
-                        "".to_string(),
+                    EmbeddingModulePaths::Transformer { path } => (
+                        path.clone(),
                         "sentence_transformers.models.Transformer".to_string(),
                     ),
-                    EmbeddingModulePaths::Pooling { config } => (
-                        config.display().to_string(),
+                    EmbeddingModulePaths::Pooling { path, .. } => (
+                        path.clone(),
                         "sentence_transformers.models.Pooling".to_string(),
                     ),
-                    EmbeddingModulePaths::Dense { config, .. } => (
-                        config.display().to_string(),
+                    EmbeddingModulePaths::Dense { path, .. } => (
+                        path.clone(),
                         "sentence_transformers.models.Dense".to_string(),
                     ),
-                    EmbeddingModulePaths::Normalize => (
-                        "".to_string(),
+                    EmbeddingModulePaths::Normalize { path } => (
+                        path.clone(),
                         "sentence_transformers.models.Normalize".to_string(),
                     ),
                 };

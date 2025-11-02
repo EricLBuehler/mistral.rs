@@ -565,7 +565,6 @@ impl IsqModel for EmbeddingGemma {
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
-        let uvb = uvb.pp("model");
         uvb.pp("embed_tokens").add(&self.embed_tokens);
         uvb.pp("norm").add(&self.norm.undo_gemma().unwrap());
 
