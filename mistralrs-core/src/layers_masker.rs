@@ -20,8 +20,16 @@ pub fn masked_fill<D: WithDType>(xs: &Tensor, mask: &Tensor, value: D) -> Result
     Ok(res)
 }
 
+pub struct NotACache;
+
 pub trait PastKvLenCache {
     fn get_past_kv_len(&self) -> Result<usize>;
+}
+
+impl PastKvLenCache for NotACache {
+    fn get_past_kv_len(&self) -> Result<usize> {
+        Ok(0)
+    }
 }
 
 impl PastKvLenCache for Vec<KvCache> {

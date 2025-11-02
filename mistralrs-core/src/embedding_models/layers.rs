@@ -1,4 +1,4 @@
-use candle_core::{Result, Tensor, D};
+use candle_core::{IndexOp, Result, Tensor, D};
 use candle_nn::Module;
 use serde::Deserialize;
 
@@ -21,6 +21,7 @@ impl Module for Pooling {
         if !self.include_prompt {
             candle_core::bail!("Only support include_prompt==true");
         }
+        dbg!(&xs);
         if xs.dim(D::Minus1)? != self.word_embedding_dimension {
             candle_core::bail!("xs does not match the expected embedding dimension.");
         }
@@ -45,7 +46,7 @@ impl Module for Pooling {
             unimplemented!();
         }
         if self.pooling_mode_lasttoken {
-            unimplemented!();
+            outputs.push(xs.i((.., xs.dim(D::Minus2)? - 1, ..))?);
         }
 
         Tensor::cat(&outputs, 1)
