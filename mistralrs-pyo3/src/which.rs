@@ -55,12 +55,14 @@ impl From<Architecture> for NormalLoaderType {
 #[derive(Debug, Clone, PartialEq)]
 pub enum EmbeddingArchitecture {
     EmbeddingGemma,
+    Qwen3Embedding,
 }
 
 impl From<EmbeddingArchitecture> for EmbeddingLoaderType {
     fn from(value: EmbeddingArchitecture) -> Self {
         match value {
             EmbeddingArchitecture::EmbeddingGemma => EmbeddingLoaderType::EmbeddingGemma,
+            EmbeddingArchitecture::Qwen3Embedding => EmbeddingLoaderType::Qwen3Embedding,
         }
     }
 }

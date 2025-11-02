@@ -444,4 +444,12 @@ embeddings = runner.send_embedding_request(
 )
 
 print(len(embeddings), len(embeddings[0]))
+
+# Swap the model_id and arch below to load Qwen/Qwen3-Embedding-0.6B instead:
+# Runner(
+#     which=Which.Embedding(
+#         model_id="Qwen/Qwen3-Embedding-0.6B",
+#         arch=EmbeddingArchitecture.Qwen3Embedding,
+#     )
+# )
 ```
