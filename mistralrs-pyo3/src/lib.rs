@@ -5,7 +5,9 @@ use anymoe::{AnyMoeConfig, AnyMoeExpertType};
 use either::Either;
 use indexmap::IndexMap;
 use itertools::Itertools;
-use requests::{ChatCompletionRequest, CompletionRequest, ToolChoice};
+use requests::{
+    ChatCompletionRequest, CompletionRequest, EmbeddingRequest, PythonEmbeddingInputs, ToolChoice,
+};
 use serde_json::Value;
 use std::{
     cell::RefCell,
@@ -23,10 +25,10 @@ use mistralrs_core::{
     BertEmbeddingModel, ChatCompletionResponse, CompletionResponse, Constraint,
     DefaultSchedulerMethod, DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata,
     DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams,
-    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
-    ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar, Loader,
-    MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
-    NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, Request as _Request,
+    EmbeddingLoaderBuilder, EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
+    LlguidanceGrammar, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
+    NormalRequest, NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, Request as _Request,
     RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig,
     SpeculativeLoader, SpeechLoader, StopTokens, TokenSource, TokenizationRequest, Tool, Topology,
     VisionLoaderBuilder, VisionSpecificConfig,
@@ -197,6 +199,31 @@ fn parse_which(
             jinja_explicit,
         )
         .build(arch.map(Into::into))?,
+        Which::Embedding {
+            model_id,
+            tokenizer_json,
+            arch,
+            topology,
+            write_uqff,
+            from_uqff,
+            dtype: _,
+            hf_cache_path,
+        } => EmbeddingLoaderBuilder::new(
+            EmbeddingSpecificConfig {
+                topology: Topology::from_option_path(topology)?,
+                write_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.right_or_else(|l| vec![l])
+                        .iter()
+                        .map(|path| PathBuf::from_str(path).unwrap())
+                        .collect::<Vec<_>>()
+                }),
+                hf_cache_path,
+            },
+            tokenizer_json,
+            Some(model_id),
+        )
+        .build(arch.map(Into::into)),
         Which::XLora {
             model_id,
             xlora_model_id,
@@ -602,6 +629,7 @@ impl Runner {
             | Which::LoraGGUF { .. }
             | Which::GGML { .. }
             | Which::LoraGGML { .. }
+            | Which::Embedding { .. }
             | Which::VisionPlain { .. }
             | Which::DiffusionPlain { .. }
             | Which::Speech { .. } => None,
@@ -625,6 +653,7 @@ impl Runner {
             | Which::LoraGGUF { dtype, .. }
             | Which::GGML { dtype, .. }
             | Which::LoraGGML { dtype, .. }
+            | Which::Embedding { dtype, .. }
             | Which::VisionPlain { dtype, .. }
             | Which::DiffusionPlain { dtype, .. }
             | Which::Speech { dtype, .. }
@@ -677,7 +706,7 @@ impl Runner {
                     max_num_images: p.max_num_images,
                 })
                 .unwrap_or(AutoDeviceMapParams::default_vision()),
-            Which::DiffusionPlain { .. } | Which::Speech { .. } => {
+            Which::Embedding { .. } | Which::DiffusionPlain { .. } | Which::Speech { .. } => {
                 AutoDeviceMapParams::default_text()
             }
         };
@@ -1193,6 +1222,7 @@ impl Runner {
                 return_raw_logits: false,
                 web_search_options: request.web_search_options.clone(),
                 model_id: model_id.clone(),
+                truncate_sequence: request.truncate_sequence,
             }));
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -1217,8 +1247,145 @@ impl Runner {
                     Response::ImageGeneration(_) => unreachable!(),
                     Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
+                    Response::Embeddings { .. } => unreachable!(),
                 }
             }
+        })
+    }
+
+    /// Send an embeddings request, returning embedding vectors in the same order they were provided.
+    /// This returns the embeddings as [batch size, embedding dim]
+    #[pyo3(signature = (request, model_id = None))]
+    fn send_embedding_request(
+        &mut self,
+        request: Py<EmbeddingRequest>,
+        model_id: Option<String>,
+    ) -> PyApiResult<Vec<Vec<f32>>> {
+        Python::with_gil(|py| {
+            let (inputs, truncate_sequence, debug_repr) = {
+                let request_ref = request.bind(py).borrow();
+                (
+                    request_ref.inputs.clone(),
+                    request_ref.truncate_sequence,
+                    format!("{:?}", &*request_ref),
+                )
+            };
+
+            MistralRs::maybe_log_request(self.runner.clone(), debug_repr);
+            let sender = self.runner.get_sender(model_id.as_deref())?;
+
+            let expected = match &inputs {
+                PythonEmbeddingInputs::Prompts(prompts) => prompts.len(),
+                PythonEmbeddingInputs::Tokens(batches) => batches.len(),
+            };
+
+            let mut receivers = Vec::with_capacity(expected);
+
+            let mut enqueue = |message: RequestMessage| -> PyApiResult<()> {
+                let (tx, rx) = channel(1);
+                let request_id = {
+                    let l = NEXT_REQUEST_ID.lock().unwrap();
+                    let last = &mut *l.borrow_mut();
+                    let last_v = *last;
+                    *last += 1;
+                    last_v
+                };
+
+                let model_request = _Request::Normal(Box::new(NormalRequest {
+                    id: request_id,
+                    messages: message,
+                    sampling_params: SamplingParams::deterministic(),
+                    response: tx,
+                    return_logprobs: false,
+                    is_streaming: false,
+                    constraint: Constraint::None,
+                    suffix: None,
+                    tool_choice: None,
+                    tools: None,
+                    logits_processors: None,
+                    return_raw_logits: false,
+                    web_search_options: None,
+                    model_id: model_id.clone(),
+                    truncate_sequence,
+                }));
+
+                sender
+                    .blocking_send(model_request)
+                    .map_err(|e| PyApiErr::from(e.to_string()))?;
+                receivers.push(rx);
+                Ok(())
+            };
+
+            match inputs {
+                PythonEmbeddingInputs::Prompts(prompts) => {
+                    for prompt in prompts {
+                        enqueue(RequestMessage::Embedding { prompt })?;
+                    }
+                }
+                PythonEmbeddingInputs::Tokens(batches) => {
+                    for tokens in batches {
+                        enqueue(RequestMessage::EmbeddingTokens { prompt: tokens })?;
+                    }
+                }
+            }
+
+            let mut all_embeddings = Vec::with_capacity(receivers.len());
+
+            for mut rx in receivers {
+                let response = rx.blocking_recv().ok_or_else(|| {
+                    PyApiErr::from("Embedding response channel closed unexpectedly")
+                })?;
+
+                match response {
+                    Response::Embeddings { embeddings, .. } => all_embeddings.push(embeddings),
+                    Response::ValidationError(e) | Response::InternalError(e) => {
+                        return Err(PyApiErr::from(e.to_string()))
+                    }
+                    Response::ModelError(msg, _) => return Err(PyApiErr::from(msg.to_string())),
+                    Response::Done(_) => {
+                        return Err(PyApiErr::from(
+                            "Received chat completion response from embeddings request.",
+                        ))
+                    }
+                    Response::Chunk(_) => {
+                        return Err(PyApiErr::from(
+                            "Received chat completion chunk from embeddings request.",
+                        ))
+                    }
+                    Response::CompletionDone(_) => {
+                        return Err(PyApiErr::from(
+                            "Received completion response from embeddings request.",
+                        ))
+                    }
+                    Response::CompletionChunk(_) => {
+                        return Err(PyApiErr::from(
+                            "Received completion chunk from embeddings request.",
+                        ))
+                    }
+                    Response::CompletionModelError(_, _) => {
+                        return Err(PyApiErr::from(
+                            "Received completion model error from embeddings request.",
+                        ))
+                    }
+                    Response::ImageGeneration(_) => {
+                        return Err(PyApiErr::from(
+                            "Received image generation response from embeddings request.",
+                        ))
+                    }
+                    Response::Speech { .. } => {
+                        return Err(PyApiErr::from(
+                            "Received speech response from embeddings request.",
+                        ))
+                    }
+                    Response::Raw { .. } => {
+                        return Err(PyApiErr::from(
+                            "Received raw logits response from embeddings request.",
+                        ))
+                    }
+                }
+            }
+
+            Ok(all_embeddings)
         })
     }
 
@@ -1304,6 +1471,7 @@ impl Runner {
                 return_raw_logits: false,
                 web_search_options: None,
                 model_id: model_id.clone(),
+                truncate_sequence: request.truncate_sequence,
             }));
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -1324,6 +1492,7 @@ impl Runner {
                 Response::ImageGeneration(_) => unreachable!(),
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
+                Response::Embeddings { .. } => unreachable!(),
             }
         })
     }
@@ -1365,6 +1534,7 @@ impl Runner {
             return_raw_logits: false,
             web_search_options: None,
             model_id: model_id.clone(),
+            truncate_sequence: false,
         }));
 
         let sender = self.runner.get_sender(model_id.as_deref())?;
@@ -1408,6 +1578,7 @@ impl Runner {
             return_raw_logits: false,
             web_search_options: None,
             model_id: model_id.clone(),
+            truncate_sequence: false,
         }));
 
         let sender = self.runner.get_sender(model_id.as_deref())?;
@@ -1804,6 +1975,7 @@ impl Runner {
                 return_raw_logits: false,
                 web_search_options: request.web_search_options.clone(),
                 model_id: Some(model_id.clone()),
+                truncate_sequence: request.truncate_sequence,
             }));
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -1828,6 +2000,7 @@ impl Runner {
                     Response::ImageGeneration(_) => unreachable!(),
                     Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
+                    Response::Embeddings { .. } => unreachable!(),
                 }
             }
         })
@@ -1914,6 +2087,7 @@ impl Runner {
                 return_raw_logits: false,
                 web_search_options: None,
                 model_id: Some(model_id.clone()),
+                truncate_sequence: request.truncate_sequence,
             }));
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -1934,6 +2108,7 @@ impl Runner {
                 Response::ImageGeneration(_) => unreachable!(),
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
+                Response::Embeddings { .. } => unreachable!(),
             }
         })
     }
@@ -1976,6 +2151,16 @@ impl MultiModelRunner {
         self.runner.send_completion_request(request, Some(model_id))
     }
 
+    /// Send an embeddings request to a specific model.
+    #[pyo3(signature = (request, model_id))]
+    fn send_embedding_request_to_model(
+        &mut self,
+        request: Py<EmbeddingRequest>,
+        model_id: String,
+    ) -> PyApiResult<Vec<Vec<f32>>> {
+        self.runner.send_embedding_request(request, Some(model_id))
+    }
+
     /// List all available model IDs.
     fn list_models(&self) -> PyApiResult<Vec<String>> {
         self.runner.list_models()
@@ -1996,7 +2181,7 @@ impl MultiModelRunner {
         self.runner.remove_model(model_id)
     }
 
-    /// Send a chat completion request to the default model.
+    /// Send a chat completion request to the specified model.
     #[pyo3(signature = (request, model_id = None))]
     fn send_chat_completion_request(
         &mut self,
@@ -2006,7 +2191,7 @@ impl MultiModelRunner {
         self.runner.send_chat_completion_request(request, model_id)
     }
 
-    /// Send a completion request to the default model.
+    /// Send a completion request to the specified model.
     #[pyo3(signature = (request, model_id = None))]
     fn send_completion_request(
         &mut self,
@@ -2016,7 +2201,18 @@ impl MultiModelRunner {
         self.runner.send_completion_request(request, model_id)
     }
 
-    /// Generate an image using the default model.
+    /// Send an embeddings request to the specified model.
+    /// This returns the embeddings as [batch size, embedding dim]
+    #[pyo3(signature = (request, model_id = None))]
+    fn send_embedding_request(
+        &mut self,
+        request: Py<EmbeddingRequest>,
+        model_id: Option<String>,
+    ) -> PyApiResult<Vec<Vec<f32>>> {
+        self.runner.send_embedding_request(request, model_id)
+    }
+
+    /// Generate an image using the specified model.
     #[pyo3(signature = (
         prompt,
         response_format,
@@ -2036,7 +2232,7 @@ impl MultiModelRunner {
             .generate_image(prompt, response_format, height, width, model_id)
     }
 
-    /// Generate audio using the default model.
+    /// Generate audio using the specified model.
     #[pyo3(signature = (prompt, model_id = None))]
     fn generate_audio(
         &self,
@@ -2046,13 +2242,13 @@ impl MultiModelRunner {
         self.runner.generate_audio(prompt, model_id)
     }
 
-    /// Send a request to re-ISQ the default model.
+    /// Send a request to re-ISQ the specified model.
     #[pyo3(signature = (dtype, model_id = None))]
     fn send_re_isq(&self, dtype: String, model_id: Option<String>) -> PyApiResult<()> {
         self.runner.send_re_isq(dtype, model_id)
     }
 
-    /// Tokenize some text using the default model.
+    /// Tokenize some text using the specified model.
     #[pyo3(signature = (text, add_special_tokens, enable_thinking, model_id = None))]
     fn tokenize_text(
         &self,
@@ -2065,7 +2261,7 @@ impl MultiModelRunner {
             .tokenize_text(text, add_special_tokens, enable_thinking, model_id)
     }
 
-    /// Detokenize some tokens using the default model.
+    /// Detokenize some tokens using the specified model.
     #[pyo3(signature = (tokens, skip_special_tokens, model_id = None))]
     fn detokenize_text(
         &self,
@@ -2259,7 +2455,9 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<CompletionRequest>()?;
+    m.add_class::<EmbeddingRequest>()?;
     m.add_class::<Architecture>()?;
+    m.add_class::<which::EmbeddingArchitecture>()?;
     m.add_class::<VisionArchitecture>()?;
     m.add_class::<DiffusionArchitecture>()?;
     m.add_class::<AnyMoeConfig>()?;

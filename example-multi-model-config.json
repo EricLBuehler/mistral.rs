@@ -10,5 +10,11 @@
       "model_id": "Qwen/Qwen3-4B"
     },
     "in_situ_quant": "4"
+  },
+  "embed-gemma": {
+    "Embedding": {
+      "model_id": "google/embeddinggemma-300m",
+      "arch": "embeddinggemma"
+    }
   }
 }

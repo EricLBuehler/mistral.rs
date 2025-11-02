@@ -65,7 +65,9 @@ use serde::Deserialize;
 use tokenizers::Tokenizer;
 use tracing::{info, warn};
 
-use crate::{device_map::DeviceMapper, topology::LayerTopology, Topology};
+use crate::{
+    device_map::DeviceMapper, pipeline::EmbeddingModulePaths, topology::LayerTopology, Topology,
+};
 
 pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
 // 10 GB max per file
@@ -192,6 +194,8 @@ impl FromStr for IsqOrganization {
 pub struct UqffFullSer<'a> {
     pub tokenizer: &'a Tokenizer,
     pub template_filename: &'a Option<PathBuf>,
+    pub modules: Option<&'a String>,
+    pub module_paths: Option<&'a [EmbeddingModulePaths]>,
     pub generation_config: Option<&'a PathBuf>,
     pub config: String,
     pub processor_filename: &'a Option<PathBuf>,
@@ -714,6 +718,7 @@ pub trait IsqModel {
 
                 let residual_out = parent.join(UQFF_RESIDUAL_SAFETENSORS);
                 let config_out = parent.join("config.json");
+                let modules_out = parent.join("modules.json");
                 let tokenizer_out = parent.join("tokenizer.json");
                 let tokenizer_cfg_out = parent.join("tokenizer_config.json");
                 let chat_template_jinja_out = parent.join("chat_template.jinja");
@@ -732,6 +737,8 @@ pub trait IsqModel {
                 let UqffFullSer {
                     tokenizer,
                     template_filename,
+                    modules,
+                    module_paths,
                     generation_config,
                     config,
                     processor_filename,
@@ -797,6 +804,57 @@ pub trait IsqModel {
                     let cfg =
                         std::fs::read(preprocessor_config).map_err(candle_core::Error::msg)?;
                     std::fs::write(&preprocessor_out, cfg).map_err(candle_core::Error::msg)?;
+                }
+
+                if let Some(modules) = modules {
+                    info!(
+                        "Serializing modules manifest to `{}`.",
+                        modules_out.display()
+                    );
+
+                    std::fs::write(&modules_out, modules).map_err(candle_core::Error::msg)?;
+
+                    if let Some(module_paths) = module_paths {
+                        for module in module_paths {
+                            match module {
+                                EmbeddingModulePaths::Transformer { path }
+                                | EmbeddingModulePaths::Pooling { path, .. }
+                                | EmbeddingModulePaths::Dense { path, .. }
+                                | EmbeddingModulePaths::Normalize { path } => {
+                                    if path.is_empty() {
+                                        continue;
+                                    }
+                                    let module_dir = parent.join(path.as_str());
+                                    std::fs::create_dir_all(&module_dir)
+                                        .map_err(candle_core::Error::msg)?;
+
+                                    match module {
+                                        EmbeddingModulePaths::Pooling { config, .. } => {
+                                            let dest = module_dir.join("config.json");
+                                            if config != &dest {
+                                                std::fs::copy(config, &dest)
+                                                    .map_err(candle_core::Error::msg)?;
+                                            }
+                                        }
+                                        EmbeddingModulePaths::Dense { config, model, .. } => {
+                                            let dest_cfg = module_dir.join("config.json");
+                                            if config != &dest_cfg {
+                                                std::fs::copy(config, &dest_cfg)
+                                                    .map_err(candle_core::Error::msg)?;
+                                            }
+                                            let dest_model = module_dir.join("model.safetensors");
+                                            if model != &dest_model {
+                                                std::fs::copy(model, &dest_model)
+                                                    .map_err(candle_core::Error::msg)?;
+                                            }
+                                        }
+                                        EmbeddingModulePaths::Transformer { .. }
+                                        | EmbeddingModulePaths::Normalize { .. } => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

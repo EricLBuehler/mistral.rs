@@ -152,6 +152,7 @@ impl futures::Stream for CompletionStreamer {
                 Response::ModelError(_, _) => unreachable!(),
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
+                Response::Embeddings { .. } => unreachable!(),
             },
             Poll::Pending | Poll::Ready(None) => Poll::Pending,
         }
@@ -259,6 +260,7 @@ pub fn parse_request(
             } else {
                 Some(oairequest.model.clone())
             },
+            truncate_sequence: oairequest.truncate_sequence.unwrap_or(false),
         })),
         is_streaming,
     ))
@@ -348,5 +350,6 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> Compl
         Response::ImageGeneration(_) => unreachable!(),
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
+        Response::Embeddings { .. } => unreachable!(),
     }
 }

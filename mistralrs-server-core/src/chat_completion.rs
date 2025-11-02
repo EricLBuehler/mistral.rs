@@ -159,6 +159,7 @@ impl futures::Stream for ChatCompletionStreamer {
                 Response::ImageGeneration(_) => unreachable!(),
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
+                Response::Embeddings { .. } => unreachable!(),
             },
             Poll::Pending | Poll::Ready(None) => Poll::Pending,
         }
@@ -487,6 +488,7 @@ pub async fn parse_request(
             } else {
                 Some(oairequest.model.clone())
             },
+            truncate_sequence: oairequest.truncate_sequence.unwrap_or(false),
         })),
         is_streaming,
     ))
@@ -583,5 +585,6 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> ChatC
         Response::ImageGeneration(_) => unreachable!(),
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
+        Response::Embeddings { .. } => unreachable!(),
     }
 }

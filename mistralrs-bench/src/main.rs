@@ -86,6 +86,7 @@ async fn run_bench(
         return_raw_logits: false,
         web_search_options: None,
         model_id: None,
+        truncate_sequence: false,
     }));
 
     let mut usages = Vec::new();
@@ -120,6 +121,7 @@ async fn run_bench(
                     Response::ImageGeneration(_) => unreachable!(),
                     Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
+                    Response::Embeddings { .. } => unreachable!(),
                 },
                 None => unreachable!("Expected a Done response, got None",),
             }
@@ -249,6 +251,7 @@ async fn warmup_run(mistralrs: Arc<MistralRs>) {
         return_raw_logits: false,
         web_search_options: None,
         model_id: None,
+        truncate_sequence: false,
     }));
 
     if sender.send(req.clone()).await.is_err() {

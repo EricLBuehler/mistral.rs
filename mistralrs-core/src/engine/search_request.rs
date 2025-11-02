@@ -491,6 +491,18 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                                 })
                                 .await
                                 .unwrap(),
+                            ResponseOk::Embeddings {
+                                embeddings,
+                                prompt_tokens,
+                                total_tokens,
+                            } => user_sender
+                                .send(Response::Embeddings {
+                                    embeddings,
+                                    prompt_tokens,
+                                    total_tokens,
+                                })
+                                .await
+                                .unwrap(),
                             ResponseOk::Speech {
                                 pcm,
                                 rate,
@@ -599,6 +611,18 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                                     .send(Response::Raw {
                                         logits_chunks,
                                         tokens,
+                                    })
+                                    .await
+                                    .unwrap(),
+                                ResponseOk::Embeddings {
+                                    embeddings,
+                                    prompt_tokens,
+                                    total_tokens,
+                                } => user_sender
+                                    .send(Response::Embeddings {
+                                        embeddings,
+                                        prompt_tokens,
+                                        total_tokens,
                                     })
                                     .await
                                     .unwrap(),

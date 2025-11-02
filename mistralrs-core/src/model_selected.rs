@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use clap::Subcommand;
 
 use crate::{
-    pipeline::{AutoDeviceMapParams, IsqOrganization, NormalLoaderType, VisionLoaderType},
+    pipeline::{
+        AutoDeviceMapParams, EmbeddingLoaderType, IsqOrganization, NormalLoaderType,
+        VisionLoaderType,
+    },
     DiffusionLoaderType, ModelDType, SpeechLoaderType,
 };
 
@@ -25,6 +28,10 @@ fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
 }
 
 fn parse_vision_arch(x: &str) -> Result<VisionLoaderType, String> {
+    x.parse()
+}
+
+fn parse_embedding_arch(x: &str) -> Result<EmbeddingLoaderType, String> {
     x.parse()
 }
 
@@ -692,5 +699,47 @@ pub enum ModelSelected {
         /// Default model ID to use when no model is specified in requests
         #[arg(short, long)]
         default_model_id: Option<String>,
+    },
+
+    /// Select an embedding model, without quantization or adapters
+    Embedding {
+        /// Model ID to load from. This may be a HF hub repo or a local path.
+        #[arg(short, long)]
+        model_id: String,
+
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(short, long)]
+        #[serde(default)]
+        tokenizer_json: Option<String>,
+
+        /// The architecture of the model.
+        #[arg(short, long, value_parser = parse_embedding_arch)]
+        #[serde(default)]
+        arch: Option<EmbeddingLoaderType>,
+
+        /// Model data type. Defaults to `auto`.
+        #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        #[serde(default = "default_model_dtype")]
+        dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        #[serde(default)]
+        topology: Option<String>,
+
+        /// UQFF path to write to.
+        #[arg(short, long)]
+        #[serde(default)]
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;)
+        #[arg(short, long)]
+        #[serde(default)]
+        from_uqff: Option<String>,
+
+        /// Cache path for Hugging Face models downloaded locally
+        #[arg(long)]
+        #[serde(default)]
+        hf_cache_path: Option<PathBuf>,
     },
 }

@@ -89,6 +89,7 @@ pub fn parse_request(
         } else {
             Some(oairequest.model.clone())
         },
+        truncate_sequence: false,
     })))
 }
 
@@ -164,5 +165,6 @@ pub fn match_responses(
         Response::ModelError(_, _) => unreachable!(),
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
+        Response::Embeddings { .. } => unreachable!(),
     }
 }

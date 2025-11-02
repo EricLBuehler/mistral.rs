@@ -74,8 +74,11 @@ impl Engine {
             | RequestMessage::CompletionTokens(_)
             | RequestMessage::VisionChat { .. }
             | RequestMessage::ImageGeneration { .. }
-            | RequestMessage::SpeechGeneration { .. } => None,
+            | RequestMessage::SpeechGeneration { .. }
+            | RequestMessage::Embedding { .. }
+            | RequestMessage::EmbeddingTokens { .. } => None,
         };
+        let truncate_sequence = request.truncate_sequence;
         if is_chat
             && !get_mut_arcmutex!(self.pipeline)
                 .get_chat_template()
@@ -106,6 +109,10 @@ impl Engine {
             ) => (),
             (ModelCategory::Diffusion, RequestMessage::ImageGeneration { .. }) => (),
             (ModelCategory::Speech, RequestMessage::SpeechGeneration { .. }) => (),
+            (
+                ModelCategory::Embedding,
+                RequestMessage::Embedding { .. } | RequestMessage::EmbeddingTokens { .. },
+            ) => (),
             _ => {
                 request
                     .response
@@ -149,9 +156,10 @@ impl Engine {
         };
 
         let seq_step_type = match &request.messages {
-            RequestMessage::ImageGeneration { .. } | RequestMessage::SpeechGeneration { .. } => {
-                SeqStepType::OneShot
-            }
+            RequestMessage::ImageGeneration { .. }
+            | RequestMessage::SpeechGeneration { .. }
+            | RequestMessage::Embedding { .. }
+            | RequestMessage::EmbeddingTokens { .. } => SeqStepType::OneShot,
             _ => SeqStepType::PromptAndDecode,
         };
 
@@ -185,7 +193,8 @@ impl Engine {
                 );
                 handle_seq_error!(template, request.response)
             }
-            RequestMessage::Completion { text, .. } => {
+            RequestMessage::Completion { text, .. }
+            | RequestMessage::Embedding { prompt: text } => {
                 let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
                     request
                         .response
@@ -208,7 +217,8 @@ impl Engine {
             }
             RequestMessage::ImageGeneration { prompt, .. }
             | RequestMessage::SpeechGeneration { prompt } => (vec![u32::MAX], prompt),
-            RequestMessage::CompletionTokens(it) => {
+            RequestMessage::CompletionTokens(it)
+            | RequestMessage::EmbeddingTokens { prompt: it } => {
                 let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
                     request
                         .response
@@ -236,8 +246,15 @@ impl Engine {
             return;
         }
 
-        if prompt_tokens.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len {
-            if !self.truncate_sequence {
+        if matches!(
+            get_mut_arcmutex!(self.pipeline).category(),
+            ModelCategory::Text | ModelCategory::Vision { .. } | ModelCategory::Embedding
+        ) && prompt_tokens.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len
+        {
+            // text/vision => truncate from start
+            // embedding => truncate from end
+            let category = get_mut_arcmutex!(self.pipeline).category();
+            if !truncate_sequence {
                 request
                     .response
                     .send(Response::ValidationError(
@@ -246,7 +263,7 @@ impl Engine {
                     .await
                     .unwrap_or_else(|_| warn!("Receiver disconnected"));
                 return;
-            } else {
+            } else if matches!(category, ModelCategory::Text | ModelCategory::Vision { .. }) {
                 let prompt_len = prompt_tokens.len();
                 let max_len = get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len;
                 let currently_over = prompt_len - max_len;
@@ -268,7 +285,14 @@ impl Engine {
                 let slice_start = prompt_len.saturating_sub(tokens_to_keep);
 
                 prompt_tokens = prompt_tokens[slice_start..].to_vec();
-                warn!("Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation.", request.id, currently_over, prompt_len - prompt_tokens.len());
+                warn!("Prompt for request {} was {currently_over} tokens over the model maximum length. The first {slice_start} tokens were truncated to make space for generation.", request.id);
+            } else {
+                let prompt_len = prompt_tokens.len();
+                let max_len = get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len;
+                let currently_over = prompt_len - max_len;
+
+                prompt_tokens = prompt_tokens[..max_len].to_vec();
+                warn!("Prompt for request {} was {currently_over} tokens over the model maximum length. The last {currently_over} tokens were truncated to make space for generation.", request.id);
             }
         }
 
@@ -421,7 +445,11 @@ impl Engine {
                 .eos_tok
                 .clone();
 
-            let seq_preallocated_cache = if get_mut_arcmutex!(self.pipeline).do_preallocated_cache()
+            let seq_preallocated_cache = if matches!(
+                get_mut_arcmutex!(self.pipeline).category(),
+                ModelCategory::Text | ModelCategory::Vision { .. }
+            ) && get_mut_arcmutex!(self.pipeline)
+                .do_preallocated_cache()
             {
                 let metadata = get_mut_arcmutex!(self.pipeline).get_metadata();
                 let model_metadata = metadata

@@ -14,8 +14,9 @@ use crate::{
         VisionLoaderBuilder, VisionSpecificConfig,
     },
     toml_selector::get_toml_selected_model_device_map_params,
-    AutoDeviceMapParams, Loader, ModelDType, ModelSelected, SpeechLoader, TomlLoaderArgs,
-    TomlSelector, Topology, GGUF_MULTI_FILE_DELIMITER, UQFF_MULTI_FILE_DELIMITER,
+    AutoDeviceMapParams, EmbeddingLoaderBuilder, EmbeddingSpecificConfig, Loader, ModelDType,
+    ModelSelected, SpeechLoader, TomlLoaderArgs, TomlSelector, Topology, GGUF_MULTI_FILE_DELIMITER,
+    UQFF_MULTI_FILE_DELIMITER,
 };
 
 /// A builder for a loader using the selected model.
@@ -66,7 +67,8 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
         | ModelSelected::Toml { .. }
         | ModelSelected::VisionPlain { .. }
         | ModelSelected::DiffusionPlain { .. }
-        | ModelSelected::Speech { .. } => None,
+        | ModelSelected::Speech { .. }
+        | ModelSelected::Embedding { .. } => None,
         ModelSelected::XLora {
             tgt_non_granular_index,
             ..
@@ -99,7 +101,8 @@ pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
         | ModelSelected::LoraGGUF { dtype, .. }
         | ModelSelected::LoraGGML { dtype, .. }
         | ModelSelected::Run { dtype, .. }
-        | ModelSelected::Speech { dtype, .. } => Ok(*dtype),
+        | ModelSelected::Speech { dtype, .. }
+        | ModelSelected::Embedding { dtype, .. } => Ok(*dtype),
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
                 &fs::read_to_string(file.clone())
@@ -199,9 +202,9 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
             max_image_shape: (*max_image_length, *max_image_length),
             max_num_images: *max_num_images,
         }),
-        ModelSelected::DiffusionPlain { .. } | ModelSelected::Speech { .. } => {
-            Ok(AutoDeviceMapParams::default_text())
-        }
+        ModelSelected::DiffusionPlain { .. }
+        | ModelSelected::Speech { .. }
+        | ModelSelected::Embedding { .. } => Ok(AutoDeviceMapParams::default_text()),
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
                 &fs::read_to_string(file.clone())
@@ -306,9 +309,9 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     matformer_slice_name: matformer_slice_name.clone(),
                 },
                 VisionSpecificConfig {
-                    topology: Topology::from_option_path(topology)?,
-                    write_uqff,
-                    from_uqff: from_uqff.map(|x| {
+                    topology: Topology::from_option_path(topology.clone())?,
+                    write_uqff: write_uqff.clone(),
+                    from_uqff: from_uqff.clone().map(|x| {
                         x.split(UQFF_MULTI_FILE_DELIMITER)
                             .map(PathBuf::from_str)
                             .map(|x| x.unwrap())
@@ -320,6 +323,17 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     hf_cache_path: hf_cache_path.clone(),
                     matformer_config_path,
                     matformer_slice_name,
+                },
+                EmbeddingSpecificConfig {
+                    topology: Topology::from_option_path(topology)?,
+                    write_uqff,
+                    from_uqff: from_uqff.map(|x| {
+                        x.split(UQFF_MULTI_FILE_DELIMITER)
+                            .map(PathBuf::from_str)
+                            .map(|x| x.unwrap())
+                            .collect::<Vec<_>>()
+                    }),
+                    hf_cache_path: hf_cache_path.clone(),
                 },
                 args.chat_template,
                 tokenizer_json,
@@ -651,6 +665,31 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             )?,
         )
         .build(),
+        ModelSelected::Embedding {
+            model_id,
+            tokenizer_json,
+            arch,
+            dtype: _,
+            topology,
+            write_uqff,
+            from_uqff,
+            hf_cache_path,
+        } => EmbeddingLoaderBuilder::new(
+            EmbeddingSpecificConfig {
+                topology: Topology::from_option_path(topology)?,
+                write_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.split(UQFF_MULTI_FILE_DELIMITER)
+                        .map(PathBuf::from_str)
+                        .map(|x| x.unwrap())
+                        .collect::<Vec<_>>()
+                }),
+                hf_cache_path,
+            },
+            tokenizer_json,
+            Some(model_id),
+        )
+        .build(arch),
         ModelSelected::MultiModel { .. } => {
             anyhow::bail!("MultiModel variant should not be used in model loading functions")
         }

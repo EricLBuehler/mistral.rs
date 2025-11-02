@@ -15,6 +15,7 @@ To support additional features, we have extended the completion and chat complet
 - `grammar`: `{"type" : "regex" | "lark" | "json_schema" | "llguidance", "value": string}` or `null`. Grammar to use. This is mutually exclusive to the OpenAI-compatible `response_format`.
 - `min_p`: `float` | `null`. If non null, it is only relevant if 1 >= min_p >= 0.
 - `enable_thinking`: `bool`, default to `false`. Enable thinking for models that support it.
+- `truncate_sequence`: `bool` | `null`. When `true`, requests that exceed the model context length will be truncated instead of rejected; otherwise the server returns a validation error. Embedding requests truncate tokens at the end of the prompt, while chat/completion requests truncate tokens at the start of the prompt.
 
 ## Model Parameter Validation
 
@@ -78,6 +79,8 @@ curl http://localhost:8080/v1/chat/completions \
 
 A streaming request can also be created by setting `"stream": true` in the request JSON. Please see [this](https://cookbook.openai.com/examples/how_to_stream_completions) guide.
 
+> ℹ️ Requests whose prompt exceeds the model's maximum context length now fail unless you opt in to truncation. Set `"truncate_sequence": true` to drop the oldest prompt tokens while reserving room (equal to `max_tokens` when provided, otherwise one token) for generation. Specifically, tokens from the front of the prompt are dropped.
+
 ## `GET`: `/v1/models`
 Returns the running models. 
 
@@ -138,6 +141,64 @@ curl http://localhost:8080/v1/completions \
 }'
 ```
 
+> ℹ️ The `truncate_sequence` flag behaves the same way for the completions endpoint: keep it `false` (default) to receive a validation error, or set it to `true` to trim the prompt automatically.
+
+## `POST`: `/v1/embeddings`
+Serve an embedding model (for example, EmbeddingGemma) to enable this endpoint:
+
+```bash
+./mistralrs-server run -m google/embeddinggemma-300m
+```
+
+In multi-model mode, include an `Embedding` entry in your selector config to expose it alongside chat models.
+
+Create vector embeddings via the OpenAI-compatible endpoint. Supported request fields:
+
+- `input`: a single string, an array of strings, an array of token IDs (`[123, 456]`), or a batch of token arrays (`[[...], [...]]`).
+- `encoding_format`: `"float"` (default) returns arrays of `f32`; `"base64"` returns Base64 strings.
+- `dimensions`: currently unsupported; providing it yields a validation error.
+- `truncate_sequence`: `bool`, default `false`. Set to `true` to clip over-length prompts instead of receiving a validation error.
+
+> ℹ️ Requests whose prompt exceeds the model's maximum context length now fail unless you opt in to truncation. Embedding requests truncate tokens from the end of the prompt.
+
+Example (Python `openai` client):
+
+```python
+import openai
+
+client = openai.OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="EMPTY",
+)
+
+result = client.embeddings.create(
+    model="default",
+    input=[
+        "Embeddings capture semantic relationships between texts.",
+        "What is graphene?",
+    ],
+    truncate_sequence=True,
+)
+
+for item in result.data:
+    print(item.index, len(item.embedding))
+```
+
+Example with `curl`:
+
+```bash
+curl http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer EMPTY" \
+  -d '{
+    "model": "default",
+    "input": ["graphene conductivity", "superconductor basics"],
+    "encoding_format": "base64",
+    "truncate_sequence": false
+  }'
+```
+
+Responses follow the OpenAI schema: `object: "list"`, `data[*].embedding` containing either float arrays or Base64 strings depending on `encoding_format`, and a `usage` block (`prompt_tokens`, `total_tokens`). At present those counters report `0` because token accounting for embeddings is not yet implemented.
 
 ## `POST`: `/v1/responses`
 Create a response using the OpenAI-compatible Responses API. Please find the official OpenAI API documentation [here](https://platform.openai.com/docs/api-reference/responses). 
@@ -190,6 +251,8 @@ curl http://localhost:8080/v1/responses \
 ```
 
 The API also supports multimodal inputs (images, audio) and streaming responses by setting `"stream": true` in the request JSON.
+
+> ℹ️ The Responses API forwards `truncate_sequence` to underlying chat completions. Enable it if you want over-length conversations to be truncated rather than rejected.
 
 ## `GET`: `/v1/responses/{response_id}`
 Retrieve a previously created response by its ID.

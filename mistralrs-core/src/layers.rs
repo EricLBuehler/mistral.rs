@@ -23,6 +23,7 @@ pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::repeat_kv;
 use crate::{
     amoe::{AnyMoeTrainableLayer, MlpLayer},
+    embedding_models::embedding_gemma::EmbeddingGemmaConfig,
     gguf::Content,
     models::{llama, smollm3},
     ops::SplitOp,
@@ -1898,6 +1899,53 @@ impl Gemma3RotaryEmbedding {
             }) => Self::new_linear(cfg, *factor, is_gpt_neox, dtype, dev),
 
             _ => Self::new_linear(cfg, 1.0, is_gpt_neox, dtype, dev),
+        }
+    }
+
+    fn new_linear_embedding_gemma(
+        cfg: &EmbeddingGemmaConfig,
+        factor: f64,
+        is_gpt_neox: bool,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Self> {
+        let max_seq_len = cfg.max_position_embeddings;
+        let dim = cfg.head_dim;
+
+        let inv_freq: Vec<_> = (0..dim)
+            .step_by(2)
+            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
+        let inv_freq = (inv_freq / factor)?;
+
+        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
+            .to_dtype(DType::F32)?
+            .reshape((max_seq_len, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+        let sin = freqs.sin()?.to_dtype(dtype)?;
+        let cos = freqs.cos()?.to_dtype(dtype)?;
+        Ok(Self(RotaryEmbedding {
+            cos,
+            sin,
+            is_gpt_neox,
+        }))
+    }
+
+    pub fn new_embedding_gemma(
+        is_gpt_neox: bool,
+        dtype: DType,
+        cfg: &EmbeddingGemmaConfig,
+        dev: &Device,
+    ) -> Result<Self> {
+        match &cfg.rope_scaling {
+            Some(Gemma3RopeScalingConfig {
+                rope_type: Gemma3ScaledRopeType::Linear,
+                factor,
+            }) => Self::new_linear_embedding_gemma(cfg, *factor, is_gpt_neox, dtype, dev),
+
+            _ => Self::new_linear_embedding_gemma(cfg, 1.0, is_gpt_neox, dtype, dev),
         }
     }
 

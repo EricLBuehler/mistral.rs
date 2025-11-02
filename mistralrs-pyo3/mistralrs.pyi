@@ -62,6 +62,7 @@ class ChatCompletionRequest:
     tool_choice: ToolChoice | None = None
     web_search_options: WebSearchOptions | None = None
     enable_thinking: bool | None = None
+    truncate_sequence: bool = False
 
 @dataclass
 class CompletionRequest:
@@ -87,8 +88,18 @@ class CompletionRequest:
     grammar: str | None = None
     grammar_type: str | None = None
     min_p: float | None = None
+    truncate_sequence: bool = False
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
+
+@dataclass
+class EmbeddingRequest:
+    """
+    An EmbeddingRequest represents a request to compute embeddings for the provided input text.
+    """
+
+    input: str | list[str] | list[int] | list[list[int]]
+    truncate_sequence: bool = False
 
 @dataclass
 class Architecture(Enum):
@@ -107,6 +118,10 @@ class Architecture(Enum):
     GLM4 = "glm4"
     Qwen3Moe = "qwen3moe"
     SmolLm3 = "smollm3"
+
+@dataclass
+class EmbeddingArchitecture(Enum):
+    EmbeddingGemma = "embeddinggemma"
 
 @dataclass
 class VisionArchitecture(Enum):
@@ -203,6 +218,17 @@ class Which(Enum):
         imatrix: str | None = None
         hf_cache_path: str | None = None
         matformer_config_path: str | None = None
+
+    @dataclass
+    class Embedding:
+        model_id: str
+        arch: EmbeddingArchitecture | None = None
+        tokenizer_json: str | None = None
+        topology: str | None = None
+        from_uqff: str | list[str] | None = None
+        write_uqff: str | None = None
+        dtype: ModelDType = ModelDType.Auto
+        hf_cache_path: str | None = None
 
     @dataclass
     class XLora:
@@ -420,6 +446,13 @@ class Runner:
         Send a chat completion request to the mistral.rs engine, returning the response object.
         """
 
+    def send_embedding_request(
+        self, request: EmbeddingRequest, model_id: str | None = None
+    ) -> list[list[float]]:
+        """
+        Generate embeddings for the supplied inputs and return one embedding vector per input.
+        """
+
     def generate_image(
         self,
         prompt: str,
@@ -453,6 +486,138 @@ class Runner:
     def detokenize_text(self, tokens: list[int], skip_special_tokens: bool) -> str:
         """
         Detokenize some tokens, returning text.
+        """
+
+class MultiModelRunner:
+    def __init__(self, runner: Runner) -> None:
+        """
+        Wrap an existing Runner to expose multi-model aware helpers.
+        """
+        ...
+
+    def send_chat_completion_request_to_model(
+        self, request: ChatCompletionRequest, model_id: str
+    ) -> ChatCompletionResponse | Iterator[ChatCompletionChunkResponse]:
+        """
+        Send a chat completion request to a specific model ID, returning the response object
+        or a generator over streamed chunks.
+        """
+
+    def send_completion_request_to_model(
+        self, request: CompletionRequest, model_id: str
+    ) -> CompletionResponse:
+        """
+        Send a completion request to a specific model ID.
+        """
+
+    def send_embedding_request_to_model(
+        self, request: EmbeddingRequest, model_id: str
+    ) -> list[list[float]]:
+        """
+        Generate embeddings using the specified model ID.
+        """
+
+    def list_models(self) -> list[str]:
+        """
+        List all registered model IDs.
+        """
+
+    def get_default_model_id(self) -> str | None:
+        """
+        Return the current default model ID, if any.
+        """
+
+    def set_default_model_id(self, model_id: str) -> None:
+        """
+        Set the default model ID for subsequent requests.
+        """
+
+    def remove_model(self, model_id: str) -> None:
+        """
+        Unload and remove the given model ID.
+        """
+
+    def send_chat_completion_request(
+        self,
+        request: ChatCompletionRequest,
+        model_id: str | None = None,
+    ) -> ChatCompletionResponse | Iterator[ChatCompletionChunkResponse]:
+        """
+        Send a chat completion request, optionally targeting a specific model ID.
+        """
+
+    def send_completion_request(
+        self,
+        request: CompletionRequest,
+        model_id: str | None = None,
+    ) -> CompletionResponse:
+        """
+        Send a completion request, optionally targeting a specific model ID.
+        """
+
+    def send_embedding_request(
+        self,
+        request: EmbeddingRequest,
+        model_id: str | None = None,
+    ) -> list[list[float]]:
+        """
+        Generate embeddings, optionally targeting a specific model ID. The result contains one vector per input.
+        """
+
+    def generate_image(
+        self,
+        prompt: str,
+        response_format: ImageGenerationResponseFormat,
+        height: int = 720,
+        width: int = 1280,
+        model_id: str | None = None,
+    ) -> ImageGenerationResponse:
+        """
+        Generate an image with the given model ID or the default model.
+        """
+
+    def generate_audio(
+        self,
+        prompt: str,
+        model_id: str | None = None,
+    ) -> SpeechGenerationResponse:
+        """
+        Generate speech audio with the given model ID or the default model.
+        """
+
+    def send_re_isq(
+        self,
+        dtype: str,
+        model_id: str | None = None,
+    ) -> None:
+        """
+        Re-ISQ the selected model (no-op for GGUF/GGML models).
+        """
+
+    def tokenize_text(
+        self,
+        text: str,
+        add_special_tokens: bool,
+        enable_thinking: bool | None = None,
+        model_id: str | None = None,
+    ) -> list[int]:
+        """
+        Tokenize text using the selected model (default or specified).
+        """
+
+    def detokenize_text(
+        self,
+        tokens: list[int],
+        skip_special_tokens: bool,
+        model_id: str | None = None,
+    ) -> str:
+        """
+        Detokenize tokens using the selected model (default or specified).
+        """
+
+    def inner(self) -> Runner:
+        """
+        Return the underlying Runner instance.
         """
 
 class AnyMoeExpertType(Enum):

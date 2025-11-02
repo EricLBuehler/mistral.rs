@@ -28,7 +28,7 @@ use crate::{
         DiffusionGenerationParams,
     },
     paged_attention::AttentionImplementation,
-    pipeline::paths::AdapterPaths,
+    pipeline::{paths::AdapterPaths, EmbeddingModulePaths},
 };
 
 pub trait DiffusionModel {
@@ -117,6 +117,9 @@ impl ModelPaths for DiffusionModelPaths {
         unreachable!("Use `std::any::Any`.")
     }
     fn get_adapter_paths(&self) -> &AdapterPaths {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_modules(&self) -> Option<&[EmbeddingModulePaths]> {
         unreachable!("Use `std::any::Any`.")
     }
 }

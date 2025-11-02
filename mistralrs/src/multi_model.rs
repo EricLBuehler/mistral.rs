@@ -71,6 +71,7 @@ impl MultiModel {
         } else {
             (None, None)
         };
+        let truncate_sequence = request.truncate_sequence();
 
         let request = Request::Normal(Box::new(NormalRequest {
             messages: request.take_messages(),
@@ -87,6 +88,7 @@ impl MultiModel {
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
             model_id: model_id.map(|s| s.to_string()),
+            truncate_sequence,
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;

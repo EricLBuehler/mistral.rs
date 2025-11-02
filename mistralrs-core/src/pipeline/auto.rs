@@ -1,6 +1,7 @@
 use super::{
-    Loader, ModelKind, ModelPaths, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
-    TokenSource, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    EmbeddingLoaderBuilder, EmbeddingLoaderType, EmbeddingSpecificConfig, Loader, ModelKind,
+    ModelPaths, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, TokenSource,
+    VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
 };
 use crate::api_get_file;
 use crate::utils::tokens::get_token;
@@ -21,6 +22,7 @@ pub struct AutoLoader {
     model_id: String,
     normal_builder: Mutex<Option<NormalLoaderBuilder>>,
     vision_builder: Mutex<Option<VisionLoaderBuilder>>,
+    embedding_builder: Mutex<Option<EmbeddingLoaderBuilder>>,
     loader: Mutex<Option<Box<dyn Loader>>>,
     hf_cache_path: Option<PathBuf>,
 }
@@ -28,6 +30,7 @@ pub struct AutoLoader {
 pub struct AutoLoaderBuilder {
     normal_cfg: NormalSpecificConfig,
     vision_cfg: VisionSpecificConfig,
+    embedding_cfg: EmbeddingSpecificConfig,
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
     model_id: String,
@@ -45,6 +48,7 @@ impl AutoLoaderBuilder {
     pub fn new(
         normal_cfg: NormalSpecificConfig,
         vision_cfg: VisionSpecificConfig,
+        embedding_cfg: EmbeddingSpecificConfig,
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
         model_id: String,
@@ -54,6 +58,7 @@ impl AutoLoaderBuilder {
         Self {
             normal_cfg,
             vision_cfg,
+            embedding_cfg,
             chat_template,
             tokenizer_json,
             model_id,
@@ -92,46 +97,71 @@ impl AutoLoaderBuilder {
     }
 
     pub fn build(self) -> Box<dyn Loader> {
-        let model_id = self.model_id.clone();
+        let Self {
+            normal_cfg,
+            vision_cfg,
+            embedding_cfg,
+            chat_template,
+            tokenizer_json,
+            model_id,
+            jinja_explicit,
+            no_kv_cache,
+            xlora_model_id,
+            xlora_order,
+            tgt_non_granular_index,
+            lora_adapter_ids,
+            hf_cache_path,
+        } = self;
+
         let mut normal_builder = NormalLoaderBuilder::new(
-            self.normal_cfg,
-            self.chat_template.clone(),
-            self.tokenizer_json.clone(),
+            normal_cfg,
+            chat_template.clone(),
+            tokenizer_json.clone(),
             Some(model_id.clone()),
-            self.no_kv_cache,
-            self.jinja_explicit.clone(),
+            no_kv_cache,
+            jinja_explicit.clone(),
         );
-        if let (Some(id), Some(ord)) = (self.xlora_model_id.clone(), self.xlora_order.clone()) {
+        if let (Some(id), Some(ord)) = (xlora_model_id.clone(), xlora_order.clone()) {
             normal_builder =
-                normal_builder.with_xlora(id, ord, self.no_kv_cache, self.tgt_non_granular_index);
+                normal_builder.with_xlora(id, ord, no_kv_cache, tgt_non_granular_index);
         }
-        if let Some(ref adapters) = self.lora_adapter_ids {
+        if let Some(ref adapters) = lora_adapter_ids {
             normal_builder = normal_builder.with_lora(adapters.clone());
         }
-        if let Some(ref path) = self.hf_cache_path {
+        if let Some(ref path) = hf_cache_path {
             normal_builder = normal_builder.hf_cache_path(path.clone());
         }
 
         let mut vision_builder = VisionLoaderBuilder::new(
-            self.vision_cfg,
-            self.chat_template,
-            self.tokenizer_json,
+            vision_cfg,
+            chat_template,
+            tokenizer_json.clone(),
             Some(model_id.clone()),
-            self.jinja_explicit,
+            jinja_explicit,
         );
-        if let Some(ref adapters) = self.lora_adapter_ids {
+        if let Some(ref adapters) = lora_adapter_ids {
             vision_builder = vision_builder.with_lora(adapters.clone());
         }
-        if let Some(ref path) = self.hf_cache_path {
+        if let Some(ref path) = hf_cache_path {
             vision_builder = vision_builder.hf_cache_path(path.clone());
+        }
+
+        let mut embedding_builder =
+            EmbeddingLoaderBuilder::new(embedding_cfg, tokenizer_json, Some(model_id.clone()));
+        if let Some(ref adapters) = lora_adapter_ids {
+            embedding_builder = embedding_builder.with_lora(adapters.clone());
+        }
+        if let Some(ref path) = hf_cache_path {
+            embedding_builder = embedding_builder.hf_cache_path(path.clone());
         }
 
         Box::new(AutoLoader {
             model_id,
             normal_builder: Mutex::new(Some(normal_builder)),
             vision_builder: Mutex::new(Some(vision_builder)),
+            embedding_builder: Mutex::new(Some(embedding_builder)),
             loader: Mutex::new(None),
-            hf_cache_path: self.hf_cache_path,
+            hf_cache_path,
         })
     }
 }
@@ -144,6 +174,7 @@ struct AutoConfig {
 enum Detected {
     Normal(NormalLoaderType),
     Vision(VisionLoaderType),
+    Embedding(EmbeddingLoaderType),
 }
 
 impl AutoLoader {
@@ -189,6 +220,9 @@ impl AutoLoader {
         if let Ok(tp) = VisionLoaderType::from_causal_lm_name(name) {
             return Ok(Detected::Vision(tp));
         }
+        if let Ok(tp) = EmbeddingLoaderType::from_causal_lm_name(name) {
+            return Ok(Detected::Embedding(tp));
+        }
         let tp = NormalLoaderType::from_causal_lm_name(name)?;
         Ok(Detected::Normal(tp))
     }
@@ -212,6 +246,16 @@ impl AutoLoader {
             Detected::Vision(tp) => {
                 let builder = self
                     .vision_builder
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("builder taken");
+                let loader = builder.build(Some(tp));
+                *guard = Some(loader);
+            }
+            Detected::Embedding(tp) => {
+                let builder = self
+                    .embedding_builder
                     .lock()
                     .unwrap()
                     .take()
