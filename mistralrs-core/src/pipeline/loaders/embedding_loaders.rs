@@ -374,7 +374,6 @@ impl DeviceMappedModelLoader for AutoEmbeddingLoader {
 /// [`EmbeddingModelLoader`] for an Embedding Gemma model.
 ///
 /// [`EmbeddingModelLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.EmbeddingModelLoader.html
-
 pub struct EmbeddingGemmaLoader;
 
 impl EmbeddingModelLoader for EmbeddingGemmaLoader {
