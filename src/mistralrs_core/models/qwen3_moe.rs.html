@@ -29,7 +29,7 @@
 <a href=#29 id=29 data-nosnippet>29</a>    (<span class="macro-nonterminal">$layer_idx</span>:expr, <span class="macro-nonterminal">$cfg</span>:expr) =&gt; {
 <a href=#30 id=30 data-nosnippet>30</a>        <span class="kw">if </span>!(<span class="macro-nonterminal">$cfg</span>.sliding_window.is_some()
 <a href=#31 id=31 data-nosnippet>31</a>            &amp;&amp; <span class="macro-nonterminal">$cfg</span>.use_sliding_window
-<a href=#32 id=32 data-nosnippet>32</a>            &amp;&amp; <span class="macro-nonterminal">$layer_idx </span>&gt; <span class="macro-nonterminal">$cfg</span>.max_window_layers)
+<a href=#32 id=32 data-nosnippet>32</a>            &amp;&amp; <span class="macro-nonterminal">$layer_idx </span>&gt;= <span class="macro-nonterminal">$cfg</span>.max_window_layers)
 <a href=#33 id=33 data-nosnippet>33</a>        {
 <a href=#34 id=34 data-nosnippet>34</a>            <span class="prelude-val">None
 <a href=#35 id=35 data-nosnippet>35</a>        </span>} <span class="kw">else </span>{
