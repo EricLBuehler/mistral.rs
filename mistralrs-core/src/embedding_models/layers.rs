@@ -1,4 +1,4 @@
-use candle_core::{Result, Tensor, D};
+use candle_core::{IndexOp, Result, Tensor, D};
 use candle_nn::Module;
 use serde::Deserialize;
 
@@ -45,7 +45,7 @@ impl Module for Pooling {
             unimplemented!();
         }
         if self.pooling_mode_lasttoken {
-            unimplemented!();
+            outputs.push(xs.i((.., xs.dim(D::Minus2)? - 1, ..))?);
         }
 
         Tensor::cat(&outputs, 1)

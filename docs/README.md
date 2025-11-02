@@ -24,6 +24,7 @@
 - [Gemma 3n](GEMMA3N.md)
 - [Embeddings overview](EMBEDDINGS.md)
 - [EmbeddingGemma](EMBEDDINGGEMMA.md)
+- [Qwen3 Embedding](QWEN3_EMBEDDING.md)
 
 ## Adapters
 - [Docs](ADAPTER_MODELS.md)

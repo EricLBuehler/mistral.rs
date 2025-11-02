@@ -85,6 +85,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 <summary><b>Embedding Models</b></summary>
 
 - Embedding Gemma
+- Qwen 3 Embedding
 </details>
 
 ## Get started fast 🚀
@@ -130,7 +131,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 *After following installation instructions*
 
-- 🔎 Generate embeddings with **EmbeddingGemma** across APIs: [guide](docs/EMBEDDINGGEMMA.md) | [overview](docs/EMBEDDINGS.md)  
+- 🔎 Generate embeddings with **EmbeddingGemma** or **Qwen3 Embedding** across APIs: [EmbeddingGemma guide](docs/EMBEDDINGGEMMA.md) | [Qwen3 guide](docs/QWEN3_EMBEDDING.md) | [overview](docs/EMBEDDINGS.md)  
   <details>
     <summary>Show commands</summary>
 
@@ -143,6 +144,15 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
     # Rust API example
     cargo run --package mistralrs --example embedding_gemma
+
+    # Qwen3 Embedding server
+    ./mistralrs-server --port 1234 run -m Qwen/Qwen3-Embedding-0.6B
+
+    # Qwen3 Embedding Python example
+    python examples/python/qwen3_embedding.py
+
+    # Qwen3 Embedding Rust example
+    cargo run --package mistralrs --example qwen3_embedding
     ```
   </details>
 
@@ -707,6 +717,7 @@ If you do not specify the architecture, an attempt will be made to use the model
   <summary>Show embedding architectures</summary>
 
 - `embeddinggemma`
+- `qwen3embedding`
 
 </details>
 

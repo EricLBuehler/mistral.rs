@@ -7,7 +7,10 @@ use std::{
 
 use crate::{
     attention::ATTENTION_CHUNK_SIZE,
-    embedding_models::embedding_gemma::{EmbeddingGemma, EmbeddingGemmaConfig},
+    embedding_models::{
+        embedding_gemma::{EmbeddingGemma, EmbeddingGemmaConfig},
+        qwen3_embedding::{Config as Qwen3EmbeddingConfig, Model as Qwen3EmbeddingModel},
+    },
     matformer::MatformerSliceConfig,
     pipeline::{loaders::auto_device_map::NonMappedSubModel, NormalLoadingMetadata},
 };
@@ -88,6 +91,8 @@ pub trait EmbeddingModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModel
 pub enum EmbeddingLoaderType {
     #[serde(rename = "embeddinggemma")]
     EmbeddingGemma,
+    #[serde(rename = "qwen3embedding")]
+    Qwen3Embedding,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -95,6 +100,7 @@ impl EmbeddingLoaderType {
     pub fn from_causal_lm_name(name: &str) -> Result<Self> {
         match name {
             "Gemma3TextModel" => Ok(Self::EmbeddingGemma),
+            "Qwen3ForCausalLM" => Ok(Self::Qwen3Embedding),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers model class `{other}`. Please raise an issue."
             ),
@@ -107,8 +113,9 @@ impl FromStr for EmbeddingLoaderType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "embeddinggemma" => Ok(Self::EmbeddingGemma),
+            "qwen3embedding" => Ok(Self::Qwen3Embedding),
             a => Err(format!(
-                "Unknown architecture `{a}`. Possible architectures: `embeddinggemma`."
+                "Unknown architecture `{a}`. Possible architectures: `embeddinggemma`, `qwen3embedding`."
             )),
         }
     }
@@ -118,6 +125,7 @@ impl Display for EmbeddingLoaderType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::EmbeddingGemma => write!(f, "embeddinggemma"),
+            Self::Qwen3Embedding => write!(f, "qwen3embedding"),
         }
     }
 }
@@ -271,6 +279,7 @@ impl AutoEmbeddingLoader {
 
         match tp {
             EmbeddingLoaderType::EmbeddingGemma => Ok(Box::new(EmbeddingGemmaLoader)),
+            EmbeddingLoaderType::Qwen3Embedding => Ok(Box::new(Qwen3EmbeddingLoader)),
         }
     }
 }
@@ -362,8 +371,9 @@ impl DeviceMappedModelLoader for AutoEmbeddingLoader {
     }
 }
 
-// ======================== EmbeddingGemma loader
-
+/// [`EmbeddingModelLoader`] for an Embedding Gemma model.
+///
+/// [`EmbeddingModelLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.EmbeddingModelLoader.html
 pub struct EmbeddingGemmaLoader;
 
 impl EmbeddingModelLoader for EmbeddingGemmaLoader {
@@ -547,5 +557,183 @@ impl DeviceMappedModelLoader for EmbeddingGemmaLoader {
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
         None // todo
+    }
+}
+
+/// [`EmbeddingModelLoader`] for a Qwen 3 model.
+///
+/// [`EmbeddingModelLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.EmbeddingModelLoader.html
+pub struct Qwen3EmbeddingLoader;
+
+impl EmbeddingModelLoader for Qwen3EmbeddingLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn EmbeddingModel + Send + Sync>> {
+        let cfg: Qwen3EmbeddingConfig = serde_json::from_str(config)?;
+
+        Ok(Box::new(Qwen3EmbeddingModel::new(
+            &cfg,
+            vb,
+            self.is_gptx(config)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn has_causal_attention(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: Qwen3EmbeddingConfig = serde_json::from_str(config)?;
+
+        Ok(Box::new(cfg))
+    }
+}
+
+impl IsqModelLoader for Qwen3EmbeddingLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+}
+
+impl DeviceMappedModelLoader for Qwen3EmbeddingLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: Qwen3EmbeddingConfig = serde_json::from_str(config)?;
+
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: Qwen3EmbeddingConfig = serde_json::from_str(config)?;
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: Qwen3EmbeddingConfig = serde_json::from_str(config)?;
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = cfg.head_dim() * cfg.num_attention_heads;
+            let size_kv = cfg.head_dim() * cfg.num_key_value_heads;
+            let q_proj = size_in * size_q / weight_pack_factor + size_q;
+            let k_proj = size_in * size_kv / weight_pack_factor + size_kv;
+            let v_proj = size_in * size_kv / weight_pack_factor + size_kv;
+            let o_proj = size_q * size_in / weight_pack_factor;
+
+            let h_size = cfg.hidden_size;
+            let i_size = cfg.intermediate_size;
+            let gate_proj = h_size * i_size / weight_pack_factor;
+            let up_proj = h_size * i_size / weight_pack_factor;
+            let down_proj = i_size * h_size / weight_pack_factor;
+
+            let q_norm = cfg.head_dim();
+            let k_norm = cfg.head_dim();
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + gate_proj
+                + up_proj
+                + down_proj
+                + q_norm
+                + k_norm
+        };
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: Qwen3EmbeddingConfig = serde_json::from_str(config)?;
+        Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: Qwen3EmbeddingConfig = serde_json::from_str(config)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+        };
+
+        Ok(Box::new(cfg))
     }
 }

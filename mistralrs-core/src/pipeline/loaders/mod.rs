@@ -37,6 +37,7 @@ pub use vision_loaders::{
 pub use embedding_loaders::{
     AutoEmbeddingLoader, EmbeddingGemmaLoader, EmbeddingLoaderType, EmbeddingModel,
     EmbeddingModelLoader, EmbeddingModule, EmbeddingModulePaths, EmbeddingModuleType,
+    Qwen3EmbeddingLoader,
 };
 
 pub use diffusion_loaders::{

@@ -1,6 +1,6 @@
 # EmbeddingGemma
 
-EmbeddingGemma is the first embedding model supported by mistral.rs. This guide walks through serving the
+EmbeddingGemma was the first embedding model supported by mistral.rs. This guide walks through serving the
 model via the OpenAI-compatible HTTP server, running it from Python, and embedding text directly in Rust.
 
 For a catalog of available embedding models and general usage tips, see [EMBEDDINGS.md](EMBEDDINGS.md).
@@ -29,7 +29,7 @@ EmbeddingGemma can generate optimized embeddings for various use cases—such as
 Launch the server in embedding mode to expose an OpenAI-compatible `/v1/embeddings` endpoint:
 
 ```bash
-./mistralrs-server run -m google/embeddinggemma-300m
+./mistralrs-server --port 1234 run -m google/embeddinggemma-300m
 ```
 
 Once running, call the endpoint with an OpenAI client or raw `curl`:
@@ -41,7 +41,7 @@ curl http://localhost:1234/v1/embeddings \
   -d '{"model": "default", "input": ["task: search result | query: What is graphene?", "task: search result | query: What is an apple?"]}'
 ```
 
-An example with the OpenAI client can be found [here](../examples/server/embedding_gemma.py).
+An example with the OpenAI client can be found [here](../examples/server/embedding.py).
 
 By default the server registers the model as `default`. To expose it under a custom name or alongside chat
 models, run in multi-model mode and assign an identifier in the selector configuration:
