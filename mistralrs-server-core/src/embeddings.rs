@@ -136,8 +136,7 @@ pub async fn embeddings(
                             embedding,
                             index,
                         });
-                        total_prompt_tokens =
-                            total_prompt_tokens.saturating_add(prompt_tokens);
+                        total_prompt_tokens = total_prompt_tokens.saturating_add(prompt_tokens);
                         total_tokens = total_tokens.saturating_add(item_total_tokens);
                     }
                     Err(e) => {
@@ -180,8 +179,7 @@ pub async fn embeddings(
                             embedding,
                             index,
                         });
-                        total_prompt_tokens =
-                            total_prompt_tokens.saturating_add(prompt_tokens);
+                        total_prompt_tokens = total_prompt_tokens.saturating_add(prompt_tokens);
                         total_tokens = total_tokens.saturating_add(item_total_tokens);
                     }
                     Err(e) => {
