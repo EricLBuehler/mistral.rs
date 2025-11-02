@@ -31,7 +31,7 @@ macro_rules! sliding_window {
     ($layer_idx:expr, $cfg:expr) => {
         if !($cfg.sliding_window.is_some()
             && $cfg.use_sliding_window
-            && $layer_idx > $cfg.max_window_layers)
+            && $layer_idx >= $cfg.max_window_layers)
         {
             None
         } else {

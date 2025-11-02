@@ -21,7 +21,6 @@ impl Module for Pooling {
         if !self.include_prompt {
             candle_core::bail!("Only support include_prompt==true");
         }
-        dbg!(&xs);
         if xs.dim(D::Minus1)? != self.word_embedding_dimension {
             candle_core::bail!("xs does not match the expected embedding dimension.");
         }
