@@ -4,37 +4,37 @@
 <a href=#4 id=4 data-nosnippet>4</a>
 <a href=#5 id=5 data-nosnippet>5</a></span><span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>candle_nn::Activation <span class="kw">as </span>CandleActivation;
-<a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>once_cell::sync::Lazy;
-<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>std::sync::atomic::{AtomicBool, Ordering};
-<a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>std::sync::{Mutex, Once};
-<a href=#10 id=10 data-nosnippet>10</a>
-<a href=#11 id=11 data-nosnippet>11</a><span class="doccomment">/// Controller for the CUBLASLT handle and inhibition flag.
-<a href=#12 id=12 data-nosnippet>12</a></span><span class="kw">pub struct </span>CublasLtController {
-<a href=#13 id=13 data-nosnippet>13</a>    handle: Mutex&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>CublasLtWrapper&gt;&gt;,
-<a href=#14 id=14 data-nosnippet>14</a>    inhibit: AtomicBool,
-<a href=#15 id=15 data-nosnippet>15</a>}
-<a href=#16 id=16 data-nosnippet>16</a>
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">impl </span>CublasLtController {
-<a href=#18 id=18 data-nosnippet>18</a>    <span class="doccomment">/// Set whether to inhibit CUBLASLT usage.
-<a href=#19 id=19 data-nosnippet>19</a>    </span><span class="kw">pub fn </span>set_inhibit(<span class="kw-2">&amp;</span><span class="self">self</span>, value: bool) {
-<a href=#20 id=20 data-nosnippet>20</a>        <span class="self">self</span>.inhibit.store(value, Ordering::SeqCst);
-<a href=#21 id=21 data-nosnippet>21</a>    }
-<a href=#22 id=22 data-nosnippet>22</a>
-<a href=#23 id=23 data-nosnippet>23</a>    <span class="doccomment">/// Get the handle if not inhibited.
-<a href=#24 id=24 data-nosnippet>24</a>    </span><span class="kw">pub fn </span>get(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>CublasLtWrapper&gt; {
-<a href=#25 id=25 data-nosnippet>25</a>        <span class="kw">let </span>handle_opt = <span class="self">self</span>.handle.lock().unwrap();
-<a href=#26 id=26 data-nosnippet>26</a>        <span class="kw">if </span><span class="self">self</span>.inhibit.load(Ordering::SeqCst) {
-<a href=#27 id=27 data-nosnippet>27</a>            <span class="prelude-val">None
-<a href=#28 id=28 data-nosnippet>28</a>        </span>} <span class="kw">else </span>{
-<a href=#29 id=29 data-nosnippet>29</a>            <span class="kw-2">*</span>handle_opt
-<a href=#30 id=30 data-nosnippet>30</a>        }
-<a href=#31 id=31 data-nosnippet>31</a>    }
-<a href=#32 id=32 data-nosnippet>32</a>}
-<a href=#33 id=33 data-nosnippet>33</a>
-<a href=#34 id=34 data-nosnippet>34</a><span class="kw">pub static </span>CUBLASLT_CONTROLLER: Lazy&lt;CublasLtController&gt; = Lazy::new(|| CublasLtController {
-<a href=#35 id=35 data-nosnippet>35</a>    handle: Mutex::new(<span class="prelude-val">None</span>),
-<a href=#36 id=36 data-nosnippet>36</a>    inhibit: AtomicBool::new(<span class="bool-val">false</span>),
-<a href=#37 id=37 data-nosnippet>37</a>});
+<a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>std::sync::atomic::{AtomicBool, Ordering};
+<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>std::sync::{LazyLock, Mutex, Once};
+<a href=#9 id=9 data-nosnippet>9</a>
+<a href=#10 id=10 data-nosnippet>10</a><span class="doccomment">/// Controller for the CUBLASLT handle and inhibition flag.
+<a href=#11 id=11 data-nosnippet>11</a></span><span class="kw">pub struct </span>CublasLtController {
+<a href=#12 id=12 data-nosnippet>12</a>    handle: Mutex&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>CublasLtWrapper&gt;&gt;,
+<a href=#13 id=13 data-nosnippet>13</a>    inhibit: AtomicBool,
+<a href=#14 id=14 data-nosnippet>14</a>}
+<a href=#15 id=15 data-nosnippet>15</a>
+<a href=#16 id=16 data-nosnippet>16</a><span class="kw">impl </span>CublasLtController {
+<a href=#17 id=17 data-nosnippet>17</a>    <span class="doccomment">/// Set whether to inhibit CUBLASLT usage.
+<a href=#18 id=18 data-nosnippet>18</a>    </span><span class="kw">pub fn </span>set_inhibit(<span class="kw-2">&amp;</span><span class="self">self</span>, value: bool) {
+<a href=#19 id=19 data-nosnippet>19</a>        <span class="self">self</span>.inhibit.store(value, Ordering::SeqCst);
+<a href=#20 id=20 data-nosnippet>20</a>    }
+<a href=#21 id=21 data-nosnippet>21</a>
+<a href=#22 id=22 data-nosnippet>22</a>    <span class="doccomment">/// Get the handle if not inhibited.
+<a href=#23 id=23 data-nosnippet>23</a>    </span><span class="kw">pub fn </span>get(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>CublasLtWrapper&gt; {
+<a href=#24 id=24 data-nosnippet>24</a>        <span class="kw">let </span>handle_opt = <span class="self">self</span>.handle.lock().unwrap();
+<a href=#25 id=25 data-nosnippet>25</a>        <span class="kw">if </span><span class="self">self</span>.inhibit.load(Ordering::SeqCst) {
+<a href=#26 id=26 data-nosnippet>26</a>            <span class="prelude-val">None
+<a href=#27 id=27 data-nosnippet>27</a>        </span>} <span class="kw">else </span>{
+<a href=#28 id=28 data-nosnippet>28</a>            <span class="kw-2">*</span>handle_opt
+<a href=#29 id=29 data-nosnippet>29</a>        }
+<a href=#30 id=30 data-nosnippet>30</a>    }
+<a href=#31 id=31 data-nosnippet>31</a>}
+<a href=#32 id=32 data-nosnippet>32</a>
+<a href=#33 id=33 data-nosnippet>33</a><span class="kw">pub static </span>CUBLASLT_CONTROLLER: LazyLock&lt;CublasLtController&gt; =
+<a href=#34 id=34 data-nosnippet>34</a>    LazyLock::new(|| CublasLtController {
+<a href=#35 id=35 data-nosnippet>35</a>        handle: Mutex::new(<span class="prelude-val">None</span>),
+<a href=#36 id=36 data-nosnippet>36</a>        inhibit: AtomicBool::new(<span class="bool-val">false</span>),
+<a href=#37 id=37 data-nosnippet>37</a>    });
 <a href=#38 id=38 data-nosnippet>38</a>
 <a href=#39 id=39 data-nosnippet>39</a><span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
 <a href=#40 id=40 data-nosnippet>40</a></span><span class="kw">mod </span>api;
