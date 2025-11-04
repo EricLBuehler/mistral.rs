@@ -111,7 +111,14 @@ pub(crate) fn apply_chat_template(
                             }
                         }
                     } else {
-                        new_message.insert(k, Either::Left(v.left().unwrap()));
+                        match v {
+                            Either::Left(v) => {
+                                new_message.insert(k, Either::Left(v));
+                            }
+                            Either::Right(v) => {
+                                new_message.insert(k, Either::Right(v));
+                            }
+                        }
                     }
                 }
                 new_messages.push(new_message)
