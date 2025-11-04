@@ -212,14 +212,14 @@
 <a href=#212 id=212 data-nosnippet>212</a>        silent: bool,
 <a href=#213 id=213 data-nosnippet>213</a>        <span class="kw-2">mut </span>mapper: DeviceMapSetting,
 <a href=#214 id=214 data-nosnippet>214</a>        <span class="kw-2">mut </span>in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
-<a href=#215 id=215 data-nosnippet>215</a>        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
+<a href=#215 id=215 data-nosnippet>215</a>        <span class="kw-2">mut </span>paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
 <a href=#216 id=216 data-nosnippet>216</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
 <a href=#217 id=217 data-nosnippet>217</a>        <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
 <a href=#218 id=218 data-nosnippet>218</a>
 <a href=#219 id=219 data-nosnippet>219</a>        <span class="kw">if </span>paged_attn_config.is_some() {
 <a href=#220 id=220 data-nosnippet>220</a>            <span class="macro">warn!</span>(<span class="string">"PagedAttention is not supported for embedding models, disabling it."</span>);
-<a href=#221 id=221 data-nosnippet>221</a>        }
-<a href=#222 id=222 data-nosnippet>222</a>        <span class="kw">let _ </span>= paged_attn_config;
+<a href=#221 id=221 data-nosnippet>221</a>            paged_attn_config = <span class="prelude-val">None</span>;
+<a href=#222 id=222 data-nosnippet>222</a>        }
 <a href=#223 id=223 data-nosnippet>223</a>
 <a href=#224 id=224 data-nosnippet>224</a>        <span class="macro">info!</span>(<span class="string">"Prompt chunk size is {ATTENTION_CHUNK_SIZE}."</span>);
 <a href=#225 id=225 data-nosnippet>225</a>
