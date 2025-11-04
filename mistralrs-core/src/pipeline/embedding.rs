@@ -212,14 +212,14 @@ impl Loader for EmbeddingLoader {
         silent: bool,
         mut mapper: DeviceMapSetting,
         mut in_situ_quant: Option<IsqType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
+        mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
 
         if paged_attn_config.is_some() {
             warn!("PagedAttention is not supported for embedding models, disabling it.");
+            paged_attn_config = None;
         }
-        let _ = paged_attn_config;
 
         info!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
