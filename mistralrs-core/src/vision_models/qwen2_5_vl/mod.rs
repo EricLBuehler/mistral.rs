@@ -306,7 +306,7 @@ impl Qwen2_5VLModel {
                     let mut last_end = 0;
                     for (start, end) in batch_ids {
                         xs = xs.slice_assign(
-                            &[batch..batch + 1, start..end, 0..xs.dim(1)?],
+                            &[batch..batch + 1, start..end, 0..xs.dim(2)?],
                             &image_embeds
                                 .i((last_end..last_end + (end - start), ..))?
                                 .unsqueeze(0)?,
