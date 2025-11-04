@@ -7,7 +7,6 @@ use mistralrs_core::{
     Request, RequestMessage, Response, ResponseOk, SamplingParams, WebSearchOptions,
     TERMINATE_ALL_NEXT_STEP,
 };
-use once_cell::sync::Lazy;
 use regex::Regex;
 use rustyline::{error::ReadlineError, history::History, DefaultEditor, Editor, Helper};
 use serde_json::Value;
@@ -15,7 +14,7 @@ use std::{
     fs,
     io::{self, Write},
     path::PathBuf,
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{atomic::Ordering, Arc, LazyLock, Mutex},
     time::Instant,
 };
 use tokio::sync::mpsc::channel;
@@ -71,8 +70,8 @@ fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>) -> String {
     }
 }
 
-static CTRLC_HANDLER: Lazy<Mutex<&'static (dyn Fn() + Sync)>> =
-    Lazy::new(|| Mutex::new(&exit_handler));
+static CTRLC_HANDLER: LazyLock<Mutex<&'static (dyn Fn() + Sync)>> =
+    LazyLock::new(|| Mutex::new(&exit_handler));
 
 pub async fn interactive_mode(
     mistralrs: Arc<MistralRs>,

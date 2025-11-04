@@ -3070,7 +3070,6 @@ dependencies = [
  "mistralrs-vision",
  "num-traits",
  "objc",
- "once_cell",
  "ordered-float",
  "parking_lot",
  "pyo3",
@@ -3146,7 +3145,6 @@ dependencies = [
  "float8",
  "half",
  "metal 0.27.0",
- "once_cell",
  "thiserror 2.0.12",
 ]
 
@@ -3190,7 +3188,6 @@ dependencies = [
  "lazy_static",
  "memmap2",
  "metal 0.27.0",
- "once_cell",
  "paste",
  "rayon",
  "regex",
@@ -3217,7 +3214,6 @@ dependencies = [
  "indexmap",
  "mistralrs-core",
  "mistralrs-server-core",
- "once_cell",
  "regex",
  "rust-mcp-sdk",
  "rustyline",

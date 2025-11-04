@@ -2,7 +2,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 
 use candle_core::{DType, Device, Error, Result, Tensor, D};
@@ -10,15 +10,14 @@ use mistralrs_quant::{CumSumOp, SortOp};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
-use once_cell::sync::Lazy;
 use rand::distr::{weighted::WeightedIndex, Distribution};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 
-static DRY_SEQUENCE_BREAKERS: Lazy<Vec<String>> =
-    Lazy::new(|| ["\n", ":", "\"", "*"].map(String::from).to_vec());
+static DRY_SEQUENCE_BREAKERS: LazyLock<Vec<String>> =
+    LazyLock::new(|| ["\n", ":", "\"", "*"].map(String::from).to_vec());
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Stop sequences or ids.

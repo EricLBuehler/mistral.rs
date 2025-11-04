@@ -17,7 +17,6 @@ use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::ParserFactory;
 pub use logger::IntervalLogger;
 use mistralrs_quant::RingConfig;
-use once_cell::sync::Lazy;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
 use std::{
@@ -27,7 +26,7 @@ use std::{
     ops::Deref,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, LazyLock,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -70,9 +69,9 @@ const SEED: u64 = 0;
 pub static TERMINATE_ALL_NEXT_STEP: AtomicBool = AtomicBool::new(false);
 
 /// Engine-specific termination flags, per Engine thread ID.
-static ENGINE_TERMINATE_FLAGS: Lazy<
+static ENGINE_TERMINATE_FLAGS: LazyLock<
     std::sync::Mutex<HashMap<std::thread::ThreadId, Arc<AtomicBool>>>,
-> = Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+> = LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// Get or create a termination flag for the current engine thread.
 pub fn get_engine_terminate_flag() -> Arc<AtomicBool> {
@@ -111,8 +110,9 @@ pub fn reset_engine_terminate_flag() {
 }
 
 /// Engine instructions, per Engine (MistralRs) ID.
-pub static ENGINE_INSTRUCTIONS: Lazy<std::sync::Mutex<HashMap<usize, Option<EngineInstruction>>>> =
-    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+pub static ENGINE_INSTRUCTIONS: LazyLock<
+    std::sync::Mutex<HashMap<usize, Option<EngineInstruction>>>,
+> = LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 pub struct Engine {
     rx: Arc<Mutex<Receiver<Request>>>,
