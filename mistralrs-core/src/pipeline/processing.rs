@@ -72,6 +72,33 @@ pub trait Processor {
     fn template_action(&self) -> MessagesAction;
 }
 
+/// Helper function to extract token string from BeginEndUnkPadTok
+fn extract_token_string(token: &super::chat_template::BeginEndUnkPadTok) -> String {
+    match &token.0 {
+        Either::Left(lit) => lit.clone(),
+        Either::Right(added) => added.content.clone(),
+    }
+}
+
+/// Flatten a content field to extract only text from structured content
+fn flatten_content(content: MessageContent) -> MessageContent {
+    match content {
+        Either::Left(_) => content,
+        Either::Right(content_rows) => {
+            // Find the first "text" field in the content rows
+            content_rows
+                .into_iter()
+                .find_map(|content_row| {
+                    content_row
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .map(|s| Either::Left(s.to_string()))
+                })
+                .unwrap_or(Either::Right(Vec::new()))
+        }
+    }
+}
+
 pub(crate) fn apply_chat_template(
     pipeline: &dyn Pipeline,
     messages: Vec<IndexMap<String, MessageContent>>,
@@ -85,68 +112,34 @@ pub(crate) fn apply_chat_template(
         MessagesAction::FlattenOnlyText => {
             // This is really only for image models. If they need to flatten it s.t. they only see
             // the text, do that.
-            let mut new_messages = Vec::new();
-            for message in messages {
-                let mut new_message = IndexMap::new();
-                for (k, v) in message {
-                    if k == "content" {
-                        match v {
-                            Either::Left(lv) => {
-                                new_message.insert(k, Either::Left(lv));
-                            }
-                            Either::Right(rv) => {
-                                'outer: for content_row in rv {
-                                    for (content_k, content_v) in content_row {
-                                        if content_k == "text" {
-                                            if let Some(content_str) = content_v.as_str() {
-                                                new_message.insert(
-                                                    k,
-                                                    Either::Left(content_str.to_string()),
-                                                );
-                                                break 'outer;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        new_message.insert(k, Either::Left(v.left().unwrap()));
-                    }
-                }
-                new_messages.push(new_message)
-            }
-            new_messages
+            messages
+                .into_iter()
+                .map(|message| {
+                    message
+                        .into_iter()
+                        .map(|(key, value)| {
+                            let new_value = if key == "content" {
+                                flatten_content(value)
+                            } else {
+                                value
+                            };
+                            (key, new_value)
+                        })
+                        .collect()
+                })
+                .collect()
         }
     };
+
     let chat_template = pipeline
         .get_chat_template()
         .with_context(|| "`apply_chat_template` expects the pipeline to have a chat template.")?;
     let template = chat_template.chat_template.as_ref().unwrap();
-    let bos_tok = if let Some(ref bos) = chat_template.bos_token {
-        match bos.0 {
-            Either::Left(ref lit) => Some(lit.to_string()),
-            Either::Right(ref added) => Some(added.content.to_string()),
-        }
-    } else {
-        None
-    };
-    let eos_tok = if let Some(ref eos) = chat_template.eos_token {
-        match eos.0 {
-            Either::Left(ref lit) => Some(lit.to_string()),
-            Either::Right(ref added) => Some(added.content.to_string()),
-        }
-    } else {
-        None
-    };
-    let unk_tok = if let Some(ref unk) = chat_template.unk_token {
-        match unk.0 {
-            Either::Left(ref lit) => Some(lit.to_string()),
-            Either::Right(ref added) => Some(added.content.to_string()),
-        }
-    } else {
-        None
-    };
+
+    let bos_tok = chat_template.bos_token.as_ref().map(extract_token_string);
+    let eos_tok = chat_template.eos_token.as_ref().map(extract_token_string);
+    let unk_tok = chat_template.unk_token.as_ref().map(extract_token_string);
+
     apply_chat_template_to(
         messages,
         add_generation_prompt,
