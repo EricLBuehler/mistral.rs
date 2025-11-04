@@ -448,7 +448,7 @@
 <a href=#448 id=448 data-nosnippet>448</a>            window_index.push(Tensor::new(
 <a href=#449 id=449 data-nosnippet>449</a>                index_new
 <a href=#450 id=450 data-nosnippet>450</a>                    .iter()
-<a href=#451 id=451 data-nosnippet>451</a>                    .map(|x| x + window_index_id)
+<a href=#451 id=451 data-nosnippet>451</a>                    .map(|x| (x + window_index_id) <span class="kw">as </span>u32)
 <a href=#452 id=452 data-nosnippet>452</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
 <a href=#453 id=453 data-nosnippet>453</a>                device,
 <a href=#454 id=454 data-nosnippet>454</a>            )<span class="question-mark">?</span>);
@@ -458,95 +458,101 @@
 <a href=#458 id=458 data-nosnippet>458</a>                </span>.to_dtype(seqlens.dtype())<span class="question-mark">?
 <a href=#459 id=459 data-nosnippet>459</a>                </span>* <span class="self">self</span>.spatial_merge_unit <span class="kw">as </span>f64)<span class="question-mark">?
 <a href=#460 id=460 data-nosnippet>460</a>                </span>+ cu_window_seqlens[cu_window_seqlens.len() - <span class="number">1</span>] <span class="kw">as </span>f64)<span class="question-mark">?</span>;
-<a href=#461 id=461 data-nosnippet>461</a>            cu_window_seqlens.extend(cu_seqlens_tmp.to_vec1::&lt;i64&gt;()<span class="question-mark">?</span>);
-<a href=#462 id=462 data-nosnippet>462</a>            window_index_id += (t * llm_grid_h * llm_grid_w) <span class="kw">as </span>i32;
-<a href=#463 id=463 data-nosnippet>463</a>        }
-<a href=#464 id=464 data-nosnippet>464</a>
-<a href=#465 id=465 data-nosnippet>465</a>        <span class="prelude-val">Ok</span>((Tensor::cat(<span class="kw-2">&amp;</span>window_index, <span class="number">0</span>)<span class="question-mark">?</span>, cu_window_seqlens))
-<a href=#466 id=466 data-nosnippet>466</a>    }
-<a href=#467 id=467 data-nosnippet>467</a>
-<a href=#468 id=468 data-nosnippet>468</a>    <span class="kw">pub fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor, grid_thw: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#469 id=469 data-nosnippet>469</a>        <span class="kw">let </span>xs = <span class="self">self
-<a href=#470 id=470 data-nosnippet>470</a>            </span>.patch_embed
-<a href=#471 id=471 data-nosnippet>471</a>            .forward(<span class="kw-2">&amp;</span>xs.to_dtype(<span class="self">self</span>.patch_merger.mlp0.weight().dtype())<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-<a href=#472 id=472 data-nosnippet>472</a>        <span class="kw">let </span>rotary_pos_emb = <span class="self">self</span>.rot_pos_emb(grid_thw, xs.device())<span class="question-mark">?</span>;
-<a href=#473 id=473 data-nosnippet>473</a>        <span class="kw">let </span>(window_index, <span class="kw-2">mut </span>cu_window_seqlens) = <span class="self">self</span>.get_window_index(grid_thw, xs.device())<span class="question-mark">?</span>;
-<a href=#474 id=474 data-nosnippet>474</a>        cu_window_seqlens.dedup();
-<a href=#475 id=475 data-nosnippet>475</a>
-<a href=#476 id=476 data-nosnippet>476</a>        <span class="kw">let </span>seq_len = xs.dims2()<span class="question-mark">?</span>.<span class="number">0</span>;
-<a href=#477 id=477 data-nosnippet>477</a>        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.reshape((
-<a href=#478 id=478 data-nosnippet>478</a>            seq_len / <span class="self">self</span>.spatial_merge_unit,
-<a href=#479 id=479 data-nosnippet>479</a>            <span class="self">self</span>.spatial_merge_unit,
-<a href=#480 id=480 data-nosnippet>480</a>            (),
-<a href=#481 id=481 data-nosnippet>481</a>        ))<span class="question-mark">?</span>;
-<a href=#482 id=482 data-nosnippet>482</a>        xs = xs.index_select(<span class="kw-2">&amp;</span>window_index, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#483 id=483 data-nosnippet>483</a>        xs = xs.reshape((seq_len, ()))<span class="question-mark">?</span>;
-<a href=#484 id=484 data-nosnippet>484</a>        <span class="kw">let </span><span class="kw-2">mut </span>rotary_pos_emb = rotary_pos_emb.reshape((
-<a href=#485 id=485 data-nosnippet>485</a>            seq_len / <span class="self">self</span>.spatial_merge_unit,
-<a href=#486 id=486 data-nosnippet>486</a>            <span class="self">self</span>.spatial_merge_unit,
-<a href=#487 id=487 data-nosnippet>487</a>            (),
-<a href=#488 id=488 data-nosnippet>488</a>        ))<span class="question-mark">?</span>;
-<a href=#489 id=489 data-nosnippet>489</a>        rotary_pos_emb = rotary_pos_emb.index_select(<span class="kw-2">&amp;</span>window_index, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#490 id=490 data-nosnippet>490</a>        rotary_pos_emb = rotary_pos_emb.reshape((seq_len, ()))<span class="question-mark">?</span>;
-<a href=#491 id=491 data-nosnippet>491</a>        rotary_pos_emb = Tensor::cat(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>rotary_pos_emb; <span class="number">2</span>], D::Minus1)<span class="question-mark">?</span>;
-<a href=#492 id=492 data-nosnippet>492</a>        rotary_pos_emb = rotary_pos_emb.to_dtype(xs.dtype())<span class="question-mark">?</span>;
-<a href=#493 id=493 data-nosnippet>493</a>
-<a href=#494 id=494 data-nosnippet>494</a>        <span class="kw">let </span>grid_thw = grid_thw.to_device(<span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
-<a href=#495 id=495 data-nosnippet>495</a>        <span class="kw">let </span>cu_seqlens = (grid_thw.i((.., <span class="number">1</span>))<span class="question-mark">? </span>* grid_thw.i((.., <span class="number">2</span>))<span class="question-mark">?</span>)<span class="question-mark">?
-<a href=#496 id=496 data-nosnippet>496</a>            </span>.repeat_interleave_flat(grid_thw.i((.., <span class="number">0</span>))<span class="question-mark">?</span>.to_vec1::&lt;u32&gt;()<span class="question-mark">?</span>)<span class="question-mark">?
-<a href=#497 id=497 data-nosnippet>497</a>            </span>.to_dtype(DType::F32)<span class="question-mark">?
-<a href=#498 id=498 data-nosnippet>498</a>            </span>.cumsum(<span class="number">0</span>)<span class="question-mark">?
-<a href=#499 id=499 data-nosnippet>499</a>            </span>.to_dtype(DType::U32)<span class="question-mark">?
-<a href=#500 id=500 data-nosnippet>500</a>            </span>.pad_with_zeros(<span class="number">0</span>, <span class="number">1</span>, <span class="number">0</span>)<span class="question-mark">?
-<a href=#501 id=501 data-nosnippet>501</a>            </span>.to_vec1::&lt;u32&gt;()<span class="question-mark">?</span>;
-<a href=#502 id=502 data-nosnippet>502</a>
-<a href=#503 id=503 data-nosnippet>503</a>        <span class="kw">let </span>seq_len = xs.dim(<span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#504 id=504 data-nosnippet>504</a>        <span class="kw">let </span>attention_mask_full = <span class="kw">match </span><span class="kw-2">&amp;</span>cu_seqlens[..] {
-<a href=#505 id=505 data-nosnippet>505</a>            <span class="kw-2">&amp;</span>[<span class="number">0</span>, len] <span class="kw">if </span>len == seq_len <span class="kw">as </span>u32 =&gt; <span class="prelude-val">None</span>,
-<a href=#506 id=506 data-nosnippet>506</a>            cu_seqlens =&gt; {
-<a href=#507 id=507 data-nosnippet>507</a>                <span class="kw">let </span><span class="kw-2">mut </span>attention_mask =
-<a href=#508 id=508 data-nosnippet>508</a>                    Tensor::full(f32::MIN, (<span class="number">1</span>, seq_len, seq_len), xs.device())<span class="question-mark">?
-<a href=#509 id=509 data-nosnippet>509</a>                        </span>.to_dtype(xs.dtype())<span class="question-mark">?</span>;
-<a href=#510 id=510 data-nosnippet>510</a>                <span class="kw">for </span>i <span class="kw">in </span><span class="number">1</span>..cu_seqlens.len() {
-<a href=#511 id=511 data-nosnippet>511</a>                    <span class="kw">let </span>a = cu_seqlens[i - <span class="number">1</span>] <span class="kw">as </span>usize;
-<a href=#512 id=512 data-nosnippet>512</a>                    <span class="kw">let </span>b = cu_seqlens[i] <span class="kw">as </span>usize;
-<a href=#513 id=513 data-nosnippet>513</a>                    attention_mask = attention_mask.slice_assign(
-<a href=#514 id=514 data-nosnippet>514</a>                        <span class="kw-2">&amp;</span>[<span class="number">0</span>..attention_mask.dim(<span class="number">0</span>)<span class="question-mark">?</span>, a..b, a..b],
-<a href=#515 id=515 data-nosnippet>515</a>                        <span class="kw-2">&amp;</span>Tensor::zeros((<span class="number">1</span>, b - a, b - a), xs.dtype(), xs.device())<span class="question-mark">?</span>,
-<a href=#516 id=516 data-nosnippet>516</a>                    )<span class="question-mark">?</span>;
-<a href=#517 id=517 data-nosnippet>517</a>                }
-<a href=#518 id=518 data-nosnippet>518</a>                <span class="prelude-val">Some</span>(attention_mask)
-<a href=#519 id=519 data-nosnippet>519</a>            }
-<a href=#520 id=520 data-nosnippet>520</a>        };
-<a href=#521 id=521 data-nosnippet>521</a>        <span class="kw">let </span>attention_mask_window = <span class="kw">match </span><span class="kw-2">&amp;</span>cu_window_seqlens[..] {
-<a href=#522 id=522 data-nosnippet>522</a>            <span class="kw-2">&amp;</span>[<span class="number">0</span>, len] <span class="kw">if </span>len == seq_len <span class="kw">as </span>i64 =&gt; <span class="prelude-val">None</span>,
-<a href=#523 id=523 data-nosnippet>523</a>            cu_seqlens =&gt; {
-<a href=#524 id=524 data-nosnippet>524</a>                <span class="kw">let </span><span class="kw-2">mut </span>attention_mask =
-<a href=#525 id=525 data-nosnippet>525</a>                    Tensor::full(f32::MIN, (<span class="number">1</span>, seq_len, seq_len), xs.device())<span class="question-mark">?
-<a href=#526 id=526 data-nosnippet>526</a>                        </span>.to_dtype(xs.dtype())<span class="question-mark">?</span>;
-<a href=#527 id=527 data-nosnippet>527</a>                <span class="kw">for </span>i <span class="kw">in </span><span class="number">1</span>..cu_seqlens.len() {
-<a href=#528 id=528 data-nosnippet>528</a>                    <span class="kw">let </span>a = cu_seqlens[i - <span class="number">1</span>] <span class="kw">as </span>usize;
-<a href=#529 id=529 data-nosnippet>529</a>                    <span class="kw">let </span>b = cu_seqlens[i] <span class="kw">as </span>usize;
-<a href=#530 id=530 data-nosnippet>530</a>                    attention_mask = attention_mask.slice_assign(
-<a href=#531 id=531 data-nosnippet>531</a>                        <span class="kw-2">&amp;</span>[<span class="number">0</span>..attention_mask.dim(<span class="number">0</span>)<span class="question-mark">?</span>, a..b, a..b],
-<a href=#532 id=532 data-nosnippet>532</a>                        <span class="kw-2">&amp;</span>Tensor::zeros((<span class="number">1</span>, b - a, b - a), xs.dtype(), xs.device())<span class="question-mark">?</span>,
-<a href=#533 id=533 data-nosnippet>533</a>                    )<span class="question-mark">?</span>;
-<a href=#534 id=534 data-nosnippet>534</a>                }
-<a href=#535 id=535 data-nosnippet>535</a>                <span class="prelude-val">Some</span>(attention_mask)
-<a href=#536 id=536 data-nosnippet>536</a>            }
-<a href=#537 id=537 data-nosnippet>537</a>        };
-<a href=#538 id=538 data-nosnippet>538</a>
-<a href=#539 id=539 data-nosnippet>539</a>        <span class="kw">for </span>(i, blk) <span class="kw">in </span><span class="self">self</span>.blocks.iter().enumerate() {
-<a href=#540 id=540 data-nosnippet>540</a>            <span class="kw">let </span>attention_mask = <span class="kw">if </span><span class="self">self</span>.fullatt_block_indices.contains(<span class="kw-2">&amp;</span>i) {
-<a href=#541 id=541 data-nosnippet>541</a>                attention_mask_full.as_ref()
-<a href=#542 id=542 data-nosnippet>542</a>            } <span class="kw">else </span>{
-<a href=#543 id=543 data-nosnippet>543</a>                attention_mask_window.as_ref()
-<a href=#544 id=544 data-nosnippet>544</a>            };
-<a href=#545 id=545 data-nosnippet>545</a>            xs = blk.forward(<span class="kw-2">&amp;</span>xs, attention_mask, <span class="kw-2">&amp;</span>rotary_pos_emb)<span class="question-mark">?</span>;
-<a href=#546 id=546 data-nosnippet>546</a>        }
-<a href=#547 id=547 data-nosnippet>547</a>
-<a href=#548 id=548 data-nosnippet>548</a>        xs = <span class="self">self</span>.patch_merger.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
-<a href=#549 id=549 data-nosnippet>549</a>        <span class="kw">let </span>reverse_indices = window_index.arg_sort_last_dim(<span class="bool-val">true</span>)<span class="question-mark">?</span>;
-<a href=#550 id=550 data-nosnippet>550</a>        xs.index_select(<span class="kw-2">&amp;</span>reverse_indices, <span class="number">0</span>)
-<a href=#551 id=551 data-nosnippet>551</a>    }
-<a href=#552 id=552 data-nosnippet>552</a>}</code></pre></div></section></main></body></html>
+<a href=#461 id=461 data-nosnippet>461</a>            cu_window_seqlens.extend(
+<a href=#462 id=462 data-nosnippet>462</a>                cu_seqlens_tmp
+<a href=#463 id=463 data-nosnippet>463</a>                    .to_vec1::&lt;i32&gt;()<span class="question-mark">?
+<a href=#464 id=464 data-nosnippet>464</a>                    </span>.into_iter()
+<a href=#465 id=465 data-nosnippet>465</a>                    .map(|x| x <span class="kw">as </span>i64)
+<a href=#466 id=466 data-nosnippet>466</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#467 id=467 data-nosnippet>467</a>            );
+<a href=#468 id=468 data-nosnippet>468</a>            window_index_id += (t * llm_grid_h * llm_grid_w) <span class="kw">as </span>i32;
+<a href=#469 id=469 data-nosnippet>469</a>        }
+<a href=#470 id=470 data-nosnippet>470</a>
+<a href=#471 id=471 data-nosnippet>471</a>        <span class="prelude-val">Ok</span>((Tensor::cat(<span class="kw-2">&amp;</span>window_index, <span class="number">0</span>)<span class="question-mark">?</span>, cu_window_seqlens))
+<a href=#472 id=472 data-nosnippet>472</a>    }
+<a href=#473 id=473 data-nosnippet>473</a>
+<a href=#474 id=474 data-nosnippet>474</a>    <span class="kw">pub fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor, grid_thw: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#475 id=475 data-nosnippet>475</a>        <span class="kw">let </span>xs = <span class="self">self
+<a href=#476 id=476 data-nosnippet>476</a>            </span>.patch_embed
+<a href=#477 id=477 data-nosnippet>477</a>            .forward(<span class="kw-2">&amp;</span>xs.to_dtype(<span class="self">self</span>.patch_merger.mlp0.weight().dtype())<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+<a href=#478 id=478 data-nosnippet>478</a>        <span class="kw">let </span>rotary_pos_emb = <span class="self">self</span>.rot_pos_emb(grid_thw, xs.device())<span class="question-mark">?</span>;
+<a href=#479 id=479 data-nosnippet>479</a>        <span class="kw">let </span>(window_index, <span class="kw-2">mut </span>cu_window_seqlens) = <span class="self">self</span>.get_window_index(grid_thw, xs.device())<span class="question-mark">?</span>;
+<a href=#480 id=480 data-nosnippet>480</a>        cu_window_seqlens.dedup();
+<a href=#481 id=481 data-nosnippet>481</a>
+<a href=#482 id=482 data-nosnippet>482</a>        <span class="kw">let </span>seq_len = xs.dims2()<span class="question-mark">?</span>.<span class="number">0</span>;
+<a href=#483 id=483 data-nosnippet>483</a>        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.reshape((
+<a href=#484 id=484 data-nosnippet>484</a>            seq_len / <span class="self">self</span>.spatial_merge_unit,
+<a href=#485 id=485 data-nosnippet>485</a>            <span class="self">self</span>.spatial_merge_unit,
+<a href=#486 id=486 data-nosnippet>486</a>            (),
+<a href=#487 id=487 data-nosnippet>487</a>        ))<span class="question-mark">?</span>;
+<a href=#488 id=488 data-nosnippet>488</a>        xs = xs.index_select(<span class="kw-2">&amp;</span>window_index, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#489 id=489 data-nosnippet>489</a>        xs = xs.reshape((seq_len, ()))<span class="question-mark">?</span>;
+<a href=#490 id=490 data-nosnippet>490</a>        <span class="kw">let </span><span class="kw-2">mut </span>rotary_pos_emb = rotary_pos_emb.reshape((
+<a href=#491 id=491 data-nosnippet>491</a>            seq_len / <span class="self">self</span>.spatial_merge_unit,
+<a href=#492 id=492 data-nosnippet>492</a>            <span class="self">self</span>.spatial_merge_unit,
+<a href=#493 id=493 data-nosnippet>493</a>            (),
+<a href=#494 id=494 data-nosnippet>494</a>        ))<span class="question-mark">?</span>;
+<a href=#495 id=495 data-nosnippet>495</a>        rotary_pos_emb = rotary_pos_emb.index_select(<span class="kw-2">&amp;</span>window_index, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#496 id=496 data-nosnippet>496</a>        rotary_pos_emb = rotary_pos_emb.reshape((seq_len, ()))<span class="question-mark">?</span>;
+<a href=#497 id=497 data-nosnippet>497</a>        rotary_pos_emb = Tensor::cat(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>rotary_pos_emb; <span class="number">2</span>], D::Minus1)<span class="question-mark">?</span>;
+<a href=#498 id=498 data-nosnippet>498</a>        rotary_pos_emb = rotary_pos_emb.to_dtype(xs.dtype())<span class="question-mark">?</span>;
+<a href=#499 id=499 data-nosnippet>499</a>
+<a href=#500 id=500 data-nosnippet>500</a>        <span class="kw">let </span>grid_thw = grid_thw.to_device(<span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
+<a href=#501 id=501 data-nosnippet>501</a>        <span class="kw">let </span>cu_seqlens = (grid_thw.i((.., <span class="number">1</span>))<span class="question-mark">? </span>* grid_thw.i((.., <span class="number">2</span>))<span class="question-mark">?</span>)<span class="question-mark">?
+<a href=#502 id=502 data-nosnippet>502</a>            </span>.repeat_interleave_flat(grid_thw.i((.., <span class="number">0</span>))<span class="question-mark">?</span>.to_vec1::&lt;u32&gt;()<span class="question-mark">?</span>)<span class="question-mark">?
+<a href=#503 id=503 data-nosnippet>503</a>            </span>.to_dtype(DType::F32)<span class="question-mark">?
+<a href=#504 id=504 data-nosnippet>504</a>            </span>.cumsum(<span class="number">0</span>)<span class="question-mark">?
+<a href=#505 id=505 data-nosnippet>505</a>            </span>.to_dtype(DType::U32)<span class="question-mark">?
+<a href=#506 id=506 data-nosnippet>506</a>            </span>.pad_with_zeros(<span class="number">0</span>, <span class="number">1</span>, <span class="number">0</span>)<span class="question-mark">?
+<a href=#507 id=507 data-nosnippet>507</a>            </span>.to_vec1::&lt;u32&gt;()<span class="question-mark">?</span>;
+<a href=#508 id=508 data-nosnippet>508</a>
+<a href=#509 id=509 data-nosnippet>509</a>        <span class="kw">let </span>seq_len = xs.dim(<span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#510 id=510 data-nosnippet>510</a>        <span class="kw">let </span>attention_mask_full = <span class="kw">match </span><span class="kw-2">&amp;</span>cu_seqlens[..] {
+<a href=#511 id=511 data-nosnippet>511</a>            <span class="kw-2">&amp;</span>[<span class="number">0</span>, len] <span class="kw">if </span>len == seq_len <span class="kw">as </span>u32 =&gt; <span class="prelude-val">None</span>,
+<a href=#512 id=512 data-nosnippet>512</a>            cu_seqlens =&gt; {
+<a href=#513 id=513 data-nosnippet>513</a>                <span class="kw">let </span><span class="kw-2">mut </span>attention_mask =
+<a href=#514 id=514 data-nosnippet>514</a>                    Tensor::full(f32::MIN, (<span class="number">1</span>, seq_len, seq_len), xs.device())<span class="question-mark">?
+<a href=#515 id=515 data-nosnippet>515</a>                        </span>.to_dtype(xs.dtype())<span class="question-mark">?</span>;
+<a href=#516 id=516 data-nosnippet>516</a>                <span class="kw">for </span>i <span class="kw">in </span><span class="number">1</span>..cu_seqlens.len() {
+<a href=#517 id=517 data-nosnippet>517</a>                    <span class="kw">let </span>a = cu_seqlens[i - <span class="number">1</span>] <span class="kw">as </span>usize;
+<a href=#518 id=518 data-nosnippet>518</a>                    <span class="kw">let </span>b = cu_seqlens[i] <span class="kw">as </span>usize;
+<a href=#519 id=519 data-nosnippet>519</a>                    attention_mask = attention_mask.slice_assign(
+<a href=#520 id=520 data-nosnippet>520</a>                        <span class="kw-2">&amp;</span>[<span class="number">0</span>..attention_mask.dim(<span class="number">0</span>)<span class="question-mark">?</span>, a..b, a..b],
+<a href=#521 id=521 data-nosnippet>521</a>                        <span class="kw-2">&amp;</span>Tensor::zeros((<span class="number">1</span>, b - a, b - a), xs.dtype(), xs.device())<span class="question-mark">?</span>,
+<a href=#522 id=522 data-nosnippet>522</a>                    )<span class="question-mark">?</span>;
+<a href=#523 id=523 data-nosnippet>523</a>                }
+<a href=#524 id=524 data-nosnippet>524</a>                <span class="prelude-val">Some</span>(attention_mask)
+<a href=#525 id=525 data-nosnippet>525</a>            }
+<a href=#526 id=526 data-nosnippet>526</a>        };
+<a href=#527 id=527 data-nosnippet>527</a>        <span class="kw">let </span>attention_mask_window = <span class="kw">match </span><span class="kw-2">&amp;</span>cu_window_seqlens[..] {
+<a href=#528 id=528 data-nosnippet>528</a>            <span class="kw-2">&amp;</span>[<span class="number">0</span>, len] <span class="kw">if </span>len == seq_len <span class="kw">as </span>i64 =&gt; <span class="prelude-val">None</span>,
+<a href=#529 id=529 data-nosnippet>529</a>            cu_seqlens =&gt; {
+<a href=#530 id=530 data-nosnippet>530</a>                <span class="kw">let </span><span class="kw-2">mut </span>attention_mask =
+<a href=#531 id=531 data-nosnippet>531</a>                    Tensor::full(f32::MIN, (<span class="number">1</span>, seq_len, seq_len), xs.device())<span class="question-mark">?
+<a href=#532 id=532 data-nosnippet>532</a>                        </span>.to_dtype(xs.dtype())<span class="question-mark">?</span>;
+<a href=#533 id=533 data-nosnippet>533</a>                <span class="kw">for </span>i <span class="kw">in </span><span class="number">1</span>..cu_seqlens.len() {
+<a href=#534 id=534 data-nosnippet>534</a>                    <span class="kw">let </span>a = cu_seqlens[i - <span class="number">1</span>] <span class="kw">as </span>usize;
+<a href=#535 id=535 data-nosnippet>535</a>                    <span class="kw">let </span>b = cu_seqlens[i] <span class="kw">as </span>usize;
+<a href=#536 id=536 data-nosnippet>536</a>                    attention_mask = attention_mask.slice_assign(
+<a href=#537 id=537 data-nosnippet>537</a>                        <span class="kw-2">&amp;</span>[<span class="number">0</span>..attention_mask.dim(<span class="number">0</span>)<span class="question-mark">?</span>, a..b, a..b],
+<a href=#538 id=538 data-nosnippet>538</a>                        <span class="kw-2">&amp;</span>Tensor::zeros((<span class="number">1</span>, b - a, b - a), xs.dtype(), xs.device())<span class="question-mark">?</span>,
+<a href=#539 id=539 data-nosnippet>539</a>                    )<span class="question-mark">?</span>;
+<a href=#540 id=540 data-nosnippet>540</a>                }
+<a href=#541 id=541 data-nosnippet>541</a>                <span class="prelude-val">Some</span>(attention_mask)
+<a href=#542 id=542 data-nosnippet>542</a>            }
+<a href=#543 id=543 data-nosnippet>543</a>        };
+<a href=#544 id=544 data-nosnippet>544</a>
+<a href=#545 id=545 data-nosnippet>545</a>        <span class="kw">for </span>(i, blk) <span class="kw">in </span><span class="self">self</span>.blocks.iter().enumerate() {
+<a href=#546 id=546 data-nosnippet>546</a>            <span class="kw">let </span>attention_mask = <span class="kw">if </span><span class="self">self</span>.fullatt_block_indices.contains(<span class="kw-2">&amp;</span>i) {
+<a href=#547 id=547 data-nosnippet>547</a>                attention_mask_full.as_ref()
+<a href=#548 id=548 data-nosnippet>548</a>            } <span class="kw">else </span>{
+<a href=#549 id=549 data-nosnippet>549</a>                attention_mask_window.as_ref()
+<a href=#550 id=550 data-nosnippet>550</a>            };
+<a href=#551 id=551 data-nosnippet>551</a>            xs = blk.forward(<span class="kw-2">&amp;</span>xs, attention_mask, <span class="kw-2">&amp;</span>rotary_pos_emb)<span class="question-mark">?</span>;
+<a href=#552 id=552 data-nosnippet>552</a>        }
+<a href=#553 id=553 data-nosnippet>553</a>
+<a href=#554 id=554 data-nosnippet>554</a>        xs = <span class="self">self</span>.patch_merger.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
+<a href=#555 id=555 data-nosnippet>555</a>        <span class="kw">let </span>reverse_indices = window_index.arg_sort_last_dim(<span class="bool-val">true</span>)<span class="question-mark">?</span>;
+<a href=#556 id=556 data-nosnippet>556</a>        xs.index_select(<span class="kw-2">&amp;</span>reverse_indices, <span class="number">0</span>)
+<a href=#557 id=557 data-nosnippet>557</a>    }
+<a href=#558 id=558 data-nosnippet>558</a>}</code></pre></div></section></main></body></html>
