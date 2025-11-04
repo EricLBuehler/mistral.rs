@@ -4,9 +4,8 @@
 
 use candle_core::{Device, Result, Tensor};
 use candle_nn::Activation as CandleActivation;
-use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, Once};
+use std::sync::{LazyLock, Mutex, Once};
 
 /// Controller for the CUBLASLT handle and inhibition flag.
 pub struct CublasLtController {
@@ -31,10 +30,11 @@ impl CublasLtController {
     }
 }
 
-pub static CUBLASLT_CONTROLLER: Lazy<CublasLtController> = Lazy::new(|| CublasLtController {
-    handle: Mutex::new(None),
-    inhibit: AtomicBool::new(false),
-});
+pub static CUBLASLT_CONTROLLER: LazyLock<CublasLtController> =
+    LazyLock::new(|| CublasLtController {
+        handle: Mutex::new(None),
+        inhibit: AtomicBool::new(false),
+    });
 
 #[cfg(feature = "cuda")]
 mod api;

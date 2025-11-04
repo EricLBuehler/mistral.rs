@@ -18,7 +18,6 @@ half.workspace = true
 float8.workspace = true
 metal = { workspace = true, optional = true }
 thiserror.workspace = true
-once_cell.workspace = true
 
 [build-dependencies]
 bindgen_cuda = { workspace = true, optional = true }

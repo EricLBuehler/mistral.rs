@@ -23,7 +23,6 @@ either.workspace = true
 indexmap.workspace = true
 mistralrs-core.workspace = true
 mistralrs-server-core.workspace = true
-once_cell.workspace = true
 regex.workspace = true
 rustyline.workspace = true
 serde.workspace = true

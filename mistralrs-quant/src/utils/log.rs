@@ -1,13 +1,12 @@
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
-    sync::Mutex,
+    sync::{LazyLock, Mutex},
 };
 
-use once_cell::sync::Lazy;
 use tracing::{info, warn};
 
-static CACHED_INFO: Lazy<Mutex<Vec<u64>>> = Lazy::new(|| Mutex::new(Vec::new()));
-static CACHED_WARN: Lazy<Mutex<Vec<u64>>> = Lazy::new(|| Mutex::new(Vec::new()));
+static CACHED_INFO: LazyLock<Mutex<Vec<u64>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+static CACHED_WARN: LazyLock<Mutex<Vec<u64>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
 pub fn once_log_info<M: AsRef<str>>(msg: M) {
     let msg = msg.as_ref();
