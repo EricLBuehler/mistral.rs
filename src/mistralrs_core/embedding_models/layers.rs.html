@@ -60,7 +60,7 @@
 <a href=#60 id=60 data-nosnippet>60</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
 <a href=#61 id=61 data-nosnippet>61</a>        <span class="kw">let </span>norm = (xs.sqr()<span class="question-mark">?</span>.sum(<span class="number">1</span>)<span class="question-mark">? </span>+ <span class="number">1e-12</span>)<span class="question-mark">?</span>.sqrt()<span class="question-mark">?</span>;
 <a href=#62 id=62 data-nosnippet>62</a>
-<a href=#63 id=63 data-nosnippet>63</a>        xs.broadcast_div(<span class="kw-2">&amp;</span>norm)
+<a href=#63 id=63 data-nosnippet>63</a>        xs.broadcast_div(<span class="kw-2">&amp;</span>norm.unsqueeze(D::Minus1)<span class="question-mark">?</span>)
 <a href=#64 id=64 data-nosnippet>64</a>    }
 <a href=#65 id=65 data-nosnippet>65</a>}
 <a href=#66 id=66 data-nosnippet>66</a>
