@@ -1,6 +1,5 @@
 use candle_core::Device;
 use mistralrs_core::*;
-use std::num::NonZeroUsize;
 use std::{
     ops::{Deref, DerefMut},
     path::PathBuf,
@@ -31,11 +30,13 @@ pub struct EmbeddingModelBuilder {
     pub(crate) throughput_logging: bool,
 
     // Other things
+    pub(crate) max_num_seqs: usize,
     pub(crate) with_logging: bool,
 }
 
 impl EmbeddingModelBuilder {
     /// A few defaults are applied here:
+    /// - Maximum number of sequences running is 32
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
     pub fn new(model_id: impl ToString) -> Self {
@@ -51,6 +52,7 @@ impl EmbeddingModelBuilder {
             token_source: TokenSource::CacheToken,
             hf_revision: None,
             isq: None,
+            max_num_seqs: 32,
             with_logging: false,
             device_mapping: None,
             throughput_logging: false,
@@ -111,6 +113,12 @@ impl EmbeddingModelBuilder {
     /// Use ISQ of a certain type. If there is an overlap, the topology type is used over the ISQ type.
     pub fn with_isq(mut self, isq: IsqType) -> Self {
         self.isq = Some(isq);
+        self
+    }
+
+    /// Set the maximum number of sequences which can be run at once.
+    pub fn with_max_num_seqs(mut self, max_num_seqs: usize) -> Self {
+        self.max_num_seqs = max_num_seqs;
         self
     }
 
@@ -197,7 +205,7 @@ impl EmbeddingModelBuilder {
         )?;
 
         let scheduler_method = SchedulerConfig::DefaultScheduler {
-            method: DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()), // just a dummy
+            method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
         };
 
         let runner =
