@@ -111,4 +111,12 @@
 <a href=#111 id=111 data-nosnippet>111</a>    </span><span class="kw">pub fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>, model_id: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>str&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;MistralRsConfig, String&gt; {
 <a href=#112 id=112 data-nosnippet>112</a>        <span class="self">self</span>.runner.config(model_id)
 <a href=#113 id=113 data-nosnippet>113</a>    }
-<a href=#114 id=114 data-nosnippet>114</a>}</code></pre></div></section></main></body></html>
+<a href=#114 id=114 data-nosnippet>114</a>
+<a href=#115 id=115 data-nosnippet>115</a>    <span class="doccomment">/// Returns the maximum supported sequence length for the specified model, if applicable.
+<a href=#116 id=116 data-nosnippet>116</a>    </span><span class="kw">pub fn </span>max_sequence_length(
+<a href=#117 id=117 data-nosnippet>117</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#118 id=118 data-nosnippet>118</a>        model_id: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>str&gt;,
+<a href=#119 id=119 data-nosnippet>119</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;usize&gt;, MistralRsError&gt; {
+<a href=#120 id=120 data-nosnippet>120</a>        <span class="self">self</span>.runner.max_sequence_length(model_id)
+<a href=#121 id=121 data-nosnippet>121</a>    }
+<a href=#122 id=122 data-nosnippet>122</a>}</code></pre></div></section></main></body></html>
