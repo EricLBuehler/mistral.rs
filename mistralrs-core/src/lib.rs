@@ -48,7 +48,6 @@ mod amoe;
 mod attention;
 mod diffusion_models;
 pub mod distributed;
-mod embedding;
 mod gguf;
 pub mod layers;
 mod layers_masker;

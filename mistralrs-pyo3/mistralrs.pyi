@@ -427,8 +427,8 @@ class Runner:
         - `no_paged_attn` disables PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
         - `paged_attn` enables PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
         - `seed`, used to ensure reproducible random number generation.
-        - `enable_search`: Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
-        - `search_bert_model`: specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
+        - `enable_search`: Enable searching compatible with the OpenAI `web_search_options` setting. This loads the EmbeddingGemma reranker (or a custom embedding model).
+        - `search_bert_model`: specify a Hugging Face model ID for the search embedding model. Defaults to `google/embeddinggemma-300m`.
         - `search_callback`: Custom Python callable to perform web searches. Should accept a query string and return a list of dicts with keys "title", "description", "url", and "content".
         - `tool_callbacks`: Mapping from tool name to Python callable invoked for generic tool calls. Each callable receives the tool name and a dict of arguments and should return the tool output as a string.
         """

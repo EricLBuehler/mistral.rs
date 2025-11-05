@@ -1,6 +1,5 @@
 use crate::{
     distributed,
-    embedding::bert::BertPipeline,
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
@@ -9,7 +8,7 @@ use crate::{
     prefix_cacher::PrefixCacheManagerV2,
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
-    search,
+    search::{self, rag::SearchPipeline},
     sequence::{SeqStepType, StopReason},
     tools, CompletionResponse, SchedulerConfig, DEBUG,
 };
@@ -59,7 +58,7 @@ pub enum EngineInstruction {
 /// Embedding model used for ranking web search results internally.
 pub enum BertEmbeddingModel {
     #[default]
-    SnowflakeArcticEmbedL,
+    EmbeddingGemma300M,
     Custom(String),
 }
 
@@ -117,7 +116,7 @@ pub static ENGINE_INSTRUCTIONS: LazyLock<
 pub struct Engine {
     rx: Arc<Mutex<Receiver<Request>>>,
     pipeline: Arc<Mutex<dyn Pipeline>>,
-    bert_pipeline: Arc<Mutex<Option<BertPipeline>>>,
+    bert_pipeline: Arc<Mutex<Option<SearchPipeline>>>,
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -164,7 +163,7 @@ impl Engine {
             || prefix_cache_n == 0;
 
         let bert_pipeline = match search_embedding_model {
-            Some(search_embedding_model) => Some(BertPipeline::new(
+            Some(search_embedding_model) => Some(SearchPipeline::new(
                 search_embedding_model,
                 &get_mut_arcmutex!(pipeline).device(),
             )?),

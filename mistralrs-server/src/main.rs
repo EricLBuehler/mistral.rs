@@ -135,11 +135,11 @@ struct Args {
     #[arg(long)]
     cpu: bool,
 
-    /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This loads the EmbeddingGemma model (or a custom embedding model) for reranking web results.
     #[arg(long = "enable-search")]
     enable_search: bool,
 
-    /// Specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
+    /// Specify a Hugging Face model ID for the search embedding model. Defaults to `google/embeddinggemma-300m`.
     #[arg(long = "search-bert-model")]
     search_bert_model: Option<String>,
 

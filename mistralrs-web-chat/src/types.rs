@@ -26,7 +26,7 @@ pub struct Cli {
     /// Enable web search tool (requires embedding model)
     #[arg(long)]
     pub enable_search: bool,
-    /// Hugging Face model ID for search embeddings (default: SnowflakeArcticEmbedL if --enable-search)
+    /// Hugging Face model ID for search embeddings (default: `google/embeddinggemma-300m` if --enable-search)
     #[arg(long = "search-bert-model")]
     pub search_bert_model: Option<String>,
 

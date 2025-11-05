@@ -17,7 +17,7 @@ You can use the web search tool in all the APIs: Python, Rust, and server.
 
 ## Specifying a custom embedding model
 
-Internally, we use a BERT model (Snowflake/snowflake-arctic-embed-l-v2.0)[https://huggingface.co/Snowflake/snowflake-arctic-embed-l-v2.0] (0.6b parameters = ~2.3GB) to select the most relevant search results. You can specify a custom BERT model by providing a Hugging Face model ID in the various APIs:
+Internally, we now use [google/embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m) to embed both the user query and each document chunk (4096 characters per chunk) before ranking. Queries are wrapped with the prompt `task: search result | query: …`, while documents use `title: {title | "none"} | text: …` to maximize retrieval quality. You can specify a custom embedding model by providing a Hugging Face model ID in the various APIs:
 
 - Rust: `with_search` in the builder
 - Python: `search_bert_model` in the Runner

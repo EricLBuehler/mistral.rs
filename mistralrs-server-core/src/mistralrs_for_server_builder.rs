@@ -214,10 +214,10 @@ pub struct MistralRsForServerBuilder {
     /// Use CPU only
     cpu: bool,
 
-    /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This loads the EmbeddingGemma reranker (or a custom embedding model).
     enable_search: bool,
 
-    /// Specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
+    /// Specify a Hugging Face model ID for the search embedding model. Defaults to `google/embeddinggemma-300m`.
     search_bert_model: Option<String>,
 
     /// Optional override search callback
@@ -533,7 +533,7 @@ impl MistralRsForServerBuilder {
         self
     }
 
-    /// Sets the BERT model for web search assistance.
+    /// Sets the embedding model used for web search assistance.
     pub fn with_search_bert_model(mut self, search_bert_model: String) -> Self {
         self.search_bert_model = Some(search_bert_model);
         self
@@ -1105,7 +1105,7 @@ pub fn configure_paged_attn_from_flags(
     }
 }
 
-/// Creates a BERT embedding model configuration for search functionality.
+/// Creates a search embedding model configuration for agentic search reranking.
 pub fn get_bert_model(
     enable_search: bool,
     search_bert_model: Option<String>,
