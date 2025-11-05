@@ -40,7 +40,7 @@ use tokio::{
 
 use crate::{
     get_mut_arcmutex, handle_pipeline_forward_error,
-    pipeline::Pipeline,
+    pipeline::{ModelCategory, Pipeline},
     request::Request,
     response::{ChatCompletionResponse, Choice, ResponseMessage},
     sequence::{SequenceRecognizer, SequenceState},
@@ -195,6 +195,19 @@ impl Engine {
             logger: IntervalLogger::new(Duration::from_secs(5)),
             handles: Arc::new(Mutex::new(Vec::new())),
         })
+    }
+
+    /// Returns the maximum supported sequence length for the underlying model, if applicable.
+    #[allow(dead_code)]
+    pub fn max_sequence_length(&self) -> Option<usize> {
+        let pipeline = get_mut_arcmutex!(self.pipeline);
+        let category = pipeline.category();
+
+        if matches!(category, ModelCategory::Diffusion | ModelCategory::Speech) {
+            None
+        } else {
+            Some(pipeline.get_metadata().max_seq_len)
+        }
     }
 
     pub async fn run(self: Arc<Self>) {

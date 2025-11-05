@@ -1674,6 +1674,14 @@ impl Runner {
         self.runner.list_models().map_err(PyApiErr::from)
     }
 
+    /// Return the maximum supported sequence length for the requested model, if available.
+    #[pyo3(signature = (model_id = None))]
+    fn max_sequence_length(&self, model_id: Option<String>) -> PyApiResult<Option<usize>> {
+        self.runner
+            .max_sequence_length(model_id.as_deref())
+            .map_err(PyApiErr::from)
+    }
+
     /// Get the default model ID in multi-model mode.
     fn get_default_model_id(&self) -> PyApiResult<Option<String>> {
         self.runner.get_default_model_id().map_err(PyApiErr::from)
@@ -2164,6 +2172,12 @@ impl MultiModelRunner {
     /// List all available model IDs.
     fn list_models(&self) -> PyApiResult<Vec<String>> {
         self.runner.list_models()
+    }
+
+    /// Return the maximum supported sequence length for a model, if available.
+    #[pyo3(signature = (model_id = None))]
+    fn max_sequence_length(&self, model_id: Option<String>) -> PyApiResult<Option<usize>> {
+        self.runner.max_sequence_length(model_id)
     }
 
     /// Get the default model ID.

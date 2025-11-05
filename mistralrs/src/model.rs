@@ -417,6 +417,11 @@ impl Model {
         self.runner.config(None)
     }
 
+    /// Returns the maximum supported sequence length for this model, if applicable.
+    pub fn max_sequence_length(&self) -> std::result::Result<Option<usize>, MistralRsError> {
+        self.runner.max_sequence_length(None)
+    }
+
     pub fn inner(&self) -> &MistralRs {
         &self.runner
     }

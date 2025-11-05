@@ -111,4 +111,12 @@ impl MultiModel {
     pub fn config(&self, model_id: Option<&str>) -> Result<MistralRsConfig, String> {
         self.runner.config(model_id)
     }
+
+    /// Returns the maximum supported sequence length for the specified model, if applicable.
+    pub fn max_sequence_length(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<Option<usize>, MistralRsError> {
+        self.runner.max_sequence_length(model_id)
+    }
 }

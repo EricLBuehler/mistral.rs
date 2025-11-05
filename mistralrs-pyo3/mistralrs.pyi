@@ -489,6 +489,12 @@ class Runner:
         Detokenize some tokens, returning text.
         """
 
+    def max_sequence_length(self, model_id: str | None = None) -> int | None:
+        """
+        Return the maximum supported sequence length for the current or specified model, or None when
+        the concept does not apply (such as diffusion or speech models).
+        """
+
 class MultiModelRunner:
     def __init__(self, runner: Runner) -> None:
         """
@@ -521,6 +527,12 @@ class MultiModelRunner:
     def list_models(self) -> list[str]:
         """
         List all registered model IDs.
+        """
+
+    def max_sequence_length(self, model_id: str | None = None) -> int | None:
+        """
+        Return the maximum supported sequence length for the selected model, or None if not applicable
+        (for example diffusion or speech models).
         """
 
     def get_default_model_id(self) -> str | None:
