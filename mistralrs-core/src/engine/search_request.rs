@@ -44,7 +44,6 @@ async fn do_search(
     }
     let tool_call_params: SearchFunctionParameters =
         serde_json::from_str(&tool_calls.function.arguments).unwrap();
-    println!();
     tracing::info!(
         "Called search tool with query `{}`.",
         tool_call_params.query
@@ -249,7 +248,6 @@ async fn do_extraction(
     }
     let tool_call_params: ExtractFunctionParameters =
         serde_json::from_str(&tool_calls.function.arguments).unwrap();
-    println!();
     tracing::info!(
         "Called extrcation tool with query `{}`.",
         tool_call_params.url
@@ -535,7 +533,7 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                     return;
                 }
 
-                // Tool requested → build the next turn.
+                // Tool requested -> build the next turn.
                 let tc = tc_opt.unwrap();
                 let next_visible = if search::search_tool_called(&tc.function.name) {
                     let web_search_options = web_search_options.as_ref().unwrap();
@@ -574,7 +572,6 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                                     .await
                                     .unwrap();
                             }
-
                             last_choice = Some(first_choice.clone());
 
                             // Stop once the model marks completion.
@@ -652,7 +649,7 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                 };
 
                 if tc_opt.is_none() {
-                    break; // No more tool calls → done.
+                    break; // No more tool calls -> done.
                 }
 
                 let tc = tc_opt.unwrap();

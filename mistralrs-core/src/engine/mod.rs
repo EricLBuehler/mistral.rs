@@ -30,9 +30,10 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
+    select,
     sync::{
         mpsc::{error::TryRecvError, Receiver},
-        Mutex,
+        Mutex, Notify,
     },
     task::JoinHandle,
 };
@@ -129,6 +130,7 @@ pub struct Engine {
     throughput_logging_enabled: bool,
     logger: IntervalLogger,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    pending_notify: Arc<Notify>,
 }
 
 impl Drop for Engine {
@@ -193,6 +195,7 @@ impl Engine {
             throughput_logging_enabled,
             logger: IntervalLogger::new(Duration::from_secs(5)),
             handles: Arc::new(Mutex::new(Vec::new())),
+            pending_notify: Arc::new(Notify::new()),
         })
     }
 
@@ -269,14 +272,25 @@ impl Engine {
                     self.replicate_request_to_daemons(&Request::Terminate);
                     break 'lp;
                 }
-
-                let next_request = {
+                enum WaitEvent {
+                    Request(Option<Request>),
+                    Wake,
+                }
+                let wait_for_request = async {
                     let mut rx = self.rx.lock().await;
                     rx.recv().await
                 };
+                tokio::pin!(wait_for_request);
+                let wait_for_wake = self.pending_notify.notified();
+                tokio::pin!(wait_for_wake);
 
-                match next_request {
-                    Some(request) => {
+                let event = select! {
+                    res = &mut wait_for_request => WaitEvent::Request(res),
+                    _ = &mut wait_for_wake => WaitEvent::Wake,
+                };
+
+                match event {
+                    WaitEvent::Request(Some(request)) => {
                         self.replicate_request_to_daemons(&request);
                         if matches!(request, Request::Terminate) {
                             break 'lp;
@@ -284,7 +298,8 @@ impl Engine {
                         self.clone().handle_request(request).await;
                         continue;
                     }
-                    None => break 'lp,
+                    WaitEvent::Request(None) => break 'lp,
+                    WaitEvent::Wake => continue,
                 }
             }
 

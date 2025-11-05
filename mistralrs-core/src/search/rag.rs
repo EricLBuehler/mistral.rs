@@ -6,17 +6,16 @@ use anyhow::{Context, Result};
 use candle_core::{DType, Device, Error as E};
 use itertools::Itertools;
 use mistralrs_quant::log::once_log_info;
-use tokio::sync::Mutex as TokioMutex;
 use tokenizers::Tokenizer;
+use tokio::sync::Mutex as TokioMutex;
 
-use crate::{
-    engine::BertEmbeddingModel,
-    embedding_models::inputs_processor::{make_prompt_chunk, ModelInputs},
-    get_mut_arcmutex,
-    AutoDeviceMapParams, DeviceMapSetting, EmbeddingLoaderBuilder, EmbeddingSpecificConfig,
-    ModelDType, Pipeline, TokenSource,
-};
 use crate::pipeline::ForwardInputsResult;
+use crate::{
+    embedding_models::inputs_processor::{make_prompt_chunk, ModelInputs},
+    engine::BertEmbeddingModel,
+    get_mut_arcmutex, AutoDeviceMapParams, DeviceMapSetting, EmbeddingLoaderBuilder,
+    EmbeddingSpecificConfig, ModelDType, Pipeline, TokenSource,
+};
 
 use super::SearchResult;
 
@@ -97,13 +96,8 @@ impl SearchPipeline {
                     .iter()
                     .map(|(_, ids)| ids.as_slice())
                     .collect();
-                let chunk = make_prompt_chunk(
-                    0,
-                    slices,
-                    &self.device,
-                    None,
-                    self.has_causal_attention,
-                )?;
+                let chunk =
+                    make_prompt_chunk(0, slices, &self.device, None, self.has_causal_attention)?;
                 let inputs = Box::new(ModelInputs {
                     input_ids: chunk.input,
                     flash_meta: chunk.flash_meta,
