@@ -185,6 +185,7 @@ pub struct MistralRsConfig {
     pub device: Device,
     pub category: ModelCategory,
     pub modalities: Modalities,
+    pub max_seq_len: Option<usize>,
 }
 
 /// Internal structure to hold per-engine state
@@ -384,15 +385,17 @@ impl MistralRs {
     ) -> Result<EngineInstance, String> {
         let (tx, rx) = channel(10_000);
 
-        let category = pipeline.try_lock().unwrap().category();
-        let kind = pipeline.try_lock().unwrap().get_metadata().kind.clone();
-        let device = pipeline.try_lock().unwrap().device();
-        let modalities = pipeline
-            .try_lock()
-            .unwrap()
-            .get_metadata()
-            .modalities
-            .clone();
+        let pipeline_guard = pipeline.try_lock().unwrap();
+        let category = pipeline_guard.category();
+        let metadata = pipeline_guard.get_metadata();
+        let kind = metadata.kind.clone();
+        let device = pipeline_guard.device();
+        let modalities = metadata.modalities.clone();
+        let max_seq_len = match &category {
+            ModelCategory::Diffusion | ModelCategory::Speech => None,
+            _ => Some(metadata.max_seq_len),
+        };
+        drop(pipeline_guard);
 
         info!("Pipeline input modalities are {:?}", &modalities.input);
         info!("Pipeline output modalities are {:?}", &modalities.output);
@@ -402,6 +405,7 @@ impl MistralRs {
             device,
             category: category.clone(),
             modalities,
+            max_seq_len,
         };
 
         let engine_handler = thread::spawn(move || {
@@ -774,6 +778,36 @@ impl MistralRs {
             .map_err(|_| MistralRsError::SenderPoisoned)?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.category.clone())
+        } else {
+            Err(MistralRsError::EnginePoisoned)
+        }
+    }
+
+    /// Get the maximum supported sequence length for a model, if applicable.
+    pub fn max_sequence_length(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<Option<usize>, MistralRsError> {
+        let resolved_model_id = match model_id {
+            Some(id) => id.to_string(),
+            None => {
+                let default_lock = self
+                    .default_engine_id
+                    .read()
+                    .map_err(|_| MistralRsError::SenderPoisoned)?;
+                default_lock
+                    .as_ref()
+                    .ok_or(MistralRsError::EnginePoisoned)?
+                    .clone()
+            }
+        };
+
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        if let Some(engine_instance) = engines.get(&resolved_model_id) {
+            Ok(engine_instance.config.max_seq_len)
         } else {
             Err(MistralRsError::EnginePoisoned)
         }
