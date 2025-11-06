@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["configure_paged_attn_from_flags","get_bert_model"],"mod":["defaults"],"struct":["MistralRsForServerBuilder","ModelConfig"]};
+window.SIDEBAR_ITEMS = {"fn":["configure_paged_attn_from_flags","get_search_embedding_model"],"mod":["defaults"],"struct":["MistralRsForServerBuilder","ModelConfig"]};

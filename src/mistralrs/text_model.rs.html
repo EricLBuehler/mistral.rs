@@ -33,7 +33,7 @@
 <a href=#33 id=33 data-nosnippet>33</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#34 id=34 data-nosnippet>34</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) device_mapping: <span class="prelude-ty">Option</span>&lt;DeviceMapSetting&gt;,
 <a href=#35 id=35 data-nosnippet>35</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) hf_cache_path: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
-<a href=#36 id=36 data-nosnippet>36</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) search_bert_model: <span class="prelude-ty">Option</span>&lt;BertEmbeddingModel&gt;,
+<a href=#36 id=36 data-nosnippet>36</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) search_embedding_model: <span class="prelude-ty">Option</span>&lt;SearchEmbeddingModel&gt;,
 <a href=#37 id=37 data-nosnippet>37</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) search_callback: <span class="prelude-ty">Option</span>&lt;Arc&lt;SearchCallback&gt;&gt;,
 <a href=#38 id=38 data-nosnippet>38</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) tool_callbacks: HashMap&lt;String, Arc&lt;ToolCallback&gt;&gt;,
 <a href=#39 id=39 data-nosnippet>39</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) tool_callbacks_with_tools: HashMap&lt;String, ToolCallbackWithTool&gt;,
@@ -131,7 +131,7 @@
 <a href=#131 id=131 data-nosnippet>131</a>            jinja_explicit: <span class="prelude-val">None</span>,
 <a href=#132 id=132 data-nosnippet>132</a>            throughput_logging: <span class="bool-val">false</span>,
 <a href=#133 id=133 data-nosnippet>133</a>            hf_cache_path: <span class="prelude-val">None</span>,
-<a href=#134 id=134 data-nosnippet>134</a>            search_bert_model: <span class="prelude-val">None</span>,
+<a href=#134 id=134 data-nosnippet>134</a>            search_embedding_model: <span class="prelude-val">None</span>,
 <a href=#135 id=135 data-nosnippet>135</a>            search_callback: <span class="prelude-val">None</span>,
 <a href=#136 id=136 data-nosnippet>136</a>            tool_callbacks: HashMap::new(),
 <a href=#137 id=137 data-nosnippet>137</a>            tool_callbacks_with_tools: HashMap::new(),
@@ -142,9 +142,9 @@
 <a href=#142 id=142 data-nosnippet>142</a>        }
 <a href=#143 id=143 data-nosnippet>143</a>    }
 <a href=#144 id=144 data-nosnippet>144</a>
-<a href=#145 id=145 data-nosnippet>145</a>    <span class="doccomment">/// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified or the default.
-<a href=#146 id=146 data-nosnippet>146</a>    </span><span class="kw">pub fn </span>with_search(<span class="kw-2">mut </span><span class="self">self</span>, search_bert_model: BertEmbeddingModel) -&gt; <span class="self">Self </span>{
-<a href=#147 id=147 data-nosnippet>147</a>        <span class="self">self</span>.search_bert_model = <span class="prelude-val">Some</span>(search_bert_model);
+<a href=#145 id=145 data-nosnippet>145</a>    <span class="doccomment">/// Enable searching compatible with the OpenAI `web_search_options` setting. This loads the selected search embedding reranker (EmbeddingGemma by default).
+<a href=#146 id=146 data-nosnippet>146</a>    </span><span class="kw">pub fn </span>with_search(<span class="kw-2">mut </span><span class="self">self</span>, search_embedding_model: SearchEmbeddingModel) -&gt; <span class="self">Self </span>{
+<a href=#147 id=147 data-nosnippet>147</a>        <span class="self">self</span>.search_embedding_model = <span class="prelude-val">Some</span>(search_embedding_model);
 <a href=#148 id=148 data-nosnippet>148</a>        <span class="self">self
 <a href=#149 id=149 data-nosnippet>149</a>    </span>}
 <a href=#150 id=150 data-nosnippet>150</a>
@@ -440,7 +440,7 @@
 <a href=#440 id=440 data-nosnippet>440</a>            pipeline,
 <a href=#441 id=441 data-nosnippet>441</a>            scheduler_method,
 <a href=#442 id=442 data-nosnippet>442</a>            <span class="self">self</span>.throughput_logging,
-<a href=#443 id=443 data-nosnippet>443</a>            <span class="self">self</span>.search_bert_model,
+<a href=#443 id=443 data-nosnippet>443</a>            <span class="self">self</span>.search_embedding_model,
 <a href=#444 id=444 data-nosnippet>444</a>        );
 <a href=#445 id=445 data-nosnippet>445</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(cb) = <span class="self">self</span>.search_callback.clone() {
 <a href=#446 id=446 data-nosnippet>446</a>            runner = runner.with_search_callback(cb);
