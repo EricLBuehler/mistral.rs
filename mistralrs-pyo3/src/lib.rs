@@ -590,7 +590,7 @@ impl Runner {
         paged_attn = false,
         seed = None,
         enable_search = false,
-        search_embedding_model_id = None,
+        search_embedding_model = None,
         search_callback = None,
         tool_callbacks = None,
         mcp_client_config = None,
@@ -617,7 +617,7 @@ impl Runner {
         paged_attn: bool,
         seed: Option<u64>,
         enable_search: bool,
-        search_embedding_model_id: Option<String>,
+        search_embedding_model: Option<String>,
         search_callback: Option<PyObject>,
         tool_callbacks: Option<PyObject>,
         mcp_client_config: Option<McpClientConfigPy>,
@@ -900,11 +900,12 @@ impl Runner {
             }
         };
         let search_embedding_model = if enable_search {
-            Some(
-                search_embedding_model_id
-                    .map(SearchEmbeddingModel::Custom)
-                    .unwrap_or_default(),
-            )
+            Some(match search_embedding_model {
+                Some(model) => {
+                    SearchEmbeddingModel::from_str(model.as_str()).map_err(PyApiErr::from)?
+                }
+                None => SearchEmbeddingModel::default(),
+            })
         } else {
             None
         };

@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
 use mistralrs_core::{
-    initialize_logging, McpClientConfig, ModelSelected, PagedCacheType, TokenSource,
+    initialize_logging, McpClientConfig, ModelSelected, PagedCacheType, SearchEmbeddingModel,
+    TokenSource,
 };
 use rust_mcp_sdk::schema::LATEST_PROTOCOL_VERSION;
 use std::collections::HashMap;
@@ -135,13 +136,13 @@ struct Args {
     #[arg(long)]
     cpu: bool,
 
-    /// Enable searching compatible with the OpenAI `web_search_options` setting. This loads the EmbeddingGemma model (or a custom embedding model) for reranking web results.
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This loads the selected search embedding model for reranking web results.
     #[arg(long = "enable-search")]
     enable_search: bool,
 
-    /// Specify a Hugging Face model ID for the search embedding model. Defaults to `google/embeddinggemma-300m`.
+    /// Select which built-in search embedding model to load (e.g., `embedding_gemma`).
     #[arg(long = "search-embedding-model")]
-    search_embedding_model_id: Option<String>,
+    search_embedding_model: Option<SearchEmbeddingModel>,
 
     /// Enable thinking for interactive mode and models that support it.
     #[arg(long = "enable-thinking")]
@@ -365,11 +366,15 @@ async fn main() -> Result<()> {
                 builder = builder.with_default_model_id(default_id);
             }
 
+            if let Some(model) = args.search_embedding_model {
+                builder = builder.with_search_embedding_model(model);
+            }
+
             builder.build_multi_model().await?
         }
         model => {
             // Single-model mode
-            MistralRsForServerBuilder::new()
+            let mut builder = MistralRsForServerBuilder::new()
                 .with_model(model)
                 .with_max_seqs(args.max_seqs)
                 .with_no_kv_cache(args.no_kv_cache)
@@ -390,15 +395,19 @@ async fn main() -> Result<()> {
                 .with_paged_ctxt_len_optional(args.paged_ctxt_len)
                 .with_paged_attn_block_size_optional(args.paged_attn_block_size)
                 .with_mcp_config_optional(mcp_config)
-                .with_paged_attn_cache_type(args.cache_type.unwrap_or_default())
-                .build()
-                .await?
+                .with_paged_attn_cache_type(args.cache_type.unwrap_or_default());
+
+            if let Some(model) = args.search_embedding_model {
+                builder = builder.with_search_embedding_model(model);
+            }
+
+            builder.build().await?
         }
     };
 
     // TODO: refactor this
     let search_embedding_model =
-        get_search_embedding_model(args.enable_search, args.search_embedding_model_id);
+        get_search_embedding_model(args.enable_search, args.search_embedding_model);
 
     if args.interactive_mode {
         interactive_mode(

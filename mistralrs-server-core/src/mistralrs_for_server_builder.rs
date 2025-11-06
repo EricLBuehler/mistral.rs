@@ -67,8 +67,9 @@ impl ModelConfig {
 }
 
 pub mod defaults {
-    //! Provides the default values used for the mistral.rs instance for server.
-    //! These defaults can be used for CLI argument fallbacks, config loading, or general initialization.
+    use super::SearchEmbeddingModel;
+    // Provides the default values used for the mistral.rs instance for server.
+    // These defaults can be used for CLI argument fallbacks, config loading, or general initialization.
 
     use std::sync::Arc;
 
@@ -96,7 +97,7 @@ pub mod defaults {
     pub const PAGED_ATTN_METAL: bool = false;
     pub const CPU: bool = false;
     pub const ENABLE_SEARCH: bool = false;
-    pub const SEARCH_EMBEDDING_MODEL_ID: Option<String> = None;
+    pub const SEARCH_EMBEDDING_MODEL: Option<SearchEmbeddingModel> = None;
     pub const TOKEN_SOURCE: mistralrs_core::TokenSource = mistralrs_core::TokenSource::CacheToken;
     pub const SEARCH_CALLBACK: Option<Arc<mistralrs_core::SearchCallback>> = None;
     pub const PAGED_CACHE_TYPE: PagedCacheType = PagedCacheType::Auto;
@@ -214,11 +215,11 @@ pub struct MistralRsForServerBuilder {
     /// Use CPU only
     cpu: bool,
 
-    /// Enable searching compatible with the OpenAI `web_search_options` setting. This loads the EmbeddingGemma reranker (or a custom embedding model).
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This loads the selected search embedding reranker (EmbeddingGemma by default).
     enable_search: bool,
 
-    /// Specify a Hugging Face model ID for the search embedding model. Defaults to `google/embeddinggemma-300m`.
-    search_embedding_model_id: Option<String>,
+    /// Specify which built-in search embedding model to load.
+    search_embedding_model: Option<SearchEmbeddingModel>,
 
     /// Optional override search callback
     search_callback: Option<Arc<SearchCallback>>,
@@ -256,7 +257,7 @@ impl Default for MistralRsForServerBuilder {
             paged_attn: defaults::PAGED_ATTN,
             cpu: defaults::CPU,
             enable_search: defaults::ENABLE_SEARCH,
-            search_embedding_model_id: defaults::SEARCH_EMBEDDING_MODEL_ID,
+            search_embedding_model: defaults::SEARCH_EMBEDDING_MODEL,
             search_callback: defaults::SEARCH_CALLBACK,
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
@@ -534,8 +535,11 @@ impl MistralRsForServerBuilder {
     }
 
     /// Sets the embedding model used for web search assistance.
-    pub fn with_search_embedding_model_id(mut self, search_embedding_model_id: String) -> Self {
-        self.search_embedding_model_id = Some(search_embedding_model_id);
+    pub fn with_search_embedding_model(
+        mut self,
+        search_embedding_model: SearchEmbeddingModel,
+    ) -> Self {
+        self.search_embedding_model = Some(search_embedding_model);
         self
     }
 
@@ -644,7 +648,7 @@ impl MistralRsForServerBuilder {
         let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
 
         let search_embedding_model =
-            get_search_embedding_model(self.enable_search, self.search_embedding_model_id);
+            get_search_embedding_model(self.enable_search, self.search_embedding_model);
 
         let mut builder = MistralRsBuilder::new(
             pipeline,
@@ -757,7 +761,7 @@ impl MistralRsForServerBuilder {
 
         let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
         let search_embedding_model =
-            get_search_embedding_model(self.enable_search, self.search_embedding_model_id);
+            get_search_embedding_model(self.enable_search, self.search_embedding_model);
 
         // Create the first MistralRs instance with the first model
         let mut builder = MistralRsBuilder::new(
@@ -1110,14 +1114,10 @@ pub fn configure_paged_attn_from_flags(
 /// Creates a search embedding model configuration for agentic search reranking.
 pub fn get_search_embedding_model(
     enable_search: bool,
-    search_embedding_model_id: Option<String>,
+    search_embedding_model: Option<SearchEmbeddingModel>,
 ) -> Option<SearchEmbeddingModel> {
     if enable_search {
-        Some(
-            search_embedding_model_id
-                .map(SearchEmbeddingModel::Custom)
-                .unwrap_or_default(),
-        )
+        Some(search_embedding_model.unwrap_or_default())
     } else {
         None
     }

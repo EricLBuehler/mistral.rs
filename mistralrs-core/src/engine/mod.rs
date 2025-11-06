@@ -18,11 +18,14 @@ pub use logger::IntervalLogger;
 use mistralrs_quant::RingConfig;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    fmt,
     io::{BufWriter, Write},
     net::TcpListener,
     ops::Deref,
+    str::FromStr,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, LazyLock,
@@ -55,12 +58,47 @@ pub enum EngineInstruction {
     Terminate,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 /// Embedding model used for ranking web search results internally.
 pub enum SearchEmbeddingModel {
     #[default]
+    #[serde(rename = "embedding_gemma")]
     EmbeddingGemma300M,
-    Custom(String),
+}
+
+impl SearchEmbeddingModel {
+    pub fn hf_model_id(&self) -> &'static str {
+        match self {
+            Self::EmbeddingGemma300M => "google/embeddinggemma-300m",
+        }
+    }
+
+    pub fn variants() -> &'static [&'static str] {
+        &["embedding_gemma"]
+    }
+}
+
+impl fmt::Display for SearchEmbeddingModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmbeddingGemma300M => f.write_str("embedding_gemma"),
+        }
+    }
+}
+
+impl FromStr for SearchEmbeddingModel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "embedding_gemma" => Ok(Self::EmbeddingGemma300M),
+            other => Err(format!(
+                "Unknown search embedding model `{other}`. Supported values: {}",
+                Self::variants().join(", ")
+            )),
+        }
+    }
 }
 
 const SEED: u64 = 0;

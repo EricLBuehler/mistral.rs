@@ -18,7 +18,6 @@ use crate::{
 
 use super::SearchResult;
 
-const DEFAULT_EMBED_MODEL_ID: &str = "google/embeddinggemma-300m";
 const EMBEDDING_BATCH: usize = 8;
 
 pub struct SearchPipeline {
@@ -46,10 +45,7 @@ pub struct ScoredChunk {
 
 impl SearchPipeline {
     pub fn new(model: SearchEmbeddingModel, runner_device: &Device) -> anyhow::Result<Self> {
-        let model_id = match model {
-            SearchEmbeddingModel::EmbeddingGemma300M => DEFAULT_EMBED_MODEL_ID.to_string(),
-            SearchEmbeddingModel::Custom(id) => id,
-        };
+        let model_id = model.hf_model_id().to_string();
 
         once_log_info(format!("Loading embedding model ({model_id})."));
 

@@ -73,10 +73,7 @@ async fn main() -> Result<()> {
 
     // Determine embedding model for web search if enabled
     let search_embedding_model: Option<SearchEmbeddingModel> = if cli.enable_search {
-        Some(match &cli.search_embedding_model_id {
-            Some(model_id) => SearchEmbeddingModel::Custom(model_id.clone()),
-            None => SearchEmbeddingModel::default(),
-        })
+        Some(cli.search_embedding_model.unwrap_or_default())
     } else {
         None
     };

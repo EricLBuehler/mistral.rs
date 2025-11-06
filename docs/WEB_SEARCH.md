@@ -15,13 +15,13 @@ Besides tool calling and parsing of web content, we also use an embedding model 
 
 You can use the web search tool in all the APIs: Python, Rust, and server.
 
-## Specifying a custom embedding model
+## Selecting a search embedding model
 
-Internally, we now use [google/embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m) to embed both the user query and each document chunk (4096 characters per chunk) before ranking. Queries are wrapped with the prompt `task: search result | query: …`, while documents use `title: {title | "none"} | text: …` to maximize retrieval quality. You can specify a custom embedding model by providing a Hugging Face model ID in the various APIs:
+Internally, we now use [google/embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m) to embed documents for ranking. You can pick from the built-in reranker variants (currently just `embedding_gemma`) in every API:
 
-- Rust: `with_search` in the builder
-- Python: `search_embedding_model_id` in the Runner
-- Server: `search-embedding-model` before the model type selector (`plain`/`vision-plain`)
+- Rust: `with_search(SearchEmbeddingModel::EmbeddingGemma300M)` in the builder
+- Python: `search_embedding_model="embedding_gemma"` in the Runner
+- Server: `--search-embedding-model embedding_gemma` before the model type selector (`plain`/`vision-plain`)
 
 ## Specifying a custom search callback
 

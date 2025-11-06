@@ -78,7 +78,7 @@ impl GgufModelBuilder {
         }
     }
 
-    /// Enable searching compatible with the OpenAI `web_search_options` setting. This loads the EmbeddingGemma reranker (or a custom embedding model) for search.
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This loads the selected search embedding reranker (EmbeddingGemma by default).
     pub fn with_search(mut self, search_embedding_model: SearchEmbeddingModel) -> Self {
         self.search_embedding_model = Some(search_embedding_model);
         self

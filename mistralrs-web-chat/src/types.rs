@@ -1,5 +1,6 @@
 use clap::Parser;
 use indexmap::IndexMap;
+use mistralrs::SearchEmbeddingModel;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
@@ -26,9 +27,9 @@ pub struct Cli {
     /// Enable web search tool (requires embedding model)
     #[arg(long)]
     pub enable_search: bool,
-    /// Hugging Face model ID for search embeddings (default: `google/embeddinggemma-300m` if --enable-search)
+    /// Built-in search embedding model to load (e.g., `embedding_gemma`)
     #[arg(long = "search-embedding-model")]
-    pub search_embedding_model_id: Option<String>,
+    pub search_embedding_model: Option<SearchEmbeddingModel>,
 
     /// Port to listen on (default: 8080)
     #[arg(long = "port")]
