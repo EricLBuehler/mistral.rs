@@ -1088,74 +1088,154 @@ impl NonZero {
     }
 }
 
-#[cfg(feature = "cuda")]
-fn count_nonzero_cuda(
-    dtype: candle_core::DType,
-    d_in: *const c_void,
-    n: u32,
-    stream: candle_core::cuda::cudarc::driver::sys::CUstream,
-) -> u32 {
-    unsafe {
-        match dtype {
-            candle_core::DType::U8 => ffi::count_nonzero_u8(d_in, n, stream),
-            candle_core::DType::U32 => ffi::count_nonzero_u32(d_in, n, stream),
-            candle_core::DType::I64 => ffi::count_nonzero_i64(d_in, n, stream),
-            candle_core::DType::I16 => ffi::count_nonzero_i16(d_in, n, stream),
-            candle_core::DType::I32 => ffi::count_nonzero_i32(d_in, n, stream),
-            candle_core::DType::BF16 => ffi::count_nonzero_bf16(d_in, n, stream),
-            candle_core::DType::F16 => ffi::count_nonzero_f16(d_in, n, stream),
-            candle_core::DType::F32 => ffi::count_nonzero_f32(d_in, n, stream),
-            candle_core::DType::F64 => ffi::count_nonzero_f64(d_in, n, stream),
-            _ => unreachable!(),
+#[cfg(all(feature = "cuda", not(feature = "cuda-13000")))]
+mod cuda_ops_cccl2 {
+    use super::*;
+
+    pub(super) fn count_nonzero_cuda(
+        dtype: candle_core::DType,
+        d_in: *const c_void,
+        n: u32,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+    ) -> u32 {
+        unsafe {
+            match dtype {
+                candle_core::DType::U8 => ffi::count_nonzero_u8(d_in, n, stream),
+                candle_core::DType::U32 => ffi::count_nonzero_u32(d_in, n, stream),
+                candle_core::DType::I64 => ffi::count_nonzero_i64(d_in, n, stream),
+                candle_core::DType::I16 => ffi::count_nonzero_i16(d_in, n, stream),
+                candle_core::DType::I32 => ffi::count_nonzero_i32(d_in, n, stream),
+                candle_core::DType::BF16 => ffi::count_nonzero_bf16(d_in, n, stream),
+                candle_core::DType::F16 => ffi::count_nonzero_f16(d_in, n, stream),
+                candle_core::DType::F32 => ffi::count_nonzero_f32(d_in, n, stream),
+                candle_core::DType::F64 => ffi::count_nonzero_f64(d_in, n, stream),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn nonzero_cuda(
+        dtype: candle_core::DType,
+        d_in: *const c_void,
+        n: u32,
+        num_nonzero: u32,
+        dims: *const c_void,
+        num_dims: u32,
+        d_out: *mut c_void,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+    ) {
+        unsafe {
+            match dtype {
+                candle_core::DType::U8 => {
+                    ffi::nonzero_u8(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                candle_core::DType::U32 => {
+                    ffi::nonzero_u32(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                candle_core::DType::I64 => {
+                    ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                candle_core::DType::I32 => {
+                    ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                candle_core::DType::I16 => {
+                    ffi::nonzero_i16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                candle_core::DType::BF16 => {
+                    ffi::nonzero_bf16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                candle_core::DType::F16 => {
+                    ffi::nonzero_f16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                candle_core::DType::F32 => {
+                    ffi::nonzero_f32(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                candle_core::DType::F64 => {
+                    ffi::nonzero_f64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                _ => unreachable!(),
+            }
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-#[cfg(feature = "cuda")]
-fn nonzero_cuda(
-    dtype: candle_core::DType,
-    d_in: *const c_void,
-    n: u32,
-    num_nonzero: u32,
-    dims: *const c_void,
-    num_dims: u32,
-    d_out: *mut c_void,
-    stream: candle_core::cuda::cudarc::driver::sys::CUstream,
-) {
-    unsafe {
-        match dtype {
-            candle_core::DType::U8 => {
-                ffi::nonzero_u8(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+#[cfg(all(feature = "cuda", feature = "cuda-13000"))]
+mod cuda_ops_cccl3 {
+    use super::*;
+
+    pub(super) fn count_nonzero_cuda(
+        dtype: candle_core::DType,
+        d_in: *const c_void,
+        n: u32,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+    ) -> u32 {
+        unsafe {
+            match dtype {
+                candle_core::DType::U8 => ffi::count_nonzero_u8(d_in, n, stream),
+                candle_core::DType::U32 => ffi::count_nonzero_u32(d_in, n, stream),
+                candle_core::DType::I64 => ffi::count_nonzero_i64(d_in, n, stream),
+                candle_core::DType::I16 => ffi::count_nonzero_i16(d_in, n, stream),
+                candle_core::DType::I32 => ffi::count_nonzero_i32(d_in, n, stream),
+                candle_core::DType::BF16 => ffi::count_nonzero_bf16(d_in, n, stream),
+                candle_core::DType::F16 => ffi::count_nonzero_f16(d_in, n, stream),
+                candle_core::DType::F32 => ffi::count_nonzero_f32(d_in, n, stream),
+                candle_core::DType::F64 => ffi::count_nonzero_f64(d_in, n, stream),
+                _ => unreachable!(),
             }
-            candle_core::DType::U32 => {
-                ffi::nonzero_u32(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn nonzero_cuda(
+        dtype: candle_core::DType,
+        d_in: *const c_void,
+        n: u32,
+        num_nonzero: u32,
+        dims: *const c_void,
+        num_dims: u32,
+        d_out: *mut c_void,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+    ) {
+        unsafe {
+            match dtype {
+                candle_core::DType::U8 => {
+                    ffi::nonzero_u8(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                candle_core::DType::U32 => {
+                    ffi::nonzero_u32(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                candle_core::DType::I64 => {
+                    ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                candle_core::DType::I32 => {
+                    ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                candle_core::DType::I16 => {
+                    ffi::nonzero_i16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                candle_core::DType::BF16 => {
+                    ffi::nonzero_bf16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                candle_core::DType::F16 => {
+                    ffi::nonzero_f16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                candle_core::DType::F32 => {
+                    ffi::nonzero_f32(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                candle_core::DType::F64 => {
+                    ffi::nonzero_f64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+                }
+                _ => unreachable!(),
             }
-            candle_core::DType::I64 => {
-                ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
-            }
-            candle_core::DType::I32 => {
-                ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
-            }
-            candle_core::DType::I16 => {
-                ffi::nonzero_i16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
-            }
-            candle_core::DType::BF16 => {
-                ffi::nonzero_bf16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
-            }
-            candle_core::DType::F16 => {
-                ffi::nonzero_f16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
-            }
-            candle_core::DType::F32 => {
-                ffi::nonzero_f32(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
-            }
-            candle_core::DType::F64 => {
-                ffi::nonzero_f64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
-            }
-            _ => unreachable!(),
         }
     }
 }
+
+#[cfg(all(feature = "cuda", not(feature = "cuda-13000")))]
+use cuda_ops_cccl2::{count_nonzero_cuda, nonzero_cuda};
+#[cfg(all(feature = "cuda", feature = "cuda-13000"))]
+use cuda_ops_cccl3::{count_nonzero_cuda, nonzero_cuda};
 
 impl CustomOp1 for NonZero {
     fn name(&self) -> &'static str {
