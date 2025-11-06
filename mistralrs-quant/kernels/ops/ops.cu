@@ -4,7 +4,6 @@
 #include <cub/cub.cuh>
 #include <stdint.h>
 #include <stdio.h>
-#include <cuda_runtime.h>
 
 #define CUDA_CHECK(call)                                                       \
   do {                                                                         \
@@ -18,7 +17,6 @@
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
-#define THREADS_PER_BLOCK 256
 
 int next_power_of_2(const uint32_t num_nonzero) {
   int result = 1;
@@ -34,78 +32,26 @@ template <typename T> struct NonZeroOp {
   }
 };
 
-template <typename T>
-__global__ void count_nonzero_kernel(const T *d_in, const uint32_t N,
-                                     uint32_t *d_out) {
-  extern __shared__ uint32_t shared[];
-  NonZeroOp<T> op;
-  uint32_t thread_sum = 0;
-  const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  const uint32_t stride = blockDim.x * gridDim.x;
-  for (uint32_t i = idx; i < N; i += stride) {
-    thread_sum += op(d_in[i]) ? 1u : 0u;
-  }
-  shared[threadIdx.x] = thread_sum;
-  __syncthreads();
-  for (uint32_t offset = blockDim.x >> 1; offset > 0; offset >>= 1) {
-    if (threadIdx.x < offset) {
-      shared[threadIdx.x] += shared[threadIdx.x + offset];
-    }
-    __syncthreads();
-  }
-  if (threadIdx.x == 0) {
-    atomicAdd(d_out, shared[0]);
-  }
-}
-
-template <typename T>
-__global__ void flag_nonzero_kernel(const T *d_in, const uint32_t N,
-                                    uint32_t *flags) {
-  NonZeroOp<T> op;
-  const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < N) {
-    flags[idx] = op(d_in[idx]) ? 1u : 0u;
-  }
-}
-
-template <typename T>
-__global__ void scatter_nonzero_indices_kernel(const T *d_in,
-                                               const uint32_t *prefix,
-                                               const uint32_t N,
-                                               uint32_t *out,
-                                               const uint32_t max_out) {
-  NonZeroOp<T> op;
-  const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < N && op(d_in[idx])) {
-    const uint32_t out_idx = prefix[idx];
-    if (out_idx < max_out) {
-      out[out_idx] = idx;
-    }
-  }
-}
-
 // count the number of non-zero elements in an array, to better allocate memory
 template <typename T>
 void count_nonzero(const T *d_in, const uint32_t N, uint32_t *h_out,
                    cudaStream_t stream) {
-  if (N == 0) {
-    *h_out = 0;
-    return;
-  }
-  const int blocks =
-      MAX(1, MIN((int)((N + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK),
-                 65535));
+  cub::TransformInputIterator<bool, NonZeroOp<T>, const T *> itr(
+      d_in, NonZeroOp<T>());
+  size_t temp_storage_bytes = 0;
   uint32_t *d_num_nonzero;
   CUDA_CHECK(
       cudaMallocAsync((void **)&d_num_nonzero, sizeof(uint32_t), stream));
-  CUDA_CHECK(cudaMemsetAsync(d_num_nonzero, 0, sizeof(uint32_t), stream));
-  const size_t shared_mem = THREADS_PER_BLOCK * sizeof(uint32_t);
-  count_nonzero_kernel<<<blocks, THREADS_PER_BLOCK, shared_mem, stream>>>(
-      d_in, N, d_num_nonzero);
-  CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(cub::DeviceReduce::Sum(nullptr, temp_storage_bytes, itr,
+                                    d_num_nonzero, N, stream));
+  void **d_temp_storage;
+  CUDA_CHECK(cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream));
+  CUDA_CHECK(cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, itr,
+                                    d_num_nonzero, N, stream));
   CUDA_CHECK(cudaMemcpyAsync(h_out, d_num_nonzero, sizeof(uint32_t),
                              cudaMemcpyDeviceToHost, stream));
   CUDA_CHECK(cudaFreeAsync(d_num_nonzero, stream));
+  CUDA_CHECK(cudaFreeAsync(d_temp_storage, stream));
 }
 
 #define COUNT_NONZERO_OP(TYPENAME, RUST_NAME)                                  \
@@ -164,33 +110,24 @@ template <typename T>
 void nonzero(const T *d_in, const uint32_t N, const uint32_t num_nonzero,
              const uint32_t *dims, const uint32_t num_dims, uint32_t *d_out,
              cudaStream_t stream) {
-  if (N == 0 || num_nonzero == 0) {
-    return;
-  }
-  const int blocks =
-      MAX(1, MIN((int)((N + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK),
-                 65535));
-  uint32_t *prefix;
-  CUDA_CHECK(cudaMallocAsync((void **)&prefix, N * sizeof(uint32_t), stream));
-  flag_nonzero_kernel<<<blocks, THREADS_PER_BLOCK, 0, stream>>>(d_in, N,
-                                                               prefix);
-  CUDA_CHECK(cudaGetLastError());
-  size_t temp_storage_bytes = 0;
-  void *d_temp_storage = nullptr;
-  CUDA_CHECK(cub::DeviceScan::ExclusiveSum(nullptr, temp_storage_bytes, prefix,
-                                           prefix, N, stream));
-  if (temp_storage_bytes > 0) {
-    CUDA_CHECK(
-        cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream));
-  }
-  CUDA_CHECK(cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes,
-                                           prefix, prefix, N, stream));
+  cub::TransformInputIterator<bool, NonZeroOp<T>, const T *> itr(
+      d_in, NonZeroOp<T>());
+  cub::CountingInputIterator<uint32_t> counting_itr(0);
   uint32_t *out_temp;
-  CUDA_CHECK(cudaMallocAsync((void **)&out_temp,
-                             MAX(1u, num_nonzero) * sizeof(uint32_t), stream));
-  scatter_nonzero_indices_kernel<<<blocks, THREADS_PER_BLOCK, 0, stream>>>(
-      d_in, prefix, N, out_temp, num_nonzero);
-  CUDA_CHECK(cudaGetLastError());
+  uint32_t *num_selected_out;
+  CUDA_CHECK(cudaMallocAsync((void **)&out_temp, num_nonzero * sizeof(uint32_t),
+                             stream));
+  CUDA_CHECK(
+      cudaMallocAsync((void **)&num_selected_out, sizeof(uint32_t), stream));
+  size_t temp_storage_bytes = 0;
+  CUDA_CHECK(cub::DeviceSelect::Flagged(nullptr, temp_storage_bytes,
+                                        counting_itr, itr, out_temp,
+                                        num_selected_out, N, stream));
+  void **d_temp_storage;
+  CUDA_CHECK(cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream));
+  CUDA_CHECK(cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes,
+                                        counting_itr, itr, out_temp,
+                                        num_selected_out, (int)N, stream));
   int nthreads = next_power_of_2(num_nonzero);
   if (nthreads > 1024) {
     nthreads = 1024;
@@ -201,10 +138,8 @@ void nonzero(const T *d_in, const uint32_t N, const uint32_t num_nonzero,
   CUDA_CHECK(cudaGetLastError());
 
   CUDA_CHECK(cudaFreeAsync(out_temp, stream));
-  if (d_temp_storage != nullptr) {
-    CUDA_CHECK(cudaFreeAsync(d_temp_storage, stream));
-  }
-  CUDA_CHECK(cudaFreeAsync(prefix, stream));
+  CUDA_CHECK(cudaFreeAsync(d_temp_storage, stream));
+  CUDA_CHECK(cudaFreeAsync(num_selected_out, stream));
 }
 
 #define NONZERO_OP(TYPENAME, RUST_NAME)                                        \
