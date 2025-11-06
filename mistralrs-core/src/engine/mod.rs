@@ -57,7 +57,7 @@ pub enum EngineInstruction {
 
 #[derive(Debug, Default, Clone)]
 /// Embedding model used for ranking web search results internally.
-pub enum BertEmbeddingModel {
+pub enum SearchEmbeddingModel {
     #[default]
     EmbeddingGemma300M,
     Custom(String),
@@ -117,7 +117,7 @@ pub static ENGINE_INSTRUCTIONS: LazyLock<
 pub struct Engine {
     rx: Arc<Mutex<Receiver<Request>>>,
     pipeline: Arc<Mutex<dyn Pipeline>>,
-    bert_pipeline: Arc<Mutex<Option<SearchPipeline>>>,
+    search_pipeline: Arc<Mutex<Option<SearchPipeline>>>,
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -152,7 +152,7 @@ impl Engine {
         prefix_cache_n: usize,
         disable_eos_stop: bool,
         throughput_logging_enabled: bool,
-        search_embedding_model: Option<BertEmbeddingModel>,
+        search_embedding_model: Option<SearchEmbeddingModel>,
         search_callback: Option<Arc<search::SearchCallback>>,
         tool_callbacks: tools::ToolCallbacks,
         tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -164,7 +164,7 @@ impl Engine {
             || get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache
             || prefix_cache_n == 0;
 
-        let bert_pipeline = match search_embedding_model {
+        let search_pipeline = match search_embedding_model {
             Some(search_embedding_model) => Some(SearchPipeline::new(
                 search_embedding_model,
                 &get_mut_arcmutex!(pipeline).device(),
@@ -178,7 +178,7 @@ impl Engine {
         Ok(Self {
             rx: Arc::new(Mutex::new(rx)),
             pipeline,
-            bert_pipeline: Arc::new(Mutex::new(bert_pipeline)),
+            search_pipeline: Arc::new(Mutex::new(search_pipeline)),
             search_callback,
             tool_callbacks,
             tool_callbacks_with_tools,

@@ -107,10 +107,13 @@ async fn do_search(
         let mut used_results = Vec::new();
         let mut used_len = 0;
 
-        if let Some(bert_pipeline) = &mut *get_mut_arcmutex!(this.bert_pipeline) {
-            let ranked_chunks =
-                search::rag::rank_document_chunks(&tool_call_params.query, &results, bert_pipeline)
-                    .unwrap();
+        if let Some(search_pipeline) = &mut *get_mut_arcmutex!(this.search_pipeline) {
+            let ranked_chunks = search::rag::rank_document_chunks(
+                &tool_call_params.query,
+                &results,
+                search_pipeline,
+            )
+            .unwrap();
 
             if ranked_chunks.is_empty() {
                 for (result, len) in results.iter().zip(result_token_lens.iter()) {

@@ -3,7 +3,7 @@ use candle_core::Device;
 use engine::Engine;
 pub use engine::{
     get_engine_terminate_flag, reset_engine_terminate_flag, should_terminate_engine_sequences,
-    BertEmbeddingModel, EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
+    EngineInstruction, SearchEmbeddingModel, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
 };
 use hf_hub::Cache;
 pub use lora::Ordering;
@@ -135,7 +135,7 @@ pub struct EngineConfig {
     pub prefix_cache_n: usize,
     pub disable_eos_stop: bool,
     pub throughput_logging_enabled: bool,
-    pub search_embedding_model: Option<BertEmbeddingModel>,
+    pub search_embedding_model: Option<SearchEmbeddingModel>,
     pub search_callback: Option<Arc<SearchCallback>>,
     pub tool_callbacks: tools::ToolCallbacks,
     pub tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -218,7 +218,7 @@ struct RebootState {
     prefix_cache_n: usize,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
-    search_embedding_model: Option<BertEmbeddingModel>,
+    search_embedding_model: Option<SearchEmbeddingModel>,
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -258,7 +258,7 @@ pub struct MistralRsBuilder {
     prefix_cache_n: Option<usize>,
     disable_eos_stop: Option<bool>,
     throughput_logging_enabled: bool,
-    search_embedding_model: Option<BertEmbeddingModel>,
+    search_embedding_model: Option<SearchEmbeddingModel>,
     search_callback: Option<Arc<SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -273,7 +273,7 @@ impl MistralRsBuilder {
         pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         method: SchedulerConfig,
         throughput_logging: bool,
-        search_embedding_model: Option<BertEmbeddingModel>,
+        search_embedding_model: Option<SearchEmbeddingModel>,
     ) -> Self {
         Self {
             pipeline,

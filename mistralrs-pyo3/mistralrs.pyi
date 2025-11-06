@@ -383,10 +383,10 @@ class Runner:
         paged_attn: bool = False,
         seed: int | None = None,
         enable_search: bool = False,
-        search_bert_model: str | None = None,
+        search_embedding_model_id: str | None = None,
         search_callback: Callable[[str], list[dict[str, str]]] | None = None,
         tool_callbacks: Mapping[str, Callable[[str, dict], str]] | None = None,
-        no_bert_model: bool = False,
+        no_search_embedding_model: bool = False,
     ) -> None:
         """
         Load a model.
@@ -428,7 +428,7 @@ class Runner:
         - `paged_attn` enables PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
         - `seed`, used to ensure reproducible random number generation.
         - `enable_search`: Enable searching compatible with the OpenAI `web_search_options` setting. This loads the EmbeddingGemma reranker (or a custom embedding model).
-        - `search_bert_model`: specify a Hugging Face model ID for the search embedding model. Defaults to `google/embeddinggemma-300m`.
+        - `search_embedding_model_id`: specify a Hugging Face model ID for the search embedding model. Defaults to `google/embeddinggemma-300m`.
         - `search_callback`: Custom Python callable to perform web searches. Should accept a query string and return a list of dicts with keys "title", "description", "url", and "content".
         - `tool_callbacks`: Mapping from tool name to Python callable invoked for generic tool calls. Each callable receives the tool name and a dict of arguments and should return the tool output as a string.
         """

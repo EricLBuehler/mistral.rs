@@ -27,8 +27,8 @@ pub struct Cli {
     #[arg(long)]
     pub enable_search: bool,
     /// Hugging Face model ID for search embeddings (default: `google/embeddinggemma-300m` if --enable-search)
-    #[arg(long = "search-bert-model")]
-    pub search_bert_model: Option<String>,
+    #[arg(long = "search-embedding-model")]
+    pub search_embedding_model_id: Option<String>,
 
     /// Port to listen on (default: 8080)
     #[arg(long = "port")]

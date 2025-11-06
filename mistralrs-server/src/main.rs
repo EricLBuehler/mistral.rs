@@ -10,8 +10,8 @@ use tracing::{error, info};
 
 use mistralrs_server_core::{
     mistralrs_for_server_builder::{
-        configure_paged_attn_from_flags, defaults, get_bert_model, MistralRsForServerBuilder,
-        ModelConfig,
+        configure_paged_attn_from_flags, defaults, get_search_embedding_model,
+        MistralRsForServerBuilder, ModelConfig,
     },
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
 };
@@ -140,8 +140,8 @@ struct Args {
     enable_search: bool,
 
     /// Specify a Hugging Face model ID for the search embedding model. Defaults to `google/embeddinggemma-300m`.
-    #[arg(long = "search-bert-model")]
-    search_bert_model: Option<String>,
+    #[arg(long = "search-embedding-model")]
+    search_embedding_model_id: Option<String>,
 
     /// Enable thinking for interactive mode and models that support it.
     #[arg(long = "enable-thinking")]
@@ -397,12 +397,13 @@ async fn main() -> Result<()> {
     };
 
     // TODO: refactor this
-    let bert_model = get_bert_model(args.enable_search, args.search_bert_model);
+    let search_embedding_model =
+        get_search_embedding_model(args.enable_search, args.search_embedding_model_id);
 
     if args.interactive_mode {
         interactive_mode(
             mistralrs,
-            bert_model.is_some(),
+            search_embedding_model.is_some(),
             args.enable_thinking.then_some(true),
         )
         .await;

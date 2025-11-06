@@ -11,7 +11,7 @@ use tokio::sync::Mutex as TokioMutex;
 use crate::pipeline::ForwardInputsResult;
 use crate::{
     embedding_models::inputs_processor::{make_prompt_chunk, ModelInputs},
-    engine::BertEmbeddingModel,
+    engine::SearchEmbeddingModel,
     get_mut_arcmutex, AutoDeviceMapParams, DeviceMapSetting, EmbeddingLoaderBuilder,
     EmbeddingSpecificConfig, ModelDType, Pipeline, TokenSource,
 };
@@ -45,10 +45,10 @@ pub struct ScoredChunk {
 }
 
 impl SearchPipeline {
-    pub fn new(model: BertEmbeddingModel, runner_device: &Device) -> anyhow::Result<Self> {
+    pub fn new(model: SearchEmbeddingModel, runner_device: &Device) -> anyhow::Result<Self> {
         let model_id = match model {
-            BertEmbeddingModel::EmbeddingGemma300M => DEFAULT_EMBED_MODEL_ID.to_string(),
-            BertEmbeddingModel::Custom(id) => id,
+            SearchEmbeddingModel::EmbeddingGemma300M => DEFAULT_EMBED_MODEL_ID.to_string(),
+            SearchEmbeddingModel::Custom(id) => id,
         };
 
         once_log_info(format!("Loading embedding model ({model_id})."));

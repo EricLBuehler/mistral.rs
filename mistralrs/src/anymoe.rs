@@ -116,7 +116,7 @@ impl AnyMoeModelBuilder {
             pipeline,
             scheduler_method,
             self.base.throughput_logging,
-            self.base.search_bert_model,
+            self.base.search_embedding_model,
         );
         if let Some(cb) = self.base.search_callback.clone() {
             runner = runner.with_search_callback(cb);

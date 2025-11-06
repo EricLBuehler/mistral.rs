@@ -20,8 +20,8 @@ You can use the web search tool in all the APIs: Python, Rust, and server.
 Internally, we now use [google/embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m) to embed both the user query and each document chunk (4096 characters per chunk) before ranking. Queries are wrapped with the prompt `task: search result | query: …`, while documents use `title: {title | "none"} | text: …` to maximize retrieval quality. You can specify a custom embedding model by providing a Hugging Face model ID in the various APIs:
 
 - Rust: `with_search` in the builder
-- Python: `search_bert_model` in the Runner
-- Server: `search-bert-model` before the model type selector (`plain`/`vision-plain`)
+- Python: `search_embedding_model_id` in the Runner
+- Server: `search-embedding-model` before the model type selector (`plain`/`vision-plain`)
 
 ## Specifying a custom search callback
 
@@ -156,7 +156,7 @@ print(res.usage)
 ```rust
 use anyhow::Result;
 use mistralrs::{
-    BertEmbeddingModel, IsqType, RequestBuilder, TextMessageRole, TextMessages, TextModelBuilder,
+    SearchEmbeddingModel, IsqType, RequestBuilder, TextMessageRole, TextMessages, TextModelBuilder,
     WebSearchOptions,
 };
 
@@ -165,7 +165,7 @@ async fn main() -> Result<()> {
     let model = TextModelBuilder::new("NousResearch/Hermes-3-Llama-3.1-8B")
         .with_isq(IsqType::Q4K)
         .with_logging()
-        .with_search(BertEmbeddingModel::default())
+        .with_search(SearchEmbeddingModel::default())
         .build()
         .await?;
 

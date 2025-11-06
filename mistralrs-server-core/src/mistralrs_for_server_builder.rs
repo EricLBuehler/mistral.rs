@@ -6,10 +6,10 @@ use anyhow::{Context, Result};
 use candle_core::Device;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
-    parse_isq_value, AutoDeviceMapParams, BertEmbeddingModel, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder,
-    McpClientConfig, MemoryGpuConfig, MistralRsBuilder, ModelSelected, PagedAttentionConfig,
-    PagedCacheType, SchedulerConfig, SearchCallback, TokenSource,
+    parse_isq_value, AutoDeviceMapParams, DefaultSchedulerMethod, DeviceLayerMapMetadata,
+    DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder, McpClientConfig, MemoryGpuConfig,
+    MistralRsBuilder, ModelSelected, PagedAttentionConfig, PagedCacheType, SchedulerConfig,
+    SearchCallback, SearchEmbeddingModel, TokenSource,
 };
 use tracing::{info, warn};
 
@@ -96,7 +96,7 @@ pub mod defaults {
     pub const PAGED_ATTN_METAL: bool = false;
     pub const CPU: bool = false;
     pub const ENABLE_SEARCH: bool = false;
-    pub const SEARCH_BERT_MODEL: Option<String> = None;
+    pub const SEARCH_EMBEDDING_MODEL_ID: Option<String> = None;
     pub const TOKEN_SOURCE: mistralrs_core::TokenSource = mistralrs_core::TokenSource::CacheToken;
     pub const SEARCH_CALLBACK: Option<Arc<mistralrs_core::SearchCallback>> = None;
     pub const PAGED_CACHE_TYPE: PagedCacheType = PagedCacheType::Auto;
@@ -218,7 +218,7 @@ pub struct MistralRsForServerBuilder {
     enable_search: bool,
 
     /// Specify a Hugging Face model ID for the search embedding model. Defaults to `google/embeddinggemma-300m`.
-    search_bert_model: Option<String>,
+    search_embedding_model_id: Option<String>,
 
     /// Optional override search callback
     search_callback: Option<Arc<SearchCallback>>,
@@ -256,7 +256,7 @@ impl Default for MistralRsForServerBuilder {
             paged_attn: defaults::PAGED_ATTN,
             cpu: defaults::CPU,
             enable_search: defaults::ENABLE_SEARCH,
-            search_bert_model: defaults::SEARCH_BERT_MODEL,
+            search_embedding_model_id: defaults::SEARCH_EMBEDDING_MODEL_ID,
             search_callback: defaults::SEARCH_CALLBACK,
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
@@ -534,8 +534,8 @@ impl MistralRsForServerBuilder {
     }
 
     /// Sets the embedding model used for web search assistance.
-    pub fn with_search_bert_model(mut self, search_bert_model: String) -> Self {
-        self.search_bert_model = Some(search_bert_model);
+    pub fn with_search_embedding_model_id(mut self, search_embedding_model_id: String) -> Self {
+        self.search_embedding_model_id = Some(search_embedding_model_id);
         self
     }
 
@@ -643,13 +643,14 @@ impl MistralRsForServerBuilder {
 
         let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
 
-        let bert_model = get_bert_model(self.enable_search, self.search_bert_model);
+        let search_embedding_model =
+            get_search_embedding_model(self.enable_search, self.search_embedding_model_id);
 
         let mut builder = MistralRsBuilder::new(
             pipeline,
             scheduler_config,
             !self.interactive_mode,
-            bert_model,
+            search_embedding_model,
         )
         .with_opt_log(self.log)
         .with_no_kv_cache(self.no_kv_cache)
@@ -755,14 +756,15 @@ impl MistralRsForServerBuilder {
         pipeline_names.push(first_pipeline_name);
 
         let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
-        let bert_model = get_bert_model(self.enable_search, self.search_bert_model);
+        let search_embedding_model =
+            get_search_embedding_model(self.enable_search, self.search_embedding_model_id);
 
         // Create the first MistralRs instance with the first model
         let mut builder = MistralRsBuilder::new(
             pipeline,
             scheduler_config.clone(),
             !self.interactive_mode,
-            bert_model.clone(),
+            search_embedding_model.clone(),
         )
         .with_opt_log(self.log.clone())
         .with_no_kv_cache(self.no_kv_cache)
@@ -846,7 +848,7 @@ impl MistralRsForServerBuilder {
                 prefix_cache_n: self.prefix_cache_n,
                 disable_eos_stop: false,
                 throughput_logging_enabled: !self.interactive_mode,
-                search_embedding_model: bert_model.clone(),
+                search_embedding_model: search_embedding_model.clone(),
                 search_callback: self.search_callback.clone(),
                 tool_callbacks: HashMap::new(),
                 tool_callbacks_with_tools: HashMap::new(),
@@ -1106,14 +1108,14 @@ pub fn configure_paged_attn_from_flags(
 }
 
 /// Creates a search embedding model configuration for agentic search reranking.
-pub fn get_bert_model(
+pub fn get_search_embedding_model(
     enable_search: bool,
-    search_bert_model: Option<String>,
-) -> Option<BertEmbeddingModel> {
+    search_embedding_model_id: Option<String>,
+) -> Option<SearchEmbeddingModel> {
     if enable_search {
         Some(
-            search_bert_model
-                .map(BertEmbeddingModel::Custom)
+            search_embedding_model_id
+                .map(SearchEmbeddingModel::Custom)
                 .unwrap_or_default(),
         )
     } else {

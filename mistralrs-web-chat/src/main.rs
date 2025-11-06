@@ -12,7 +12,7 @@ use hyper::Uri;
 use include_dir::{include_dir, Dir};
 use indexmap::IndexMap;
 use mistralrs::{
-    best_device, parse_isq_value, BertEmbeddingModel, IsqType, SpeechLoaderType,
+    best_device, parse_isq_value, IsqType, SearchEmbeddingModel, SpeechLoaderType,
     SpeechModelBuilder, TextModelBuilder, VisionModelBuilder,
 };
 use std::{net::SocketAddr, sync::Arc};
@@ -72,10 +72,10 @@ async fn main() -> Result<()> {
         .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
 
     // Determine embedding model for web search if enabled
-    let search_embedding_model: Option<BertEmbeddingModel> = if cli.enable_search {
-        Some(match &cli.search_bert_model {
-            Some(model_id) => BertEmbeddingModel::Custom(model_id.clone()),
-            None => BertEmbeddingModel::default(),
+    let search_embedding_model: Option<SearchEmbeddingModel> = if cli.enable_search {
+        Some(match &cli.search_embedding_model_id {
+            Some(model_id) => SearchEmbeddingModel::Custom(model_id.clone()),
+            None => SearchEmbeddingModel::default(),
         })
     } else {
         None
@@ -94,8 +94,8 @@ async fn main() -> Result<()> {
             .with_isq(isq.unwrap_or(default_isq))
             .with_logging()
             .with_throughput_logging();
-        if let Some(ref bert_model) = search_embedding_model {
-            builder = builder.with_search(bert_model.clone());
+        if let Some(ref search_embedding_model) = search_embedding_model {
+            builder = builder.with_search(search_embedding_model.clone());
         }
         let m = builder.build().await?;
         models.insert(name, LoadedModel::Text(Arc::new(m)));
@@ -113,8 +113,8 @@ async fn main() -> Result<()> {
             .with_isq(isq.unwrap_or(default_isq))
             .with_logging()
             .with_throughput_logging();
-        if let Some(ref bert_model) = search_embedding_model {
-            builder = builder.with_search(bert_model.clone());
+        if let Some(ref search_embedding_model) = search_embedding_model {
+            builder = builder.with_search(search_embedding_model.clone());
         }
         let m = builder.build().await?;
         models.insert(name, LoadedModel::Vision(Arc::new(m)));
