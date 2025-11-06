@@ -4,7 +4,7 @@
     socket: &amp;mut WebSocket,
     on_token: F,
     on_end: E,
-) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.91.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.91.0/std/primitive.unit.html">()</a>, <a class="struct" href="https://docs.rs/anyhow/1.0.98/anyhow/struct.Error.html" title="struct anyhow::Error">Error</a>&gt;<div class="where">where
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.91.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.91.0/std/primitive.unit.html">()</a>, <a class="struct" href="https://docs.rs/anyhow/1.0.100/anyhow/struct.Error.html" title="struct anyhow::Error">Error</a>&gt;<div class="where">where
     Msgs: RequestLike + <a class="trait" href="https://doc.rust-lang.org/1.91.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'static,
     F: <a class="trait" href="https://doc.rust-lang.org/1.91.0/core/ops/function/trait.FnMut.html" title="trait core::ops::function::FnMut">FnMut</a>(&amp;<a class="primitive" href="https://doc.rust-lang.org/1.91.0/std/primitive.str.html">str</a>),
     E: <a class="trait" href="https://doc.rust-lang.org/1.91.0/core/ops/function/trait.FnMut.html" title="trait core::ops::function::FnMut">FnMut</a>(),</div></code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Generic helper to stream tokens and forward them to the websocket.</p>
