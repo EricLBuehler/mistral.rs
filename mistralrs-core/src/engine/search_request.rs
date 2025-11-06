@@ -69,118 +69,115 @@ async fn do_search(
                 SearchContextSize::Medium => 8192_usize,
                 SearchContextSize::Low => 4096_usize,
             };
-        let mut results = tokio::task::block_in_place(|| {
-            tracing::dispatcher::with_default(&dispatch, || {
-                let base_results = if let Some(cb) = &this.search_callback {
-                    cb(&tool_call_params).unwrap()
-                } else {
-                    search::run_search_tool(&tool_call_params).unwrap()
-                };
-                base_results
-                    .into_iter()
-                    .map(|mut result| {
-                        result = result
-                            .cap_content_len(&tokenizer, max_results_budget_toks)
-                            .unwrap();
-                        let len = {
-                            let inp = InputSequence::Raw(Cow::from(&result.content));
-                            tokenizer
-                                .encode_fast(inp, false)
-                                .map(|x| x.len())
-                                .unwrap_or(usize::MAX)
-                        };
-                        (result, len)
-                    })
-                    .collect::<Vec<_>>()
-            })
-        });
+        let (results, result_token_lens): (Vec<SearchResult>, Vec<usize>) =
+            tokio::task::block_in_place(|| {
+                tracing::dispatcher::with_default(&dispatch, || {
+                    let base_results = if let Some(cb) = &this.search_callback {
+                        cb(&tool_call_params).unwrap()
+                    } else {
+                        search::run_search_tool(&tool_call_params).unwrap()
+                    };
+                    base_results
+                        .into_iter()
+                        .map(|mut result| {
+                            result = result
+                                .cap_content_len(&tokenizer, max_results_budget_toks)
+                                .unwrap();
+                            let len = {
+                                let inp = InputSequence::Raw(Cow::from(&result.content));
+                                tokenizer
+                                    .encode_fast(inp, false)
+                                    .map(|x| x.len())
+                                    .unwrap_or(usize::MAX)
+                            };
+                            (result, len)
+                        })
+                        .unzip()
+                })
+            });
 
-        // Sort increasing by tokenized length, if it fails, put it at the end.
-        results.sort_by_key(|(_, len)| *len);
-
-        {
-            // Determine ranking: use embedding model if available, otherwise fallback to BM25
-            let decreasing_indexes: Vec<usize> = if let Some(bert_pipeline) =
-                &mut *get_mut_arcmutex!(this.bert_pipeline)
-            {
-                // Semantic reranking with embeddings
-                let device = get_mut_arcmutex!(this.pipeline).device();
-                search::rag::compute_most_similar(
-                    &device,
-                    &tool_call_params.query,
-                    results.iter().map(|(res, _)| res).collect::<Vec<_>>(),
-                    bert_pipeline,
-                )
-                .unwrap()
-            } else {
-                tracing::warn!("No embedding model loaded; falling back to BM25 ranking for web search results.");
-
-                // Build an Embedder over the corpus, fitting to the entire set of documents.
-                //    - Language::English is chosen here
-                //    - This computes an in‑memory sparse embedding for each document.
-
-                let docs: Vec<String> =
-                    results.iter().map(|(res, _)| res.content.clone()).collect();
-                let doc_refs: Vec<&str> = docs.iter().map(|s| s.as_str()).collect();
-
-                let embedder: Embedder =
-                    EmbedderBuilder::with_fit_to_corpus(Language::English, &doc_refs).build();
-
-                // Initialize a Scorer keyed by usize (document index type).
-                let mut scorer = Scorer::<usize>::new();
-
-                // For each document, compute its embedding and upsert into the scorer.
-                for (i, doc_text) in docs.iter().enumerate() {
-                    let doc_embedding = embedder.embed(doc_text);
-                    scorer.upsert(&i, doc_embedding);
-                }
-
-                // Embed the query string into the same sparse embedding space.
-                let query_embedding = embedder.embed(&tool_call_params.query);
-
-                // Score all documents individually
-                let mut scored_docs: Vec<ScoredDocument<usize>> = docs
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, _)| {
-                        scorer
-                            .score(&i, &query_embedding)
-                            .map(|score| ScoredDocument { id: i, score })
-                    })
-                    .collect();
-
-                // Sort the scored documents by descending `score` (f32).
-                scored_docs.sort_by(|a, b| {
-                    b.score
-                        .partial_cmp(&a.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-
-                // Extract only the document indices (usize) in ranked order.
-                let decreasing_indexes: Vec<usize> =
-                    scored_docs.into_iter().map(|d| d.id).collect();
-
-                decreasing_indexes
-            };
-            // Reorder results according to ranking
-            let mut old = Vec::new();
-            std::mem::swap(&mut old, &mut results);
-            for &idx in &decreasing_indexes {
-                let mut item: (SearchResult, usize) = Default::default();
-                std::mem::swap(&mut item, &mut old[idx]);
-                results.push(item);
-            }
-        }
+        let mut combined: Vec<(SearchResult, usize)> = results
+            .into_iter()
+            .zip(result_token_lens.into_iter())
+            .collect();
+        combined.sort_by_key(|(_, len)| *len);
+        let (results, result_token_lens): (Vec<SearchResult>, Vec<usize>) =
+            combined.into_iter().unzip();
 
         let mut used_results = Vec::new();
         let mut used_len = 0;
-        for (item, len) in results {
-            if used_len + len > max_results_budget_toks {
-                break;
+
+        if let Some(bert_pipeline) = &mut *get_mut_arcmutex!(this.bert_pipeline) {
+            let ranked_chunks =
+                search::rag::rank_document_chunks(&tool_call_params.query, &results, bert_pipeline)
+                    .unwrap();
+
+            if ranked_chunks.is_empty() {
+                for (result, len) in results.iter().zip(result_token_lens.iter()) {
+                    if used_len + len > max_results_budget_toks {
+                        break;
+                    }
+                    used_len += len;
+                    used_results.push(result.clone());
+                }
+            } else {
+                for chunk in ranked_chunks {
+                    if chunk.token_len == 0 {
+                        continue;
+                    }
+                    if used_len + chunk.token_len > max_results_budget_toks {
+                        break;
+                    }
+                    used_len += chunk.token_len;
+                    let mut chunk_result = results[chunk.result_index].clone();
+                    chunk_result.content = chunk.content;
+                    used_results.push(chunk_result);
+                }
             }
-            // So the info! below gets the correct value
-            used_len += len;
-            used_results.push(item);
+        } else {
+            tracing::warn!(
+                "No embedding model loaded; falling back to BM25 ranking for web search results."
+            );
+
+            let docs: Vec<String> = results.iter().map(|res| res.content.clone()).collect();
+            let doc_refs: Vec<&str> = docs.iter().map(|s| s.as_str()).collect();
+
+            let embedder: Embedder =
+                EmbedderBuilder::with_fit_to_corpus(Language::English, &doc_refs).build();
+
+            let mut scorer = Scorer::<usize>::new();
+            for (i, doc_text) in docs.iter().enumerate() {
+                let doc_embedding = embedder.embed(doc_text);
+                scorer.upsert(&i, doc_embedding);
+            }
+
+            let query_embedding = embedder.embed(&tool_call_params.query);
+
+            let mut scored_docs: Vec<ScoredDocument<usize>> = docs
+                .iter()
+                .enumerate()
+                .filter_map(|(i, _)| {
+                    scorer
+                        .score(&i, &query_embedding)
+                        .map(|score| ScoredDocument { id: i, score })
+                })
+                .collect();
+
+            scored_docs.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            for doc in scored_docs {
+                let idx = doc.id;
+                let len = result_token_lens[idx];
+                if used_len + len > max_results_budget_toks {
+                    break;
+                }
+                used_len += len;
+                used_results.push(results[idx].clone());
+            }
         }
 
         let tool_result = serde_json::to_string(&used_results)

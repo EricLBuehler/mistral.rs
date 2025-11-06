@@ -29,6 +29,19 @@ pub struct SearchPipeline {
     max_seq_len: usize,
 }
 
+struct DocumentChunk {
+    prompt: String,
+    content: String,
+    token_len: usize,
+}
+
+pub struct ScoredChunk {
+    pub result_index: usize,
+    pub content: String,
+    pub token_len: usize,
+    pub score: f32,
+}
+
 impl SearchPipeline {
     pub fn new(model: BertEmbeddingModel, runner_device: &Device) -> anyhow::Result<Self> {
         let model_id = match model {
@@ -125,7 +138,7 @@ impl SearchPipeline {
 }
 
 impl SearchPipeline {
-    fn chunk_document_prompts(&self, sanitized_title: &str, text: &str) -> Result<Vec<String>> {
+    fn chunk_document(&self, sanitized_title: &str, text: &str) -> Result<Vec<DocumentChunk>> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return Ok(Vec::new());
@@ -139,14 +152,15 @@ impl SearchPipeline {
             .len();
 
         if self.max_seq_len <= prefix_tokens {
-            return Ok(vec![format_document_prompt(sanitized_title, trimmed)]);
+            let token_len = self.tokenizer.encode(trimmed, false).map_err(E::msg)?.len();
+            return Ok(vec![DocumentChunk {
+                prompt: format_document_prompt(sanitized_title, trimmed),
+                content: trimmed.to_string(),
+                token_len,
+            }]);
         }
 
-        let mut max_text_tokens = self.max_seq_len - prefix_tokens;
-        if max_text_tokens == 0 {
-            max_text_tokens = 1;
-        }
-
+        let max_text_tokens = (self.max_seq_len - prefix_tokens).max(1);
         let encoding = self.tokenizer.encode(trimmed, false).map_err(E::msg)?;
         let token_count = encoding.len();
         if token_count == 0 {
@@ -154,17 +168,21 @@ impl SearchPipeline {
         }
 
         let offsets = encoding.get_offsets();
-        let mut prompts = Vec::new();
+        let mut chunks = Vec::new();
         let mut start_idx = 0;
 
         while start_idx < token_count {
             let mut end_idx = (start_idx + max_text_tokens).min(token_count);
-            let mut accepted: Option<(String, usize)> = None;
+            let mut accepted: Option<(DocumentChunk, usize)> = None;
 
             while end_idx > start_idx {
                 let start_char = offsets[start_idx].0;
                 let end_char = offsets[end_idx - 1].1;
-                let chunk_slice = &trimmed[start_char..end_char];
+                let chunk_slice = trimmed[start_char..end_char].trim();
+                if chunk_slice.is_empty() {
+                    end_idx -= 1;
+                    continue;
+                }
                 let candidate = format_document_prompt(sanitized_title, chunk_slice);
                 let candidate_len = self
                     .tokenizer
@@ -172,26 +190,42 @@ impl SearchPipeline {
                     .map_err(E::msg)?
                     .len();
                 if candidate_len <= self.max_seq_len {
-                    accepted = Some((candidate, end_idx));
+                    let token_len = end_idx - start_idx;
+                    accepted = Some((
+                        DocumentChunk {
+                            prompt: candidate,
+                            content: chunk_slice.to_string(),
+                            token_len,
+                        },
+                        end_idx,
+                    ));
                     break;
                 }
                 end_idx -= 1;
             }
 
-            if let Some((prompt, next_idx)) = accepted {
-                prompts.push(prompt);
+            if let Some((chunk, next_idx)) = accepted {
+                chunks.push(chunk);
                 start_idx = next_idx;
             } else {
                 // Fallback: force single-token progress to avoid infinite loops.
                 let start_char = offsets[start_idx].0;
                 let end_char = offsets[start_idx].1;
-                let chunk_slice = &trimmed[start_char..end_char];
-                prompts.push(format_document_prompt(sanitized_title, chunk_slice));
+                let chunk_slice = trimmed[start_char..end_char].trim();
+                if chunk_slice.is_empty() {
+                    start_idx += 1;
+                    continue;
+                }
+                chunks.push(DocumentChunk {
+                    prompt: format_document_prompt(sanitized_title, chunk_slice),
+                    content: chunk_slice.to_string(),
+                    token_len: 1,
+                });
                 start_idx += 1;
             }
         }
 
-        Ok(prompts)
+        Ok(chunks)
     }
 }
 
@@ -223,13 +257,11 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-/// Get the indexes of requests most similar to the query. In decreasing order
-pub fn compute_most_similar(
-    _device: &Device,
+pub fn rank_document_chunks(
     query: &str,
-    results: Vec<&SearchResult>,
+    results: &[SearchResult],
     pipeline: &mut SearchPipeline,
-) -> Result<Vec<usize>> {
+) -> Result<Vec<ScoredChunk>> {
     if results.is_empty() {
         return Ok(Vec::new());
     }
@@ -240,38 +272,44 @@ pub fn compute_most_similar(
         .next()
         .context("Failed to generate embedding for search query")?;
 
-    let mut scored = Vec::with_capacity(results.len());
-    for (idx, result) in results.iter().enumerate() {
-        let title = sanitize_title(&result.title);
-
-        let content_prompts = pipeline.chunk_document_prompts(&title, &result.content)?;
-        let content_embeddings = pipeline.embed(&content_prompts)?;
-        let mean_content_similarity = if content_embeddings.is_empty() {
-            0.0
-        } else {
-            content_embeddings
-                .iter()
-                .map(|emb| cosine_similarity(&query_embedding, emb))
-                .sum::<f32>()
-                / content_embeddings.len() as f32
-        };
-
-        let title_similarity = if result.title.trim().is_empty() {
-            0.0
-        } else {
-            let title_prompt = format_document_prompt(&title, &result.title);
-            let title_emb = pipeline
-                .embed(&[title_prompt])?
-                .into_iter()
-                .next()
-                .context("Failed to generate embedding for result title")?;
-            cosine_similarity(&query_embedding, &title_emb)
-        };
-
-        let score = (2.0 * title_similarity) + mean_content_similarity;
-        scored.push((idx, score));
+    struct ChunkBinding {
+        result_index: usize,
+        chunk: DocumentChunk,
     }
 
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Less));
-    Ok(scored.into_iter().map(|(idx, _)| idx).collect())
+    let mut bindings = Vec::new();
+    for (result_index, result) in results.iter().enumerate() {
+        let title = sanitize_title(&result.title);
+        let chunks = pipeline.chunk_document(&title, &result.content)?;
+        for chunk in chunks.into_iter() {
+            bindings.push(ChunkBinding {
+                result_index,
+                chunk,
+            });
+        }
+    }
+
+    if bindings.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let prompts: Vec<String> = bindings
+        .iter()
+        .map(|binding| binding.chunk.prompt.clone())
+        .collect();
+
+    let chunk_embeddings = pipeline.embed(&prompts)?;
+    let mut scored = Vec::with_capacity(bindings.len());
+    for (binding, embedding) in bindings.into_iter().zip(chunk_embeddings.into_iter()) {
+        let score = cosine_similarity(&query_embedding, &embedding);
+        scored.push(ScoredChunk {
+            result_index: binding.result_index,
+            content: binding.chunk.content,
+            token_len: binding.chunk.token_len,
+            score,
+        });
+    }
+
+    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Less));
+    Ok(scored)
 }
