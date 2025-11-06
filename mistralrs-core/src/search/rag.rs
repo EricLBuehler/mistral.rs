@@ -4,7 +4,6 @@ use std::{cmp::Ordering, sync::Arc};
 
 use anyhow::{Context, Result};
 use candle_core::{DType, Device, Error as E};
-use itertools::Itertools;
 use mistralrs_quant::log::once_log_info;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex as TokioMutex;
@@ -20,7 +19,6 @@ use crate::{
 use super::SearchResult;
 
 const DEFAULT_EMBED_MODEL_ID: &str = "google/embeddinggemma-300m";
-const DOC_CHARS_PER_CHUNK: usize = 4096;
 const EMBEDDING_BATCH: usize = 8;
 
 pub struct SearchPipeline {
@@ -28,6 +26,7 @@ pub struct SearchPipeline {
     tokenizer: Arc<Tokenizer>,
     device: Device,
     has_causal_attention: bool,
+    max_seq_len: usize,
 }
 
 impl SearchPipeline {
@@ -63,6 +62,7 @@ impl SearchPipeline {
             .with_context(|| "Embedding model did not expose a tokenizer")?
             .clone();
         let device = guard.device();
+        let max_seq_len = guard.get_metadata().max_seq_len;
         drop(guard);
 
         Ok(Self {
@@ -70,6 +70,7 @@ impl SearchPipeline {
             tokenizer,
             device,
             has_causal_attention: false,
+            max_seq_len,
         })
     }
 
@@ -123,12 +124,75 @@ impl SearchPipeline {
     }
 }
 
-fn chunk_by_chars(text: &str) -> Vec<String> {
-    text.chars()
-        .chunks(DOC_CHARS_PER_CHUNK)
-        .into_iter()
-        .map(|chunk| chunk.collect::<String>())
-        .collect()
+impl SearchPipeline {
+    fn chunk_document_prompts(&self, sanitized_title: &str, text: &str) -> Result<Vec<String>> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let prefix_prompt = format_document_prompt(sanitized_title, "");
+        let prefix_tokens = self
+            .tokenizer
+            .encode(prefix_prompt.as_str(), true)
+            .map_err(E::msg)?
+            .len();
+
+        if self.max_seq_len <= prefix_tokens {
+            return Ok(vec![format_document_prompt(sanitized_title, trimmed)]);
+        }
+
+        let mut max_text_tokens = self.max_seq_len - prefix_tokens;
+        if max_text_tokens == 0 {
+            max_text_tokens = 1;
+        }
+
+        let encoding = self.tokenizer.encode(trimmed, false).map_err(E::msg)?;
+        let token_count = encoding.len();
+        if token_count == 0 {
+            return Ok(Vec::new());
+        }
+
+        let offsets = encoding.get_offsets();
+        let mut prompts = Vec::new();
+        let mut start_idx = 0;
+
+        while start_idx < token_count {
+            let mut end_idx = (start_idx + max_text_tokens).min(token_count);
+            let mut accepted: Option<(String, usize)> = None;
+
+            while end_idx > start_idx {
+                let start_char = offsets[start_idx].0;
+                let end_char = offsets[end_idx - 1].1;
+                let chunk_slice = &trimmed[start_char..end_char];
+                let candidate = format_document_prompt(sanitized_title, chunk_slice);
+                let candidate_len = self
+                    .tokenizer
+                    .encode(candidate.as_str(), true)
+                    .map_err(E::msg)?
+                    .len();
+                if candidate_len <= self.max_seq_len {
+                    accepted = Some((candidate, end_idx));
+                    break;
+                }
+                end_idx -= 1;
+            }
+
+            if let Some((prompt, next_idx)) = accepted {
+                prompts.push(prompt);
+                start_idx = next_idx;
+            } else {
+                // Fallback: force single-token progress to avoid infinite loops.
+                let start_char = offsets[start_idx].0;
+                let end_char = offsets[start_idx].1;
+                let chunk_slice = &trimmed[start_char..end_char];
+                prompts.push(format_document_prompt(sanitized_title, chunk_slice));
+                start_idx += 1;
+            }
+        }
+
+        Ok(prompts)
+    }
 }
 
 fn sanitize_title(title: &str) -> String {
@@ -180,11 +244,7 @@ pub fn compute_most_similar(
     for (idx, result) in results.iter().enumerate() {
         let title = sanitize_title(&result.title);
 
-        let content_chunks = chunk_by_chars(&result.content);
-        let content_prompts: Vec<String> = content_chunks
-            .iter()
-            .map(|chunk| format_document_prompt(&title, chunk))
-            .collect();
+        let content_prompts = pipeline.chunk_document_prompts(&title, &result.content)?;
         let content_embeddings = pipeline.embed(&content_prompts)?;
         let mean_content_similarity = if content_embeddings.is_empty() {
             0.0
