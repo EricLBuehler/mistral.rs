@@ -183,11 +183,10 @@ async fn do_search(
             }
         }
 
-        let tool_result = serde_json::to_string(&used_results)
-            .unwrap()
-            .replace("\\n", "\n")
-            .replace("\\\"", "\"")
-            .replace("\\\\", "\\");
+        let tool_result = serde_json::to_string(&serde_json::json!({
+            "output": used_results
+        }))
+        .unwrap();
         let end = Instant::now();
         tracing::info!(
             "Web search executed in {:.2}s, using {used_len} tokens of {} search results.",
@@ -202,7 +201,7 @@ async fn do_search(
             Either::Left(
                 // Format the tool output JSON and append the search tool description for context
                 format!(
-                    "{{\"output\": \"{}\"}}\n\n{}\n\n{}",
+                    "{}\n\n{}\n\n{}",
                     tool_result,
                     search::SEARCH_DESCRIPTION,
                     search::EXTRACT_DESCRIPTION,

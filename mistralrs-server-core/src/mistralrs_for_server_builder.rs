@@ -768,7 +768,7 @@ impl MistralRsForServerBuilder {
             pipeline,
             scheduler_config.clone(),
             !self.interactive_mode,
-            search_embedding_model.clone(),
+            search_embedding_model,
         )
         .with_opt_log(self.log.clone())
         .with_no_kv_cache(self.no_kv_cache)
@@ -852,7 +852,7 @@ impl MistralRsForServerBuilder {
                 prefix_cache_n: self.prefix_cache_n,
                 disable_eos_stop: false,
                 throughput_logging_enabled: !self.interactive_mode,
-                search_embedding_model: search_embedding_model.clone(),
+                search_embedding_model,
                 search_callback: self.search_callback.clone(),
                 tool_callbacks: HashMap::new(),
                 tool_callbacks_with_tools: HashMap::new(),

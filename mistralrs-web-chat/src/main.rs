@@ -92,7 +92,7 @@ async fn main() -> Result<()> {
             .with_logging()
             .with_throughput_logging();
         if let Some(ref search_embedding_model) = search_embedding_model {
-            builder = builder.with_search(search_embedding_model.clone());
+            builder = builder.with_search(*search_embedding_model);
         }
         let m = builder.build().await?;
         models.insert(name, LoadedModel::Text(Arc::new(m)));
@@ -111,7 +111,7 @@ async fn main() -> Result<()> {
             .with_logging()
             .with_throughput_logging();
         if let Some(ref search_embedding_model) = search_embedding_model {
-            builder = builder.with_search(search_embedding_model.clone());
+            builder = builder.with_search(*search_embedding_model);
         }
         let m = builder.build().await?;
         models.insert(name, LoadedModel::Vision(Arc::new(m)));
