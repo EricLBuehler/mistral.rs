@@ -29,12 +29,14 @@ pub struct SearchPipeline {
     max_seq_len: usize,
 }
 
+#[derive(Debug, Clone)]
 struct DocumentChunk {
     prompt: String,
     content: String,
     token_len: usize,
 }
 
+#[derive(Debug, Clone)]
 pub struct ScoredChunk {
     pub result_index: usize,
     pub content: String,
@@ -150,17 +152,15 @@ impl SearchPipeline {
             .encode(prefix_prompt.as_str(), true)
             .map_err(E::msg)?
             .len();
-
         if self.max_seq_len <= prefix_tokens {
-            let token_len = self.tokenizer.encode(trimmed, false).map_err(E::msg)?.len();
             return Ok(vec![DocumentChunk {
                 prompt: format_document_prompt(sanitized_title, trimmed),
                 content: trimmed.to_string(),
-                token_len,
+                token_len: self.tokenizer.encode(trimmed, false).map_err(E::msg)?.len(),
             }]);
         }
 
-        let max_text_tokens = (self.max_seq_len - prefix_tokens).max(1);
+        let budget = (self.max_seq_len - prefix_tokens).max(1);
         let encoding = self.tokenizer.encode(trimmed, false).map_err(E::msg)?;
         let token_count = encoding.len();
         if token_count == 0 {
@@ -172,23 +172,24 @@ impl SearchPipeline {
         let mut start_idx = 0;
 
         while start_idx < token_count {
-            let mut end_idx = (start_idx + max_text_tokens).min(token_count);
+            let mut end_idx = (start_idx + budget).min(token_count);
             let mut accepted: Option<(DocumentChunk, usize)> = None;
 
             while end_idx > start_idx {
-                let start_char = offsets[start_idx].0;
-                let end_char = offsets[end_idx - 1].1;
-                let chunk_slice = trimmed[start_char..end_char].trim();
+                let range = offsets[start_idx].0..offsets[end_idx - 1].1;
+                let chunk_slice = trimmed[range.clone()].trim();
                 if chunk_slice.is_empty() {
                     end_idx -= 1;
                     continue;
                 }
+
                 let candidate = format_document_prompt(sanitized_title, chunk_slice);
                 let candidate_len = self
                     .tokenizer
                     .encode(candidate.as_str(), true)
                     .map_err(E::msg)?
                     .len();
+
                 if candidate_len <= self.max_seq_len {
                     let token_len = end_idx - start_idx;
                     accepted = Some((
@@ -207,22 +208,19 @@ impl SearchPipeline {
             if let Some((chunk, next_idx)) = accepted {
                 chunks.push(chunk);
                 start_idx = next_idx;
-            } else {
-                // Fallback: force single-token progress to avoid infinite loops.
-                let start_char = offsets[start_idx].0;
-                let end_char = offsets[start_idx].1;
-                let chunk_slice = trimmed[start_char..end_char].trim();
-                if chunk_slice.is_empty() {
-                    start_idx += 1;
-                    continue;
-                }
+                continue;
+            }
+
+            let single_range = offsets[start_idx].0..offsets[start_idx].1;
+            let chunk_slice = trimmed[single_range].trim();
+            if !chunk_slice.is_empty() {
                 chunks.push(DocumentChunk {
                     prompt: format_document_prompt(sanitized_title, chunk_slice),
                     content: chunk_slice.to_string(),
                     token_len: 1,
                 });
-                start_idx += 1;
             }
+            start_idx += 1;
         }
 
         Ok(chunks)
@@ -272,21 +270,15 @@ pub fn rank_document_chunks(
         .next()
         .context("Failed to generate embedding for search query")?;
 
-    struct ChunkBinding {
-        result_index: usize,
-        chunk: DocumentChunk,
-    }
-
-    let mut bindings = Vec::new();
+    let mut bindings: Vec<(usize, DocumentChunk)> = Vec::new();
     for (result_index, result) in results.iter().enumerate() {
         let title = sanitize_title(&result.title);
-        let chunks = pipeline.chunk_document(&title, &result.content)?;
-        for chunk in chunks.into_iter() {
-            bindings.push(ChunkBinding {
-                result_index,
-                chunk,
-            });
-        }
+        bindings.extend(
+            pipeline
+                .chunk_document(&title, &result.content)?
+                .into_iter()
+                .map(|chunk| (result_index, chunk)),
+        );
     }
 
     if bindings.is_empty() {
@@ -295,17 +287,18 @@ pub fn rank_document_chunks(
 
     let prompts: Vec<String> = bindings
         .iter()
-        .map(|binding| binding.chunk.prompt.clone())
+        .map(|(_, chunk)| chunk.prompt.clone())
         .collect();
 
     let chunk_embeddings = pipeline.embed(&prompts)?;
     let mut scored = Vec::with_capacity(bindings.len());
-    for (binding, embedding) in bindings.into_iter().zip(chunk_embeddings.into_iter()) {
+    for ((result_index, chunk), embedding) in bindings.into_iter().zip(chunk_embeddings.into_iter())
+    {
         let score = cosine_similarity(&query_embedding, &embedding);
         scored.push(ScoredChunk {
-            result_index: binding.result_index,
-            content: binding.chunk.content,
-            token_len: binding.chunk.token_len,
+            result_index,
+            content: chunk.content,
+            token_len: chunk.token_len,
             score,
         });
     }
