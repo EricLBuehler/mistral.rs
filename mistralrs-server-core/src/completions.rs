@@ -12,7 +12,7 @@ use axum::{
     extract::{Json, State},
     http::{self},
     response::{
-        sse::{Event, KeepAlive},
+        sse::{Event, KeepAlive, KeepAliveStream},
         IntoResponse, Sse,
     },
 };
@@ -160,7 +160,8 @@ impl futures::Stream for CompletionStreamer {
 }
 
 /// Represents different types of completion responses.
-pub type CompletionResponder = BaseCompletionResponder<CompletionResponse, CompletionStreamer>;
+pub type CompletionResponder =
+    BaseCompletionResponder<CompletionResponse, KeepAliveStream<CompletionStreamer>>;
 
 /// JSON error response structure for model errors.
 type JsonModelError = BaseJsonModelError<CompletionResponse>;
@@ -310,7 +311,7 @@ pub fn create_streamer(
     state: SharedMistralRsState,
     on_chunk: Option<CompletionOnChunkCallback>,
     on_done: Option<CompletionOnDoneCallback>,
-) -> Sse<CompletionStreamer> {
+) -> Sse<KeepAliveStream<CompletionStreamer>> {
     let streamer = base_create_streamer(rx, state, on_chunk, on_done);
     let keep_alive_interval = get_keep_alive_interval();
 
