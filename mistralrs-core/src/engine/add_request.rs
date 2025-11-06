@@ -169,6 +169,7 @@ impl Engine {
             } => Some(generation_params.clone()),
             _ => None,
         };
+        let mut added_seq = false;
 
         let (mut prompt_tokens, prompt_text) = match request.messages {
             RequestMessage::Chat {
@@ -623,6 +624,10 @@ impl Engine {
 
             *get_mut_arcmutex!(self.id) += 1;
             get_mut_arcmutex!(self.scheduler).add_seq(seq);
+            added_seq = true;
+        }
+        if added_seq {
+            self.pending_notify.notify_one();
         }
     }
 

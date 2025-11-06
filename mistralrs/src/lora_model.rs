@@ -89,7 +89,7 @@ impl LoraModelBuilder {
             pipeline,
             scheduler_method,
             self.text_model.throughput_logging,
-            self.text_model.search_bert_model,
+            self.text_model.search_embedding_model,
         );
         if let Some(cb) = self.text_model.search_callback.clone() {
             runner = runner.with_search_callback(cb);

@@ -1,6 +1,5 @@
 use crate::{
     distributed,
-    embedding::bert::BertPipeline,
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
@@ -9,7 +8,7 @@ use crate::{
     prefix_cacher::PrefixCacheManagerV2,
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
-    search,
+    search::{self, rag::SearchPipeline},
     sequence::{SeqStepType, StopReason},
     tools, CompletionResponse, SchedulerConfig, DEBUG,
 };
@@ -19,11 +18,14 @@ pub use logger::IntervalLogger;
 use mistralrs_quant::RingConfig;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    fmt,
     io::{BufWriter, Write},
     net::TcpListener,
     ops::Deref,
+    str::FromStr,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, LazyLock,
@@ -31,9 +33,10 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
+    select,
     sync::{
         mpsc::{error::TryRecvError, Receiver},
-        Mutex,
+        Mutex, Notify,
     },
     task::JoinHandle,
 };
@@ -55,12 +58,47 @@ pub enum EngineInstruction {
     Terminate,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 /// Embedding model used for ranking web search results internally.
-pub enum BertEmbeddingModel {
+pub enum SearchEmbeddingModel {
     #[default]
-    SnowflakeArcticEmbedL,
-    Custom(String),
+    #[serde(rename = "embedding_gemma")]
+    EmbeddingGemma300M,
+}
+
+impl SearchEmbeddingModel {
+    pub fn hf_model_id(&self) -> &'static str {
+        match self {
+            Self::EmbeddingGemma300M => "google/embeddinggemma-300m",
+        }
+    }
+
+    pub fn variants() -> &'static [&'static str] {
+        &["embedding_gemma"]
+    }
+}
+
+impl fmt::Display for SearchEmbeddingModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmbeddingGemma300M => f.write_str("embedding_gemma"),
+        }
+    }
+}
+
+impl FromStr for SearchEmbeddingModel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "embedding_gemma" => Ok(Self::EmbeddingGemma300M),
+            other => Err(format!(
+                "Unknown search embedding model `{other}`. Supported values: {}",
+                Self::variants().join(", ")
+            )),
+        }
+    }
 }
 
 const SEED: u64 = 0;
@@ -117,7 +155,7 @@ pub static ENGINE_INSTRUCTIONS: LazyLock<
 pub struct Engine {
     rx: Arc<Mutex<Receiver<Request>>>,
     pipeline: Arc<Mutex<dyn Pipeline>>,
-    bert_pipeline: Arc<Mutex<Option<BertPipeline>>>,
+    search_pipeline: Arc<Mutex<Option<SearchPipeline>>>,
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -130,6 +168,7 @@ pub struct Engine {
     throughput_logging_enabled: bool,
     logger: IntervalLogger,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    pending_notify: Arc<Notify>,
 }
 
 impl Drop for Engine {
@@ -151,7 +190,7 @@ impl Engine {
         prefix_cache_n: usize,
         disable_eos_stop: bool,
         throughput_logging_enabled: bool,
-        search_embedding_model: Option<BertEmbeddingModel>,
+        search_embedding_model: Option<SearchEmbeddingModel>,
         search_callback: Option<Arc<search::SearchCallback>>,
         tool_callbacks: tools::ToolCallbacks,
         tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -163,8 +202,8 @@ impl Engine {
             || get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache
             || prefix_cache_n == 0;
 
-        let bert_pipeline = match search_embedding_model {
-            Some(search_embedding_model) => Some(BertPipeline::new(
+        let search_pipeline = match search_embedding_model {
+            Some(search_embedding_model) => Some(SearchPipeline::new(
                 search_embedding_model,
                 &get_mut_arcmutex!(pipeline).device(),
             )?),
@@ -177,7 +216,7 @@ impl Engine {
         Ok(Self {
             rx: Arc::new(Mutex::new(rx)),
             pipeline,
-            bert_pipeline: Arc::new(Mutex::new(bert_pipeline)),
+            search_pipeline: Arc::new(Mutex::new(search_pipeline)),
             search_callback,
             tool_callbacks,
             tool_callbacks_with_tools,
@@ -194,6 +233,7 @@ impl Engine {
             throughput_logging_enabled,
             logger: IntervalLogger::new(Duration::from_secs(5)),
             handles: Arc::new(Mutex::new(Vec::new())),
+            pending_notify: Arc::new(Notify::new()),
         })
     }
 
@@ -270,14 +310,25 @@ impl Engine {
                     self.replicate_request_to_daemons(&Request::Terminate);
                     break 'lp;
                 }
-
-                let next_request = {
+                enum WaitEvent {
+                    Request(Option<Request>),
+                    Wake,
+                }
+                let wait_for_request = async {
                     let mut rx = self.rx.lock().await;
                     rx.recv().await
                 };
+                tokio::pin!(wait_for_request);
+                let wait_for_wake = self.pending_notify.notified();
+                tokio::pin!(wait_for_wake);
 
-                match next_request {
-                    Some(request) => {
+                let event = select! {
+                    res = &mut wait_for_request => WaitEvent::Request(res),
+                    _ = &mut wait_for_wake => WaitEvent::Wake,
+                };
+
+                match event {
+                    WaitEvent::Request(Some(request)) => {
                         self.replicate_request_to_daemons(&request);
                         if matches!(request, Request::Terminate) {
                             break 'lp;
@@ -285,7 +336,8 @@ impl Engine {
                         self.clone().handle_request(request).await;
                         continue;
                     }
-                    None => break 'lp,
+                    WaitEvent::Request(None) => break 'lp,
+                    WaitEvent::Wake => continue,
                 }
             }
 

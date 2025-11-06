@@ -34,7 +34,7 @@ pub struct VisionModelBuilder {
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) max_edge: Option<u32>,
     pub(crate) hf_cache_path: Option<PathBuf>,
-    pub(crate) search_bert_model: Option<BertEmbeddingModel>,
+    pub(crate) search_embedding_model: Option<SearchEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
     pub(crate) tool_callbacks: HashMap<String, Arc<ToolCallback>>,
     pub(crate) tool_callbacks_with_tools: HashMap<String, ToolCallbackWithTool>,
@@ -87,7 +87,7 @@ impl VisionModelBuilder {
             throughput_logging: false,
             paged_attn_cfg: None,
             hf_cache_path: None,
-            search_bert_model: None,
+            search_embedding_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
             tool_callbacks_with_tools: HashMap::new(),
@@ -98,9 +98,9 @@ impl VisionModelBuilder {
         }
     }
 
-    /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified or the default.
-    pub fn with_search(mut self, search_bert_model: BertEmbeddingModel) -> Self {
-        self.search_bert_model = Some(search_bert_model);
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This loads the selected search embedding reranker (EmbeddingGemma by default).
+    pub fn with_search(mut self, search_embedding_model: SearchEmbeddingModel) -> Self {
+        self.search_embedding_model = Some(search_embedding_model);
         self
     }
 
@@ -376,7 +376,7 @@ impl VisionModelBuilder {
             pipeline,
             scheduler_method,
             self.throughput_logging,
-            self.search_bert_model,
+            self.search_embedding_model,
         );
         if let Some(cb) = self.search_callback.clone() {
             runner = runner.with_search_callback(cb);

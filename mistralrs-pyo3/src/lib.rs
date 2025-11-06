@@ -22,16 +22,16 @@ use util::{PyApiErr, PyApiResult};
 use candle_core::{Device, Result};
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader, AutoDeviceMapParams,
-    BertEmbeddingModel, ChatCompletionResponse, CompletionResponse, Constraint,
-    DefaultSchedulerMethod, DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams,
-    EmbeddingLoaderBuilder, EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
-    LlguidanceGrammar, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
-    NormalRequest, NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, Request as _Request,
-    RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig,
-    SpeculativeLoader, SpeechLoader, StopTokens, TokenSource, TokenizationRequest, Tool, Topology,
-    VisionLoaderBuilder, VisionSpecificConfig,
+    ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
+    DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
+    DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams, EmbeddingLoaderBuilder,
+    EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
+    GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar,
+    Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
+    NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, Request as _Request,
+    RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig, SearchEmbeddingModel,
+    SpeculativeConfig, SpeculativeLoader, SpeechLoader, StopTokens, TokenSource,
+    TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use mistralrs_core::{
     CalledFunction, SearchCallback, SearchFunctionParameters, SearchResult, ToolCallback,
@@ -590,7 +590,7 @@ impl Runner {
         paged_attn = false,
         seed = None,
         enable_search = false,
-        search_bert_model = None,
+        search_embedding_model = None,
         search_callback = None,
         tool_callbacks = None,
         mcp_client_config = None,
@@ -617,7 +617,7 @@ impl Runner {
         paged_attn: bool,
         seed: Option<u64>,
         enable_search: bool,
-        search_bert_model: Option<String>,
+        search_embedding_model: Option<String>,
         search_callback: Option<PyObject>,
         tool_callbacks: Option<PyObject>,
         mcp_client_config: Option<McpClientConfigPy>,
@@ -899,12 +899,13 @@ impl Runner {
                 ),
             }
         };
-        let bert_model = if enable_search {
-            Some(
-                search_bert_model
-                    .map(BertEmbeddingModel::Custom)
-                    .unwrap_or_default(),
-            )
+        let search_embedding_model = if enable_search {
+            Some(match search_embedding_model {
+                Some(model) => {
+                    SearchEmbeddingModel::from_str(model.as_str()).map_err(PyApiErr::from)?
+                }
+                None => SearchEmbeddingModel::default(),
+            })
         } else {
             None
         };
@@ -913,7 +914,8 @@ impl Runner {
             Some(obj) => Some(wrap_tool_callbacks(obj)?),
             None => None,
         };
-        let mut builder = MistralRsBuilder::new(pipeline, scheduler_config, false, bert_model);
+        let mut builder =
+            MistralRsBuilder::new(pipeline, scheduler_config, false, search_embedding_model);
         if let Some(cb) = cb {
             builder = builder.with_search_callback(cb);
         }

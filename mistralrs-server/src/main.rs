@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
 use mistralrs_core::{
-    initialize_logging, McpClientConfig, ModelSelected, PagedCacheType, TokenSource,
+    initialize_logging, McpClientConfig, ModelSelected, PagedCacheType, SearchEmbeddingModel,
+    TokenSource,
 };
 use rust_mcp_sdk::schema::LATEST_PROTOCOL_VERSION;
 use std::collections::HashMap;
@@ -10,8 +11,8 @@ use tracing::{error, info};
 
 use mistralrs_server_core::{
     mistralrs_for_server_builder::{
-        configure_paged_attn_from_flags, defaults, get_bert_model, MistralRsForServerBuilder,
-        ModelConfig,
+        configure_paged_attn_from_flags, defaults, get_search_embedding_model,
+        MistralRsForServerBuilder, ModelConfig,
     },
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
 };
@@ -135,13 +136,13 @@ struct Args {
     #[arg(long)]
     cpu: bool,
 
-    /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This loads the selected search embedding model for reranking web results.
     #[arg(long = "enable-search")]
     enable_search: bool,
 
-    /// Specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
-    #[arg(long = "search-bert-model")]
-    search_bert_model: Option<String>,
+    /// Select which built-in search embedding model to load (e.g., `embedding_gemma`).
+    #[arg(long = "search-embedding-model")]
+    search_embedding_model: Option<SearchEmbeddingModel>,
 
     /// Enable thinking for interactive mode and models that support it.
     #[arg(long = "enable-thinking")]
@@ -365,11 +366,15 @@ async fn main() -> Result<()> {
                 builder = builder.with_default_model_id(default_id);
             }
 
+            if let Some(model) = args.search_embedding_model {
+                builder = builder.with_search_embedding_model(model);
+            }
+
             builder.build_multi_model().await?
         }
         model => {
             // Single-model mode
-            MistralRsForServerBuilder::new()
+            let mut builder = MistralRsForServerBuilder::new()
                 .with_model(model)
                 .with_max_seqs(args.max_seqs)
                 .with_no_kv_cache(args.no_kv_cache)
@@ -390,19 +395,24 @@ async fn main() -> Result<()> {
                 .with_paged_ctxt_len_optional(args.paged_ctxt_len)
                 .with_paged_attn_block_size_optional(args.paged_attn_block_size)
                 .with_mcp_config_optional(mcp_config)
-                .with_paged_attn_cache_type(args.cache_type.unwrap_or_default())
-                .build()
-                .await?
+                .with_paged_attn_cache_type(args.cache_type.unwrap_or_default());
+
+            if let Some(model) = args.search_embedding_model {
+                builder = builder.with_search_embedding_model(model);
+            }
+
+            builder.build().await?
         }
     };
 
     // TODO: refactor this
-    let bert_model = get_bert_model(args.enable_search, args.search_bert_model);
+    let search_embedding_model =
+        get_search_embedding_model(args.enable_search, args.search_embedding_model);
 
     if args.interactive_mode {
         interactive_mode(
             mistralrs,
-            bert_model.is_some(),
+            search_embedding_model.is_some(),
             args.enable_thinking.then_some(true),
         )
         .await;

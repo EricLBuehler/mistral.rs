@@ -3,7 +3,7 @@ use candle_core::Device;
 use engine::Engine;
 pub use engine::{
     get_engine_terminate_flag, reset_engine_terminate_flag, should_terminate_engine_sequences,
-    BertEmbeddingModel, EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
+    EngineInstruction, SearchEmbeddingModel, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
 };
 use hf_hub::Cache;
 pub use lora::Ordering;
@@ -48,7 +48,6 @@ mod amoe;
 mod attention;
 mod diffusion_models;
 pub mod distributed;
-mod embedding;
 mod gguf;
 pub mod layers;
 mod layers_masker;
@@ -136,7 +135,7 @@ pub struct EngineConfig {
     pub prefix_cache_n: usize,
     pub disable_eos_stop: bool,
     pub throughput_logging_enabled: bool,
-    pub search_embedding_model: Option<BertEmbeddingModel>,
+    pub search_embedding_model: Option<SearchEmbeddingModel>,
     pub search_callback: Option<Arc<SearchCallback>>,
     pub tool_callbacks: tools::ToolCallbacks,
     pub tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -219,7 +218,7 @@ struct RebootState {
     prefix_cache_n: usize,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
-    search_embedding_model: Option<BertEmbeddingModel>,
+    search_embedding_model: Option<SearchEmbeddingModel>,
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -259,7 +258,7 @@ pub struct MistralRsBuilder {
     prefix_cache_n: Option<usize>,
     disable_eos_stop: Option<bool>,
     throughput_logging_enabled: bool,
-    search_embedding_model: Option<BertEmbeddingModel>,
+    search_embedding_model: Option<SearchEmbeddingModel>,
     search_callback: Option<Arc<SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -274,7 +273,7 @@ impl MistralRsBuilder {
         pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         method: SchedulerConfig,
         throughput_logging: bool,
-        search_embedding_model: Option<BertEmbeddingModel>,
+        search_embedding_model: Option<SearchEmbeddingModel>,
     ) -> Self {
         Self {
             pipeline,
@@ -536,7 +535,7 @@ impl MistralRs {
             prefix_cache_n,
             disable_eos_stop,
             throughput_logging_enabled,
-            search_embedding_model: search_embedding_model.clone(),
+            search_embedding_model,
             search_callback: search_callback.clone(),
             tool_callbacks: tool_callbacks.clone(),
             tool_callbacks_with_tools: tool_callbacks_with_tools.clone(),
@@ -676,7 +675,7 @@ impl MistralRs {
                 prefix_cache_n: reboot_state.prefix_cache_n,
                 disable_eos_stop: reboot_state.disable_eos_stop,
                 throughput_logging_enabled: reboot_state.throughput_logging_enabled,
-                search_embedding_model: reboot_state.search_embedding_model.clone(),
+                search_embedding_model: reboot_state.search_embedding_model,
                 search_callback: reboot_state.search_callback.clone(),
                 tool_callbacks: reboot_state.tool_callbacks.clone(),
                 tool_callbacks_with_tools: reboot_state.tool_callbacks_with_tools.clone(),
@@ -837,7 +836,7 @@ impl MistralRs {
             prefix_cache_n: config.engine_config.prefix_cache_n,
             disable_eos_stop: config.engine_config.disable_eos_stop,
             throughput_logging_enabled: config.engine_config.throughput_logging_enabled,
-            search_embedding_model: config.engine_config.search_embedding_model.clone(),
+            search_embedding_model: config.engine_config.search_embedding_model,
             search_callback: config.engine_config.search_callback.clone(),
             tool_callbacks: config.engine_config.tool_callbacks.clone(),
             tool_callbacks_with_tools: config.engine_config.tool_callbacks_with_tools.clone(),
