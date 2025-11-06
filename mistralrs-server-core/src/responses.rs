@@ -7,7 +7,7 @@ use axum::{
     extract::{Json, Path, State},
     http::{self, StatusCode},
     response::{
-        sse::{Event, KeepAlive},
+        sse::{Event, KeepAlive, KeepAliveStream},
         IntoResponse, Sse,
     },
 };
@@ -166,7 +166,8 @@ impl futures::Stream for ResponsesStreamer {
 }
 
 /// Response responder types
-pub type ResponsesResponder = BaseCompletionResponder<ResponsesObject, ResponsesStreamer>;
+pub type ResponsesResponder =
+    BaseCompletionResponder<ResponsesObject, KeepAliveStream<ResponsesStreamer>>;
 
 type JsonModelError = BaseJsonModelError<ResponsesObject>;
 impl ErrorToResponse for JsonModelError {}
@@ -598,7 +599,7 @@ fn handle_error(
 fn create_streamer(
     streamer: ResponsesStreamer,
     on_done: Option<OnDoneCallback<ResponsesChunk>>,
-) -> Sse<ResponsesStreamer> {
+) -> Sse<KeepAliveStream<ResponsesStreamer>> {
     let keep_alive_interval = get_keep_alive_interval();
 
     let streamer_with_callback = ResponsesStreamer {

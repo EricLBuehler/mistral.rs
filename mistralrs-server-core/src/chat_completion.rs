@@ -7,7 +7,7 @@ use axum::{
     extract::{Json, State},
     http::{self},
     response::{
-        sse::{Event, KeepAlive},
+        sse::{Event, KeepAlive, KeepAliveStream},
         IntoResponse, Sse,
     },
 };
@@ -168,7 +168,7 @@ impl futures::Stream for ChatCompletionStreamer {
 
 /// Represents different types of chat completion responses.
 pub type ChatCompletionResponder =
-    BaseCompletionResponder<ChatCompletionResponse, ChatCompletionStreamer>;
+    BaseCompletionResponder<ChatCompletionResponse, KeepAliveStream<ChatCompletionStreamer>>;
 
 type JsonModelError = BaseJsonModelError<ChatCompletionResponse>;
 impl ErrorToResponse for JsonModelError {}
@@ -545,7 +545,7 @@ pub fn create_streamer(
     state: SharedMistralRsState,
     on_chunk: Option<ChatCompletionOnChunkCallback>,
     on_done: Option<ChatCompletionOnDoneCallback>,
-) -> Sse<ChatCompletionStreamer> {
+) -> Sse<KeepAliveStream<ChatCompletionStreamer>> {
     let streamer = base_create_streamer(rx, state, on_chunk, on_done);
     let keep_alive_interval = get_keep_alive_interval();
 

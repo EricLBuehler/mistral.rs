@@ -435,10 +435,7 @@ impl McpServerConnection for HttpMcpConnection {
 
         // Check if the result indicates an error
         if tool_result.is_error.unwrap_or(false) {
-            return Err(anyhow::anyhow!(
-                "Tool execution failed: {}",
-                tool_result.to_string()
-            ));
+            return Err(anyhow::anyhow!("Tool execution failed: {tool_result}"));
         }
 
         Ok(tool_result.to_string())
@@ -604,10 +601,7 @@ impl McpServerConnection for ProcessMcpConnection {
 
         // Check if the result indicates an error
         if tool_result.is_error.unwrap_or(false) {
-            return Err(anyhow::anyhow!(
-                "Tool execution failed: {}",
-                tool_result.to_string()
-            ));
+            return Err(anyhow::anyhow!("Tool execution failed: {tool_result}"));
         }
 
         Ok(tool_result.to_string())
@@ -772,10 +766,7 @@ impl McpServerConnection for WebSocketMcpConnection {
 
         // Check if the result indicates an error
         if tool_result.is_error.unwrap_or(false) {
-            return Err(anyhow::anyhow!(
-                "Tool execution failed: {}",
-                tool_result.to_string()
-            ));
+            return Err(anyhow::anyhow!("Tool execution failed: {tool_result}"));
         }
 
         Ok(tool_result.to_string())
