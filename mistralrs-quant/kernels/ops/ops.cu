@@ -5,6 +5,30 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#if __CUDACC_VER_MAJOR__ >= 13
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/transform_iterator.h>
+#endif
+
+#if __CUDACC_VER_MAJOR__ >= 13
+#define USE_THRUST_INPUT_ITERS 1
+#else
+#define USE_THRUST_INPUT_ITERS 0
+#endif
+
+#if USE_THRUST_INPUT_ITERS
+#define DECLARE_NONZERO_ITER(NAME, TYPE, PTR)                                  \
+  auto NAME = thrust::make_transform_iterator(PTR, NonZeroOp<TYPE>());
+#define DECLARE_COUNTING_ITER(NAME, START)                                     \
+  auto NAME = thrust::make_counting_iterator<uint32_t>(START);
+#else
+#define DECLARE_NONZERO_ITER(NAME, TYPE, PTR)                                  \
+  cub::TransformInputIterator<bool, NonZeroOp<TYPE>, const TYPE *> NAME(       \
+      PTR, NonZeroOp<TYPE>());
+#define DECLARE_COUNTING_ITER(NAME, START)                                     \
+  cub::CountingInputIterator<uint32_t> NAME(START);
+#endif
+
 #define CUDA_CHECK(call)                                                       \
   do {                                                                         \
     cudaError_t err = call;                                                    \
@@ -36,8 +60,7 @@ template <typename T> struct NonZeroOp {
 template <typename T>
 void count_nonzero(const T *d_in, const uint32_t N, uint32_t *h_out,
                    cudaStream_t stream) {
-  cub::TransformInputIterator<bool, NonZeroOp<T>, const T *> itr(
-      d_in, NonZeroOp<T>());
+  DECLARE_NONZERO_ITER(itr, T, d_in);
   size_t temp_storage_bytes = 0;
   uint32_t *d_num_nonzero;
   CUDA_CHECK(
@@ -110,9 +133,8 @@ template <typename T>
 void nonzero(const T *d_in, const uint32_t N, const uint32_t num_nonzero,
              const uint32_t *dims, const uint32_t num_dims, uint32_t *d_out,
              cudaStream_t stream) {
-  cub::TransformInputIterator<bool, NonZeroOp<T>, const T *> itr(
-      d_in, NonZeroOp<T>());
-  cub::CountingInputIterator<uint32_t> counting_itr(0);
+  DECLARE_NONZERO_ITER(itr, T, d_in);
+  DECLARE_COUNTING_ITER(counting_itr, 0);
   uint32_t *out_temp;
   uint32_t *num_selected_out;
   CUDA_CHECK(cudaMallocAsync((void **)&out_temp, num_nonzero * sizeof(uint32_t),
