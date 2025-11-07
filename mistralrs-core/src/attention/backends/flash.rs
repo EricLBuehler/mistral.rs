@@ -14,8 +14,6 @@ pub(crate) fn flash_attn(
     let window_size_left = sdpa_params.sliding_window;
     let default_causal = seq_len > 1;
 
-    use crate::pipeline::text_models_inputs_processor::FlashParams;
-
     if let Some(params) = flash_params {
         let window_size_right = if params.causal { Some(0) } else { None };
         let qshape = q.shape();
@@ -93,8 +91,6 @@ pub(crate) fn flash_attn(
 ) -> Result<Tensor> {
     let (_b_sz, _n_attn_heads, seq_len, _head_dim) = q.dims4()?;
     let default_causal = seq_len > 1;
-
-    use crate::pipeline::text_models_inputs_processor::FlashParams;
 
     if let Some(params) = flash_params {
         let qshape = q.shape();
