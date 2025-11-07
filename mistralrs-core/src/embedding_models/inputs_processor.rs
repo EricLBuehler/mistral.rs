@@ -92,11 +92,17 @@ pub fn make_prompt_chunk<T: WithDType + Debug>(
         let mut seqlens_q_map = HashMap::new();
         let mut seqlens_k_map = HashMap::new();
 
-        let devices = mapper.unwrap().get_unique_devices();
-        for device in devices {
-            seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
-            seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
+        if let Some(mapper) = &mapper {
+            let devices = mapper.get_unique_devices();
+            for device in devices {
+                seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
+                seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
+            }
+        } else {
+            seqlens_q_map.insert(device.location(), seqlens_q.to_device(device)?);
+            seqlens_k_map.insert(device.location(), seqlens_k.to_device(device)?);
         }
+
         (max_q, max_k, seqlens_q_map, seqlens_k_map)
     } else {
         (0, 0, HashMap::new(), HashMap::new())
