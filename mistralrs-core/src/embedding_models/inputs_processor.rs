@@ -99,8 +99,8 @@ pub fn make_prompt_chunk<T: WithDType + Debug>(
                 seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
             }
         } else {
-            seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
-            seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
+            seqlens_q_map.insert(device.location(), seqlens_q.to_device(device)?);
+            seqlens_k_map.insert(device.location(), seqlens_k.to_device(device)?);
         }
 
         (max_q, max_k, seqlens_q_map, seqlens_k_map)
