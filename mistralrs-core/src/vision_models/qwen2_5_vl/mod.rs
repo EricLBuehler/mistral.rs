@@ -355,7 +355,7 @@ impl Qwen2_5VLModel {
         let mut ropeidx_attn_mask_indices_bs = Vec::new();
         for len in seqlens.iter() {
             ropeidx_attn_mask_indices_bs.push(Tensor::from_vec(
-                (0 as i64..*len as i64).collect(),
+                (0_i64..*len as i64).collect(),
                 (*len,),
                 input_ids.device(),
             )?);
