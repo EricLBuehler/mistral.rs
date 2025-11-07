@@ -116,8 +116,8 @@ impl Sdpa {
         let (_, _, _, k_head_dim) = k.dims4()?;
         let (_, _, _, v_head_dim) = v.dims4()?;
 
-        let can_use_flash =
-            q.device().is_cpu() || q.device().is_cuda() && crate::using_flash_attn();
+        let can_use_flash = q.device().is_cpu()
+            || q.device().is_cuda() && crate::using_flash_attn() && q.dtype() != DType::F32;
 
         if can_use_flash {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
