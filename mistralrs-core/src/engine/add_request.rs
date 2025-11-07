@@ -29,13 +29,15 @@ impl Engine {
     pub async fn handle_request(self: Arc<Self>, request: Request) {
         match request {
             Request::Normal(request) => {
-                if matches!(
-                    request.messages,
+                let is_chat = matches!(
+                    &request.messages,
                     RequestMessage::Chat { .. } | RequestMessage::VisionChat { .. }
-                ) && request.web_search_options.is_some()
-                    || !self.tool_callbacks.is_empty()
-                    || !self.tool_callbacks_with_tools.is_empty()
-                {
+                );
+                let has_tooling =
+                    !self.tool_callbacks.is_empty() || !self.tool_callbacks_with_tools.is_empty();
+                let has_search = request.web_search_options.is_some();
+
+                if is_chat && (has_search || has_tooling) {
                     search_request::search_request(self.clone(), *request).await;
                 } else {
                     self.add_request(*request).await
