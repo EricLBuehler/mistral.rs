@@ -648,7 +648,7 @@
 <a href=#648 id=648 data-nosnippet>648</a>                    Storage::Cuda(cuda_storage) =&gt; cuda_storage.as_cuda_slice::&lt;f32&gt;()<span class="question-mark">?</span>,
 <a href=#649 id=649 data-nosnippet>649</a>                    <span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"Expected CUDA storage"</span>),
 <a href=#650 id=650 data-nosnippet>650</a>                };
-<a href=#651 id=651 data-nosnippet>651</a>                <span class="kw">let </span>(input_ptr, _input_guard) = slice_ptr(<span class="kw-2">&amp;</span>input_s, input_l.start_offset());
+<a href=#651 id=651 data-nosnippet>651</a>                <span class="kw">let </span>(input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
 <a href=#652 id=652 data-nosnippet>652</a>                <span class="kw">unsafe </span>{
 <a href=#653 id=653 data-nosnippet>653</a>                    ffi::launch_quant_fp8_blockwise_kernel_f32(
 <a href=#654 id=654 data-nosnippet>654</a>                        input_ptr <span class="kw">as </span><span class="kw-2">*const </span><span class="kw">_</span>,
@@ -670,7 +670,7 @@
 <a href=#670 id=670 data-nosnippet>670</a>                    Storage::Cuda(cuda_storage) =&gt; cuda_storage.as_cuda_slice::&lt;f16&gt;()<span class="question-mark">?</span>,
 <a href=#671 id=671 data-nosnippet>671</a>                    <span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"Expected CUDA storage"</span>),
 <a href=#672 id=672 data-nosnippet>672</a>                };
-<a href=#673 id=673 data-nosnippet>673</a>                <span class="kw">let </span>(input_ptr, _input_guard) = slice_ptr(<span class="kw-2">&amp;</span>input_s, input_l.start_offset());
+<a href=#673 id=673 data-nosnippet>673</a>                <span class="kw">let </span>(input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
 <a href=#674 id=674 data-nosnippet>674</a>                <span class="kw">unsafe </span>{
 <a href=#675 id=675 data-nosnippet>675</a>                    ffi::launch_quant_fp8_blockwise_kernel_f16(
 <a href=#676 id=676 data-nosnippet>676</a>                        input_ptr <span class="kw">as </span><span class="kw-2">*const </span><span class="kw">_</span>,
@@ -692,7 +692,7 @@
 <a href=#692 id=692 data-nosnippet>692</a>                    Storage::Cuda(cuda_storage) =&gt; cuda_storage.as_cuda_slice::&lt;bf16&gt;()<span class="question-mark">?</span>,
 <a href=#693 id=693 data-nosnippet>693</a>                    <span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"Expected CUDA storage"</span>),
 <a href=#694 id=694 data-nosnippet>694</a>                };
-<a href=#695 id=695 data-nosnippet>695</a>                <span class="kw">let </span>(input_ptr, _input_guard) = slice_ptr(<span class="kw-2">&amp;</span>input_s, input_l.start_offset());
+<a href=#695 id=695 data-nosnippet>695</a>                <span class="kw">let </span>(input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
 <a href=#696 id=696 data-nosnippet>696</a>                <span class="kw">unsafe </span>{
 <a href=#697 id=697 data-nosnippet>697</a>                    ffi::launch_quant_fp8_blockwise_kernel_bf16(
 <a href=#698 id=698 data-nosnippet>698</a>                        input_ptr <span class="kw">as </span><span class="kw-2">*const </span><span class="kw">_</span>,

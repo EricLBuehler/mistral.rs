@@ -344,7 +344,7 @@
 <a href=#344 id=344 data-nosnippet>344</a>                        Storage::Cuda(cuda_storage) =&gt; cuda_storage.as_cuda_slice::&lt;f32&gt;()<span class="question-mark">?</span>,
 <a href=#345 id=345 data-nosnippet>345</a>                        <span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"Expected CUDA storage"</span>),
 <a href=#346 id=346 data-nosnippet>346</a>                    };
-<a href=#347 id=347 data-nosnippet>347</a>                    <span class="kw">let </span>(input_ptr, _input_guard) = slice_ptr(<span class="kw-2">&amp;</span>input_s, input_l.start_offset());
+<a href=#347 id=347 data-nosnippet>347</a>                    <span class="kw">let </span>(input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
 <a href=#348 id=348 data-nosnippet>348</a>                    <span class="kw">unsafe </span>{
 <a href=#349 id=349 data-nosnippet>349</a>                        ffi::launch_quant_fp8_vector_kernel_f32(
 <a href=#350 id=350 data-nosnippet>350</a>                            input_ptr <span class="kw">as </span><span class="kw-2">*const </span><span class="kw">_</span>,
@@ -361,7 +361,7 @@
 <a href=#361 id=361 data-nosnippet>361</a>                        Storage::Cuda(cuda_storage) =&gt; cuda_storage.as_cuda_slice::&lt;f16&gt;()<span class="question-mark">?</span>,
 <a href=#362 id=362 data-nosnippet>362</a>                        <span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"Expected CUDA storage"</span>),
 <a href=#363 id=363 data-nosnippet>363</a>                    };
-<a href=#364 id=364 data-nosnippet>364</a>                    <span class="kw">let </span>(input_ptr, _input_guard) = slice_ptr(<span class="kw-2">&amp;</span>input_s, input_l.start_offset());
+<a href=#364 id=364 data-nosnippet>364</a>                    <span class="kw">let </span>(input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
 <a href=#365 id=365 data-nosnippet>365</a>                    <span class="kw">unsafe </span>{
 <a href=#366 id=366 data-nosnippet>366</a>                        ffi::launch_quant_fp8_vector_kernel_f16(
 <a href=#367 id=367 data-nosnippet>367</a>                            input_ptr <span class="kw">as </span><span class="kw-2">*const </span><span class="kw">_</span>,
@@ -378,7 +378,7 @@
 <a href=#378 id=378 data-nosnippet>378</a>                        Storage::Cuda(cuda_storage) =&gt; cuda_storage.as_cuda_slice::&lt;bf16&gt;()<span class="question-mark">?</span>,
 <a href=#379 id=379 data-nosnippet>379</a>                        <span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"Expected CUDA storage"</span>),
 <a href=#380 id=380 data-nosnippet>380</a>                    };
-<a href=#381 id=381 data-nosnippet>381</a>                    <span class="kw">let </span>(input_ptr, _input_guard) = slice_ptr(<span class="kw-2">&amp;</span>input_s, input_l.start_offset());
+<a href=#381 id=381 data-nosnippet>381</a>                    <span class="kw">let </span>(input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
 <a href=#382 id=382 data-nosnippet>382</a>                    <span class="kw">unsafe </span>{
 <a href=#383 id=383 data-nosnippet>383</a>                        ffi::launch_quant_fp8_vector_kernel_bf16(
 <a href=#384 id=384 data-nosnippet>384</a>                            input_ptr <span class="kw">as </span><span class="kw-2">*const </span><span class="kw">_</span>,
@@ -411,7 +411,7 @@
 <a href=#411 id=411 data-nosnippet>411</a>                <span class="bool-val">false</span>,
 <a href=#412 id=412 data-nosnippet>412</a>            );
 <a href=#413 id=413 data-nosnippet>413</a>
-<a href=#414 id=414 data-nosnippet>414</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>((weight, scale));
+<a href=#414 id=414 data-nosnippet>414</a>            <span class="prelude-val">Ok</span>((weight, scale))
 <a href=#415 id=415 data-nosnippet>415</a>        } <span class="kw">else </span>{
 <a href=#416 id=416 data-nosnippet>416</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"Expected CUDA device."</span>);
 <a href=#417 id=417 data-nosnippet>417</a>        }
