@@ -648,7 +648,7 @@ pub fn fp8_blockwise_quantize(
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f32>()?,
                     _ => candle_core::bail!("Expected CUDA storage"),
                 };
-                let (input_ptr, _input_guard) = slice_ptr(&input_s, input_l.start_offset());
+                let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
                 unsafe {
                     ffi::launch_quant_fp8_blockwise_kernel_f32(
                         input_ptr as *const _,
@@ -670,7 +670,7 @@ pub fn fp8_blockwise_quantize(
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
                     _ => candle_core::bail!("Expected CUDA storage"),
                 };
-                let (input_ptr, _input_guard) = slice_ptr(&input_s, input_l.start_offset());
+                let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
                 unsafe {
                     ffi::launch_quant_fp8_blockwise_kernel_f16(
                         input_ptr as *const _,
@@ -692,7 +692,7 @@ pub fn fp8_blockwise_quantize(
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
                     _ => candle_core::bail!("Expected CUDA storage"),
                 };
-                let (input_ptr, _input_guard) = slice_ptr(&input_s, input_l.start_offset());
+                let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
                 unsafe {
                     ffi::launch_quant_fp8_blockwise_kernel_bf16(
                         input_ptr as *const _,
