@@ -562,6 +562,11 @@ impl Model {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
+        #[cfg(feature = "cuda")]
+        candle_core::cuda_backend::BYTES_ALLOCED
+            .lock()
+            .unwrap()
+            .clear();
         let mut xs = input_embeds;
         let cache = &mut self.cache.normal().0;
         let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
@@ -602,7 +607,44 @@ impl Model {
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
+        let x = extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)?;
+        #[cfg(feature = "cuda")]
+        dbg!(candle_core::cuda_backend::BYTES_ALLOCED
+            .lock()
+            .unwrap().clone()
+            .into_iter()
+            .fold(HashMap::new(), |mut acc: HashMap<usize, Vec<String>>, (size, backtrace)| {
+                let frames = backtrace.frames();
+                let frame_str = if frames.is_empty() {
+                    "<no frames>".to_string()
+                } else {
+                    // Find the first frame with symbols, then get the next one (caller)
+                    let mut frames_iter = frames.iter().enumerate();
+                    if let Some((idx, _)) = frames_iter.find(|(_, frame)| {
+                        frame.symbols().first().is_some()
+                    }) {
+                        // Get the frame one above (idx + 1)
+                        frames.get(idx + 1)
+                            .and_then(|frame| {
+                                frame.symbols().first().map(|symbol| {
+                                    format!("{} at line {}",
+                                        symbol.name().map(|n| n.to_string()).unwrap_or_else(|| "<unknown>".to_string()),
+                                        symbol.lineno().map(|l| l.to_string()).unwrap_or_else(|| "?".to_string())
+                                    )
+                                })
+                            })
+                            .unwrap_or_else(|| "<no caller frame>".to_string())
+                    } else {
+                        format!("<no symbols in {} frames>", frames.len())
+                    }
+                };
+                acc.entry(size).or_insert_with(Vec::new).push(frame_str);
+                acc
+            })
+            .into_iter()
+            .map(|(size, backtraces)| (backtraces.len(), size, backtraces))
+            .collect::<Vec<_>>());
+        Ok(x)
     }
 }
 
