@@ -5,14 +5,14 @@ Mistral.rs supports FlashAttention V2 and V3 on CUDA devices (V3 is only support
 > Note: If compiled with FlashAttention and [PagedAttention](PAGED_ATTENTION.md) is enabled, then FlashAttention will be used in tandem to accelerate
 the prefill phase.
 
-## Using FlashAttention V2/V3
+## GPU Architecture Compatibility
 
-To use FlashAttention V2/V3, compile with the following feature flags.
-
-|FlashAttention|Feature flag|
-|--|--|
-|V2 (CC < 9.0)| `--features flash-attn` |
-|V3 (CC >= 9.0)| `--features flash-attn-v3` |
+| Architecture | Compute Capability | Example GPUs | Feature Flag |
+|--------------|-------------------|--------------|--------------|
+| Ampere | 8.0, 8.6 | RTX 30*, A100, A40 | `--features flash-attn` |
+| Ada Lovelace | 8.9 | RTX 40*, L40S | `--features flash-attn` |
+| Hopper | 9.0 | H100, H800 | `--features flash-attn-v3` |
+| Blackwell | 10.0, 12.0 | RTX 50* | `--features flash-attn` |
 
 > Note: FlashAttention V2 and V3 are mutually exclusive
 > Note: To use FlashAttention in the Python API, [compile from source](../mistralrs-pyo3/README.md).
