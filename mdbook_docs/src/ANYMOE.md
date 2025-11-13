@@ -141,7 +141,7 @@ print(res.usage)
 ```
 
 ## Rust API
-You can find this example [here](../mistralrs/examples/anymoe/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/main/mistralrs/examples/anymoe/main.rs).
 
 ```rust
 use anyhow::Result;

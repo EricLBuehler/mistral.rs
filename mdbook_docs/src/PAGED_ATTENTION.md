@@ -66,7 +66,7 @@ cargo run --release --features metal -- -i --pa-gpu-mem 4096 --pa-blk-size 32 --
 ```
 
 ## Using the Rust API
-You can find this example [here](../mistralrs/examples/paged_attn/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/main/mistralrs/examples/paged_attn/main.rs).
 
 ```rust
 use anyhow::Result;

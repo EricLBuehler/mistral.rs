@@ -72,7 +72,7 @@ To load a UQFF model, one should specify the filename. This will be located base
 be loaded locally or from Hugging Face based on the model ID.
 
 - `phi3.5-mini-instruct-q4k.uqff`
-- `../UQFF/phi3.5-mini-instruct-q4k.uqff`
+- `UQFF_examples/phi3.5-mini-instruct-q4k.uqff`
 
 You can find a [collection of UQFF models here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c), which each include a simple
 command to get started.
@@ -88,8 +88,8 @@ command to get started.
 ### Using with the Rust API
 
 Check out the following examples:
-- Normal: [uqff/main.rs](../mistralrs/examples/uqff/main.rs)
-- Vision: [uqff_vision/main.rs](../mistralrs/examples/uqff_vision/main.rs)
+- Normal: [uqff/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/main/mistralrs/examples/uqff/main.rs)
+- Vision: [uqff_vision/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/main/mistralrs/examples/uqff_vision/main.rs)
 
 ### Using the Python API
 Modify the `Which` instantiation as follows:
@@ -117,7 +117,7 @@ After creating the UQFF file, you can upload the model to Hugging Face. To do th
 2) Upload the UQFF file:
     - With the web interface: [guide here](https://huggingface.co/docs/hub/en/models-uploading#using-the-web-interface).
     - With Git: [steps here](#upload-with-git-lfs)
-3) Locally, generate the model card file with [this Python script](../scripts/generate_uqff_card.py)..
+3) Locally, generate the model card file with [this Python script](https://github.com/EricLBuehler/mistral.rs/blob/main/scripts/generate_uqff_card.py)..
 4) In the web interface, press the `Create Model Card` button and paste the generated model card.
 
 **⭐ Check out [uqff_maker](https://github.com/EricLBuehler/uqff_maker) to make UQFF models with an easy CLI!**
