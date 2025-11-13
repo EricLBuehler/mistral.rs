@@ -930,3 +930,222 @@ pub fn linear_b(
         linear_no_bias(in_dim, out_dim, config, vb)
     }
 }
+
+/// Execute a grouped GEMM where each token is routed to a subset of experts.
+///
+/// - `xs`: activations shaped `(batch_size, seq_len, hidden)`
+/// - `ids`: expert identifiers shaped `(batch_size, seq_len, topk)`
+/// - `experts`: collection of expert projections. Each expert must implement [`QuantMethod`].
+///
+/// The returned tensor has shape `(batch_size, seq_len, topk, out_dim)`, where `out_dim` is the
+/// output dimension of the provided experts.
+pub fn grouped_gemm(xs: &Tensor, ids: &Tensor, experts: &[Arc<dyn QuantMethod>]) -> Result<Tensor> {
+    if experts.is_empty() {
+        candle_core::bail!("grouped_gemm requires at least one expert.");
+    }
+    if xs.rank() != 3 {
+        candle_core::bail!(
+            "grouped_gemm expects `xs` to have rank 3, got shape {:?}.",
+            xs.dims()
+        );
+    }
+    if ids.rank() != 3 {
+        candle_core::bail!(
+            "grouped_gemm expects `ids` to have rank 3, got shape {:?}.",
+            ids.dims()
+        );
+    }
+
+    let (bs, seq_len, hidden_size) = xs.dims3()?;
+    let ids_shape = ids.dims();
+    if ids_shape[0] != bs || ids_shape[1] != seq_len {
+        candle_core::bail!(
+            "grouped_gemm expects `ids` to match the first two dimensions of `xs` \
+             (got ids shape {:?}, xs shape {:?}).",
+            ids_shape,
+            xs.dims()
+        );
+    }
+    let topk = ids_shape[2];
+    if topk == 0 {
+        candle_core::bail!("grouped_gemm received `ids` with top-k dimension 0.");
+    }
+
+    let xs_flat = xs.reshape((bs * seq_len, hidden_size))?;
+    let ids_u32 = if ids.dtype() == DType::U32 {
+        ids.clone()
+    } else {
+        ids.to_dtype(DType::U32)?
+    };
+    let ids_flat = ids_u32.reshape((bs * seq_len, topk))?;
+    let ids_host = ids_flat.to_vec2::<u32>()?;
+
+    let mut routing: Vec<Vec<(usize, usize)>> = vec![Vec::new(); experts.len()];
+    for (token_idx, routed) in ids_host.iter().enumerate() {
+        for (slot_idx, expert_id) in routed.iter().enumerate() {
+            let expert_idx = *expert_id as usize;
+            if expert_idx >= experts.len() {
+                candle_core::bail!(
+                    "grouped_gemm received expert id {expert_idx} but only {} experts provided.",
+                    experts.len()
+                );
+            }
+            routing[expert_idx].push((token_idx, slot_idx));
+        }
+    }
+
+    let mut output: Option<Tensor> = None;
+    let mut output_dim: Option<usize> = None;
+    let mut output_dtype: Option<DType> = None;
+    let total_slots = bs * seq_len * topk;
+
+    for (expert_idx, assignments) in routing.into_iter().enumerate() {
+        if assignments.is_empty() {
+            continue;
+        }
+
+        let token_indices: Vec<i64> = assignments
+            .iter()
+            .map(|(token_idx, _)| *token_idx as i64)
+            .collect();
+        let token_indices = Tensor::new(&token_indices[..], xs.device())?;
+        let expert_in = xs_flat.index_select(&token_indices, 0)?;
+
+        let mut expert_out = experts[expert_idx].forward_autocast(&expert_in)?;
+        let expert_shape = expert_out.dims();
+        if expert_shape.len() != 2 {
+            candle_core::bail!(
+                "grouped_gemm expects expert outputs with rank 2, got {:?} for expert {expert_idx}.",
+                expert_shape
+            );
+        }
+        let current_out_dim = expert_shape[1];
+        if expert_shape[0] != assignments.len() {
+            candle_core::bail!(
+                "grouped_gemm expected expert {expert_idx} to produce {} rows but received {}.",
+                assignments.len(),
+                expert_shape[0]
+            );
+        }
+
+        if output.is_none() {
+            output_dim = Some(current_out_dim);
+            output_dtype = Some(expert_out.dtype());
+            output = Some(Tensor::zeros(
+                (total_slots, current_out_dim),
+                expert_out.dtype(),
+                xs.device(),
+            )?);
+        } else {
+            let expected_dim = output_dim.expect("output_dim should be set");
+            if current_out_dim != expected_dim {
+                candle_core::bail!(
+                    "grouped_gemm expects all experts to share the same output dimension \
+                     ({expected_dim}), but expert {expert_idx} produced {current_out_dim}."
+                );
+            }
+            let expected_dtype = output_dtype.expect("output_dtype should be set");
+            if expert_out.dtype() != expected_dtype {
+                expert_out = expert_out.to_dtype(expected_dtype)?;
+            }
+        }
+
+        expert_out = expert_out.reshape((assignments.len(), current_out_dim))?;
+
+        let flat_indices: Vec<i64> = assignments
+            .iter()
+            .map(|(token_idx, slot_idx)| (token_idx * topk + slot_idx) as i64)
+            .collect();
+        let flat_indices = Tensor::new(&flat_indices[..], xs.device())?;
+
+        // Safety: the Option has been initialized in the branch above.
+        let current_out = output.take().unwrap();
+        let updated = current_out.index_add(&flat_indices, &expert_out, 0)?;
+        output = Some(updated);
+    }
+
+    let mut output = output.ok_or_else(|| {
+        candle_core::Error::Msg(
+            "grouped_gemm produced no outputs; ensure at least one token is routed to an expert."
+                .into(),
+        )
+    })?;
+    let output_dim = output_dim.ok_or_else(|| {
+        candle_core::Error::Msg("grouped_gemm could not infer expert output dimension.".into())
+    })?;
+
+    output = output.reshape((bs, seq_len, topk, output_dim))?;
+    Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::IndexOp;
+
+    #[test]
+    fn grouped_gemm_matches_naive_reference() -> Result<()> {
+        let device = Device::Cpu;
+        let batch_size = 2;
+        let seq_len = 3;
+        let hidden = 5;
+        let topk = 2;
+        let out_dim = 4;
+        let num_experts = 4;
+        let total_tokens = batch_size * seq_len;
+
+        let xs_data: Vec<f32> = (0..(total_tokens * hidden))
+            .map(|v| v as f32 * 0.1 + 0.5)
+            .collect();
+        let xs = Tensor::from_vec(xs_data, (batch_size, seq_len, hidden), &device)?
+            .to_dtype(DType::F32)?;
+
+        let ids_data: Vec<f32> = (0..total_tokens)
+            .flat_map(|token_idx| {
+                let base = token_idx % num_experts;
+                [base as f32, ((base + 1) % num_experts) as f32]
+            })
+            .collect();
+        let ids = Tensor::from_vec(ids_data, (batch_size, seq_len, topk), &device)?
+            .to_dtype(DType::U32)?;
+
+        let mut experts: Vec<Arc<dyn QuantMethod>> = Vec::with_capacity(num_experts);
+        for expert_idx in 0..num_experts {
+            let weight_data: Vec<f32> = (0..(out_dim * hidden))
+                .map(|v| (expert_idx * out_dim * hidden + v) as f32 * 0.01 + 0.2)
+                .collect();
+            let weight = Tensor::from_vec(weight_data, (out_dim, hidden), &device)?;
+            let linear = Linear::new(weight, None);
+            let expert = UnquantLinear::new(QuantMethodConfig::Unquantized(linear))?;
+            experts.push(Arc::new(expert));
+        }
+
+        let ids_host = ids
+            .reshape((total_tokens, topk))?
+            .to_dtype(DType::U32)?
+            .to_vec2::<u32>()?;
+        let xs_flat = xs.reshape((total_tokens, hidden))?;
+
+        let mut expected_chunks = Vec::with_capacity(total_tokens * topk);
+        for (token_idx, assignments) in ids_host.iter().enumerate() {
+            let token_x = xs_flat.i(token_idx)?.reshape((1, hidden))?;
+            for expert_id in assignments {
+                let y = experts[*expert_id as usize].forward_autocast(&token_x)?;
+                expected_chunks.push(y);
+            }
+        }
+        let expected =
+            Tensor::cat(&expected_chunks, 0)?.reshape((batch_size, seq_len, topk, out_dim))?;
+
+        let actual = grouped_gemm(&xs, &ids, &experts)?;
+
+        let actual_flat = actual.flatten_all()?.to_vec1::<f32>()?;
+        let expected_flat = expected.flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(actual_flat.len(), expected_flat.len());
+        for (a, e) in actual_flat.iter().zip(expected_flat.iter()) {
+            assert!((a - e).abs() < 1e-5, "mismatch: {a} vs {e}");
+        }
+
+        Ok(())
+    }
+}
