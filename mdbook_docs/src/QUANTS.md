@@ -9,12 +9,12 @@ Mistral.rs supports the following quantization:
     - I quants coming!
     - CPU, CUDA, Metal (all supported devices)
     - 2, 3, 4, 5, 6, 8 bit
-- GPTQ (convert with [this script](../scripts/convert_to_gptq.py))
+- GPTQ (convert with [this script](https://github.com/EricLBuehler/mistral.rs/blob/main/scripts/convert_to_gptq.py))
     - Supported in all plain/vision and adapter models
     - CUDA only
     - 2, 3, 4, 8 bit
     - [Marlin](https://github.com/IST-DASLab/marlin) kernel support in 4-bit and 8-bit.
-- AWQ (convert with [this script](../scripts/convert_awq_marlin.py))
+- AWQ (convert with [this script](https://github.com/EricLBuehler/mistral.rs/blob/main/scripts/convert_awq_marlin.py))
     - Supported in all plain/vision and adapter models
     - CUDA only
     - 4 and 8 bit
@@ -69,7 +69,7 @@ cargo run --features cuda -- -i --isq 4 plain -m microsoft/Phi-3-mini-4k-instruc
 cargo run --features cuda --release -- -i plain -m kaitchup/Phi-3-mini-4k-instruct-gptq-4bit
 ```
 
-You can create your own GPTQ model using [`scripts/convert_to_gptq.py`][../scripts/convert_to_gptq.py]:
+You can create your own GPTQ model using [`scripts/convert_to_gptq.py`](https://github.com/EricLBuehler/mistral.rs/blob/main/scripts/convert_to_gptq.py):
 ```
 pip install gptqmodel transformers datasets
 
