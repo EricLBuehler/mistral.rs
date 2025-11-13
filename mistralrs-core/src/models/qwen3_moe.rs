@@ -493,62 +493,252 @@ impl SlowMoeMlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        // Shapes and device
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
-        let xs = xs.reshape(((), hidden_dim))?;
-        let router_logits = xs.apply(&self.gate)?;
-        let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
+        let device = xs.device();
 
-        // In order to extract topk, we extract the data from the tensor and manipulate it
-        // directly. Maybe we will want to use some custom ops instead at some point.
-        let experts_per_tok = routing_weights
+        // Flatten tokens: xs2d: [N, H]
+        let xs2d = xs.reshape(((), hidden_dim))?;
+
+        // Router: logits -> softmax -> top-k indices and scores
+        let router_logits = xs2d.apply(&self.gate)?; // [N, E]
+        let routing_weights_full = candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?; // [N, E]
+        let indices = routing_weights_full
             .arg_sort_last_dim(false)?
             .narrow(D::Minus1, 0, self.num_experts_per_tok)?
-            .contiguous()?;
-        let routing_weights = routing_weights.gather(&experts_per_tok, D::Minus1)?;
+            .contiguous()?; // [N, K]
+        let mut scores = routing_weights_full.gather(&indices, D::Minus1)?; // [N, K]
+        if self.norm_topk_prob {
+            scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
+        }
 
-        // routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-        // top_x contains the row indexes to evaluate for each expert.
-        let routing_weights = routing_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
-        let experts_per_tok = experts_per_tok.to_vec2::<u32>()?;
-        let mut top_x = vec![vec![]; self.experts.len()];
-        let mut selected_experts = vec![vec![]; self.experts.len()];
-        for (row_idx, (rw, expert_idxs)) in routing_weights
-            .iter()
-            .zip(experts_per_tok.iter())
-            .enumerate()
-        {
-            let sum_rw = rw.iter().sum::<f32>();
-            for (&rw, &expert_idx) in rw.iter().zip(expert_idxs.iter()) {
-                top_x[expert_idx as usize].push(row_idx as u32);
-                let rw = if self.norm_topk_prob { rw / sum_rw } else { rw };
-                selected_experts[expert_idx as usize].push(rw)
+        // Grouping: build ids_to_sorted / ids_from_sorted in host memory
+        let n_tokens = xs2d.dim(0)?;
+        let k = indices.dim(D::Minus1)?;
+        let n_experts = self.experts.len();
+        let total_rows = n_tokens * k;
+        let indices_cpu = indices.to_device(&Device::Cpu)?.to_dtype(DType::I64)?.to_vec2::<i64>()?; // [N,K]
+        let mut ids_to_sorted: Vec<i64> = Vec::with_capacity(total_rows);
+        let mut ids_from_sorted: Vec<i64> = vec![-1; total_rows];
+        let mut tokens_per_expert: Vec<usize> = vec![0; n_experts];
+        for e in 0..n_experts {
+            for i in 0..n_tokens {
+                let base = i * k;
+                let row_indices = &indices_cpu[i];
+                for slot in 0..k {
+                    if (row_indices[slot] as usize) == e {
+                        let row_idx = base + slot;
+                        ids_from_sorted[row_idx] = ids_to_sorted.len() as i64;
+                        ids_to_sorted.push(row_idx as i64);
+                        tokens_per_expert[e] += 1;
+                        break;
+                    }
+                }
+            }
+        }
+        if ids_to_sorted.len() != total_rows {
+            candle_core::bail!("ids_to_sorted size mismatch");
+        }
+
+        // Expand xs per top-k and gather to expert-grouped order
+        let xs_k = xs2d
+            .reshape((n_tokens, 1, hidden_dim))?
+            .expand((n_tokens, k, hidden_dim))?
+            .contiguous()? // [N, K, H]
+            .reshape((total_rows, hidden_dim))?; // [N*K, H]
+        let ids_to_sorted_t = Tensor::new(ids_to_sorted.as_slice(), &device)?;
+        let grouped_in = xs_k.index_select(&ids_to_sorted_t, 0)?; // [N*K, H]
+
+        // Prefix sums to slice per expert
+        let mut prefix: Vec<usize> = Vec::with_capacity(n_experts + 1);
+        prefix.push(0);
+        for e in 0..n_experts {
+            prefix.push(prefix[e] + tokens_per_expert[e]);
+        }
+
+        // Run each expert MLP on its contiguous slice (batched along rows)
+        let mut out_chunks: Vec<Tensor> = Vec::with_capacity(n_experts);
+        for e in 0..n_experts {
+            let cnt = tokens_per_expert[e];
+            if cnt == 0 { continue; }
+            let off = prefix[e];
+            let slice = grouped_in.narrow(0, off, cnt)?;   // [cnt, H]
+            let slice_bth = slice.unsqueeze(0)?;            // [1, cnt, H]
+            let out_e = self.experts[e].forward(&slice_bth)?.squeeze(0)?; // [cnt, H]
+            out_chunks.push(out_e);
+        }
+        let grouped_out = if out_chunks.is_empty() {
+            grouped_in.zeros_like()? // degenerate: no assignments
+        } else {
+            Tensor::cat(&out_chunks, 0)? // [N*K, H]
+        };
+
+        // Unpermute back to original row order and shape [N, K, H]
+        let ids_from_sorted_t = Tensor::new(ids_from_sorted.as_slice(), &device)?;
+        let y = grouped_out.index_select(&ids_from_sorted_t, 0)?; // [N*K, H]
+        let y = y.reshape((n_tokens, k, hidden_dim))?;            // [N, K, H]
+
+        // Combine with routing scores: weighted sum across K
+        let y = y
+            .to_dtype(DType::F32)?
+            .broadcast_mul(&scores.to_dtype(DType::F32)?.unsqueeze(D::Minus1)?)?
+            .sum(D::Minus2)?
+            .to_dtype(xs.dtype())?; // [N, H]
+
+        y.reshape((b_size, seq_len, hidden_dim))
+    }
+
+    /// Standalone grouped GEMM with explicit permute/unpermute and gather/scatter.
+    ///
+    /// Implements a MoE-style grouped matmul path analogous to ggml's non-mat-vec `mul_mat_id`:
+    /// - Expand inputs per top-k slot, build permutation to group rows by expert
+    /// - Apply a sequence of per-expert QuantMethod layers stage-by-stage on grouped slices
+    /// - Unpermute back to original (token, top-k) row order
+    ///
+    /// Arguments:
+    /// - `xs`: Input activations, shape [B, T, H] or [N, H] (N = B*T)
+    /// - `indices`: Expert ids per token and top-k slot, shape [B, T, K] or [N, K]
+    /// - `stages`: List of stages; each stage is a vec of per-expert layers of length E
+    ///
+    /// Returns: Tensor with shape [B, T, K, O] or [N, K, O], where O is last stage output dim.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn grouped_sequential_gemm(
+        &self,
+        xs: &Tensor,
+        indices: &Tensor,
+        stages: &[Vec<Arc<dyn QuantMethod>>],
+    ) -> Result<Tensor> {
+        use candle_core::DType;
+
+        // Infer xs shape and flatten to [N, H]
+        let (b, t, h, xs_2d, n_tokens, xs_is_3d) = match xs.rank() {
+            3 => {
+                let (b, t, h) = xs.dims3()?;
+                let n = b * t;
+                (b, t, h, xs.reshape((n, h))?, n, true)
+            }
+            2 => {
+                let (n, h) = xs.dims2()?;
+                (1, n, h, xs.clone(), n, false)
+            }
+            _ => candle_core::bail!("grouped_sequential_gemm: xs must be rank-2 or rank-3"),
+        };
+
+        // Indices must be [N, K] or [B, T, K]; flatten to [N, K]
+        let (k, indices_2d) = match indices.rank() {
+            3 => {
+                let (ib, it, ik) = indices.dims3()?;
+                let expected_n = ib * it;
+                if xs_is_3d {
+                    if !(ib == b && it == t) {
+                        candle_core::bail!("indices must match xs batch/time dims");
+                    }
+                } else if expected_n != t {
+                    candle_core::bail!(
+                        "indices [B,T,K] must flatten to N == T when xs is [N,H]"
+                    );
+                }
+                (ik, indices.reshape((expected_n, ik))?)
+            }
+            2 => {
+                let (in_n, ik) = indices.dims2()?;
+                if in_n != n_tokens {
+                    candle_core::bail!("indices first dim (N) must match tokens count");
+                }
+                (ik, indices.clone())
+            }
+            _ => candle_core::bail!("grouped_sequential_gemm: indices must be rank-2 or rank-3"),
+        };
+
+        if stages.is_empty() {
+            candle_core::bail!("stages must be non-empty");
+        }
+        let n_experts = stages[0].len();
+        for s in stages.iter() {
+            if s.len() != n_experts {
+                candle_core::bail!("all stages must have {} experts", n_experts);
             }
         }
 
-        let mut ys = xs.zeros_like()?;
-        for (expert_idx, expert_layer) in self.experts.iter().enumerate() {
-            let top_x = &top_x[expert_idx];
-            if top_x.is_empty() {
-                continue;
+        // Copy indices to CPU and build mappings
+        let indices_cpu = indices_2d
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::I64)?
+            .to_vec2::<i64>()?; // [N, K]
+
+        let total_rows = n_tokens * k;
+        let mut ids_to_sorted: Vec<i64> = Vec::with_capacity(total_rows);
+        let mut ids_from_sorted: Vec<i64> = vec![-1; total_rows];
+        let mut tokens_per_expert: Vec<usize> = vec![0; n_experts];
+
+        // Group rows by expert (expert-major traversal mirrors ggml path)
+        for e in 0..n_experts {
+            for i in 0..n_tokens {
+                let base = i * k;
+                let row_indices = &indices_cpu[i];
+                for slot in 0..k {
+                    if (row_indices[slot] as usize) == e {
+                        let row_idx = base + slot;
+                        ids_from_sorted[row_idx] = ids_to_sorted.len() as i64;
+                        ids_to_sorted.push(row_idx as i64);
+                        tokens_per_expert[e] += 1;
+                        break;
+                    }
+                }
             }
-            let top_x = Tensor::new(top_x.as_slice(), xs.device())?;
-            let selected_experts =
-                Tensor::new(selected_experts[expert_idx].as_slice(), xs.device())?
-                    .reshape(((), 1))?
-                    .to_dtype(xs.dtype())?;
-            // Index the correct hidden states and compute the expert hidden state for
-            // the current expert. We need to make sure to multiply the output hidden
-            // states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-            let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden_dim))?;
-            // current_hidden_states = expert_layer(current_state, routing_weights[top_x_list, idx_list, None])
-            let current_hidden_states = expert_layer
-                .forward(&current_state.unsqueeze(0)?)?
-                .squeeze(0)?;
-            let current_hidden_states = current_hidden_states.broadcast_mul(&selected_experts)?;
-            ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
         }
-        let ys = ys.reshape((b_size, seq_len, hidden_dim))?;
-        Ok(ys)
+        if ids_to_sorted.len() != total_rows {
+            candle_core::bail!("ids_to_sorted size mismatch");
+        }
+
+        // Expand xs per top-k slot: [N,H] -> [N,1,H] -> [N,K,H] -> [N*K,H]
+        let xs_k = xs_2d
+            .reshape((n_tokens, 1, h))?
+            .expand((n_tokens, k, h))?
+            .contiguous()?
+            .reshape((total_rows, h))?;
+
+        // Gather rows into expert-grouped order
+        let ids_to_sorted_t = Tensor::new(ids_to_sorted.as_slice(), &Device::Cpu)?;
+        let mut cur = xs_k.index_select(&ids_to_sorted_t, 0)?;
+
+        // Prefix sums for expert offsets
+        let mut prefix: Vec<usize> = Vec::with_capacity(n_experts + 1);
+        prefix.push(0);
+        for e in 0..n_experts {
+            prefix.push(prefix[e] + tokens_per_expert[e]);
+        }
+
+        // Apply each stage per expert on its slice
+        for stage in stages.iter() {
+            let mut outs: Vec<Tensor> = Vec::with_capacity(n_experts);
+            for e in 0..n_experts {
+                let cnt = tokens_per_expert[e];
+                if cnt == 0 {
+                    continue;
+                }
+                let off = prefix[e];
+                let slice = cur.narrow(0, off, cnt)?; // [cnt, in_dim]
+                let out_e = stage[e].forward_autocast(&slice)?; // [cnt, out_dim]
+                outs.push(out_e);
+            }
+            if !outs.is_empty() {
+                cur = Tensor::cat(&outs, 0)?;
+            }
+        }
+
+        // Unpermute: y[orig_row] = cur[ids_from_sorted[orig_row]]
+        let ids_from_sorted_t = Tensor::new(ids_from_sorted.as_slice(), &Device::Cpu)?;
+        let y = cur.index_select(&ids_from_sorted_t, 0)?; // [N*K, O]
+
+        // Reshape back to [N,K,O] or [B,T,K,O]
+        let o = y.dim(D::Minus1)?;
+        let y = y.reshape((n_tokens, k, o))?;
+        if xs_is_3d {
+            y.reshape((b, t, k, o))
+        } else {
+            Ok(y)
+        }
     }
 }
 
