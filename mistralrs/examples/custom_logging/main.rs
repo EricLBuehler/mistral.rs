@@ -1,5 +1,5 @@
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, TextMessages, TextModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, TextMessages, VisionModelBuilder};
 use std::fs;
 use std::fs::OpenOptions;
 use tracing::info;
@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
     init_logging(LOG_FILE);
     info!("Custom subscriber installed; writing logs to {LOG_FILE}");
 
-    let model = TextModelBuilder::new("google/gemma-3-4b-it")
+    let model = VisionModelBuilder::new("google/gemma-3-4b-it")
         .with_isq(IsqType::Q4K)
         // NOTE: deliberately skip `.with_logging()` so only our subscriber runs.
         .build()
