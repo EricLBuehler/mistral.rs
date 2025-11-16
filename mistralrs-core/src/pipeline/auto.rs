@@ -4,7 +4,7 @@ use super::{
     VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
 };
 use crate::api_get_file;
-use crate::utils::tokens::get_token;
+use crate::utils::{progress::ProgressScopeGuard, tokens::get_token};
 use crate::Ordering;
 use crate::{DeviceMapSetting, IsqType, PagedAttentionConfig, Pipeline, TryIntoDType};
 use anyhow::Result;
@@ -337,6 +337,7 @@ impl Loader for AutoLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
         let config = self.read_config_from_hf(revision.clone(), &token_source, silent)?;
         dbg!(&config.sentence_transformers_present);
         self.ensure_loader(&config.contents, config.sentence_transformers_present)?;
@@ -368,6 +369,7 @@ impl Loader for AutoLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
         let config = self.read_config_from_path(paths.as_ref())?;
         self.ensure_loader(&config.contents, config.sentence_transformers_present)?;
         self.loader

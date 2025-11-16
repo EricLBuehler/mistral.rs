@@ -33,7 +33,11 @@ use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
-use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
+use crate::utils::{
+    progress::{new_multi_progress, ProgressScopeGuard},
+    tokens::get_token,
+    varbuilder_utils::from_mmaped_safetensors,
+};
 use crate::xlora_models::NonGranularState;
 use crate::{
     api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
@@ -44,7 +48,6 @@ use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use indicatif::MultiProgress;
 use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::{
     AfqLayer, GgufMatMul, HqqLayer, ImmediateIsqOverride, IsqType, QuantizedSerdeType,
@@ -263,6 +266,7 @@ impl Loader for NormalLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
         let cache = self
             .hf_cache_path
             .clone()
@@ -310,6 +314,7 @@ impl Loader for NormalLoader {
         mut in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
         let config = std::fs::read_to_string(paths.get_config_filename())?;
 
         if !self.inner.supports_paged_attention(&config)? {
@@ -587,7 +592,7 @@ impl Loader for NormalLoader {
             AttentionImplementation::Eager
         };
 
-        let multi_progress = Arc::new(MultiProgress::new());
+        let multi_progress = Arc::new(new_multi_progress());
 
         // Load matformer slicing config if provided
         let matformer_slicing_config = if let Some(matformer_path) =
@@ -859,7 +864,7 @@ impl Loader for NormalLoader {
                 info!("Serializing existing ISQ tensors without additional quantization.");
             }
 
-            let multi_progress = Arc::new(MultiProgress::new());
+            let multi_progress = Arc::new(new_multi_progress());
 
             model.quantize(
                 in_situ_quant,
@@ -1012,7 +1017,7 @@ impl PreProcessingMixin for NormalPipeline {
 impl IsqPipelineMixin for NormalPipeline {
     fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
-        let multi_progress = Arc::new(MultiProgress::new());
+        let multi_progress = Arc::new(new_multi_progress());
         self.model.quantize(
             Some(dtype),
             device.clone(),

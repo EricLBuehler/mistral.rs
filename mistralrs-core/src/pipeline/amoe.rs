@@ -12,7 +12,6 @@ use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
-use indicatif::MultiProgress;
 use mistralrs_quant::IsqType;
 use rand::{rng, seq::SliceRandom};
 use rand_isaac::Isaac64Rng;
@@ -25,7 +24,7 @@ use crate::{
     prefix_cacher::PrefixCacheManagerV2,
     sampler::Sampler,
     sequence::{SeqStepType, Sequence, SequenceGroup, SequenceRecognizer},
-    utils::progress::NiceProgressBar,
+    utils::progress::{new_multi_progress, NiceProgressBar, ProgressScopeGuard},
     DeviceMapSetting, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig, Pipeline,
     Response, TokenSource, TryIntoDType,
 };
@@ -63,6 +62,7 @@ impl Loader for AnyMoeLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
         let paged_attn_config = if paged_attn_config.is_none() {
             warn!("AnyMoE does not currently support PagedAttention, running without");
             None
@@ -105,6 +105,7 @@ impl Loader for AnyMoeLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
         let paged_attn_config = if paged_attn_config.is_none() {
             warn!("AnyMoE does not currently support PagedAttention, running without");
             None
@@ -388,7 +389,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         let mut all_losses = Vec::new();
 
         for _ in
-            NiceProgressBar::<_, 'g'>(0..epochs, "Training gating layers", &MultiProgress::new())
+            NiceProgressBar::<_, 'g'>(0..epochs, "Training gating layers", &new_multi_progress())
         {
             samples.as_mut_slice().shuffle(&mut rng);
             for batch in samples.chunks(batch_size) {

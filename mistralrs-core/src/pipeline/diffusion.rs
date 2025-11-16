@@ -12,13 +12,16 @@ use crate::pipeline::{ChatTemplate, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
-use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
+use crate::utils::{
+    progress::{new_multi_progress, ProgressScopeGuard},
+    tokens::get_token,
+    varbuilder_utils::from_mmaped_safetensors,
+};
 use crate::{DeviceMapSetting, PagedAttentionConfig, Pipeline, TryIntoDType};
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use image::{DynamicImage, RgbImage};
-use indicatif::MultiProgress;
 use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
@@ -84,6 +87,7 @@ impl Loader for DiffusionLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
         let paths: anyhow::Result<Box<dyn ModelPaths>> = {
             let api = ApiBuilder::new()
                 .with_progress(!silent)
@@ -125,6 +129,7 @@ impl Loader for DiffusionLoader {
         in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
         let paths = &paths
             .as_ref()
             .as_any()
@@ -199,7 +204,7 @@ impl Loader for DiffusionLoader {
                         mapper,
                         loading_isq: false,
                         real_device: device.clone(),
-                        multi_progress: Arc::new(MultiProgress::new()),
+                        multi_progress: Arc::new(new_multi_progress()),
                         matformer_slicing_config: None,
                     },
                     attention_mechanism,

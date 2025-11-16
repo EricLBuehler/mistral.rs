@@ -13,12 +13,11 @@ use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::{EitherCache, KvCache, NormalCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
-use crate::utils::progress::NiceProgressBar;
+use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor};
 use candle_nn::{Embedding, LayerNorm};
-use indicatif::MultiProgress;
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 #[derive(Clone)]
@@ -244,7 +243,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         for layer_idx in NiceProgressBar::<_, 'b'>(
             0..block_count,
             "Loading repeating layers",
-            &MultiProgress::new(),
+            &new_multi_progress(),
         ) {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
