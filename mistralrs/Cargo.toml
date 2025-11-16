@@ -28,6 +28,8 @@ reqwest.workspace = true
 rand.workspace = true
 clap.workspace = true
 walkdir.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [features]
 cuda = ["mistralrs-core/cuda"]
