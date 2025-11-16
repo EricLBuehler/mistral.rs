@@ -24,6 +24,7 @@ use crate::{
 };
 
 use crate::kv_cache::CacheManager;
+use crate::utils::progress::ProgressScopeGuard;
 
 use super::{
     chat_template::ChatTemplate, sampling::SpeculativeSample, AnyMoePipelineMixin,
@@ -52,6 +53,7 @@ impl Loader for SpeculativeLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
         let paged_attn_config = if paged_attn_config.is_none() {
             warn!(
                 "Speculative decoding does not currently support PagedAttention, running without"
@@ -99,6 +101,7 @@ impl Loader for SpeculativeLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
         let paged_attn_config = if paged_attn_config.is_none() {
             warn!(
                 "Speculative decoding does not currently support PagedAttention, running without"

@@ -7,7 +7,6 @@ use candle_core::quantized::ggml_file;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module};
-use indicatif::MultiProgress;
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 use crate::attention::SdpaParams;
@@ -23,7 +22,7 @@ use crate::pipeline::KvCache;
 use crate::pipeline::NormalCache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
-use crate::utils::progress::NiceProgressBar;
+use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 // Default fallback for models that don't specify context_length
 const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
 
@@ -243,7 +242,7 @@ impl ModelConfig::FromGGML for ModelWeights {
         for layer_idx in NiceProgressBar::<_, 'b'>(
             0..ct.hparams.n_layer,
             "Loading repeating layers",
-            &MultiProgress::new(),
+            &new_multi_progress(),
         ) {
             let prefix = format!("layers.{layer_idx}");
             let attention_wq = ct.remove(&format!("{prefix}.attention.wq.weight"))?;
@@ -460,7 +459,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         for layer_idx in NiceProgressBar::<_, 'b'>(
             0..block_count,
             "Loading repeating layers",
-            &MultiProgress::new(),
+            &new_multi_progress(),
         ) {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);

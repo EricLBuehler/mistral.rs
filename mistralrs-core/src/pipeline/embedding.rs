@@ -25,7 +25,11 @@ use crate::pipeline::{EmbeddingGemmaLoader, Qwen3EmbeddingLoader};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
-use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
+use crate::utils::{
+    progress::{new_multi_progress, ProgressScopeGuard},
+    tokens::get_token,
+    varbuilder_utils::from_mmaped_safetensors,
+};
 use crate::Modalities;
 use crate::SupportedModality;
 use crate::{
@@ -38,7 +42,6 @@ use candle_core::{Device, Tensor};
 use candle_nn::{Linear, Module};
 use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use indicatif::MultiProgress;
 use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::safetensors::MmapedSafetensors;
 use mistralrs_quant::{
@@ -167,6 +170,7 @@ impl Loader for EmbeddingLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
         let cache = self
             .hf_cache_path
             .clone()
@@ -214,6 +218,7 @@ impl Loader for EmbeddingLoader {
         mut in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
         let config = std::fs::read_to_string(paths.get_config_filename())?;
 
         if paged_attn_config.is_some() {
@@ -465,7 +470,7 @@ impl Loader for EmbeddingLoader {
             AttentionImplementation::Eager
         };
 
-        let multi_progress = Arc::new(MultiProgress::new());
+        let multi_progress = Arc::new(new_multi_progress());
 
         let modules_config: Vec<_> = paths
             .get_modules()
@@ -587,7 +592,7 @@ impl Loader for EmbeddingLoader {
                     modules: Some(&modules_ser),
                     module_paths: Some(&modules_config),
                 },
-                Arc::new(MultiProgress::new()),
+                Arc::new(new_multi_progress()),
             )?;
         } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
             model.load_from_artifacts(
@@ -680,7 +685,7 @@ impl IsqPipelineMixin for EmbeddingPipeline {
                     modules: Some(&self.modules_ser),
                     module_paths: Some(&self.modules_manifest),
                 },
-                Arc::new(MultiProgress::new()),
+                Arc::new(new_multi_progress()),
             )
             .map_err(anyhow::Error::msg)
     }

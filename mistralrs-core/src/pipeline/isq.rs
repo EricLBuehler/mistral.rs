@@ -66,7 +66,8 @@ use tokenizers::Tokenizer;
 use tracing::{info, warn};
 
 use crate::{
-    device_map::DeviceMapper, pipeline::EmbeddingModulePaths, topology::LayerTopology, Topology,
+    device_map::DeviceMapper, pipeline::EmbeddingModulePaths, topology::LayerTopology,
+    utils::progress::configure_progress_bar, Topology,
 };
 
 pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
@@ -453,6 +454,7 @@ pub trait IsqModel {
                     );
                 }
                 let bar = ProgressBar::new(total_tensors as u64);
+                configure_progress_bar(&bar);
                 bar.set_style(
                     ProgressStyle::default_bar()
                         .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
@@ -605,6 +607,7 @@ pub trait IsqModel {
                 }
 
                 let bar = ProgressBar::new(total_tensors as u64);
+                configure_progress_bar(&bar);
                 bar.set_style(
                     ProgressStyle::default_bar()
                         .template("[{elapsed_precise}] [{bar:40.red/magenta}] {pos}/{len} ({eta})")
@@ -926,6 +929,7 @@ pub trait IsqModel {
         }
 
         let bar = ProgressBar::new(total_tensors as u64);
+        configure_progress_bar(&bar);
         bar.set_style(
             ProgressStyle::default_bar()
                 .template("[{elapsed_precise}] [{bar:40.red/magenta}] {pos}/{len} ({eta})")
