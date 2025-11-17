@@ -28,8 +28,6 @@ const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mistralrs_quant
 pub enum MetalKernelError {
     #[error("Could not lock kernel map: {0}")]
     LockError(String),
-    #[error("Error while loading library: {0}")]
-    LoadLibraryError(String),
     #[error("Error while loading function: {0:?}")]
     LoadFunctionError(String),
     #[error("Failed to create pipeline")]

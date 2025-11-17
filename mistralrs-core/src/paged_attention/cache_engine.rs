@@ -111,7 +111,7 @@ impl CacheEngine {
                         * key_block_shape.1
                         * key_block_shape.2
                         * key_block_shape.3;
-                    let buffer = dev.new_buffer(elem_count, dtype, "k_cache")?;
+                    let buffer = dev.new_private_buffer(elem_count, dtype, "k_cache")?;
                     let storage =
                         Storage::Metal(MetalStorage::new(buffer, dev.clone(), elem_count, dtype));
                     Tensor::from((
@@ -155,7 +155,7 @@ impl CacheEngine {
                         * value_block_shape.0
                         * value_block_shape.1
                         * value_block_shape.2;
-                    let buffer = dev.new_buffer(elem_count, dtype, "v_cache")?;
+                    let buffer = dev.new_private_buffer(elem_count, dtype, "v_cache")?;
                     let storage =
                         Storage::Metal(MetalStorage::new(buffer, dev.clone(), elem_count, dtype));
                     Tensor::from((
