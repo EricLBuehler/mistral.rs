@@ -572,7 +572,7 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 [[package]]
 name = "candle-core"
 version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=db6b60b#db6b60b29a6ce32631e639e7ab6a47fb3cc41c29"
+source = "git+https://github.com/huggingface/candle.git?rev=bc6263d8#bc6263d8b8505bc67088d3f7e49624ac15dff7a7"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -605,7 +605,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=db6b60b#db6b60b29a6ce32631e639e7ab6a47fb3cc41c29"
+source = "git+https://github.com/huggingface/candle.git?rev=bc6263d8#bc6263d8b8505bc67088d3f7e49624ac15dff7a7"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -616,7 +616,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=db6b60b#db6b60b29a6ce32631e639e7ab6a47fb3cc41c29"
+source = "git+https://github.com/huggingface/candle.git?rev=bc6263d8#bc6263d8b8505bc67088d3f7e49624ac15dff7a7"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -628,7 +628,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=db6b60b#db6b60b29a6ce32631e639e7ab6a47fb3cc41c29"
+source = "git+https://github.com/huggingface/candle.git?rev=bc6263d8#bc6263d8b8505bc67088d3f7e49624ac15dff7a7"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -636,7 +636,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=db6b60b#db6b60b29a6ce32631e639e7ab6a47fb3cc41c29"
+source = "git+https://github.com/huggingface/candle.git?rev=bc6263d8#bc6263d8b8505bc67088d3f7e49624ac15dff7a7"
 dependencies = [
  "half",
  "objc2",
@@ -650,7 +650,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=db6b60b#db6b60b29a6ce32631e639e7ab6a47fb3cc41c29"
+source = "git+https://github.com/huggingface/candle.git?rev=bc6263d8#bc6263d8b8505bc67088d3f7e49624ac15dff7a7"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -2779,21 +2779,6 @@ dependencies = [
 
 [[package]]
 name = "metal"
-version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c43f73953f8cbe511f021b58f18c3ce1c3d1ae13fe953293e13345bf83217f25"
-dependencies = [
- "bitflags 2.10.0",
- "block",
- "core-graphics-types",
- "foreign-types",
- "log",
- "objc",
- "paste",
-]
-
-[[package]]
-name = "metal"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ecfd3296f8c56b7c1f6fbac3c71cefa9d78ce009850c45000015f206dc7fa21"
@@ -2976,7 +2961,6 @@ dependencies = [
  "libc",
  "llguidance",
  "lrtable",
- "metal 0.27.0",
  "minijinja",
  "minijinja-contrib",
  "mistralrs-audio",
@@ -2986,6 +2970,7 @@ dependencies = [
  "mistralrs-vision",
  "num-traits",
  "objc",
+ "objc2-metal",
  "ordered-float",
  "parking_lot",
  "pyo3",
@@ -3060,7 +3045,7 @@ dependencies = [
  "candle-core",
  "float8 0.4.2",
  "half",
- "metal 0.27.0",
+ "objc2-metal",
  "thiserror 2.0.17",
 ]
 
@@ -3103,7 +3088,7 @@ dependencies = [
  "hf-hub",
  "lazy_static",
  "memmap2",
- "metal 0.27.0",
+ "objc2-metal",
  "paste",
  "rayon",
  "regex",
@@ -3463,7 +3448,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "915b1b472bc21c53464d6c8461c9d3af805ba1ef837e1cac254428f4a77177b1"
 dependencies = [
  "malloc_buf",
- "objc_exception",
 ]
 
 [[package]]
@@ -3517,15 +3501,6 @@ dependencies = [
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
-]
-
-[[package]]
-name = "objc_exception"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad970fb455818ad6cba4c122ad012fae53ae8b4795f86378bce65e4f6bab2ca4"
-dependencies = [
- "cc",
 ]
 
 [[package]]
@@ -5966,7 +5941,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7adf545a99a086d362efc739e7cf4317c18cbeda22706000fd434d70ea3d95"
 dependencies = [
  "half",
- "metal 0.29.0",
+ "metal",
  "objc",
  "serde",
  "thiserror 1.0.69",

@@ -107,7 +107,7 @@ statrs.workspace = true
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc = { workspace = true, optional = true }
-metal = { workspace = true, optional = true }
+objc2-metal = { workspace = true, optional = true }
 
 [features]
 pyo3_macros = ["pyo3", "mistralrs-mcp/pyo3_macros"]
@@ -128,7 +128,7 @@ metal = [
     "dep:objc",
     "dep:mistralrs-paged-attn",
     "mistralrs-paged-attn/metal",
-    "dep:metal"
+    "dep:objc2-metal"
 ]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
 flash-attn-v3 = ["cuda", "dep:candle-flash-attn-v3"]

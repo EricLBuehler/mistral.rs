@@ -16,7 +16,7 @@ homepage.workspace = true
 candle-core.workspace = true
 half.workspace = true
 float8.workspace = true
-metal = { workspace = true, optional = true }
+objc2-metal = { workspace = true, optional = true }
 thiserror.workspace = true
 
 [build-dependencies]
@@ -25,4 +25,4 @@ anyhow.workspace = true
 
 [features]
 cuda = ["dep:bindgen_cuda"]
-metal = ["dep:metal"]
+metal = ["dep:objc2-metal"]
