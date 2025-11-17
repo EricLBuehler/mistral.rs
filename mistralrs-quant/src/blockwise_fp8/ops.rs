@@ -253,8 +253,8 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
             candle_core::bail!("Expected scale to be rank 2");
         }
 
-        let command_buffer = weight_s.device().command_buffer()?;
-        command_buffer.set_label("dequant-blockwise-fp8");
+        let encoder = weight_s.device().command_encoder()?;
+        encoder.set_label("dequant-blockwise-fp8");
 
         let device = weight_s.device();
 
@@ -275,7 +275,7 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
 
         crate::metal_kernels::call_dequant_blockwise_fp8(
             device.device(),
-            &command_buffer,
+            &encoder,
             &crate::metal_kernels::Kernels::new(),
             self.out_ty,
             weight_s.buffer(),

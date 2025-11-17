@@ -8,7 +8,7 @@ use candle_core::{
 };
 
 #[cfg(feature = "metal")]
-use candle_core::{from_storage_no_op, Storage};
+use candle_core::Storage;
 
 use candle_nn::Linear;
 #[cfg(feature = "cuda")]
@@ -193,8 +193,8 @@ impl HqqBits {
                     use candle_core::MetalStorage;
 
                     let dev = device.as_metal_device()?;
-                    let command_buffer = dev.command_buffer()?;
-                    command_buffer.set_label("hqq_pack_8bit");
+                    let encoder = dev.command_encoder()?;
+                    encoder.set_label("hqq_pack_8bit");
 
                     let (wq_storage, _wq_layout) = wq.storage_and_layout();
                     let wq_storage = match &*wq_storage {
@@ -211,7 +211,7 @@ impl HqqBits {
 
                     crate::metal_kernels::call_hqq_pack_8bit(
                         dev.device(),
-                        &command_buffer,
+                        &encoder,
                         &crate::metal_kernels::Kernels::new(),
                         wq_storage.buffer(),
                         &output,
@@ -227,7 +227,7 @@ impl HqqBits {
                     );
                     let storage = Storage::Metal(storage);
 
-                    return Ok(from_storage_no_op(storage, output_shape, false));
+                    return Ok(Tensor::from((storage, output_shape)));
                 }
 
                 wq.to_dtype(DType::U8)
@@ -278,8 +278,8 @@ impl HqqBits {
                     use candle_core::MetalStorage;
 
                     let dev = device.as_metal_device()?;
-                    let command_buffer = dev.command_buffer()?;
-                    command_buffer.set_label("hqq_pack_4bit");
+                    let encoder = dev.command_encoder()?;
+                    encoder.set_label("hqq_pack_4bit");
 
                     let wq = wq_in.to_dtype(DType::U8)?;
                     let (wq_storage, _wq_layout) = wq.storage_and_layout();
@@ -298,7 +298,7 @@ impl HqqBits {
 
                     crate::metal_kernels::call_hqq_pack_4bit(
                         dev.device(),
-                        &command_buffer,
+                        &encoder,
                         &crate::metal_kernels::Kernels::new(),
                         wq_storage.buffer(),
                         &output,
@@ -315,7 +315,7 @@ impl HqqBits {
                     );
                     let storage = Storage::Metal(storage);
 
-                    return Ok(from_storage_no_op(storage, output_shape, false));
+                    return Ok(Tensor::from((storage, output_shape)));
                 }
 
                 // CPU fallback

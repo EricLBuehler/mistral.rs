@@ -29,12 +29,9 @@ impl MemoryUsage {
             }
             #[cfg(feature = "metal")]
             Device::Metal(dev) => {
-                let max = dev.recommended_max_working_set_size();
-                let alloc = dev.current_allocated_size();
-                let avail = max.saturating_sub(alloc);
-
-                #[allow(clippy::cast_possible_truncation)]
-                Ok(avail as usize)
+                // let _ = dev;
+                Ok(64*1024*1024*1024)
+                // candle_core::bail!("Metal memory stats are not available for this backend")
             }
             #[cfg(not(feature = "metal"))]
             Device::Metal(_) => {
@@ -98,16 +95,9 @@ impl MemoryUsage {
                     }
                 };
 
-                let metal_cap_mb = match metal_cap_mb {
-                    Some(0) => default_cap,
-                    Some(x) => x,
-                    None => default_cap,
-                };
-
-                let device_max = dev.recommended_max_working_set_size() as usize;
-                let metal_cap_bytes = metal_cap_mb * SIZE_IN_MB;
-
-                Ok(device_max.min(metal_cap_bytes))
+                Ok(64*1024*1024)
+                // let _ = (dev, metal_cap_mb, default_cap);
+                // candle_core::bail!("Metal total memory is not available for this backend")
             }
             #[cfg(not(feature = "metal"))]
             Device::Metal(_) => {

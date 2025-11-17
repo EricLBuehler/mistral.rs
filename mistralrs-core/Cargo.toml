@@ -108,6 +108,7 @@ statrs.workspace = true
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc = { workspace = true, optional = true }
 objc2-metal = { workspace = true, optional = true }
+candle-metal-kernels = { workspace = true, optional = true }
 
 [features]
 pyo3_macros = ["pyo3", "mistralrs-mcp/pyo3_macros"]
@@ -125,6 +126,7 @@ metal = [
     "candle-core/metal",
     "candle-nn/metal",
     "mistralrs-quant/metal",
+    "dep:candle-metal-kernels",
     "dep:objc",
     "dep:mistralrs-paged-attn",
     "mistralrs-paged-attn/metal",

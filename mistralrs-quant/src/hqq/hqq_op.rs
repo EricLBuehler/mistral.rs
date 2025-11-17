@@ -73,8 +73,8 @@ impl CustomOp3 for Dequant8Bit {
             candle_core::bail!("All inputs must be contiguous");
         }
 
-        let command_buffer = w.device().command_buffer()?;
-        command_buffer.set_label("dequant-8bit");
+        let encoder = w.device().command_encoder()?;
+        encoder.set_label("dequant-8bit");
 
         let device = w.device();
 
@@ -84,7 +84,7 @@ impl CustomOp3 for Dequant8Bit {
 
         crate::metal_kernels::call_dequant_8bit(
             device.device(),
-            &command_buffer,
+            &encoder,
             &crate::metal_kernels::Kernels::new(),
             s.dtype(),
             w.buffer(),
@@ -184,8 +184,8 @@ impl CustomOp3 for Dequant4Bit {
             candle_core::bail!("All inputs must be contiguous");
         }
 
-        let command_buffer = w.device().command_buffer()?;
-        command_buffer.set_label("dequant-4bit");
+        let encoder = w.device().command_encoder()?;
+        encoder.set_label("dequant-4bit");
 
         let device = w.device();
 
@@ -195,7 +195,7 @@ impl CustomOp3 for Dequant4Bit {
 
         crate::metal_kernels::call_dequant_4bit(
             device.device(),
-            &command_buffer,
+            &encoder,
             &crate::metal_kernels::Kernels::new(),
             s.dtype(),
             w.buffer(),
@@ -297,8 +297,8 @@ impl CustomOp3 for Dequant2Bit {
             candle_core::bail!("All inputs must be contiguous");
         }
 
-        let command_buffer = w.device().command_buffer()?;
-        command_buffer.set_label("dequant-2bit");
+        let encoder = w.device().command_encoder()?;
+        encoder.set_label("dequant-2bit");
 
         let device = w.device();
 
@@ -308,7 +308,7 @@ impl CustomOp3 for Dequant2Bit {
 
         crate::metal_kernels::call_dequant_2bit(
             device.device(),
-            &command_buffer,
+            &encoder,
             &crate::metal_kernels::Kernels::new(),
             s.dtype(),
             w.buffer(),
@@ -414,8 +414,8 @@ impl CustomOp3 for Dequant1Bit {
             candle_core::bail!("All inputs must be contiguous");
         }
 
-        let command_buffer = w.device().command_buffer()?;
-        command_buffer.set_label("dequant-1bit");
+        let encoder = w.device().command_encoder()?;
+        encoder.set_label("dequant-1bit");
 
         let device = w.device();
 
@@ -425,7 +425,7 @@ impl CustomOp3 for Dequant1Bit {
 
         crate::metal_kernels::call_dequant_1bit(
             device.device(),
-            &command_buffer,
+            &encoder,
             &crate::metal_kernels::Kernels::new(),
             s.dtype(),
             w.buffer(),
@@ -533,8 +533,8 @@ impl CustomOp3 for Dequant3Bit {
             candle_core::bail!("All inputs must be contiguous");
         }
 
-        let command_buffer = w.device().command_buffer()?;
-        command_buffer.set_label("dequant-3bit");
+        let encoder = w.device().command_encoder()?;
+        encoder.set_label("dequant-3bit");
 
         let device = w.device();
 
@@ -544,7 +544,7 @@ impl CustomOp3 for Dequant3Bit {
 
         crate::metal_kernels::call_dequant_3bit(
             device.device(),
-            &command_buffer,
+            &encoder,
             &crate::metal_kernels::Kernels::new(),
             s.dtype(),
             w.buffer(),
