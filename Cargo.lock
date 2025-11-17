@@ -572,7 +572,7 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 [[package]]
 name = "candle-core"
 version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=60252cc#60252ccf0f92df00a08eab4f9f83b79b9f339d2f"
+source = "git+https://github.com/huggingface/candle.git?rev=db6b60b#db6b60b29a6ce32631e639e7ab6a47fb3cc41c29"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -593,7 +593,7 @@ dependencies = [
  "rand 0.9.2",
  "rand_distr 0.5.1",
  "rayon",
- "safetensors 0.4.5",
+ "safetensors 0.6.2",
  "thiserror 1.0.69",
  "ug",
  "ug-cuda",
@@ -605,7 +605,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=60252cc#60252ccf0f92df00a08eab4f9f83b79b9f339d2f"
+source = "git+https://github.com/huggingface/candle.git?rev=db6b60b#db6b60b29a6ce32631e639e7ab6a47fb3cc41c29"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -616,7 +616,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=60252cc#60252ccf0f92df00a08eab4f9f83b79b9f339d2f"
+source = "git+https://github.com/huggingface/candle.git?rev=db6b60b#db6b60b29a6ce32631e639e7ab6a47fb3cc41c29"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -628,7 +628,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=60252cc#60252ccf0f92df00a08eab4f9f83b79b9f339d2f"
+source = "git+https://github.com/huggingface/candle.git?rev=db6b60b#db6b60b29a6ce32631e639e7ab6a47fb3cc41c29"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -636,7 +636,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=60252cc#60252ccf0f92df00a08eab4f9f83b79b9f339d2f"
+source = "git+https://github.com/huggingface/candle.git?rev=db6b60b#db6b60b29a6ce32631e639e7ab6a47fb3cc41c29"
 dependencies = [
  "half",
  "objc2",
@@ -650,7 +650,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=60252cc#60252ccf0f92df00a08eab4f9f83b79b9f339d2f"
+source = "git+https://github.com/huggingface/candle.git?rev=db6b60b#db6b60b29a6ce32631e639e7ab6a47fb3cc41c29"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -661,7 +661,7 @@ dependencies = [
  "num-traits",
  "objc2-metal",
  "rayon",
- "safetensors 0.4.5",
+ "safetensors 0.6.2",
  "serde",
  "thiserror 1.0.69",
 ]
