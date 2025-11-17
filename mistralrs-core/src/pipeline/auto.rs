@@ -339,7 +339,6 @@ impl Loader for AutoLoader {
     ) -> Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         let config = self.read_config_from_hf(revision.clone(), &token_source, silent)?;
-        dbg!(&config.sentence_transformers_present);
         self.ensure_loader(&config.contents, config.sentence_transformers_present)?;
         self.loader
             .lock()
