@@ -12,6 +12,9 @@ use tracing::{info, warn};
 
 use super::DeviceMappedModelLoader;
 
+const GPU_RESERVE_FRACTION: f64 = 0.02;
+const GPU_MIN_RESERVE_BYTES: usize = 512 * 1024 * 1024; // 512MB safety buffer
+
 #[derive(Clone, Debug)]
 pub(crate) enum NonMappedSubModel {
     Vision,
@@ -177,6 +180,12 @@ pub fn get_device_layers(
     let non_mapped_max =
         loader.non_mapped_max_act_size_elems(config, params)? * dtype.size_in_bytes();
 
+    let mut layer_sizes_backup = if paged_attn_config.is_some() {
+        Some(layer_sizes_in_bytes.clone())
+    } else {
+        None
+    };
+
     let mut remaining = total_model_size_in_bytes;
     let max_seq_len = match params {
         AutoDeviceMapParams::Text { max_seq_len, .. }
@@ -252,18 +261,20 @@ pub fn get_device_layers(
     let avail_copy = avail.clone();
     let mut includes_cpu = false;
     while remaining > 0 && !avail.is_empty() {
-        let (cap, dev) = avail
+        let (avail_bytes, dev) = avail
             .pop()
             .context("No more devices to map to. The model does not fit on this system.")?;
 
         // For CPU: effectively unlimited capacity since it can use swap memory
-        // For GPU/accelerators: use 90% of available memory as maximum
+        // For GPU/accelerators: keep a small dynamic safety reserve to avoid OOMs
         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let cap = if dev.is_cpu() {
             // Allow unlimited capacity for CPU - swap will handle it
             usize::MAX
         } else {
-            (cap as f64 * 0.90) as usize
+            let reserve_fraction = (avail_bytes as f64 * GPU_RESERVE_FRACTION) as usize;
+            let reserve = reserve_fraction.max(GPU_MIN_RESERVE_BYTES).min(avail_bytes);
+            avail_bytes.saturating_sub(reserve)
         };
 
         // Algorithm is to check the following:
@@ -273,10 +284,7 @@ pub fn get_device_layers(
         //   - if this is the first dev: must hold the non-mapped act and non-mapped model
         //   - otherwise, must hold the mapped act
         let required_whole_capacity = if ordinal == 0 {
-            remaining
-                + non_mapped_max.max(mapped_max)
-                + non_mapped_size_in_bytes
-                + kv_cache_bytes * (num_layers - layer)
+            remaining + non_mapped_max.max(mapped_max) + kv_cache_bytes * (num_layers - layer)
         } else {
             remaining + mapped_max + kv_cache_bytes * (num_layers - layer)
         };
@@ -286,11 +294,11 @@ pub fn get_device_layers(
             num_layers - layer
         } else {
             let mut used = mapped_max;
-            let mut used_no_act = 0;
+            let mut used_weight_bytes = 0;
             let mut count = 0;
             if ordinal == 0 {
                 used = used.max(non_mapped_max) + non_mapped_size_in_bytes;
-                used_no_act += non_mapped_size_in_bytes;
+                used_weight_bytes += non_mapped_size_in_bytes;
             }
             while let Some(&sz) = layer_sizes_in_bytes.last() {
                 let delta = sz + kv_cache_bytes;
@@ -299,11 +307,11 @@ pub fn get_device_layers(
                 }
                 layer_sizes_in_bytes.pop();
                 used += delta;
-                used_no_act += delta;
+                used_weight_bytes += sz;
                 count += 1;
             }
             if count > 0 {
-                remaining = remaining.saturating_sub(used_no_act);
+                remaining = remaining.saturating_sub(used_weight_bytes);
             } else {
                 warn!(
                     "Device {} can fit 0 layers. Consider reducing auto map params from current: {params} (ex. reducing max seq len or max num images)",
@@ -334,11 +342,16 @@ pub fn get_device_layers(
         );
     }
     if paged_attn_config.is_some_and(|_| includes_cpu) {
+        let original_layers = layer_sizes_backup
+            .take()
+            .expect("layer sizes backup missing for paged attention fallback");
+        // The original vector was in forward order, but `get_device_layers` handles
+        // reversing internally, so we can pass it along unchanged.
         return get_device_layers(
             loader,
             config,
             num_layers,
-            layer_sizes_in_bytes,
+            original_layers,
             non_mapped_size_in_bytes,
             total_model_size_in_bytes,
             devices,
