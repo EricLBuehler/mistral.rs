@@ -4,7 +4,7 @@ use candle_core::{DType, Device, Result, Shape, Tensor};
 #[cfg(feature = "cuda")]
 use candle_core::{
     cuda::{cudarc::driver::DevicePtr, CudaStorageSlice},
-    from_storage_no_op, CudaStorage, Storage,
+    CudaStorage, Storage,
 };
 
 #[cfg(feature = "metal")]
@@ -100,7 +100,7 @@ macro_rules! dequant_for_dtype {
             };
             let storage = Storage::Cuda(storage);
 
-            from_storage_no_op(storage, out_shape, false)
+            Tensor::from((storage, out_shape))
         }
     }};
 }
@@ -185,7 +185,7 @@ impl HqqBits {
 
                     let storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
                     let storage = Storage::Cuda(storage);
-                    return Ok(from_storage_no_op(storage, output_shape, false));
+                    return Ok(Tensor::from((storage, output_shape)));
                 }
 
                 #[cfg(feature = "metal")]
@@ -270,7 +270,7 @@ impl HqqBits {
 
                     let storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
                     let storage = Storage::Cuda(storage);
-                    return Ok(from_storage_no_op(storage, output_shape, false));
+                    return Ok(Tensor::from((storage, output_shape)));
                 }
 
                 #[cfg(feature = "metal")]
@@ -364,7 +364,7 @@ impl HqqBits {
 
                     let storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
                     let storage = Storage::Cuda(storage);
-                    Ok(from_storage_no_op(storage, output_shape, false))
+                    Ok(Tensor::from((storage, output_shape)))
                 } else {
                     // CPU fallback
                     let wq = wq_in.to_dtype(DType::U8)?;
@@ -440,7 +440,7 @@ impl HqqBits {
 
                     let storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
                     let storage = Storage::Cuda(storage);
-                    return Ok(from_storage_no_op(storage, output_shape, false));
+                    return Ok(Tensor::from((storage, output_shape)));
                 }
 
                 // CPU fallback implementation
@@ -513,7 +513,7 @@ impl HqqBits {
 
                     let storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
                     let storage = Storage::Cuda(storage);
-                    Ok(from_storage_no_op(storage, output_shape, false))
+                    Ok(Tensor::from((storage, output_shape)))
                 } else {
                     // CPU fallback
                     let wq = wq_in.to_dtype(DType::U8)?;

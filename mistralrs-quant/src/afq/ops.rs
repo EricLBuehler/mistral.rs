@@ -1,8 +1,7 @@
 #![allow(unused)]
 
 use candle_core::{
-    backend::BackendStorage, from_storage_no_op, DType, MetalStorage, Result, Shape, Storage,
-    Tensor, D,
+    backend::BackendStorage, DType, MetalStorage, Result, Shape, Storage, Tensor, D,
 };
 
 use super::{AfqBits, AfqGroupSize};

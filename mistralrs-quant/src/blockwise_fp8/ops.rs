@@ -1,5 +1,3 @@
-#[cfg(feature = "cuda")]
-use candle_core::from_storage_no_op;
 use candle_core::{CpuStorage, CustomOp1, CustomOp2, DType, Result, Tensor, WithDType};
 use float8::F8E4M3;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -717,16 +715,14 @@ pub fn fp8_blockwise_quantize(
 
         // Create weight tensor by wrapping the CUDA storage
         let weight_storage = CudaStorage::wrap_cuda_slice(weight_output, dev.clone());
-        let weight =
-            from_storage_no_op(Storage::Cuda(weight_storage), input.shape().clone(), false);
+        let weight = Tensor::from((Storage::Cuda(weight_storage), input.shape().clone()));
 
         // Create scale tensor
         let scale_storage = CudaStorage::wrap_cuda_slice(scale_output, dev.clone());
-        let scale = from_storage_no_op(
+        let scale = Tensor::from((
             Storage::Cuda(scale_storage),
             candle_core::Shape::from_dims(&[grid_y, grid_x]),
-            false,
-        );
+        ));
 
         Ok((weight, scale))
     }

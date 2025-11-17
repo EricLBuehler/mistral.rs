@@ -571,27 +571,29 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 
 [[package]]
 name = "candle-core"
-version = "0.9.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=175926c9#175926c960f5aff6a543a06b3214471dd92785e4"
+version = "0.9.2-alpha.1"
+source = "git+https://github.com/huggingface/candle.git?rev=60252cc#60252ccf0f92df00a08eab4f9f83b79b9f339d2f"
 dependencies = [
  "accelerate-src",
  "byteorder",
  "candle-kernels",
  "candle-metal-kernels",
  "cudarc",
- "float8",
- "gemm 0.17.1",
+ "float8 0.4.2",
+ "gemm",
  "half",
  "intel-mkl-src",
  "libc",
+ "libm",
  "memmap2",
- "metal 0.27.0",
  "num-traits",
  "num_cpus",
+ "objc2-foundation",
+ "objc2-metal",
  "rand 0.9.2",
  "rand_distr 0.5.1",
  "rayon",
- "safetensors 0.6.2",
+ "safetensors 0.4.5",
  "thiserror 1.0.69",
  "ug",
  "ug-cuda",
@@ -602,8 +604,8 @@ dependencies = [
 
 [[package]]
 name = "candle-flash-attn"
-version = "0.9.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=175926c9#175926c960f5aff6a543a06b3214471dd92785e4"
+version = "0.9.2-alpha.1"
+source = "git+https://github.com/huggingface/candle.git?rev=60252cc#60252ccf0f92df00a08eab4f9f83b79b9f339d2f"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -613,8 +615,8 @@ dependencies = [
 
 [[package]]
 name = "candle-flash-attn-v3"
-version = "0.9.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=175926c9#175926c960f5aff6a543a06b3214471dd92785e4"
+version = "0.9.2-alpha.1"
+source = "git+https://github.com/huggingface/candle.git?rev=60252cc#60252ccf0f92df00a08eab4f9f83b79b9f339d2f"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -625,38 +627,41 @@ dependencies = [
 
 [[package]]
 name = "candle-kernels"
-version = "0.9.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=175926c9#175926c960f5aff6a543a06b3214471dd92785e4"
+version = "0.9.2-alpha.1"
+source = "git+https://github.com/huggingface/candle.git?rev=60252cc#60252ccf0f92df00a08eab4f9f83b79b9f339d2f"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
 
 [[package]]
 name = "candle-metal-kernels"
-version = "0.9.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=175926c9#175926c960f5aff6a543a06b3214471dd92785e4"
+version = "0.9.2-alpha.1"
+source = "git+https://github.com/huggingface/candle.git?rev=60252cc#60252ccf0f92df00a08eab4f9f83b79b9f339d2f"
 dependencies = [
  "half",
- "metal 0.27.0",
+ "objc2",
+ "objc2-foundation",
+ "objc2-metal",
  "once_cell",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tracing",
 ]
 
 [[package]]
 name = "candle-nn"
-version = "0.9.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=175926c9#175926c960f5aff6a543a06b3214471dd92785e4"
+version = "0.9.2-alpha.1"
+source = "git+https://github.com/huggingface/candle.git?rev=60252cc#60252ccf0f92df00a08eab4f9f83b79b9f339d2f"
 dependencies = [
  "accelerate-src",
  "candle-core",
  "candle-metal-kernels",
  "half",
  "intel-mkl-src",
- "metal 0.27.0",
+ "libc",
  "num-traits",
+ "objc2-metal",
  "rayon",
- "safetensors 0.6.2",
+ "safetensors 0.4.5",
  "serde",
  "thiserror 1.0.69",
 ]
@@ -1043,6 +1048,7 @@ version = "0.17.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff0da1a70ec91e66731c1752deb9fda3044f1154fe4ceb5873e3f96ed34cafa3"
 dependencies = [
+ "float8 0.3.0",
  "half",
  "libloading",
 ]
@@ -1379,16 +1385,6 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "dyn-stack"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56e53799688f5632f364f8fb387488dd05db9fe45db7011be066fc20e7027f8b"
-dependencies = [
- "bytemuck",
- "reborrow",
-]
-
-[[package]]
-name = "dyn-stack"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c4713e43e2886ba72b8271aa66c93d722116acf7a75555cce11dcde84388fe8"
@@ -1592,6 +1588,15 @@ dependencies = [
 
 [[package]]
 name = "float8"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f498aec3b227cd892ce18967f4033d9d397d28a80a7ab67e9f6b0176a79654e"
+dependencies = [
+ "half",
+]
+
+[[package]]
+name = "float8"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4203231de188ebbdfb85c11f3c20ca2b063945710de04e7b59268731e728b462"
@@ -1599,6 +1604,8 @@ dependencies = [
  "cudarc",
  "half",
  "num-traits",
+ "rand 0.9.2",
+ "rand_distr 0.5.1",
 ]
 
 [[package]]
@@ -1779,56 +1786,21 @@ dependencies = [
 
 [[package]]
 name = "gemm"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ab24cc62135b40090e31a76a9b2766a501979f3070fa27f689c27ec04377d32"
-dependencies = [
- "dyn-stack 0.10.0",
- "gemm-c32 0.17.1",
- "gemm-c64 0.17.1",
- "gemm-common 0.17.1",
- "gemm-f16 0.17.1",
- "gemm-f32 0.17.1",
- "gemm-f64 0.17.1",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid 10.7.0",
- "seq-macro",
-]
-
-[[package]]
-name = "gemm"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab96b703d31950f1aeddded248bc95543c9efc7ac9c4a21fda8703a83ee35451"
 dependencies = [
- "dyn-stack 0.13.2",
- "gemm-c32 0.18.2",
- "gemm-c64 0.18.2",
- "gemm-common 0.18.2",
- "gemm-f16 0.18.2",
- "gemm-f32 0.18.2",
- "gemm-f64 0.18.2",
+ "dyn-stack",
+ "gemm-c32",
+ "gemm-c64",
+ "gemm-common",
+ "gemm-f16",
+ "gemm-f32",
+ "gemm-f64",
  "num-complex",
  "num-traits",
  "paste",
- "raw-cpuid 11.6.0",
- "seq-macro",
-]
-
-[[package]]
-name = "gemm-c32"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9c030d0b983d1e34a546b86e08f600c11696fde16199f971cd46c12e67512c0"
-dependencies = [
- "dyn-stack 0.10.0",
- "gemm-common 0.17.1",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid 10.7.0",
+ "raw-cpuid",
  "seq-macro",
 ]
 
@@ -1838,27 +1810,12 @@ version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6db9fd9f40421d00eea9dd0770045a5603b8d684654816637732463f4073847"
 dependencies = [
- "dyn-stack 0.13.2",
- "gemm-common 0.18.2",
+ "dyn-stack",
+ "gemm-common",
  "num-complex",
  "num-traits",
  "paste",
- "raw-cpuid 11.6.0",
- "seq-macro",
-]
-
-[[package]]
-name = "gemm-c64"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbb5f2e79fefb9693d18e1066a557b4546cd334b226beadc68b11a8f9431852a"
-dependencies = [
- "dyn-stack 0.10.0",
- "gemm-common 0.17.1",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid 10.7.0",
+ "raw-cpuid",
  "seq-macro",
 ]
 
@@ -1868,33 +1825,13 @@ version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfcad8a3d35a43758330b635d02edad980c1e143dc2f21e6fd25f9e4eada8edf"
 dependencies = [
- "dyn-stack 0.13.2",
- "gemm-common 0.18.2",
+ "dyn-stack",
+ "gemm-common",
  "num-complex",
  "num-traits",
  "paste",
- "raw-cpuid 11.6.0",
+ "raw-cpuid",
  "seq-macro",
-]
-
-[[package]]
-name = "gemm-common"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2e7ea062c987abcd8db95db917b4ffb4ecdfd0668471d8dc54734fdff2354e8"
-dependencies = [
- "bytemuck",
- "dyn-stack 0.10.0",
- "half",
- "num-complex",
- "num-traits",
- "once_cell",
- "paste",
- "pulp 0.18.22",
- "raw-cpuid 10.7.0",
- "rayon",
- "seq-macro",
- "sysctl 0.5.5",
 ]
 
 [[package]]
@@ -1904,36 +1841,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a352d4a69cbe938b9e2a9cb7a3a63b7e72f9349174a2752a558a8a563510d0f3"
 dependencies = [
  "bytemuck",
- "dyn-stack 0.13.2",
+ "dyn-stack",
  "half",
  "libm",
  "num-complex",
  "num-traits",
  "once_cell",
  "paste",
- "pulp 0.21.5",
- "raw-cpuid 11.6.0",
+ "pulp",
+ "raw-cpuid",
  "rayon",
  "seq-macro",
- "sysctl 0.6.0",
-]
-
-[[package]]
-name = "gemm-f16"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ca4c06b9b11952071d317604acb332e924e817bd891bec8dfb494168c7cedd4"
-dependencies = [
- "dyn-stack 0.10.0",
- "gemm-common 0.17.1",
- "gemm-f32 0.17.1",
- "half",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid 10.7.0",
- "rayon",
- "seq-macro",
+ "sysctl",
 ]
 
 [[package]]
@@ -1942,30 +1861,15 @@ version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cff95ae3259432f3c3410eaa919033cd03791d81cebd18018393dc147952e109"
 dependencies = [
- "dyn-stack 0.13.2",
- "gemm-common 0.18.2",
- "gemm-f32 0.18.2",
+ "dyn-stack",
+ "gemm-common",
+ "gemm-f32",
  "half",
  "num-complex",
  "num-traits",
  "paste",
- "raw-cpuid 11.6.0",
+ "raw-cpuid",
  "rayon",
- "seq-macro",
-]
-
-[[package]]
-name = "gemm-f32"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9a69f51aaefbd9cf12d18faf273d3e982d9d711f60775645ed5c8047b4ae113"
-dependencies = [
- "dyn-stack 0.10.0",
- "gemm-common 0.17.1",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid 10.7.0",
  "seq-macro",
 ]
 
@@ -1975,27 +1879,12 @@ version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc8d3d4385393304f407392f754cd2dc4b315d05063f62cf09f47b58de276864"
 dependencies = [
- "dyn-stack 0.13.2",
- "gemm-common 0.18.2",
+ "dyn-stack",
+ "gemm-common",
  "num-complex",
  "num-traits",
  "paste",
- "raw-cpuid 11.6.0",
- "seq-macro",
-]
-
-[[package]]
-name = "gemm-f64"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa397a48544fadf0b81ec8741e5c0fba0043008113f71f2034def1935645d2b0"
-dependencies = [
- "dyn-stack 0.10.0",
- "gemm-common 0.17.1",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid 10.7.0",
+ "raw-cpuid",
  "seq-macro",
 ]
 
@@ -2005,12 +1894,12 @@ version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35b2a4f76ce4b8b16eadc11ccf2e083252d8237c1b589558a49b0183545015bd"
 dependencies = [
- "dyn-stack 0.13.2",
- "gemm-common 0.18.2",
+ "dyn-stack",
+ "gemm-common",
  "num-complex",
  "num-traits",
  "paste",
- "raw-cpuid 11.6.0",
+ "raw-cpuid",
  "seq-macro",
 ]
 
@@ -3069,7 +2958,7 @@ dependencies = [
  "derive_more 2.0.1",
  "dirs",
  "either",
- "float8",
+ "float8 0.4.2",
  "futures",
  "galil-seiferas",
  "half",
@@ -3169,7 +3058,7 @@ dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.7",
  "candle-core",
- "float8",
+ "float8 0.4.2",
  "half",
  "metal 0.27.0",
  "thiserror 2.0.17",
@@ -3209,7 +3098,7 @@ dependencies = [
  "byteorder",
  "candle-core",
  "candle-nn",
- "float8",
+ "float8 0.4.2",
  "half",
  "hf-hub",
  "lazy_static",
@@ -3587,10 +3476,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-core-foundation"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
+dependencies = [
+ "bitflags 2.10.0",
+ "dispatch2",
+ "objc2",
+]
+
+[[package]]
 name = "objc2-encode"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef25abbcd74fb2609453eb695bd2f860d389e457f67dc17cafc8b8cbc89d0c33"
+
+[[package]]
+name = "objc2-foundation"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3e0adef53c21f888deb4fa59fc59f7eb17404926ee8a6f59f5df0fd7f9f3272"
+dependencies = [
+ "bitflags 2.10.0",
+ "block2",
+ "libc",
+ "objc2",
+ "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-metal"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0125f776a10d00af4152d74616409f0d4a2053a6f57fa5b7d6aa2854ac04794"
+dependencies = [
+ "bitflags 2.10.0",
+ "block2",
+ "dispatch2",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-foundation",
+]
 
 [[package]]
 name = "objc_exception"
@@ -3922,18 +3849,6 @@ dependencies = [
 
 [[package]]
 name = "pulp"
-version = "0.18.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0a01a0dc67cf4558d279f0c25b0962bd08fc6dec0137699eae304103e882fe6"
-dependencies = [
- "bytemuck",
- "libm",
- "num-complex",
- "reborrow",
-]
-
-[[package]]
-name = "pulp"
 version = "0.21.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96b86df24f0a7ddd5e4b95c94fc9ed8a98f1ca94d3b01bdce2824097e7835907"
@@ -4217,15 +4132,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3382fc9f0aad4f2e2a56b53d9133c8c810b4dbf21e7e370e24346161a5b2c7bd"
 dependencies = [
  "rand_core 0.9.3",
-]
-
-[[package]]
-name = "raw-cpuid"
-version = "10.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c297679cb867470fa8c9f67dbba74a78d78e3e98d7cf2b08d6d71540f797332"
-dependencies = [
- "bitflags 1.3.2",
 ]
 
 [[package]]
@@ -5356,20 +5262,6 @@ dependencies = [
 
 [[package]]
 name = "sysctl"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec7dddc5f0fee506baf8b9fdb989e242f17e4b11c61dfbb0635b705217199eea"
-dependencies = [
- "bitflags 2.10.0",
- "byteorder",
- "enum-as-inner",
- "libc",
- "thiserror 1.0.69",
- "walkdir",
-]
-
-[[package]]
-name = "sysctl"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01198a2debb237c62b6826ec7081082d951f46dbb64b0e8c7649a452230d1dfc"
@@ -6039,7 +5931,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76b761acf8af3494640d826a8609e2265e19778fb43306c7f15379c78c9b05b0"
 dependencies = [
- "gemm 0.18.2",
+ "gemm",
  "half",
  "libloading",
  "memmap2",
