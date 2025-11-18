@@ -70,7 +70,21 @@ pub fn get_global_tp_size_from_devices() -> Result<usize> {
         Ok(config.world_size)
     }
 
-    #[cfg(not(feature = "ring"))]
+    #[cfg(all(feature = "cuda", feature = "nccl"))]
+    {
+        // In case we have manual set of TP size
+        if let Ok(x) = std::env::var("MISTRALRS_MN_LOCAL_WORLD_SIZE") {
+            use std::str::FromStr;
+            Ok(usize::from_str(&x).expect("Not a number for MISTRALRS_MN_LOCAL_WORLD_SIZE!"))
+        } else {
+            use candle_core::cuda::WrapErr;
+            candle_core::cuda::cudarc::driver::result::device::get_count()
+                .w()
+                .map(|x| x as usize)
+        }
+    }
+
+    #[cfg(all(not(feature = "ring"), not(feature = "nccl")))]
     Ok(1)
 }
 
