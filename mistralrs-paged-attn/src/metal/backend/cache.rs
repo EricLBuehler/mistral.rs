@@ -4,7 +4,6 @@ use candle_core::{
     backend::BackendStorage, CpuStorage, Device, IndexOp, Layout, MetalDevice, MetalStorage,
     Result, Storage, Tensor, WithDType,
 };
-use metal::NSUInteger;
 
 use crate::metal::kernels;
 
@@ -68,12 +67,12 @@ pub fn copy_blocks(
             unreachable!()
         };
 
-        let command_buffer = dev.command_buffer()?;
-        command_buffer.set_label("copy-blocks");
+        let encoder = dev.command_encoder()?;
+        encoder.set_label("copy-blocks");
 
         kernels::call_copy_blocks(
             dev.device(),
-            &command_buffer,
+            &encoder,
             &kernels::Kernels::new(),
             key_cache.dtype(),
             key_storage.buffer(),
@@ -127,17 +126,14 @@ pub unsafe fn swap_blocks(
                 let dst_offset = dst_block_number * block_size_in_bytes
                     + dst_layout.start_offset() * dst_storage.dtype().size_in_bytes();
 
-                let command_buffer = src_dev.command_buffer()?;
-                command_buffer.set_label("swap-blocks-gpu-gpu");
-                let blit = command_buffer.new_blit_command_encoder();
+                let blit = src_dev.blit_command_encoder()?;
                 blit.set_label("swap-blocks-gpu-gpu");
-                let length = (src_layout.shape().elem_count() * src_storage.dtype().size_in_bytes())
-                    as NSUInteger;
+                let length = src_layout.shape().elem_count() * src_storage.dtype().size_in_bytes();
                 blit.copy_from_buffer(
                     src_storage.buffer(),
-                    src_offset as u64,
+                    src_offset,
                     dst_storage.buffer(),
-                    dst_offset as u64,
+                    dst_offset,
                     length,
                 );
                 blit.end_encoding();
@@ -174,17 +170,14 @@ pub unsafe fn swap_blocks(
                         &src_slice[src_offset..src_offset + block_size_in_bytes],
                     )?;
 
-                    let command_buffer = dev.command_buffer()?;
-                    command_buffer.set_label("swap-blocks-cpu-gpu");
-                    let blit = command_buffer.new_blit_command_encoder();
+                    let blit = dev.blit_command_encoder()?;
                     blit.set_label("swap-blocks-cpu-gpu");
-                    let length = (src_layout.shape().elem_count() * SRCT::DTYPE.size_in_bytes())
-                        as NSUInteger;
+                    let length = src_layout.shape().elem_count() * SRCT::DTYPE.size_in_bytes();
                     blit.copy_from_buffer(
                         &src_buffer,
-                        src_offset as u64,
+                        src_offset,
                         dst_storage.buffer(),
-                        dst_offset as u64,
+                        dst_offset,
                         length,
                     );
                     blit.end_encoding();

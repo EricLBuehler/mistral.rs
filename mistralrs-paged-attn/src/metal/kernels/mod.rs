@@ -1,15 +1,20 @@
 use candle_core::{DType, MetalStorage};
-use metal::{
-    Buffer, ComputeCommandEncoderRef, ComputePipelineState, Device, Function,
-    FunctionConstantValues, Library, MTLDataType, MTLSize, NSUInteger,
+use candle_metal_kernels::metal::{
+    Buffer, ComputeCommandEncoder, ComputePipeline, ConstantValues, Device, Function, Library,
+    Value,
 };
+use objc2_metal::{MTLCompileOptions, MTLMathMode, MTLSize};
 use std::sync::{OnceLock, RwLock};
 use std::{collections::HashMap, ffi::c_void};
 
 pub mod utils;
-use utils::EncoderProvider;
+use utils::{EncoderProvider, RawBytesEncoder};
 
 use crate::set_params;
+
+// Backward-compatible aliases to ease migration from the `metal` crate API.
+type ComputeCommandEncoderRef = ComputeCommandEncoder;
+type ComputePipelineState = ComputePipeline;
 
 #[cfg(target_os = "macos")]
 const KERNELS: &[u8] = include_bytes!(concat!(
@@ -26,8 +31,6 @@ const KERNELS: &[u8] = include_bytes!(concat!(
 pub enum MetalKernelError {
     #[error("Could not lock kernel map: {0}")]
     LockError(String),
-    #[error("Error while loading library: {0}")]
-    LoadLibraryError(String),
     #[error("Error while loading function: {0:?}")]
     LoadFunctionError(String),
     #[error("Failed to create pipeline")]
@@ -71,19 +74,8 @@ impl Kernels {
         if let Some(lib) = LIBRARY.get() {
             Ok(lib.clone())
         } else {
-            let source_data = KERNELS;
-            // Check if the precompiled library is empty (which indicates runtime compilation is needed)
-            let lib = if source_data.is_empty() {
-                // Runtime compilation path
-                self.compile_kernels_at_runtime(device)?
-            } else {
-                // Precompiled path
-                device.new_library_with_data(source_data).map_err(|e| {
-                    MetalKernelError::LoadLibraryError(format!(
-                        "Metal requires macosx > 13.0 or higher, cannot load candle metal library: {e}"
-                    ))
-                })?
-            };
+            let _ = KERNELS; // keep the artifact around even though we compile at runtime
+            let lib = self.compile_kernels_at_runtime(device)?;
             Ok(LIBRARY.get_or_init(|| lib).clone())
         }
     }
@@ -241,9 +233,13 @@ impl Kernels {
         }
 
         // Compile the preprocessed source
-        let compile_options = metal::CompileOptions::new();
+        let compile_options = {
+            let opts = MTLCompileOptions::new();
+            opts.setMathMode(MTLMathMode::Fast);
+            opts
+        };
         device
-            .new_library_with_source(&main_source, &compile_options)
+            .new_library_with_source(&main_source, Some(&compile_options))
             .map_err(|e| {
                 MetalKernelError::CompilationError(format!(
                     "Failed to compile Metal kernels at runtime: {e}"
@@ -255,7 +251,7 @@ impl Kernels {
         &self,
         device: &Device,
         name: impl ToString,
-        constants: Option<FunctionConstantValues>,
+        constants: Option<&ConstantValues>,
     ) -> Result<Function, MetalKernelError> {
         let func = self
             .load_library(device)?
@@ -279,11 +275,7 @@ impl Kernels {
             Ok(pipeline.clone())
         } else {
             let (name, constants) = key;
-            let func = self.load_function(
-                device,
-                name.clone(),
-                constants.as_ref().map(|c| c.function_constant_values()),
-            )?;
+            let func = self.load_function(device, name.clone(), constants.as_ref())?;
             let pipeline = device
                 .new_compute_pipeline_state_with_function(&func)
                 .map_err(|e| MetalKernelError::FailedToCreatePipeline(e.to_string()))?;
@@ -347,12 +339,12 @@ pub fn call_copy_blocks(
     );
 
     let thread_groups_count = MTLSize {
-        width: num_pairs,
+        width: num_pairs as usize,
         height: 1,
         depth: 1,
     };
     let thread_group_size = MTLSize {
-        width: numel_per_block.min(1024),
+        width: (numel_per_block.min(1024)) as usize,
         height: 1,
         depth: 1,
     };
@@ -421,108 +413,58 @@ pub fn call_reshape_and_cache(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_buffer(0, Some(key), key_offset as NSUInteger);
-    encoder.set_buffer(1, Some(value), value_offset as NSUInteger);
-    encoder.set_buffer(2, Some(key_cache), key_cache_offset as NSUInteger);
-    encoder.set_buffer(3, Some(value_cache), value_cache_offset as NSUInteger);
-    encoder.set_buffer(4, Some(slot_mapping), slot_mapping_offset as NSUInteger);
+    encoder.set_buffer(0, Some(key), key_offset as usize);
+    encoder.set_buffer(1, Some(value), value_offset as usize);
+    encoder.set_buffer(2, Some(key_cache), key_cache_offset as usize);
+    encoder.set_buffer(3, Some(value_cache), value_cache_offset as usize);
+    encoder.set_buffer(4, Some(slot_mapping), slot_mapping_offset as usize);
     if let Some((k_scale, v_scale)) = k_v_scale {
-        encoder.set_buffer(5, Some(&k_scale), 0 as NSUInteger);
-        encoder.set_buffer(6, Some(&v_scale), 0 as NSUInteger);
+        encoder.set_buffer(5, Some(&k_scale), 0 as usize);
+        encoder.set_buffer(6, Some(&v_scale), 0 as usize);
     }
-    encoder.set_bytes(
+    encoder.set_bytes_raw(
         7,
-        core::mem::size_of_val(&key_stride) as u64,
+        core::mem::size_of_val(&key_stride),
         &key_stride as *const _ as *const c_void,
     );
-    encoder.set_bytes(
+    encoder.set_bytes_raw(
         8,
-        core::mem::size_of_val(&value_stride) as u64,
+        core::mem::size_of_val(&value_stride),
         &value_stride as *const _ as *const c_void,
     );
-    encoder.set_bytes(
+    encoder.set_bytes_raw(
         9,
-        core::mem::size_of_val(&num_heads) as u64,
+        core::mem::size_of_val(&num_heads),
         &num_heads as *const _ as *const c_void,
     );
-    encoder.set_bytes(
+    encoder.set_bytes_raw(
         10,
-        core::mem::size_of_val(&head_size) as u64,
+        core::mem::size_of_val(&head_size),
         &head_size as *const _ as *const c_void,
     );
-    encoder.set_bytes(
+    encoder.set_bytes_raw(
         11,
-        core::mem::size_of_val(&block_size) as u64,
+        core::mem::size_of_val(&block_size),
         &block_size as *const _ as *const c_void,
     );
-    encoder.set_bytes(
+    encoder.set_bytes_raw(
         12,
-        core::mem::size_of_val(&x) as u64,
+        core::mem::size_of_val(&x),
         &x as *const _ as *const c_void,
     );
 
     let thread_groups_count = MTLSize {
-        width: num_tokens as u64,
+        width: num_tokens as usize,
         height: 1,
         depth: 1,
     };
     let threads_per_threadgroup = MTLSize {
-        width: (num_heads * head_size).min(512) as u64,
+        width: (num_heads * head_size).min(512) as usize,
         height: 1,
         depth: 1,
     };
     encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
     Ok(())
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Value {
-    Bool(bool),
-}
-
-impl std::hash::Hash for Value {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self {
-            Value::Bool(v) => v.hash(state),
-        }
-    }
-}
-
-impl Value {
-    fn data_type(&self) -> MTLDataType {
-        match self {
-            Value::Bool(_) => MTLDataType::Bool,
-        }
-    }
-}
-
-/// Not true, good enough for our purposes.
-impl Eq for Value {}
-
-#[derive(Debug, Eq, PartialEq, Hash)]
-struct ConstantValues(Vec<(usize, Value)>);
-
-impl ConstantValues {
-    pub fn new(values: Vec<(usize, Value)>) -> Self {
-        Self(values)
-    }
-
-    fn function_constant_values(&self) -> FunctionConstantValues {
-        let f = FunctionConstantValues::new();
-        for (index, value) in &self.0 {
-            let ty = value.data_type();
-            match value {
-                Value::Bool(v) => {
-                    f.set_constant_value_at_index(
-                        v as *const bool as *const c_void,
-                        ty,
-                        *index as u64,
-                    );
-                }
-            }
-        }
-        f
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -558,8 +500,8 @@ pub fn call_paged_attention_v1(
     kv_block_stride: i32,
     kv_head_stride: i32,
 ) -> Result<(), MetalKernelError> {
-    const NUM_THREADS: u64 = 256;
-    const NUM_SIMD_LANES: u64 = 32;
+    const NUM_THREADS: usize = 256;
+    const NUM_SIMD_LANES: usize = 32;
 
     // v1 has no partition
     let name = format!(
@@ -581,67 +523,65 @@ pub fn call_paged_attention_v1(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    assert_eq!(pipeline.thread_execution_width(), NUM_SIMD_LANES);
-
     let num_simds = NUM_THREADS / NUM_SIMD_LANES;
     let padded_max_context_len = ((max_context_len + block_size - 1) / block_size) * block_size;
     let logits_size = padded_max_context_len * std::mem::size_of::<f32>() as i32;
     let outputs_size = (num_simds as i32 / 2) * head_size * std::mem::size_of::<f32>() as i32;
     let shared_mem_size = logits_size.max(outputs_size);
-    encoder.set_threadgroup_memory_length(0, shared_mem_size as u64);
+    encoder.set_threadgroup_memory_length(0, shared_mem_size as usize);
 
-    encoder.set_buffer(2, Some(output), 0 as NSUInteger);
-    encoder.set_buffer(3, Some(q), q_offset as NSUInteger);
-    encoder.set_buffer(4, Some(k_cache), k_cache_offset as NSUInteger);
-    encoder.set_buffer(5, Some(v_cache), v_cache_offset as NSUInteger);
+    encoder.set_buffer(2, Some(output), 0 as usize);
+    encoder.set_buffer(3, Some(q), q_offset as usize);
+    encoder.set_buffer(4, Some(k_cache), k_cache_offset as usize);
+    encoder.set_buffer(5, Some(v_cache), v_cache_offset as usize);
     if let Some((k_scale, v_scale)) = &k_v_scale {
-        encoder.set_buffer(6, Some(k_scale), 0 as NSUInteger);
-        encoder.set_buffer(7, Some(v_scale), 0 as NSUInteger);
+        encoder.set_buffer(6, Some(k_scale), 0 as usize);
+        encoder.set_buffer(7, Some(v_scale), 0 as usize);
     }
-    encoder.set_bytes(
+    encoder.set_bytes_raw(
         8,
-        core::mem::size_of_val(&num_kv_heads) as u64,
+        core::mem::size_of_val(&num_kv_heads),
         &num_kv_heads as *const _ as *const c_void,
     );
-    encoder.set_bytes(
+    encoder.set_bytes_raw(
         9,
-        core::mem::size_of_val(&scale) as u64,
+        core::mem::size_of_val(&scale),
         &scale as *const _ as *const c_void,
     );
-    encoder.set_bytes(
+    encoder.set_bytes_raw(
         10,
-        core::mem::size_of_val(&softcapping) as u64,
+        core::mem::size_of_val(&softcapping),
         &softcapping as *const _ as *const c_void,
     );
-    encoder.set_buffer(11, Some(block_tables), block_tables_offset as NSUInteger);
-    encoder.set_buffer(12, Some(context_lens), context_lens_offset as NSUInteger);
-    encoder.set_bytes(
+    encoder.set_buffer(11, Some(block_tables), block_tables_offset as usize);
+    encoder.set_buffer(12, Some(context_lens), context_lens_offset as usize);
+    encoder.set_bytes_raw(
         13,
-        core::mem::size_of_val(&max_num_blocks_per_seq) as u64,
+        core::mem::size_of_val(&max_num_blocks_per_seq),
         &max_num_blocks_per_seq as *const _ as *const c_void,
     );
     if let Some((alibi, alibi_offset)) = alibi_storage_and_offset {
-        encoder.set_buffer(14, Some(alibi.buffer()), alibi_offset as NSUInteger);
+        encoder.set_buffer(14, Some(alibi.buffer()), alibi_offset as usize);
     }
-    encoder.set_bytes(
+    encoder.set_bytes_raw(
         15,
-        core::mem::size_of_val(&q_stride) as u64,
+        core::mem::size_of_val(&q_stride),
         &q_stride as *const _ as *const c_void,
     );
-    encoder.set_bytes(
+    encoder.set_bytes_raw(
         16,
-        core::mem::size_of_val(&kv_block_stride) as u64,
+        core::mem::size_of_val(&kv_block_stride),
         &kv_block_stride as *const _ as *const c_void,
     );
-    encoder.set_bytes(
+    encoder.set_bytes_raw(
         17,
-        core::mem::size_of_val(&kv_head_stride) as u64,
+        core::mem::size_of_val(&kv_head_stride),
         &kv_head_stride as *const _ as *const c_void,
     );
 
     let thread_groups_count = MTLSize {
-        width: num_heads as u64,
-        height: num_seqs as u64,
+        width: num_heads as usize,
+        height: num_seqs as usize,
         depth: 1,
     };
     let thread_group_size = MTLSize {
@@ -689,9 +629,9 @@ pub fn call_paged_attention_v2(
     kv_block_stride: i32,
     kv_head_stride: i32,
 ) -> Result<(), MetalKernelError> {
-    const NUM_THREADS: u64 = 256;
-    const PARTITION_SIZE: u64 = 512;
-    const NUM_SIMD_LANES: u64 = 32;
+    const NUM_THREADS: usize = 256;
+    const PARTITION_SIZE: usize = 512;
+    const NUM_SIMD_LANES: usize = 32;
 
     // Initial paged attention kernel
     {
@@ -718,71 +658,69 @@ pub fn call_paged_attention_v2(
         let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
         encoder.set_compute_pipeline_state(&pipeline);
 
-        assert_eq!(pipeline.thread_execution_width(), NUM_SIMD_LANES);
-
         let num_simds = NUM_THREADS / NUM_SIMD_LANES;
         let max_num_partitions =
             (max_context_len + PARTITION_SIZE as i32 - 1) / PARTITION_SIZE as i32;
         let logits_size = PARTITION_SIZE as i32 * std::mem::size_of::<f32>() as i32;
         let outputs_size = (num_simds as i32 / 2) * head_size * std::mem::size_of::<f32>() as i32;
         let shared_mem_size = logits_size.max(outputs_size);
-        encoder.set_threadgroup_memory_length(0, shared_mem_size as u64);
+        encoder.set_threadgroup_memory_length(0, shared_mem_size as usize);
 
-        encoder.set_buffer(0, Some(exp_sums), 0 as NSUInteger);
-        encoder.set_buffer(1, Some(max_logits), 0 as NSUInteger);
-        encoder.set_buffer(2, Some(tmp_out), 0 as NSUInteger);
-        encoder.set_buffer(3, Some(q), q_offset as NSUInteger);
-        encoder.set_buffer(4, Some(k_cache), k_cache_offset as NSUInteger);
-        encoder.set_buffer(5, Some(v_cache), v_cache_offset as NSUInteger);
+        encoder.set_buffer(0, Some(exp_sums), 0 as usize);
+        encoder.set_buffer(1, Some(max_logits), 0 as usize);
+        encoder.set_buffer(2, Some(tmp_out), 0 as usize);
+        encoder.set_buffer(3, Some(q), q_offset as usize);
+        encoder.set_buffer(4, Some(k_cache), k_cache_offset as usize);
+        encoder.set_buffer(5, Some(v_cache), v_cache_offset as usize);
         if let Some((k_scale, v_scale)) = &k_v_scale {
-            encoder.set_buffer(6, Some(k_scale), 0 as NSUInteger);
-            encoder.set_buffer(7, Some(v_scale), 0 as NSUInteger);
+            encoder.set_buffer(6, Some(k_scale), 0 as usize);
+            encoder.set_buffer(7, Some(v_scale), 0 as usize);
         }
-        encoder.set_bytes(
+        encoder.set_bytes_raw(
             8,
-            core::mem::size_of_val(&num_kv_heads) as u64,
+            core::mem::size_of_val(&num_kv_heads),
             &num_kv_heads as *const _ as *const c_void,
         );
-        encoder.set_bytes(
+        encoder.set_bytes_raw(
             9,
-            core::mem::size_of_val(&scale) as u64,
+            core::mem::size_of_val(&scale),
             &scale as *const _ as *const c_void,
         );
-        encoder.set_bytes(
+        encoder.set_bytes_raw(
             10,
-            core::mem::size_of_val(&softcapping) as u64,
+            core::mem::size_of_val(&softcapping),
             &softcapping as *const _ as *const c_void,
         );
-        encoder.set_buffer(11, Some(block_tables), block_tables_offset as NSUInteger);
-        encoder.set_buffer(12, Some(context_lens), context_lens_offset as NSUInteger);
-        encoder.set_bytes(
+        encoder.set_buffer(11, Some(block_tables), block_tables_offset as usize);
+        encoder.set_buffer(12, Some(context_lens), context_lens_offset as usize);
+        encoder.set_bytes_raw(
             13,
-            core::mem::size_of_val(&max_num_blocks_per_seq) as u64,
+            core::mem::size_of_val(&max_num_blocks_per_seq),
             &max_num_blocks_per_seq as *const _ as *const c_void,
         );
         if let Some((alibi, alibi_offset)) = alibi_storage_and_offset {
-            encoder.set_buffer(14, Some(alibi.buffer()), alibi_offset as NSUInteger);
+            encoder.set_buffer(14, Some(alibi.buffer()), alibi_offset as usize);
         }
-        encoder.set_bytes(
+        encoder.set_bytes_raw(
             15,
-            core::mem::size_of_val(&q_stride) as u64,
+            core::mem::size_of_val(&q_stride),
             &q_stride as *const _ as *const c_void,
         );
-        encoder.set_bytes(
+        encoder.set_bytes_raw(
             16,
-            core::mem::size_of_val(&kv_block_stride) as u64,
+            core::mem::size_of_val(&kv_block_stride),
             &kv_block_stride as *const _ as *const c_void,
         );
-        encoder.set_bytes(
+        encoder.set_bytes_raw(
             17,
-            core::mem::size_of_val(&kv_head_stride) as u64,
+            core::mem::size_of_val(&kv_head_stride),
             &kv_head_stride as *const _ as *const c_void,
         );
 
         let thread_groups_count = MTLSize {
-            width: num_heads as u64,
-            height: num_seqs as u64,
-            depth: max_num_partitions as u64,
+            width: num_heads as usize,
+            height: num_seqs as usize,
+            depth: max_num_partitions as usize,
         };
         let thread_group_size = MTLSize {
             width: NUM_THREADS,
@@ -817,27 +755,25 @@ pub fn call_paged_attention_v2(
         let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
         encoder.set_compute_pipeline_state(&pipeline);
 
-        assert_eq!(pipeline.thread_execution_width(), NUM_SIMD_LANES);
-
         let max_num_partitions =
             (max_context_len + PARTITION_SIZE as i32 - 1) / PARTITION_SIZE as i32;
         let reduce_shared_mem_size = 2 * max_num_partitions * std::mem::size_of::<f32>() as i32;
-        encoder.set_threadgroup_memory_length(0, reduce_shared_mem_size as u64);
+        encoder.set_threadgroup_memory_length(0, reduce_shared_mem_size as usize);
 
-        encoder.set_buffer(0, Some(output), 0 as NSUInteger);
-        encoder.set_buffer(1, Some(exp_sums), 0 as NSUInteger);
-        encoder.set_buffer(2, Some(max_logits), 0 as NSUInteger);
-        encoder.set_buffer(3, Some(tmp_out), 0 as NSUInteger);
-        encoder.set_buffer(4, Some(context_lens), context_lens_offset as NSUInteger);
-        encoder.set_bytes(
+        encoder.set_buffer(0, Some(output), 0 as usize);
+        encoder.set_buffer(1, Some(exp_sums), 0 as usize);
+        encoder.set_buffer(2, Some(max_logits), 0 as usize);
+        encoder.set_buffer(3, Some(tmp_out), 0 as usize);
+        encoder.set_buffer(4, Some(context_lens), context_lens_offset as usize);
+        encoder.set_bytes_raw(
             5,
-            core::mem::size_of_val(&max_num_partitions) as u64,
+            core::mem::size_of_val(&max_num_partitions),
             &max_num_partitions as *const _ as *const c_void,
         );
 
         let thread_groups_count = MTLSize {
-            width: num_heads as u64,
-            height: num_seqs as u64,
+            width: num_heads as usize,
+            height: num_seqs as usize,
             depth: 1,
         };
         let thread_group_size = MTLSize {

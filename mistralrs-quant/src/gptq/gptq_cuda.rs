@@ -12,7 +12,7 @@ use candle_core::{
         },
         CudaStorageSlice, WrapErr,
     },
-    from_storage_no_op, Context, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
+    Context, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
 use half::f16;
 
@@ -284,7 +284,7 @@ impl GptqLayer {
         };
         let storage = Storage::Cuda(storage);
 
-        Ok(from_storage_no_op(storage, c_shape, false))
+        Ok(Tensor::from((storage, c_shape)))
     }
 }
 

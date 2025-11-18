@@ -1,8 +1,7 @@
 #![allow(unused)]
 
 use candle_core::{
-    backend::BackendStorage, from_storage_no_op, DType, MetalStorage, Result, Shape, Storage,
-    Tensor, D,
+    backend::BackendStorage, DType, MetalStorage, Result, Shape, Storage, Tensor, D,
 };
 
 use super::{AfqBits, AfqGroupSize};
@@ -34,9 +33,8 @@ pub(crate) fn afq_quantize_op(
         };
         let device = w_s.device();
 
-        // This is necessary to avoid the errors of "A command encoder is already encoding to this command buffer"
-        let command_buffer = device.new_command_buffer()?;
-        command_buffer.set_label("afq-quantize");
+        let encoder = device.command_encoder()?;
+        encoder.set_label("afq-quantize");
 
         let mut wq_shape = w.dims().to_vec();
         *wq_shape.last_mut().unwrap() = w.dim(D::Minus1)? * bits / 32;
@@ -52,7 +50,7 @@ pub(crate) fn afq_quantize_op(
 
         crate::metal_kernels::call_affine_quantize(
             device.device(),
-            &command_buffer,
+            &encoder,
             &crate::metal_kernels::Kernels::new(),
             w.dtype(),
             w_s.buffer(),
@@ -69,39 +67,33 @@ pub(crate) fn afq_quantize_op(
         )
         .map_err(candle_core::Error::wrap)?;
 
-        // This is necessary to avoid the errors of "A command encoder is already encoding to this command buffer"
-        command_buffer.commit();
-
-        let output = from_storage_no_op(
+        let output = Tensor::from((
             Storage::Metal(MetalStorage::new(
                 output,
                 device.clone(),
                 wq_shape.iter().product(),
                 DType::U32,
             )),
-            wq_shape,
-            false,
-        );
-        let scales = from_storage_no_op(
+            Shape::from(wq_shape),
+        ));
+        let scales = Tensor::from((
             Storage::Metal(MetalStorage::new(
                 scales,
                 device.clone(),
                 s_shape.iter().product(),
                 w.dtype(),
             )),
-            s_shape.clone(),
-            false,
-        );
-        let biases = from_storage_no_op(
+            Shape::from(s_shape.clone()),
+        ));
+        let biases = Tensor::from((
             Storage::Metal(MetalStorage::new(
                 biases,
                 device.clone(),
                 s_shape.iter().product(),
                 w.dtype(),
             )),
-            s_shape,
-            false,
-        );
+            Shape::from(s_shape),
+        ));
 
         Ok((output, scales, biases))
     }
@@ -142,8 +134,8 @@ pub(crate) fn afq_dequantize_op(
 
         let device = wq_s.device();
 
-        let command_buffer = device.command_buffer()?;
-        command_buffer.set_label("afq-dequantize");
+        let encoder = device.command_encoder()?;
+        encoder.set_label("afq-dequantize");
 
         let out_size = w_q.dim(D::Minus1)? * 32 / bits;
         let mut w_shape = w_q.dims().to_vec();
@@ -168,7 +160,7 @@ pub(crate) fn afq_dequantize_op(
         assert_eq!(biases.layout().start_offset(), 0);
         crate::metal_kernels::call_affine_quantize(
             device.device(),
-            &command_buffer,
+            &encoder,
             &crate::metal_kernels::Kernels::new(),
             scales.dtype(),
             wq_s.buffer(),
@@ -185,16 +177,15 @@ pub(crate) fn afq_dequantize_op(
         )
         .map_err(candle_core::Error::wrap)?;
 
-        let output = from_storage_no_op(
+        let output = Tensor::from((
             Storage::Metal(MetalStorage::new(
                 output,
                 device.clone(),
                 w_shape.iter().product(),
                 scales.dtype(),
             )),
-            w_shape,
-            false,
-        );
+            Shape::from(w_shape),
+        ));
 
         Ok(output)
     }
@@ -335,15 +326,15 @@ pub(crate) fn afq_mm_op(
             out_shape.push(x.dim(D::Minus2)?);
             out_shape.push(w_outer_dims);
 
-            let command_buffer = device.command_buffer()?;
-            command_buffer.set_label("afq-qmm");
+            let encoder = device.command_encoder()?;
+            encoder.set_label("afq-qmm");
 
             let output =
                 device.new_buffer(out_shape.iter().product(), scales.dtype(), "afq-qmm-output")?;
 
             crate::metal_kernels::call_afq_qmm(
                 device.device(),
-                &command_buffer,
+                &encoder,
                 &crate::metal_kernels::Kernels::new(),
                 scales.dtype(),
                 x_s.buffer(),
@@ -373,15 +364,15 @@ pub(crate) fn afq_mm_op(
             let mut out_shape = x.dims().to_vec();
             *out_shape.last_mut().unwrap() = w_outer_dims;
 
-            let command_buffer = device.command_buffer()?;
-            command_buffer.set_label("afq-qmm");
+            let encoder = device.command_encoder()?;
+            encoder.set_label("afq-qmm");
 
             let output =
                 device.new_buffer(out_shape.iter().product(), scales.dtype(), "afq-qmm-output")?;
 
             crate::metal_kernels::call_afq_qmm(
                 device.device(),
-                &command_buffer,
+                &encoder,
                 &crate::metal_kernels::Kernels::new(),
                 scales.dtype(),
                 x_s.buffer(),
@@ -409,16 +400,15 @@ pub(crate) fn afq_mm_op(
             (output, out_shape)
         };
 
-        let output = from_storage_no_op(
+        let output = Tensor::from((
             Storage::Metal(MetalStorage::new(
                 output,
                 device.clone(),
                 out_shape.iter().product(),
                 scales.dtype(),
             )),
-            out_shape,
-            false,
-        );
+            Shape::from(out_shape),
+        ));
 
         Ok(output)
     }

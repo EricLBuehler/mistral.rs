@@ -570,7 +570,10 @@ pub fn get_all_similar_devices(base: &Device) -> Result<Vec<Device>> {
         }
         #[cfg(feature = "metal")]
         Device::Metal(_) => {
-            let total_ords = metal::Device::all().len();
+            #[cfg(feature = "metal")]
+            let total_ords = candle_metal_kernels::metal::Device::all().len();
+            #[cfg(not(feature = "metal"))]
+            let total_ords = 0;
             let mut ord = 0;
             let DeviceLocation::Metal { gpu_id: base_ord } = base.location() else {
                 candle_core::bail!("location and device do not match");

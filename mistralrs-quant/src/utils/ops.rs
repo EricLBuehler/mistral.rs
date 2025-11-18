@@ -154,8 +154,8 @@ impl CustomOp1 for Leftshift {
             candle_core::bail!("Input tensor s1 must be contiguous");
         }
 
-        let command_buffer = s1.device().command_buffer()?;
-        command_buffer.set_label("bitwise-leftshift");
+        let encoder = s1.device().command_encoder()?;
+        encoder.set_label("bitwise-leftshift");
 
         let device = s1.device();
 
@@ -165,7 +165,7 @@ impl CustomOp1 for Leftshift {
 
         crate::metal_kernels::call_bitwise_leftshift(
             device.device(),
-            &command_buffer,
+            &encoder,
             &crate::metal_kernels::Kernels::new(),
             s1.dtype(),
             s1.buffer(),
@@ -600,8 +600,8 @@ impl CustomOp2 for BitWise {
             candle_core::bail!("Input tensor s2 must be contiguous");
         }
 
-        let command_buffer = s1.device().command_buffer()?;
-        command_buffer.set_label("bitwise-op");
+        let encoder = s1.device().command_encoder()?;
+        encoder.set_label("bitwise-op");
 
         let device = s1.device();
 
@@ -612,7 +612,7 @@ impl CustomOp2 for BitWise {
         match self.op {
             BitWiseBinaryOpEnum::Or => crate::metal_kernels::call_bitwise_or(
                 device.device(),
-                &command_buffer,
+                &encoder,
                 &crate::metal_kernels::Kernels::new(),
                 s1.dtype(),
                 s1.buffer(),
@@ -625,7 +625,7 @@ impl CustomOp2 for BitWise {
             .map_err(candle_core::Error::wrap)?,
             BitWiseBinaryOpEnum::And => crate::metal_kernels::call_bitwise_and(
                 device.device(),
-                &command_buffer,
+                &encoder,
                 &crate::metal_kernels::Kernels::new(),
                 s1.dtype(),
                 s1.buffer(),
@@ -638,7 +638,7 @@ impl CustomOp2 for BitWise {
             .map_err(candle_core::Error::wrap)?,
             BitWiseBinaryOpEnum::Xor => crate::metal_kernels::call_bitwise_xor(
                 device.device(),
-                &command_buffer,
+                &encoder,
                 &crate::metal_kernels::Kernels::new(),
                 s1.dtype(),
                 s1.buffer(),
@@ -754,8 +754,8 @@ impl CustomOp1 for BitWiseUnary {
             candle_core::bail!("Input tensor s1 must be contiguous");
         }
 
-        let command_buffer = s1.device().command_buffer()?;
-        command_buffer.set_label("bitwise-unary-op");
+        let encoder = s1.device().command_encoder()?;
+        encoder.set_label("bitwise-unary-op");
 
         let device = s1.device();
 
@@ -766,7 +766,7 @@ impl CustomOp1 for BitWiseUnary {
         match self.op {
             BitWiseUnaryOpEnum::Not => crate::metal_kernels::call_bitwise_not(
                 device.device(),
-                &command_buffer,
+                &encoder,
                 &crate::metal_kernels::Kernels::new(),
                 s1.dtype(),
                 s1.buffer(),
@@ -855,9 +855,9 @@ impl CustomOp1 for ArgSort {
             candle_core::bail!("Input tensor s1 must be contiguous");
         }
 
-        // Create a command‑buffer and label it for easy debugging in Xcode’s GPU frame‑capture
-        let command_buffer = s1.device().command_buffer()?;
-        command_buffer.set_label("argsort");
+        // Create a command encoder and label it for easy debugging in Xcode’s GPU frame‑capture
+        let encoder = s1.device().command_encoder()?;
+        encoder.set_label("argsort");
 
         let device = s1.device();
         let out_shape = l1.shape().clone();
@@ -915,8 +915,8 @@ impl CustomOp1 for ArgSort {
 
         // Launch the Metal kernel via the new API
         crate::metal_kernels::call_argsort(
-            device.device(), // &metal::Device
-            &command_buffer, // impl EncoderProvider
+            device.device(),
+            &encoder, // impl EncoderProvider
             &crate::metal_kernels::Kernels::new(),
             &sort_args,
             &scratch,
@@ -962,9 +962,9 @@ impl CustomOp1 for Sort {
             candle_core::bail!("Input tensor s1 must be contiguous");
         }
 
-        // Create a command‑buffer and label it for easy debugging in Xcode’s GPU frame‑capture
-        let command_buffer = s1.device().command_buffer()?;
-        command_buffer.set_label("sort");
+        // Create a command encoder and label it for easy debugging in Xcode’s GPU frame‑capture
+        let encoder = s1.device().command_encoder()?;
+        encoder.set_label("sort");
 
         let device = s1.device();
         let out_shape = l1.shape().clone();
@@ -1022,8 +1022,8 @@ impl CustomOp1 for Sort {
 
         // Launch the Metal kernel via the new API
         crate::metal_kernels::call_sort(
-            device.device(), // &metal::Device
-            &command_buffer, // impl EncoderProvider
+            device.device(),
+            &encoder, // impl EncoderProvider
             &crate::metal_kernels::Kernels::new(),
             &sort_args,
             &scratch,
@@ -1517,8 +1517,8 @@ impl CustomOp1 for CumSum {
     ) -> Result<(candle_core::MetalStorage, Shape)> {
         use crate::metal_kernels::ScanType;
 
-        let command_buffer = s1.device().command_buffer()?;
-        command_buffer.set_label("cumsum");
+        let encoder = s1.device().command_encoder()?;
+        encoder.set_label("cumsum");
 
         let device = s1.device();
 
@@ -1528,7 +1528,7 @@ impl CustomOp1 for CumSum {
 
         crate::metal_kernels::call_scan(
             device.device(),
-            &command_buffer,
+            &encoder,
             &crate::metal_kernels::Kernels::new(),
             s1.dtype(),
             ScanType::Sum,
