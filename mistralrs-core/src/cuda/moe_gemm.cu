@@ -38,7 +38,7 @@ template<> struct LoadVecType<half>         { using type = float4; };
 template<> struct LoadVecType<nv_bfloat16> { using type = float4; }; 
 
 template<typename T> struct LoadVecSize     { static constexpr int value = 1; };
-template<> struct LoadVecSize<half>         { static constexpr int value = 8; }; // 8 halfs in a float4
+template<> struct LoadVecSize<half>         { static constexpr int value = 8; }; // 8 half values in a float4
 template<> struct LoadVecSize<nv_bfloat16> { static constexpr int value = 8; }; // 8 bf16s in a float4
 
 inline __device__ void zero(__nv_bfloat162& dst) {
