@@ -186,9 +186,11 @@ mistralrs-mcp = { path = "mistralrs-mcp" }
 inherits = "release"
 debug = true
 
-[profile.release]
-lto = true
-opt-level = 3
+# Makes release profiler faster to build
+# The improvement is negligible with it.
+# [profile.release]
+# lto = true
+# opt-level = 3
 
 [profile.dev]
 debug = true
