@@ -36,6 +36,7 @@ candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", vers
 # candle-nn = { path = "../candle/candle-nn" }
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }
 # candle-flash-attn = { path = "../candle/candle-flash-attn" }
+# candle-metal-kernels = { path = "../candle/candle-metal-kernels" }
 
 axum = "0.8.4"
 anyhow = "1.0.98"
