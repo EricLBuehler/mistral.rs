@@ -312,145 +312,149 @@
 <a href=#312 id=312 data-nosnippet>312</a>    }
 <a href=#313 id=313 data-nosnippet>313</a>
 <a href=#314 id=314 data-nosnippet>314</a>    <span class="comment">// Compute the maximum value in parallel.
-<a href=#315 id=315 data-nosnippet>315</a>    // SAFETY: we know `values` is nonempty.
-<a href=#316 id=316 data-nosnippet>316</a>    </span><span class="kw">let </span>max_val = <span class="kw-2">*</span>values.par_iter().max().unwrap();
-<a href=#317 id=317 data-nosnippet>317</a>
-<a href=#318 id=318 data-nosnippet>318</a>    <span class="comment">// The histogram length must cover all observed values as well as `minlength`.
-<a href=#319 id=319 data-nosnippet>319</a>    </span><span class="kw">let </span>result_len = (max_val + <span class="number">1</span>).max(minlength) <span class="kw">as </span>usize;
-<a href=#320 id=320 data-nosnippet>320</a>
-<a href=#321 id=321 data-nosnippet>321</a>    <span class="comment">// Build per-thread histograms in parallel.
-<a href=#322 id=322 data-nosnippet>322</a>    // We use unsafe indexing to eliminate bounds checks in the inner loop.
-<a href=#323 id=323 data-nosnippet>323</a>    </span>values
-<a href=#324 id=324 data-nosnippet>324</a>        .par_iter()
-<a href=#325 id=325 data-nosnippet>325</a>        .fold(
-<a href=#326 id=326 data-nosnippet>326</a>            || <span class="macro">vec!</span>[<span class="number">0u32</span>; result_len],
-<a href=#327 id=327 data-nosnippet>327</a>            |<span class="kw-2">mut </span>local_hist, <span class="kw-2">&amp;</span>v| {
-<a href=#328 id=328 data-nosnippet>328</a>                <span class="comment">// SAFETY: v is guaranteed to be &lt;= max_val, so it is in bounds.
-<a href=#329 id=329 data-nosnippet>329</a>                </span><span class="kw">unsafe </span>{
-<a href=#330 id=330 data-nosnippet>330</a>                    <span class="kw-2">*</span>local_hist.get_unchecked_mut(v <span class="kw">as </span>usize) += <span class="number">1</span>;
-<a href=#331 id=331 data-nosnippet>331</a>                }
-<a href=#332 id=332 data-nosnippet>332</a>                local_hist
-<a href=#333 id=333 data-nosnippet>333</a>            },
-<a href=#334 id=334 data-nosnippet>334</a>        )
-<a href=#335 id=335 data-nosnippet>335</a>        <span class="comment">// Merge the per-thread histograms in parallel.
-<a href=#336 id=336 data-nosnippet>336</a>        </span>.reduce(
-<a href=#337 id=337 data-nosnippet>337</a>            || <span class="macro">vec!</span>[<span class="number">0u32</span>; result_len],
-<a href=#338 id=338 data-nosnippet>338</a>            |<span class="kw-2">mut </span>global_hist, local_hist| {
-<a href=#339 id=339 data-nosnippet>339</a>                <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..result_len {
-<a href=#340 id=340 data-nosnippet>340</a>                    <span class="comment">// SAFETY: we know local histogram is at least result_len, as is global_hist
-<a href=#341 id=341 data-nosnippet>341</a>                    </span><span class="kw">unsafe </span>{
-<a href=#342 id=342 data-nosnippet>342</a>                        <span class="kw-2">*</span>global_hist.get_unchecked_mut(i) += local_hist.get_unchecked(i);
-<a href=#343 id=343 data-nosnippet>343</a>                    }
-<a href=#344 id=344 data-nosnippet>344</a>                }
-<a href=#345 id=345 data-nosnippet>345</a>                global_hist
-<a href=#346 id=346 data-nosnippet>346</a>            },
-<a href=#347 id=347 data-nosnippet>347</a>        )
-<a href=#348 id=348 data-nosnippet>348</a>}
-<a href=#349 id=349 data-nosnippet>349</a>
-<a href=#350 id=350 data-nosnippet>350</a><span class="attr">#[allow(dead_code)]
-<a href=#351 id=351 data-nosnippet>351</a></span><span class="kw">impl </span>BincountOp <span class="kw">for </span>Tensor {
-<a href=#352 id=352 data-nosnippet>352</a>    <span class="kw">fn </span>bincount(<span class="kw-2">&amp;</span><span class="self">self</span>, minlength: u32) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u32&gt;&gt; {
-<a href=#353 id=353 data-nosnippet>353</a>        <span class="kw">let </span>values = <span class="self">self</span>.to_vec1::&lt;u32&gt;()<span class="question-mark">?</span>;
-<a href=#354 id=354 data-nosnippet>354</a>
-<a href=#355 id=355 data-nosnippet>355</a>        <span class="prelude-val">Ok</span>(bincount(<span class="kw-2">&amp;</span>values, minlength))
-<a href=#356 id=356 data-nosnippet>356</a>    }
-<a href=#357 id=357 data-nosnippet>357</a>}
+<a href=#315 id=315 data-nosnippet>315</a>    // SAFETY: We just checked that values is nonempty above, so max() will return Some.
+<a href=#316 id=316 data-nosnippet>316</a>    // Using expect() for clearer error message if this invariant is somehow violated.
+<a href=#317 id=317 data-nosnippet>317</a>    </span><span class="kw">let </span>max_val = <span class="kw-2">*</span>values
+<a href=#318 id=318 data-nosnippet>318</a>        .par_iter()
+<a href=#319 id=319 data-nosnippet>319</a>        .max()
+<a href=#320 id=320 data-nosnippet>320</a>        .expect(<span class="string">"values should be non-empty after empty check"</span>);
+<a href=#321 id=321 data-nosnippet>321</a>
+<a href=#322 id=322 data-nosnippet>322</a>    <span class="comment">// The histogram length must cover all observed values as well as `minlength`.
+<a href=#323 id=323 data-nosnippet>323</a>    </span><span class="kw">let </span>result_len = (max_val + <span class="number">1</span>).max(minlength) <span class="kw">as </span>usize;
+<a href=#324 id=324 data-nosnippet>324</a>
+<a href=#325 id=325 data-nosnippet>325</a>    <span class="comment">// Build per-thread histograms in parallel.
+<a href=#326 id=326 data-nosnippet>326</a>    // We use unsafe indexing to eliminate bounds checks in the inner loop.
+<a href=#327 id=327 data-nosnippet>327</a>    </span>values
+<a href=#328 id=328 data-nosnippet>328</a>        .par_iter()
+<a href=#329 id=329 data-nosnippet>329</a>        .fold(
+<a href=#330 id=330 data-nosnippet>330</a>            || <span class="macro">vec!</span>[<span class="number">0u32</span>; result_len],
+<a href=#331 id=331 data-nosnippet>331</a>            |<span class="kw-2">mut </span>local_hist, <span class="kw-2">&amp;</span>v| {
+<a href=#332 id=332 data-nosnippet>332</a>                <span class="comment">// SAFETY: v is guaranteed to be &lt;= max_val, so it is in bounds.
+<a href=#333 id=333 data-nosnippet>333</a>                </span><span class="kw">unsafe </span>{
+<a href=#334 id=334 data-nosnippet>334</a>                    <span class="kw-2">*</span>local_hist.get_unchecked_mut(v <span class="kw">as </span>usize) += <span class="number">1</span>;
+<a href=#335 id=335 data-nosnippet>335</a>                }
+<a href=#336 id=336 data-nosnippet>336</a>                local_hist
+<a href=#337 id=337 data-nosnippet>337</a>            },
+<a href=#338 id=338 data-nosnippet>338</a>        )
+<a href=#339 id=339 data-nosnippet>339</a>        <span class="comment">// Merge the per-thread histograms in parallel.
+<a href=#340 id=340 data-nosnippet>340</a>        </span>.reduce(
+<a href=#341 id=341 data-nosnippet>341</a>            || <span class="macro">vec!</span>[<span class="number">0u32</span>; result_len],
+<a href=#342 id=342 data-nosnippet>342</a>            |<span class="kw-2">mut </span>global_hist, local_hist| {
+<a href=#343 id=343 data-nosnippet>343</a>                <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..result_len {
+<a href=#344 id=344 data-nosnippet>344</a>                    <span class="comment">// SAFETY: we know local histogram is at least result_len, as is global_hist
+<a href=#345 id=345 data-nosnippet>345</a>                    </span><span class="kw">unsafe </span>{
+<a href=#346 id=346 data-nosnippet>346</a>                        <span class="kw-2">*</span>global_hist.get_unchecked_mut(i) += local_hist.get_unchecked(i);
+<a href=#347 id=347 data-nosnippet>347</a>                    }
+<a href=#348 id=348 data-nosnippet>348</a>                }
+<a href=#349 id=349 data-nosnippet>349</a>                global_hist
+<a href=#350 id=350 data-nosnippet>350</a>            },
+<a href=#351 id=351 data-nosnippet>351</a>        )
+<a href=#352 id=352 data-nosnippet>352</a>}
+<a href=#353 id=353 data-nosnippet>353</a>
+<a href=#354 id=354 data-nosnippet>354</a><span class="attr">#[allow(dead_code)]
+<a href=#355 id=355 data-nosnippet>355</a></span><span class="kw">impl </span>BincountOp <span class="kw">for </span>Tensor {
+<a href=#356 id=356 data-nosnippet>356</a>    <span class="kw">fn </span>bincount(<span class="kw-2">&amp;</span><span class="self">self</span>, minlength: u32) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u32&gt;&gt; {
+<a href=#357 id=357 data-nosnippet>357</a>        <span class="kw">let </span>values = <span class="self">self</span>.to_vec1::&lt;u32&gt;()<span class="question-mark">?</span>;
 <a href=#358 id=358 data-nosnippet>358</a>
-<a href=#359 id=359 data-nosnippet>359</a><span class="comment">// https://github.com/mokeyish/candle-ext/blob/ca4547c803469bd51c00ce5eda2f18dd249c8f10/src/triangular.rs#L21
-<a href=#360 id=360 data-nosnippet>360</a></span><span class="kw">pub fn </span>apply_triangular(xs: <span class="kw-2">&amp;</span>Tensor, diagonal: isize, upper: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#361 id=361 data-nosnippet>361</a>    <span class="kw">let </span>device = xs.device();
-<a href=#362 id=362 data-nosnippet>362</a>    <span class="kw">let </span>(l, s) = xs.dims2()<span class="question-mark">?</span>;
-<a href=#363 id=363 data-nosnippet>363</a>    <span class="kw">let </span><span class="kw-2">mut </span>xs_tri = <span class="macro">vec!</span>[];
-<a href=#364 id=364 data-nosnippet>364</a>    <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..l <span class="kw">as </span>isize {
-<a href=#365 id=365 data-nosnippet>365</a>        <span class="kw">for </span>j <span class="kw">in </span><span class="number">0</span>..s <span class="kw">as </span>isize {
-<a href=#366 id=366 data-nosnippet>366</a>            <span class="kw">let </span>cond = <span class="kw">if </span>upper {
-<a href=#367 id=367 data-nosnippet>367</a>                i + diagonal &gt; j
-<a href=#368 id=368 data-nosnippet>368</a>            } <span class="kw">else </span>{
-<a href=#369 id=369 data-nosnippet>369</a>                i + diagonal &lt; j
-<a href=#370 id=370 data-nosnippet>370</a>            };
-<a href=#371 id=371 data-nosnippet>371</a>            xs_tri.push(<span class="kw">if </span>cond { <span class="number">0u8 </span>} <span class="kw">else </span>{ <span class="number">1u8 </span>});
-<a href=#372 id=372 data-nosnippet>372</a>        }
-<a href=#373 id=373 data-nosnippet>373</a>    }
-<a href=#374 id=374 data-nosnippet>374</a>    xs * Tensor::from_vec(xs_tri, (l, s), device)<span class="question-mark">?</span>.to_dtype(xs.dtype())<span class="question-mark">?
-<a href=#375 id=375 data-nosnippet>375</a></span>}
-<a href=#376 id=376 data-nosnippet>376</a>
-<a href=#377 id=377 data-nosnippet>377</a><span class="doccomment">/// Elementwise multiply and activation. The following activations are supported:
-<a href=#378 id=378 data-nosnippet>378</a>/// - `gelu`
-<a href=#379 id=379 data-nosnippet>379</a>/// - `silu`
-<a href=#380 id=380 data-nosnippet>380</a>/// - `relu`
-<a href=#381 id=381 data-nosnippet>381</a>///
-<a href=#382 id=382 data-nosnippet>382</a>/// This is equivalent to:
-<a href=#383 id=383 data-nosnippet>383</a>/// `act(a) * b`
-<a href=#384 id=384 data-nosnippet>384</a></span><span class="kw">pub fn </span>mul_and_act(a: <span class="kw-2">&amp;</span>Tensor, b: <span class="kw-2">&amp;</span>Tensor, act: Activation) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#385 id=385 data-nosnippet>385</a>    a.apply(<span class="kw-2">&amp;</span>act)<span class="question-mark">? </span>* b
-<a href=#386 id=386 data-nosnippet>386</a>}
-<a href=#387 id=387 data-nosnippet>387</a>
-<a href=#388 id=388 data-nosnippet>388</a><span class="kw">mod </span>tests {
-<a href=#389 id=389 data-nosnippet>389</a>    <span class="attr">#[test]
-<a href=#390 id=390 data-nosnippet>390</a>    </span><span class="kw">fn </span>test_topk() {
-<a href=#391 id=391 data-nosnippet>391</a>        <span class="kw">use </span><span class="kw">crate</span>::ops::{TopKLastDimOp, TopKOutput};
-<a href=#392 id=392 data-nosnippet>392</a>        <span class="kw">use </span>candle_core::Tensor;
-<a href=#393 id=393 data-nosnippet>393</a>        <span class="kw">let </span>device = candle_core::Device::Cpu;
-<a href=#394 id=394 data-nosnippet>394</a>        <span class="comment">//  [[1, 3, 5],
-<a href=#395 id=395 data-nosnippet>395</a>        //   [2, 4, 6]]
-<a href=#396 id=396 data-nosnippet>396</a>        </span><span class="kw">let </span>x = Tensor::arange(<span class="number">1f32</span>, <span class="number">7f32</span>, <span class="kw-2">&amp;</span>device)
-<a href=#397 id=397 data-nosnippet>397</a>            .unwrap()
-<a href=#398 id=398 data-nosnippet>398</a>            .reshape((<span class="number">3</span>, <span class="number">2</span>))
-<a href=#399 id=399 data-nosnippet>399</a>            .unwrap()
-<a href=#400 id=400 data-nosnippet>400</a>            .t()
+<a href=#359 id=359 data-nosnippet>359</a>        <span class="prelude-val">Ok</span>(bincount(<span class="kw-2">&amp;</span>values, minlength))
+<a href=#360 id=360 data-nosnippet>360</a>    }
+<a href=#361 id=361 data-nosnippet>361</a>}
+<a href=#362 id=362 data-nosnippet>362</a>
+<a href=#363 id=363 data-nosnippet>363</a><span class="comment">// https://github.com/mokeyish/candle-ext/blob/ca4547c803469bd51c00ce5eda2f18dd249c8f10/src/triangular.rs#L21
+<a href=#364 id=364 data-nosnippet>364</a></span><span class="kw">pub fn </span>apply_triangular(xs: <span class="kw-2">&amp;</span>Tensor, diagonal: isize, upper: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#365 id=365 data-nosnippet>365</a>    <span class="kw">let </span>device = xs.device();
+<a href=#366 id=366 data-nosnippet>366</a>    <span class="kw">let </span>(l, s) = xs.dims2()<span class="question-mark">?</span>;
+<a href=#367 id=367 data-nosnippet>367</a>    <span class="kw">let </span><span class="kw-2">mut </span>xs_tri = <span class="macro">vec!</span>[];
+<a href=#368 id=368 data-nosnippet>368</a>    <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..l <span class="kw">as </span>isize {
+<a href=#369 id=369 data-nosnippet>369</a>        <span class="kw">for </span>j <span class="kw">in </span><span class="number">0</span>..s <span class="kw">as </span>isize {
+<a href=#370 id=370 data-nosnippet>370</a>            <span class="kw">let </span>cond = <span class="kw">if </span>upper {
+<a href=#371 id=371 data-nosnippet>371</a>                i + diagonal &gt; j
+<a href=#372 id=372 data-nosnippet>372</a>            } <span class="kw">else </span>{
+<a href=#373 id=373 data-nosnippet>373</a>                i + diagonal &lt; j
+<a href=#374 id=374 data-nosnippet>374</a>            };
+<a href=#375 id=375 data-nosnippet>375</a>            xs_tri.push(<span class="kw">if </span>cond { <span class="number">0u8 </span>} <span class="kw">else </span>{ <span class="number">1u8 </span>});
+<a href=#376 id=376 data-nosnippet>376</a>        }
+<a href=#377 id=377 data-nosnippet>377</a>    }
+<a href=#378 id=378 data-nosnippet>378</a>    xs * Tensor::from_vec(xs_tri, (l, s), device)<span class="question-mark">?</span>.to_dtype(xs.dtype())<span class="question-mark">?
+<a href=#379 id=379 data-nosnippet>379</a></span>}
+<a href=#380 id=380 data-nosnippet>380</a>
+<a href=#381 id=381 data-nosnippet>381</a><span class="doccomment">/// Elementwise multiply and activation. The following activations are supported:
+<a href=#382 id=382 data-nosnippet>382</a>/// - `gelu`
+<a href=#383 id=383 data-nosnippet>383</a>/// - `silu`
+<a href=#384 id=384 data-nosnippet>384</a>/// - `relu`
+<a href=#385 id=385 data-nosnippet>385</a>///
+<a href=#386 id=386 data-nosnippet>386</a>/// This is equivalent to:
+<a href=#387 id=387 data-nosnippet>387</a>/// `act(a) * b`
+<a href=#388 id=388 data-nosnippet>388</a></span><span class="kw">pub fn </span>mul_and_act(a: <span class="kw-2">&amp;</span>Tensor, b: <span class="kw-2">&amp;</span>Tensor, act: Activation) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#389 id=389 data-nosnippet>389</a>    a.apply(<span class="kw-2">&amp;</span>act)<span class="question-mark">? </span>* b
+<a href=#390 id=390 data-nosnippet>390</a>}
+<a href=#391 id=391 data-nosnippet>391</a>
+<a href=#392 id=392 data-nosnippet>392</a><span class="kw">mod </span>tests {
+<a href=#393 id=393 data-nosnippet>393</a>    <span class="attr">#[test]
+<a href=#394 id=394 data-nosnippet>394</a>    </span><span class="kw">fn </span>test_topk() {
+<a href=#395 id=395 data-nosnippet>395</a>        <span class="kw">use </span><span class="kw">crate</span>::ops::{TopKLastDimOp, TopKOutput};
+<a href=#396 id=396 data-nosnippet>396</a>        <span class="kw">use </span>candle_core::Tensor;
+<a href=#397 id=397 data-nosnippet>397</a>        <span class="kw">let </span>device = candle_core::Device::Cpu;
+<a href=#398 id=398 data-nosnippet>398</a>        <span class="comment">//  [[1, 3, 5],
+<a href=#399 id=399 data-nosnippet>399</a>        //   [2, 4, 6]]
+<a href=#400 id=400 data-nosnippet>400</a>        </span><span class="kw">let </span>x = Tensor::arange(<span class="number">1f32</span>, <span class="number">7f32</span>, <span class="kw-2">&amp;</span>device)
 <a href=#401 id=401 data-nosnippet>401</a>            .unwrap()
-<a href=#402 id=402 data-nosnippet>402</a>            .contiguous()
-<a href=#403 id=403 data-nosnippet>403</a>            .unwrap();
-<a href=#404 id=404 data-nosnippet>404</a>        <span class="kw">let </span>TopKOutput { values, indices } = x.topk(<span class="number">2</span>).unwrap();
-<a href=#405 id=405 data-nosnippet>405</a>        <span class="macro">assert_eq!</span>(
-<a href=#406 id=406 data-nosnippet>406</a>            x.to_vec2::&lt;f32&gt;().unwrap(),
-<a href=#407 id=407 data-nosnippet>407</a>            <span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">1f32</span>, <span class="number">3f32</span>, <span class="number">5f32</span>], <span class="macro">vec!</span>[<span class="number">2f32</span>, <span class="number">4f32</span>, <span class="number">6f32</span>]]
-<a href=#408 id=408 data-nosnippet>408</a>        );
+<a href=#402 id=402 data-nosnippet>402</a>            .reshape((<span class="number">3</span>, <span class="number">2</span>))
+<a href=#403 id=403 data-nosnippet>403</a>            .unwrap()
+<a href=#404 id=404 data-nosnippet>404</a>            .t()
+<a href=#405 id=405 data-nosnippet>405</a>            .unwrap()
+<a href=#406 id=406 data-nosnippet>406</a>            .contiguous()
+<a href=#407 id=407 data-nosnippet>407</a>            .unwrap();
+<a href=#408 id=408 data-nosnippet>408</a>        <span class="kw">let </span>TopKOutput { values, indices } = x.topk(<span class="number">2</span>).unwrap();
 <a href=#409 id=409 data-nosnippet>409</a>        <span class="macro">assert_eq!</span>(
-<a href=#410 id=410 data-nosnippet>410</a>            values.to_vec2::&lt;f32&gt;().unwrap(),
-<a href=#411 id=411 data-nosnippet>411</a>            <span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">5f32</span>, <span class="number">3f32</span>], <span class="macro">vec!</span>[<span class="number">6f32</span>, <span class="number">4f32</span>]]
+<a href=#410 id=410 data-nosnippet>410</a>            x.to_vec2::&lt;f32&gt;().unwrap(),
+<a href=#411 id=411 data-nosnippet>411</a>            <span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">1f32</span>, <span class="number">3f32</span>, <span class="number">5f32</span>], <span class="macro">vec!</span>[<span class="number">2f32</span>, <span class="number">4f32</span>, <span class="number">6f32</span>]]
 <a href=#412 id=412 data-nosnippet>412</a>        );
 <a href=#413 id=413 data-nosnippet>413</a>        <span class="macro">assert_eq!</span>(
-<a href=#414 id=414 data-nosnippet>414</a>            indices.to_vec2::&lt;u32&gt;().unwrap(),
-<a href=#415 id=415 data-nosnippet>415</a>            <span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">2u32</span>, <span class="number">1u32</span>], <span class="macro">vec!</span>[<span class="number">2u32</span>, <span class="number">1u32</span>]]
+<a href=#414 id=414 data-nosnippet>414</a>            values.to_vec2::&lt;f32&gt;().unwrap(),
+<a href=#415 id=415 data-nosnippet>415</a>            <span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">5f32</span>, <span class="number">3f32</span>], <span class="macro">vec!</span>[<span class="number">6f32</span>, <span class="number">4f32</span>]]
 <a href=#416 id=416 data-nosnippet>416</a>        );
-<a href=#417 id=417 data-nosnippet>417</a>    }
-<a href=#418 id=418 data-nosnippet>418</a>
-<a href=#419 id=419 data-nosnippet>419</a>    <span class="attr">#[test]
-<a href=#420 id=420 data-nosnippet>420</a>    </span><span class="kw">fn </span>test_repeat_interleave() -&gt; candle_core::Result&lt;()&gt; {
-<a href=#421 id=421 data-nosnippet>421</a>        <span class="kw">use </span><span class="kw">crate</span>::ops::RepeatInterleaveOp;
-<a href=#422 id=422 data-nosnippet>422</a>        <span class="kw">use </span>candle_core::{Device, Tensor};
-<a href=#423 id=423 data-nosnippet>423</a>
-<a href=#424 id=424 data-nosnippet>424</a>        <span class="kw">let </span>input = Tensor::new(
-<a href=#425 id=425 data-nosnippet>425</a>            <span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">1f32</span>, <span class="number">2.</span>, <span class="number">3.</span>], <span class="macro">vec!</span>[<span class="number">4f32</span>, <span class="number">5.</span>, <span class="number">6.</span>]]],
-<a href=#426 id=426 data-nosnippet>426</a>            <span class="kw-2">&amp;</span>Device::Cpu,
-<a href=#427 id=427 data-nosnippet>427</a>        )<span class="question-mark">?</span>;
-<a href=#428 id=428 data-nosnippet>428</a>
-<a href=#429 id=429 data-nosnippet>429</a>        <span class="kw">let </span>repeat_interleaved = input.repeat_interleave(<span class="number">2</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-<a href=#430 id=430 data-nosnippet>430</a>        <span class="macro">assert_eq!</span>(
-<a href=#431 id=431 data-nosnippet>431</a>            repeat_interleaved.to_vec3::&lt;f32&gt;()<span class="question-mark">?</span>,
-<a href=#432 id=432 data-nosnippet>432</a>            <span class="macro">vec!</span>[<span class="macro">vec!</span>[
-<a href=#433 id=433 data-nosnippet>433</a>                <span class="macro">vec!</span>[<span class="number">1.</span>, <span class="number">1.</span>, <span class="number">2.</span>, <span class="number">2.</span>, <span class="number">3.</span>, <span class="number">3.</span>],
-<a href=#434 id=434 data-nosnippet>434</a>                <span class="macro">vec!</span>[<span class="number">4.</span>, <span class="number">4.</span>, <span class="number">5.</span>, <span class="number">5.</span>, <span class="number">6.</span>, <span class="number">6.</span>]
-<a href=#435 id=435 data-nosnippet>435</a>            ]]
-<a href=#436 id=436 data-nosnippet>436</a>        );
-<a href=#437 id=437 data-nosnippet>437</a>
-<a href=#438 id=438 data-nosnippet>438</a>        <span class="prelude-val">Ok</span>(())
-<a href=#439 id=439 data-nosnippet>439</a>    }
-<a href=#440 id=440 data-nosnippet>440</a>
-<a href=#441 id=441 data-nosnippet>441</a>    <span class="attr">#[test]
-<a href=#442 id=442 data-nosnippet>442</a>    </span><span class="kw">fn </span>test_repeat_interleave_flat() -&gt; candle_core::Result&lt;()&gt; {
-<a href=#443 id=443 data-nosnippet>443</a>        <span class="kw">use </span><span class="kw">crate</span>::ops::RepeatInterleaveOp;
-<a href=#444 id=444 data-nosnippet>444</a>        <span class="kw">use </span>candle_core::{Device, Tensor};
-<a href=#445 id=445 data-nosnippet>445</a>
-<a href=#446 id=446 data-nosnippet>446</a>        <span class="kw">let </span>input = Tensor::new(<span class="macro">vec!</span>[<span class="number">1.</span>, <span class="number">2.</span>, <span class="number">3.</span>, <span class="number">4.</span>], <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
-<a href=#447 id=447 data-nosnippet>447</a>
-<a href=#448 id=448 data-nosnippet>448</a>        <span class="kw">let </span>repeat_interleaved = input.repeat_interleave_flat(<span class="macro">vec!</span>[<span class="number">1u32</span>, <span class="number">2u32</span>, <span class="number">3u32</span>, <span class="number">4u32</span>])<span class="question-mark">?</span>;
-<a href=#449 id=449 data-nosnippet>449</a>        <span class="macro">assert_eq!</span>(
-<a href=#450 id=450 data-nosnippet>450</a>            repeat_interleaved.to_vec1::&lt;f64&gt;()<span class="question-mark">?</span>,
-<a href=#451 id=451 data-nosnippet>451</a>            <span class="macro">vec!</span>[<span class="number">1.</span>, <span class="number">2.</span>, <span class="number">2.</span>, <span class="number">3.</span>, <span class="number">3.</span>, <span class="number">3.</span>, <span class="number">4.</span>, <span class="number">4.</span>, <span class="number">4.</span>, <span class="number">4.</span>]
-<a href=#452 id=452 data-nosnippet>452</a>        );
-<a href=#453 id=453 data-nosnippet>453</a>
-<a href=#454 id=454 data-nosnippet>454</a>        <span class="prelude-val">Ok</span>(())
-<a href=#455 id=455 data-nosnippet>455</a>    }
-<a href=#456 id=456 data-nosnippet>456</a>}</code></pre></div></section></main></body></html>
+<a href=#417 id=417 data-nosnippet>417</a>        <span class="macro">assert_eq!</span>(
+<a href=#418 id=418 data-nosnippet>418</a>            indices.to_vec2::&lt;u32&gt;().unwrap(),
+<a href=#419 id=419 data-nosnippet>419</a>            <span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">2u32</span>, <span class="number">1u32</span>], <span class="macro">vec!</span>[<span class="number">2u32</span>, <span class="number">1u32</span>]]
+<a href=#420 id=420 data-nosnippet>420</a>        );
+<a href=#421 id=421 data-nosnippet>421</a>    }
+<a href=#422 id=422 data-nosnippet>422</a>
+<a href=#423 id=423 data-nosnippet>423</a>    <span class="attr">#[test]
+<a href=#424 id=424 data-nosnippet>424</a>    </span><span class="kw">fn </span>test_repeat_interleave() -&gt; candle_core::Result&lt;()&gt; {
+<a href=#425 id=425 data-nosnippet>425</a>        <span class="kw">use </span><span class="kw">crate</span>::ops::RepeatInterleaveOp;
+<a href=#426 id=426 data-nosnippet>426</a>        <span class="kw">use </span>candle_core::{Device, Tensor};
+<a href=#427 id=427 data-nosnippet>427</a>
+<a href=#428 id=428 data-nosnippet>428</a>        <span class="kw">let </span>input = Tensor::new(
+<a href=#429 id=429 data-nosnippet>429</a>            <span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">1f32</span>, <span class="number">2.</span>, <span class="number">3.</span>], <span class="macro">vec!</span>[<span class="number">4f32</span>, <span class="number">5.</span>, <span class="number">6.</span>]]],
+<a href=#430 id=430 data-nosnippet>430</a>            <span class="kw-2">&amp;</span>Device::Cpu,
+<a href=#431 id=431 data-nosnippet>431</a>        )<span class="question-mark">?</span>;
+<a href=#432 id=432 data-nosnippet>432</a>
+<a href=#433 id=433 data-nosnippet>433</a>        <span class="kw">let </span>repeat_interleaved = input.repeat_interleave(<span class="number">2</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+<a href=#434 id=434 data-nosnippet>434</a>        <span class="macro">assert_eq!</span>(
+<a href=#435 id=435 data-nosnippet>435</a>            repeat_interleaved.to_vec3::&lt;f32&gt;()<span class="question-mark">?</span>,
+<a href=#436 id=436 data-nosnippet>436</a>            <span class="macro">vec!</span>[<span class="macro">vec!</span>[
+<a href=#437 id=437 data-nosnippet>437</a>                <span class="macro">vec!</span>[<span class="number">1.</span>, <span class="number">1.</span>, <span class="number">2.</span>, <span class="number">2.</span>, <span class="number">3.</span>, <span class="number">3.</span>],
+<a href=#438 id=438 data-nosnippet>438</a>                <span class="macro">vec!</span>[<span class="number">4.</span>, <span class="number">4.</span>, <span class="number">5.</span>, <span class="number">5.</span>, <span class="number">6.</span>, <span class="number">6.</span>]
+<a href=#439 id=439 data-nosnippet>439</a>            ]]
+<a href=#440 id=440 data-nosnippet>440</a>        );
+<a href=#441 id=441 data-nosnippet>441</a>
+<a href=#442 id=442 data-nosnippet>442</a>        <span class="prelude-val">Ok</span>(())
+<a href=#443 id=443 data-nosnippet>443</a>    }
+<a href=#444 id=444 data-nosnippet>444</a>
+<a href=#445 id=445 data-nosnippet>445</a>    <span class="attr">#[test]
+<a href=#446 id=446 data-nosnippet>446</a>    </span><span class="kw">fn </span>test_repeat_interleave_flat() -&gt; candle_core::Result&lt;()&gt; {
+<a href=#447 id=447 data-nosnippet>447</a>        <span class="kw">use </span><span class="kw">crate</span>::ops::RepeatInterleaveOp;
+<a href=#448 id=448 data-nosnippet>448</a>        <span class="kw">use </span>candle_core::{Device, Tensor};
+<a href=#449 id=449 data-nosnippet>449</a>
+<a href=#450 id=450 data-nosnippet>450</a>        <span class="kw">let </span>input = Tensor::new(<span class="macro">vec!</span>[<span class="number">1.</span>, <span class="number">2.</span>, <span class="number">3.</span>, <span class="number">4.</span>], <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
+<a href=#451 id=451 data-nosnippet>451</a>
+<a href=#452 id=452 data-nosnippet>452</a>        <span class="kw">let </span>repeat_interleaved = input.repeat_interleave_flat(<span class="macro">vec!</span>[<span class="number">1u32</span>, <span class="number">2u32</span>, <span class="number">3u32</span>, <span class="number">4u32</span>])<span class="question-mark">?</span>;
+<a href=#453 id=453 data-nosnippet>453</a>        <span class="macro">assert_eq!</span>(
+<a href=#454 id=454 data-nosnippet>454</a>            repeat_interleaved.to_vec1::&lt;f64&gt;()<span class="question-mark">?</span>,
+<a href=#455 id=455 data-nosnippet>455</a>            <span class="macro">vec!</span>[<span class="number">1.</span>, <span class="number">2.</span>, <span class="number">2.</span>, <span class="number">3.</span>, <span class="number">3.</span>, <span class="number">3.</span>, <span class="number">4.</span>, <span class="number">4.</span>, <span class="number">4.</span>, <span class="number">4.</span>]
+<a href=#456 id=456 data-nosnippet>456</a>        );
+<a href=#457 id=457 data-nosnippet>457</a>
+<a href=#458 id=458 data-nosnippet>458</a>        <span class="prelude-val">Ok</span>(())
+<a href=#459 id=459 data-nosnippet>459</a>    }
+<a href=#460 id=460 data-nosnippet>460</a>}</code></pre></div></section></main></body></html>
