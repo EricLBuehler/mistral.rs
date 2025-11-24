@@ -1,6 +1,7 @@
 pub(crate) mod deepseek2;
 pub(crate) mod deepseek3;
 pub(crate) mod gemma;
+pub(crate) mod granite;
 pub(crate) mod gemma2;
 pub(crate) mod glm4;
 pub(crate) mod llama;
