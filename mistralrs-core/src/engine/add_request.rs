@@ -40,7 +40,7 @@ impl Engine {
                 if is_chat && (has_search || has_tooling) {
                     search_request::search_request(self.clone(), *request).await;
                 } else {
-                    self.add_request(*request).await
+                    self.add_request(*request).await;
                 }
             }
             Request::ReIsq(level) => {

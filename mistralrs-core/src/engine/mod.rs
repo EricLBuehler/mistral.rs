@@ -35,7 +35,7 @@ use std::{
 use tokio::{
     select,
     sync::{
-        mpsc::{error::TryRecvError, Receiver},
+        mpsc::{error::TryRecvError, Receiver, Sender},
         Mutex, Notify,
     },
     task::JoinHandle,
@@ -153,6 +153,7 @@ pub static ENGINE_INSTRUCTIONS: LazyLock<
 > = LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 pub struct Engine {
+    tx: Sender<Request>,
     rx: Arc<Mutex<Receiver<Request>>>,
     pipeline: Arc<Mutex<dyn Pipeline>>,
     search_pipeline: Arc<Mutex<Option<SearchPipeline>>>,
@@ -182,6 +183,7 @@ impl Drop for Engine {
 impl Engine {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        tx: Sender<Request>,
         rx: Receiver<Request>,
         pipeline: Arc<Mutex<dyn Pipeline>>,
         config: SchedulerConfig,
@@ -214,6 +216,7 @@ impl Engine {
         let block_engine = get_mut_arcmutex!(scheduler).block_engine();
 
         Ok(Self {
+            tx,
             rx: Arc::new(Mutex::new(rx)),
             pipeline,
             search_pipeline: Arc::new(Mutex::new(search_pipeline)),
@@ -300,10 +303,11 @@ impl Engine {
                 break 'lp;
             }
 
-            let scheduler_idle = {
+            let (waiting_len, running_len) = {
                 let scheduler = get_mut_arcmutex!(self.scheduler);
-                scheduler.waiting_len() == 0 && scheduler.running_len() == 0
+                (scheduler.waiting_len(), scheduler.running_len())
             };
+            let scheduler_idle = waiting_len == 0 && running_len == 0;
 
             if scheduler_idle {
                 if should_terminate() {
@@ -337,7 +341,9 @@ impl Engine {
                         continue;
                     }
                     WaitEvent::Request(None) => break 'lp,
-                    WaitEvent::Wake => continue,
+                    WaitEvent::Wake => {
+                        continue;
+                    }
                 }
             }
 

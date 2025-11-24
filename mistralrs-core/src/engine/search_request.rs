@@ -10,7 +10,7 @@ use crate::{
     get_mut_arcmutex,
     request::SearchContextSize,
     search::{self, ExtractFunctionParameters, SearchFunctionParameters, SearchResult},
-    MessageContent, NormalRequest, RequestMessage, Response, ResponseOk, ToolCallResponse,
+    MessageContent, NormalRequest, RequestMessage, Response, ToolCallResponse,
     ToolChoice, WebSearchOptions,
 };
 
@@ -353,7 +353,6 @@ async fn do_custom_tool(
     }
 
     let result = if let Some(cb) = this.tool_callbacks.get(&tool_calls.function.name) {
-        tracing::info!("Called tool `{}`.", tool_calls.function.name);
         cb(&tool_calls.function).unwrap_or_else(|e| {
             tracing::error!(
                 "Error when calling tool `{}`: {e}",
@@ -365,7 +364,6 @@ async fn do_custom_tool(
         .tool_callbacks_with_tools
         .get(&tool_calls.function.name)
     {
-        tracing::info!("Called tool `{}`.", tool_calls.function.name);
         (callback_with_tool.callback)(&tool_calls.function).unwrap_or_else(|e| {
             tracing::error!(
                 "Error when calling tool `{}`: {e}",
@@ -395,9 +393,9 @@ async fn do_custom_tool(
 /// Drive one or more web-search / extraction rounds without recursion.
 ///
 /// Strategy:
-/// 1. Send a “probe” request that may call the search/extract tools.  
+/// 1. Send a "probe" request that may call the search/extract tools.
 /// 2. If such a tool is called, run it (`do_search` / `do_extraction`) to
-///    mutate the conversational context and build the next request.  
+///    mutate the conversational context and build the next request.
 /// 3. Repeat until no further tool call is made.
 /// 4. Forward every user-visible reply **except** the first, which is just the
 ///    probe that discovers whether a tool call is needed.
@@ -453,66 +451,93 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
             let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
             current.response = sender;
 
-            // Kick the request into the engine.
-            this_clone.add_request(current).await;
+            // Kick the request into the engine via the channel.
+            // This avoids lock contention with the main engine loop.
+            let _ = this_clone
+                .tx
+                .send(crate::request::Request::Normal(Box::new(current)))
+                .await;
 
             // ----------------------- NON-STREAMING ------------------------
             if !is_streaming {
-                let done = match receiver.recv().await.unwrap().as_result().unwrap() {
-                    ResponseOk::Done(done) => done,
-                    other => {
-                        match other {
-                            ResponseOk::Chunk(res) => {
-                                user_sender.send(Response::Chunk(res)).await.unwrap()
-                            }
-                            ResponseOk::CompletionChunk(res) => user_sender
-                                .send(Response::CompletionChunk(res))
-                                .await
-                                .unwrap(),
-                            ResponseOk::Done(_) => unreachable!(),
-                            ResponseOk::CompletionDone(res) => user_sender
-                                .send(Response::CompletionDone(res))
-                                .await
-                                .unwrap(),
-                            ResponseOk::ImageGeneration(res) => user_sender
-                                .send(Response::ImageGeneration(res))
-                                .await
-                                .unwrap(),
-                            ResponseOk::Raw {
+                let resp = receiver.recv().await.unwrap();
+                // Handle the response, forwarding errors and non-Done responses to user
+                let done = match resp {
+                    Response::Done(done) => done,
+                    // Forward error responses to user and return
+                    Response::InternalError(e) => {
+                        let _ = user_sender.send(Response::InternalError(e)).await;
+                        return;
+                    }
+                    Response::ValidationError(e) => {
+                        let _ = user_sender.send(Response::ValidationError(e)).await;
+                        return;
+                    }
+                    Response::ModelError(msg, resp) => {
+                        let _ = user_sender.send(Response::ModelError(msg, resp)).await;
+                        return;
+                    }
+                    // Forward other response types to user and return
+                    Response::Chunk(res) => {
+                        let _ = user_sender.send(Response::Chunk(res)).await;
+                        return;
+                    }
+                    Response::CompletionChunk(res) => {
+                        let _ = user_sender.send(Response::CompletionChunk(res)).await;
+                        return;
+                    }
+                    Response::CompletionModelError(msg, resp) => {
+                        let _ = user_sender
+                            .send(Response::CompletionModelError(msg, resp))
+                            .await;
+                        return;
+                    }
+                    Response::CompletionDone(res) => {
+                        let _ = user_sender.send(Response::CompletionDone(res)).await;
+                        return;
+                    }
+                    Response::ImageGeneration(res) => {
+                        let _ = user_sender.send(Response::ImageGeneration(res)).await;
+                        return;
+                    }
+                    Response::Raw {
+                        logits_chunks,
+                        tokens,
+                    } => {
+                        let _ = user_sender
+                            .send(Response::Raw {
                                 logits_chunks,
                                 tokens,
-                            } => user_sender
-                                .send(Response::Raw {
-                                    logits_chunks,
-                                    tokens,
-                                })
-                                .await
-                                .unwrap(),
-                            ResponseOk::Embeddings {
+                            })
+                            .await;
+                        return;
+                    }
+                    Response::Embeddings {
+                        embeddings,
+                        prompt_tokens,
+                        total_tokens,
+                    } => {
+                        let _ = user_sender
+                            .send(Response::Embeddings {
                                 embeddings,
                                 prompt_tokens,
                                 total_tokens,
-                            } => user_sender
-                                .send(Response::Embeddings {
-                                    embeddings,
-                                    prompt_tokens,
-                                    total_tokens,
-                                })
-                                .await
-                                .unwrap(),
-                            ResponseOk::Speech {
+                            })
+                            .await;
+                        return;
+                    }
+                    Response::Speech {
+                        pcm,
+                        rate,
+                        channels,
+                    } => {
+                        let _ = user_sender
+                            .send(Response::Speech {
                                 pcm,
                                 rate,
                                 channels,
-                            } => user_sender
-                                .send(Response::Speech {
-                                    pcm,
-                                    rate,
-                                    channels,
-                                })
-                                .await
-                                .unwrap(),
-                        };
+                            })
+                            .await;
                         return;
                     }
                 };
@@ -557,19 +582,18 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                 let mut last_choice = None;
 
                 while let Some(resp) = receiver.recv().await {
-                    match resp.as_result().unwrap() {
-                        ResponseOk::Chunk(chunk) => {
+                    match resp {
+                        Response::Chunk(chunk) => {
                             // Forward every content‑bearing chunk immediately, but
                             // *suppress* the ones that initiate a tool call. This ensures
-                            // the user sees the assistant’s streamed text from the very
+                            // the user sees the assistant's streamed text from the very
                             // first probe turn while still hiding the internal
                             // search/extract trigger.
                             let first_choice = &chunk.choices[0];
                             if first_choice.delta.tool_calls.is_none() {
-                                user_sender
+                                let _ = user_sender
                                     .send(Response::Chunk(chunk.clone()))
-                                    .await
-                                    .unwrap();
+                                    .await;
                             }
                             last_choice = Some(first_choice.clone());
 
@@ -582,59 +606,80 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                                 break;
                             }
                         }
-                        other => {
-                            match other {
-                                ResponseOk::Chunk(_) => unreachable!(),
-                                ResponseOk::CompletionChunk(res) => user_sender
-                                    .send(Response::CompletionChunk(res))
-                                    .await
-                                    .unwrap(),
-                                ResponseOk::Done(res) => {
-                                    user_sender.send(Response::Done(res)).await.unwrap()
-                                }
-                                ResponseOk::CompletionDone(res) => user_sender
-                                    .send(Response::CompletionDone(res))
-                                    .await
-                                    .unwrap(),
-                                ResponseOk::ImageGeneration(res) => user_sender
-                                    .send(Response::ImageGeneration(res))
-                                    .await
-                                    .unwrap(),
-                                ResponseOk::Raw {
+                        // Forward error responses to user and return
+                        Response::InternalError(e) => {
+                            let _ = user_sender.send(Response::InternalError(e)).await;
+                            return;
+                        }
+                        Response::ValidationError(e) => {
+                            let _ = user_sender.send(Response::ValidationError(e)).await;
+                            return;
+                        }
+                        Response::ModelError(msg, resp) => {
+                            let _ = user_sender.send(Response::ModelError(msg, resp)).await;
+                            return;
+                        }
+                        // Forward other response types to user and return
+                        Response::CompletionChunk(res) => {
+                            let _ = user_sender.send(Response::CompletionChunk(res)).await;
+                            return;
+                        }
+                        Response::CompletionModelError(msg, resp) => {
+                            let _ = user_sender
+                                .send(Response::CompletionModelError(msg, resp))
+                                .await;
+                            return;
+                        }
+                        Response::Done(res) => {
+                            let _ = user_sender.send(Response::Done(res)).await;
+                            return;
+                        }
+                        Response::CompletionDone(res) => {
+                            let _ = user_sender.send(Response::CompletionDone(res)).await;
+                            return;
+                        }
+                        Response::ImageGeneration(res) => {
+                            let _ = user_sender.send(Response::ImageGeneration(res)).await;
+                            return;
+                        }
+                        Response::Raw {
+                            logits_chunks,
+                            tokens,
+                        } => {
+                            let _ = user_sender
+                                .send(Response::Raw {
                                     logits_chunks,
                                     tokens,
-                                } => user_sender
-                                    .send(Response::Raw {
-                                        logits_chunks,
-                                        tokens,
-                                    })
-                                    .await
-                                    .unwrap(),
-                                ResponseOk::Embeddings {
+                                })
+                                .await;
+                            return;
+                        }
+                        Response::Embeddings {
+                            embeddings,
+                            prompt_tokens,
+                            total_tokens,
+                        } => {
+                            let _ = user_sender
+                                .send(Response::Embeddings {
                                     embeddings,
                                     prompt_tokens,
                                     total_tokens,
-                                } => user_sender
-                                    .send(Response::Embeddings {
-                                        embeddings,
-                                        prompt_tokens,
-                                        total_tokens,
-                                    })
-                                    .await
-                                    .unwrap(),
-                                ResponseOk::Speech {
+                                })
+                                .await;
+                            return;
+                        }
+                        Response::Speech {
+                            pcm,
+                            rate,
+                            channels,
+                        } => {
+                            let _ = user_sender
+                                .send(Response::Speech {
                                     pcm,
                                     rate,
                                     channels,
-                                } => user_sender
-                                    .send(Response::Speech {
-                                        pcm,
-                                        rate,
-                                        channels,
-                                    })
-                                    .await
-                                    .unwrap(),
-                            };
+                                })
+                                .await;
                             return;
                         }
                     }

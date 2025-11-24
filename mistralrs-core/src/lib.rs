@@ -407,12 +407,14 @@ impl MistralRs {
             max_seq_len,
         };
 
+        let tx_for_engine = tx.clone();
         let engine_handler = thread::spawn(move || {
             #[cfg(feature = "metal")]
             objc::rc::autoreleasepool(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
                     let engine = Engine::new(
+                        tx_for_engine,
                         rx,
                         pipeline,
                         method,
@@ -436,6 +438,7 @@ impl MistralRs {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
                     let engine = Engine::new(
+                        tx_for_engine,
                         rx,
                         pipeline,
                         method,
