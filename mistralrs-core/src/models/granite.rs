@@ -331,11 +331,8 @@ impl CausalSelfAttention {
             comm,
             vb.pp("q_proj"),
         )?;
-        let kv_shard = mistralrs_quant::compute_kv_shard(
-            cfg.num_key_value_heads(),
-            cfg.head_dim(),
-            comm,
-        );
+        let kv_shard =
+            mistralrs_quant::compute_kv_shard(cfg.num_key_value_heads(), cfg.head_dim(), comm);
         let k_proj = ColumnParallelLayer::new_with_shard(
             size_in,
             size_kv,
@@ -572,7 +569,7 @@ impl GraniteMoeHybrid {
             let device = mapper
                 .device_for(i, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
-            if !ropes.contains_key(&device.location()) {
+            if let std::collections::hash_map::Entry::Vacant(e) = ropes.entry(device.location()) {
                 let rope = RotaryEmbedding::new(
                     cfg.rope_theta,
                     head_dim,
@@ -581,7 +578,7 @@ impl GraniteMoeHybrid {
                     true, // is_gpt_neox style
                     vb_m.dtype(),
                 )?;
-                ropes.insert(device.location(), Arc::new(rope));
+                e.insert(Arc::new(rope));
             }
         }
 

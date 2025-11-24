@@ -10,8 +10,8 @@ use crate::{
     get_mut_arcmutex,
     request::SearchContextSize,
     search::{self, ExtractFunctionParameters, SearchFunctionParameters, SearchResult},
-    MessageContent, NormalRequest, RequestMessage, Response, ToolCallResponse,
-    ToolChoice, WebSearchOptions,
+    MessageContent, NormalRequest, RequestMessage, Response, ToolCallResponse, ToolChoice,
+    WebSearchOptions,
 };
 
 use super::Engine;
@@ -591,9 +591,7 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                             // search/extract trigger.
                             let first_choice = &chunk.choices[0];
                             if first_choice.delta.tool_calls.is_none() {
-                                let _ = user_sender
-                                    .send(Response::Chunk(chunk.clone()))
-                                    .await;
+                                let _ = user_sender.send(Response::Chunk(chunk.clone())).await;
                             }
                             last_choice = Some(first_choice.clone());
 
