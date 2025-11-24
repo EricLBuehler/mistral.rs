@@ -237,8 +237,15 @@ pub mod text_models_inputs_processor {
                         table.get(i / paged_attn_metadata.block_size).unwrap()
                     };
                     let block_offset = i % paged_attn_metadata.block_size;
-                    let slot = block_number * paged_attn_metadata.block_size + block_offset;
-                    slot_mapping.push(slot.try_into().unwrap());
+                    // Use checked arithmetic to prevent overflow
+                    let slot = block_number
+                        .checked_mul(paged_attn_metadata.block_size)
+                        .and_then(|v| v.checked_add(block_offset))
+                        .expect("Slot calculation overflowed");
+                    slot_mapping.push(
+                        slot.try_into()
+                            .expect("Slot value too large for target integer type"),
+                    );
                     block_tables.push(table.clone());
                 }
                 slot_mappings.push(slot_mapping);
@@ -247,8 +254,16 @@ pub mod text_models_inputs_processor {
         }
 
         let (max_q, max_k, seqlens_q_map, seqlens_k_map) = if flash_attn {
-            let max_q = *seqlens_q.iter().max().unwrap();
-            let max_k = *seqlens_k.iter().max().unwrap();
+            // SAFETY: seqlens_q/k are initialized with vec![0] when flash_attn is true,
+            // so they are guaranteed to be non-empty here.
+            let max_q = *seqlens_q
+                .iter()
+                .max()
+                .expect("seqlens_q should not be empty when flash_attn is enabled");
+            let max_k = *seqlens_k
+                .iter()
+                .max()
+                .expect("seqlens_k should not be empty when flash_attn is enabled");
             let seqlens_q = Tensor::new(seqlens_q, device)?
                 .to_dtype(DType::F32)?
                 .cumsum(0)?
@@ -400,8 +415,14 @@ pub mod text_models_inputs_processor {
                         .unwrap()
                 };
                 let block_offset = block_pos % paged_attn_metadata.block_size;
-                let slot = block_number * paged_attn_metadata.block_size + block_offset;
-                let slot = slot.try_into().unwrap();
+                // Use checked arithmetic to prevent overflow
+                let slot = block_number
+                    .checked_mul(paged_attn_metadata.block_size)
+                    .and_then(|v| v.checked_add(block_offset))
+                    .expect("Slot calculation overflowed");
+                let slot = slot
+                    .try_into()
+                    .expect("Slot value too large for target integer type");
                 slot_mappings.push(vec![slot]);
 
                 if let Some(sliding_window) = paged_attn_metadata.sliding_window {
@@ -427,8 +448,16 @@ pub mod text_models_inputs_processor {
         }
 
         let (max_q, max_k, seqlens_q_map, seqlens_k_map) = if flash_attn {
-            let max_q = *seqlens_q.iter().max().unwrap();
-            let max_k = *seqlens_k.iter().max().unwrap();
+            // SAFETY: seqlens_q/k are initialized with vec![0] when flash_attn is true,
+            // so they are guaranteed to be non-empty here.
+            let max_q = *seqlens_q
+                .iter()
+                .max()
+                .expect("seqlens_q should not be empty when flash_attn is enabled");
+            let max_k = *seqlens_k
+                .iter()
+                .max()
+                .expect("seqlens_k should not be empty when flash_attn is enabled");
             let seqlens_q = Tensor::new(seqlens_q, device)?
                 .to_dtype(DType::F32)?
                 .cumsum(0)?
@@ -454,7 +483,11 @@ pub mod text_models_inputs_processor {
         let paged_attn_meta = if paged_attn_metadata.is_some() {
             let slot_mappings = _make_tensor_with_pad(slot_mappings, 1, _PAD_SLOT_ID, device)?;
 
-            let max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
+            let max_block_table_len = block_tables
+                .iter()
+                .map(|x| x.len())
+                .max()
+                .expect("block_tables should not be empty when paged attention is enabled");
 
             let block_tables = _make_tensor_with_pad(
                 block_tables

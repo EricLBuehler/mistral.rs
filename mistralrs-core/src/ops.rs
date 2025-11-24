@@ -312,8 +312,12 @@ fn bincount(values: &[u32], minlength: u32) -> Vec<u32> {
     }
 
     // Compute the maximum value in parallel.
-    // SAFETY: we know `values` is nonempty.
-    let max_val = *values.par_iter().max().unwrap();
+    // SAFETY: We just checked that values is nonempty above, so max() will return Some.
+    // Using expect() for clearer error message if this invariant is somehow violated.
+    let max_val = *values
+        .par_iter()
+        .max()
+        .expect("values should be non-empty after empty check");
 
     // The histogram length must cover all observed values as well as `minlength`.
     let result_len = (max_val + 1).max(minlength) as usize;
