@@ -68,6 +68,12 @@ impl ResponseCache for InMemoryResponseCache {
     }
 
     fn delete_response(&self, id: &str) -> Result<bool> {
+        // IMPORTANT: Lock ordering must be maintained to prevent deadlocks.
+        // Order: responses -> chunks -> conversation_histories
+        // All methods that acquire multiple locks must follow this order.
+        //
+        // We acquire all locks before any modifications to ensure atomicity.
+        // The locks are released in reverse order when dropped at end of scope.
         let mut responses = self.responses.write().unwrap();
         let mut chunks = self.chunks.write().unwrap();
         let mut histories = self.conversation_histories.write().unwrap();

@@ -46,12 +46,27 @@ pub fn nccl_daemon_replicator(request_sender: Sender<Request>) {
             use interprocess::local_socket::Stream as LocalStream;
 
             loop {
-                let name = ipc_name().unwrap();
+                let name = match ipc_name() {
+                    Ok(name) => name,
+                    Err(e) => {
+                        tracing::error!("Failed to get IPC name in daemon: {e}");
+                        continue;
+                    }
+                };
                 if let Ok(stream) = LocalStream::connect(name) {
                     let mut reader = BufReader::new(stream);
                     let mut buf = String::new();
-                    reader.read_line(&mut buf).unwrap();
-                    let mut req: Request = serde_json::from_str(&buf).unwrap();
+                    if let Err(e) = reader.read_line(&mut buf) {
+                        tracing::error!("Failed to read line from IPC stream: {e}");
+                        continue;
+                    }
+                    let mut req: Request = match serde_json::from_str(&buf) {
+                        Ok(req) => req,
+                        Err(e) => {
+                            tracing::error!("Failed to parse request JSON: {e}");
+                            continue;
+                        }
+                    };
 
                     req = match req {
                         Request::ReIsq(x) => Request::ReIsq(x),
@@ -61,9 +76,18 @@ pub fn nccl_daemon_replicator(request_sender: Sender<Request>) {
                             x.response = sender;
                             let req = Request::Detokenize(x);
 
-                            request_sender.send(req).await.unwrap();
-                            let resp = receiver.recv().await.unwrap();
-                            resp.unwrap();
+                            if request_sender.send(req).await.is_err() {
+                                tracing::error!("Daemon channel closed for Detokenize request");
+                                continue;
+                            }
+                            match receiver.recv().await {
+                                Some(resp) => {
+                                    if let Err(e) = resp {
+                                        tracing::error!("Detokenize response error: {e}");
+                                    }
+                                }
+                                None => tracing::error!("Detokenize response channel closed"),
+                            }
                             continue;
                         }
                         Request::Tokenize(mut x) => {
@@ -71,9 +95,18 @@ pub fn nccl_daemon_replicator(request_sender: Sender<Request>) {
                             x.response = sender;
                             let req = Request::Tokenize(x);
 
-                            request_sender.send(req).await.unwrap();
-                            let resp = receiver.recv().await.unwrap();
-                            resp.unwrap();
+                            if request_sender.send(req).await.is_err() {
+                                tracing::error!("Daemon channel closed for Tokenize request");
+                                continue;
+                            }
+                            match receiver.recv().await {
+                                Some(resp) => {
+                                    if let Err(e) = resp {
+                                        tracing::error!("Tokenize response error: {e}");
+                                    }
+                                }
+                                None => tracing::error!("Tokenize response channel closed"),
+                            }
                             continue;
                         }
                         Request::Normal(mut x) => {
@@ -82,15 +115,26 @@ pub fn nccl_daemon_replicator(request_sender: Sender<Request>) {
                             x.response = sender;
                             let req = Request::Normal(x);
 
-                            request_sender.send(req).await.unwrap();
-                            let resp = receiver.recv().await.unwrap();
-                            resp.as_result().unwrap();
+                            if request_sender.send(req).await.is_err() {
+                                tracing::error!("Daemon channel closed for Normal request");
+                                continue;
+                            }
+                            match receiver.recv().await {
+                                Some(resp) => {
+                                    if let Err(e) = resp.as_result() {
+                                        tracing::error!("Normal response error: {e}");
+                                    }
+                                }
+                                None => tracing::error!("Normal response channel closed"),
+                            }
                             continue;
                         }
                         Request::TerminateAllSeqsNextStep => Request::TerminateAllSeqsNextStep,
                     };
 
-                    request_sender.send(req).await.unwrap();
+                    if request_sender.send(req).await.is_err() {
+                        tracing::error!("Daemon channel closed for request");
+                    }
                 }
             }
         });
