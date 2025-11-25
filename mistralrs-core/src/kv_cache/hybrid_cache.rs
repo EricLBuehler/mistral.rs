@@ -39,6 +39,7 @@ pub struct MambaStatePool {
 }
 
 impl MambaStatePool {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         max_num_seqs: usize,
         conv_dim: usize,
@@ -331,9 +332,7 @@ impl HybridCache {
             if let HybridLayerCache::Mamba(pool) = cache {
                 if slot_idx.is_none() {
                     slot_idx = pool.allocate();
-                    if slot_idx.is_none() {
-                        return None; // No free slots
-                    }
+                    slot_idx?;
                 } else {
                     // Allocate same slot in other layers (they should be in sync)
                     let _ = pool.allocate();

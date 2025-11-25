@@ -498,6 +498,7 @@ struct MambaLayerCache {
 }
 
 impl MambaLayerCache {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         batch_size: usize,
         conv_dim: usize,

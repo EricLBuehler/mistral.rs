@@ -923,6 +923,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
 
         if let Some(device) = mamba_device {
             // Build state_indices tensor from sequences
+            #[allow(clippy::cast_possible_truncation)]
             let indices: Vec<u32> = seqs
                 .iter()
                 .map(|seq| seq.mamba_state_idx().unwrap_or(0) as u32)
@@ -1059,10 +1060,8 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
     ) {
         // Reset attention KV caches in sequences
         for seq in seqs.iter_mut() {
-            for kv in seq.normal_cache().iter_mut() {
-                if let Some(kv) = kv {
-                    kv.reset();
-                }
+            for kv in seq.normal_cache().iter_mut().flatten() {
+                kv.reset();
             }
         }
         // Reset the hybrid cache (including Mamba state pools)
