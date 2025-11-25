@@ -1858,6 +1858,10 @@ impl GraniteMoeHybrid {
                         if let GraniteLayerCache::Mamba(mamba_cache) =
                             &mut internal_cache.caches[layer_idx]
                         {
+                            // Reset state at start of new sequence (prompt phase)
+                            if seqlen_offsets[0] == 0 {
+                                mamba_cache.reset()?;
+                            }
                             x = block.forward(&x, mamba_cache)?;
                         }
                     } else if let (Some(ref indices), Some(HybridLayerCache::Mamba(pool))) =
@@ -1895,6 +1899,10 @@ impl GraniteMoeHybrid {
                         if let GraniteLayerCache::Mamba(mamba_cache) =
                             &mut internal_cache.caches[layer_idx]
                         {
+                            // Reset state at start of new sequence (prompt phase)
+                            if seqlen_offsets[0] == 0 {
+                                mamba_cache.reset()?;
+                            }
                             x = block.forward(&x, mamba_cache)?;
                         }
                     }
