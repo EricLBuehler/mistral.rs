@@ -566,6 +566,17 @@ impl Engine {
                 self.logger.add_new_sequence();
             }
 
+            // Allocate Mamba state pool slot for hybrid models
+            {
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                if pipeline.cache().is_hybrid() {
+                    let mut hybrid_cache = pipeline.cache().hybrid();
+                    if let Some(slot_idx) = hybrid_cache.allocate_seq() {
+                        seq.set_mamba_state_idx(Some(slot_idx));
+                    }
+                }
+            }
+
             // Run the inputs processor to update the prompt for multimodal models.
             if images.is_some() || audios.is_some() {
                 let pipeline = get_mut_arcmutex!(self.pipeline);

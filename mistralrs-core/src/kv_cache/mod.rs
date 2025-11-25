@@ -14,9 +14,7 @@ mod rotating_cache;
 mod single_cache;
 
 pub use full_cache::{EitherCache, LayerCaches};
-pub use hybrid_cache::{
-    HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, MambaLayerCache,
-};
+pub use hybrid_cache::{HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType};
 pub use rotating_cache::RotatingCache;
 pub use single_cache::SingleCache;
 
@@ -893,7 +891,14 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for FullCach
 }
 
 /// Cache manager for hybrid models (attention + Mamba layers).
-/// Used for continuous batching with GraniteMoeHybrid and similar hybrid models.
+///
+/// This implements vLLM-style continuous batching:
+/// - Attention layers: Standard KV cache batching (cat on clone_in, chunk on clone_out)
+/// - Mamba layers: Pool-based state management with indexed access
+///
+/// For Mamba, each sequence has a `mamba_state_idx` pointing to its slot in the
+/// pre-allocated state pool. The forward pass builds a `state_indices` tensor
+/// from these indices and uses gather/scatter operations.
 pub struct HybridCacheManager;
 
 impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCacheManager {
@@ -906,102 +911,87 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
         let mut hybrid_cache = pipeline.cache().hybrid();
         let num_layers = hybrid_cache.num_layers();
 
+        // Build state_indices for Mamba layers from sequences' mamba_state_idx
+        // Find the device from the first Mamba layer's pool
+        let mamba_device = hybrid_cache
+            .caches
+            .iter()
+            .find_map(|c| {
+                if let HybridLayerCache::Mamba(pool) = c {
+                    Some(pool.device().clone())
+                } else {
+                    None
+                }
+            });
+
+        if let Some(device) = mamba_device {
+            // Build state_indices tensor from sequences
+            let indices: Vec<u32> = seqs
+                .iter()
+                .map(|seq| seq.mamba_state_idx().unwrap_or(0) as u32)
+                .collect();
+            if let Ok(state_indices) = Tensor::from_vec(indices, (seqs.len(),), &device) {
+                hybrid_cache.set_state_indices(Some(state_indices));
+            }
+        }
+
+        // For attention layers, we still need to batch KV caches
         for layer_idx in 0..num_layers {
             let layer_cache = hybrid_cache.caches.get_mut(layer_idx).unwrap();
 
-            match layer_cache {
-                HybridLayerCache::Attention(kv_cache) => {
-                    // For attention layers, batch the KV caches from sequences
-                    let mut k_tensors = Vec::new();
-                    let mut v_tensors = Vec::new();
-                    let mut template_cache: Option<KvCache> = None;
+            if let HybridLayerCache::Attention(kv_cache) = layer_cache {
+                // Batch KV caches from sequences (same as NormalCacheManager)
+                let mut k_tensors = Vec::new();
+                let mut v_tensors = Vec::new();
+                let mut template_cache: Option<KvCache> = None;
 
-                    for seq in seqs.iter_mut() {
-                        if let Some(ref hybrid_seq_cache) = seq.hybrid_cache() {
-                            if let Some(HybridLayerCache::Attention(seq_kv)) =
-                                hybrid_seq_cache.get(layer_idx)
-                            {
-                                if template_cache.is_none() {
-                                    template_cache = Some(seq_kv.clone());
-                                }
-                                if let (Ok(Some(k)), Ok(Some(v))) = (seq_kv.k(), seq_kv.v()) {
-                                    k_tensors.push(k);
-                                    v_tensors.push(v);
-                                }
-                            }
+                for seq in seqs.iter_mut() {
+                    if let Some(Some(ref kv)) = seq.normal_cache().get(layer_idx) {
+                        if template_cache.is_none() {
+                            template_cache = Some(kv.clone());
                         }
-                    }
-
-                    if !k_tensors.is_empty() {
-                        let batched_k = if k_tensors.len() > 1 {
-                            Tensor::cat(&k_tensors, 0).unwrap()
-                        } else {
-                            k_tensors[0].clone()
-                        };
-                        let batched_v = if v_tensors.len() > 1 {
-                            Tensor::cat(&v_tensors, 0).unwrap()
-                        } else {
-                            v_tensors[0].clone()
-                        };
-
-                        // Update the pipeline's cache with batched data
-                        if let Some(ref template) = template_cache {
-                            match (template, kv_cache) {
-                                (KvCache::Normal { k: tk, .. }, KvCache::Normal { k, v }) => {
-                                    k.all_data = Some(batched_k);
-                                    k.current_seq_len = tk.current_seq_len;
-                                    v.all_data = Some(batched_v);
-                                    v.current_seq_len = tk.current_seq_len;
-                                }
-                                (KvCache::Rotating { k: tk, .. }, KvCache::Rotating { k, v }) => {
-                                    k.all_data = Some(batched_k);
-                                    k.current_seq_len = tk.current_seq_len;
-                                    k.offset = tk.offset;
-                                    v.all_data = Some(batched_v);
-                                    v.current_seq_len = tk.current_seq_len;
-                                    v.offset = tk.offset;
-                                }
-                                _ => {}
-                            }
+                        if let (Ok(Some(k)), Ok(Some(v))) = (kv.k(), kv.v()) {
+                            k_tensors.push(k);
+                            v_tensors.push(v);
                         }
                     }
                 }
-                HybridLayerCache::Mamba(mamba_cache) => {
-                    // For Mamba layers, batch the conv_state and ssm_state tensors
-                    let mut conv_states = Vec::new();
-                    let mut ssm_states = Vec::new();
-                    let mut seqlen_offset = 0;
 
-                    for seq in seqs.iter_mut() {
-                        if let Some(ref hybrid_seq_cache) = seq.hybrid_cache() {
-                            if let Some(HybridLayerCache::Mamba(seq_mamba)) =
-                                hybrid_seq_cache.get(layer_idx)
-                            {
-                                conv_states.push(seq_mamba.conv_state.clone());
-                                ssm_states.push(seq_mamba.ssm_state.clone());
-                                seqlen_offset = seq_mamba.seqlen_offset;
+                if !k_tensors.is_empty() {
+                    let batched_k = if k_tensors.len() > 1 {
+                        Tensor::cat(&k_tensors, 0).unwrap()
+                    } else {
+                        k_tensors[0].clone()
+                    };
+                    let batched_v = if v_tensors.len() > 1 {
+                        Tensor::cat(&v_tensors, 0).unwrap()
+                    } else {
+                        v_tensors[0].clone()
+                    };
+
+                    if let Some(ref template) = template_cache {
+                        match (template, kv_cache) {
+                            (KvCache::Normal { k: tk, .. }, KvCache::Normal { k, v }) => {
+                                k.all_data = Some(batched_k);
+                                k.current_seq_len = tk.current_seq_len;
+                                v.all_data = Some(batched_v);
+                                v.current_seq_len = tk.current_seq_len;
                             }
+                            (KvCache::Rotating { k: tk, .. }, KvCache::Rotating { k, v }) => {
+                                k.all_data = Some(batched_k);
+                                k.current_seq_len = tk.current_seq_len;
+                                k.offset = tk.offset;
+                                v.all_data = Some(batched_v);
+                                v.current_seq_len = tk.current_seq_len;
+                                v.offset = tk.offset;
+                            }
+                            _ => {}
                         }
-                    }
-
-                    if !conv_states.is_empty() {
-                        let batched_conv = if conv_states.len() > 1 {
-                            Tensor::cat(&conv_states, 0).unwrap()
-                        } else {
-                            conv_states[0].clone()
-                        };
-                        let batched_ssm = if ssm_states.len() > 1 {
-                            Tensor::cat(&ssm_states, 0).unwrap()
-                        } else {
-                            ssm_states[0].clone()
-                        };
-
-                        mamba_cache.conv_state = batched_conv;
-                        mamba_cache.ssm_state = batched_ssm;
-                        mamba_cache.seqlen_offset = seqlen_offset;
                     }
                 }
             }
+            // For Mamba layers: No copying needed!
+            // The pool is accessed directly via state_indices during forward.
         }
     }
 
@@ -1010,91 +1000,72 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
         let num_layers = hybrid_cache.num_layers();
         let num_seqs = seqs.len();
 
-        for (seq_idx, seq) in seqs.iter_mut().enumerate() {
-            // Initialize hybrid cache for seq if not present
-            if seq.hybrid_cache().is_none() {
-                let mut new_cache = Vec::with_capacity(num_layers);
-                for layer_idx in 0..num_layers {
-                    let layer_cache = hybrid_cache.caches.get(layer_idx).unwrap();
-                    match layer_cache {
-                        HybridLayerCache::Attention(kv) => {
-                            // Clone the structure but with empty data initially
-                            new_cache.push(HybridLayerCache::Attention(kv.clone()));
+        // For attention layers, split batched KV caches back to sequences
+        for layer_idx in 0..num_layers {
+            let layer_cache = hybrid_cache.caches.get(layer_idx).unwrap();
+
+            if let HybridLayerCache::Attention(kv_cache) = layer_cache {
+                if let (Ok(Some(k)), Ok(Some(v))) = (kv_cache.k(), kv_cache.v()) {
+                    let k_chunks = k.chunk(num_seqs, 0).unwrap();
+                    let v_chunks = v.chunk(num_seqs, 0).unwrap();
+
+                    for (seq_idx, seq) in seqs.iter_mut().enumerate() {
+                        let seq_k = k_chunks.get(seq_idx).unwrap().clone();
+                        let seq_v = v_chunks.get(seq_idx).unwrap().clone();
+
+                        // Initialize cache if needed
+                        if seq.normal_cache().get(layer_idx).is_none()
+                            || seq.normal_cache()[layer_idx].is_none()
+                        {
+                            while seq.normal_cache().len() <= layer_idx {
+                                seq.normal_cache().push(None);
+                            }
+                            seq.normal_cache()[layer_idx] = Some(kv_cache.clone());
                         }
-                        HybridLayerCache::Mamba(mamba) => {
-                            // Clone the structure
-                            new_cache.push(HybridLayerCache::Mamba(mamba.clone()));
-                        }
-                    }
-                }
-                *seq.hybrid_cache() = Some(new_cache);
-            }
 
-            let seq_cache = seq.hybrid_cache().as_mut().unwrap();
-
-            for layer_idx in 0..num_layers {
-                let layer_cache = hybrid_cache.caches.get(layer_idx).unwrap();
-
-                match layer_cache {
-                    HybridLayerCache::Attention(kv_cache) => {
-                        if let (Ok(Some(k)), Ok(Some(v))) = (kv_cache.k(), kv_cache.v()) {
-                            // Split batched tensors by sequence
-                            let k_chunks = k.chunk(num_seqs, 0).unwrap();
-                            let v_chunks = v.chunk(num_seqs, 0).unwrap();
-
-                            if let HybridLayerCache::Attention(seq_kv) = &mut seq_cache[layer_idx] {
-                                let seq_k = k_chunks.get(seq_idx).unwrap().clone();
-                                let seq_v = v_chunks.get(seq_idx).unwrap().clone();
-
-                                match (kv_cache, seq_kv) {
-                                    (
-                                        KvCache::Normal { k: src_k, .. },
-                                        KvCache::Normal { k, v },
-                                    ) => {
-                                        k.all_data = Some(seq_k);
-                                        k.current_seq_len = src_k.current_seq_len;
-                                        v.all_data = Some(seq_v);
-                                        v.current_seq_len = src_k.current_seq_len;
-                                    }
-                                    (
-                                        KvCache::Rotating { k: src_k, .. },
-                                        KvCache::Rotating { k, v },
-                                    ) => {
-                                        k.all_data = Some(seq_k);
-                                        k.current_seq_len = src_k.current_seq_len;
-                                        k.offset = src_k.offset;
-                                        v.all_data = Some(seq_v);
-                                        v.current_seq_len = src_k.current_seq_len;
-                                        v.offset = src_k.offset;
-                                    }
-                                    _ => {}
+                        if let Some(ref mut seq_kv) = seq.normal_cache()[layer_idx] {
+                            match (kv_cache, seq_kv) {
+                                (KvCache::Normal { k: src_k, .. }, KvCache::Normal { k, v }) => {
+                                    k.all_data = Some(seq_k);
+                                    k.current_seq_len = src_k.current_seq_len;
+                                    v.all_data = Some(seq_v);
+                                    v.current_seq_len = src_k.current_seq_len;
                                 }
+                                (KvCache::Rotating { k: src_k, .. }, KvCache::Rotating { k, v }) => {
+                                    k.all_data = Some(seq_k);
+                                    k.current_seq_len = src_k.current_seq_len;
+                                    k.offset = src_k.offset;
+                                    v.all_data = Some(seq_v);
+                                    v.current_seq_len = src_k.current_seq_len;
+                                    v.offset = src_k.offset;
+                                }
+                                _ => {}
                             }
                         }
                     }
-                    HybridLayerCache::Mamba(mamba_cache) => {
-                        // Split batched Mamba states by sequence
-                        let conv_chunks = mamba_cache.conv_state.chunk(num_seqs, 0).unwrap();
-                        let ssm_chunks = mamba_cache.ssm_state.chunk(num_seqs, 0).unwrap();
-
-                        if let HybridLayerCache::Mamba(seq_mamba) = &mut seq_cache[layer_idx] {
-                            seq_mamba.conv_state = conv_chunks.get(seq_idx).unwrap().clone();
-                            seq_mamba.ssm_state = ssm_chunks.get(seq_idx).unwrap().clone();
-                            seq_mamba.seqlen_offset = mamba_cache.seqlen_offset;
-                        }
-                    }
                 }
             }
+            // For Mamba layers: No splitting needed!
+            // The pool was updated in-place during forward via scatter operations.
         }
     }
 
     fn set_none_cache(
         &self,
         pipeline: &T,
-        _seqs: &mut [&mut Sequence],
+        seqs: &mut [&mut Sequence],
         _modify_draft_cache: bool,
         _load_preallocated_cache: bool,
     ) {
+        // Reset attention KV caches in sequences
+        for seq in seqs.iter_mut() {
+            for kv in seq.normal_cache().iter_mut() {
+                if let Some(kv) = kv {
+                    kv.reset();
+                }
+            }
+        }
+        // Reset the hybrid cache (including Mamba state pools)
         pipeline.cache().hybrid().reset();
     }
 }

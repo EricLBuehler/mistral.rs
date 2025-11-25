@@ -16,7 +16,7 @@ use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
     attention::SdpaParams,
     device_map::DeviceMapper,
-    kv_cache::{HybridCache, HybridCacheConfig, HybridLayerType, MambaLayerCache},
+    kv_cache::{HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType},
     layers::{embedding, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -484,6 +484,56 @@ impl GraniteMoE {
 }
 
 // ====================== Mamba Implementation ======================
+
+/// Per-layer Mamba state cache (local to granite model).
+/// Stores conv state and SSM state for recurrent processing.
+#[derive(Debug)]
+struct MambaLayerCache {
+    /// Convolution state: (batch, conv_dim, d_conv)
+    pub conv_state: Tensor,
+    /// SSM state: (batch, n_heads, head_dim, d_state)
+    pub ssm_state: Tensor,
+    /// Current sequence length offset for this layer
+    pub seqlen_offset: usize,
+}
+
+impl MambaLayerCache {
+    pub fn new(
+        batch_size: usize,
+        conv_dim: usize,
+        d_conv: usize,
+        n_heads: usize,
+        head_dim: usize,
+        d_state: usize,
+        dtype: candle_core::DType,
+        device: &Device,
+    ) -> Result<Self> {
+        let conv_state = Tensor::zeros((batch_size, conv_dim, d_conv), dtype, device)?;
+        let ssm_state = Tensor::zeros((batch_size, n_heads, head_dim, d_state), dtype, device)?;
+        Ok(Self {
+            conv_state,
+            ssm_state,
+            seqlen_offset: 0,
+        })
+    }
+
+    pub fn reset(&mut self) -> Result<()> {
+        self.conv_state = self.conv_state.zeros_like()?;
+        self.ssm_state = self.ssm_state.zeros_like()?;
+        self.seqlen_offset = 0;
+        Ok(())
+    }
+}
+
+impl Clone for MambaLayerCache {
+    fn clone(&self) -> Self {
+        Self {
+            conv_state: self.conv_state.clone(),
+            ssm_state: self.ssm_state.clone(),
+            seqlen_offset: self.seqlen_offset,
+        }
+    }
+}
 
 fn softplus(x: &Tensor) -> Result<Tensor> {
     (Tensor::ones_like(x)? + x.exp()?)?.log()
@@ -1685,6 +1735,7 @@ impl GraniteMoeHybrid {
         let hybrid_cache_config = HybridCacheConfig {
             layer_types: pipeline_layer_types,
             max_seq_len: cfg.max_position_embeddings,
+            max_num_seqs: 256, // Max concurrent sequences for Mamba state pool
             mamba_conv_dim: cfg.mamba_conv_dim(),
             mamba_d_conv: cfg.mamba_d_conv,
             mamba_n_heads: cfg.mamba_n_heads(),
@@ -1745,12 +1796,17 @@ impl GraniteMoeHybrid {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
+        let (_batch_size, _seq_len) = input_ids.dims2()?;
         let mut x = self.wte.forward(input_ids)?;
         // Scale embeddings
         x = scale_tensor(x, self.embedding_multiplier)?;
 
-        // Get cache lock for the entire forward pass
-        let mut hybrid_cache = self.hybrid_cache.lock().unwrap();
+        // Get both internal cache and pipeline cache
+        let mut internal_cache = self.hybrid_cache.lock().unwrap();
+        let mut pipeline_cache = self.kv_cache.hybrid();
+
+        // Get state_indices for Mamba layers from pipeline cache
+        let state_indices = pipeline_cache.state_indices().cloned();
 
         // Build attention mask - use seqlen_offsets for attention layers
         let mask = CausalMasker.make_causal_mask_matrix(
@@ -1758,7 +1814,7 @@ impl GraniteMoeHybrid {
             metadata
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*hybrid_cache as &dyn PastKvLenCache),
+                .unwrap_or(&*internal_cache as &dyn PastKvLenCache),
             x.dtype(),
             self.num_attention_heads,
         )?;
@@ -1770,28 +1826,77 @@ impl GraniteMoeHybrid {
                 .unwrap_or(true)
         });
 
-        let cache = &mut hybrid_cache.caches;
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             x = self.mapper.map(x, layer_idx)?;
 
-            match (layer, &mut cache[layer_idx]) {
-                (DecoderLayer::Attention(block), GraniteLayerCache::Attention(kv_cache)) => {
-                    x = block.forward(
-                        &x,
-                        &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
-                        seqlen_offsets,
-                        kv_cache,
-                        metadata
-                            .as_ref()
-                            .map(|(kv_cache, metadata)| (kv_cache[layer_idx].clone(), *metadata)),
-                        flash_params,
-                    )?;
+            match layer {
+                DecoderLayer::Attention(block) => {
+                    // Use internal cache for attention layers
+                    if let GraniteLayerCache::Attention(kv_cache) =
+                        &mut internal_cache.caches[layer_idx]
+                    {
+                        x = block.forward(
+                            &x,
+                            &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                            seqlen_offsets,
+                            kv_cache,
+                            metadata
+                                .as_ref()
+                                .map(|(kv_cache, metadata)| (kv_cache[layer_idx].clone(), *metadata)),
+                            flash_params,
+                        )?;
+                    }
                 }
-                (DecoderLayer::Mamba(block), GraniteLayerCache::Mamba(mamba_cache)) => {
-                    x = block.forward(&x, mamba_cache)?;
-                }
-                _ => {
-                    candle_core::bail!("Layer type mismatch: layer and cache types don't match");
+                DecoderLayer::Mamba(block) => {
+                    // For batch_size=1, use internal cache (faster, no gather/scatter overhead)
+                    // For batch_size>1, use pool-based approach with gather/scatter
+                    let batch_size = x.dim(0)?;
+
+                    if batch_size == 1 {
+                        // Single sequence: use internal cache directly (no pool overhead)
+                        if let GraniteLayerCache::Mamba(mamba_cache) =
+                            &mut internal_cache.caches[layer_idx]
+                        {
+                            x = block.forward(&x, mamba_cache)?;
+                        }
+                    } else if let (Some(ref indices), Some(HybridLayerCache::Mamba(pool))) =
+                        (&state_indices, pipeline_cache.get_mut(layer_idx))
+                    {
+                        // Multiple sequences: use pool with gather/scatter
+                        let conv_state = pool.gather_conv_state(indices)?;
+                        let ssm_state = pool.gather_ssm_state(indices)?;
+
+                        // Get seqlen_offset from first sequence (assumes all same phase)
+                        let first_idx: u32 = indices.i(0)?.to_scalar()?;
+                        let seqlen_offset = pool.get_seqlen_offset(first_idx as usize);
+
+                        // Create temporary cache with gathered states
+                        let mut temp_cache = MambaLayerCache {
+                            conv_state,
+                            ssm_state,
+                            seqlen_offset,
+                        };
+
+                        // Run Mamba forward
+                        x = block.forward(&x, &mut temp_cache)?;
+
+                        // Scatter updated states back to pool
+                        pool.scatter_conv_state(indices, &temp_cache.conv_state)?;
+                        pool.scatter_ssm_state(indices, &temp_cache.ssm_state)?;
+
+                        // Update seqlen_offsets in pool for each sequence
+                        let indices_vec: Vec<u32> = indices.to_vec1()?;
+                        for &idx in &indices_vec {
+                            pool.set_seqlen_offset(idx as usize, temp_cache.seqlen_offset);
+                        }
+                    } else {
+                        // Fallback: use internal cache
+                        if let GraniteLayerCache::Mamba(mamba_cache) =
+                            &mut internal_cache.caches[layer_idx]
+                        {
+                            x = block.forward(&x, mamba_cache)?;
+                        }
+                    }
                 }
             }
         }

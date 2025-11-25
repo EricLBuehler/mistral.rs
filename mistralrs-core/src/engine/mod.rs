@@ -641,6 +641,19 @@ impl Engine {
                 }
             }
 
+            // Free Mamba state pool slots for finished sequences (hybrid models)
+            {
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                if pipeline.cache().is_hybrid() {
+                    let mamba_indices = scheduler.get_finished_mamba_indices();
+                    if !mamba_indices.is_empty() {
+                        let mut hybrid_cache = pipeline.cache().hybrid();
+                        for idx in mamba_indices {
+                            hybrid_cache.free_seq(idx);
+                        }
+                    }
+                }
+            }
             scheduler.free_finished_sequence_groups();
         }
     }
