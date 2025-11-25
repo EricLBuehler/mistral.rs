@@ -29,7 +29,7 @@
 <a href=#29 id=29 data-nosnippet>29</a>            }
 <a href=#30 id=30 data-nosnippet>30</a>            <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
 <a href=#31 id=31 data-nosnippet>31</a>            </span>Device::Metal(dev) =&gt; {
-<a href=#32 id=32 data-nosnippet>32</a>                <span class="kw">let </span>max = dev.recommended_max_working_set_size();
+<a href=#32 id=32 data-nosnippet>32</a>                <span class="kw">let </span>max = dev.device().recommended_max_working_set_size();
 <a href=#33 id=33 data-nosnippet>33</a>                <span class="kw">let </span>alloc = dev.current_allocated_size();
 <a href=#34 id=34 data-nosnippet>34</a>                <span class="kw">let </span>avail = max.saturating_sub(alloc);
 <a href=#35 id=35 data-nosnippet>35</a>

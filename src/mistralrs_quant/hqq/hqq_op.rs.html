@@ -73,8 +73,8 @@
 <a href=#73 id=73 data-nosnippet>73</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"All inputs must be contiguous"</span>);
 <a href=#74 id=74 data-nosnippet>74</a>        }
 <a href=#75 id=75 data-nosnippet>75</a>
-<a href=#76 id=76 data-nosnippet>76</a>        <span class="kw">let </span>command_buffer = w.device().command_buffer()<span class="question-mark">?</span>;
-<a href=#77 id=77 data-nosnippet>77</a>        command_buffer.set_label(<span class="string">"dequant-8bit"</span>);
+<a href=#76 id=76 data-nosnippet>76</a>        <span class="kw">let </span>encoder = w.device().command_encoder()<span class="question-mark">?</span>;
+<a href=#77 id=77 data-nosnippet>77</a>        encoder.set_label(<span class="string">"dequant-8bit"</span>);
 <a href=#78 id=78 data-nosnippet>78</a>
 <a href=#79 id=79 data-nosnippet>79</a>        <span class="kw">let </span>device = w.device();
 <a href=#80 id=80 data-nosnippet>80</a>
@@ -84,7 +84,7 @@
 <a href=#84 id=84 data-nosnippet>84</a>
 <a href=#85 id=85 data-nosnippet>85</a>        <span class="kw">crate</span>::metal_kernels::call_dequant_8bit(
 <a href=#86 id=86 data-nosnippet>86</a>            device.device(),
-<a href=#87 id=87 data-nosnippet>87</a>            <span class="kw-2">&amp;</span>command_buffer,
+<a href=#87 id=87 data-nosnippet>87</a>            <span class="kw-2">&amp;</span>encoder,
 <a href=#88 id=88 data-nosnippet>88</a>            <span class="kw-2">&amp;</span><span class="kw">crate</span>::metal_kernels::Kernels::new(),
 <a href=#89 id=89 data-nosnippet>89</a>            s.dtype(),
 <a href=#90 id=90 data-nosnippet>90</a>            w.buffer(),
@@ -184,8 +184,8 @@
 <a href=#184 id=184 data-nosnippet>184</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"All inputs must be contiguous"</span>);
 <a href=#185 id=185 data-nosnippet>185</a>        }
 <a href=#186 id=186 data-nosnippet>186</a>
-<a href=#187 id=187 data-nosnippet>187</a>        <span class="kw">let </span>command_buffer = w.device().command_buffer()<span class="question-mark">?</span>;
-<a href=#188 id=188 data-nosnippet>188</a>        command_buffer.set_label(<span class="string">"dequant-4bit"</span>);
+<a href=#187 id=187 data-nosnippet>187</a>        <span class="kw">let </span>encoder = w.device().command_encoder()<span class="question-mark">?</span>;
+<a href=#188 id=188 data-nosnippet>188</a>        encoder.set_label(<span class="string">"dequant-4bit"</span>);
 <a href=#189 id=189 data-nosnippet>189</a>
 <a href=#190 id=190 data-nosnippet>190</a>        <span class="kw">let </span>device = w.device();
 <a href=#191 id=191 data-nosnippet>191</a>
@@ -195,7 +195,7 @@
 <a href=#195 id=195 data-nosnippet>195</a>
 <a href=#196 id=196 data-nosnippet>196</a>        <span class="kw">crate</span>::metal_kernels::call_dequant_4bit(
 <a href=#197 id=197 data-nosnippet>197</a>            device.device(),
-<a href=#198 id=198 data-nosnippet>198</a>            <span class="kw-2">&amp;</span>command_buffer,
+<a href=#198 id=198 data-nosnippet>198</a>            <span class="kw-2">&amp;</span>encoder,
 <a href=#199 id=199 data-nosnippet>199</a>            <span class="kw-2">&amp;</span><span class="kw">crate</span>::metal_kernels::Kernels::new(),
 <a href=#200 id=200 data-nosnippet>200</a>            s.dtype(),
 <a href=#201 id=201 data-nosnippet>201</a>            w.buffer(),
@@ -297,8 +297,8 @@
 <a href=#297 id=297 data-nosnippet>297</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"All inputs must be contiguous"</span>);
 <a href=#298 id=298 data-nosnippet>298</a>        }
 <a href=#299 id=299 data-nosnippet>299</a>
-<a href=#300 id=300 data-nosnippet>300</a>        <span class="kw">let </span>command_buffer = w.device().command_buffer()<span class="question-mark">?</span>;
-<a href=#301 id=301 data-nosnippet>301</a>        command_buffer.set_label(<span class="string">"dequant-2bit"</span>);
+<a href=#300 id=300 data-nosnippet>300</a>        <span class="kw">let </span>encoder = w.device().command_encoder()<span class="question-mark">?</span>;
+<a href=#301 id=301 data-nosnippet>301</a>        encoder.set_label(<span class="string">"dequant-2bit"</span>);
 <a href=#302 id=302 data-nosnippet>302</a>
 <a href=#303 id=303 data-nosnippet>303</a>        <span class="kw">let </span>device = w.device();
 <a href=#304 id=304 data-nosnippet>304</a>
@@ -308,7 +308,7 @@
 <a href=#308 id=308 data-nosnippet>308</a>
 <a href=#309 id=309 data-nosnippet>309</a>        <span class="kw">crate</span>::metal_kernels::call_dequant_2bit(
 <a href=#310 id=310 data-nosnippet>310</a>            device.device(),
-<a href=#311 id=311 data-nosnippet>311</a>            <span class="kw-2">&amp;</span>command_buffer,
+<a href=#311 id=311 data-nosnippet>311</a>            <span class="kw-2">&amp;</span>encoder,
 <a href=#312 id=312 data-nosnippet>312</a>            <span class="kw-2">&amp;</span><span class="kw">crate</span>::metal_kernels::Kernels::new(),
 <a href=#313 id=313 data-nosnippet>313</a>            s.dtype(),
 <a href=#314 id=314 data-nosnippet>314</a>            w.buffer(),
@@ -414,8 +414,8 @@
 <a href=#414 id=414 data-nosnippet>414</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"All inputs must be contiguous"</span>);
 <a href=#415 id=415 data-nosnippet>415</a>        }
 <a href=#416 id=416 data-nosnippet>416</a>
-<a href=#417 id=417 data-nosnippet>417</a>        <span class="kw">let </span>command_buffer = w.device().command_buffer()<span class="question-mark">?</span>;
-<a href=#418 id=418 data-nosnippet>418</a>        command_buffer.set_label(<span class="string">"dequant-1bit"</span>);
+<a href=#417 id=417 data-nosnippet>417</a>        <span class="kw">let </span>encoder = w.device().command_encoder()<span class="question-mark">?</span>;
+<a href=#418 id=418 data-nosnippet>418</a>        encoder.set_label(<span class="string">"dequant-1bit"</span>);
 <a href=#419 id=419 data-nosnippet>419</a>
 <a href=#420 id=420 data-nosnippet>420</a>        <span class="kw">let </span>device = w.device();
 <a href=#421 id=421 data-nosnippet>421</a>
@@ -425,7 +425,7 @@
 <a href=#425 id=425 data-nosnippet>425</a>
 <a href=#426 id=426 data-nosnippet>426</a>        <span class="kw">crate</span>::metal_kernels::call_dequant_1bit(
 <a href=#427 id=427 data-nosnippet>427</a>            device.device(),
-<a href=#428 id=428 data-nosnippet>428</a>            <span class="kw-2">&amp;</span>command_buffer,
+<a href=#428 id=428 data-nosnippet>428</a>            <span class="kw-2">&amp;</span>encoder,
 <a href=#429 id=429 data-nosnippet>429</a>            <span class="kw-2">&amp;</span><span class="kw">crate</span>::metal_kernels::Kernels::new(),
 <a href=#430 id=430 data-nosnippet>430</a>            s.dtype(),
 <a href=#431 id=431 data-nosnippet>431</a>            w.buffer(),
@@ -533,8 +533,8 @@
 <a href=#533 id=533 data-nosnippet>533</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"All inputs must be contiguous"</span>);
 <a href=#534 id=534 data-nosnippet>534</a>        }
 <a href=#535 id=535 data-nosnippet>535</a>
-<a href=#536 id=536 data-nosnippet>536</a>        <span class="kw">let </span>command_buffer = w.device().command_buffer()<span class="question-mark">?</span>;
-<a href=#537 id=537 data-nosnippet>537</a>        command_buffer.set_label(<span class="string">"dequant-3bit"</span>);
+<a href=#536 id=536 data-nosnippet>536</a>        <span class="kw">let </span>encoder = w.device().command_encoder()<span class="question-mark">?</span>;
+<a href=#537 id=537 data-nosnippet>537</a>        encoder.set_label(<span class="string">"dequant-3bit"</span>);
 <a href=#538 id=538 data-nosnippet>538</a>
 <a href=#539 id=539 data-nosnippet>539</a>        <span class="kw">let </span>device = w.device();
 <a href=#540 id=540 data-nosnippet>540</a>
@@ -544,7 +544,7 @@
 <a href=#544 id=544 data-nosnippet>544</a>
 <a href=#545 id=545 data-nosnippet>545</a>        <span class="kw">crate</span>::metal_kernels::call_dequant_3bit(
 <a href=#546 id=546 data-nosnippet>546</a>            device.device(),
-<a href=#547 id=547 data-nosnippet>547</a>            <span class="kw-2">&amp;</span>command_buffer,
+<a href=#547 id=547 data-nosnippet>547</a>            <span class="kw-2">&amp;</span>encoder,
 <a href=#548 id=548 data-nosnippet>548</a>            <span class="kw-2">&amp;</span><span class="kw">crate</span>::metal_kernels::Kernels::new(),
 <a href=#549 id=549 data-nosnippet>549</a>            s.dtype(),
 <a href=#550 id=550 data-nosnippet>550</a>            w.buffer(),

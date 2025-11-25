@@ -570,28 +570,31 @@
 <a href=#570 id=570 data-nosnippet>570</a>        }
 <a href=#571 id=571 data-nosnippet>571</a>        <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
 <a href=#572 id=572 data-nosnippet>572</a>        </span>Device::Metal(<span class="kw">_</span>) =&gt; {
-<a href=#573 id=573 data-nosnippet>573</a>            <span class="kw">let </span>total_ords = metal::Device::all().len();
-<a href=#574 id=574 data-nosnippet>574</a>            <span class="kw">let </span><span class="kw-2">mut </span>ord = <span class="number">0</span>;
-<a href=#575 id=575 data-nosnippet>575</a>            <span class="kw">let </span>DeviceLocation::Metal { gpu_id: base_ord } = base.location() <span class="kw">else </span>{
-<a href=#576 id=576 data-nosnippet>576</a>                <span class="macro">candle_core::bail!</span>(<span class="string">"location and device do not match"</span>);
-<a href=#577 id=577 data-nosnippet>577</a>            };
-<a href=#578 id=578 data-nosnippet>578</a>            <span class="kw">loop </span>{
-<a href=#579 id=579 data-nosnippet>579</a>                <span class="kw">if </span>base_ord == ord {
-<a href=#580 id=580 data-nosnippet>580</a>                    devices.push(base.clone());
-<a href=#581 id=581 data-nosnippet>581</a>                    ord += <span class="number">1</span>;
-<a href=#582 id=582 data-nosnippet>582</a>                    <span class="kw">continue</span>;
-<a href=#583 id=583 data-nosnippet>583</a>                }
-<a href=#584 id=584 data-nosnippet>584</a>                <span class="kw">if </span>total_ords == ord {
-<a href=#585 id=585 data-nosnippet>585</a>                    <span class="kw">break</span>;
+<a href=#573 id=573 data-nosnippet>573</a>            <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
+<a href=#574 id=574 data-nosnippet>574</a>            </span><span class="kw">let </span>total_ords = candle_metal_kernels::metal::Device::all().len();
+<a href=#575 id=575 data-nosnippet>575</a>            <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
+<a href=#576 id=576 data-nosnippet>576</a>            </span><span class="kw">let </span>total_ords = <span class="number">0</span>;
+<a href=#577 id=577 data-nosnippet>577</a>            <span class="kw">let </span><span class="kw-2">mut </span>ord = <span class="number">0</span>;
+<a href=#578 id=578 data-nosnippet>578</a>            <span class="kw">let </span>DeviceLocation::Metal { gpu_id: base_ord } = base.location() <span class="kw">else </span>{
+<a href=#579 id=579 data-nosnippet>579</a>                <span class="macro">candle_core::bail!</span>(<span class="string">"location and device do not match"</span>);
+<a href=#580 id=580 data-nosnippet>580</a>            };
+<a href=#581 id=581 data-nosnippet>581</a>            <span class="kw">loop </span>{
+<a href=#582 id=582 data-nosnippet>582</a>                <span class="kw">if </span>base_ord == ord {
+<a href=#583 id=583 data-nosnippet>583</a>                    devices.push(base.clone());
+<a href=#584 id=584 data-nosnippet>584</a>                    ord += <span class="number">1</span>;
+<a href=#585 id=585 data-nosnippet>585</a>                    <span class="kw">continue</span>;
 <a href=#586 id=586 data-nosnippet>586</a>                }
-<a href=#587 id=587 data-nosnippet>587</a>                <span class="kw">if let </span><span class="prelude-val">Ok</span>(dev) = Device::new_metal(ord) {
-<a href=#588 id=588 data-nosnippet>588</a>                    devices.push(dev);
-<a href=#589 id=589 data-nosnippet>589</a>                    ord += <span class="number">1</span>;
-<a href=#590 id=590 data-nosnippet>590</a>                } <span class="kw">else </span>{
-<a href=#591 id=591 data-nosnippet>591</a>                    <span class="kw">break</span>;
-<a href=#592 id=592 data-nosnippet>592</a>                }
-<a href=#593 id=593 data-nosnippet>593</a>            }
-<a href=#594 id=594 data-nosnippet>594</a>        }
-<a href=#595 id=595 data-nosnippet>595</a>    }
-<a href=#596 id=596 data-nosnippet>596</a>    <span class="prelude-val">Ok</span>(devices)
-<a href=#597 id=597 data-nosnippet>597</a>}</code></pre></div></section></main></body></html>
+<a href=#587 id=587 data-nosnippet>587</a>                <span class="kw">if </span>total_ords == ord {
+<a href=#588 id=588 data-nosnippet>588</a>                    <span class="kw">break</span>;
+<a href=#589 id=589 data-nosnippet>589</a>                }
+<a href=#590 id=590 data-nosnippet>590</a>                <span class="kw">if let </span><span class="prelude-val">Ok</span>(dev) = Device::new_metal(ord) {
+<a href=#591 id=591 data-nosnippet>591</a>                    devices.push(dev);
+<a href=#592 id=592 data-nosnippet>592</a>                    ord += <span class="number">1</span>;
+<a href=#593 id=593 data-nosnippet>593</a>                } <span class="kw">else </span>{
+<a href=#594 id=594 data-nosnippet>594</a>                    <span class="kw">break</span>;
+<a href=#595 id=595 data-nosnippet>595</a>                }
+<a href=#596 id=596 data-nosnippet>596</a>            }
+<a href=#597 id=597 data-nosnippet>597</a>        }
+<a href=#598 id=598 data-nosnippet>598</a>    }
+<a href=#599 id=599 data-nosnippet>599</a>    <span class="prelude-val">Ok</span>(devices)
+<a href=#600 id=600 data-nosnippet>600</a>}</code></pre></div></section></main></body></html>

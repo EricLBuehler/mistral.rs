@@ -699,7 +699,7 @@
 <a href=#699 id=699 data-nosnippet>699</a>
 <a href=#700 id=700 data-nosnippet>700</a>    <span class="doccomment">/// Acquire the quantize drop guard to protect the critical section.
 <a href=#701 id=701 data-nosnippet>701</a>    ///
-<a href=#702 id=702 data-nosnippet>702</a>    /// On metal, this flushes the command buffer to avoid "A command encoder is already encoding to this command buffer"
+<a href=#702 id=702 data-nosnippet>702</a>    /// On metal, this waits for outstanding work to finish to avoid "A command encoder is already encoding to this command buffer"
 <a href=#703 id=703 data-nosnippet>703</a>    </span><span class="kw">pub fn </span>acquire(<span class="kw-2">&amp;</span><span class="self">self</span>, device: <span class="kw-2">&amp;</span>Device) -&gt; QuantizeOntoDropGuard&lt;<span class="lifetime">'_</span>&gt; {
 <a href=#704 id=704 data-nosnippet>704</a>        <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
 <a href=#705 id=705 data-nosnippet>705</a>        </span>{
@@ -712,7 +712,7 @@
 <a href=#712 id=712 data-nosnippet>712</a>            <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
 <a href=#713 id=713 data-nosnippet>713</a>            </span><span class="kw">if let </span>Device::Metal(dev) = device {
 <a href=#714 id=714 data-nosnippet>714</a>                <span class="comment">// This is necessary to avoid the errors of "A command encoder is already encoding to this command buffer"
-<a href=#715 id=715 data-nosnippet>715</a>                </span>dev.flush_command_buffer()
+<a href=#715 id=715 data-nosnippet>715</a>                </span>dev.wait_until_completed()
 <a href=#716 id=716 data-nosnippet>716</a>                    .expect(<span class="string">"Failed to flush command buffer."</span>);
 <a href=#717 id=717 data-nosnippet>717</a>            }
 <a href=#718 id=718 data-nosnippet>718</a>            <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]

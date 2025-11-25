@@ -4,11 +4,11 @@
 <a href=#4 id=4 data-nosnippet>4</a><span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
 <a href=#5 id=5 data-nosnippet>5</a></span><span class="kw">use </span>candle_core::{
 <a href=#6 id=6 data-nosnippet>6</a>    cuda::{cudarc::driver::DevicePtr, CudaStorageSlice},
-<a href=#7 id=7 data-nosnippet>7</a>    from_storage_no_op, CudaStorage, Storage,
+<a href=#7 id=7 data-nosnippet>7</a>    CudaStorage, Storage,
 <a href=#8 id=8 data-nosnippet>8</a>};
 <a href=#9 id=9 data-nosnippet>9</a>
 <a href=#10 id=10 data-nosnippet>10</a><span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
-<a href=#11 id=11 data-nosnippet>11</a></span><span class="kw">use </span>candle_core::{from_storage_no_op, Storage};
+<a href=#11 id=11 data-nosnippet>11</a></span><span class="kw">use </span>candle_core::Storage;
 <a href=#12 id=12 data-nosnippet>12</a>
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>candle_nn::Linear;
 <a href=#14 id=14 data-nosnippet>14</a><span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
@@ -100,7 +100,7 @@
 <a href=#100 id=100 data-nosnippet>100</a>            };
 <a href=#101 id=101 data-nosnippet>101</a>            <span class="kw">let </span>storage = Storage::Cuda(storage);
 <a href=#102 id=102 data-nosnippet>102</a>
-<a href=#103 id=103 data-nosnippet>103</a>            from_storage_no_op(storage, out_shape, <span class="bool-val">false</span>)
+<a href=#103 id=103 data-nosnippet>103</a>            Tensor::from((storage, out_shape))
 <a href=#104 id=104 data-nosnippet>104</a>        }
 <a href=#105 id=105 data-nosnippet>105</a>    }};
 <a href=#106 id=106 data-nosnippet>106</a>}
@@ -185,7 +185,7 @@
 <a href=#185 id=185 data-nosnippet>185</a>
 <a href=#186 id=186 data-nosnippet>186</a>                    <span class="kw">let </span>storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
 <a href=#187 id=187 data-nosnippet>187</a>                    <span class="kw">let </span>storage = Storage::Cuda(storage);
-<a href=#188 id=188 data-nosnippet>188</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(from_storage_no_op(storage, output_shape, <span class="bool-val">false</span>));
+<a href=#188 id=188 data-nosnippet>188</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(Tensor::from((storage, output_shape)));
 <a href=#189 id=189 data-nosnippet>189</a>                }
 <a href=#190 id=190 data-nosnippet>190</a>
 <a href=#191 id=191 data-nosnippet>191</a>                <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
@@ -193,8 +193,8 @@
 <a href=#193 id=193 data-nosnippet>193</a>                    <span class="kw">use </span>candle_core::MetalStorage;
 <a href=#194 id=194 data-nosnippet>194</a>
 <a href=#195 id=195 data-nosnippet>195</a>                    <span class="kw">let </span>dev = device.as_metal_device()<span class="question-mark">?</span>;
-<a href=#196 id=196 data-nosnippet>196</a>                    <span class="kw">let </span>command_buffer = dev.command_buffer()<span class="question-mark">?</span>;
-<a href=#197 id=197 data-nosnippet>197</a>                    command_buffer.set_label(<span class="string">"hqq_pack_8bit"</span>);
+<a href=#196 id=196 data-nosnippet>196</a>                    <span class="kw">let </span>encoder = dev.command_encoder()<span class="question-mark">?</span>;
+<a href=#197 id=197 data-nosnippet>197</a>                    encoder.set_label(<span class="string">"hqq_pack_8bit"</span>);
 <a href=#198 id=198 data-nosnippet>198</a>
 <a href=#199 id=199 data-nosnippet>199</a>                    <span class="kw">let </span>(wq_storage, _wq_layout) = wq.storage_and_layout();
 <a href=#200 id=200 data-nosnippet>200</a>                    <span class="kw">let </span>wq_storage = <span class="kw">match </span><span class="kw-2">&amp;*</span>wq_storage {
@@ -211,7 +211,7 @@
 <a href=#211 id=211 data-nosnippet>211</a>
 <a href=#212 id=212 data-nosnippet>212</a>                    <span class="kw">crate</span>::metal_kernels::call_hqq_pack_8bit(
 <a href=#213 id=213 data-nosnippet>213</a>                        dev.device(),
-<a href=#214 id=214 data-nosnippet>214</a>                        <span class="kw-2">&amp;</span>command_buffer,
+<a href=#214 id=214 data-nosnippet>214</a>                        <span class="kw-2">&amp;</span>encoder,
 <a href=#215 id=215 data-nosnippet>215</a>                        <span class="kw-2">&amp;</span><span class="kw">crate</span>::metal_kernels::Kernels::new(),
 <a href=#216 id=216 data-nosnippet>216</a>                        wq_storage.buffer(),
 <a href=#217 id=217 data-nosnippet>217</a>                        <span class="kw-2">&amp;</span>output,
@@ -227,7 +227,7 @@
 <a href=#227 id=227 data-nosnippet>227</a>                    );
 <a href=#228 id=228 data-nosnippet>228</a>                    <span class="kw">let </span>storage = Storage::Metal(storage);
 <a href=#229 id=229 data-nosnippet>229</a>
-<a href=#230 id=230 data-nosnippet>230</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(from_storage_no_op(storage, output_shape, <span class="bool-val">false</span>));
+<a href=#230 id=230 data-nosnippet>230</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(Tensor::from((storage, output_shape)));
 <a href=#231 id=231 data-nosnippet>231</a>                }
 <a href=#232 id=232 data-nosnippet>232</a>
 <a href=#233 id=233 data-nosnippet>233</a>                wq.to_dtype(DType::U8)
@@ -270,7 +270,7 @@
 <a href=#270 id=270 data-nosnippet>270</a>
 <a href=#271 id=271 data-nosnippet>271</a>                    <span class="kw">let </span>storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
 <a href=#272 id=272 data-nosnippet>272</a>                    <span class="kw">let </span>storage = Storage::Cuda(storage);
-<a href=#273 id=273 data-nosnippet>273</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(from_storage_no_op(storage, output_shape, <span class="bool-val">false</span>));
+<a href=#273 id=273 data-nosnippet>273</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(Tensor::from((storage, output_shape)));
 <a href=#274 id=274 data-nosnippet>274</a>                }
 <a href=#275 id=275 data-nosnippet>275</a>
 <a href=#276 id=276 data-nosnippet>276</a>                <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
@@ -278,8 +278,8 @@
 <a href=#278 id=278 data-nosnippet>278</a>                    <span class="kw">use </span>candle_core::MetalStorage;
 <a href=#279 id=279 data-nosnippet>279</a>
 <a href=#280 id=280 data-nosnippet>280</a>                    <span class="kw">let </span>dev = device.as_metal_device()<span class="question-mark">?</span>;
-<a href=#281 id=281 data-nosnippet>281</a>                    <span class="kw">let </span>command_buffer = dev.command_buffer()<span class="question-mark">?</span>;
-<a href=#282 id=282 data-nosnippet>282</a>                    command_buffer.set_label(<span class="string">"hqq_pack_4bit"</span>);
+<a href=#281 id=281 data-nosnippet>281</a>                    <span class="kw">let </span>encoder = dev.command_encoder()<span class="question-mark">?</span>;
+<a href=#282 id=282 data-nosnippet>282</a>                    encoder.set_label(<span class="string">"hqq_pack_4bit"</span>);
 <a href=#283 id=283 data-nosnippet>283</a>
 <a href=#284 id=284 data-nosnippet>284</a>                    <span class="kw">let </span>wq = wq_in.to_dtype(DType::U8)<span class="question-mark">?</span>;
 <a href=#285 id=285 data-nosnippet>285</a>                    <span class="kw">let </span>(wq_storage, _wq_layout) = wq.storage_and_layout();
@@ -298,7 +298,7 @@
 <a href=#298 id=298 data-nosnippet>298</a>
 <a href=#299 id=299 data-nosnippet>299</a>                    <span class="kw">crate</span>::metal_kernels::call_hqq_pack_4bit(
 <a href=#300 id=300 data-nosnippet>300</a>                        dev.device(),
-<a href=#301 id=301 data-nosnippet>301</a>                        <span class="kw-2">&amp;</span>command_buffer,
+<a href=#301 id=301 data-nosnippet>301</a>                        <span class="kw-2">&amp;</span>encoder,
 <a href=#302 id=302 data-nosnippet>302</a>                        <span class="kw-2">&amp;</span><span class="kw">crate</span>::metal_kernels::Kernels::new(),
 <a href=#303 id=303 data-nosnippet>303</a>                        wq_storage.buffer(),
 <a href=#304 id=304 data-nosnippet>304</a>                        <span class="kw-2">&amp;</span>output,
@@ -315,7 +315,7 @@
 <a href=#315 id=315 data-nosnippet>315</a>                    );
 <a href=#316 id=316 data-nosnippet>316</a>                    <span class="kw">let </span>storage = Storage::Metal(storage);
 <a href=#317 id=317 data-nosnippet>317</a>
-<a href=#318 id=318 data-nosnippet>318</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(from_storage_no_op(storage, output_shape, <span class="bool-val">false</span>));
+<a href=#318 id=318 data-nosnippet>318</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(Tensor::from((storage, output_shape)));
 <a href=#319 id=319 data-nosnippet>319</a>                }
 <a href=#320 id=320 data-nosnippet>320</a>
 <a href=#321 id=321 data-nosnippet>321</a>                <span class="comment">// CPU fallback
@@ -364,7 +364,7 @@
 <a href=#364 id=364 data-nosnippet>364</a>
 <a href=#365 id=365 data-nosnippet>365</a>                    <span class="kw">let </span>storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
 <a href=#366 id=366 data-nosnippet>366</a>                    <span class="kw">let </span>storage = Storage::Cuda(storage);
-<a href=#367 id=367 data-nosnippet>367</a>                    <span class="prelude-val">Ok</span>(from_storage_no_op(storage, output_shape, <span class="bool-val">false</span>))
+<a href=#367 id=367 data-nosnippet>367</a>                    <span class="prelude-val">Ok</span>(Tensor::from((storage, output_shape)))
 <a href=#368 id=368 data-nosnippet>368</a>                } <span class="kw">else </span>{
 <a href=#369 id=369 data-nosnippet>369</a>                    <span class="comment">// CPU fallback
 <a href=#370 id=370 data-nosnippet>370</a>                    </span><span class="kw">let </span>wq = wq_in.to_dtype(DType::U8)<span class="question-mark">?</span>;
@@ -440,7 +440,7 @@
 <a href=#440 id=440 data-nosnippet>440</a>
 <a href=#441 id=441 data-nosnippet>441</a>                    <span class="kw">let </span>storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
 <a href=#442 id=442 data-nosnippet>442</a>                    <span class="kw">let </span>storage = Storage::Cuda(storage);
-<a href=#443 id=443 data-nosnippet>443</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(from_storage_no_op(storage, output_shape, <span class="bool-val">false</span>));
+<a href=#443 id=443 data-nosnippet>443</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(Tensor::from((storage, output_shape)));
 <a href=#444 id=444 data-nosnippet>444</a>                }
 <a href=#445 id=445 data-nosnippet>445</a>
 <a href=#446 id=446 data-nosnippet>446</a>                <span class="comment">// CPU fallback implementation
@@ -513,7 +513,7 @@
 <a href=#513 id=513 data-nosnippet>513</a>
 <a href=#514 id=514 data-nosnippet>514</a>                    <span class="kw">let </span>storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
 <a href=#515 id=515 data-nosnippet>515</a>                    <span class="kw">let </span>storage = Storage::Cuda(storage);
-<a href=#516 id=516 data-nosnippet>516</a>                    <span class="prelude-val">Ok</span>(from_storage_no_op(storage, output_shape, <span class="bool-val">false</span>))
+<a href=#516 id=516 data-nosnippet>516</a>                    <span class="prelude-val">Ok</span>(Tensor::from((storage, output_shape)))
 <a href=#517 id=517 data-nosnippet>517</a>                } <span class="kw">else </span>{
 <a href=#518 id=518 data-nosnippet>518</a>                    <span class="comment">// CPU fallback
 <a href=#519 id=519 data-nosnippet>519</a>                    </span><span class="kw">let </span>wq = wq_in.to_dtype(DType::U8)<span class="question-mark">?</span>;
