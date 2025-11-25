@@ -51,8 +51,13 @@ impl Qwen3VLModel {
                 .pp("visual")
                 .set_device(normal_loading_metadata.real_device.clone()),
         )?;
+        // Use top-level quantization_config if present, otherwise fall back to text_config's
+        let mut text_config = cfg.text_config.clone();
+        if cfg.quantization_config.is_some() {
+            text_config.quantization_config = cfg.quantization_config.clone();
+        }
         let text = Qwen3VLTextModel::new(
-            &cfg.text_config,
+            &text_config,
             vb.clone(),
             cfg.tie_word_embeddings,
             normal_loading_metadata,
