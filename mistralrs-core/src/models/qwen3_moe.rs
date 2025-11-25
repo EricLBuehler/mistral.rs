@@ -426,7 +426,8 @@ impl FastMoeMlp {
             D::Minus1,
             0,
             self.num_experts_per_tok,
-        )?;
+        )?
+        .to_dtype(DType::U32)?;
         let mut scores = routing_weights.gather(&indices.contiguous()?, D::Minus1)?;
 
         if self.norm_topk_prob {
@@ -552,8 +553,123 @@ impl SlowMoeMlp {
     }
 }
 
+#[cfg(feature = "cuda")]
+struct CudaMoeMlp {
+    gate: Arc<dyn QuantMethod>,
+    fused_gate_proj: Arc<dyn QuantMethod>,
+    fused_up_proj: Arc<dyn QuantMethod>,
+    fused_down_proj: Arc<dyn QuantMethod>,
+    act: Activation,
+    norm_topk_prob: bool,
+    num_experts_per_tok: usize,
+}
+
+#[cfg(feature = "cuda")]
+impl CudaMoeMlp {
+    fn new(
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        layer_device: Device,
+        _comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        if !layer_device.is_cuda() {
+            candle_core::bail!("CudaMoeMlp requires CUDA device");
+        }
+
+        let num_experts = cfg.num_experts;
+        let gate = mistralrs_quant::linear_no_bias(
+            cfg.hidden_size,
+            num_experts,
+            &cfg.quantization_config,
+            vb.pp("gate").set_device(layer_device),
+        )?;
+
+        let FusedExperts {
+            fused_gate_proj,
+            fused_up_proj,
+            fused_down_proj,
+        } = FusedExperts::new(
+            cfg.hidden_size,
+            cfg.moe_intermediate_size,
+            cfg.num_experts,
+            &cfg.quantization_config,
+            vb,
+        )?;
+
+        Ok(Self {
+            gate,
+            fused_gate_proj,
+            fused_up_proj,
+            fused_down_proj,
+            act: cfg.hidden_act,
+            norm_topk_prob: cfg.norm_topk_prob,
+            num_experts_per_tok: cfg.num_experts_per_tok,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        use crate::cuda::moe_ops::FusedMoeForward;
+
+        let original_dtype = xs.dtype();
+        let (b_size, seq_len, hidden_dim) = xs.dims3()?;
+
+        let router_logits = self.gate.forward_autocast(&xs)?;
+        let routing_weights =
+            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?.contiguous()?)?;
+
+        let routing_weights = routing_weights.reshape((b_size * seq_len, ()))?;
+        let xs = xs.reshape((b_size * seq_len, hidden_dim))?;
+
+        let indices = routing_weights.arg_sort_last_dim(false)?.narrow(
+            D::Minus1,
+            0,
+            self.num_experts_per_tok,
+        )?
+        .to_dtype(DType::U32)?;
+        let mut scores = routing_weights.gather(&indices.contiguous()?, D::Minus1)?;
+
+        if self.norm_topk_prob {
+            scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
+        }
+
+        // Get the fused expert weights and convert to input dtype
+        let gate_weights = self.fused_gate_proj.dequantize_w()?.to_dtype(xs.dtype())?;
+        let up_weights = self.fused_up_proj.dequantize_w()?.to_dtype(xs.dtype())?;
+        let down_weights = self.fused_down_proj.dequantize_w()?.to_dtype(xs.dtype())?;
+
+        // Map activation function
+        let activation = match self.act {
+            Activation::Silu => crate::cuda::moe_ops::Activation::Silu,
+            Activation::Gelu => crate::cuda::moe_ops::Activation::Gelu,
+            Activation::Relu => crate::cuda::moe_ops::Activation::Relu,
+            _ => candle_core::bail!("Unsupported activation for CUDA MoE"),
+        };
+
+        let fused_op = FusedMoeForward::new(
+            gate_weights.dim(0)?, // num_experts
+            self.num_experts_per_tok,
+            activation,
+        );
+
+        let output = fused_op.forward_optimized(
+            &xs.contiguous()?,
+            &gate_weights.contiguous()?,
+            &up_weights.contiguous()?,
+            &down_weights.contiguous()?,
+            &scores.contiguous()?,
+            &indices.contiguous()?,
+        )?;
+
+        output
+            .reshape((b_size, seq_len, hidden_dim))?
+            .to_dtype(original_dtype)
+    }
+}
+
 enum MoeOrMlp {
     FastMoe(FastMoeMlp),
+    #[cfg(feature = "cuda")]
+    CudaMoe(CudaMoeMlp),
     SlowMoe(SlowMoeMlp),
     Mlp(Mlp),
 }
@@ -563,6 +679,8 @@ impl MoeOrMlp {
         match self {
             Self::Mlp(m) => m.forward(xs),
             Self::FastMoe(m) => m.forward(xs),
+            #[cfg(feature = "cuda")]
+            Self::CudaMoe(m) => m.forward(xs),
             Self::SlowMoe(m) => m.forward(xs),
         }
     }
@@ -603,26 +721,28 @@ impl DecoderLayer {
         {
             let vb = mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq);
 
-            if vb.device().is_metal() {
-                MoeOrMlp::FastMoe(FastMoeMlp::new(
-                    cfg,
-                    vb,
-                    mapper
-                        .device_for(layer_idx, false)
-                        .cloned()
-                        .unwrap_or(real_device),
-                    comm,
-                )?)
+            let layer_device = mapper
+                .device_for(layer_idx, false)
+                .cloned()
+                .unwrap_or(real_device);
+
+            if layer_device.is_metal()
+                && cfg
+                    .quantization_config
+                    .as_ref()
+                    .is_some_and(|cfg| matches!(cfg, QuantizedConfig::Afq { .. }))
+            {
+                MoeOrMlp::FastMoe(FastMoeMlp::new(cfg, vb, layer_device, comm)?)
             } else {
-                MoeOrMlp::SlowMoe(SlowMoeMlp::new(
-                    cfg,
-                    vb,
-                    mapper
-                        .device_for(layer_idx, false)
-                        .cloned()
-                        .unwrap_or(real_device),
-                    comm,
-                )?)
+                #[cfg(feature = "cuda")]
+                if layer_device.is_cuda() {
+                    MoeOrMlp::CudaMoe(CudaMoeMlp::new(cfg, vb, layer_device, comm)?)
+                } else {
+                    MoeOrMlp::SlowMoe(SlowMoeMlp::new(cfg, vb, layer_device, comm)?)
+                }
+
+                #[cfg(not(feature = "cuda"))]
+                MoeOrMlp::SlowMoe(SlowMoeMlp::new(cfg, vb, layer_device, comm)?)
             }
         } else {
             MoeOrMlp::Mlp(Mlp::new(
@@ -952,6 +1072,12 @@ impl IsqModel for Model {
                         tensors.push((&mut expert.up_proj, Some(i)));
                         tensors.push((&mut expert.down_proj, Some(i)));
                     }
+                }
+                #[cfg(feature = "cuda")]
+                MoeOrMlp::CudaMoe(layer) => {
+                    tensors.push((&mut layer.fused_gate_proj, Some(i)));
+                    tensors.push((&mut layer.fused_up_proj, Some(i)));
+                    tensors.push((&mut layer.fused_down_proj, Some(i)));
                 }
             }
         }
