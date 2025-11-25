@@ -699,7 +699,7 @@ impl QuantizeOntoGuard {
 
     /// Acquire the quantize drop guard to protect the critical section.
     ///
-    /// On metal, this flushes the command buffer to avoid "A command encoder is already encoding to this command buffer"
+    /// On metal, this waits for outstanding work to finish to avoid "A command encoder is already encoding to this command buffer"
     pub fn acquire(&self, device: &Device) -> QuantizeOntoDropGuard<'_> {
         #[cfg(feature = "cuda")]
         {
@@ -712,7 +712,7 @@ impl QuantizeOntoGuard {
             #[cfg(feature = "metal")]
             if let Device::Metal(dev) = device {
                 // This is necessary to avoid the errors of "A command encoder is already encoding to this command buffer"
-                dev.flush_command_buffer()
+                dev.wait_until_completed()
                     .expect("Failed to flush command buffer.");
             }
             #[cfg(not(feature = "metal"))]

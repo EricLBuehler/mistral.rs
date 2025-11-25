@@ -1,6 +1,4 @@
-use candle_core::{
-    from_storage_no_op, DType, Device, Error, IndexOp, Result, Shape, Storage, Tensor, WithDType,
-};
+use candle_core::{DType, Device, Error, IndexOp, Result, Shape, Storage, Tensor, WithDType};
 use candle_nn::var_builder::{Backend, SimpleBackend, VarBuilderArgs};
 use float8::F8E4M3;
 use regex::Regex;
@@ -214,7 +212,7 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
         }
     };
 
-    Ok(from_storage_no_op(storage, shape, false))
+    Ok(Tensor::from((storage, shape)))
 }
 
 #[derive(yoke::Yokeable)]
