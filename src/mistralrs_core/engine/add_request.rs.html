@@ -40,8 +40,8 @@
 <a href=#40 id=40 data-nosnippet>40</a>                <span class="kw">if </span>is_chat &amp;&amp; (has_search || has_tooling) {
 <a href=#41 id=41 data-nosnippet>41</a>                    search_request::search_request(<span class="self">self</span>.clone(), <span class="kw-2">*</span>request).<span class="kw">await</span>;
 <a href=#42 id=42 data-nosnippet>42</a>                } <span class="kw">else </span>{
-<a href=#43 id=43 data-nosnippet>43</a>                    <span class="self">self</span>.add_request(<span class="kw-2">*</span>request).<span class="kw">await
-<a href=#44 id=44 data-nosnippet>44</a>                </span>}
+<a href=#43 id=43 data-nosnippet>43</a>                    <span class="self">self</span>.add_request(<span class="kw-2">*</span>request).<span class="kw">await</span>;
+<a href=#44 id=44 data-nosnippet>44</a>                }
 <a href=#45 id=45 data-nosnippet>45</a>            }
 <a href=#46 id=46 data-nosnippet>46</a>            Request::ReIsq(level) =&gt; {
 <a href=#47 id=47 data-nosnippet>47</a>                <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).re_isq_model(level) {
@@ -566,172 +566,183 @@
 <a href=#566 id=566 data-nosnippet>566</a>                <span class="self">self</span>.logger.add_new_sequence();
 <a href=#567 id=567 data-nosnippet>567</a>            }
 <a href=#568 id=568 data-nosnippet>568</a>
-<a href=#569 id=569 data-nosnippet>569</a>            <span class="comment">// Run the inputs processor to update the prompt for multimodal models.
-<a href=#570 id=570 data-nosnippet>570</a>            </span><span class="kw">if </span>images.is_some() || audios.is_some() {
+<a href=#569 id=569 data-nosnippet>569</a>            <span class="comment">// Allocate Mamba state pool slot for hybrid models
+<a href=#570 id=570 data-nosnippet>570</a>            </span>{
 <a href=#571 id=571 data-nosnippet>571</a>                <span class="kw">let </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
-<a href=#572 id=572 data-nosnippet>572</a>                <span class="kw">let _ </span>= pipeline.get_processor().inputs_processor().process_inputs(
-<a href=#573 id=573 data-nosnippet>573</a>                    pipeline.tokenizer(),
-<a href=#574 id=574 data-nosnippet>574</a>                    <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>seq],
-<a href=#575 id=575 data-nosnippet>575</a>                    <span class="bool-val">true</span>,
-<a href=#576 id=576 data-nosnippet>576</a>                    pipeline.get_metadata().is_xlora,
-<a href=#577 id=577 data-nosnippet>577</a>                    <span class="kw-2">&amp;</span>pipeline.device(),
-<a href=#578 id=578 data-nosnippet>578</a>                    pipeline.get_metadata().no_kv_cache,
-<a href=#579 id=579 data-nosnippet>579</a>                    <span class="prelude-val">None</span>,
-<a href=#580 id=580 data-nosnippet>580</a>                    <span class="bool-val">false</span>,
-<a href=#581 id=581 data-nosnippet>581</a>                    pipeline.get_input_processor_config(),
-<a href=#582 id=582 data-nosnippet>582</a>                    <span class="prelude-val">None</span>,
-<a href=#583 id=583 data-nosnippet>583</a>                    pipeline.device_mapper(),
-<a href=#584 id=584 data-nosnippet>584</a>                );
-<a href=#585 id=585 data-nosnippet>585</a>            }
-<a href=#586 id=586 data-nosnippet>586</a>
-<a href=#587 id=587 data-nosnippet>587</a>            <span class="kw">let </span>prefill_cache = <span class="macro">handle_seq_error!</span>(
-<a href=#588 id=588 data-nosnippet>588</a>                <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.prefix_cacher).search_for_matching_cache(
-<a href=#589 id=589 data-nosnippet>589</a>                    seq.get_toks(),
-<a href=#590 id=590 data-nosnippet>590</a>                    seq.image_hashes(),
-<a href=#591 id=591 data-nosnippet>591</a>                    seq.audio_hashes(),
-<a href=#592 id=592 data-nosnippet>592</a>                ),
-<a href=#593 id=593 data-nosnippet>593</a>                request.response
-<a href=#594 id=594 data-nosnippet>594</a>            );
-<a href=#595 id=595 data-nosnippet>595</a>
-<a href=#596 id=596 data-nosnippet>596</a>            seq = <span class="kw">match </span>prefill_cache.clone() {
-<a href=#597 id=597 data-nosnippet>597</a>                <span class="prelude-val">Some</span>(MatchingCache::Normal {
-<a href=#598 id=598 data-nosnippet>598</a>                    normal,
-<a href=#599 id=599 data-nosnippet>599</a>                    images_to_keep,
-<a href=#600 id=600 data-nosnippet>600</a>                    audios_to_keep,
-<a href=#601 id=601 data-nosnippet>601</a>                    toks,
-<a href=#602 id=602 data-nosnippet>602</a>                    offset,
-<a href=#603 id=603 data-nosnippet>603</a>                }) =&gt; {
-<a href=#604 id=604 data-nosnippet>604</a>                    <span class="self">self</span>.logger.add_prefix_cache_hit();
-<a href=#605 id=605 data-nosnippet>605</a>
-<a href=#606 id=606 data-nosnippet>606</a>                    seq.keep_num_images(images_to_keep);
-<a href=#607 id=607 data-nosnippet>607</a>                    seq.keep_num_audios(audios_to_keep);
-<a href=#608 id=608 data-nosnippet>608</a>                    seq.prefill_v2_normal(normal, toks, offset)
-<a href=#609 id=609 data-nosnippet>609</a>                }
-<a href=#610 id=610 data-nosnippet>610</a>                <span class="prelude-val">Some</span>(MatchingCache::Paged {
-<a href=#611 id=611 data-nosnippet>611</a>                    logical_blocks,
-<a href=#612 id=612 data-nosnippet>612</a>                    physical_blocks,
-<a href=#613 id=613 data-nosnippet>613</a>                    images_to_keep,
-<a href=#614 id=614 data-nosnippet>614</a>                    audios_to_keep,
-<a href=#615 id=615 data-nosnippet>615</a>                    toks,
-<a href=#616 id=616 data-nosnippet>616</a>                    offset,
-<a href=#617 id=617 data-nosnippet>617</a>                }) =&gt; {
-<a href=#618 id=618 data-nosnippet>618</a>                    <span class="self">self</span>.logger.add_prefix_cache_hit();
-<a href=#619 id=619 data-nosnippet>619</a>
-<a href=#620 id=620 data-nosnippet>620</a>                    seq.keep_num_images(images_to_keep);
-<a href=#621 id=621 data-nosnippet>621</a>                    seq.keep_num_audios(audios_to_keep);
-<a href=#622 id=622 data-nosnippet>622</a>                    seq.prefill_v2_paged(logical_blocks, physical_blocks, toks, offset)
-<a href=#623 id=623 data-nosnippet>623</a>                }
-<a href=#624 id=624 data-nosnippet>624</a>                <span class="prelude-val">None </span>=&gt; seq,
-<a href=#625 id=625 data-nosnippet>625</a>            };
-<a href=#626 id=626 data-nosnippet>626</a>
-<a href=#627 id=627 data-nosnippet>627</a>            <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.id) += <span class="number">1</span>;
-<a href=#628 id=628 data-nosnippet>628</a>            <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.scheduler).add_seq(seq);
-<a href=#629 id=629 data-nosnippet>629</a>            added_seq = <span class="bool-val">true</span>;
-<a href=#630 id=630 data-nosnippet>630</a>        }
-<a href=#631 id=631 data-nosnippet>631</a>        <span class="kw">if </span>added_seq {
-<a href=#632 id=632 data-nosnippet>632</a>            <span class="self">self</span>.pending_notify.notify_one();
-<a href=#633 id=633 data-nosnippet>633</a>        }
-<a href=#634 id=634 data-nosnippet>634</a>    }
-<a href=#635 id=635 data-nosnippet>635</a>
-<a href=#636 id=636 data-nosnippet>636</a>    <span class="kw">async fn </span>tokenize_text(<span class="kw-2">&amp;</span><span class="self">self</span>, request: TokenizationRequest) {
-<a href=#637 id=637 data-nosnippet>637</a>        <span class="kw">match </span>request.text {
-<a href=#638 id=638 data-nosnippet>638</a>            Either::Left(messages) =&gt; {
-<a href=#639 id=639 data-nosnippet>639</a>                <span class="kw">let </span>pipeline = <span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
-<a href=#640 id=640 data-nosnippet>640</a>                <span class="kw">let </span>tools = request.tools.unwrap_or_default();
-<a href=#641 id=641 data-nosnippet>641</a>                <span class="kw">let </span>template = pipeline.get_processor().process(
-<a href=#642 id=642 data-nosnippet>642</a>                    pipeline,
-<a href=#643 id=643 data-nosnippet>643</a>                    messages,
-<a href=#644 id=644 data-nosnippet>644</a>                    request.add_generation_prompt,
-<a href=#645 id=645 data-nosnippet>645</a>                    request.add_special_tokens,
-<a href=#646 id=646 data-nosnippet>646</a>                    request.enable_thinking,
-<a href=#647 id=647 data-nosnippet>647</a>                    tools,
-<a href=#648 id=648 data-nosnippet>648</a>                );
-<a href=#649 id=649 data-nosnippet>649</a>                <span class="kw">let </span>toks = <span class="kw">match </span>template {
-<a href=#650 id=650 data-nosnippet>650</a>                    <span class="prelude-val">Ok</span>((toks, <span class="kw">_</span>)) =&gt; toks,
-<a href=#651 id=651 data-nosnippet>651</a>                    <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#652 id=652 data-nosnippet>652</a>                        request
-<a href=#653 id=653 data-nosnippet>653</a>                            .response
-<a href=#654 id=654 data-nosnippet>654</a>                            .send(<span class="prelude-val">Err</span>(e))
-<a href=#655 id=655 data-nosnippet>655</a>                            .<span class="kw">await
-<a href=#656 id=656 data-nosnippet>656</a>                            </span>.unwrap_or_else(|<span class="kw">_</span>| <span class="macro">warn!</span>(<span class="string">"Receiver disconnected"</span>));
-<a href=#657 id=657 data-nosnippet>657</a>                        <span class="kw">return</span>;
-<a href=#658 id=658 data-nosnippet>658</a>                    }
-<a href=#659 id=659 data-nosnippet>659</a>                };
-<a href=#660 id=660 data-nosnippet>660</a>                request
-<a href=#661 id=661 data-nosnippet>661</a>                    .response
-<a href=#662 id=662 data-nosnippet>662</a>                    .send(<span class="prelude-val">Ok</span>(toks))
-<a href=#663 id=663 data-nosnippet>663</a>                    .<span class="kw">await
-<a href=#664 id=664 data-nosnippet>664</a>                    </span>.expect(<span class="string">"Sender disconnected unexpectedly!"</span>);
-<a href=#665 id=665 data-nosnippet>665</a>            }
-<a href=#666 id=666 data-nosnippet>666</a>            Either::Right(text) =&gt; {
-<a href=#667 id=667 data-nosnippet>667</a>                <span class="kw">let </span>pipeline = <span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
-<a href=#668 id=668 data-nosnippet>668</a>                <span class="kw">let </span>tokenizer = pipeline.tokenizer();
-<a href=#669 id=669 data-nosnippet>669</a>                <span class="kw">let </span>tokenizer = <span class="kw">match </span>tokenizer {
-<a href=#670 id=670 data-nosnippet>670</a>                    <span class="prelude-val">Some</span>(tokenizer) =&gt; tokenizer,
-<a href=#671 id=671 data-nosnippet>671</a>                    <span class="prelude-val">None </span>=&gt; {
-<a href=#672 id=672 data-nosnippet>672</a>                        request
-<a href=#673 id=673 data-nosnippet>673</a>                            .response
-<a href=#674 id=674 data-nosnippet>674</a>                            .send(<span class="prelude-val">Err</span>(anyhow::Error::msg(
-<a href=#675 id=675 data-nosnippet>675</a>                                <span class="string">"Pipeline does not include a toksnizer."</span>,
-<a href=#676 id=676 data-nosnippet>676</a>                            )))
-<a href=#677 id=677 data-nosnippet>677</a>                            .<span class="kw">await
-<a href=#678 id=678 data-nosnippet>678</a>                            </span>.unwrap_or_else(|<span class="kw">_</span>| <span class="macro">warn!</span>(<span class="string">"Receiver disconnected"</span>));
-<a href=#679 id=679 data-nosnippet>679</a>                        <span class="kw">return</span>;
-<a href=#680 id=680 data-nosnippet>680</a>                    }
-<a href=#681 id=681 data-nosnippet>681</a>                };
-<a href=#682 id=682 data-nosnippet>682</a>                <span class="kw">let </span>toks = tokenizer.encode_fast(text, request.add_special_tokens);
-<a href=#683 id=683 data-nosnippet>683</a>                <span class="kw">let </span>toks = <span class="kw">match </span>toks {
-<a href=#684 id=684 data-nosnippet>684</a>                    <span class="prelude-val">Ok</span>(tokenizer) =&gt; tokenizer,
-<a href=#685 id=685 data-nosnippet>685</a>                    <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#686 id=686 data-nosnippet>686</a>                        request
-<a href=#687 id=687 data-nosnippet>687</a>                            .response
-<a href=#688 id=688 data-nosnippet>688</a>                            .send(<span class="prelude-val">Err</span>(anyhow::Error::msg(e)))
-<a href=#689 id=689 data-nosnippet>689</a>                            .<span class="kw">await
-<a href=#690 id=690 data-nosnippet>690</a>                            </span>.unwrap_or_else(|<span class="kw">_</span>| <span class="macro">warn!</span>(<span class="string">"Receiver disconnected"</span>));
-<a href=#691 id=691 data-nosnippet>691</a>                        <span class="kw">return</span>;
-<a href=#692 id=692 data-nosnippet>692</a>                    }
-<a href=#693 id=693 data-nosnippet>693</a>                };
-<a href=#694 id=694 data-nosnippet>694</a>                request
-<a href=#695 id=695 data-nosnippet>695</a>                    .response
-<a href=#696 id=696 data-nosnippet>696</a>                    .send(<span class="prelude-val">Ok</span>(toks.get_ids().to_vec()))
-<a href=#697 id=697 data-nosnippet>697</a>                    .<span class="kw">await
-<a href=#698 id=698 data-nosnippet>698</a>                    </span>.expect(<span class="string">"Sender disconnected unexpectedly!"</span>);
-<a href=#699 id=699 data-nosnippet>699</a>            }
-<a href=#700 id=700 data-nosnippet>700</a>        };
-<a href=#701 id=701 data-nosnippet>701</a>    }
-<a href=#702 id=702 data-nosnippet>702</a>
-<a href=#703 id=703 data-nosnippet>703</a>    <span class="kw">async fn </span>detokenize_text(<span class="kw-2">&amp;</span><span class="self">self</span>, request: DetokenizationRequest) {
-<a href=#704 id=704 data-nosnippet>704</a>        <span class="kw">let </span>pipeline = <span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
-<a href=#705 id=705 data-nosnippet>705</a>        <span class="kw">let </span>tokenizer = pipeline.tokenizer();
-<a href=#706 id=706 data-nosnippet>706</a>        <span class="kw">let </span>tokenizer = <span class="kw">match </span>tokenizer {
-<a href=#707 id=707 data-nosnippet>707</a>            <span class="prelude-val">Some</span>(tokenizer) =&gt; tokenizer,
-<a href=#708 id=708 data-nosnippet>708</a>            <span class="prelude-val">None </span>=&gt; {
-<a href=#709 id=709 data-nosnippet>709</a>                request
-<a href=#710 id=710 data-nosnippet>710</a>                    .response
-<a href=#711 id=711 data-nosnippet>711</a>                    .send(<span class="prelude-val">Err</span>(anyhow::Error::msg(
-<a href=#712 id=712 data-nosnippet>712</a>                        <span class="string">"Pipeline does not include a toksnizer."</span>,
-<a href=#713 id=713 data-nosnippet>713</a>                    )))
-<a href=#714 id=714 data-nosnippet>714</a>                    .<span class="kw">await
-<a href=#715 id=715 data-nosnippet>715</a>                    </span>.unwrap_or_else(|<span class="kw">_</span>| <span class="macro">warn!</span>(<span class="string">"Receiver disconnected"</span>));
-<a href=#716 id=716 data-nosnippet>716</a>                <span class="kw">return</span>;
-<a href=#717 id=717 data-nosnippet>717</a>            }
-<a href=#718 id=718 data-nosnippet>718</a>        };
-<a href=#719 id=719 data-nosnippet>719</a>        <span class="kw">let </span>txt = tokenizer.decode(<span class="kw-2">&amp;</span>request.tokens, request.skip_special_tokens);
-<a href=#720 id=720 data-nosnippet>720</a>        <span class="kw">let </span>txt = <span class="kw">match </span>txt {
-<a href=#721 id=721 data-nosnippet>721</a>            <span class="prelude-val">Ok</span>(tokenizer) =&gt; tokenizer,
-<a href=#722 id=722 data-nosnippet>722</a>            <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#723 id=723 data-nosnippet>723</a>                request
-<a href=#724 id=724 data-nosnippet>724</a>                    .response
-<a href=#725 id=725 data-nosnippet>725</a>                    .send(<span class="prelude-val">Err</span>(anyhow::Error::msg(e)))
-<a href=#726 id=726 data-nosnippet>726</a>                    .<span class="kw">await
-<a href=#727 id=727 data-nosnippet>727</a>                    </span>.unwrap_or_else(|<span class="kw">_</span>| <span class="macro">warn!</span>(<span class="string">"Receiver disconnected"</span>));
-<a href=#728 id=728 data-nosnippet>728</a>                <span class="kw">return</span>;
-<a href=#729 id=729 data-nosnippet>729</a>            }
-<a href=#730 id=730 data-nosnippet>730</a>        };
-<a href=#731 id=731 data-nosnippet>731</a>        request
-<a href=#732 id=732 data-nosnippet>732</a>            .response
-<a href=#733 id=733 data-nosnippet>733</a>            .send(<span class="prelude-val">Ok</span>(txt))
-<a href=#734 id=734 data-nosnippet>734</a>            .<span class="kw">await
-<a href=#735 id=735 data-nosnippet>735</a>            </span>.expect(<span class="string">"Sender disconnected unexpectedly!"</span>);
-<a href=#736 id=736 data-nosnippet>736</a>    }
-<a href=#737 id=737 data-nosnippet>737</a>}</code></pre></div></section></main></body></html>
+<a href=#572 id=572 data-nosnippet>572</a>                <span class="kw">if </span>pipeline.cache().is_hybrid() {
+<a href=#573 id=573 data-nosnippet>573</a>                    <span class="kw">let </span><span class="kw-2">mut </span>hybrid_cache = pipeline.cache().hybrid();
+<a href=#574 id=574 data-nosnippet>574</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(slot_idx) = hybrid_cache.allocate_seq() {
+<a href=#575 id=575 data-nosnippet>575</a>                        seq.set_mamba_state_idx(<span class="prelude-val">Some</span>(slot_idx));
+<a href=#576 id=576 data-nosnippet>576</a>                    }
+<a href=#577 id=577 data-nosnippet>577</a>                }
+<a href=#578 id=578 data-nosnippet>578</a>            }
+<a href=#579 id=579 data-nosnippet>579</a>
+<a href=#580 id=580 data-nosnippet>580</a>            <span class="comment">// Run the inputs processor to update the prompt for multimodal models.
+<a href=#581 id=581 data-nosnippet>581</a>            </span><span class="kw">if </span>images.is_some() || audios.is_some() {
+<a href=#582 id=582 data-nosnippet>582</a>                <span class="kw">let </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
+<a href=#583 id=583 data-nosnippet>583</a>                <span class="kw">let _ </span>= pipeline.get_processor().inputs_processor().process_inputs(
+<a href=#584 id=584 data-nosnippet>584</a>                    pipeline.tokenizer(),
+<a href=#585 id=585 data-nosnippet>585</a>                    <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>seq],
+<a href=#586 id=586 data-nosnippet>586</a>                    <span class="bool-val">true</span>,
+<a href=#587 id=587 data-nosnippet>587</a>                    pipeline.get_metadata().is_xlora,
+<a href=#588 id=588 data-nosnippet>588</a>                    <span class="kw-2">&amp;</span>pipeline.device(),
+<a href=#589 id=589 data-nosnippet>589</a>                    pipeline.get_metadata().no_kv_cache,
+<a href=#590 id=590 data-nosnippet>590</a>                    <span class="prelude-val">None</span>,
+<a href=#591 id=591 data-nosnippet>591</a>                    <span class="bool-val">false</span>,
+<a href=#592 id=592 data-nosnippet>592</a>                    pipeline.get_input_processor_config(),
+<a href=#593 id=593 data-nosnippet>593</a>                    <span class="prelude-val">None</span>,
+<a href=#594 id=594 data-nosnippet>594</a>                    pipeline.device_mapper(),
+<a href=#595 id=595 data-nosnippet>595</a>                );
+<a href=#596 id=596 data-nosnippet>596</a>            }
+<a href=#597 id=597 data-nosnippet>597</a>
+<a href=#598 id=598 data-nosnippet>598</a>            <span class="kw">let </span>prefill_cache = <span class="macro">handle_seq_error!</span>(
+<a href=#599 id=599 data-nosnippet>599</a>                <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.prefix_cacher).search_for_matching_cache(
+<a href=#600 id=600 data-nosnippet>600</a>                    seq.get_toks(),
+<a href=#601 id=601 data-nosnippet>601</a>                    seq.image_hashes(),
+<a href=#602 id=602 data-nosnippet>602</a>                    seq.audio_hashes(),
+<a href=#603 id=603 data-nosnippet>603</a>                ),
+<a href=#604 id=604 data-nosnippet>604</a>                request.response
+<a href=#605 id=605 data-nosnippet>605</a>            );
+<a href=#606 id=606 data-nosnippet>606</a>
+<a href=#607 id=607 data-nosnippet>607</a>            seq = <span class="kw">match </span>prefill_cache.clone() {
+<a href=#608 id=608 data-nosnippet>608</a>                <span class="prelude-val">Some</span>(MatchingCache::Normal {
+<a href=#609 id=609 data-nosnippet>609</a>                    normal,
+<a href=#610 id=610 data-nosnippet>610</a>                    images_to_keep,
+<a href=#611 id=611 data-nosnippet>611</a>                    audios_to_keep,
+<a href=#612 id=612 data-nosnippet>612</a>                    toks,
+<a href=#613 id=613 data-nosnippet>613</a>                    offset,
+<a href=#614 id=614 data-nosnippet>614</a>                }) =&gt; {
+<a href=#615 id=615 data-nosnippet>615</a>                    <span class="self">self</span>.logger.add_prefix_cache_hit();
+<a href=#616 id=616 data-nosnippet>616</a>
+<a href=#617 id=617 data-nosnippet>617</a>                    seq.keep_num_images(images_to_keep);
+<a href=#618 id=618 data-nosnippet>618</a>                    seq.keep_num_audios(audios_to_keep);
+<a href=#619 id=619 data-nosnippet>619</a>                    seq.prefill_v2_normal(normal, toks, offset)
+<a href=#620 id=620 data-nosnippet>620</a>                }
+<a href=#621 id=621 data-nosnippet>621</a>                <span class="prelude-val">Some</span>(MatchingCache::Paged {
+<a href=#622 id=622 data-nosnippet>622</a>                    logical_blocks,
+<a href=#623 id=623 data-nosnippet>623</a>                    physical_blocks,
+<a href=#624 id=624 data-nosnippet>624</a>                    images_to_keep,
+<a href=#625 id=625 data-nosnippet>625</a>                    audios_to_keep,
+<a href=#626 id=626 data-nosnippet>626</a>                    toks,
+<a href=#627 id=627 data-nosnippet>627</a>                    offset,
+<a href=#628 id=628 data-nosnippet>628</a>                }) =&gt; {
+<a href=#629 id=629 data-nosnippet>629</a>                    <span class="self">self</span>.logger.add_prefix_cache_hit();
+<a href=#630 id=630 data-nosnippet>630</a>
+<a href=#631 id=631 data-nosnippet>631</a>                    seq.keep_num_images(images_to_keep);
+<a href=#632 id=632 data-nosnippet>632</a>                    seq.keep_num_audios(audios_to_keep);
+<a href=#633 id=633 data-nosnippet>633</a>                    seq.prefill_v2_paged(logical_blocks, physical_blocks, toks, offset)
+<a href=#634 id=634 data-nosnippet>634</a>                }
+<a href=#635 id=635 data-nosnippet>635</a>                <span class="prelude-val">None </span>=&gt; seq,
+<a href=#636 id=636 data-nosnippet>636</a>            };
+<a href=#637 id=637 data-nosnippet>637</a>
+<a href=#638 id=638 data-nosnippet>638</a>            <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.id) += <span class="number">1</span>;
+<a href=#639 id=639 data-nosnippet>639</a>            <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.scheduler).add_seq(seq);
+<a href=#640 id=640 data-nosnippet>640</a>            added_seq = <span class="bool-val">true</span>;
+<a href=#641 id=641 data-nosnippet>641</a>        }
+<a href=#642 id=642 data-nosnippet>642</a>        <span class="kw">if </span>added_seq {
+<a href=#643 id=643 data-nosnippet>643</a>            <span class="self">self</span>.pending_notify.notify_one();
+<a href=#644 id=644 data-nosnippet>644</a>        }
+<a href=#645 id=645 data-nosnippet>645</a>    }
+<a href=#646 id=646 data-nosnippet>646</a>
+<a href=#647 id=647 data-nosnippet>647</a>    <span class="kw">async fn </span>tokenize_text(<span class="kw-2">&amp;</span><span class="self">self</span>, request: TokenizationRequest) {
+<a href=#648 id=648 data-nosnippet>648</a>        <span class="kw">match </span>request.text {
+<a href=#649 id=649 data-nosnippet>649</a>            Either::Left(messages) =&gt; {
+<a href=#650 id=650 data-nosnippet>650</a>                <span class="kw">let </span>pipeline = <span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
+<a href=#651 id=651 data-nosnippet>651</a>                <span class="kw">let </span>tools = request.tools.unwrap_or_default();
+<a href=#652 id=652 data-nosnippet>652</a>                <span class="kw">let </span>template = pipeline.get_processor().process(
+<a href=#653 id=653 data-nosnippet>653</a>                    pipeline,
+<a href=#654 id=654 data-nosnippet>654</a>                    messages,
+<a href=#655 id=655 data-nosnippet>655</a>                    request.add_generation_prompt,
+<a href=#656 id=656 data-nosnippet>656</a>                    request.add_special_tokens,
+<a href=#657 id=657 data-nosnippet>657</a>                    request.enable_thinking,
+<a href=#658 id=658 data-nosnippet>658</a>                    tools,
+<a href=#659 id=659 data-nosnippet>659</a>                );
+<a href=#660 id=660 data-nosnippet>660</a>                <span class="kw">let </span>toks = <span class="kw">match </span>template {
+<a href=#661 id=661 data-nosnippet>661</a>                    <span class="prelude-val">Ok</span>((toks, <span class="kw">_</span>)) =&gt; toks,
+<a href=#662 id=662 data-nosnippet>662</a>                    <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#663 id=663 data-nosnippet>663</a>                        request
+<a href=#664 id=664 data-nosnippet>664</a>                            .response
+<a href=#665 id=665 data-nosnippet>665</a>                            .send(<span class="prelude-val">Err</span>(e))
+<a href=#666 id=666 data-nosnippet>666</a>                            .<span class="kw">await
+<a href=#667 id=667 data-nosnippet>667</a>                            </span>.unwrap_or_else(|<span class="kw">_</span>| <span class="macro">warn!</span>(<span class="string">"Receiver disconnected"</span>));
+<a href=#668 id=668 data-nosnippet>668</a>                        <span class="kw">return</span>;
+<a href=#669 id=669 data-nosnippet>669</a>                    }
+<a href=#670 id=670 data-nosnippet>670</a>                };
+<a href=#671 id=671 data-nosnippet>671</a>                request
+<a href=#672 id=672 data-nosnippet>672</a>                    .response
+<a href=#673 id=673 data-nosnippet>673</a>                    .send(<span class="prelude-val">Ok</span>(toks))
+<a href=#674 id=674 data-nosnippet>674</a>                    .<span class="kw">await
+<a href=#675 id=675 data-nosnippet>675</a>                    </span>.expect(<span class="string">"Sender disconnected unexpectedly!"</span>);
+<a href=#676 id=676 data-nosnippet>676</a>            }
+<a href=#677 id=677 data-nosnippet>677</a>            Either::Right(text) =&gt; {
+<a href=#678 id=678 data-nosnippet>678</a>                <span class="kw">let </span>pipeline = <span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
+<a href=#679 id=679 data-nosnippet>679</a>                <span class="kw">let </span>tokenizer = pipeline.tokenizer();
+<a href=#680 id=680 data-nosnippet>680</a>                <span class="kw">let </span>tokenizer = <span class="kw">match </span>tokenizer {
+<a href=#681 id=681 data-nosnippet>681</a>                    <span class="prelude-val">Some</span>(tokenizer) =&gt; tokenizer,
+<a href=#682 id=682 data-nosnippet>682</a>                    <span class="prelude-val">None </span>=&gt; {
+<a href=#683 id=683 data-nosnippet>683</a>                        request
+<a href=#684 id=684 data-nosnippet>684</a>                            .response
+<a href=#685 id=685 data-nosnippet>685</a>                            .send(<span class="prelude-val">Err</span>(anyhow::Error::msg(
+<a href=#686 id=686 data-nosnippet>686</a>                                <span class="string">"Pipeline does not include a toksnizer."</span>,
+<a href=#687 id=687 data-nosnippet>687</a>                            )))
+<a href=#688 id=688 data-nosnippet>688</a>                            .<span class="kw">await
+<a href=#689 id=689 data-nosnippet>689</a>                            </span>.unwrap_or_else(|<span class="kw">_</span>| <span class="macro">warn!</span>(<span class="string">"Receiver disconnected"</span>));
+<a href=#690 id=690 data-nosnippet>690</a>                        <span class="kw">return</span>;
+<a href=#691 id=691 data-nosnippet>691</a>                    }
+<a href=#692 id=692 data-nosnippet>692</a>                };
+<a href=#693 id=693 data-nosnippet>693</a>                <span class="kw">let </span>toks = tokenizer.encode_fast(text, request.add_special_tokens);
+<a href=#694 id=694 data-nosnippet>694</a>                <span class="kw">let </span>toks = <span class="kw">match </span>toks {
+<a href=#695 id=695 data-nosnippet>695</a>                    <span class="prelude-val">Ok</span>(tokenizer) =&gt; tokenizer,
+<a href=#696 id=696 data-nosnippet>696</a>                    <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#697 id=697 data-nosnippet>697</a>                        request
+<a href=#698 id=698 data-nosnippet>698</a>                            .response
+<a href=#699 id=699 data-nosnippet>699</a>                            .send(<span class="prelude-val">Err</span>(anyhow::Error::msg(e)))
+<a href=#700 id=700 data-nosnippet>700</a>                            .<span class="kw">await
+<a href=#701 id=701 data-nosnippet>701</a>                            </span>.unwrap_or_else(|<span class="kw">_</span>| <span class="macro">warn!</span>(<span class="string">"Receiver disconnected"</span>));
+<a href=#702 id=702 data-nosnippet>702</a>                        <span class="kw">return</span>;
+<a href=#703 id=703 data-nosnippet>703</a>                    }
+<a href=#704 id=704 data-nosnippet>704</a>                };
+<a href=#705 id=705 data-nosnippet>705</a>                request
+<a href=#706 id=706 data-nosnippet>706</a>                    .response
+<a href=#707 id=707 data-nosnippet>707</a>                    .send(<span class="prelude-val">Ok</span>(toks.get_ids().to_vec()))
+<a href=#708 id=708 data-nosnippet>708</a>                    .<span class="kw">await
+<a href=#709 id=709 data-nosnippet>709</a>                    </span>.expect(<span class="string">"Sender disconnected unexpectedly!"</span>);
+<a href=#710 id=710 data-nosnippet>710</a>            }
+<a href=#711 id=711 data-nosnippet>711</a>        };
+<a href=#712 id=712 data-nosnippet>712</a>    }
+<a href=#713 id=713 data-nosnippet>713</a>
+<a href=#714 id=714 data-nosnippet>714</a>    <span class="kw">async fn </span>detokenize_text(<span class="kw-2">&amp;</span><span class="self">self</span>, request: DetokenizationRequest) {
+<a href=#715 id=715 data-nosnippet>715</a>        <span class="kw">let </span>pipeline = <span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
+<a href=#716 id=716 data-nosnippet>716</a>        <span class="kw">let </span>tokenizer = pipeline.tokenizer();
+<a href=#717 id=717 data-nosnippet>717</a>        <span class="kw">let </span>tokenizer = <span class="kw">match </span>tokenizer {
+<a href=#718 id=718 data-nosnippet>718</a>            <span class="prelude-val">Some</span>(tokenizer) =&gt; tokenizer,
+<a href=#719 id=719 data-nosnippet>719</a>            <span class="prelude-val">None </span>=&gt; {
+<a href=#720 id=720 data-nosnippet>720</a>                request
+<a href=#721 id=721 data-nosnippet>721</a>                    .response
+<a href=#722 id=722 data-nosnippet>722</a>                    .send(<span class="prelude-val">Err</span>(anyhow::Error::msg(
+<a href=#723 id=723 data-nosnippet>723</a>                        <span class="string">"Pipeline does not include a toksnizer."</span>,
+<a href=#724 id=724 data-nosnippet>724</a>                    )))
+<a href=#725 id=725 data-nosnippet>725</a>                    .<span class="kw">await
+<a href=#726 id=726 data-nosnippet>726</a>                    </span>.unwrap_or_else(|<span class="kw">_</span>| <span class="macro">warn!</span>(<span class="string">"Receiver disconnected"</span>));
+<a href=#727 id=727 data-nosnippet>727</a>                <span class="kw">return</span>;
+<a href=#728 id=728 data-nosnippet>728</a>            }
+<a href=#729 id=729 data-nosnippet>729</a>        };
+<a href=#730 id=730 data-nosnippet>730</a>        <span class="kw">let </span>txt = tokenizer.decode(<span class="kw-2">&amp;</span>request.tokens, request.skip_special_tokens);
+<a href=#731 id=731 data-nosnippet>731</a>        <span class="kw">let </span>txt = <span class="kw">match </span>txt {
+<a href=#732 id=732 data-nosnippet>732</a>            <span class="prelude-val">Ok</span>(tokenizer) =&gt; tokenizer,
+<a href=#733 id=733 data-nosnippet>733</a>            <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#734 id=734 data-nosnippet>734</a>                request
+<a href=#735 id=735 data-nosnippet>735</a>                    .response
+<a href=#736 id=736 data-nosnippet>736</a>                    .send(<span class="prelude-val">Err</span>(anyhow::Error::msg(e)))
+<a href=#737 id=737 data-nosnippet>737</a>                    .<span class="kw">await
+<a href=#738 id=738 data-nosnippet>738</a>                    </span>.unwrap_or_else(|<span class="kw">_</span>| <span class="macro">warn!</span>(<span class="string">"Receiver disconnected"</span>));
+<a href=#739 id=739 data-nosnippet>739</a>                <span class="kw">return</span>;
+<a href=#740 id=740 data-nosnippet>740</a>            }
+<a href=#741 id=741 data-nosnippet>741</a>        };
+<a href=#742 id=742 data-nosnippet>742</a>        request
+<a href=#743 id=743 data-nosnippet>743</a>            .response
+<a href=#744 id=744 data-nosnippet>744</a>            .send(<span class="prelude-val">Ok</span>(txt))
+<a href=#745 id=745 data-nosnippet>745</a>            .<span class="kw">await
+<a href=#746 id=746 data-nosnippet>746</a>            </span>.expect(<span class="string">"Sender disconnected unexpectedly!"</span>);
+<a href=#747 id=747 data-nosnippet>747</a>    }
+<a href=#748 id=748 data-nosnippet>748</a>}</code></pre></div></section></main></body></html>

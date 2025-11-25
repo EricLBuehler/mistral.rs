@@ -58,9 +58,12 @@
 <a href=#58 id=58 data-nosnippet>58</a>    <span class="kw">fn </span>add_seq(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seq: Sequence);
 <a href=#59 id=59 data-nosnippet>59</a>    <span class="doccomment">/// This may do nothing. It depends on the implementation
 <a href=#60 id=60 data-nosnippet>60</a>    </span><span class="kw">fn </span>free_finished_sequence_groups(<span class="kw-2">&amp;mut </span><span class="self">self</span>);
-<a href=#61 id=61 data-nosnippet>61</a>
-<a href=#62 id=62 data-nosnippet>62</a>    <span class="comment">// PagedAttention metadata
-<a href=#63 id=63 data-nosnippet>63</a>    </span><span class="kw">fn </span>block_tables(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;BlockTables&gt;;
-<a href=#64 id=64 data-nosnippet>64</a>    <span class="kw">fn </span>block_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt;;
-<a href=#65 id=65 data-nosnippet>65</a>    <span class="kw">fn </span>block_engine(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Mutex&lt;BlockEngine&gt;&gt;&gt;;
-<a href=#66 id=66 data-nosnippet>66</a>}</code></pre></div></section></main></body></html>
+<a href=#61 id=61 data-nosnippet>61</a>    <span class="doccomment">/// Get Mamba state pool indices of finished sequences for freeing.
+<a href=#62 id=62 data-nosnippet>62</a>    /// Called before free_finished_sequence_groups to allow cleanup of hybrid cache slots.
+<a href=#63 id=63 data-nosnippet>63</a>    </span><span class="kw">fn </span>get_finished_mamba_indices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;usize&gt;;
+<a href=#64 id=64 data-nosnippet>64</a>
+<a href=#65 id=65 data-nosnippet>65</a>    <span class="comment">// PagedAttention metadata
+<a href=#66 id=66 data-nosnippet>66</a>    </span><span class="kw">fn </span>block_tables(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;BlockTables&gt;;
+<a href=#67 id=67 data-nosnippet>67</a>    <span class="kw">fn </span>block_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt;;
+<a href=#68 id=68 data-nosnippet>68</a>    <span class="kw">fn </span>block_engine(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Mutex&lt;BlockEngine&gt;&gt;&gt;;
+<a href=#69 id=69 data-nosnippet>69</a>}</code></pre></div></section></main></body></html>
