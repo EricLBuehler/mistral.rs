@@ -2,7 +2,7 @@
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use mistralrs_quant::{
-    ColumnParallelLayer, FusedExperts, QuantMethod, QuantizedConfig, ReplicatedLayer,
+    grouped_gemm, ColumnParallelLayer, FusedExperts, QuantMethod, QuantizedConfig, ReplicatedLayer,
     RowParallelLayer, ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
@@ -494,61 +494,68 @@ impl SlowMoeMlp {
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
-        let xs = xs.reshape(((), hidden_dim))?;
-        let router_logits = xs.apply(&self.gate)?;
+        let xs_flat = xs.reshape(((), hidden_dim))?;
+        let router_logits = xs_flat.apply(&self.gate)?;
         let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
 
-        // In order to extract topk, we extract the data from the tensor and manipulate it
-        // directly. Maybe we will want to use some custom ops instead at some point.
         let experts_per_tok = routing_weights
             .arg_sort_last_dim(false)?
             .narrow(D::Minus1, 0, self.num_experts_per_tok)?
             .contiguous()?;
-        let routing_weights = routing_weights.gather(&experts_per_tok, D::Minus1)?;
+        let mut routing_scores = routing_weights.gather(&experts_per_tok, D::Minus1)?;
+        if self.norm_topk_prob {
+            routing_scores =
+                routing_scores.broadcast_div(&routing_scores.sum_keepdim(D::Minus1)?)?;
+        }
 
-        // routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-        // top_x contains the row indexes to evaluate for each expert.
-        let routing_weights = routing_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
-        let experts_per_tok = experts_per_tok.to_vec2::<u32>()?;
-        let mut top_x = vec![vec![]; self.experts.len()];
-        let mut selected_experts = vec![vec![]; self.experts.len()];
-        for (row_idx, (rw, expert_idxs)) in routing_weights
+        let expert_indices = experts_per_tok
+            .reshape((b_size, seq_len, self.num_experts_per_tok))?
+            .to_dtype(DType::U32)?;
+        let routing_scores = routing_scores.reshape((b_size, seq_len, self.num_experts_per_tok))?;
+
+        let gate_methods: Vec<_> = self
+            .experts
             .iter()
-            .zip(experts_per_tok.iter())
-            .enumerate()
-        {
-            let sum_rw = rw.iter().sum::<f32>();
-            for (&rw, &expert_idx) in rw.iter().zip(expert_idxs.iter()) {
-                top_x[expert_idx as usize].push(row_idx as u32);
-                let rw = if self.norm_topk_prob { rw / sum_rw } else { rw };
-                selected_experts[expert_idx as usize].push(rw)
-            }
-        }
+            .map(|expert| Arc::clone(&expert.gate_proj))
+            .collect();
+        let up_methods: Vec<_> = self
+            .experts
+            .iter()
+            .map(|expert| Arc::clone(&expert.up_proj))
+            .collect();
+        let down_methods: Vec<_> = self
+            .experts
+            .iter()
+            .map(|expert| Arc::clone(&expert.down_proj))
+            .collect();
 
-        let mut ys = xs.zeros_like()?;
-        for (expert_idx, expert_layer) in self.experts.iter().enumerate() {
-            let top_x = &top_x[expert_idx];
-            if top_x.is_empty() {
-                continue;
-            }
-            let top_x = Tensor::new(top_x.as_slice(), xs.device())?;
-            let selected_experts =
-                Tensor::new(selected_experts[expert_idx].as_slice(), xs.device())?
-                    .reshape(((), 1))?
-                    .to_dtype(xs.dtype())?;
-            // Index the correct hidden states and compute the expert hidden state for
-            // the current expert. We need to make sure to multiply the output hidden
-            // states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-            let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden_dim))?;
-            // current_hidden_states = expert_layer(current_state, routing_weights[top_x_list, idx_list, None])
-            let current_hidden_states = expert_layer
-                .forward(&current_state.unsqueeze(0)?)?
-                .squeeze(0)?;
-            let current_hidden_states = current_hidden_states.broadcast_mul(&selected_experts)?;
-            ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
+        let gate_out = grouped_gemm(xs, &expert_indices, gate_methods.as_slice())?;
+        let up_out = grouped_gemm(xs, &expert_indices, up_methods.as_slice())?;
+
+        let act = self.experts.first().map(|e| e.act_fn).unwrap_or_default();
+        let gate_out = gate_out.apply(&act)?;
+        let activated = gate_out.broadcast_mul(&up_out)?;
+
+        let inter_dim = activated.dim(D::Minus1)?;
+        let down_input =
+            activated.reshape((b_size, seq_len * self.num_experts_per_tok, inter_dim))?;
+        let down_indices =
+            expert_indices.reshape((b_size, seq_len * self.num_experts_per_tok, 1))?;
+        let down_out = grouped_gemm(&down_input, &down_indices, down_methods.as_slice())?
+            .reshape((b_size, seq_len, self.num_experts_per_tok, hidden_dim))?;
+
+        let scores = routing_scores.to_dtype(down_out.dtype())?.reshape((
+            b_size,
+            seq_len,
+            self.num_experts_per_tok,
+            1,
+        ))?;
+        let ys = down_out.broadcast_mul(&scores)?.sum(D::Minus2)?;
+        if ys.dtype() != xs.dtype() {
+            ys.to_dtype(xs.dtype())
+        } else {
+            Ok(ys)
         }
-        let ys = ys.reshape((b_size, seq_len, hidden_dim))?;
-        Ok(ys)
     }
 }
 
