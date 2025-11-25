@@ -553,6 +553,18 @@ impl Qwen3VLImageProcessor {
         let temporal_patch_size = Self::temporal_patch_size(config);
         let patch_size = Self::patch_size(config);
         let merge_size = Self::merge_size(config);
+
+        // Validate divisors to prevent division by zero
+        if temporal_patch_size == 0 {
+            candle_core::bail!("temporal_patch_size cannot be zero");
+        }
+        if patch_size == 0 {
+            candle_core::bail!("patch_size cannot be zero");
+        }
+        if merge_size == 0 {
+            candle_core::bail!("merge_size cannot be zero");
+        }
+
         // Image
         if patches.dim(0)? == 1 {
             patches = patches.repeat((temporal_patch_size, 1, 1, 1))?;

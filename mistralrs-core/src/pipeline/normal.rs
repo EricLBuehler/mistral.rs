@@ -11,14 +11,15 @@ use super::{
 };
 use super::{
     AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, GLM4Loader, Gemma2Loader, GemmaLoader,
-    LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader,
-    Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader, SmolLm3Loader, Starcoder2Loader,
+    GraniteMoeHybridLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
+    Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader,
+    SmolLm3Loader, Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
-use crate::kv_cache::{FullCacheManager, NormalCacheManager};
+use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
@@ -230,6 +231,7 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::GLM4) => Box::new(GLM4Loader),
             Some(NormalLoaderType::Qwen3Moe) => Box::new(Qwen3MoELoader),
             Some(NormalLoaderType::SmolLm3) => Box::new(SmolLm3Loader),
+            Some(NormalLoaderType::GraniteMoeHybrid) => Box::new(GraniteMoeHybridLoader),
             None => Box::new(AutoNormalLoader),
         };
         Ok(Box::new(NormalLoader {
@@ -822,6 +824,9 @@ impl Loader for NormalLoader {
                             layer.reset();
                         }
                     }
+                    EitherCache::Hybrid(hybrid) => {
+                        hybrid.lock().unwrap().reset();
+                    }
                 }
 
                 let end = Instant::now();
@@ -949,6 +954,7 @@ impl Loader for NormalLoader {
         let num_hidden_layers = match model.cache() {
             EitherCache::Full(full) => full.lock().len(),
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
+            EitherCache::Hybrid(hybrid) => hybrid.lock().unwrap().num_layers(),
         };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;
@@ -1045,17 +1051,17 @@ impl IsqPipelineMixin for NormalPipeline {
 
 impl CacheManagerMixin for NormalPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) {
-        if matches!(self.model.cache(), EitherCache::Full(_)) {
-            FullCacheManager.clone_in_cache(self, seqs, false)
-        } else {
-            NormalCacheManager.clone_in_cache(self, seqs, false)
+        match self.model.cache() {
+            EitherCache::Full(_) => FullCacheManager.clone_in_cache(self, seqs, false),
+            EitherCache::Normal(_) => NormalCacheManager.clone_in_cache(self, seqs, false),
+            EitherCache::Hybrid(_) => HybridCacheManager.clone_in_cache(self, seqs, false),
         }
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence]) {
-        if matches!(self.model.cache(), EitherCache::Full(_)) {
-            FullCacheManager.clone_out_cache(self, seqs, false)
-        } else {
-            NormalCacheManager.clone_out_cache(self, seqs, false)
+        match self.model.cache() {
+            EitherCache::Full(_) => FullCacheManager.clone_out_cache(self, seqs, false),
+            EitherCache::Normal(_) => NormalCacheManager.clone_out_cache(self, seqs, false),
+            EitherCache::Hybrid(_) => HybridCacheManager.clone_out_cache(self, seqs, false),
         }
     }
     fn set_none_cache(
@@ -1065,15 +1071,22 @@ impl CacheManagerMixin for NormalPipeline {
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
     ) {
-        if matches!(self.model.cache(), EitherCache::Full(_)) {
-            FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
-        } else {
-            NormalCacheManager.set_none_cache(
+        match self.model.cache() {
+            EitherCache::Full(_) => {
+                FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false)
+            }
+            EitherCache::Normal(_) => NormalCacheManager.set_none_cache(
                 self,
                 seqs,
                 modify_draft_cache,
                 load_preallocated_cache,
-            );
+            ),
+            EitherCache::Hybrid(_) => HybridCacheManager.set_none_cache(
+                self,
+                seqs,
+                modify_draft_cache,
+                load_preallocated_cache,
+            ),
         }
         if reset_non_granular {
             self.reset_non_granular_state()

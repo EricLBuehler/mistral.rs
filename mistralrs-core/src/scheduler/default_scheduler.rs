@@ -333,7 +333,17 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
     fn block_size(&self) -> Option<usize> {
         None
     }
-    fn free_finished_sequence_groups(&mut self) {}
+    fn free_finished_sequence_groups(&mut self) {
+        // Remove finished sequences
+        self.running.retain(|seq| !seq.is_finished_paged_attn());
+    }
+    fn get_finished_mamba_indices(&self) -> Vec<usize> {
+        self.running
+            .iter()
+            .filter(|seq| seq.is_finished_paged_attn())
+            .filter_map(|seq| seq.mamba_state_idx())
+            .collect()
+    }
     fn block_engine(&self) -> Option<Arc<tokio::sync::Mutex<BlockEngine>>> {
         None
     }

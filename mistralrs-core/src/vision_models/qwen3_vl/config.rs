@@ -65,6 +65,7 @@ pub struct TextConfig {
     pub rope_theta: f64,
     pub sliding_window: Option<usize>,
     // pub rope_scaling: MRopeScaling,
+    #[serde(default)]
     pub quantization_config: Option<QuantizedConfig>,
     // pub vision_start_token_id: usize,
     // pub max_window_layers: usize,
@@ -79,4 +80,6 @@ pub struct Config {
     pub vision_start_token_id: u32,
     pub vision_end_token_id: u32,
     pub tie_word_embeddings: bool,
+    /// Top-level quantization_config takes precedence
+    pub quantization_config: Option<QuantizedConfig>,
 }

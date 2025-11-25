@@ -75,11 +75,9 @@ impl CacheEngine {
     }
 
     pub fn get_kv_cache(&self) -> MutexGuard<'_, Vec<KVCache>> {
-        loop {
-            if let Ok(v) = self.gpu_cache.try_lock() {
-                return v;
-            }
-        }
+        // Use blocking lock instead of busy-wait spin loop to avoid CPU waste
+        // and potential thread starvation issues
+        self.gpu_cache.lock().expect("KV cache mutex was poisoned")
     }
 
     fn allocate_gpu_cache(

@@ -18,6 +18,10 @@ macro_rules! get_mut_arcmutex {
             if let Ok(inner) = $thing.try_lock() {
                 break inner;
             }
+            // Yield to allow other threads to make progress and release the lock.
+            // This prevents deadlock when a spawned async task busy-loops while
+            // another task holds the lock across an await point.
+            std::thread::yield_now();
         }
     };
 }
@@ -198,6 +202,8 @@ macro_rules! get_mut_group {
             if let Ok(inner) = $this.group.try_lock() {
                 break inner;
             }
+            // Yield to allow other threads to make progress and release the lock.
+            std::thread::yield_now();
         }
     };
 }

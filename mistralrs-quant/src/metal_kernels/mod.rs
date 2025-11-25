@@ -2270,7 +2270,7 @@ pub fn call_hqq_pack_8bit(
     set_params!(encoder, (input, output, num_elements as usize));
 
     let grid_size = MTLSize {
-        width: ((num_elements + 255) / 256) as usize,
+        width: num_elements.div_ceil(256) as u64,
         height: 1,
         depth: 1,
     };
@@ -2302,8 +2302,8 @@ pub fn call_hqq_pack_4bit(
 
     let step = height / 2;
     let grid_size = MTLSize {
-        width: ((step + 15) / 16) as usize,
-        height: ((width + 15) / 16) as usize,
+        width: step.div_ceil(16) as u64,
+        height: width.div_ceil(16) as u64,
         depth: 1,
     };
     let threadgroup_size = MTLSize {
@@ -2335,8 +2335,8 @@ pub fn call_hqq_pack_2bit(
 
     let step = height / 4;
     let grid_size = MTLSize {
-        width: ((step + 15) / 16) as usize,
-        height: ((width + 15) / 16) as usize,
+        width: step.div_ceil(16) as u64,
+        height: width.div_ceil(16) as u64,
         depth: 1,
     };
     let threadgroup_size = MTLSize {
@@ -2368,8 +2368,8 @@ pub fn call_hqq_pack_3bit(
 
     let step = height / 10;
     let grid_size = MTLSize {
-        width: ((step + 15) / 16) as usize,
-        height: ((width + 15) / 16) as usize,
+        width: step.div_ceil(16) as u64,
+        height: width.div_ceil(16) as u64,
         depth: 1,
     };
     let threadgroup_size = MTLSize {
@@ -2401,8 +2401,8 @@ pub fn call_hqq_pack_1bit(
 
     let step = height / 8;
     let grid_size = MTLSize {
-        width: ((step + 15) / 16) as usize,
-        height: ((width + 15) / 16) as usize,
+        width: step.div_ceil(16) as u64,
+        height: width.div_ceil(16) as u64,
         depth: 1,
     };
     let threadgroup_size = MTLSize {

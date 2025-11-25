@@ -108,13 +108,20 @@ pub(crate) fn util_append_token_to_blocks(
         }
         None => {
             logical_token_blocks.push(LogicalTokenBlock::new(block_size));
+            // SAFETY: We just pushed a block, so last_mut() will return Some
             logical_token_blocks
                 .last_mut()
-                .unwrap()
+                .expect("just pushed a block, vector cannot be empty")
                 .append_token_id(tok);
         }
     }
-    if logical_token_blocks.last().as_ref().unwrap().is_full() {
+    // SAFETY: At this point, we either had a block or just created one above,
+    // so the vector is guaranteed to be non-empty.
+    if logical_token_blocks
+        .last()
+        .expect("logical_token_blocks should not be empty after appending")
+        .is_full()
+    {
         logical_token_blocks.push(LogicalTokenBlock::new(block_size));
     }
 }
@@ -413,6 +420,8 @@ pub struct Sequence {
     cache: LayerCaches,
     draft_cache: LayerCaches,
     xlora_cache: Option<LayerCaches>,
+    /// For hybrid models: index into the Mamba state pool
+    mamba_state_idx: Option<usize>,
 
     // Preallocated KV cache (k,v)
     seq_preallocated_cache: Option<(Tensor, Tensor)>,
@@ -556,6 +565,7 @@ impl Sequence {
             } else {
                 None
             },
+            mamba_state_idx: None,
             seq_preallocated_cache,
             responder,
             sampler: sampler.into(),
@@ -793,6 +803,14 @@ impl Sequence {
 
     pub fn scaling_cache(&mut self) -> &mut Option<Tensor> {
         &mut self.scaling_cache
+    }
+
+    pub fn mamba_state_idx(&self) -> Option<usize> {
+        self.mamba_state_idx
+    }
+
+    pub fn set_mamba_state_idx(&mut self, idx: Option<usize>) {
+        self.mamba_state_idx = idx;
     }
 
     pub fn is_xlora(&self) -> bool {
