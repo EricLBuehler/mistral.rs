@@ -58,10 +58,6 @@ pub trait Processor {
             self.template_action(),
             tools,
         )?;
-        println!("{prompt}");
-        let prompt = "<|start_of_role|>system<|end_of_role|>You are a helpful assistant. Please ensure responses are professional, accurate, and safe.<|end_of_text|>
-<|start_of_role|>user<|end_of_role|>Please list one IBM Research laboratory located in the United States. You should only output its name and location.<|end_of_text|>
-<|start_of_role|>assistant<|end_of_role|>";
         let encoding = pipeline
             .tokenizer()
             .with_context(|| {
@@ -69,7 +65,7 @@ pub trait Processor {
             })?
             .encode_fast(prompt.clone(), add_special_tokens)
             .map_err(anyhow::Error::msg)?;
-        Ok((encoding.get_ids().to_vec(), prompt.to_string()))
+        Ok((encoding.get_ids().to_vec(), prompt))
     }
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor>;
     fn get_special_tokens(&self) -> &[&'static str];

@@ -7,7 +7,10 @@ use mistralrs_quant::{
     ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::{Arc, Mutex}};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
@@ -257,7 +260,12 @@ struct GraniteTopKGating {
 }
 
 impl GraniteTopKGating {
-    fn new(input_size: usize, num_experts: usize, top_k: usize, vb: ShardedVarBuilder) -> Result<Self> {
+    fn new(
+        input_size: usize,
+        num_experts: usize,
+        top_k: usize,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         let weight = vb.pp("layer").get((num_experts, input_size), "weight")?;
         let layer = candle_nn::Linear::new(weight, None);
         Ok(Self {
@@ -284,7 +292,10 @@ impl GraniteTopKGating {
         let gates = candle_nn::ops::softmax(&logits, candle_core::D::Minus1)?;
 
         // Get top-k expert indices and gates per token
-        let gates_vec: Vec<f32> = gates.to_dtype(candle_core::DType::F32)?.flatten_all()?.to_vec1()?;
+        let gates_vec: Vec<f32> = gates
+            .to_dtype(candle_core::DType::F32)?
+            .flatten_all()?
+            .to_vec1()?;
 
         // Collect (expert_idx, token_idx, gate) tuples
         let mut expert_token_gates: Vec<(usize, usize, f32)> = Vec::new();
@@ -308,7 +319,8 @@ impl GraniteTopKGating {
 
             // Normalize selected gates
             let sum: f32 = selected.iter().map(|(_, g)| g).sum();
-            let normalized: Vec<(usize, f32)> = selected.iter()
+            let normalized: Vec<(usize, f32)> = selected
+                .iter()
                 .map(|(e, g)| (*e, if sum > 0.0 { g / sum } else { 0.0 }))
                 .collect();
 
@@ -322,17 +334,20 @@ impl GraniteTopKGating {
         expert_token_gates.sort_by_key(|(expert_idx, _, _)| *expert_idx);
 
         // Extract sorted batch_index and batch_gates
-        let all_batch_indices: Vec<u32> = expert_token_gates.iter()
+        let all_batch_indices: Vec<u32> = expert_token_gates
+            .iter()
             .map(|(_, token_idx, _)| *token_idx as u32)
             .collect();
-        let all_batch_gates: Vec<f32> = expert_token_gates.iter()
+        let all_batch_gates: Vec<f32> = expert_token_gates
+            .iter()
             .map(|(_, _, gate)| *gate)
             .collect();
 
         let indices_len = all_batch_indices.len();
         let gates_len = all_batch_gates.len();
         let batch_index = Tensor::from_vec(all_batch_indices, (indices_len,), device)?;
-        let batch_gates = Tensor::from_vec(all_batch_gates, (gates_len,), device)?.to_dtype(dtype)?;
+        let batch_gates =
+            Tensor::from_vec(all_batch_gates, (gates_len,), device)?.to_dtype(dtype)?;
 
         Ok((batch_index, batch_gates, expert_counts))
     }
@@ -508,8 +523,9 @@ impl GraniteMoE {
 
         // Convert back to tensor
         let flat_output: Vec<f32> = output_vec.into_iter().flatten().collect();
-        let output = Tensor::from_vec(flat_output, (batch_size * seq_len, self.input_size), device)?
-            .to_dtype(dtype)?;
+        let output =
+            Tensor::from_vec(flat_output, (batch_size * seq_len, self.input_size), device)?
+                .to_dtype(dtype)?;
 
         // Reshape back to (batch, seq_len, emb_size)
         output.reshape((batch_size, seq_len, self.input_size))
@@ -599,7 +615,9 @@ impl RmsNormGated {
         let hidden_states = hidden_states.broadcast_div(&(variance + self.eps)?.sqrt()?)?;
 
         // Apply weight and convert back to original dtype
-        hidden_states.to_dtype(dtype)?.broadcast_mul(&self.weight.to_dtype(dtype)?)
+        hidden_states
+            .to_dtype(dtype)?
+            .broadcast_mul(&self.weight.to_dtype(dtype)?)
     }
 }
 
@@ -648,7 +666,9 @@ impl MambaLayer {
         let in_proj = candle_nn::Linear::new(in_proj_weight, in_proj_bias);
 
         // Conv1d weights: (conv_dim, 1, kernel_size) but stored as (conv_dim, kernel_size)
-        let conv1d_weight = vb.pp("conv1d").get((conv_dim, 1, conv_kernel_size), "weight")?;
+        let conv1d_weight = vb
+            .pp("conv1d")
+            .get((conv_dim, 1, conv_kernel_size), "weight")?;
         let conv1d_bias = if cfg.mamba_conv_bias {
             Some(vb.pp("conv1d").get(conv_dim, "bias")?)
         } else {
@@ -707,11 +727,7 @@ impl MambaLayer {
 
         // 1. Input projection
         let projected = self.in_proj.forward(x)?;
-        let gate = projected.narrow(
-            candle_core::D::Minus1,
-            0,
-            self.intermediate_size,
-        )?;
+        let gate = projected.narrow(candle_core::D::Minus1, 0, self.intermediate_size)?;
         let hidden_states_b_c = projected.narrow(
             candle_core::D::Minus1,
             self.intermediate_size,
@@ -737,13 +753,7 @@ impl MambaLayer {
             .unsqueeze(1)?
         } else {
             // Full sequence forward (no fast path, pure torch implementation)
-            self.forward_full(
-                &hidden_states_b_c,
-                &dt,
-                cache,
-                batch_size,
-                seq_len,
-            )?
+            self.forward_full(&hidden_states_b_c, &dt, cache, batch_size, seq_len)?
         };
 
         // Apply gated normalization
@@ -755,8 +765,8 @@ impl MambaLayer {
 
     fn forward_cached(
         &self,
-        hidden_states_b_c: &Tensor,  // (batch, conv_dim)
-        dt: &Tensor,                  // (batch, num_heads)
+        hidden_states_b_c: &Tensor, // (batch, conv_dim)
+        dt: &Tensor,                // (batch, num_heads)
         cache: &mut MambaCache,
         batch_size: usize,
     ) -> Result<Tensor> {
@@ -771,8 +781,8 @@ impl MambaLayer {
         // Apply convolution: sum(conv_state * weight)
         // weight: (conv_dim, 1, kernel_size) -> squeeze to (conv_dim, kernel_size)
         let weight = self.conv1d_weight.squeeze(1)?;
-        let mut hidden_states_b_c = (cache.conv_state.clone() * weight.unsqueeze(0)?)?
-            .sum(candle_core::D::Minus1)?;
+        let mut hidden_states_b_c =
+            (cache.conv_state.clone() * weight.unsqueeze(0)?)?.sum(candle_core::D::Minus1)?;
 
         if let Some(ref bias) = self.conv1d_bias {
             hidden_states_b_c = hidden_states_b_c.broadcast_add(bias)?;
@@ -780,11 +790,8 @@ impl MambaLayer {
         let hidden_states_b_c = candle_nn::ops::silu(&hidden_states_b_c)?;
 
         // Split into hidden_states, B, C
-        let hidden_states = hidden_states_b_c.narrow(
-            candle_core::D::Minus1,
-            0,
-            self.intermediate_size,
-        )?;
+        let hidden_states =
+            hidden_states_b_c.narrow(candle_core::D::Minus1, 0, self.intermediate_size)?;
         let b = hidden_states_b_c.narrow(
             candle_core::D::Minus1,
             self.intermediate_size,
@@ -801,7 +808,10 @@ impl MambaLayer {
         let a = self.a_log.to_dtype(candle_core::DType::F32)?.exp()?.neg()?;
 
         // dt with bias and softplus
-        let dt_bias = self.dt_bias.unsqueeze(0)?.expand((batch_size, self.num_heads))?;
+        let dt_bias = self
+            .dt_bias
+            .unsqueeze(0)?
+            .expand((batch_size, self.num_heads))?;
         let dt = dt.broadcast_add(&dt_bias)?;
         let dt = softplus(&dt)?;
         // Clamp dt
@@ -809,23 +819,36 @@ impl MambaLayer {
 
         // Expand dimensions for broadcasting
         // dt: (batch, num_heads) -> (batch, num_heads, head_dim)
-        let dt = dt.unsqueeze(2)?.expand((batch_size, self.num_heads, self.head_dim))?;
+        let dt = dt
+            .unsqueeze(2)?
+            .expand((batch_size, self.num_heads, self.head_dim))?;
 
         // a: (num_heads) -> (num_heads, head_dim, state_size)
-        let a = a.unsqueeze(1)?.unsqueeze(2)?
+        let a = a
+            .unsqueeze(1)?
+            .unsqueeze(2)?
             .expand((self.num_heads, self.head_dim, self.ssm_state_size))?
             .to_dtype(candle_core::DType::F32)?;
 
         // dA = exp(dt * A): (batch, num_heads, head_dim, state_size)
-        let da = dt.unsqueeze(3)?.to_dtype(candle_core::DType::F32)?
+        let da = dt
+            .unsqueeze(3)?
+            .to_dtype(candle_core::DType::F32)?
             .broadcast_mul(&a.unsqueeze(0)?)?
             .exp()?;
 
         // Reshape B: (batch, n_groups * state_size) -> (batch, num_heads, state_size)
-        let b = b.reshape((batch_size, self.n_groups, self.ssm_state_size))?
+        let b = b
+            .reshape((batch_size, self.n_groups, self.ssm_state_size))?
             .to_dtype(candle_core::DType::F32)?;
-        let b = b.unsqueeze(2)?
-            .expand((batch_size, self.n_groups, self.num_heads / self.n_groups, self.ssm_state_size))?
+        let b = b
+            .unsqueeze(2)?
+            .expand((
+                batch_size,
+                self.n_groups,
+                self.num_heads / self.n_groups,
+                self.ssm_state_size,
+            ))?
             .reshape((batch_size, self.num_heads, self.ssm_state_size))?;
 
         // dB = dt * B: (batch, num_heads, head_dim, state_size)
@@ -833,34 +856,50 @@ impl MambaLayer {
         let db = dt_f32.unsqueeze(3)?.broadcast_mul(&b.unsqueeze(2)?)?;
 
         // hidden_states: (batch, intermediate_size) -> (batch, num_heads, head_dim)
-        let hidden_states = hidden_states.reshape((batch_size, self.num_heads, self.head_dim))?
+        let hidden_states = hidden_states
+            .reshape((batch_size, self.num_heads, self.head_dim))?
             .to_dtype(candle_core::DType::F32)?;
 
         // dBx = dB * x: (batch, num_heads, head_dim, state_size)
         let dbx = db.broadcast_mul(&hidden_states.unsqueeze(3)?)?;
 
         // Update SSM state: state = state * dA + dBx
-        let ssm_state = cache.ssm_state.to_dtype(candle_core::DType::F32)?
+        let ssm_state = cache
+            .ssm_state
+            .to_dtype(candle_core::DType::F32)?
             .broadcast_mul(&da)?
             .broadcast_add(&dbx)?;
         cache.ssm_state = ssm_state.to_dtype(cache.ssm_state.dtype())?;
 
         // Reshape C: (batch, n_groups * state_size) -> (batch, num_heads, state_size)
-        let c = c.reshape((batch_size, self.n_groups, self.ssm_state_size))?
+        let c = c
+            .reshape((batch_size, self.n_groups, self.ssm_state_size))?
             .to_dtype(candle_core::DType::F32)?;
-        let c = c.unsqueeze(2)?
-            .expand((batch_size, self.n_groups, self.num_heads / self.n_groups, self.ssm_state_size))?
+        let c = c
+            .unsqueeze(2)?
+            .expand((
+                batch_size,
+                self.n_groups,
+                self.num_heads / self.n_groups,
+                self.ssm_state_size,
+            ))?
             .reshape((batch_size, self.num_heads, self.ssm_state_size))?;
 
         // y = (state @ C^T): (batch, num_heads, head_dim)
         // state: (batch, num_heads, head_dim, state_size)
         // C: (batch, num_heads, state_size)
-        let y = cache.ssm_state.to_dtype(candle_core::DType::F32)?.matmul(&c.unsqueeze(3)?)?
+        let y = cache
+            .ssm_state
+            .to_dtype(candle_core::DType::F32)?
+            .matmul(&c.unsqueeze(3)?)?
             .squeeze(3)?;
 
         // D skip connection: y = y + x * D
-        let d = self.d.to_dtype(candle_core::DType::F32)?
-            .unsqueeze(0)?.unsqueeze(2)?
+        let d = self
+            .d
+            .to_dtype(candle_core::DType::F32)?
+            .unsqueeze(0)?
+            .unsqueeze(2)?
             .expand((batch_size, self.num_heads, self.head_dim))?;
         let y = y.broadcast_add(&hidden_states.broadcast_mul(&d)?)?;
 
@@ -873,8 +912,8 @@ impl MambaLayer {
 
     fn forward_full(
         &self,
-        hidden_states_b_c: &Tensor,  // (batch, seq_len, conv_dim)
-        dt: &Tensor,                  // (batch, seq_len, num_heads)
+        hidden_states_b_c: &Tensor, // (batch, seq_len, conv_dim)
+        dt: &Tensor,                // (batch, seq_len, num_heads)
         cache: &mut MambaCache,
         batch_size: usize,
         seq_len: usize,
@@ -882,7 +921,7 @@ impl MambaLayer {
         let groups_time_state_size = self.n_groups * self.ssm_state_size;
 
         // Store conv state for future use
-        let hidden_states_b_c_t = hidden_states_b_c.transpose(1, 2)?;  // (batch, conv_dim, seq_len)
+        let hidden_states_b_c_t = hidden_states_b_c.transpose(1, 2)?; // (batch, conv_dim, seq_len)
         let pad_width = self.conv_kernel_size.saturating_sub(seq_len);
         let conv_state = if pad_width > 0 {
             let zeros = Tensor::zeros(
@@ -901,7 +940,11 @@ impl MambaLayer {
         let padded = Tensor::cat(
             &[
                 Tensor::zeros(
-                    (batch_size, self.conv_kernel_size - 1, hidden_states_b_c.dim(2)?),
+                    (
+                        batch_size,
+                        self.conv_kernel_size - 1,
+                        hidden_states_b_c.dim(2)?,
+                    ),
                     hidden_states_b_c.dtype(),
                     hidden_states_b_c.device(),
                 )?,
@@ -911,8 +954,8 @@ impl MambaLayer {
         )?;
 
         // Manual grouped conv1d
-        let padded_t = padded.transpose(1, 2)?;  // (batch, conv_dim, seq_len + pad)
-        let weight = self.conv1d_weight.squeeze(1)?;  // (conv_dim, kernel_size)
+        let padded_t = padded.transpose(1, 2)?; // (batch, conv_dim, seq_len + pad)
+        let weight = self.conv1d_weight.squeeze(1)?; // (conv_dim, kernel_size)
 
         // For each output position, compute the convolution
         let mut conv_outputs = Vec::with_capacity(seq_len);
@@ -921,19 +964,17 @@ impl MambaLayer {
             let out = (window * weight.unsqueeze(0)?)?.sum(candle_core::D::Minus1)?;
             conv_outputs.push(out);
         }
-        let mut hidden_states_b_c = Tensor::stack(&conv_outputs, 1)?;  // (batch, seq_len, conv_dim)
+        let mut hidden_states_b_c = Tensor::stack(&conv_outputs, 1)?; // (batch, seq_len, conv_dim)
 
         if let Some(ref bias) = self.conv1d_bias {
-            hidden_states_b_c = hidden_states_b_c.broadcast_add(&bias.unsqueeze(0)?.unsqueeze(0)?)?;
+            hidden_states_b_c =
+                hidden_states_b_c.broadcast_add(&bias.unsqueeze(0)?.unsqueeze(0)?)?;
         }
         let hidden_states_b_c = candle_nn::ops::silu(&hidden_states_b_c)?;
 
         // Split into hidden_states, B, C
-        let hidden_states = hidden_states_b_c.narrow(
-            candle_core::D::Minus1,
-            0,
-            self.intermediate_size,
-        )?;
+        let hidden_states =
+            hidden_states_b_c.narrow(candle_core::D::Minus1, 0, self.intermediate_size)?;
         let b = hidden_states_b_c.narrow(
             candle_core::D::Minus1,
             self.intermediate_size,
@@ -951,23 +992,41 @@ impl MambaLayer {
         // dt with bias and softplus
         let dt = dt.broadcast_add(&self.dt_bias.unsqueeze(0)?.unsqueeze(0)?)?;
         let dt = softplus(&dt)?;
-        let dt = dt.clamp(self.time_step_min, self.time_step_max)?
+        let dt = dt
+            .clamp(self.time_step_min, self.time_step_max)?
             .to_dtype(candle_core::DType::F32)?;
 
         // Reshape for SSM
-        let hidden_states = hidden_states.reshape((batch_size, seq_len, self.num_heads, self.head_dim))?
+        let hidden_states = hidden_states
+            .reshape((batch_size, seq_len, self.num_heads, self.head_dim))?
             .to_dtype(candle_core::DType::F32)?;
-        let b = b.reshape((batch_size, seq_len, self.n_groups, self.ssm_state_size))?
+        let b = b
+            .reshape((batch_size, seq_len, self.n_groups, self.ssm_state_size))?
             .to_dtype(candle_core::DType::F32)?;
-        let c = c.reshape((batch_size, seq_len, self.n_groups, self.ssm_state_size))?
+        let c = c
+            .reshape((batch_size, seq_len, self.n_groups, self.ssm_state_size))?
             .to_dtype(candle_core::DType::F32)?;
 
         // Expand B and C to num_heads
-        let b = b.unsqueeze(3)?
-            .expand((batch_size, seq_len, self.n_groups, self.num_heads / self.n_groups, self.ssm_state_size))?
+        let b = b
+            .unsqueeze(3)?
+            .expand((
+                batch_size,
+                seq_len,
+                self.n_groups,
+                self.num_heads / self.n_groups,
+                self.ssm_state_size,
+            ))?
             .reshape((batch_size, seq_len, self.num_heads, self.ssm_state_size))?;
-        let c = c.unsqueeze(3)?
-            .expand((batch_size, seq_len, self.n_groups, self.num_heads / self.n_groups, self.ssm_state_size))?
+        let c = c
+            .unsqueeze(3)?
+            .expand((
+                batch_size,
+                seq_len,
+                self.n_groups,
+                self.num_heads / self.n_groups,
+                self.ssm_state_size,
+            ))?
             .reshape((batch_size, seq_len, self.num_heads, self.ssm_state_size))?;
 
         // Simple sequential SSM (not chunked for now - can optimize later)
@@ -975,15 +1034,22 @@ impl MambaLayer {
         let mut outputs = Vec::with_capacity(seq_len);
 
         for t in 0..seq_len {
-            let dt_t = dt.i((.., t, ..))?.unsqueeze(2)?
-                .expand((batch_size, self.num_heads, self.head_dim))?;
+            let dt_t = dt.i((.., t, ..))?.unsqueeze(2)?.expand((
+                batch_size,
+                self.num_heads,
+                self.head_dim,
+            ))?;
             let x_t = hidden_states.i((.., t, .., ..))?;
             let b_t = b.i((.., t, .., ..))?;
             let c_t = c.i((.., t, .., ..))?;
 
             // dA = exp(dt * A)
-            let a_expanded = a.unsqueeze(0)?.unsqueeze(2)?.unsqueeze(3)?
-                .expand((batch_size, self.num_heads, self.head_dim, self.ssm_state_size))?;
+            let a_expanded = a.unsqueeze(0)?.unsqueeze(2)?.unsqueeze(3)?.expand((
+                batch_size,
+                self.num_heads,
+                self.head_dim,
+                self.ssm_state_size,
+            ))?;
             let da = dt_t.unsqueeze(3)?.broadcast_mul(&a_expanded)?.exp()?;
 
             // dB = dt * B
@@ -999,8 +1065,11 @@ impl MambaLayer {
             let y_t = ssm_state.matmul(&c_t.unsqueeze(3)?)?.squeeze(3)?;
 
             // D skip connection
-            let d_expanded = self.d.to_dtype(candle_core::DType::F32)?
-                .unsqueeze(0)?.unsqueeze(2)?
+            let d_expanded = self
+                .d
+                .to_dtype(candle_core::DType::F32)?
+                .unsqueeze(0)?
+                .unsqueeze(2)?
                 .expand((batch_size, self.num_heads, self.head_dim))?;
             let y_t = y_t.broadcast_add(&x_t.broadcast_mul(&d_expanded)?)?;
 
@@ -1028,11 +1097,7 @@ struct MambaBlock {
 }
 
 impl MambaBlock {
-    fn forward(
-        &self,
-        x: &Tensor,
-        cache: &mut MambaCache,
-    ) -> Result<Tensor> {
+    fn forward(&self, x: &Tensor, cache: &mut MambaCache) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
         let mamba_out = self.mamba.forward(&x, cache)?;
@@ -1243,7 +1308,7 @@ impl CausalSelfAttention {
     fn load(
         vb: ShardedVarBuilder,
         cfg: &Config,
-        rope: Option<Arc<RotaryEmbedding>>,  // Optional - None when position_embedding_type == "nope"
+        rope: Option<Arc<RotaryEmbedding>>, // Optional - None when position_embedding_type == "nope"
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
@@ -1294,7 +1359,7 @@ impl CausalSelfAttention {
             num_attention_heads: cfg.num_attention_heads / comm.world_size(),
             num_key_value_heads: (cfg.num_key_value_heads() / comm.world_size()).max(1),
             head_dim: cfg.head_dim(),
-            rotary_emb: rope,  // Now optional
+            rotary_emb: rope, // Now optional
             max_seq_len: cfg.max_position_embeddings,
             paged_attn,
             sdpa_params: SdpaParams {
@@ -1370,14 +1435,14 @@ impl Block {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: Option<Arc<RotaryEmbedding>>,  // Optional - None when position_embedding_type == "nope"
+        rope: Option<Arc<RotaryEmbedding>>, // Optional - None when position_embedding_type == "nope"
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let attn = CausalSelfAttention::load(
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
             cfg,
-            rope,  // Pass the optional RoPE
+            rope, // Pass the optional RoPE
             paged_attn,
             comm,
         )?;
@@ -1432,12 +1497,21 @@ pub struct HybridCache {
 }
 
 impl HybridCache {
-    pub fn new(layer_types: &[GraniteLayerType], cfg: &Config, device: &Device, dtype: candle_core::DType) -> Result<Self> {
+    pub fn new(
+        layer_types: &[GraniteLayerType],
+        cfg: &Config,
+        device: &Device,
+        dtype: candle_core::DType,
+    ) -> Result<Self> {
         let mut caches = Vec::with_capacity(layer_types.len());
         for layer_type in layer_types {
             match layer_type {
                 GraniteLayerType::Attention => {
-                    caches.push(LayerCache::Attention(KvCache::new_normal(2, cfg.max_position_embeddings, cfg.max_position_embeddings)));
+                    caches.push(LayerCache::Attention(KvCache::new_normal(
+                        2,
+                        cfg.max_position_embeddings,
+                        cfg.max_position_embeddings,
+                    )));
                 }
                 GraniteLayerType::Mamba => {
                     caches.push(LayerCache::Mamba(MambaCache::new(1, cfg, dtype, device)?));
@@ -1466,7 +1540,9 @@ impl HybridCache {
         for cache in &mut self.caches {
             match cache {
                 LayerCache::Attention(kv) => kv.reset(),
-                LayerCache::Mamba(mamba) => { let _ = mamba.reset(); }
+                LayerCache::Mamba(mamba) => {
+                    let _ = mamba.reset();
+                }
             }
         }
     }
@@ -1587,7 +1663,8 @@ impl GraniteMoeHybrid {
                 let device = mapper
                     .device_for(i, false)
                     .unwrap_or(&normal_loading_metadata.real_device);
-                if let std::collections::hash_map::Entry::Vacant(e) = ropes.entry(device.location()) {
+                if let std::collections::hash_map::Entry::Vacant(e) = ropes.entry(device.location())
+                {
                     let rope = RotaryEmbedding::new(
                         cfg.rope_theta,
                         head_dim,
@@ -1604,8 +1681,14 @@ impl GraniteMoeHybrid {
         let layer_types = cfg.layer_types();
 
         // Log layer configuration
-        let num_mamba = layer_types.iter().filter(|t| matches!(t, GraniteLayerType::Mamba)).count();
-        let num_attn = layer_types.iter().filter(|t| matches!(t, GraniteLayerType::Attention)).count();
+        let num_mamba = layer_types
+            .iter()
+            .filter(|t| matches!(t, GraniteLayerType::Mamba))
+            .count();
+        let num_attn = layer_types
+            .iter()
+            .filter(|t| matches!(t, GraniteLayerType::Attention))
+            .count();
         tracing::info!(
             "GraniteMoeHybrid: {} attention layers, {} mamba layers",
             num_attn,
@@ -1629,10 +1712,12 @@ impl GraniteMoeHybrid {
                 GraniteLayerType::Attention => {
                     // Get optional RoPE - None when position_embedding_type == "nope"
                     let rotary_emb = if use_position_embeddings {
-                        Some(ropes
-                            .get(&device.location())
-                            .expect("No RoPE for device location!")
-                            .clone())
+                        Some(
+                            ropes
+                                .get(&device.location())
+                                .expect("No RoPE for device location!")
+                                .clone(),
+                        )
                     } else {
                         None
                     };
@@ -1648,21 +1733,19 @@ impl GraniteMoeHybrid {
                         &*mapper,
                         i,
                         normal_loading_metadata.loading_isq,
-                        rotary_emb,  // Now optional
+                        rotary_emb, // Now optional
                         paged_attn,
                         &comm,
                     )?)
                 }
-                GraniteLayerType::Mamba => {
-                    DecoderLayer::Mamba(MambaBlock::load(
-                        vb_layer,
-                        cfg,
-                        &*mapper,
-                        i,
-                        normal_loading_metadata.loading_isq,
-                        &comm,
-                    )?)
-                }
+                GraniteLayerType::Mamba => DecoderLayer::Mamba(MambaBlock::load(
+                    vb_layer,
+                    cfg,
+                    &*mapper,
+                    i,
+                    normal_loading_metadata.loading_isq,
+                    &comm,
+                )?),
             };
             layers.push(layer);
         }
@@ -2027,7 +2110,10 @@ impl AnyMoeBaseModelMixin for GraniteMoeHybrid {
                             position_embedding_type: "rope".to_string(),
                         };
                         row.push(Box::new(GraniteMlp::new(
-                            vb.pp(layer_idx).pp("mlp").set_dtype(dtype).set_device(device),
+                            vb.pp(layer_idx)
+                                .pp("mlp")
+                                .set_dtype(dtype)
+                                .set_device(device),
                             &cfg_for_layer,
                             &self.mapper.get_comm_for(layer_idx)?,
                         )?));
