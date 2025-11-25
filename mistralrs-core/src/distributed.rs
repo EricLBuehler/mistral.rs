@@ -245,7 +245,11 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
     let global_world_size = if let Ok(x) = std::env::var("MISTRALRS_MN_GLOBAL_WORLD_SIZE") {
         usize::from_str(&x).context("MISTRALRS_MN_GLOBAL_WORLD_SIZE")?
     } else {
-        mistralrs_quant::distributed::get_global_tp_size_from_devices()?
+        // global world size is always >= local world size
+        std::cmp::max(
+            mistralrs_quant::distributed::get_global_tp_size_from_devices()?,
+            local_world_size,
+        )
     };
 
     let use_multi_node = std::env::var("MISTRALRS_MN_GLOBAL_WORLD_SIZE").is_ok();
@@ -282,7 +286,8 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
         config.rank
     } else {
         id = mistralrs_quant::Id::new();
-        let num_workers = mistralrs_quant::distributed::get_global_tp_size_from_devices()? - 1;
+        let num_ranks = mistralrs_quant::distributed::get_global_tp_size_from_devices()?;
+        let num_workers = num_ranks - 1;
         let mut children = Vec::new();
         for worker_rank in 0..num_workers {
             let exe_path = env::current_exe().expect("Failed to get current exe");

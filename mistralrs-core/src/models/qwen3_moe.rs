@@ -8,6 +8,7 @@ use mistralrs_quant::{
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
+use crate::moe::{FusedMoe, MoEConfig};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
@@ -553,15 +554,17 @@ impl SlowMoeMlp {
 }
 
 enum MoeOrMlp {
+    FusedMoe(FusedMoe),
     FastMoe(FastMoeMlp),
     SlowMoe(SlowMoeMlp),
     Mlp(Mlp),
 }
 
 impl MoeOrMlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, is_prefill: bool) -> Result<Tensor> {
         match self {
             Self::Mlp(m) => m.forward(xs),
+            Self::FusedMoe(m) => m.forward(xs, is_prefill),
             Self::FastMoe(m) => m.forward(xs),
             Self::SlowMoe(m) => m.forward(xs),
         }
@@ -598,6 +601,15 @@ impl DecoderLayer {
             paged_attn,
             comm,
         )?;
+
+        let moe_cfg = MoEConfig {
+            num_experts: cfg.num_experts,
+            num_experts_per_tok: cfg.num_experts_per_tok,
+            hidden_size: cfg.hidden_size,
+            moe_intermediate_size: cfg.moe_intermediate_size,
+            norm_topk_prob: cfg.norm_topk_prob,
+        };
+
         let mlp = if !cfg.mlp_only_layers.contains(&layer_idx)
             && (cfg.num_experts > 0 && (layer_idx + 1) % cfg.decoder_sparse_step == 0)
         {
@@ -606,6 +618,17 @@ impl DecoderLayer {
             if vb.device().is_metal() {
                 MoeOrMlp::FastMoe(FastMoeMlp::new(
                     cfg,
+                    vb,
+                    mapper
+                        .device_for(layer_idx, false)
+                        .cloned()
+                        .unwrap_or(real_device),
+                    comm,
+                )?)
+            } else if cfg.quantization_config.is_none() {
+                // Router unquantized model to fused moe impl
+                MoeOrMlp::FusedMoe(FusedMoe::new(
+                    &moe_cfg,
                     vb,
                     mapper
                         .device_for(layer_idx, false)
@@ -672,9 +695,10 @@ impl DecoderLayer {
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let xs = self
-            .mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        let xs = self.mlp.forward(
+            &xs.apply(&self.post_attention_layernorm)?,
+            flash_params.causal,
+        )?;
         residual + xs
     }
 }
@@ -940,6 +964,9 @@ impl IsqModel for Model {
                     tensors.push((&mut layer.gate_proj, Some(i)));
                     tensors.push((&mut layer.up_proj, Some(i)));
                     tensors.push((&mut layer.down_proj, Some(i)));
+                }
+                MoeOrMlp::FusedMoe(_) => {
+                    println!("Not implemented!")
                 }
                 MoeOrMlp::FastMoe(layer) => {
                     tensors.push((&mut layer.fused_gate_proj, Some(i)));

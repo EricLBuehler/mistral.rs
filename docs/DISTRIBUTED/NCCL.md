@@ -20,6 +20,16 @@ See the following environment variables:
 |--|--|--|
 |`MISTRALRS_NO_NCCL=1`|Disable TP and NCCL|If the model does not fit on the available CUDA devices, disabling NCCL will re-enable automatic device mapping|
 
+## Single-Node Support
+
+Set the number of ranks using `MISTRALRS_MN_LOCAL_WORLD_SIZE`, e.g.,
+
+```
+MISTRALRS_MN_LOCAL_WORLD_SIZE=2 ./mistralrs-server --port 8000 run -m Qwen/Qwen3-30B-A3B-Instruct-2507
+```
+
+where, if no `MISTRALRS_MN_LOCAL_WORLD_SIZE` env given, mistral.rs will split the model across all available devices.
+
 ## Multi-node support
 
 ```
