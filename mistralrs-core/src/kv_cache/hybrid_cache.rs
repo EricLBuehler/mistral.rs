@@ -143,8 +143,7 @@ impl MambaStatePool {
 
     /// Reset a specific slot's state to zeros
     pub fn reset_slot(&mut self, slot_idx: usize) -> Result<()> {
-        let zero_conv =
-            Tensor::zeros((1, self.conv_dim, self.d_conv), self.dtype, &self.device)?;
+        let zero_conv = Tensor::zeros((1, self.conv_dim, self.d_conv), self.dtype, &self.device)?;
         let zero_ssm = Tensor::zeros(
             (1, self.n_heads, self.head_dim, self.d_state),
             self.dtype,

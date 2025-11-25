@@ -913,16 +913,13 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
 
         // Build state_indices for Mamba layers from sequences' mamba_state_idx
         // Find the device from the first Mamba layer's pool
-        let mamba_device = hybrid_cache
-            .caches
-            .iter()
-            .find_map(|c| {
-                if let HybridLayerCache::Mamba(pool) = c {
-                    Some(pool.device().clone())
-                } else {
-                    None
-                }
-            });
+        let mamba_device = hybrid_cache.caches.iter().find_map(|c| {
+            if let HybridLayerCache::Mamba(pool) = c {
+                Some(pool.device().clone())
+            } else {
+                None
+            }
+        });
 
         if let Some(device) = mamba_device {
             // Build state_indices tensor from sequences
@@ -1031,7 +1028,10 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                                     v.all_data = Some(seq_v);
                                     v.current_seq_len = src_k.current_seq_len;
                                 }
-                                (KvCache::Rotating { k: src_k, .. }, KvCache::Rotating { k, v }) => {
+                                (
+                                    KvCache::Rotating { k: src_k, .. },
+                                    KvCache::Rotating { k, v },
+                                ) => {
                                     k.all_data = Some(seq_k);
                                     k.current_seq_len = src_k.current_seq_len;
                                     k.offset = src_k.offset;

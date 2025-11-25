@@ -12,6 +12,7 @@ pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::OnceLock;
 use std::time::Instant;
 use std::{
@@ -488,6 +489,19 @@ impl MistralRs {
             get_mut_arcmutex!(pipeline).device(),
         );
 
+        // For hybrid models (Mamba-Attention), force batch_size=1 to prevent state bleeding
+        // Mamba's stateful nature makes batched inference complex; this ensures correctness
+        let method = if get_mut_arcmutex!(pipeline).cache().is_hybrid() {
+            info!(
+                "Hybrid model detected (Mamba-Attention), enforcing batch_size=1 for correctness"
+            );
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()),
+            }
+        } else {
+            method
+        };
+
         let no_kv_cache = no_kv_cache.unwrap_or(false);
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
@@ -831,6 +845,18 @@ impl MistralRs {
         method: SchedulerConfig,
         config: AddModelConfig,
     ) -> Result<(), String> {
+        // For hybrid models (Mamba-Attention), force batch_size=1 to prevent state bleeding
+        let method = if pipeline.try_lock().unwrap().cache().is_hybrid() {
+            info!(
+                "Hybrid model detected (Mamba-Attention), enforcing batch_size=1 for correctness"
+            );
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()),
+            }
+        } else {
+            method
+        };
+
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
             method: method.clone(),

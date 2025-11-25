@@ -1735,7 +1735,8 @@ impl GraniteMoeHybrid {
         let hybrid_cache_config = HybridCacheConfig {
             layer_types: pipeline_layer_types,
             max_seq_len: cfg.max_position_embeddings,
-            max_num_seqs: 256, // Max concurrent sequences for Mamba state pool
+            // batch_size=1 is enforced for hybrid models, so only 1 slot needed
+            max_num_seqs: 1,
             mamba_conv_dim: cfg.mamba_conv_dim(),
             mamba_d_conv: cfg.mamba_d_conv,
             mamba_n_heads: cfg.mamba_n_heads(),
@@ -1840,9 +1841,9 @@ impl GraniteMoeHybrid {
                             &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
                             seqlen_offsets,
                             kv_cache,
-                            metadata
-                                .as_ref()
-                                .map(|(kv_cache, metadata)| (kv_cache[layer_idx].clone(), *metadata)),
+                            metadata.as_ref().map(|(kv_cache, metadata)| {
+                                (kv_cache[layer_idx].clone(), *metadata)
+                            }),
                             flash_params,
                         )?;
                     }
