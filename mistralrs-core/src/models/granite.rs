@@ -354,12 +354,8 @@ impl GraniteTopKGating {
 }
 
 /// Parallel experts layer - processes all experts in a batched manner
-/// Uses separate weight tensors per expert (not fully parallelized, but correct)
-#[allow(dead_code)]
 struct GraniteParallelExperts {
-    weights: Vec<Tensor>, // num_experts x (input_size, output_size)
-    num_experts: usize,
-    input_size: usize,
+    weights: Vec<Tensor>,
     output_size: usize,
 }
 
@@ -370,25 +366,16 @@ impl GraniteParallelExperts {
         output_size: usize,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
-        let mut weights = Vec::with_capacity(num_experts);
-        // The weight is stored as (num_experts, output_size, input_size)
-        // We'll load it as a 3D tensor and slice per expert
         let all_weights = vb.get((num_experts, output_size, input_size), "weight")?;
-        for i in 0..num_experts {
-            let w = all_weights.i(i)?; // (output_size, input_size)
-            weights.push(w);
-        }
+        let weights = (0..num_experts)
+            .map(|i| all_weights.i(i))
+            .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             weights,
-            num_experts,
-            input_size,
             output_size,
         })
     }
 
-    /// Forward pass: routes inputs through appropriate experts
-    /// x: flattened expert inputs grouped by expert
-    /// expert_size: number of tokens per expert
     fn forward(&self, x: &Tensor, expert_size: &[usize]) -> Result<Tensor> {
         let dtype = x.dtype();
         let device = x.device();
@@ -400,18 +387,13 @@ impl GraniteParallelExperts {
             if size == 0 {
                 continue;
             }
-            // Get inputs for this expert: (size, input_size)
             let expert_input = x.narrow(0, offset, size)?;
-            // Weight: (output_size, input_size)
-            let weight = &self.weights[expert_idx];
-            // Output: (size, output_size) = (size, input_size) @ (input_size, output_size)
-            let expert_output = expert_input.matmul(&weight.t()?)?;
+            let expert_output = expert_input.matmul(&self.weights[expert_idx].t()?)?;
             outputs.push(expert_output);
             offset += size;
         }
 
         if outputs.is_empty() {
-            // No tokens routed to any expert - return zeros
             Tensor::zeros((0, self.output_size), dtype, device)
         } else {
             Tensor::cat(&outputs, 0)
@@ -420,15 +402,11 @@ impl GraniteParallelExperts {
 }
 
 /// Sparse Mixture of Experts layer
-#[allow(dead_code)]
 struct GraniteMoE {
     input_linear: GraniteParallelExperts,
     output_linear: GraniteParallelExperts,
     router: GraniteTopKGating,
     input_size: usize,
-    hidden_size: usize,
-    num_experts: usize,
-    top_k: usize,
 }
 
 impl GraniteMoE {
@@ -438,28 +416,21 @@ impl GraniteMoE {
         let num_experts = cfg.num_local_experts;
         let top_k = cfg.num_experts_per_tok;
 
-        let input_linear = GraniteParallelExperts::new(
-            num_experts,
-            input_size,
-            hidden_size * 2, // Gated, so 2x
-            vb.pp("input_linear"),
-        )?;
-        let output_linear = GraniteParallelExperts::new(
-            num_experts,
-            hidden_size,
-            input_size,
-            vb.pp("output_linear"),
-        )?;
-        let router = GraniteTopKGating::new(input_size, num_experts, top_k, vb.pp("router"))?;
-
         Ok(Self {
-            input_linear,
-            output_linear,
-            router,
+            input_linear: GraniteParallelExperts::new(
+                num_experts,
+                input_size,
+                hidden_size * 2, // Gated
+                vb.pp("input_linear"),
+            )?,
+            output_linear: GraniteParallelExperts::new(
+                num_experts,
+                hidden_size,
+                input_size,
+                vb.pp("output_linear"),
+            )?,
+            router: GraniteTopKGating::new(input_size, num_experts, top_k, vb.pp("router"))?,
             input_size,
-            hidden_size,
-            num_experts,
-            top_k,
         })
     }
 
@@ -467,51 +438,34 @@ impl GraniteMoE {
         let (batch_size, seq_len, emb_size) = x.dims3()?;
         let dtype = x.dtype();
         let device = x.device();
+        let num_tokens = batch_size * seq_len;
 
-        // Flatten to (batch * seq_len, emb_size)
-        let x_flat = x.reshape((batch_size * seq_len, emb_size))?;
-
-        // Route tokens to experts
+        let x_flat = x.reshape((num_tokens, emb_size))?;
         let (batch_index, batch_gates, expert_size) = self.router.forward(&x_flat)?;
 
-        // If no tokens (edge case), return zeros
         if batch_index.dim(0)? == 0 {
             return Tensor::zeros((batch_size, seq_len, self.input_size), dtype, device);
         }
 
-        // Gather inputs by routing: select tokens based on batch_index
+        // Route tokens through experts
         let expert_inputs = x_flat.index_select(&batch_index, 0)?;
-
-        // Input projection (gated)
         let hidden = self.input_linear.forward(&expert_inputs, &expert_size)?;
 
-        // Apply gated activation: silu(first_half) * second_half
+        // Gated activation: silu(first_half) * second_half
         let chunks = hidden.chunk(2, candle_core::D::Minus1)?;
         let hidden = (candle_nn::ops::silu(&chunks[0])? * &chunks[1])?;
 
-        // Output projection
         let expert_outputs = self.output_linear.forward(&hidden, &expert_size)?;
-
-        // Weight outputs by routing gates
         let expert_outputs = expert_outputs.broadcast_mul(&batch_gates.unsqueeze(1)?)?;
 
-        // Scatter-add back to token positions
-        // We need to aggregate outputs back to their original token positions
-        let batch_index_i64 = batch_index.to_dtype(candle_core::DType::I64)?;
-        let batch_index_vec: Vec<i64> = batch_index_i64.to_vec1()?;
+        // Scatter-add outputs back to token positions
+        let batch_index_vec: Vec<i64> = batch_index.to_dtype(candle_core::DType::I64)?.to_vec1()?;
+        let expert_outputs_f32 = expert_outputs.to_dtype(candle_core::DType::F32)?;
+        let num_outputs = expert_outputs_f32.dim(0)?;
 
-        // Use index_add to accumulate expert outputs
-        // Since Candle's index_add expects specific dimensions, we'll do this manually
-        let expert_outputs_vec: Vec<Vec<f32>> = {
-            let eo = expert_outputs.to_dtype(candle_core::DType::F32)?;
-            let num_outputs = eo.dim(0)?;
-            let mut result = Vec::with_capacity(num_outputs);
-            for i in 0..num_outputs {
-                let row: Vec<f32> = eo.i(i)?.to_vec1()?;
-                result.push(row);
-            }
-            result
-        };
+        let expert_outputs_vec: Vec<Vec<f32>> = (0..num_outputs)
+            .map(|i| expert_outputs_f32.i(i)?.to_vec1())
+            .collect::<Result<Vec<_>>>()?;
 
         let mut output_vec = vec![vec![0.0f32; self.input_size]; batch_size * seq_len];
         for (i, &token_idx) in batch_index_vec.iter().enumerate() {
@@ -521,26 +475,17 @@ impl GraniteMoE {
             }
         }
 
-        // Convert back to tensor
         let flat_output: Vec<f32> = output_vec.into_iter().flatten().collect();
-        let output =
-            Tensor::from_vec(flat_output, (batch_size * seq_len, self.input_size), device)?
-                .to_dtype(dtype)?;
-
-        // Reshape back to (batch, seq_len, emb_size)
-        output.reshape((batch_size, seq_len, self.input_size))
+        Tensor::from_vec(flat_output, (num_tokens, self.input_size), device)?
+            .to_dtype(dtype)?
+            .reshape((batch_size, seq_len, self.input_size))
     }
 }
 
 // ====================== Mamba Implementation ======================
 
-/// Softplus activation: log(1 + exp(x))
 fn softplus(x: &Tensor) -> Result<Tensor> {
-    // For numerical stability: softplus(x) = x + log(1 + exp(-x)) for large x
-    // Using the simpler formula for now: log(1 + exp(x))
-    let one = Tensor::ones_like(x)?;
-    let exp_x = x.exp()?;
-    (&one + exp_x)?.log()
+    (Tensor::ones_like(x)? + x.exp()?)?.log()
 }
 
 /// Cache for Mamba layers - stores conv state and SSM state
@@ -622,7 +567,6 @@ impl RmsNormGated {
 }
 
 /// Mamba2-style mixer layer
-#[allow(dead_code)]
 struct MambaLayer {
     in_proj: candle_nn::Linear,
     conv1d_weight: Tensor,
@@ -632,14 +576,12 @@ struct MambaLayer {
     d: Tensor,
     norm: RmsNormGated,
     out_proj: candle_nn::Linear,
-    // Config params
     num_heads: usize,
     head_dim: usize,
     intermediate_size: usize,
     ssm_state_size: usize,
     conv_kernel_size: usize,
     n_groups: usize,
-    chunk_size: usize,
     time_step_min: f64,
     time_step_max: f64,
 }
@@ -654,7 +596,6 @@ impl MambaLayer {
         let conv_kernel_size = cfg.mamba_d_conv;
         let n_groups = cfg.mamba_n_groups;
 
-        // Input projection: hidden_size -> (intermediate_size + conv_dim + num_heads)
         let projection_size = intermediate_size + conv_dim + num_heads;
         let in_proj_vb = vb.pp("in_proj");
         let in_proj_weight = in_proj_vb.get((projection_size, cfg.hidden_size), "weight")?;
@@ -665,7 +606,6 @@ impl MambaLayer {
         };
         let in_proj = candle_nn::Linear::new(in_proj_weight, in_proj_bias);
 
-        // Conv1d weights: (conv_dim, 1, kernel_size) but stored as (conv_dim, kernel_size)
         let conv1d_weight = vb
             .pp("conv1d")
             .get((conv_dim, 1, conv_kernel_size), "weight")?;
@@ -675,19 +615,11 @@ impl MambaLayer {
             None
         };
 
-        // Time step bias
         let dt_bias = vb.get(num_heads, "dt_bias")?;
-
-        // A_log for SSM
         let a_log = vb.get(num_heads, "A_log")?;
-
-        // D skip connection
         let d = vb.get(num_heads, "D")?;
-
-        // Gated RMSNorm
         let norm = RmsNormGated::new(intermediate_size, cfg.rms_norm_eps, vb.pp("norm"))?;
 
-        // Output projection
         let out_proj_vb = vb.pp("out_proj");
         let out_proj_weight = out_proj_vb.get((cfg.hidden_size, intermediate_size), "weight")?;
         let out_proj_bias = if cfg.mamba_proj_bias {
@@ -712,9 +644,6 @@ impl MambaLayer {
             ssm_state_size,
             conv_kernel_size,
             n_groups,
-            chunk_size: cfg.mamba_chunk_size,
-            // Match PyTorch defaults - essentially no clamping
-            // softplus output is already >= 0, and no upper bound needed
             time_step_min: 0.0,
             time_step_max: f64::MAX,
         })
