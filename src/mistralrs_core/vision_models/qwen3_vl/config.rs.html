@@ -65,18 +65,21 @@
 <a href=#65 id=65 data-nosnippet>65</a>    <span class="kw">pub </span>rope_theta: f64,
 <a href=#66 id=66 data-nosnippet>66</a>    <span class="kw">pub </span>sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 <a href=#67 id=67 data-nosnippet>67</a>    <span class="comment">// pub rope_scaling: MRopeScaling,
-<a href=#68 id=68 data-nosnippet>68</a>    </span><span class="kw">pub </span>quantization_config: <span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
-<a href=#69 id=69 data-nosnippet>69</a>    <span class="comment">// pub vision_start_token_id: usize,
-<a href=#70 id=70 data-nosnippet>70</a>    // pub max_window_layers: usize,
-<a href=#71 id=71 data-nosnippet>71</a></span>}
-<a href=#72 id=72 data-nosnippet>72</a>
-<a href=#73 id=73 data-nosnippet>73</a><span class="attr">#[derive(Debug, Clone, serde::Deserialize)]
-<a href=#74 id=74 data-nosnippet>74</a></span><span class="kw">pub struct </span>Config {
-<a href=#75 id=75 data-nosnippet>75</a>    <span class="kw">pub </span>text_config: TextConfig,
-<a href=#76 id=76 data-nosnippet>76</a>    <span class="kw">pub </span>vision_config: VisionConfig,
-<a href=#77 id=77 data-nosnippet>77</a>    <span class="kw">pub </span>image_token_id: u32,
-<a href=#78 id=78 data-nosnippet>78</a>    <span class="kw">pub </span>video_token_id: u32,
-<a href=#79 id=79 data-nosnippet>79</a>    <span class="kw">pub </span>vision_start_token_id: u32,
-<a href=#80 id=80 data-nosnippet>80</a>    <span class="kw">pub </span>vision_end_token_id: u32,
-<a href=#81 id=81 data-nosnippet>81</a>    <span class="kw">pub </span>tie_word_embeddings: bool,
-<a href=#82 id=82 data-nosnippet>82</a>}</code></pre></div></section></main></body></html>
+<a href=#68 id=68 data-nosnippet>68</a>    </span><span class="attr">#[serde(default)]
+<a href=#69 id=69 data-nosnippet>69</a>    </span><span class="kw">pub </span>quantization_config: <span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
+<a href=#70 id=70 data-nosnippet>70</a>    <span class="comment">// pub vision_start_token_id: usize,
+<a href=#71 id=71 data-nosnippet>71</a>    // pub max_window_layers: usize,
+<a href=#72 id=72 data-nosnippet>72</a></span>}
+<a href=#73 id=73 data-nosnippet>73</a>
+<a href=#74 id=74 data-nosnippet>74</a><span class="attr">#[derive(Debug, Clone, serde::Deserialize)]
+<a href=#75 id=75 data-nosnippet>75</a></span><span class="kw">pub struct </span>Config {
+<a href=#76 id=76 data-nosnippet>76</a>    <span class="kw">pub </span>text_config: TextConfig,
+<a href=#77 id=77 data-nosnippet>77</a>    <span class="kw">pub </span>vision_config: VisionConfig,
+<a href=#78 id=78 data-nosnippet>78</a>    <span class="kw">pub </span>image_token_id: u32,
+<a href=#79 id=79 data-nosnippet>79</a>    <span class="kw">pub </span>video_token_id: u32,
+<a href=#80 id=80 data-nosnippet>80</a>    <span class="kw">pub </span>vision_start_token_id: u32,
+<a href=#81 id=81 data-nosnippet>81</a>    <span class="kw">pub </span>vision_end_token_id: u32,
+<a href=#82 id=82 data-nosnippet>82</a>    <span class="kw">pub </span>tie_word_embeddings: bool,
+<a href=#83 id=83 data-nosnippet>83</a>    <span class="doccomment">/// Top-level quantization_config takes precedence
+<a href=#84 id=84 data-nosnippet>84</a>    </span><span class="kw">pub </span>quantization_config: <span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
+<a href=#85 id=85 data-nosnippet>85</a>}</code></pre></div></section></main></body></html>
