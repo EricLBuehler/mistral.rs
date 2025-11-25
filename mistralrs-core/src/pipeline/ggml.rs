@@ -46,7 +46,7 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 enum Model {
-    Llama(QLlama),
+    Llama(Box<QLlama>),
     XLoraLlama(Box<XLoraQLlama>),
 }
 
@@ -333,7 +333,9 @@ impl Loader for GGMLLoader {
         // Config into model:
         // NOTE: No architecture to infer like GGUF, Llama model is implicitly matched
         let model = match self.kind {
-            ModelKind::GgufQuantized { .. } => Model::Llama(QLlama::try_from(model_config)?),
+            ModelKind::GgufQuantized { .. } => {
+                Model::Llama(Box::new(QLlama::try_from(model_config)?))
+            }
             ModelKind::GgufAdapter { .. } => {
                 Model::XLoraLlama(Box::new(XLoraQLlama::try_from(model_config)?))
             }

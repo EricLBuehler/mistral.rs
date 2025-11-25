@@ -27,8 +27,8 @@ impl PagedAttention {
         };
         Ok(Self {
             alibi_slopes,
-            k_scale: Some(Tensor::new(1f32, &device)?),
-            v_scale: Some(Tensor::new(1f32, &device)?),
+            k_scale: Some(Tensor::new(1f32, device)?),
+            v_scale: Some(Tensor::new(1f32, device)?),
             kv_updated_times: AtomicI32::new(0),
         })
     }
@@ -58,12 +58,12 @@ impl PagedAttention {
         if let (Some(k_scale), Some(v_scale), Some(key_cache)) =
             (&self.k_scale, &self.v_scale, &key_cache)
         {
-            if self.kv_updated_times.load(Ordering::Relaxed) < KV_SCALE_UPDATE_ITERATION {
-                if key_cache.dtype() == DType::F8E4M3 {
-                    // scale update only used for fp8 kvcache
-                    kv_scale_update(key, value, k_scale, v_scale)?;
-                    self.kv_updated_times.fetch_add(1, Ordering::Relaxed);
-                }
+            if self.kv_updated_times.load(Ordering::Relaxed) < KV_SCALE_UPDATE_ITERATION
+                && key_cache.dtype() == DType::F8E4M3
+            {
+                // scale update only used for fp8 kvcache
+                kv_scale_update(key, value, k_scale, v_scale)?;
+                self.kv_updated_times.fetch_add(1, Ordering::Relaxed);
             }
         }
 

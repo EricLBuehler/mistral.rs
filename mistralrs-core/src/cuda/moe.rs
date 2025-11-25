@@ -79,7 +79,7 @@ pub fn moe_gemm(
             let topk_w_ptr = topk_weights.device_ptr(topk_weights.stream()).0 as *const f32;
             topk_w_ptr
         } else {
-            std::ptr::null() as *const f32
+            std::ptr::null()
         };
 
         let output = unsafe { dev.alloc::<T>(size_m * size_n) }?;
@@ -92,6 +92,12 @@ pub fn moe_gemm(
         } else {
             crate::cuda::ffi::moe_gemm
         };
+        let num_experts_i32 = i32::try_from(num_experts).expect("num_experts too large for i32");
+        let topk_i32 = i32::try_from(topk).expect("topk too large for i32");
+        let size_m_i32 = i32::try_from(size_m).expect("size_m too large for i32");
+        let size_n_i32 = i32::try_from(size_n).expect("size_n too large for i32");
+        let size_k_i32 = i32::try_from(size_k).expect("size_k too large for i32");
+
         unsafe {
             moe_func(
                 input.device_ptr(input.stream()).0 as *const c_void, // [size_m, size_k]
@@ -100,13 +106,13 @@ pub fn moe_gemm(
                 experts_ids.device_ptr(experts_ids.stream()).0 as *const i32,
                 topk_weights_ptr,
                 output.device_ptr(output.stream()).0 as *mut c_void, // [size_m, size_n]
-                num_experts as i32,
-                topk as i32,
-                size_m as i32,
-                size_n as i32,
-                size_k as i32,
+                num_experts_i32,
+                topk_i32,
+                size_m_i32,
+                size_n_i32,
+                size_k_i32,
                 data_type as i32, // 0=float16, 1=bf16 (for input/output)
-                stream as i64,
+                stream,
             );
         }
 
