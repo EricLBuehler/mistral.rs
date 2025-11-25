@@ -1,9 +1,57 @@
-use indicatif::{MultiProgress, ProgressBar, ProgressBarIter, ProgressIterator, ProgressStyle};
+use indicatif::{
+    MultiProgress, ProgressBar, ProgressBarIter, ProgressDrawTarget, ProgressIterator,
+    ProgressStyle,
+};
 use mistralrs_quant::get_immediate_isq;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rayon::prelude::*;
 use std::iter::Iterator;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tqdm::Iter;
+
+static PROGRESS_SUPPRESS_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// RAII guard that suppresses progress bar drawing while it is alive.
+pub struct ProgressScopeGuard {
+    suppressed: bool,
+}
+
+impl ProgressScopeGuard {
+    pub fn new(silent: bool) -> Self {
+        if silent {
+            PROGRESS_SUPPRESS_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+        Self { suppressed: silent }
+    }
+}
+
+impl Drop for ProgressScopeGuard {
+    fn drop(&mut self) {
+        if self.suppressed {
+            PROGRESS_SUPPRESS_COUNT.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
+#[inline]
+pub fn progress_suppressed() -> bool {
+    PROGRESS_SUPPRESS_COUNT.load(Ordering::SeqCst) > 0
+}
+
+#[inline]
+pub fn configure_progress_bar(bar: &ProgressBar) {
+    if progress_suppressed() {
+        bar.set_draw_target(ProgressDrawTarget::hidden());
+    }
+}
+
+pub fn new_multi_progress() -> MultiProgress {
+    let multi = MultiProgress::new();
+    if progress_suppressed() {
+        multi.set_draw_target(ProgressDrawTarget::hidden());
+    }
+    multi
+}
 
 // Optionally display a progress bar via the `tqdm` crate:
 // Usage: `iter.with_progress(true)`
@@ -44,6 +92,7 @@ impl<T: ExactSizeIterator, const COLOR: char> IntoIterator for NiceProgressBar<'
             other => panic!("Color char `{other}` not supported"),
         };
         let bar = ProgressBar::new(self.0.len() as u64);
+        configure_progress_bar(&bar);
         bar.set_style(
             ProgressStyle::default_bar()
                 .template(&format!(
@@ -140,6 +189,7 @@ where
             other => panic!("Color char `{other}` not supported"),
         };
         let bar = ProgressBar::new(self.0.len() as u64);
+        configure_progress_bar(&bar);
         bar.set_style(
             ProgressStyle::default_bar()
                 .template(&format!(

@@ -20,6 +20,11 @@
 - [Mistral 3](MISTRAL3.md)
 - [Llama 4](LLAMA4.md)
 - [Qwen 3](QWEN3.md)
+- [Qwen 3 VL](QWEN3VL.md)
+- [Gemma 3n](GEMMA3N.md)
+- [Embeddings overview](EMBEDDINGS.md)
+- [EmbeddingGemma](EMBEDDINGGEMMA.md)
+- [Qwen3 Embedding](QWEN3_EMBEDDING.md)
 
 ## Adapters
 - [Docs](ADAPTER_MODELS.md)
@@ -45,4 +50,3 @@
 ## Cross-device inference
 - [Device mapping](DEVICE_MAPPING.md)
 - [Topology](TOPOLOGY.md)
-

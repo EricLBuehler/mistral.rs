@@ -66,7 +66,7 @@ pub use utils::isq::apply_immediate_isq;
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
 pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 
-use candle_nn::{Linear, Module};
+use candle_nn::{Conv1d, Conv2d, Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Clone, Debug)]
@@ -74,6 +74,20 @@ pub struct ImmediateIsqParams {
     pub guard: QuantizeOntoGuard,
     pub ty: Option<IsqType>,
     pub predicates: Vec<Regex>,
+    pub overrides: Vec<ImmediateIsqOverride>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ImmediateIsqOverride {
+    pub predicate: Regex,
+    pub ty: Option<IsqType>,
+    pub device: Option<Device>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ImmediateIsqMatch {
+    pub ty: IsqType,
+    pub device: Option<Device>,
 }
 
 thread_local! {
@@ -81,11 +95,20 @@ thread_local! {
 }
 
 pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>) {
+    set_immediate_isq_with_overrides(isq, predicates, Vec::new());
+}
+
+pub fn set_immediate_isq_with_overrides(
+    isq: Option<IsqType>,
+    predicates: Vec<Regex>,
+    overrides: Vec<ImmediateIsqOverride>,
+) {
     ENGINE_IMMEDIATE_ISQ.with(|cell| {
         *cell.borrow_mut() = Some(ImmediateIsqParams {
             guard: QuantizeOntoGuard::new(),
             ty: isq,
             predicates,
+            overrides,
         });
     });
 }
@@ -101,16 +124,42 @@ pub fn clear_immediate_isq() {
 }
 
 pub fn should_apply_immediate_isq(vb: &ShardedVarBuilder) -> bool {
-    let Some(immediate_isq) = get_immediate_isq() else {
-        return false;
-    };
+    immediate_isq_match(vb).is_some()
+}
+
+pub fn immediate_isq_match(vb: &ShardedVarBuilder) -> Option<ImmediateIsqMatch> {
+    let immediate_isq = get_immediate_isq()?;
     // Add a .weight to match the ISQ regexes!
     let prefix = format!("{}.weight", vb.prefix());
-    immediate_isq.ty.is_some()
-        && immediate_isq
+    resolve_immediate_isq(&immediate_isq, &prefix)
+}
+
+fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<ImmediateIsqMatch> {
+    if let Some(override_hit) = params
+        .overrides
+        .iter()
+        .find(|override_pred| override_pred.predicate.is_match(prefix))
+    {
+        if let Some(ty) = override_hit.ty.or(params.ty) {
+            return Some(ImmediateIsqMatch {
+                ty,
+                device: override_hit.device.clone(),
+            });
+        }
+        return None;
+    }
+
+    if let Some(ty) = params.ty {
+        if params
             .predicates
             .iter()
-            .any(|predicate| predicate.is_match(&prefix))
+            .any(|predicate| predicate.is_match(prefix))
+        {
+            return Some(ImmediateIsqMatch { ty, device: None });
+        }
+    }
+
+    None
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -370,6 +419,42 @@ impl MatMul {
     }
 }
 
+/// Device/configurable intelligent convolution
+/// - Handles limitation of cpu which requires f32
+pub struct Convolution;
+
+impl Convolution {
+    pub fn forward_1d(&self, layer: &Conv1d, x: &Tensor) -> Result<Tensor> {
+        if x.device().is_cpu() {
+            let original_dtype = x.dtype();
+            Conv1d::new(
+                layer.weight().to_dtype(DType::F32)?,
+                layer.bias().map(|b| b.to_dtype(DType::F32)).transpose()?,
+                *layer.config(),
+            )
+            .forward(&x.to_dtype(DType::F32)?)?
+            .to_dtype(original_dtype)
+        } else {
+            layer.forward(x)
+        }
+    }
+
+    pub fn forward_2d(&self, layer: &Conv2d, x: &Tensor) -> Result<Tensor> {
+        if x.device().is_cpu() {
+            let original_dtype = x.dtype();
+            Conv2d::new(
+                layer.weight().to_dtype(DType::F32)?,
+                layer.bias().map(|b| b.to_dtype(DType::F32)).transpose()?,
+                *layer.config(),
+            )
+            .forward(&x.to_dtype(DType::F32)?)?
+            .to_dtype(original_dtype)
+        } else {
+            layer.forward(x)
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Eq, Serialize, Deserialize)]
 pub enum IsqType {
     Q4_0,
@@ -614,7 +699,7 @@ impl QuantizeOntoGuard {
 
     /// Acquire the quantize drop guard to protect the critical section.
     ///
-    /// On metal, this flushes the command buffer to avoid "A command encoder is already encoding to this command buffer"
+    /// On metal, this waits for outstanding work to finish to avoid "A command encoder is already encoding to this command buffer"
     pub fn acquire(&self, device: &Device) -> QuantizeOntoDropGuard<'_> {
         #[cfg(feature = "cuda")]
         {
@@ -627,7 +712,7 @@ impl QuantizeOntoGuard {
             #[cfg(feature = "metal")]
             if let Device::Metal(dev) = device {
                 // This is necessary to avoid the errors of "A command encoder is already encoding to this command buffer"
-                dev.flush_command_buffer()
+                dev.wait_until_completed()
                     .expect("Failed to flush command buffer.");
             }
             #[cfg(not(feature = "metal"))]

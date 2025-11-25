@@ -127,3 +127,26 @@ pub async fn send_raw_responses(
 
     Ok(())
 }
+
+pub async fn send_embedding_responses(
+    input_seqs: &mut [&mut Sequence],
+    embedings: Vec<Vec<f32>>,
+) -> candle_core::Result<()> {
+    if embedings.len() != input_seqs.len() {
+        candle_core::bail!("Number of embeddings must match number of sequences..");
+    }
+
+    for (seq, embeddings) in input_seqs.iter_mut().zip(embedings) {
+        seq.add_embedding_choice_to_group(embeddings);
+
+        let group = seq.get_mut_group();
+        group
+            .maybe_send_embedding_done_response(seq.responder())
+            .await
+            .map_err(candle_core::Error::msg)?;
+
+        seq.set_state(SequenceState::Done(StopReason::Length(0)));
+    }
+
+    Ok(())
+}

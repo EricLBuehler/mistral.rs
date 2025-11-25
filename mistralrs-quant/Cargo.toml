@@ -24,8 +24,8 @@ tracing.workspace = true
 rayon.workspace = true
 byteorder.workspace = true
 float8.workspace = true
-once_cell.workspace = true
-metal = { workspace = true, optional = true }
+objc2-metal = { workspace = true, optional = true }
+candle-metal-kernels = { workspace = true, optional = true }
 thiserror.workspace = true
 yoke.workspace = true
 memmap2.workspace = true
@@ -41,7 +41,12 @@ cuda = [
     "dep:bindgen_cuda"
 ]
 nccl = ["cuda", "candle-core/nccl"]
-metal = ["candle-core/metal", "candle-nn/metal", "dep:metal"]
+metal = [
+    "candle-core/metal",
+    "candle-nn/metal",
+    "dep:objc2-metal",
+    "dep:candle-metal-kernels",
+]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
 ring = []
 
@@ -59,6 +64,7 @@ cuda-12050 = []
 cuda-12060 = []
 cuda-12080 = []
 cuda-12090 = []
+cuda-13000 = []
 
 [build-dependencies]
 bindgen_cuda = { workspace = true, optional = true }

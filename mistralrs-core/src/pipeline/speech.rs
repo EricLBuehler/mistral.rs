@@ -6,10 +6,11 @@ use super::{
     PreProcessingMixin, Processor, TokenSource,
 };
 use crate::device_map::DeviceMapper;
-use crate::pipeline::{ChatTemplate, Modalities, SupportedModality};
+use crate::pipeline::{ChatTemplate, EmbeddingModulePaths, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::speech_models::{DiaConfig, DiaPipeline, SpeechGenerationOutput, SpeechLoaderType};
+use crate::utils::progress::ProgressScopeGuard;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::{
@@ -63,6 +64,9 @@ impl ModelPaths for SpeechModelPaths {
         unreachable!("Use `std::any::Any`.")
     }
     fn get_adapter_paths(&self) -> &AdapterPaths {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_modules(&self) -> Option<&[EmbeddingModulePaths]> {
         unreachable!("Use `std::any::Any`.")
     }
 }
@@ -162,6 +166,7 @@ impl Loader for SpeechLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
         let paths: anyhow::Result<Box<dyn ModelPaths>> = {
             // Main weights first, DAC is the final one.
             let mut weights = Vec::new();
@@ -237,6 +242,7 @@ impl Loader for SpeechLoader {
         in_situ_quant: Option<IsqType>,
         _paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
         let paths = &paths
             .as_ref()
             .as_any()

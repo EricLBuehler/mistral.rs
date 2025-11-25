@@ -33,7 +33,7 @@ pub struct TextModelBuilder {
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) hf_cache_path: Option<PathBuf>,
-    pub(crate) search_bert_model: Option<BertEmbeddingModel>,
+    pub(crate) search_embedding_model: Option<SearchEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
     pub(crate) tool_callbacks: HashMap<String, Arc<ToolCallback>>,
     pub(crate) tool_callbacks_with_tools: HashMap<String, ToolCallbackWithTool>,
@@ -62,7 +62,6 @@ pub struct TextModelBuilder {
 /// Builder for PagedAttention metadata.
 pub struct PagedAttentionMetaBuilder {
     block_size: Option<usize>,
-    mem_cpu: usize,
     mem_gpu: MemoryGpuConfig,
     cache_type: PagedCacheType,
 }
@@ -71,7 +70,6 @@ impl Default for PagedAttentionMetaBuilder {
     fn default() -> Self {
         Self {
             block_size: None,
-            mem_cpu: 64,
             mem_gpu: MemoryGpuConfig::ContextSize(4096),
             cache_type: PagedCacheType::Auto,
         }
@@ -95,7 +93,7 @@ impl PagedAttentionMetaBuilder {
     }
 
     pub fn build(self) -> anyhow::Result<PagedAttentionConfig> {
-        PagedAttentionConfig::new(self.block_size, self.mem_cpu, self.mem_gpu, self.cache_type)
+        PagedAttentionConfig::new(self.block_size, self.mem_gpu, self.cache_type)
     }
 }
 
@@ -133,7 +131,7 @@ impl TextModelBuilder {
             jinja_explicit: None,
             throughput_logging: false,
             hf_cache_path: None,
-            search_bert_model: None,
+            search_embedding_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
             tool_callbacks_with_tools: HashMap::new(),
@@ -144,9 +142,9 @@ impl TextModelBuilder {
         }
     }
 
-    /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified or the default.
-    pub fn with_search(mut self, search_bert_model: BertEmbeddingModel) -> Self {
-        self.search_bert_model = Some(search_bert_model);
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This loads the selected search embedding reranker (EmbeddingGemma by default).
+    pub fn with_search(mut self, search_embedding_model: SearchEmbeddingModel) -> Self {
+        self.search_embedding_model = Some(search_embedding_model);
         self
     }
 
@@ -442,7 +440,7 @@ impl TextModelBuilder {
             pipeline,
             scheduler_method,
             self.throughput_logging,
-            self.search_bert_model,
+            self.search_embedding_model,
         );
         if let Some(cb) = self.search_callback.clone() {
             runner = runner.with_search_callback(cb);

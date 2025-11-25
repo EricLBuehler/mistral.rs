@@ -6,6 +6,7 @@
 ///
 use candle_core::{IndexOp, Result, Tensor, D};
 use candle_nn::{Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, VarBuilder};
+use mistralrs_quant::Convolution;
 
 // Applies weight norm for inference by recomputing the weight tensor. This
 // does not apply to training.
@@ -116,11 +117,10 @@ impl ResidualUnit {
 
 impl candle_core::Module for ResidualUnit {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let ys = xs
-            .apply(&self.snake1)?
-            .apply(&self.conv1)?
-            .apply(&self.snake2)?
-            .apply(&self.conv2)?;
+        let mut ys = self.snake1.forward(xs)?;
+        ys = Convolution.forward_1d(&self.conv1, &ys)?;
+        ys = self.snake2.forward(&ys)?;
+        ys = Convolution.forward_1d(&self.conv2, &ys)?;
         let pad = (xs.dim(D::Minus1)? - ys.dim(D::Minus1)?) / 2;
         if pad > 0 {
             &ys + xs.narrow(D::Minus1, pad, ys.dim(D::Minus1)?)
@@ -213,11 +213,12 @@ impl Decoder {
 
 impl candle_core::Module for Decoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let mut xs = xs.apply(&self.conv1)?;
+        let mut xs = Convolution.forward_1d(&self.conv1, xs)?;
         for block in self.blocks.iter() {
             xs = xs.apply(block)?
         }
-        xs.apply(&self.snake1)?.apply(&self.conv2)
+        xs = self.snake1.forward(&xs)?;
+        Convolution.forward_1d(&self.conv2, &xs)
     }
 }
 

@@ -10,8 +10,8 @@ use crate::{
     get_mut_arcmutex,
     request::SearchContextSize,
     search::{self, ExtractFunctionParameters, SearchFunctionParameters, SearchResult},
-    MessageContent, NormalRequest, RequestMessage, Response, ResponseOk, ToolCallResponse,
-    ToolChoice, WebSearchOptions,
+    MessageContent, NormalRequest, RequestMessage, Response, ToolCallResponse, ToolChoice,
+    WebSearchOptions,
 };
 
 use super::Engine;
@@ -44,7 +44,6 @@ async fn do_search(
     }
     let tool_call_params: SearchFunctionParameters =
         serde_json::from_str(&tool_calls.function.arguments).unwrap();
-    println!();
     tracing::info!(
         "Called search tool with query `{}`.",
         tool_call_params.query
@@ -70,125 +69,124 @@ async fn do_search(
                 SearchContextSize::Medium => 8192_usize,
                 SearchContextSize::Low => 4096_usize,
             };
-        let mut results = tokio::task::block_in_place(|| {
-            tracing::dispatcher::with_default(&dispatch, || {
-                let base_results = if let Some(cb) = &this.search_callback {
-                    cb(&tool_call_params).unwrap()
-                } else {
-                    search::run_search_tool(&tool_call_params).unwrap()
-                };
-                base_results
-                    .into_iter()
-                    .map(|mut result| {
-                        result = result
-                            .cap_content_len(&tokenizer, max_results_budget_toks)
-                            .unwrap();
-                        let len = {
-                            let inp = InputSequence::Raw(Cow::from(&result.content));
-                            tokenizer
-                                .encode_fast(inp, false)
-                                .map(|x| x.len())
-                                .unwrap_or(usize::MAX)
-                        };
-                        (result, len)
-                    })
-                    .collect::<Vec<_>>()
-            })
-        });
+        let (results, result_token_lens): (Vec<SearchResult>, Vec<usize>) =
+            tokio::task::block_in_place(|| {
+                tracing::dispatcher::with_default(&dispatch, || {
+                    let base_results = if let Some(cb) = &this.search_callback {
+                        cb(&tool_call_params).unwrap()
+                    } else {
+                        search::run_search_tool(&tool_call_params).unwrap()
+                    };
+                    base_results
+                        .into_iter()
+                        .map(|mut result| {
+                            result = result
+                                .cap_content_len(&tokenizer, max_results_budget_toks)
+                                .unwrap();
+                            let len = {
+                                let inp = InputSequence::Raw(Cow::from(&result.content));
+                                tokenizer
+                                    .encode_fast(inp, false)
+                                    .map(|x| x.len())
+                                    .unwrap_or(usize::MAX)
+                            };
+                            (result, len)
+                        })
+                        .unzip()
+                })
+            });
 
-        // Sort increasing by tokenized length, if it fails, put it at the end.
-        results.sort_by_key(|(_, len)| *len);
-
-        {
-            // Determine ranking: use embedding model if available, otherwise fallback to BM25
-            let decreasing_indexes: Vec<usize> = if let Some(bert_pipeline) =
-                &mut *get_mut_arcmutex!(this.bert_pipeline)
-            {
-                // Semantic reranking with embeddings
-                let device = get_mut_arcmutex!(this.pipeline).device();
-                search::rag::compute_most_similar(
-                    &device,
-                    &tool_call_params.query,
-                    results.iter().map(|(res, _)| res).collect::<Vec<_>>(),
-                    bert_pipeline,
-                )
-                .unwrap()
-            } else {
-                tracing::warn!("No embedding model loaded; falling back to BM25 ranking for web search results.");
-
-                // Build an Embedder over the corpus, fitting to the entire set of documents.
-                //    - Language::English is chosen here
-                //    - This computes an in‑memory sparse embedding for each document.
-
-                let docs: Vec<String> =
-                    results.iter().map(|(res, _)| res.content.clone()).collect();
-                let doc_refs: Vec<&str> = docs.iter().map(|s| s.as_str()).collect();
-
-                let embedder: Embedder =
-                    EmbedderBuilder::with_fit_to_corpus(Language::English, &doc_refs).build();
-
-                // Initialize a Scorer keyed by usize (document index type).
-                let mut scorer = Scorer::<usize>::new();
-
-                // For each document, compute its embedding and upsert into the scorer.
-                for (i, doc_text) in docs.iter().enumerate() {
-                    let doc_embedding = embedder.embed(doc_text);
-                    scorer.upsert(&i, doc_embedding);
-                }
-
-                // Embed the query string into the same sparse embedding space.
-                let query_embedding = embedder.embed(&tool_call_params.query);
-
-                // Score all documents individually
-                let mut scored_docs: Vec<ScoredDocument<usize>> = docs
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, _)| {
-                        scorer
-                            .score(&i, &query_embedding)
-                            .map(|score| ScoredDocument { id: i, score })
-                    })
-                    .collect();
-
-                // Sort the scored documents by descending `score` (f32).
-                scored_docs.sort_by(|a, b| {
-                    b.score
-                        .partial_cmp(&a.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-
-                // Extract only the document indices (usize) in ranked order.
-                let decreasing_indexes: Vec<usize> =
-                    scored_docs.into_iter().map(|d| d.id).collect();
-
-                decreasing_indexes
-            };
-            // Reorder results according to ranking
-            let mut old = Vec::new();
-            std::mem::swap(&mut old, &mut results);
-            for &idx in &decreasing_indexes {
-                let mut item: (SearchResult, usize) = Default::default();
-                std::mem::swap(&mut item, &mut old[idx]);
-                results.push(item);
-            }
-        }
+        let mut combined: Vec<(SearchResult, usize)> = results
+            .into_iter()
+            .zip(result_token_lens.into_iter())
+            .collect();
+        combined.sort_by_key(|(_, len)| *len);
+        let (results, result_token_lens): (Vec<SearchResult>, Vec<usize>) =
+            combined.into_iter().unzip();
 
         let mut used_results = Vec::new();
         let mut used_len = 0;
-        for (item, len) in results {
-            if used_len + len > max_results_budget_toks {
-                break;
+
+        if let Some(search_pipeline) = &mut *get_mut_arcmutex!(this.search_pipeline) {
+            let ranked_chunks = search::rag::rank_document_chunks(
+                &tool_call_params.query,
+                &results,
+                search_pipeline,
+            )
+            .unwrap();
+
+            if ranked_chunks.is_empty() {
+                for (result, len) in results.iter().zip(result_token_lens.iter()) {
+                    if used_len + len > max_results_budget_toks {
+                        break;
+                    }
+                    used_len += len;
+                    used_results.push(result.clone());
+                }
+            } else {
+                for chunk in ranked_chunks {
+                    if chunk.token_len == 0 {
+                        continue;
+                    }
+                    if used_len + chunk.token_len > max_results_budget_toks {
+                        break;
+                    }
+                    used_len += chunk.token_len;
+                    let mut chunk_result = results[chunk.result_index].clone();
+                    chunk_result.content = chunk.content;
+                    used_results.push(chunk_result);
+                }
             }
-            // So the info! below gets the correct value
-            used_len += len;
-            used_results.push(item);
+        } else {
+            tracing::warn!(
+                "No embedding model loaded; falling back to BM25 ranking for web search results."
+            );
+
+            let docs: Vec<String> = results.iter().map(|res| res.content.clone()).collect();
+            let doc_refs: Vec<&str> = docs.iter().map(|s| s.as_str()).collect();
+
+            let embedder: Embedder =
+                EmbedderBuilder::with_fit_to_corpus(Language::English, &doc_refs).build();
+
+            let mut scorer = Scorer::<usize>::new();
+            for (i, doc_text) in docs.iter().enumerate() {
+                let doc_embedding = embedder.embed(doc_text);
+                scorer.upsert(&i, doc_embedding);
+            }
+
+            let query_embedding = embedder.embed(&tool_call_params.query);
+
+            let mut scored_docs: Vec<ScoredDocument<usize>> = docs
+                .iter()
+                .enumerate()
+                .filter_map(|(i, _)| {
+                    scorer
+                        .score(&i, &query_embedding)
+                        .map(|score| ScoredDocument { id: i, score })
+                })
+                .collect();
+
+            scored_docs.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            for doc in scored_docs {
+                let idx = doc.id;
+                let len = result_token_lens[idx];
+                if used_len + len > max_results_budget_toks {
+                    break;
+                }
+                used_len += len;
+                used_results.push(results[idx].clone());
+            }
         }
 
-        let tool_result = serde_json::to_string(&used_results)
-            .unwrap()
-            .replace("\\n", "\n")
-            .replace("\\\"", "\"")
-            .replace("\\\\", "\\");
+        let tool_result = serde_json::to_string(&serde_json::json!({
+            "output": used_results
+        }))
+        .unwrap();
         let end = Instant::now();
         tracing::info!(
             "Web search executed in {:.2}s, using {used_len} tokens of {} search results.",
@@ -203,7 +201,7 @@ async fn do_search(
             Either::Left(
                 // Format the tool output JSON and append the search tool description for context
                 format!(
-                    "{{\"output\": \"{}\"}}\n\n{}\n\n{}",
+                    "{}\n\n{}\n\n{}",
                     tool_result,
                     search::SEARCH_DESCRIPTION,
                     search::EXTRACT_DESCRIPTION,
@@ -249,7 +247,6 @@ async fn do_extraction(
     }
     let tool_call_params: ExtractFunctionParameters =
         serde_json::from_str(&tool_calls.function.arguments).unwrap();
-    println!();
     tracing::info!(
         "Called extrcation tool with query `{}`.",
         tool_call_params.url
@@ -356,7 +353,6 @@ async fn do_custom_tool(
     }
 
     let result = if let Some(cb) = this.tool_callbacks.get(&tool_calls.function.name) {
-        tracing::info!("Called tool `{}`.", tool_calls.function.name);
         cb(&tool_calls.function).unwrap_or_else(|e| {
             tracing::error!(
                 "Error when calling tool `{}`: {e}",
@@ -368,7 +364,6 @@ async fn do_custom_tool(
         .tool_callbacks_with_tools
         .get(&tool_calls.function.name)
     {
-        tracing::info!("Called tool `{}`.", tool_calls.function.name);
         (callback_with_tool.callback)(&tool_calls.function).unwrap_or_else(|e| {
             tracing::error!(
                 "Error when calling tool `{}`: {e}",
@@ -398,9 +393,9 @@ async fn do_custom_tool(
 /// Drive one or more web-search / extraction rounds without recursion.
 ///
 /// Strategy:
-/// 1. Send a “probe” request that may call the search/extract tools.  
+/// 1. Send a "probe" request that may call the search/extract tools.
 /// 2. If such a tool is called, run it (`do_search` / `do_extraction`) to
-///    mutate the conversational context and build the next request.  
+///    mutate the conversational context and build the next request.
 /// 3. Repeat until no further tool call is made.
 /// 4. Forward every user-visible reply **except** the first, which is just the
 ///    probe that discovers whether a tool call is needed.
@@ -456,54 +451,93 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
             let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
             current.response = sender;
 
-            // Kick the request into the engine.
-            this_clone.add_request(current).await;
+            // Kick the request into the engine via the channel.
+            // This avoids lock contention with the main engine loop.
+            let _ = this_clone
+                .tx
+                .send(crate::request::Request::Normal(Box::new(current)))
+                .await;
 
             // ----------------------- NON-STREAMING ------------------------
             if !is_streaming {
-                let done = match receiver.recv().await.unwrap().as_result().unwrap() {
-                    ResponseOk::Done(done) => done,
-                    other => {
-                        match other {
-                            ResponseOk::Chunk(res) => {
-                                user_sender.send(Response::Chunk(res)).await.unwrap()
-                            }
-                            ResponseOk::CompletionChunk(res) => user_sender
-                                .send(Response::CompletionChunk(res))
-                                .await
-                                .unwrap(),
-                            ResponseOk::Done(_) => unreachable!(),
-                            ResponseOk::CompletionDone(res) => user_sender
-                                .send(Response::CompletionDone(res))
-                                .await
-                                .unwrap(),
-                            ResponseOk::ImageGeneration(res) => user_sender
-                                .send(Response::ImageGeneration(res))
-                                .await
-                                .unwrap(),
-                            ResponseOk::Raw {
+                let resp = receiver.recv().await.unwrap();
+                // Handle the response, forwarding errors and non-Done responses to user
+                let done = match resp {
+                    Response::Done(done) => done,
+                    // Forward error responses to user and return
+                    Response::InternalError(e) => {
+                        let _ = user_sender.send(Response::InternalError(e)).await;
+                        return;
+                    }
+                    Response::ValidationError(e) => {
+                        let _ = user_sender.send(Response::ValidationError(e)).await;
+                        return;
+                    }
+                    Response::ModelError(msg, resp) => {
+                        let _ = user_sender.send(Response::ModelError(msg, resp)).await;
+                        return;
+                    }
+                    // Forward other response types to user and return
+                    Response::Chunk(res) => {
+                        let _ = user_sender.send(Response::Chunk(res)).await;
+                        return;
+                    }
+                    Response::CompletionChunk(res) => {
+                        let _ = user_sender.send(Response::CompletionChunk(res)).await;
+                        return;
+                    }
+                    Response::CompletionModelError(msg, resp) => {
+                        let _ = user_sender
+                            .send(Response::CompletionModelError(msg, resp))
+                            .await;
+                        return;
+                    }
+                    Response::CompletionDone(res) => {
+                        let _ = user_sender.send(Response::CompletionDone(res)).await;
+                        return;
+                    }
+                    Response::ImageGeneration(res) => {
+                        let _ = user_sender.send(Response::ImageGeneration(res)).await;
+                        return;
+                    }
+                    Response::Raw {
+                        logits_chunks,
+                        tokens,
+                    } => {
+                        let _ = user_sender
+                            .send(Response::Raw {
                                 logits_chunks,
                                 tokens,
-                            } => user_sender
-                                .send(Response::Raw {
-                                    logits_chunks,
-                                    tokens,
-                                })
-                                .await
-                                .unwrap(),
-                            ResponseOk::Speech {
+                            })
+                            .await;
+                        return;
+                    }
+                    Response::Embeddings {
+                        embeddings,
+                        prompt_tokens,
+                        total_tokens,
+                    } => {
+                        let _ = user_sender
+                            .send(Response::Embeddings {
+                                embeddings,
+                                prompt_tokens,
+                                total_tokens,
+                            })
+                            .await;
+                        return;
+                    }
+                    Response::Speech {
+                        pcm,
+                        rate,
+                        channels,
+                    } => {
+                        let _ = user_sender
+                            .send(Response::Speech {
                                 pcm,
                                 rate,
                                 channels,
-                            } => user_sender
-                                .send(Response::Speech {
-                                    pcm,
-                                    rate,
-                                    channels,
-                                })
-                                .await
-                                .unwrap(),
-                        };
+                            })
+                            .await;
                         return;
                     }
                 };
@@ -523,7 +557,7 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                     return;
                 }
 
-                // Tool requested → build the next turn.
+                // Tool requested -> build the next turn.
                 let tc = tc_opt.unwrap();
                 let next_visible = if search::search_tool_called(&tc.function.name) {
                     let web_search_options = web_search_options.as_ref().unwrap();
@@ -548,21 +582,17 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                 let mut last_choice = None;
 
                 while let Some(resp) = receiver.recv().await {
-                    match resp.as_result().unwrap() {
-                        ResponseOk::Chunk(chunk) => {
+                    match resp {
+                        Response::Chunk(chunk) => {
                             // Forward every content‑bearing chunk immediately, but
                             // *suppress* the ones that initiate a tool call. This ensures
-                            // the user sees the assistant’s streamed text from the very
+                            // the user sees the assistant's streamed text from the very
                             // first probe turn while still hiding the internal
                             // search/extract trigger.
                             let first_choice = &chunk.choices[0];
                             if first_choice.delta.tool_calls.is_none() {
-                                user_sender
-                                    .send(Response::Chunk(chunk.clone()))
-                                    .await
-                                    .unwrap();
+                                let _ = user_sender.send(Response::Chunk(chunk.clone())).await;
                             }
-
                             last_choice = Some(first_choice.clone());
 
                             // Stop once the model marks completion.
@@ -574,47 +604,80 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                                 break;
                             }
                         }
-                        other => {
-                            match other {
-                                ResponseOk::Chunk(_) => unreachable!(),
-                                ResponseOk::CompletionChunk(res) => user_sender
-                                    .send(Response::CompletionChunk(res))
-                                    .await
-                                    .unwrap(),
-                                ResponseOk::Done(res) => {
-                                    user_sender.send(Response::Done(res)).await.unwrap()
-                                }
-                                ResponseOk::CompletionDone(res) => user_sender
-                                    .send(Response::CompletionDone(res))
-                                    .await
-                                    .unwrap(),
-                                ResponseOk::ImageGeneration(res) => user_sender
-                                    .send(Response::ImageGeneration(res))
-                                    .await
-                                    .unwrap(),
-                                ResponseOk::Raw {
+                        // Forward error responses to user and return
+                        Response::InternalError(e) => {
+                            let _ = user_sender.send(Response::InternalError(e)).await;
+                            return;
+                        }
+                        Response::ValidationError(e) => {
+                            let _ = user_sender.send(Response::ValidationError(e)).await;
+                            return;
+                        }
+                        Response::ModelError(msg, resp) => {
+                            let _ = user_sender.send(Response::ModelError(msg, resp)).await;
+                            return;
+                        }
+                        // Forward other response types to user and return
+                        Response::CompletionChunk(res) => {
+                            let _ = user_sender.send(Response::CompletionChunk(res)).await;
+                            return;
+                        }
+                        Response::CompletionModelError(msg, resp) => {
+                            let _ = user_sender
+                                .send(Response::CompletionModelError(msg, resp))
+                                .await;
+                            return;
+                        }
+                        Response::Done(res) => {
+                            let _ = user_sender.send(Response::Done(res)).await;
+                            return;
+                        }
+                        Response::CompletionDone(res) => {
+                            let _ = user_sender.send(Response::CompletionDone(res)).await;
+                            return;
+                        }
+                        Response::ImageGeneration(res) => {
+                            let _ = user_sender.send(Response::ImageGeneration(res)).await;
+                            return;
+                        }
+                        Response::Raw {
+                            logits_chunks,
+                            tokens,
+                        } => {
+                            let _ = user_sender
+                                .send(Response::Raw {
                                     logits_chunks,
                                     tokens,
-                                } => user_sender
-                                    .send(Response::Raw {
-                                        logits_chunks,
-                                        tokens,
-                                    })
-                                    .await
-                                    .unwrap(),
-                                ResponseOk::Speech {
+                                })
+                                .await;
+                            return;
+                        }
+                        Response::Embeddings {
+                            embeddings,
+                            prompt_tokens,
+                            total_tokens,
+                        } => {
+                            let _ = user_sender
+                                .send(Response::Embeddings {
+                                    embeddings,
+                                    prompt_tokens,
+                                    total_tokens,
+                                })
+                                .await;
+                            return;
+                        }
+                        Response::Speech {
+                            pcm,
+                            rate,
+                            channels,
+                        } => {
+                            let _ = user_sender
+                                .send(Response::Speech {
                                     pcm,
                                     rate,
                                     channels,
-                                } => user_sender
-                                    .send(Response::Speech {
-                                        pcm,
-                                        rate,
-                                        channels,
-                                    })
-                                    .await
-                                    .unwrap(),
-                            };
+                                })
+                                .await;
                             return;
                         }
                     }
@@ -628,7 +691,7 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                 };
 
                 if tc_opt.is_none() {
-                    break; // No more tool calls → done.
+                    break; // No more tool calls -> done.
                 }
 
                 let tc = tc_opt.unwrap();

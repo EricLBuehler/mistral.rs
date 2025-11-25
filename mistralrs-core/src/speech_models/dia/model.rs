@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use candle_core::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
-use indicatif::MultiProgress;
 use mistralrs_quant::{
     apply_immediate_isq, QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear,
 };
@@ -10,7 +9,7 @@ use mistralrs_quant::{
 use crate::{
     attention::{naive_sdpa, SdpaParams},
     layers::{self, repeat_kv, DiaRotaryEmbedding, RmsNorm},
-    utils::progress::NiceProgressBar,
+    utils::progress::{new_multi_progress, NiceProgressBar},
 };
 
 use super::{cache::DiaKvCache, config::DiaConfig};
@@ -312,7 +311,7 @@ impl DiaEncoder {
         let layers = NiceProgressBar::<_, 'b'>(
             0..cfg.model.encoder.n_layer,
             "Loading encoder",
-            &MultiProgress::new(),
+            &new_multi_progress(),
         )
         .run(false, |i| DiaEncoderLayer::new(cfg, vb.pp("layers").pp(i)))?;
 
@@ -512,7 +511,7 @@ impl DiaDecoder {
         let layers = NiceProgressBar::<_, 'b'>(
             0..cfg.model.decoder.n_layer,
             "Loading decoder",
-            &MultiProgress::new(),
+            &new_multi_progress(),
         )
         .run(false, |i| DiaDecoderLayer::new(cfg, vb.pp("layers").pp(i)))?;
 

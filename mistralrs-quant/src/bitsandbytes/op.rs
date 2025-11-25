@@ -421,8 +421,8 @@ impl CustomOp3 for DequantizeOp {
             candle_core::bail!("All inputs must be contiguous");
         }
 
-        let command_buffer = input_s.device().command_buffer()?;
-        command_buffer.set_label("dequant-bnb-nf4");
+        let encoder = input_s.device().command_encoder()?;
+        encoder.set_label("dequant-bnb-nf4");
 
         let device = input_s.device();
 
@@ -445,7 +445,7 @@ impl CustomOp3 for DequantizeOp {
         match self.quant_ty {
             BnbQuantType::Nf4 => crate::metal_kernels::call_dequant_bnb_nf4(
                 device.device(),
-                &command_buffer,
+                &encoder,
                 &crate::metal_kernels::Kernels::new(),
                 self.out_ty.into(),
                 input_s.buffer(),
@@ -458,7 +458,7 @@ impl CustomOp3 for DequantizeOp {
             .map_err(candle_core::Error::wrap)?,
             BnbQuantType::Fp4 => crate::metal_kernels::call_dequant_bnb_fp4(
                 device.device(),
-                &command_buffer,
+                &encoder,
                 &crate::metal_kernels::Kernels::new(),
                 self.out_ty.into(),
                 input_s.buffer(),
@@ -471,7 +471,7 @@ impl CustomOp3 for DequantizeOp {
             .map_err(candle_core::Error::wrap)?,
             BnbQuantType::Int8 => crate::metal_kernels::call_dequant_bnb_int8(
                 device.device(),
-                &command_buffer,
+                &encoder,
                 &crate::metal_kernels::Kernels::new(),
                 self.out_ty.into(),
                 input_s.buffer(),

@@ -19,6 +19,7 @@ inline uint16_t bfloat16_to_uint16(const bfloat16_t x) {
 inline bfloat16_t uint16_to_bfloat16(const uint16_t x) {
   return as_type<bfloat16_t>(x);
 }
+
 #else
 
 /////////////////////////////////////////////////////////////////////////////
@@ -1023,7 +1024,7 @@ struct Equal {
 
 struct NaNEqual {
   template <typename T> bool operator()(T x, T y) {
-    return x == y || (metal::isnan(x) && metal::isnan(y));
+    return x == y || (isnan(x) && isnan(y));
   }
 };
 
@@ -1045,7 +1046,7 @@ struct LessEqual {
 
 struct LogAddExp {
   template <typename T> T operator()(T x, T y) {
-    if (metal::isnan(x) || metal::isnan(y)) {
+    if (isnan(x) || isnan(y)) {
       return metal::numeric_limits<T>::quiet_NaN();
     }
     constexpr T inf = metal::numeric_limits<T>::infinity();
@@ -1065,7 +1066,7 @@ struct Maximum {
 
   template <typename T>
   metal::enable_if_t<!metal::is_integral_v<T>, T> operator()(T x, T y) {
-    if (metal::isnan(x)) {
+    if (isnan(x)) {
       return x;
     }
     return x > y ? x : y;
@@ -1080,7 +1081,7 @@ struct Minimum {
 
   template <typename T>
   metal::enable_if_t<!metal::is_integral_v<T>, T> operator()(T x, T y) {
-    if (metal::isnan(x)) {
+    if (isnan(x)) {
       return x;
     }
     return x < y ? x : y;

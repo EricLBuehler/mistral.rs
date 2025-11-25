@@ -3,7 +3,7 @@ use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("google/gemma-3-12b-it")
+    let model = VisionModelBuilder::new("google/gemma-3-4b-it")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()

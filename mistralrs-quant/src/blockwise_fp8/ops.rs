@@ -1,5 +1,3 @@
-#[cfg(feature = "cuda")]
-use candle_core::from_storage_no_op;
 use candle_core::{CpuStorage, CustomOp1, CustomOp2, DType, Result, Tensor, WithDType};
 use float8::F8E4M3;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -255,8 +253,8 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
             candle_core::bail!("Expected scale to be rank 2");
         }
 
-        let command_buffer = weight_s.device().command_buffer()?;
-        command_buffer.set_label("dequant-blockwise-fp8");
+        let encoder = weight_s.device().command_encoder()?;
+        encoder.set_label("dequant-blockwise-fp8");
 
         let device = weight_s.device();
 
@@ -277,7 +275,7 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
 
         crate::metal_kernels::call_dequant_blockwise_fp8(
             device.device(),
-            &command_buffer,
+            &encoder,
             &crate::metal_kernels::Kernels::new(),
             self.out_ty,
             weight_s.buffer(),
@@ -648,7 +646,7 @@ pub fn fp8_blockwise_quantize(
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f32>()?,
                     _ => candle_core::bail!("Expected CUDA storage"),
                 };
-                let (input_ptr, _input_guard) = slice_ptr(&input_s, input_l.start_offset());
+                let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
                 unsafe {
                     ffi::launch_quant_fp8_blockwise_kernel_f32(
                         input_ptr as *const _,
@@ -670,7 +668,7 @@ pub fn fp8_blockwise_quantize(
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
                     _ => candle_core::bail!("Expected CUDA storage"),
                 };
-                let (input_ptr, _input_guard) = slice_ptr(&input_s, input_l.start_offset());
+                let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
                 unsafe {
                     ffi::launch_quant_fp8_blockwise_kernel_f16(
                         input_ptr as *const _,
@@ -692,7 +690,7 @@ pub fn fp8_blockwise_quantize(
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
                     _ => candle_core::bail!("Expected CUDA storage"),
                 };
-                let (input_ptr, _input_guard) = slice_ptr(&input_s, input_l.start_offset());
+                let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
                 unsafe {
                     ffi::launch_quant_fp8_blockwise_kernel_bf16(
                         input_ptr as *const _,
@@ -717,16 +715,14 @@ pub fn fp8_blockwise_quantize(
 
         // Create weight tensor by wrapping the CUDA storage
         let weight_storage = CudaStorage::wrap_cuda_slice(weight_output, dev.clone());
-        let weight =
-            from_storage_no_op(Storage::Cuda(weight_storage), input.shape().clone(), false);
+        let weight = Tensor::from((Storage::Cuda(weight_storage), input.shape().clone()));
 
         // Create scale tensor
         let scale_storage = CudaStorage::wrap_cuda_slice(scale_output, dev.clone());
-        let scale = from_storage_no_op(
+        let scale = Tensor::from((
             Storage::Cuda(scale_storage),
             candle_core::Shape::from_dims(&[grid_y, grid_x]),
-            false,
-        );
+        ));
 
         Ok((weight, scale))
     }

@@ -82,6 +82,7 @@ pub fn parse_request(
         } else {
             Some(oairequest.model.clone())
         },
+        truncate_sequence: false,
     }));
 
     Ok((request, oairequest.response_format))
@@ -212,5 +213,6 @@ pub fn match_responses(
             SpeechGenerationResponder::RawResponse((StatusCode::OK, headers, bytes).into_response())
         }
         Response::Raw { .. } => unreachable!(),
+        Response::Embeddings { .. } => unreachable!(),
     }
 }

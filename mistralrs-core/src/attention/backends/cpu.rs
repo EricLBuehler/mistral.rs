@@ -88,7 +88,148 @@ fn vec_dot_f32<T: UpcastF32 + Copy>(a: &[T], b: &[T]) -> f32 {
     sum
 }
 
-pub(super) trait DowncastF32 {
+#[inline]
+fn clamp_index(idx: usize, dim: usize) -> usize {
+    if dim == 0 {
+        0
+    } else if idx >= dim {
+        dim - 1
+    } else {
+        idx
+    }
+}
+
+#[inline]
+fn mask_offset(
+    dims: &[usize],
+    b: usize,
+    h: usize,
+    b_i: usize,
+    h_i: usize,
+    q_pos: usize,
+    kv_pos: usize,
+) -> Option<usize> {
+    if dims.is_empty() {
+        return Some(0);
+    }
+
+    match dims.len() {
+        1 => {
+            let kv_dim = dims[0];
+            if kv_dim == 0 {
+                None
+            } else {
+                Some(clamp_index(kv_pos, kv_dim))
+            }
+        }
+        2 => {
+            let q_dim = dims[0];
+            let kv_dim = dims[1];
+            if q_dim == 0 || kv_dim == 0 {
+                None
+            } else {
+                let q_idx = clamp_index(q_pos, q_dim);
+                let kv_idx = clamp_index(kv_pos, kv_dim);
+                Some(q_idx * kv_dim + kv_idx)
+            }
+        }
+        3 => {
+            let d0 = dims[0];
+            let d1 = dims[1];
+            let d2 = dims[2];
+            if d0 == 0 || d1 == 0 || d2 == 0 {
+                return None;
+            }
+            let q_idx = clamp_index(q_pos, d1);
+            let kv_idx = clamp_index(kv_pos, d2);
+            if d0 == b || d0 == 1 {
+                let b_idx = if d0 == 1 { 0 } else { clamp_index(b_i, d0) };
+                Some((b_idx * d1 + q_idx) * d2 + kv_idx)
+            } else if d0 == h || d0 == 1 {
+                let h_idx = if d0 == 1 { 0 } else { clamp_index(h_i, d0) };
+                Some((h_idx * d1 + q_idx) * d2 + kv_idx)
+            } else if d0 == b.saturating_mul(h) {
+                let combined_idx = clamp_index(b_i * h + h_i, d0);
+                Some((combined_idx * d1 + q_idx) * d2 + kv_idx)
+            } else {
+                Some(q_idx * d2 + kv_idx)
+            }
+        }
+        4 => {
+            let d0 = dims[0];
+            let d1 = dims[1];
+            let d2 = dims[2];
+            let d3 = dims[3];
+            if d0 == 0 || d1 == 0 || d2 == 0 || d3 == 0 {
+                return None;
+            }
+            let b_idx = if d0 == 1 {
+                0
+            } else if d0 == b {
+                clamp_index(b_i, d0)
+            } else if d0 == b.saturating_mul(h) {
+                clamp_index(b_i * h + h_i, d0)
+            } else {
+                clamp_index(b_i, d0)
+            };
+            let h_idx = if d1 == 1 {
+                0
+            } else if d1 == h {
+                clamp_index(h_i, d1)
+            } else if d1 == b {
+                clamp_index(b_i, d1)
+            } else {
+                clamp_index(h_i, d1)
+            };
+            let q_idx = clamp_index(q_pos, d2);
+            let kv_idx = clamp_index(kv_pos, d3);
+            Some(((b_idx * d1 + h_idx) * d2 + q_idx) * d3 + kv_idx)
+        }
+        _ => {
+            let q_dim = *dims.get(dims.len().saturating_sub(2))?;
+            let kv_dim = *dims.last()?;
+            if q_dim == 0 || kv_dim == 0 {
+                return None;
+            }
+            let q_idx = clamp_index(q_pos, q_dim);
+            let kv_idx = clamp_index(kv_pos, kv_dim);
+            let mut prefix_dim = 1usize;
+            for &dim in &dims[..dims.len() - 2] {
+                if dim == 0 {
+                    return None;
+                }
+                prefix_dim = prefix_dim.saturating_mul(dim);
+            }
+            let combined_idx = if prefix_dim == 0 {
+                0
+            } else {
+                let idx_val = b_i * h + h_i;
+                idx_val.min(prefix_dim - 1)
+            };
+            Some((combined_idx * q_dim + q_idx) * kv_dim + kv_idx)
+        }
+    }
+}
+
+struct MaskInfo<'a> {
+    data: &'a [f32],
+    dims: &'a [usize],
+    b: usize,
+    h: usize,
+}
+
+impl<'a> MaskInfo<'a> {
+    #[inline]
+    fn value(&self, b_i: usize, h_i: usize, q_pos: usize, kv_pos: usize) -> f32 {
+        if let Some(idx) = mask_offset(self.dims, self.b, self.h, b_i, h_i, q_pos, kv_pos) {
+            *self.data.get(idx).unwrap_or(&0.0)
+        } else {
+            0.0
+        }
+    }
+}
+
+pub(crate) trait DowncastF32 {
     fn cast(x: f32) -> Self;
 }
 
@@ -112,7 +253,7 @@ impl DowncastF32 for bf16 {
 
 /// Up‑cast helper: convert any supported element type to `f32` once so that the
 /// hot kernels can run entirely in `f32` and only down‑cast when writing out.
-pub(super) trait UpcastF32 {
+pub trait UpcastF32 {
     fn to_f32(self) -> f32;
 }
 
@@ -145,7 +286,7 @@ pub fn run_flash_attn_cpu<T>(
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor>
 where
-    T: WithDType + Sum + num_traits::real::Real + DowncastF32 + UpcastF32,
+    T: WithDType + Sum + num_traits::real::Real + DowncastF32 + UpcastF32 + Copy,
 {
     // Inline CPU slice extraction for q, k, v, and optional mask
     let (q_guard, q_layout) = q.storage_and_layout();
@@ -169,23 +310,28 @@ where
     } else {
         return Err(candle_core::Error::Msg("Expected CPU storage for v".into()));
     };
-    let mask_guard = mask.map(|mask| mask.storage_and_layout().0);
-    let mask_data: Option<&[T]> = if let Some(mask_guard) = &mask_guard {
-        let mask = mask.as_ref().unwrap();
-
-        if let Storage::Cpu(cpu) = &**mask_guard {
-            let data = cpu
-                .as_slice::<T>()
-                .context("Expected CPU storage for mask")?;
-            Some(&data[mask.layout().start_offset()..])
-        } else {
-            return Err(candle_core::Error::Msg(
-                "Expected CPU storage for mask".into(),
-            ));
-        }
-    } else {
-        None
-    };
+    let mut mask_buffer: Option<Vec<f32>> = None;
+    let mut mask_dims: Option<Vec<usize>> = None;
+    if let Some(mask_tensor) = mask {
+        mask_dims = Some(mask_tensor.shape().dims().to_vec());
+        let buffer = {
+            let (guard, layout) = mask_tensor.storage_and_layout();
+            if let Storage::Cpu(cpu) = &*guard {
+                let data = cpu
+                    .as_slice::<T>()
+                    .context("Expected CPU storage for mask")?;
+                data[layout.start_offset()..]
+                    .iter()
+                    .map(|v| (*v).to_f32())
+                    .collect::<Vec<f32>>()
+            } else {
+                return Err(candle_core::Error::Msg(
+                    "Expected CPU storage for mask".into(),
+                ));
+            }
+        };
+        mask_buffer = Some(buffer);
+    }
     // q_guard, k_guard, v_guard, and m_guard (if any) are kept in scope to hold storage alive
 
     let q_stride = q.stride();
@@ -193,12 +339,16 @@ where
     let v_stride = v.stride();
 
     // Fast path for decode: q_len == 1
+    let mask_dims_ref = mask_dims.as_deref();
+    let mask_slice = mask_buffer.as_deref();
+
     if q.shape().dims()[1] == 1 {
         return flash_attn_cpu_single_q(
             q_data,
             k_data,
             v_data,
-            mask_data,
+            mask_slice,
+            mask_dims_ref,
             q.shape().dims(),
             k.shape().dims(),
             v.shape().dims(),
@@ -215,7 +365,8 @@ where
         q_data,
         k_data,
         v_data,
-        mask_data,
+        mask_slice,
+        mask_dims_ref,
         q.shape().dims(),
         k.shape().dims(),
         v.shape().dims(),
@@ -236,7 +387,8 @@ fn flash_attn_cpu_single_q<T>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
-    mask_vec: Option<&[T]>,
+    mask_vec: Option<&[f32]>,
+    mask_dims: Option<&[usize]>,
     qshape: &[usize],
     kshape: &[usize],
     vshape: &[usize],
@@ -250,7 +402,7 @@ fn flash_attn_cpu_single_q<T>(
 where
     T: WithDType + Copy + UpcastF32 + DowncastF32,
 {
-    let (b, _qlen, h, d) = (qshape[0], qshape[1], qshape[2], qshape[3]);
+    let (b, _q_len, h, d) = (qshape[0], qshape[1], qshape[2], qshape[3]);
     let kv_len = kshape[1];
     let kv_tiles = kv_len.div_ceil(TILE_KV);
     let dv = d;
@@ -273,6 +425,11 @@ where
     let scratch_ptr = scratch.as_mut_ptr() as usize;
     let scratch_s_ptr = scratch_s.as_mut_ptr() as usize;
     let scratch_m_ptr = scratch_m.as_mut_ptr() as usize;
+
+    let mask_info = match (mask_vec, mask_dims) {
+        (Some(data), Some(dims)) => Some(MaskInfo { data, dims, b, h }),
+        _ => None,
+    };
 
     FLASH_ATTN_POOL.install(|| {
         (0..kv_tiles).into_par_iter().for_each(|tile_idx| {
@@ -332,9 +489,11 @@ where
                         if logit_softcap != 0.0 {
                             s_val = logit_softcap * (s_val / logit_softcap).tanh();
                         }
-                        if let Some(mv_vec) = mask_vec {
-                            s_val += slope * mv_vec[(b_i * kv_len) + kv_pos].to_f32();
-                        }
+                        let mask_delta = mask_info
+                            .as_ref()
+                            .map(|mask| slope * mask.value(b_i, h_i, 0, kv_pos))
+                            .unwrap_or(0.0);
+                        s_val += mask_delta;
 
                         // -------- tile-local softmax ----------
                         let m_old = m;
@@ -420,7 +579,8 @@ fn flash_attn_cpu<T>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
-    mask_vec: Option<&[T]>,
+    mask_vec: Option<&[f32]>,
+    mask_dims: Option<&[usize]>,
     qshape: &[usize],
     kshape: &[usize],
     vshape: &[usize],
@@ -449,6 +609,11 @@ where
     assert_eq!(qstride[3], 1, "q must have contiguous rows");
     assert_eq!(kstride[3], 1, "k must have contiguous rows");
     assert_eq!(vstride[3], 1, "v must have contiguous rows");
+
+    let mask_info = match (mask_vec, mask_dims) {
+        (Some(data), Some(dims)) => Some(MaskInfo { data, dims, b, h }),
+        _ => None,
+    };
 
     FLASH_ATTN_POOL.install(|| {
         out.par_chunks_mut(dv)
@@ -497,11 +662,10 @@ where
                     }
                     // ----------------------------------------------------
                     // Mask (optional)
-                    let mv = if let Some(mv_vec) = mask_vec {
-                        slope * mv_vec[((b_i * q_len + q_pos) * kv_len) + kv_pos].to_f32()
-                    } else {
-                        0.0
-                    };
+                    let mv = mask_info
+                        .as_ref()
+                        .map(|mask| slope * mask.value(b_i, h_i, q_pos, kv_pos))
+                        .unwrap_or(0.0);
                     if mv == f32::NEG_INFINITY {
                         continue;
                     }

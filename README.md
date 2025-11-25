@@ -18,12 +18,76 @@ Blazingly fast LLM inference.
 </p>
 
 **Mistral.rs is a cross-platform, highly-multimodal inference engine that brings you:**
-- All-in-one multimodal workflow: text↔text, text+vision↔text, text+vision+audio↔text, text→speech, text→image
+- All-in-one multimodal workflow: text↔text, text+vision↔text, text+vision+audio↔text, text→speech, text→image, text→embeddings
 - APIs: Rust, Python, OpenAI HTTP server (with Chat Completions, Responses API), MCP server
 - 🔗 **MCP Client**: Connect to external tools and services automatically (file systems, web search, databases, APIs)
-- Performance: ISQ, PagedAttention, FlashAttention
+- Performance: ISQ, PagedAttention, FlashAttention, **per-layer topology optimization**
+- Support for embedding, speech generation, and image generation models
 
 Please submit requests for new models [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
+
+## Supported Models
+
+<details>
+<summary><b>Text Models</b></summary>
+
+- Granite 4.0
+- SmolLM 3
+- DeepSeek V3
+- DeepSeek V2
+- Qwen 3 MoE
+- Phi 3.5 MoE
+- Qwen 3
+- GLM 4
+- Gemma 2
+- Qwen 2
+- Starcoder 2
+- Phi 3
+- Mixtral
+- Phi 2
+- Gemma
+- Llama
+- Mistral
+</details>
+
+<details>
+<summary><b>Vision Models</b></summary>
+
+- Qwen 3-VL**
+- Gemma 3n
+- Llama 4
+- Gemma 3
+- Mistral 3
+- Phi 4 multimodal
+- Qwen 2.5-VL
+- MiniCPM-O
+- Llama 3.2 Vision
+- Qwen 2-VL
+- Idefics 3
+- Idefics 2
+- LLaVA Next
+- LLaVA
+- Phi 3V
+</details>
+
+<details>
+<summary><b>Speech Models</b></summary>
+
+- Dia
+</details>
+
+<details>
+<summary><b>Image Generation Models</b></summary>
+
+- FLUX
+</details>
+
+<details>
+<summary><b>Embedding Models</b></summary>
+
+- Embedding Gemma
+- Qwen 3 Embedding
+</details>
 
 ## Get started fast 🚀
 
@@ -68,6 +132,31 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 *After following installation instructions*
 
+- 🔎 Generate embeddings with **EmbeddingGemma** or **Qwen3 Embedding** across APIs: [EmbeddingGemma guide](docs/EMBEDDINGGEMMA.md) | [Qwen3 guide](docs/QWEN3_EMBEDDING.md) | [overview](docs/EMBEDDINGS.md)  
+  <details>
+    <summary>Show commands</summary>
+
+    ```bash
+    # HTTP API (OpenAI-compatible)
+    ./mistralrs-server --port 1234 run -m google/embeddinggemma-300m
+
+    # Python API example
+    python examples/python/embedding_gemma.py
+
+    # Rust API example
+    cargo run --package mistralrs --example embedding_gemma
+
+    # Qwen3 Embedding server
+    ./mistralrs-server --port 1234 run -m Qwen/Qwen3-Embedding-0.6B
+
+    # Qwen3 Embedding Python example
+    python examples/python/qwen3_embedding.py
+
+    # Qwen3 Embedding Rust example
+    cargo run --package mistralrs --example qwen3_embedding
+    ```
+  </details>
+
 - 💎🪆💎🪆💎 Run the **Gemma 3n** family (E2B, E4B) with **vision**, **audio**, and **MatFormer** support: [documentation](docs/GEMMA3N.md)  
   <details>
     <summary>Show commands</summary>
@@ -82,6 +171,15 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs-server -i --isq 8 run -m google/gemma-3n-E4B-it \
       --matformer-config-path matformer_configs/gemma3n.csv \
       --matformer-slice-name "Config for E2.49B (block-level)"
+    ```
+  </details>
+
+- 🧠+📷 Run the **Qwen 3 VL** reasoning vision models with full tool-calling support: [documentation](docs/QWEN3VL.md)  
+  <details>
+    <summary>Show command</summary>
+
+    ```bash
+    ./mistralrs-server -i --isq 8 run -m Qwen/Qwen3-VL-4B-Thinking
     ```
   </details>
   
@@ -161,7 +259,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ```
   </details>
 
-- 🔗 **MCP Client** - Connect to external tools and services automatically: [**Quick Start Guide**](examples/MCP_QUICK_START.md)  
+- 🔗 **MCP Client** - Connect to external tools and services automatically: [**Quick Start Guide**](examples/MCP_QUICK_START.md)
   <details>
     <summary>Show examples</summary>
 
@@ -184,7 +282,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ```bash
     ./mistralrs-server --mcp-config mcp-config.json --port 1234 run -m Qwen/Qwen3-4B
     ```
-    
+
     **3. Tools work automatically:**
     ```bash
     curl -X POST http://localhost:1234/v1/chat/completions \
@@ -197,13 +295,13 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
         servers=[mistralrs.McpServerConfigPy(
             name="Filesystem",
             source=mistralrs.McpServerSourcePy.Process(
-                command="npx", 
+                command="npx",
                 args=["@modelcontextprotocol/server-filesystem", "/tmp", "-y"]
             )
         )],
         auto_register_tools=True
     )
-    
+
     runner = mistralrs.Runner(
         which=mistralrs.Which.Plain(model_id="Qwen/Qwen3-4B"),
         mcp_client_config=mcp_config
@@ -216,6 +314,60 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     let model = TextModelBuilder::new("Qwen/Qwen3-4B")
         .with_mcp_client(mcp_config) // Tools automatically available!
         .build().await?;
+    ```
+  </details>
+
+- ⚡ **Smart Per-Layer Optimization** - Fine-tune quantization and device placement per layer: [documentation](docs/TOPOLOGY.md)
+  <details>
+    <summary>Show examples</summary>
+
+    **Optimize memory usage with mixed quantization (fits large models in limited VRAM):**
+    ```bash
+    # Use aggressive quantization on less important layers, preserve quality on critical ones
+    ./mistralrs-server -i --topology topologies/isq.yml run -m meta-llama/Llama-3.2-8B-Instruct
+    ```
+
+    **Example topology file (`topologies/isq.yml`):**
+    ```yaml
+    # Early layers: lower quantization for embeddings
+    0-8:
+      isq: Q3K
+    # Middle layers: balanced quantization
+    8-24:
+      isq: Q4K
+    # Final layers: higher quality for output
+    24-32:
+      isq: Q6K
+    ```
+
+    **Advanced: Target specific components with regex patterns:**
+    ```yaml
+    # Quantize attention layers differently from FFN layers
+    '/attn\.q_proj$/':
+      isq: Q4K
+    '/ffn_.*\.weight$/':
+      isq: Q3K
+    ```
+
+    **Multi-device deployment (split across GPUs/CPU):**
+    ```yaml
+    0-16:
+      isq: Q4K
+      device: cuda[0]
+    16-32:
+      isq: Q4K
+      device: cuda[1]
+    # Or offload some layers to CPU for very large models
+    ```
+
+    **Python example:**
+    ```python
+    runner = mistralrs.Runner(
+        which=mistralrs.Which.Plain(
+            model_id="meta-llama/Llama-3.2-8B-Instruct",
+            topology="topologies/isq.yml",
+        ),
+    )
     ```
   </details>
 
@@ -240,7 +392,8 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
      - CUDA-specialized [NCCL](docs/DISTRIBUTED/NCCL.md)
      - Heterogeneous, flexible [Ring backend](docs/DISTRIBUTED/RING.md)
 
-3. **Quantization**
+3. **Quantization & Optimization**
+   - ⭐ [**Per-layer topology**](docs/TOPOLOGY.md): Fine-tune quantization per layer for optimal quality/speed balance
    - [In-place quantization (ISQ)](docs/ISQ.md) of Hugging Face models
    - [GGML & GGUF support](docs/QUANTS.md): 2–8 bit
    - [GPTQ](docs/QUANTS.md), [AWQ](scripts/convert_awq_marlin.py), [AFQ](docs/QUANTS.md), [HQQ](docs/QUANTS.md), [FP8](docs/QUANTS.md), [BNB](https://github.com/TimDettmers/bitsandbytes) (int8/fp4/nf4)
@@ -257,7 +410,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 5. **Advanced Features**
    - High-throughput with [PagedAttention](docs/PAGED_ATTENTION.md) & FlashAttention V2/V3
    - Prefix caching (including multimodal)
-   - Customizable quantization with [topology](docs/TOPOLOGY.md) & [UQFF format](docs/UQFF.md)
+   - [UQFF format](docs/UQFF.md) for custom quantization
    - Speculative decoding across models
    - ⭐ Agentic [web search integration](docs/WEB_SEARCH.md)
 
@@ -480,7 +633,7 @@ You can find documentation about the server itself [here](docs/HTTP.md).
 
 ### Multi-model support
 
-Serve multiple models simultaneously from a single server instance. Perfect for comparing models, A/B testing, or serving different models for different use cases.
+Serve multiple models simultaneously from a single server instance. This is useful for comparing models, A/B testing, or serving different models for different use cases.
 
 ```bash
 ./mistralrs-server --port 1234 multi-model --config example-multi-model-config.json --default-model-id meta-llama/Llama-3.2-3B-Instruct
@@ -529,6 +682,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `qwen3`
 - `qwen3moe`
 - `smollm3`
+- `granitemoehybrid`
 
 </details>
 
@@ -553,6 +707,19 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `mistral3`
 - `llama4`
 - `gemma3n`
+- `qwen3vl`
+
+</details>
+
+### Architecture for embedding models
+
+> Note: for embedding models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`vision-plain`).
+
+<details>
+  <summary>Show embedding architectures</summary>
+
+- `embeddinggemma`
+- `qwen3embedding`
 
 </details>
 
@@ -616,6 +783,8 @@ Please submit more benchmarks via raising an issue!
 |SmolLM3| | |✅|
 |Dia 1.6b| | |✅|
 |Gemma 3n| | |✅|
+|Qwen 3 VL | |✅|
+|Granite 4.0| | |✅|
 </details>
 
 <details>
@@ -663,6 +832,8 @@ Please submit more benchmarks via raising an issue!
 |Qwen 3| | | |
 |SmolLM3|✅| | |
 |Gemma 3n| | | |
+|Qwen 3 VL | | |
+|Granite 4.0| | | |
 </details>
 
 <details>
@@ -697,7 +868,9 @@ Please submit more benchmarks via raising an issue!
 |Llama 4| |
 |Qwen 3| |
 |SmolLM3|✅|
-|Gemma 3n| | | |
+|Gemma 3n| |
+|Qwen 3 VL | |
+|Granite 4.0| |
 </details>
 
 ### Using derivative and adapter models

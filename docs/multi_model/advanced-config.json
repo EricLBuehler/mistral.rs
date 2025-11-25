@@ -24,5 +24,11 @@
       "quantized_model_id": "bartowski/Llama-3.2-3B-Instruct-GGUF",
       "quantized_filename": "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
     }
+  },
+  "embed-qwen3": {
+    "Embedding": {
+      "model_id": "Qwen/Qwen3-Embedding-0.6B",
+      "arch": "qwen3embedding"
+    }
   }
 }

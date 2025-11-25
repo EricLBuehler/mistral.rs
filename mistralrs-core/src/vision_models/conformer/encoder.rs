@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use candle_core::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{BatchNorm, Conv1d, Conv1dConfig, LayerNorm, Linear, ModuleT};
-use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{Convolution, QuantMethod, ShardedVarBuilder};
 
 use crate::{
     attention::SdpaParams,
@@ -204,15 +204,16 @@ impl DepthWiseSeperableConv1d {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let mut xs = xs
-            .to_dtype(DType::F32)?
-            .apply(&self.dw_conv)?
-            .to_dtype(xs.dtype())?;
+        let original_dtype = xs.dtype();
+        let xs_f32 = xs.to_dtype(DType::F32)?;
+        let mut xs = Convolution
+            .forward_1d(&self.dw_conv, &xs_f32)?
+            .to_dtype(original_dtype)?;
         if let Some(pw_conv) = &self.pw_conv {
-            xs = xs
-                .to_dtype(DType::F32)?
-                .apply(pw_conv)?
-                .to_dtype(xs.dtype())?;
+            let xs_f32 = xs.to_dtype(DType::F32)?;
+            xs = Convolution
+                .forward_1d(pw_conv, &xs_f32)?
+                .to_dtype(original_dtype)?;
         }
 
         Ok(xs)
@@ -275,10 +276,11 @@ impl GLUPointWiseConv {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         // Input is (B, T, D), need (B, D, T) for conv1d
         let x = x.transpose(1, 2)?;
-        let x = x
-            .to_dtype(DType::F32)?
-            .apply(&self.ext_pw_conv_1d)?
-            .to_dtype(x.dtype())?;
+        let original_dtype = x.dtype();
+        let x_f32 = x.to_dtype(DType::F32)?;
+        let x = Convolution
+            .forward_1d(&self.ext_pw_conv_1d, &x_f32)?
+            .to_dtype(original_dtype)?;
 
         // Split for GLU
         let chunks = x.chunk(2, 1)?; // Split along channel dim
@@ -447,10 +449,11 @@ impl ConvModule {
 
         x = x.apply(&self.act)?;
 
-        x = x
-            .to_dtype(DType::F32)?
-            .apply(&self.ext_pw_conv_1d)?
-            .to_dtype(x.dtype())?;
+        let original_dtype = x.dtype();
+        let x_f32 = x.to_dtype(DType::F32)?;
+        x = Convolution
+            .forward_1d(&self.ext_pw_conv_1d, &x_f32)?
+            .to_dtype(original_dtype)?;
         if self.fix_len1 {
             let seq_len = x.dim(2)?;
             x = x.i((.., .., ..(seq_len - (self.cfg.ext_pw_kernel_size - 1))))?;

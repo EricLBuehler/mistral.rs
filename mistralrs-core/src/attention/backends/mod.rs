@@ -1,4 +1,4 @@
-mod cpu;
+pub(super) mod cpu;
 mod flash;
 mod naive;
 

@@ -127,6 +127,7 @@
 
 mod anymoe;
 mod diffusion_model;
+mod embedding_model;
 mod gguf;
 mod gguf_lora_model;
 mod gguf_xlora_model;
@@ -142,11 +143,15 @@ mod xlora_model;
 
 pub use anymoe::AnyMoeModelBuilder;
 pub use diffusion_model::DiffusionModelBuilder;
+pub use embedding_model::{EmbeddingModelBuilder, UqffEmbeddingModelBuilder};
 pub use gguf::GgufModelBuilder;
 pub use gguf_lora_model::GgufLoraModelBuilder;
 pub use gguf_xlora_model::GgufXLoraModelBuilder;
 pub use lora_model::LoraModelBuilder;
-pub use messages::{RequestBuilder, RequestLike, TextMessageRole, TextMessages, VisionMessages};
+pub use messages::{
+    EmbeddingRequest, EmbeddingRequestBuilder, EmbeddingRequestInput, RequestBuilder, RequestLike,
+    TextMessageRole, TextMessages, VisionMessages,
+};
 pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };

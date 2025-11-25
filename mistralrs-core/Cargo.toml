@@ -52,7 +52,6 @@ futures.workspace = true
 pyo3 = { workspace = true, optional = true }
 indicatif.workspace = true
 async-trait.workspace = true
-once_cell.workspace = true
 toml.workspace = true
 strum.workspace = true
 image.workspace = true
@@ -108,7 +107,8 @@ statrs.workspace = true
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc = { workspace = true, optional = true }
-metal = { workspace = true, optional = true }
+objc2-metal = { workspace = true, optional = true }
+candle-metal-kernels = { workspace = true, optional = true }
 
 [features]
 pyo3_macros = ["pyo3", "mistralrs-mcp/pyo3_macros"]
@@ -126,10 +126,11 @@ metal = [
     "candle-core/metal",
     "candle-nn/metal",
     "mistralrs-quant/metal",
+    "dep:candle-metal-kernels",
     "dep:objc",
     "dep:mistralrs-paged-attn",
     "mistralrs-paged-attn/metal",
-    "dep:metal"
+    "dep:objc2-metal"
 ]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
 flash-attn-v3 = ["cuda", "dep:candle-flash-attn-v3"]

@@ -64,6 +64,12 @@ pub enum RequestMessage {
     SpeechGeneration {
         prompt: String,
     },
+    Embedding {
+        prompt: String,
+    },
+    EmbeddingTokens {
+        prompt: Vec<u32>,
+    },
 }
 
 fn default_responder<T>() -> Sender<T> {
@@ -135,6 +141,7 @@ pub struct WebSearchOptions {
 ///     3) Apply temperature and softmax
 ///     4) Sample the next token (topk, topp, minp, etc)
 /// - `return_raw_logits`: Return raw logits.
+/// - `truncate_sequence`: Whether to truncate the prompt if it exceeds the model's maximum context length.
 pub struct NormalRequest {
     pub messages: RequestMessage,
     pub sampling_params: SamplingParams,
@@ -153,6 +160,8 @@ pub struct NormalRequest {
     pub return_raw_logits: bool,
     pub web_search_options: Option<WebSearchOptions>,
     pub model_id: Option<String>,
+    #[serde(default)]
+    pub truncate_sequence: bool,
 }
 
 impl NormalRequest {
@@ -179,6 +188,7 @@ impl NormalRequest {
             return_raw_logits: false,
             web_search_options: None,
             model_id: None,
+            truncate_sequence: false,
         }
     }
 }

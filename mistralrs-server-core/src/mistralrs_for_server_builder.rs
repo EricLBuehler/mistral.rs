@@ -6,10 +6,10 @@ use anyhow::{Context, Result};
 use candle_core::Device;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
-    parse_isq_value, AutoDeviceMapParams, BertEmbeddingModel, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder,
-    McpClientConfig, MemoryGpuConfig, MistralRsBuilder, ModelSelected, PagedAttentionConfig,
-    PagedCacheType, SchedulerConfig, SearchCallback, TokenSource,
+    parse_isq_value, AutoDeviceMapParams, DefaultSchedulerMethod, DeviceLayerMapMetadata,
+    DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder, McpClientConfig, MemoryGpuConfig,
+    MistralRsBuilder, ModelSelected, PagedAttentionConfig, PagedCacheType, SchedulerConfig,
+    SearchCallback, SearchEmbeddingModel, TokenSource,
 };
 use tracing::{info, warn};
 
@@ -67,8 +67,9 @@ impl ModelConfig {
 }
 
 pub mod defaults {
-    //! Provides the default values used for the mistral.rs instance for server.
-    //! These defaults can be used for CLI argument fallbacks, config loading, or general initialization.
+    use super::SearchEmbeddingModel;
+    // Provides the default values used for the mistral.rs instance for server.
+    // These defaults can be used for CLI argument fallbacks, config loading, or general initialization.
 
     use std::sync::Arc;
 
@@ -77,7 +78,6 @@ pub mod defaults {
     pub const DEVICE: Option<candle_core::Device> = None;
     pub const SEED: Option<u64> = None;
     pub const LOG: Option<String> = None;
-    pub const TRUNCATE_SEQUENCE: bool = false;
     pub const MODEL: Option<mistralrs_core::ModelSelected> = None;
     pub const MAX_SEQS: usize = 16;
     pub const NO_KV_CACHE: bool = false;
@@ -97,7 +97,7 @@ pub mod defaults {
     pub const PAGED_ATTN_METAL: bool = false;
     pub const CPU: bool = false;
     pub const ENABLE_SEARCH: bool = false;
-    pub const SEARCH_BERT_MODEL: Option<String> = None;
+    pub const SEARCH_EMBEDDING_MODEL: Option<SearchEmbeddingModel> = None;
     pub const TOKEN_SOURCE: mistralrs_core::TokenSource = mistralrs_core::TokenSource::CacheToken;
     pub const SEARCH_CALLBACK: Option<Arc<mistralrs_core::SearchCallback>> = None;
     pub const PAGED_CACHE_TYPE: PagedCacheType = PagedCacheType::Auto;
@@ -114,7 +114,6 @@ pub mod defaults {
 /// let args = Args::parse();
 ///
 /// let mistralrs = MistralRsForServerBuilder::new()
-///        .with_truncate_sequence(args.truncate_sequence)
 ///        .with_model(args.model)
 ///        .with_max_seqs(args.max_seqs)
 ///        .with_no_kv_cache(args.no_kv_cache)
@@ -146,11 +145,6 @@ pub struct MistralRsForServerBuilder {
 
     /// Log all responses and requests to this file
     log: Option<String>,
-
-    /// If a sequence is larger than the maximum model length, truncate the number
-    /// of tokens such that the sequence will fit at most the maximum length.
-    /// If `max_tokens` is not specified in the request, space for 10 tokens will be reserved instead.
-    truncate_sequence: bool,
 
     /// Model selector (for single-model mode, deprecated in favor of models)
     model: Option<ModelSelected>,
@@ -221,11 +215,11 @@ pub struct MistralRsForServerBuilder {
     /// Use CPU only
     cpu: bool,
 
-    /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This loads the selected search embedding reranker (EmbeddingGemma by default).
     enable_search: bool,
 
-    /// Specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
-    search_bert_model: Option<String>,
+    /// Specify which built-in search embedding model to load.
+    search_embedding_model: Option<SearchEmbeddingModel>,
 
     /// Optional override search callback
     search_callback: Option<Arc<SearchCallback>>,
@@ -244,7 +238,6 @@ impl Default for MistralRsForServerBuilder {
             device: defaults::DEVICE,
             seed: defaults::SEED,
             log: defaults::LOG,
-            truncate_sequence: defaults::TRUNCATE_SEQUENCE,
             model: defaults::MODEL,
             models: Vec::new(),
             default_model_id: None,
@@ -264,7 +257,7 @@ impl Default for MistralRsForServerBuilder {
             paged_attn: defaults::PAGED_ATTN,
             cpu: defaults::CPU,
             enable_search: defaults::ENABLE_SEARCH,
-            search_bert_model: defaults::SEARCH_BERT_MODEL,
+            search_embedding_model: defaults::SEARCH_EMBEDDING_MODEL,
             search_callback: defaults::SEARCH_CALLBACK,
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
@@ -319,12 +312,6 @@ impl MistralRsForServerBuilder {
         if let Some(log) = log {
             self = self.with_log(log);
         }
-        self
-    }
-
-    /// Sets whether to truncate sequences that exceed the maximum model length.
-    pub fn with_truncate_sequence(mut self, truncate_sequence: bool) -> Self {
-        self.truncate_sequence = truncate_sequence;
         self
     }
 
@@ -547,9 +534,12 @@ impl MistralRsForServerBuilder {
         self
     }
 
-    /// Sets the BERT model for web search assistance.
-    pub fn with_search_bert_model(mut self, search_bert_model: String) -> Self {
-        self.search_bert_model = Some(search_bert_model);
+    /// Sets the embedding model used for web search assistance.
+    pub fn with_search_embedding_model(
+        mut self,
+        search_embedding_model: SearchEmbeddingModel,
+    ) -> Self {
+        self.search_embedding_model = Some(search_embedding_model);
         self
     }
 
@@ -619,8 +609,6 @@ impl MistralRsForServerBuilder {
         let mapper = init_mapper(&self.num_device_layers, &auto_device_map_params);
         let paged_attn = configure_paged_attn(&device, self.paged_attn);
 
-        // Allocate 0.5 GB of CPU memory just as a placeholder.
-        // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
         let cache_config = init_cache_config(
             self.paged_attn_block_size,
             self.paged_attn_gpu_mem,
@@ -659,16 +647,16 @@ impl MistralRsForServerBuilder {
 
         let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
 
-        let bert_model = get_bert_model(self.enable_search, self.search_bert_model);
+        let search_embedding_model =
+            get_search_embedding_model(self.enable_search, self.search_embedding_model);
 
         let mut builder = MistralRsBuilder::new(
             pipeline,
             scheduler_config,
             !self.interactive_mode,
-            bert_model,
+            search_embedding_model,
         )
         .with_opt_log(self.log)
-        .with_truncate_sequence(self.truncate_sequence)
         .with_no_kv_cache(self.no_kv_cache)
         .with_prefix_cache_n(self.prefix_cache_n);
 
@@ -772,17 +760,17 @@ impl MistralRsForServerBuilder {
         pipeline_names.push(first_pipeline_name);
 
         let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
-        let bert_model = get_bert_model(self.enable_search, self.search_bert_model);
+        let search_embedding_model =
+            get_search_embedding_model(self.enable_search, self.search_embedding_model);
 
         // Create the first MistralRs instance with the first model
         let mut builder = MistralRsBuilder::new(
             pipeline,
             scheduler_config.clone(),
             !self.interactive_mode,
-            bert_model.clone(),
+            search_embedding_model,
         )
         .with_opt_log(self.log.clone())
-        .with_truncate_sequence(self.truncate_sequence)
         .with_no_kv_cache(self.no_kv_cache)
         .with_prefix_cache_n(self.prefix_cache_n);
 
@@ -859,13 +847,12 @@ impl MistralRsForServerBuilder {
 
             // Add the model to the MistralRs instance
             let engine_config = mistralrs_core::EngineConfig {
-                truncate_sequence: self.truncate_sequence,
                 no_kv_cache: self.no_kv_cache,
                 no_prefix_cache: false,
                 prefix_cache_n: self.prefix_cache_n,
                 disable_eos_stop: false,
                 throughput_logging_enabled: !self.interactive_mode,
-                search_embedding_model: bert_model.clone(),
+                search_embedding_model,
                 search_callback: self.search_callback.clone(),
                 tool_callbacks: HashMap::new(),
                 tool_callbacks_with_tools: HashMap::new(),
@@ -1035,25 +1022,21 @@ fn init_cache_config(
     ) {
         (block_size, None, None, None, true, false) => Ok(Some(PagedAttentionConfig::new(
             block_size,
-            512,
             MemoryGpuConfig::ContextSize(max_seq_len),
             cache_type,
         )?)),
         (block_size, None, None, Some(ctxt), true, false) => Ok(Some(PagedAttentionConfig::new(
             block_size,
-            512,
             MemoryGpuConfig::ContextSize(ctxt),
             cache_type,
         )?)),
         (block_size, None, Some(f), None, true, false) => Ok(Some(PagedAttentionConfig::new(
             block_size,
-            512,
             MemoryGpuConfig::Utilization(f),
             cache_type,
         )?)),
         (block_size, Some(m), None, None, true, false) => Ok(Some(PagedAttentionConfig::new(
             block_size,
-            512,
             MemoryGpuConfig::MbAmount(m),
             cache_type,
         )?)),
@@ -1061,7 +1044,6 @@ fn init_cache_config(
             info!("Both memory size, and usage were specified, defaulting to the usage value.");
             Ok(Some(PagedAttentionConfig::new(
                 block_size,
-                512,
                 MemoryGpuConfig::Utilization(f),
                 cache_type,
             )?))
@@ -1070,7 +1052,6 @@ fn init_cache_config(
             info!("All memory size and ctxt len, defaulting to the context len value.");
             Ok(Some(PagedAttentionConfig::new(
                 block_size,
-                512,
                 MemoryGpuConfig::ContextSize(ctxt),
                 cache_type,
             )?))
@@ -1079,7 +1060,6 @@ fn init_cache_config(
             info!("Both ctxt len and usage were specified, defaulting to the usage value.");
             Ok(Some(PagedAttentionConfig::new(
                 block_size,
-                512,
                 MemoryGpuConfig::Utilization(f),
                 cache_type,
             )?))
@@ -1131,17 +1111,13 @@ pub fn configure_paged_attn_from_flags(
     }
 }
 
-/// Creates a BERT embedding model configuration for search functionality.
-pub fn get_bert_model(
+/// Creates a search embedding model configuration for agentic search reranking.
+pub fn get_search_embedding_model(
     enable_search: bool,
-    search_bert_model: Option<String>,
-) -> Option<BertEmbeddingModel> {
+    search_embedding_model: Option<SearchEmbeddingModel>,
+) -> Option<SearchEmbeddingModel> {
     if enable_search {
-        Some(
-            search_bert_model
-                .map(BertEmbeddingModel::Custom)
-                .unwrap_or_default(),
-        )
+        Some(search_embedding_model.unwrap_or_default())
     } else {
         None
     }

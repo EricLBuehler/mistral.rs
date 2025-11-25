@@ -19,6 +19,9 @@ pub trait RequestLike {
     fn take_tools(&mut self) -> Option<(Vec<Tool>, ToolChoice)>;
     fn take_sampling_params(&mut self) -> SamplingParams;
     fn take_web_search_options(&mut self) -> Option<WebSearchOptions>;
+    fn truncate_sequence(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -202,10 +205,7 @@ impl VisionMessages {
         let config = model.config().unwrap();
         let prefixer = match &config.category {
             ModelCategory::Vision { prefixer } => prefixer,
-            ModelCategory::Text
-            | ModelCategory::Diffusion
-            | ModelCategory::Speech
-            | ModelCategory::Audio => {
+            _ => {
                 anyhow::bail!("`add_image_message` expects a vision model.")
             }
         };
@@ -333,6 +333,7 @@ pub struct RequestBuilder {
     sampling_params: SamplingParams,
     web_search_options: Option<WebSearchOptions>,
     enable_thinking: Option<bool>,
+    truncate_sequence: bool,
 }
 
 impl Default for RequestBuilder {
@@ -356,6 +357,7 @@ impl From<TextMessages> for RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_thinking: None,
+            truncate_sequence: false,
         }
     }
 }
@@ -375,6 +377,7 @@ impl From<VisionMessages> for RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_thinking: None,
+            truncate_sequence: false,
         }
     }
 }
@@ -394,6 +397,7 @@ impl RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_thinking: None,
+            truncate_sequence: false,
         }
     }
 
@@ -494,10 +498,7 @@ impl RequestBuilder {
         let config = model.config().unwrap();
         let prefixer = match &config.category {
             ModelCategory::Vision { prefixer } => prefixer,
-            ModelCategory::Text
-            | ModelCategory::Diffusion
-            | ModelCategory::Speech
-            | ModelCategory::Audio => {
+            _ => {
                 anyhow::bail!("`add_image_message` expects a vision model.")
             }
         };
@@ -652,6 +653,12 @@ impl RequestBuilder {
         self.enable_thinking = Some(enable_thinking);
         self
     }
+
+    /// Truncate prompts that exceed the model's maximum context length.
+    pub fn with_truncate_sequence(mut self, truncate_sequence: bool) -> Self {
+        self.truncate_sequence = truncate_sequence;
+        self
+    }
 }
 
 impl RequestLike for RequestBuilder {
@@ -743,5 +750,110 @@ impl RequestLike for RequestBuilder {
         let mut other = None;
         std::mem::swap(&mut other, &mut self.web_search_options);
         other
+    }
+
+    fn truncate_sequence(&self) -> bool {
+        self.truncate_sequence
+    }
+}
+
+#[derive(Clone, Debug)]
+/// An individual embedding input.
+pub enum EmbeddingRequestInput {
+    /// Raw text prompt that will be tokenized.
+    Prompt(String),
+    /// Pre-tokenized input.
+    Tokens(Vec<u32>),
+}
+
+impl EmbeddingRequestInput {
+    pub fn into_request_message(self) -> RequestMessage {
+        match self {
+            Self::Prompt(prompt) => RequestMessage::Embedding { prompt },
+            Self::Tokens(prompt) => RequestMessage::EmbeddingTokens { prompt },
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+/// A validated embedding request constructed via [`EmbeddingRequestBuilder`].
+pub struct EmbeddingRequest {
+    pub inputs: Vec<EmbeddingRequestInput>,
+    pub truncate_sequence: bool,
+}
+
+impl EmbeddingRequest {
+    /// Create a new builder for an embedding request.
+    pub fn builder() -> EmbeddingRequestBuilder {
+        EmbeddingRequestBuilder::new()
+    }
+}
+
+/// Builder for configuring embedding requests.
+#[derive(Clone, Debug, Default)]
+pub struct EmbeddingRequestBuilder {
+    inputs: Vec<EmbeddingRequestInput>,
+    truncate_sequence: bool,
+}
+
+impl EmbeddingRequestBuilder {
+    /// Create an empty builder. You must add at least one input before using it.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a single text prompt.
+    pub fn add_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.inputs
+            .push(EmbeddingRequestInput::Prompt(prompt.into()));
+        self
+    }
+
+    /// Add multiple text prompts at once.
+    pub fn add_prompts<I, S>(mut self, prompts: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.inputs.extend(
+            prompts
+                .into_iter()
+                .map(|prompt| EmbeddingRequestInput::Prompt(prompt.into())),
+        );
+        self
+    }
+
+    /// Add a single pre-tokenized prompt.
+    pub fn add_tokens(mut self, tokens: impl Into<Vec<u32>>) -> Self {
+        self.inputs
+            .push(EmbeddingRequestInput::Tokens(tokens.into()));
+        self
+    }
+
+    /// Add multiple pre-tokenized prompts.
+    pub fn add_tokens_batch<I>(mut self, batches: I) -> Self
+    where
+        I: IntoIterator<Item = Vec<u32>>,
+    {
+        self.inputs
+            .extend(batches.into_iter().map(EmbeddingRequestInput::Tokens));
+        self
+    }
+
+    /// Control whether prompts longer than the model context are truncated.
+    pub fn with_truncate_sequence(mut self, truncate: bool) -> Self {
+        self.truncate_sequence = truncate;
+        self
+    }
+
+    pub fn build(self) -> anyhow::Result<EmbeddingRequest> {
+        if self.inputs.is_empty() {
+            anyhow::bail!("Embedding request must contain at least one input.");
+        }
+
+        Ok(EmbeddingRequest {
+            inputs: self.inputs,
+            truncate_sequence: self.truncate_sequence,
+        })
     }
 }

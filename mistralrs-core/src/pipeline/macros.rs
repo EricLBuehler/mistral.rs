@@ -228,6 +228,118 @@ macro_rules! get_paths {
 
 #[doc(hidden)]
 #[macro_export]
+macro_rules! get_embedding_paths {
+    (
+        $path_name:ident,
+        $token_source:expr,
+        $revision:expr,
+        $this:expr,
+        $quantized_model_id:expr,
+        $quantized_filename:expr,
+        $silent:expr,
+        $loading_uqff:expr
+    ) => {{
+        let api = {
+            use $crate::GLOBAL_HF_CACHE;
+            let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+            let mut api = ApiBuilder::from_cache(cache)
+                .with_progress(!$silent)
+                .with_token(get_token($token_source)?);
+            if let Ok(x) = std::env::var("HF_HUB_CACHE") {
+                api = api.with_cache_dir(x.into());
+            }
+            api.build()?
+        };
+        let revision = $revision.unwrap_or("main".to_string());
+        let api = api.repo(Repo::with_revision(
+            $this.model_id.clone(),
+            RepoType::Model,
+            revision.clone(),
+        ));
+        let model_id = std::path::Path::new(&$this.model_id);
+        let tokenizer_filename = if let Some(ref p) = $this.tokenizer_json {
+            info!("Using tokenizer.json at `{p}`");
+            PathBuf::from_str(p)?
+        } else {
+            info!("Loading `tokenizer.json` at `{}`", $this.model_id);
+            $crate::api_get_file!(api, "tokenizer.json", model_id)
+        };
+        info!("Loading `config.json` at `{}`", $this.model_id);
+        let config_filename = $crate::api_get_file!(api, "config.json", model_id);
+        let filenames = get_model_paths(
+            revision.clone(),
+            &$token_source,
+            $quantized_model_id.as_ref(),
+            $quantized_filename.as_ref(),
+            &api,
+            &model_id,
+            $loading_uqff,
+        )?;
+        let adapter_paths = get_xlora_paths(
+            $this.model_id.clone(),
+            None, // no xlora
+            $this.lora_adapter_ids.as_ref(),
+            &$token_source,
+            revision.clone(),
+            None, // no xlora
+        )?;
+
+        let modules_config = $crate::api_get_file!(api, "modules.json", model_id);
+        let modules: Vec<$crate::pipeline::EmbeddingModule> =
+            serde_json::from_str(&std::fs::read_to_string(modules_config)?)?;
+        let mut parsed_modules = Vec::new();
+        for module in modules {
+            match module.ty {
+                $crate::pipeline::EmbeddingModuleType::Transformer => {
+                    parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Transformer {
+                        path: module.path.clone(),
+                    });
+                }
+                $crate::pipeline::EmbeddingModuleType::Pooling => {
+                    parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Pooling {
+                        path: module.path.clone(),
+                        config: $crate::api_get_file!(
+                            api,
+                            &format!("{}/config.json", module.path),
+                            model_id
+                        ),
+                    });
+                }
+                $crate::pipeline::EmbeddingModuleType::Dense => {
+                    parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Dense {
+                        path: module.path.clone(),
+                        config: $crate::api_get_file!(
+                            api,
+                            &format!("{}/config.json", module.path),
+                            model_id
+                        ),
+                        model: $crate::api_get_file!(
+                            api,
+                            &format!("{}/model.safetensors", module.path),
+                            model_id
+                        ),
+                    });
+                }
+                $crate::pipeline::EmbeddingModuleType::Normalize => {
+                    parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Normalize {
+                        path: module.path.clone(),
+                    });
+                }
+            }
+        }
+
+        Ok(Box::new($path_name {
+            tokenizer_filename,
+            config_filename,
+            filenames,
+            adapter_paths,
+            modules: parsed_modules,
+        }))
+    }};
+}
+
+#[doc(hidden)]
+#[macro_export]
 macro_rules! get_uqff_paths {
     ($from_uqff:expr, $this:expr, $silent:expr) => {{
         let api = {
@@ -586,6 +698,88 @@ macro_rules! vision_normal_model_loader_sharded {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: $matformer_config,
+            },
+            $attention_mechanism,
+        )?
+    }};
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! embedding_normal_model_loader {
+    (
+        $paths:expr,
+        $dtype:expr,
+        $device:expr,
+        $layer_devices:expr,
+        $config:expr,
+        $loader:expr,
+        $silent:expr,
+        $mapper:expr,
+        $loading_isq:expr,
+        $loading_uqff:expr,
+        $real_device:expr,
+        $attention_mechanism:expr,
+        $multi_progress:expr,
+    ) => {{
+        let regexes = if $loading_isq && $loading_uqff {
+            // Dummy weights for the layers which will be overwritten...
+            Some(std::sync::Arc::new($loader.isq_layer_regexes(&$config)?))
+        } else {
+            None
+        };
+        let get_device_for_tensor =
+            $loader.get_device_for_tensor(&$config, &*$mapper, $loading_isq)?;
+
+        let vb = from_mmaped_safetensors(
+            $paths.get_weight_filenames().to_vec(),
+            Vec::new(),
+            $dtype,
+            $device,
+            $layer_devices,
+            $silent,
+            regexes,
+            |_| true, // Will be overwritten...
+            get_device_for_tensor,
+        )?;
+
+        $loader.load(
+            &$config,
+            vb,
+            $crate::pipeline::NormalLoadingMetadata {
+                mapper: $mapper,
+                loading_isq: $loading_isq,
+                real_device: $real_device,
+                multi_progress: $multi_progress,
+                matformer_slicing_config: None,
+            },
+            $attention_mechanism,
+        )?
+    }};
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! embedding_normal_model_loader_sharded {
+    (
+        $vb:expr,
+        $config:expr,
+        $loader:expr,
+        $mapper:expr,
+        $loading_isq:expr,
+        $real_device:expr,
+        $attention_mechanism:expr,
+        $multi_progress:expr,
+    ) => {{
+        $loader.load(
+            &$config,
+            $vb,
+            $crate::pipeline::NormalLoadingMetadata {
+                mapper: $mapper,
+                loading_isq: $loading_isq,
+                real_device: $real_device,
+                multi_progress: $multi_progress,
+                matformer_slicing_config: None,
             },
             $attention_mechanism,
         )?

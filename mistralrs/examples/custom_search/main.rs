@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
     // used **instead** of the default remote web search when we set `web_search_options` later
     // in the request.
 
-    // The BERT embedding model is **not** required even when using a custom callback – it is
+    // The EmbeddingGemma reranker is **not** required even when using a custom callback – it is
     // used inside the retrieval pipeline to cluster / rank the results that our callback returns.
     let model = TextModelBuilder::new("NousResearch/Hermes-3-Llama-3.1-8B")
         .with_isq(IsqType::Q4K)

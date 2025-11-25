@@ -20,8 +20,16 @@ pub fn masked_fill<D: WithDType>(xs: &Tensor, mask: &Tensor, value: D) -> Result
     Ok(res)
 }
 
+pub struct NotACache;
+
 pub trait PastKvLenCache {
     fn get_past_kv_len(&self) -> Result<usize>;
+}
+
+impl PastKvLenCache for NotACache {
+    fn get_past_kv_len(&self) -> Result<usize> {
+        Ok(0)
+    }
 }
 
 impl PastKvLenCache for Vec<KvCache> {
@@ -289,5 +297,64 @@ impl CausalMasker {
                 )
             }
         }
+    }
+}
+
+pub struct BidirectionalMasker;
+
+impl BidirectionalMasker {
+    fn make_swa_mask(
+        &self,
+        tgt_len: usize,
+        sliding_window: usize,
+        device: &Device,
+        dtype: DType,
+    ) -> Result<Tensor> {
+        let mask: Vec<_> = (0..tgt_len)
+            .flat_map(|i| {
+                (0..tgt_len).map(move |j| {
+                    // https://github.com/huggingface/transformers/blob/a0bf5a82eebf88ee9f52145be427f6f1541329f6/src/transformers/models/gemma3/modeling_gemma3.py#L478
+                    // A token can attend to any other token if their absolute distance is within the (exclusive) sliding window size (distance < sliding_window)."
+                    if (i as isize - j as isize).unsigned_abs() >= sliding_window {
+                        f32::NEG_INFINITY
+                    } else {
+                        0.
+                    }
+                })
+            })
+            .collect();
+        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), device)?;
+        mask.to_dtype(dtype)
+    }
+
+    pub fn make_mask(&self, input_ids: &Tensor, dtype: DType) -> Result<Tensor> {
+        let (_b_sz, tgt_len) = input_ids.dims2()?;
+
+        // Avoid materializing large sliding-window masks when flash-attn on CUDA.
+        if crate::using_flash_attn() && input_ids.device().is_cuda() {
+            return Tensor::zeros((1, 1), dtype, input_ids.device());
+        }
+
+        // Do not make any -inf
+        let mask = Tensor::zeros((tgt_len, tgt_len), dtype, input_ids.device())?;
+
+        Ok(mask)
+    }
+    pub fn make_sliding_mask(
+        &self,
+        input_ids: &Tensor,
+        dtype: DType,
+        sliding_window: usize,
+    ) -> Result<Tensor> {
+        let (_b_sz, tgt_len) = input_ids.dims2()?;
+
+        // Avoid materializing large sliding-window masks when flash-attn on CUDA.
+        if crate::using_flash_attn() && input_ids.device().is_cuda() {
+            return Tensor::zeros((1, 1), dtype, input_ids.device());
+        }
+
+        let mask = self.make_swa_mask(tgt_len, sliding_window, input_ids.device(), dtype)?;
+
+        Ok(mask)
     }
 }

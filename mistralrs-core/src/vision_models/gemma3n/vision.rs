@@ -1,6 +1,6 @@
 use candle_core::{Result, Tensor};
 use candle_nn::{Activation, Conv2d, Conv2dConfig, Module};
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{Convolution, ShardedVarBuilder};
 use tracing::warn;
 
 use crate::{
@@ -115,7 +115,7 @@ impl Conv2dSame {
 impl Module for Conv2dSame {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let x = pad_same(x, self.kernel_size, self.stride, self.dilation)?;
-        self.conv.forward(&x)
+        Convolution.forward_2d(&self.conv, &x)
     }
 }
 
@@ -193,7 +193,7 @@ enum ConvType {
 impl Module for ConvType {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         match self {
-            ConvType::Regular(conv) => conv.forward(x),
+            ConvType::Regular(conv) => Convolution.forward_2d(conv, x),
             ConvType::Same(conv) => conv.forward(x),
         }
     }
@@ -324,7 +324,7 @@ impl EdgeResidual {
         let shortcut = x.clone();
         let mut x = self.conv_exp.forward(x)?;
         x = self.bn1.forward(&x)?;
-        x = self.conv_pwl.forward(&x)?;
+        x = Convolution.forward_2d(&self.conv_pwl, &x)?;
         x = self.bn2.forward(&x)?;
 
         if self.has_skip {
@@ -603,7 +603,7 @@ impl MultiQueryAttention2d {
 
         // Query projection and reshape
         // [B, H, W, C] -> [B, H, W, num_heads * key_dim] -> [B, H*W, num_heads, key_dim] -> [B, num_heads, H*W, key_dim]
-        let mut q = self.query_proj.forward(x)?;
+        let mut q = Convolution.forward_2d(&self.query_proj, x)?;
         q = q
             .permute((0, 2, 3, 1))? // NCHW -> NHWC
             .reshape((b, h * w, self.num_heads, self.key_dim))?
@@ -615,7 +615,7 @@ impl MultiQueryAttention2d {
             k = down_conv.forward(&k)?;
             k = norm.forward(&k)?;
         }
-        k = self.key_proj.forward(&k)?;
+        k = Convolution.forward_2d(&self.key_proj, &k)?;
         let (_, _, kh, kw) = k.dims4()?;
         // [B, C, H, W] -> [B, H, W, C] -> [B, H*W, C] -> [B, 1, H*W, C]
         k = k
@@ -629,7 +629,7 @@ impl MultiQueryAttention2d {
             v = down_conv.forward(&v)?;
             v = norm.forward(&v)?;
         }
-        v = self.value_proj.forward(&v)?;
+        v = Convolution.forward_2d(&self.value_proj, &v)?;
         let (_, _, vh, vw) = v.dims4()?;
         // [B, C, H, W] -> [B, H, W, C] -> [B, H*W, C] -> [B, 1, H*W, C]
         v = v
@@ -643,7 +643,7 @@ impl MultiQueryAttention2d {
             softmax_scale: self.scale as f32,
             sliding_window: None,
         };
-        let mut o = Sdpa.run_attention(&q, &k, &v, None, None, &sdpa_params)?;
+        let mut o = Sdpa.run_attention_noflash(&q, &k, &v, None, &sdpa_params)?;
 
         // Reshape output back
         // [B, num_heads, H*W, value_dim] -> [B, H*W, num_heads, value_dim] -> [B, H, W, num_heads * value_dim]
@@ -652,7 +652,7 @@ impl MultiQueryAttention2d {
             .reshape((b, h, w, self.num_heads * self.value_dim))?
             .permute((0, 3, 1, 2))?; // NHWC -> NCHW
 
-        o = self.output_proj.forward(&o)?;
+        o = Convolution.forward_2d(&self.output_proj, &o)?;
 
         Ok(o)
     }

@@ -11,11 +11,12 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3.10"
 ]
 dynamic = ["description"]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
 profile = "release"
+include = ["mistralrs.pyi", "py.typed"]
+sdist-include = ["mistralrs.pyi", "py.typed"]

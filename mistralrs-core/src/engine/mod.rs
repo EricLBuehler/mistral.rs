@@ -1,6 +1,5 @@
 use crate::{
     distributed,
-    embedding::bert::BertPipeline,
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
@@ -9,7 +8,7 @@ use crate::{
     prefix_cacher::PrefixCacheManagerV2,
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
-    search,
+    search::{self, rag::SearchPipeline},
     sequence::{SeqStepType, StopReason},
     tools, CompletionResponse, SchedulerConfig, DEBUG,
 };
@@ -17,28 +16,34 @@ use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::ParserFactory;
 pub use logger::IntervalLogger;
 use mistralrs_quant::RingConfig;
-use once_cell::sync::Lazy;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    fmt,
     io::{BufWriter, Write},
     net::TcpListener,
     ops::Deref,
+    str::FromStr,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, LazyLock,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    sync::{mpsc::Receiver, Mutex},
+    select,
+    sync::{
+        mpsc::{error::TryRecvError, Receiver, Sender},
+        Mutex, Notify,
+    },
     task::JoinHandle,
 };
 
 use crate::{
     get_mut_arcmutex, handle_pipeline_forward_error,
-    pipeline::Pipeline,
+    pipeline::{ModelCategory, Pipeline},
     request::Request,
     response::{ChatCompletionResponse, Choice, ResponseMessage},
     sequence::{SequenceRecognizer, SequenceState},
@@ -53,12 +58,47 @@ pub enum EngineInstruction {
     Terminate,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 /// Embedding model used for ranking web search results internally.
-pub enum BertEmbeddingModel {
+pub enum SearchEmbeddingModel {
     #[default]
-    SnowflakeArcticEmbedL,
-    Custom(String),
+    #[serde(rename = "embedding_gemma")]
+    EmbeddingGemma300M,
+}
+
+impl SearchEmbeddingModel {
+    pub fn hf_model_id(&self) -> &'static str {
+        match self {
+            Self::EmbeddingGemma300M => "google/embeddinggemma-300m",
+        }
+    }
+
+    pub fn variants() -> &'static [&'static str] {
+        &["embedding_gemma"]
+    }
+}
+
+impl fmt::Display for SearchEmbeddingModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmbeddingGemma300M => f.write_str("embedding_gemma"),
+        }
+    }
+}
+
+impl FromStr for SearchEmbeddingModel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "embedding_gemma" => Ok(Self::EmbeddingGemma300M),
+            other => Err(format!(
+                "Unknown search embedding model `{other}`. Supported values: {}",
+                Self::variants().join(", ")
+            )),
+        }
+    }
 }
 
 const SEED: u64 = 0;
@@ -67,9 +107,9 @@ const SEED: u64 = 0;
 pub static TERMINATE_ALL_NEXT_STEP: AtomicBool = AtomicBool::new(false);
 
 /// Engine-specific termination flags, per Engine thread ID.
-static ENGINE_TERMINATE_FLAGS: Lazy<
+static ENGINE_TERMINATE_FLAGS: LazyLock<
     std::sync::Mutex<HashMap<std::thread::ThreadId, Arc<AtomicBool>>>,
-> = Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+> = LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// Get or create a termination flag for the current engine thread.
 pub fn get_engine_terminate_flag() -> Arc<AtomicBool> {
@@ -108,19 +148,20 @@ pub fn reset_engine_terminate_flag() {
 }
 
 /// Engine instructions, per Engine (MistralRs) ID.
-pub static ENGINE_INSTRUCTIONS: Lazy<std::sync::Mutex<HashMap<usize, Option<EngineInstruction>>>> =
-    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+pub static ENGINE_INSTRUCTIONS: LazyLock<
+    std::sync::Mutex<HashMap<usize, Option<EngineInstruction>>>,
+> = LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 pub struct Engine {
+    tx: Sender<Request>,
     rx: Arc<Mutex<Receiver<Request>>>,
     pipeline: Arc<Mutex<dyn Pipeline>>,
-    bert_pipeline: Arc<Mutex<Option<BertPipeline>>>,
+    search_pipeline: Arc<Mutex<Option<SearchPipeline>>>,
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
     scheduler: Arc<Mutex<dyn Scheduler>>,
     id: Arc<Mutex<usize>>,
-    truncate_sequence: bool,
     no_kv_cache: bool,
     prefix_cacher: Arc<Mutex<PrefixCacheManagerV2>>,
     is_debug: bool,
@@ -128,6 +169,7 @@ pub struct Engine {
     throughput_logging_enabled: bool,
     logger: IntervalLogger,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    pending_notify: Arc<Notify>,
 }
 
 impl Drop for Engine {
@@ -141,16 +183,16 @@ impl Drop for Engine {
 impl Engine {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        tx: Sender<Request>,
         rx: Receiver<Request>,
         pipeline: Arc<Mutex<dyn Pipeline>>,
         config: SchedulerConfig,
-        truncate_sequence: bool,
         mut no_kv_cache: bool,
         mut no_prefix_cache: bool,
         prefix_cache_n: usize,
         disable_eos_stop: bool,
         throughput_logging_enabled: bool,
-        search_embedding_model: Option<BertEmbeddingModel>,
+        search_embedding_model: Option<SearchEmbeddingModel>,
         search_callback: Option<Arc<search::SearchCallback>>,
         tool_callbacks: tools::ToolCallbacks,
         tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -162,8 +204,8 @@ impl Engine {
             || get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache
             || prefix_cache_n == 0;
 
-        let bert_pipeline = match search_embedding_model {
-            Some(search_embedding_model) => Some(BertPipeline::new(
+        let search_pipeline = match search_embedding_model {
+            Some(search_embedding_model) => Some(SearchPipeline::new(
                 search_embedding_model,
                 &get_mut_arcmutex!(pipeline).device(),
             )?),
@@ -174,15 +216,15 @@ impl Engine {
         let block_engine = get_mut_arcmutex!(scheduler).block_engine();
 
         Ok(Self {
+            tx,
             rx: Arc::new(Mutex::new(rx)),
             pipeline,
-            bert_pipeline: Arc::new(Mutex::new(bert_pipeline)),
+            search_pipeline: Arc::new(Mutex::new(search_pipeline)),
             search_callback,
             tool_callbacks,
             tool_callbacks_with_tools,
             scheduler: scheduler.clone(),
             id: Arc::new(Mutex::new(0)),
-            truncate_sequence,
             no_kv_cache,
             prefix_cacher: Arc::new(Mutex::new(PrefixCacheManagerV2::new(
                 prefix_cache_n,
@@ -194,7 +236,21 @@ impl Engine {
             throughput_logging_enabled,
             logger: IntervalLogger::new(Duration::from_secs(5)),
             handles: Arc::new(Mutex::new(Vec::new())),
+            pending_notify: Arc::new(Notify::new()),
         })
+    }
+
+    /// Returns the maximum supported sequence length for the underlying model, if applicable.
+    #[allow(dead_code)]
+    pub fn max_sequence_length(&self) -> Option<usize> {
+        let pipeline = get_mut_arcmutex!(self.pipeline);
+        let category = pipeline.category();
+
+        if matches!(category, ModelCategory::Diffusion | ModelCategory::Speech) {
+            None
+        } else {
+            Some(pipeline.get_metadata().max_seq_len)
+        }
     }
 
     pub async fn run(self: Arc<Self>) {
@@ -205,23 +261,90 @@ impl Engine {
         let rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
         let mut last_completion_ids: Vec<usize> = vec![];
         'lp: loop {
-            if matches!(
-                ENGINE_INSTRUCTIONS
-                    .lock()
-                    .expect("`ENGINE_INSTRUCTIONS` was poisoned")
-                    .get(get_mut_arcmutex!(self.id).deref()),
-                Some(Some(EngineInstruction::Terminate))
-            ) {
+            let should_terminate = || {
+                matches!(
+                    ENGINE_INSTRUCTIONS
+                        .lock()
+                        .expect("`ENGINE_INSTRUCTIONS` was poisoned")
+                        .get(get_mut_arcmutex!(self.id).deref()),
+                    Some(Some(EngineInstruction::Terminate))
+                )
+            };
+
+            if should_terminate() {
                 self.replicate_request_to_daemons(&Request::Terminate);
                 break 'lp;
             }
 
-            while let Ok(request) = get_mut_arcmutex!(self.rx).try_recv() {
-                self.replicate_request_to_daemons(&request);
-                if matches!(request, Request::Terminate) {
+            let mut channel_disconnected = false;
+            loop {
+                let next_request = {
+                    let mut rx = self.rx.lock().await;
+                    rx.try_recv()
+                };
+
+                match next_request {
+                    Ok(request) => {
+                        self.replicate_request_to_daemons(&request);
+                        if matches!(request, Request::Terminate) {
+                            break 'lp;
+                        }
+                        self.clone().handle_request(request).await;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        channel_disconnected = true;
+                        break;
+                    }
+                }
+            }
+
+            if channel_disconnected {
+                break 'lp;
+            }
+
+            let (waiting_len, running_len) = {
+                let scheduler = get_mut_arcmutex!(self.scheduler);
+                (scheduler.waiting_len(), scheduler.running_len())
+            };
+            let scheduler_idle = waiting_len == 0 && running_len == 0;
+
+            if scheduler_idle {
+                if should_terminate() {
+                    self.replicate_request_to_daemons(&Request::Terminate);
                     break 'lp;
                 }
-                self.clone().handle_request(request).await;
+                enum WaitEvent {
+                    Request(Option<Request>),
+                    Wake,
+                }
+                let wait_for_request = async {
+                    let mut rx = self.rx.lock().await;
+                    rx.recv().await
+                };
+                tokio::pin!(wait_for_request);
+                let wait_for_wake = self.pending_notify.notified();
+                tokio::pin!(wait_for_wake);
+
+                let event = select! {
+                    res = &mut wait_for_request => WaitEvent::Request(res),
+                    _ = &mut wait_for_wake => WaitEvent::Wake,
+                };
+
+                match event {
+                    WaitEvent::Request(Some(request)) => {
+                        self.replicate_request_to_daemons(&request);
+                        if matches!(request, Request::Terminate) {
+                            break 'lp;
+                        }
+                        self.clone().handle_request(request).await;
+                        continue;
+                    }
+                    WaitEvent::Request(None) => break 'lp,
+                    WaitEvent::Wake => {
+                        continue;
+                    }
+                }
             }
 
             if TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
@@ -449,8 +572,6 @@ impl Engine {
                                     CacheBackendMetadata::PagedAttention {
                                         metadata,
                                         blocks_to_copy: output.blocks_to_copy,
-                                        blocks_to_swap_in: output.blocks_to_swap_in,
-                                        blocks_to_swap_out: output.blocks_to_swap_out,
                                     },
                                 )
                                 .await
@@ -520,6 +641,19 @@ impl Engine {
                 }
             }
 
+            // Free Mamba state pool slots for finished sequences (hybrid models)
+            {
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                if pipeline.cache().is_hybrid() {
+                    let mamba_indices = scheduler.get_finished_mamba_indices();
+                    if !mamba_indices.is_empty() {
+                        let mut hybrid_cache = pipeline.cache().hybrid();
+                        for idx in mamba_indices {
+                            hybrid_cache.free_seq(idx);
+                        }
+                    }
+                }
+            }
             scheduler.free_finished_sequence_groups();
         }
     }

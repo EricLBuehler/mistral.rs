@@ -135,9 +135,6 @@ impl InputsProcessor for Qwen2VLImageProcessor {
         if no_kv_cache {
             return Err(anyhow::Error::msg("Vision model must have kv cache."));
         }
-        if input_seqs.len() != 1 {
-            return Err(anyhow::Error::msg("Qwen2-VL only supports batch size = 1"));
-        }
         let Some(tokenizer) = tokenizer else {
             return Err(anyhow::Error::msg(
                 "MLlamaInputProcessor requires a specified tokenizer.",

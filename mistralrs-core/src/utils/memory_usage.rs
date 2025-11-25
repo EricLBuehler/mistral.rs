@@ -29,7 +29,7 @@ impl MemoryUsage {
             }
             #[cfg(feature = "metal")]
             Device::Metal(dev) => {
-                let max = dev.recommended_max_working_set_size();
+                let max = dev.device().recommended_max_working_set_size();
                 let alloc = dev.current_allocated_size();
                 let avail = max.saturating_sub(alloc);
 

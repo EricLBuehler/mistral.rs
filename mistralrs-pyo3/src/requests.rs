@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use either::Either;
 use mistralrs_core::WebSearchOptions;
 use pyo3::{
-    exceptions::PyTypeError,
+    exceptions::{PyTypeError, PyValueError},
     pyclass, pymethods,
     types::{PyAnyMethods, PyList, PyString},
-    Py, PyAny, PyErr, PyResult, Python,
+    Bound, Py, PyAny, PyErr, PyResult, Python,
 };
 
 #[pyclass(eq, eq_int)]
@@ -44,6 +44,7 @@ pub struct CompletionRequest {
     pub(crate) dry_base: Option<f32>,
     pub(crate) dry_allowed_length: Option<usize>,
     pub(crate) dry_sequence_breakers: Option<Vec<String>>,
+    pub(crate) truncate_sequence: bool,
 }
 
 #[pymethods]
@@ -74,6 +75,7 @@ impl CompletionRequest {
         dry_base=None,
         dry_allowed_length=None,
         dry_sequence_breakers=None,
+        truncate_sequence=false,
     ))]
     fn new(
         prompt: String,
@@ -100,6 +102,7 @@ impl CompletionRequest {
         dry_base: Option<f32>,
         dry_allowed_length: Option<usize>,
         dry_sequence_breakers: Option<Vec<String>>,
+        truncate_sequence: Option<bool>,
     ) -> PyResult<Self> {
         Ok(Self {
             prompt,
@@ -126,7 +129,94 @@ impl CompletionRequest {
             dry_allowed_length,
             dry_base,
             dry_sequence_breakers,
+            truncate_sequence: truncate_sequence.unwrap_or(false),
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum PythonEmbeddingInputs {
+    Prompts(Vec<String>),
+    Tokens(Vec<Vec<u32>>),
+}
+
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct EmbeddingRequest {
+    pub(crate) inputs: PythonEmbeddingInputs,
+    pub(crate) truncate_sequence: bool,
+}
+
+#[pymethods]
+impl EmbeddingRequest {
+    #[new]
+    #[pyo3(signature = (input, truncate_sequence=false))]
+    fn new(input: Py<PyAny>, truncate_sequence: bool) -> PyResult<Self> {
+        let inputs = Python::with_gil(|py| normalize_embedding_inputs(input.bind(py)))?;
+        Ok(Self {
+            inputs,
+            truncate_sequence,
+        })
+    }
+}
+
+fn normalize_embedding_inputs(obj: &Bound<'_, PyAny>) -> PyResult<PythonEmbeddingInputs> {
+    // Single string
+    if let Ok(single) = obj.extract::<String>() {
+        return Ok(PythonEmbeddingInputs::Prompts(vec![single]));
+    }
+
+    if let Ok(strings) = obj.extract::<Vec<String>>() {
+        if strings.is_empty() {
+            return Err(PyValueError::new_err(
+                "embedding input sequence must not be empty",
+            ));
+        }
+        return Ok(PythonEmbeddingInputs::Prompts(strings));
+    }
+
+    if let Ok(tokens) = obj.extract::<Vec<i64>>() {
+        return Ok(PythonEmbeddingInputs::Tokens(vec![convert_tokens(tokens)?]));
+    }
+
+    if let Ok(batches) = obj.extract::<Vec<Vec<i64>>>() {
+        if batches.is_empty() {
+            return Err(PyValueError::new_err(
+                "embedding token batches must not be empty",
+            ));
+        }
+        let mut out = Vec::with_capacity(batches.len());
+        for batch in batches {
+            out.push(convert_tokens(batch)?);
+        }
+        return Ok(PythonEmbeddingInputs::Tokens(out));
+    }
+
+    Err(PyTypeError::new_err(
+        "embedding input must be a string, list[str], list[int], or list[list[int]]",
+    ))
+}
+
+fn convert_tokens(tokens: Vec<i64>) -> PyResult<Vec<u32>> {
+    if tokens.is_empty() {
+        return Err(PyValueError::new_err(
+            "token list must contain at least one element",
+        ));
+    }
+    let mut out = Vec::with_capacity(tokens.len());
+    for token in tokens {
+        out.push(convert_token(token)?);
+    }
+    Ok(out)
+}
+
+fn convert_token(value: i64) -> PyResult<u32> {
+    if value < 0 || value > u32::MAX as i64 {
+        Err(PyValueError::new_err(format!(
+            "token value {value} is outside the allowed unsigned 32-bit range"
+        )))
+    } else {
+        Ok(value as u32)
     }
 }
 
@@ -169,6 +259,7 @@ pub struct ChatCompletionRequest {
     pub(crate) dry_sequence_breakers: Option<Vec<String>>,
     pub(crate) web_search_options: Option<WebSearchOptions>,
     pub(crate) enable_thinking: Option<bool>,
+    pub(crate) truncate_sequence: bool,
 }
 
 #[pymethods]
@@ -201,6 +292,7 @@ impl ChatCompletionRequest {
         dry_sequence_breakers=None,
         web_search_options=None,
         enable_thinking=false,
+        truncate_sequence=false,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -229,6 +321,7 @@ impl ChatCompletionRequest {
         dry_sequence_breakers: Option<Vec<String>>,
         web_search_options: Option<WebSearchOptions>,
         enable_thinking: Option<bool>,
+        truncate_sequence: Option<bool>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -305,6 +398,7 @@ impl ChatCompletionRequest {
             dry_sequence_breakers,
             web_search_options,
             enable_thinking,
+            truncate_sequence: truncate_sequence.unwrap_or(false),
         })
     }
 }

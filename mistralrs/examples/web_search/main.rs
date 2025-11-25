@@ -1,6 +1,6 @@
 use anyhow::Result;
 use mistralrs::{
-    BertEmbeddingModel, IsqType, RequestBuilder, TextMessageRole, TextMessages, TextModelBuilder,
+    IsqType, RequestBuilder, SearchEmbeddingModel, TextMessageRole, TextMessages, TextModelBuilder,
     WebSearchOptions,
 };
 
@@ -9,7 +9,7 @@ async fn main() -> Result<()> {
     let model = TextModelBuilder::new("NousResearch/Hermes-3-Llama-3.1-8B")
         .with_isq(IsqType::Q4K)
         .with_logging()
-        .with_search(BertEmbeddingModel::default())
+        .with_search(SearchEmbeddingModel::default())
         .build()
         .await?;
 

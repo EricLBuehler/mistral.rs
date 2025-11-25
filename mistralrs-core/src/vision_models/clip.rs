@@ -5,7 +5,7 @@ use std::sync::Arc;
 // Sourced from https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/clip/vision_model.rs
 use candle_core::{IndexOp, Result, Shape, Tensor, D};
 use candle_nn::{Conv2dConfig, Module};
-use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{Convolution, QuantMethod, ShardedVarBuilder};
 
 use crate::{
     layers::{self, MatMul},
@@ -106,9 +106,8 @@ impl ClipVisionEmbeddings {
 impl Module for ClipVisionEmbeddings {
     fn forward(&self, pixel_values: &Tensor) -> Result<Tensor> {
         let batch_size = pixel_values.shape().dims();
-        let patch_embeds = self
-            .patch_embedding
-            .forward(pixel_values)?
+        let patch_embeds = Convolution
+            .forward_2d(&self.patch_embedding, pixel_values)?
             .flatten_from(2)?
             .transpose(1, 2)?;
         let shape = Shape::from((batch_size[0], 1, self.class_embedding.dim(D::Minus1)?));

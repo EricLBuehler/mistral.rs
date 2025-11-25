@@ -63,7 +63,7 @@ You should expect output like this:
 }
 "#;
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct SearchResult {
     pub title: String,
     pub description: String,
@@ -71,7 +71,7 @@ pub struct SearchResult {
     pub content: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct ExtractResult {
     pub url: String,
     pub content: String,

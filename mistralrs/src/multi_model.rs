@@ -71,6 +71,7 @@ impl MultiModel {
         } else {
             (None, None)
         };
+        let truncate_sequence = request.truncate_sequence();
 
         let request = Request::Normal(Box::new(NormalRequest {
             messages: request.take_messages(),
@@ -87,6 +88,7 @@ impl MultiModel {
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
             model_id: model_id.map(|s| s.to_string()),
+            truncate_sequence,
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -108,5 +110,13 @@ impl MultiModel {
     /// Get configuration for a specific model.
     pub fn config(&self, model_id: Option<&str>) -> Result<MistralRsConfig, String> {
         self.runner.config(model_id)
+    }
+
+    /// Returns the maximum supported sequence length for the specified model, if applicable.
+    pub fn max_sequence_length(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<Option<usize>, MistralRsError> {
+        self.runner.max_sequence_length(model_id)
     }
 }

@@ -8,16 +8,16 @@ use crate::device_map::DeviceMapper;
 use crate::gguf::Content;
 use crate::layers::{CausalMasker, MatMul, QRmsNorm, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
+use crate::ops::{TopKLastDimOp, TopKOutput};
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::{extract_logits, EitherCache, KvCache, NormalCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
-use crate::utils::progress::NiceProgressBar;
+use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 use candle_core::quantized::QMatMul;
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Embedding, Module};
-use indicatif::MultiProgress;
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 // Default fallback for models that don't specify context_length
@@ -57,20 +57,10 @@ impl FusedMoe {
         let router_logits = self.gate.forward(&xs.to_dtype(DType::F32)?)?;
         let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
 
-        #[cfg(feature = "cuda")]
-        let indices = routing_weights
-            .arg_sort_last_dim(false)?
-            .narrow(D::Minus1, 0, self.num_experts_per_tok)?
-            .contiguous()?;
-
-        #[cfg(not(feature = "cuda"))]
-        let indices = routing_weights
-            .to_device(&candle_core::Device::Cpu)?
-            .arg_sort_last_dim(false)?
-            .narrow(D::Minus1, 0, self.num_experts_per_tok)?
-            .contiguous()?
-            .to_device(xs.device())?;
-        let mut scores = routing_weights.gather(&indices, D::Minus1)?;
+        let TopKOutput {
+            values: mut scores,
+            indices,
+        } = routing_weights.topk(self.num_experts_per_tok)?;
 
         if self.norm_topk_prob {
             scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
@@ -379,7 +369,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         for layer_idx in NiceProgressBar::<_, 'b'>(
             0..block_count,
             "Loading repeating layers",
-            &MultiProgress::new(),
+            &new_multi_progress(),
         ) {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);

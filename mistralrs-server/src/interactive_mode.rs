@@ -7,7 +7,6 @@ use mistralrs_core::{
     Request, RequestMessage, Response, ResponseOk, SamplingParams, WebSearchOptions,
     TERMINATE_ALL_NEXT_STEP,
 };
-use once_cell::sync::Lazy;
 use regex::Regex;
 use rustyline::{error::ReadlineError, history::History, DefaultEditor, Editor, Helper};
 use serde_json::Value;
@@ -15,7 +14,7 @@ use std::{
     fs,
     io::{self, Write},
     path::PathBuf,
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{atomic::Ordering, Arc, LazyLock, Mutex},
     time::Instant,
 };
 use tokio::sync::mpsc::channel;
@@ -71,8 +70,8 @@ fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>) -> String {
     }
 }
 
-static CTRLC_HANDLER: Lazy<Mutex<&'static (dyn Fn() + Sync)>> =
-    Lazy::new(|| Mutex::new(&exit_handler));
+static CTRLC_HANDLER: LazyLock<Mutex<&'static (dyn Fn() + Sync)>> =
+    LazyLock::new(|| Mutex::new(&exit_handler));
 
 pub async fn interactive_mode(
     mistralrs: Arc<MistralRs>,
@@ -91,6 +90,9 @@ pub async fn interactive_mode(
             audio_interactive_mode(mistralrs, do_search, enable_thinking).await
         }
         Ok(ModelCategory::Speech) => speech_interactive_mode(mistralrs, do_search).await,
+        Ok(ModelCategory::Embedding) => error!(
+            "Embedding models do not support interactive mode. Use the server or Python/Rust APIs."
+        ),
         Err(e) => eprintln!("Error getting model category: {e}"),
     }
 }
@@ -330,6 +332,7 @@ async fn text_interactive_mode(
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             model_id: None,
+            truncate_sequence: false,
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -386,6 +389,7 @@ async fn text_interactive_mode(
                 Response::ImageGeneration(_) => unreachable!(),
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
+                Response::Embeddings { .. } => unreachable!(),
             }
         }
 
@@ -455,10 +459,7 @@ async fn vision_interactive_mode(
     let config = mistralrs.config(None).unwrap();
     let prefixer = match &config.category {
         ModelCategory::Vision { prefixer } => prefixer,
-        ModelCategory::Text
-        | ModelCategory::Diffusion
-        | ModelCategory::Speech
-        | ModelCategory::Audio => {
+        _ => {
             panic!("`add_image_message` expects a vision model.")
         }
     };
@@ -635,6 +636,7 @@ async fn vision_interactive_mode(
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             model_id: None,
+            truncate_sequence: false,
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -691,6 +693,7 @@ async fn vision_interactive_mode(
                 Response::ImageGeneration(_) => unreachable!(),
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
+                Response::Embeddings { .. } => unreachable!(),
             }
         }
 
@@ -794,6 +797,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             model_id: None,
+            truncate_sequence: false,
         }));
 
         let start = Instant::now();
@@ -882,6 +886,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             model_id: None,
+            truncate_sequence: false,
         }));
 
         let start = Instant::now();

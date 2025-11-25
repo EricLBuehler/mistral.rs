@@ -28,6 +28,7 @@ use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::gguf_metadata::{ContentConfig, GgufDeviceMapLoaderInner};
 use crate::utils::model_config as ModelConfig;
+use crate::utils::progress::ProgressScopeGuard;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
@@ -271,6 +272,7 @@ impl Loader for GGUFLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths_gguf!(
             LocalModelPaths,
             &token_source,
@@ -302,6 +304,7 @@ impl Loader for GGUFLoader {
         in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
         if in_situ_quant.is_some() {
             anyhow::bail!(
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."
@@ -467,7 +470,6 @@ impl Loader for GGUFLoader {
             let model_config: &dyn ModelConfigLike = &model_config_metadata;
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
-                paged_attn_config.mem_cpu,
                 paged_attn_config.block_size,
                 internal_dtype,
                 paged_attn_config.cache_type,

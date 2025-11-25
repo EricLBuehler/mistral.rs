@@ -7,12 +7,11 @@ use crate::attention::SdpaParams;
 use crate::gguf::Content;
 use crate::lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
 use crate::pipeline::text_models_inputs_processor::FlashParams;
-use crate::utils::progress::NiceProgressBar;
+use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 use candle_core::quantized::ggml_file;
 use candle_core::quantized::QMatMul;
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module};
-use indicatif::MultiProgress;
 use mistralrs_quant::{MatMul, ShardedVarBuilder};
 use tqdm::Iter;
 use tracing::info;
@@ -535,7 +534,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         for layer_idx in NiceProgressBar::<_, 'b'>(
             0..block_count,
             "Loading repeating layers",
-            &MultiProgress::new(),
+            &new_multi_progress(),
         ) {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);

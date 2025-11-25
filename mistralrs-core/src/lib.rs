@@ -3,7 +3,7 @@ use candle_core::Device;
 use engine::Engine;
 pub use engine::{
     get_engine_terminate_flag, reset_engine_terminate_flag, should_terminate_engine_sequences,
-    BertEmbeddingModel, EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
+    EngineInstruction, SearchEmbeddingModel, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
 };
 use hf_hub::Cache;
 pub use lora::Ordering;
@@ -12,6 +12,7 @@ pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::OnceLock;
 use std::time::Instant;
 use std::{
@@ -36,6 +37,7 @@ mod ops;
 pub use model_loader::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
 };
+mod embedding_models;
 mod kv_cache;
 mod search;
 
@@ -44,22 +46,16 @@ pub use model_selected::ModelSelected;
 pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_selected_model_dtype};
 
 mod amoe;
-#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
-mod dummy_paged_attention;
-mod embedding;
+mod attention;
+mod diffusion_models;
+pub mod distributed;
 mod gguf;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;
 pub mod matformer;
 mod models;
-#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
 mod paged_attention;
-#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
-use dummy_paged_attention as paged_attention;
-mod attention;
-mod diffusion_models;
-pub mod distributed;
 mod pipeline;
 mod prefix_cacher;
 mod request;
@@ -92,11 +88,12 @@ pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType}
 pub use pipeline::{
     chat_template::ChatTemplate, parse_isq_value, AdapterPaths, AnyMoeLoader, AnyMoePipeline,
     AutoDeviceMapParams, AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams, DiffusionLoader,
-    DiffusionLoaderBuilder, DiffusionLoaderType, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, Idefics2Loader,
-    IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths,
-    LoraAdapterPaths, MistralLoader, MixtralLoader, Modalities, ModelKind, ModelPaths,
-    MultimodalPromptPrefixer, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
+    DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoader, EmbeddingLoaderBuilder,
+    EmbeddingLoaderType, EmbeddingModelPaths, EmbeddingSpecificConfig, GGMLLoader,
+    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
+    GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader,
+    Loader, LocalModelPaths, LoraAdapterPaths, MistralLoader, MixtralLoader, Modalities, ModelKind,
+    ModelPaths, MultimodalPromptPrefixer, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
     NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
     SpeculativeLoader, SpeculativePipeline, SpeechLoader, SpeechPipeline, Starcoder2Loader,
     SupportedModality, TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType,
@@ -134,13 +131,12 @@ pub static GLOBAL_HF_CACHE: OnceLock<Cache> = OnceLock::new();
 /// Configuration for creating an engine instance
 #[derive(Clone)]
 pub struct EngineConfig {
-    pub truncate_sequence: bool,
     pub no_kv_cache: bool,
     pub no_prefix_cache: bool,
     pub prefix_cache_n: usize,
     pub disable_eos_stop: bool,
     pub throughput_logging_enabled: bool,
-    pub search_embedding_model: Option<BertEmbeddingModel>,
+    pub search_embedding_model: Option<SearchEmbeddingModel>,
     pub search_callback: Option<Arc<SearchCallback>>,
     pub tool_callbacks: tools::ToolCallbacks,
     pub tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -149,7 +145,6 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            truncate_sequence: false,
             no_kv_cache: false,
             no_prefix_cache: false,
             prefix_cache_n: 16,
@@ -190,6 +185,7 @@ pub struct MistralRsConfig {
     pub device: Device,
     pub category: ModelCategory,
     pub modalities: Modalities,
+    pub max_seq_len: Option<usize>,
 }
 
 /// Internal structure to hold per-engine state
@@ -218,13 +214,12 @@ pub struct MistralRs {
 struct RebootState {
     pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     method: SchedulerConfig,
-    truncate_sequence: bool,
     no_kv_cache: bool,
     no_prefix_cache: bool,
     prefix_cache_n: usize,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
-    search_embedding_model: Option<BertEmbeddingModel>,
+    search_embedding_model: Option<SearchEmbeddingModel>,
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -259,13 +254,12 @@ pub struct MistralRsBuilder {
     pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     method: SchedulerConfig,
     log: Option<String>,
-    truncate_sequence: Option<bool>,
     no_kv_cache: Option<bool>,
     no_prefix_cache: Option<bool>,
     prefix_cache_n: Option<usize>,
     disable_eos_stop: Option<bool>,
     throughput_logging_enabled: bool,
-    search_embedding_model: Option<BertEmbeddingModel>,
+    search_embedding_model: Option<SearchEmbeddingModel>,
     search_callback: Option<Arc<SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
@@ -280,13 +274,12 @@ impl MistralRsBuilder {
         pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         method: SchedulerConfig,
         throughput_logging: bool,
-        search_embedding_model: Option<BertEmbeddingModel>,
+        search_embedding_model: Option<SearchEmbeddingModel>,
     ) -> Self {
         Self {
             pipeline,
             method,
             log: None,
-            truncate_sequence: None,
             no_kv_cache: None,
             no_prefix_cache: None,
             prefix_cache_n: None,
@@ -305,10 +298,6 @@ impl MistralRsBuilder {
     }
     pub fn with_opt_log(mut self, log: Option<String>) -> Self {
         self.log = log;
-        self
-    }
-    pub fn with_truncate_sequence(mut self, truncate_sequence: bool) -> Self {
-        self.truncate_sequence = Some(truncate_sequence);
         self
     }
     pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
@@ -396,15 +385,17 @@ impl MistralRs {
     ) -> Result<EngineInstance, String> {
         let (tx, rx) = channel(10_000);
 
-        let category = pipeline.try_lock().unwrap().category();
-        let kind = pipeline.try_lock().unwrap().get_metadata().kind.clone();
-        let device = pipeline.try_lock().unwrap().device();
-        let modalities = pipeline
-            .try_lock()
-            .unwrap()
-            .get_metadata()
-            .modalities
-            .clone();
+        let pipeline_guard = pipeline.try_lock().unwrap();
+        let category = pipeline_guard.category();
+        let metadata = pipeline_guard.get_metadata();
+        let kind = metadata.kind.clone();
+        let device = pipeline_guard.device();
+        let modalities = metadata.modalities.clone();
+        let max_seq_len = match &category {
+            ModelCategory::Diffusion | ModelCategory::Speech => None,
+            _ => Some(metadata.max_seq_len),
+        };
+        drop(pipeline_guard);
 
         info!("Pipeline input modalities are {:?}", &modalities.input);
         info!("Pipeline output modalities are {:?}", &modalities.output);
@@ -414,18 +405,20 @@ impl MistralRs {
             device,
             category: category.clone(),
             modalities,
+            max_seq_len,
         };
 
+        let tx_for_engine = tx.clone();
         let engine_handler = thread::spawn(move || {
             #[cfg(feature = "metal")]
             objc::rc::autoreleasepool(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
                     let engine = Engine::new(
+                        tx_for_engine,
                         rx,
                         pipeline,
                         method,
-                        config.truncate_sequence,
                         config.no_kv_cache,
                         config.no_prefix_cache,
                         config.prefix_cache_n,
@@ -446,10 +439,10 @@ impl MistralRs {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
                     let engine = Engine::new(
+                        tx_for_engine,
                         rx,
                         pipeline,
                         method,
-                        config.truncate_sequence,
                         config.no_kv_cache,
                         config.no_prefix_cache,
                         config.prefix_cache_n,
@@ -480,7 +473,6 @@ impl MistralRs {
             pipeline,
             method,
             log,
-            truncate_sequence,
             no_kv_cache,
             no_prefix_cache,
             prefix_cache_n,
@@ -497,7 +489,19 @@ impl MistralRs {
             get_mut_arcmutex!(pipeline).device(),
         );
 
-        let truncate_sequence = truncate_sequence.unwrap_or(false);
+        // For hybrid models (Mamba-Attention), force batch_size=1 to prevent state bleeding
+        // Mamba's stateful nature makes batched inference complex; this ensures correctness
+        let method = if get_mut_arcmutex!(pipeline).cache().is_hybrid() {
+            info!(
+                "Hybrid model detected (Mamba-Attention), enforcing batch_size=1 for correctness"
+            );
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()),
+            }
+        } else {
+            method
+        };
+
         let no_kv_cache = no_kv_cache.unwrap_or(false);
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
@@ -543,13 +547,12 @@ impl MistralRs {
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
             method: method.clone(),
-            truncate_sequence,
             no_kv_cache,
             no_prefix_cache,
             prefix_cache_n,
             disable_eos_stop,
             throughput_logging_enabled,
-            search_embedding_model: search_embedding_model.clone(),
+            search_embedding_model,
             search_callback: search_callback.clone(),
             tool_callbacks: tool_callbacks.clone(),
             tool_callbacks_with_tools: tool_callbacks_with_tools.clone(),
@@ -558,7 +561,6 @@ impl MistralRs {
 
         // Create the engine configuration
         let engine_config = EngineConfig {
-            truncate_sequence,
             no_kv_cache,
             no_prefix_cache,
             prefix_cache_n,
@@ -629,6 +631,7 @@ impl MistralRs {
                     return_raw_logits: false,
                     web_search_options: None,
                     model_id: None,
+                    truncate_sequence: false,
                 }));
                 info!("Beginning dummy run.");
                 let start = Instant::now();
@@ -684,13 +687,12 @@ impl MistralRs {
 
             let reboot_state = engine_instance.reboot_state.clone();
             let engine_config = EngineConfig {
-                truncate_sequence: reboot_state.truncate_sequence,
                 no_kv_cache: reboot_state.no_kv_cache,
                 no_prefix_cache: reboot_state.no_prefix_cache,
                 prefix_cache_n: reboot_state.prefix_cache_n,
                 disable_eos_stop: reboot_state.disable_eos_stop,
                 throughput_logging_enabled: reboot_state.throughput_logging_enabled,
-                search_embedding_model: reboot_state.search_embedding_model.clone(),
+                search_embedding_model: reboot_state.search_embedding_model,
                 search_callback: reboot_state.search_callback.clone(),
                 tool_callbacks: reboot_state.tool_callbacks.clone(),
                 tool_callbacks_with_tools: reboot_state.tool_callbacks_with_tools.clone(),
@@ -797,6 +799,36 @@ impl MistralRs {
         }
     }
 
+    /// Get the maximum supported sequence length for a model, if applicable.
+    pub fn max_sequence_length(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<Option<usize>, MistralRsError> {
+        let resolved_model_id = match model_id {
+            Some(id) => id.to_string(),
+            None => {
+                let default_lock = self
+                    .default_engine_id
+                    .read()
+                    .map_err(|_| MistralRsError::SenderPoisoned)?;
+                default_lock
+                    .as_ref()
+                    .ok_or(MistralRsError::EnginePoisoned)?
+                    .clone()
+            }
+        };
+
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        if let Some(engine_instance) = engines.get(&resolved_model_id) {
+            Ok(engine_instance.config.max_seq_len)
+        } else {
+            Err(MistralRsError::EnginePoisoned)
+        }
+    }
+
     pub fn next_request_id(&self) -> usize {
         let l = self.next_request_id.lock().unwrap();
         let last = &mut *l.borrow_mut();
@@ -813,16 +845,27 @@ impl MistralRs {
         method: SchedulerConfig,
         config: AddModelConfig,
     ) -> Result<(), String> {
+        // For hybrid models (Mamba-Attention), force batch_size=1 to prevent state bleeding
+        let method = if pipeline.try_lock().unwrap().cache().is_hybrid() {
+            info!(
+                "Hybrid model detected (Mamba-Attention), enforcing batch_size=1 for correctness"
+            );
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()),
+            }
+        } else {
+            method
+        };
+
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
             method: method.clone(),
-            truncate_sequence: config.engine_config.truncate_sequence,
             no_kv_cache: config.engine_config.no_kv_cache,
             no_prefix_cache: config.engine_config.no_prefix_cache,
             prefix_cache_n: config.engine_config.prefix_cache_n,
             disable_eos_stop: config.engine_config.disable_eos_stop,
             throughput_logging_enabled: config.engine_config.throughput_logging_enabled,
-            search_embedding_model: config.engine_config.search_embedding_model.clone(),
+            search_embedding_model: config.engine_config.search_embedding_model,
             search_callback: config.engine_config.search_callback.clone(),
             tool_callbacks: config.engine_config.tool_callbacks.clone(),
             tool_callbacks_with_tools: config.engine_config.tool_callbacks_with_tools.clone(),

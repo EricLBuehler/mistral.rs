@@ -8,6 +8,7 @@ These are API docs for the `mistralrs` package.
 - Multi-model support: [here](#multi-model-support)
 - MCP Client Configuration: [here](#mcp-client)
 - Example: [here](#example)
+- Embeddings example: [here](#embeddings-example)
 
 ## `Which`
 
@@ -60,6 +61,9 @@ If you do not specify the architecture, an attempt will be made to use the model
 ### Architecture for speech models
 - `Dia`
 
+### Architecture for embedding models
+- `EmbeddingGemma`
+
 ### ISQ Organization
 - `Default`
 - `MoQE`: if applicable, only quantize MoE experts. https://arxiv.org/abs/2310.02410
@@ -67,6 +71,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 > Note: `from_uqff` specified a UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;).
 
 > Note: `enable_thinking` enables thinking for models that support the configuration.
+> Note: `truncate_sequence=True` trims prompts that would otherwise exceed the model's maximum context length. Leave it `False` to receive a validation error instead.
 
 ```py
 class Which(Enum):
@@ -181,6 +186,17 @@ class Which(Enum):
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = (None,)
+
+    @dataclass
+    class Embedding:
+        model_id: str
+        arch: EmbeddingArchitecture | None = None
+        tokenizer_json: str | None = None
+        topology: str | None = None
+        from_uqff: str | list[str] | None = None
+        write_uqff: str | None = None
+        dtype: ModelDType = ModelDType.Auto
+        hf_cache_path: str | None = None
 
     @dataclass
     class VisionPlain:
@@ -403,4 +419,37 @@ res = runner.send_chat_completion_request(
 )
 print(res.choices[0].message.content)
 print(res.usage)
+```
+
+## Embeddings example
+
+```python
+from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
+
+runner = Runner(
+    which=Which.Embedding(
+        model_id="google/embeddinggemma-300m",
+        arch=EmbeddingArchitecture.EmbeddingGemma,
+    )
+)
+
+embeddings = runner.send_embedding_request(
+    EmbeddingRequest(
+        input=[
+            "task: query | text: superconductors",
+            "task: query | text: graphene",
+        ],
+        truncate_sequence=True,
+    )
+)
+
+print(len(embeddings), len(embeddings[0]))
+
+# Swap the model_id and arch below to load Qwen/Qwen3-Embedding-0.6B instead:
+# Runner(
+#     which=Which.Embedding(
+#         model_id="Qwen/Qwen3-Embedding-0.6B",
+#         arch=EmbeddingArchitecture.Qwen3Embedding,
+#     )
+# )
 ```

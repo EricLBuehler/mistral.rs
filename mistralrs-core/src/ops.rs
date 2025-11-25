@@ -195,10 +195,11 @@ pub trait TopKLastDimOp {
 impl TopKLastDimOp for Tensor {
     fn topk(&self, topk: usize) -> Result<TopKOutput> {
         // Sorted descending
-        // #[cfg(feature = "cuda")]
-        // let (values, sorted_indices) = self.sort(false)?;
-        // #[cfg(not(feature = "cuda"))]
-        let (values, sorted_indices) = self.sort_last_dim(false)?;
+        let (values, sorted_indices) = if self.device().is_cuda() {
+            self.sort(false)?
+        } else {
+            self.sort_last_dim(false)?
+        };
         let topk_indices = sorted_indices.narrow(D::Minus1, 0, topk)?.contiguous()?;
         let topk_values = values.narrow(D::Minus1, 0, topk)?.contiguous()?;
         Ok(TopKOutput {
@@ -312,8 +313,12 @@ fn bincount(values: &[u32], minlength: u32) -> Vec<u32> {
     }
 
     // Compute the maximum value in parallel.
-    // SAFETY: we know `values` is nonempty.
-    let max_val = *values.par_iter().max().unwrap();
+    // SAFETY: We just checked that values is nonempty above, so max() will return Some.
+    // Using expect() for clearer error message if this invariant is somehow violated.
+    let max_val = *values
+        .par_iter()
+        .max()
+        .expect("values should be non-empty after empty check");
 
     // The histogram length must cover all observed values as well as `minlength`.
     let result_len = (max_val + 1).max(minlength) as usize;

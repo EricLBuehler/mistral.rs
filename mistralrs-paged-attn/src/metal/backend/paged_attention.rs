@@ -192,15 +192,15 @@ impl candle_core::CustomOp1 for PagedAttention {
 
         let elem_count = out_shape.elem_count();
 
-        let command_buffer = dev.command_buffer()?;
-        command_buffer.set_label("paged-attention");
+        let encoder = dev.command_encoder()?;
+        encoder.set_label("paged-attention");
 
         let out = dev.new_buffer(elem_count, q.dtype(), "paged-attention-out")?;
 
         if use_v1 {
             kernels::call_paged_attention_v1(
                 dev.device(),
-                &command_buffer,
+                &encoder,
                 &kernels::Kernels::new(),
                 ty,
                 cache_ty,
@@ -252,7 +252,7 @@ impl candle_core::CustomOp1 for PagedAttention {
 
             kernels::call_paged_attention_v2(
                 dev.device(),
-                &command_buffer,
+                &encoder,
                 &kernels::Kernels::new(),
                 ty,
                 cache_ty,
@@ -488,12 +488,12 @@ pub fn reshape_and_cache(
 
     let dev = key.device().as_metal_device()?;
 
-    let command_buffer = dev.command_buffer()?;
-    command_buffer.set_label("reshape-and-cache");
+    let encoder = dev.command_encoder()?;
+    encoder.set_label("reshape-and-cache");
 
     kernels::call_reshape_and_cache(
         dev.device(),
-        &command_buffer,
+        &encoder,
         &kernels::Kernels::new(),
         kv_ty,
         cache_ty,

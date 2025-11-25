@@ -14,6 +14,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{self, embedding, Activation, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
+    ops::{TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -29,7 +30,7 @@ macro_rules! sliding_window {
     ($layer_idx:expr, $cfg:expr) => {
         if !($cfg.sliding_window.is_some()
             && $cfg.use_sliding_window
-            && $layer_idx > $cfg.max_window_layers)
+            && $layer_idx >= $cfg.max_window_layers)
         {
             None
         } else {
@@ -500,11 +501,10 @@ impl SlowMoeMlp {
 
         // In order to extract topk, we extract the data from the tensor and manipulate it
         // directly. Maybe we will want to use some custom ops instead at some point.
-        let experts_per_tok = routing_weights
-            .arg_sort_last_dim(false)?
-            .narrow(D::Minus1, 0, self.num_experts_per_tok)?
-            .contiguous()?;
-        let routing_weights = routing_weights.gather(&experts_per_tok, D::Minus1)?;
+        let TopKOutput {
+            values: routing_weights,
+            indices: experts_per_tok,
+        } = routing_weights.topk(self.num_experts_per_tok)?;
 
         // routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
         // top_x contains the row indexes to evaluate for each expert.

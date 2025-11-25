@@ -253,6 +253,11 @@ pub enum Response {
         logits_chunks: Vec<Tensor>,
         tokens: Vec<u32>,
     },
+    Embeddings {
+        embeddings: Vec<f32>,
+        prompt_tokens: usize,
+        total_tokens: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -275,6 +280,12 @@ pub enum ResponseOk {
     Raw {
         logits_chunks: Vec<Tensor>,
         tokens: Vec<u32>,
+    },
+    // Embeddings
+    Embeddings {
+        embeddings: Vec<f32>,
+        prompt_tokens: usize,
+        total_tokens: usize,
     },
 }
 
@@ -353,6 +364,15 @@ impl Response {
             } => Ok(ResponseOk::Raw {
                 logits_chunks,
                 tokens,
+            }),
+            Self::Embeddings {
+                embeddings,
+                prompt_tokens,
+                total_tokens,
+            } => Ok(ResponseOk::Embeddings {
+                embeddings,
+                prompt_tokens,
+                total_tokens,
             }),
         }
     }

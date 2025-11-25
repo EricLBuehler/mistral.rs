@@ -13,7 +13,7 @@ use candle_nn::{
 use float8::F8E4M3;
 use half::{bf16, f16};
 use mistralrs_quant::{
-    AfqLayer, ColumnParallelLayer, QuantMethod, QuantizedConfig, RowParallelLayer,
+    AfqLayer, ColumnParallelLayer, Convolution, QuantMethod, QuantizedConfig, RowParallelLayer,
     ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,7 @@ pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::repeat_kv;
 use crate::{
     amoe::{AnyMoeTrainableLayer, MlpLayer},
+    embedding_models::embedding_gemma::EmbeddingGemmaConfig,
     gguf::Content,
     models::{llama, smollm3},
     ops::SplitOp,
@@ -1274,6 +1275,82 @@ impl Qwen2_5VLRotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
+pub struct Qwen3VLRotaryEmbedding {
+    inv_freq: Tensor,
+    mrope_section: Vec<usize>,
+}
+
+impl Qwen3VLRotaryEmbedding {
+    pub fn new(
+        base: f32,
+        head_dim: usize,
+        device: &Device,
+        mrope_section: Vec<usize>,
+    ) -> Result<Self> {
+        let inv_freq: Vec<_> = (0..head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (inv_freq_len,), device)?.to_dtype(DType::F32)?;
+        Ok(Self {
+            inv_freq,
+            mrope_section,
+        })
+    }
+
+    /// (cos, sin)
+    pub fn compute_cos_sin(&self, position_ids: &Tensor, dtype: DType) -> Result<(Tensor, Tensor)> {
+        let inv_freq_expanded =
+            self.inv_freq
+                .reshape((1, 1, (), 1))?
+                .repeat((3, position_ids.dim(1)?, 1, 1))?;
+        let position_ids_expanded = position_ids.unsqueeze(2)?;
+        let freqs = inv_freq_expanded
+            .matmul(&position_ids_expanded.to_dtype(inv_freq_expanded.dtype())?)?
+            .transpose(2, 3)?;
+        let cos = freqs.cos()?;
+        let sin = freqs.sin()?;
+
+        let cos = Tensor::cat(
+            &cos.split(&self.mrope_section, D::Minus1)?
+                .into_iter()
+                .enumerate()
+                .map(|(i, m)| m.i(i % 3))
+                .collect::<Result<Vec<_>>>()?,
+            D::Minus1,
+        )?
+        .squeeze(0)?
+        .to_dtype(dtype)?
+        .contiguous()?;
+        let sin = Tensor::cat(
+            &sin.split(&self.mrope_section, D::Minus1)?
+                .into_iter()
+                .enumerate()
+                .map(|(i, m)| m.i(i % 3))
+                .collect::<Result<Vec<_>>>()?,
+            D::Minus1,
+        )?
+        .squeeze(0)?
+        .to_dtype(dtype)?
+        .contiguous()?;
+
+        Ok((cos, sin))
+    }
+
+    pub fn forward(
+        &self,
+        (cos, sin): &(Tensor, Tensor),
+        q: &mut Tensor,
+        k: &mut Tensor,
+    ) -> Result<()> {
+        *q = candle_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
+        *k = candle_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct DeepSeekV2RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
@@ -1825,6 +1902,53 @@ impl Gemma3RotaryEmbedding {
         }
     }
 
+    fn new_linear_embedding_gemma(
+        cfg: &EmbeddingGemmaConfig,
+        factor: f64,
+        is_gpt_neox: bool,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Self> {
+        let max_seq_len = cfg.max_position_embeddings;
+        let dim = cfg.head_dim;
+
+        let inv_freq: Vec<_> = (0..dim)
+            .step_by(2)
+            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
+        let inv_freq = (inv_freq / factor)?;
+
+        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
+            .to_dtype(DType::F32)?
+            .reshape((max_seq_len, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+        let sin = freqs.sin()?.to_dtype(dtype)?;
+        let cos = freqs.cos()?.to_dtype(dtype)?;
+        Ok(Self(RotaryEmbedding {
+            cos,
+            sin,
+            is_gpt_neox,
+        }))
+    }
+
+    pub fn new_embedding_gemma(
+        is_gpt_neox: bool,
+        dtype: DType,
+        cfg: &EmbeddingGemmaConfig,
+        dev: &Device,
+    ) -> Result<Self> {
+        match &cfg.rope_scaling {
+            Some(Gemma3RopeScalingConfig {
+                rope_type: Gemma3ScaledRopeType::Linear,
+                factor,
+            }) => Self::new_linear_embedding_gemma(cfg, *factor, is_gpt_neox, dtype, dev),
+
+            _ => Self::new_linear_embedding_gemma(cfg, 1.0, is_gpt_neox, dtype, dev),
+        }
+    }
+
     pub fn forward(
         &self,
         q: &Tensor,
@@ -2255,6 +2379,12 @@ impl Conv3dNoBias {
             conv2d_2: Conv2d::new(w2.contiguous()?, None, cfg),
         })
     }
+
+    pub fn weight(&self) -> Result<Tensor> {
+        let w1 = self.conv2d_1.weight().clone().unsqueeze(2)?;
+        let w2 = self.conv2d_2.weight().clone().unsqueeze(2)?;
+        Tensor::cat(&[w1, w2], 2)
+    }
 }
 
 impl Module for Conv3dNoBias {
@@ -2262,7 +2392,9 @@ impl Module for Conv3dNoBias {
         let xs1 = xs.i((.., .., 0, .., ..))?;
         let xs2 = xs.i((.., .., 1, .., ..))?;
 
-        (self.conv2d_1.forward(&xs1)? + self.conv2d_2.forward(&xs2)?)?.unsqueeze(2)
+        (Convolution.forward_2d(&self.conv2d_1, &xs1)?
+            + Convolution.forward_2d(&self.conv2d_2, &xs2)?)?
+        .unsqueeze(2)
     }
 }
 

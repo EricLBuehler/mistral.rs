@@ -7,7 +7,7 @@ use axum::{
     extract::{Json, State},
     http::{self},
     response::{
-        sse::{Event, KeepAlive},
+        sse::{Event, KeepAlive, KeepAliveStream},
         IntoResponse, Sse,
     },
 };
@@ -159,6 +159,7 @@ impl futures::Stream for ChatCompletionStreamer {
                 Response::ImageGeneration(_) => unreachable!(),
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
+                Response::Embeddings { .. } => unreachable!(),
             },
             Poll::Pending | Poll::Ready(None) => Poll::Pending,
         }
@@ -167,7 +168,7 @@ impl futures::Stream for ChatCompletionStreamer {
 
 /// Represents different types of chat completion responses.
 pub type ChatCompletionResponder =
-    BaseCompletionResponder<ChatCompletionResponse, ChatCompletionStreamer>;
+    BaseCompletionResponder<ChatCompletionResponse, KeepAliveStream<ChatCompletionStreamer>>;
 
 type JsonModelError = BaseJsonModelError<ChatCompletionResponse>;
 impl ErrorToResponse for JsonModelError {}
@@ -487,6 +488,7 @@ pub async fn parse_request(
             } else {
                 Some(oairequest.model.clone())
             },
+            truncate_sequence: oairequest.truncate_sequence.unwrap_or(false),
         })),
         is_streaming,
     ))
@@ -543,7 +545,7 @@ pub fn create_streamer(
     state: SharedMistralRsState,
     on_chunk: Option<ChatCompletionOnChunkCallback>,
     on_done: Option<ChatCompletionOnDoneCallback>,
-) -> Sse<ChatCompletionStreamer> {
+) -> Sse<KeepAliveStream<ChatCompletionStreamer>> {
     let streamer = base_create_streamer(rx, state, on_chunk, on_done);
     let keep_alive_interval = get_keep_alive_interval();
 
@@ -583,5 +585,6 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> ChatC
         Response::ImageGeneration(_) => unreachable!(),
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
+        Response::Embeddings { .. } => unreachable!(),
     }
 }

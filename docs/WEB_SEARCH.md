@@ -15,13 +15,13 @@ Besides tool calling and parsing of web content, we also use an embedding model 
 
 You can use the web search tool in all the APIs: Python, Rust, and server.
 
-## Specifying a custom embedding model
+## Selecting a search embedding model
 
-Internally, we use a BERT model (Snowflake/snowflake-arctic-embed-l-v2.0)[https://huggingface.co/Snowflake/snowflake-arctic-embed-l-v2.0] (0.6b parameters = ~2.3GB) to select the most relevant search results. You can specify a custom BERT model by providing a Hugging Face model ID in the various APIs:
+Internally, we now use [google/embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m) to embed documents for ranking. You can pick from the built-in reranker variants (currently just `embedding_gemma`) in every API:
 
-- Rust: `with_search` in the builder
-- Python: `search_bert_model` in the Runner
-- Server: `search-bert-model` before the model type selector (`plain`/`vision-plain`)
+- Rust: `with_search(SearchEmbeddingModel::EmbeddingGemma300M)` in the builder
+- Python: `search_embedding_model="embedding_gemma"` in the Runner
+- Server: `--search-embedding-model embedding_gemma` before the model type selector (`plain`/`vision-plain`)
 
 ## Specifying a custom search callback
 
@@ -156,7 +156,7 @@ print(res.usage)
 ```rust
 use anyhow::Result;
 use mistralrs::{
-    BertEmbeddingModel, IsqType, RequestBuilder, TextMessageRole, TextMessages, TextModelBuilder,
+    SearchEmbeddingModel, IsqType, RequestBuilder, TextMessageRole, TextMessages, TextModelBuilder,
     WebSearchOptions,
 };
 
@@ -165,7 +165,7 @@ async fn main() -> Result<()> {
     let model = TextModelBuilder::new("NousResearch/Hermes-3-Llama-3.1-8B")
         .with_isq(IsqType::Q4K)
         .with_logging()
-        .with_search(BertEmbeddingModel::default())
+        .with_search(SearchEmbeddingModel::default())
         .build()
         .await?;
 
