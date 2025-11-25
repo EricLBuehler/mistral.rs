@@ -35,6 +35,9 @@ serde_default_fn!(usize, default_mamba_n_groups, 1);
 serde_default_fn!(usize, default_mamba_chunk_size, 256);
 serde_default_fn!(bool, default_mamba_conv_bias, true);
 serde_default_fn!(bool, default_mamba_proj_bias, false);
+serde_default_fn!(usize, default_num_local_experts, 0);
+serde_default_fn!(usize, default_num_experts_per_tok, 2);
+serde_default_fn!(String, default_position_embedding_type, "rope".to_string());
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -106,6 +109,14 @@ pub struct Config {
     pub mamba_conv_bias: bool,
     #[serde(default = "default_mamba_proj_bias")]
     pub mamba_proj_bias: bool,
+    // MoE configuration
+    #[serde(default = "default_num_local_experts")]
+    pub num_local_experts: usize,
+    #[serde(default = "default_num_experts_per_tok")]
+    pub num_experts_per_tok: usize,
+    // Position embedding type: "rope" or "nope" (no position embedding)
+    #[serde(default = "default_position_embedding_type")]
+    pub position_embedding_type: String,
 }
 
 impl Config {
@@ -235,6 +246,275 @@ impl MlpLayer for GraniteMlp {
 }
 
 impl crate::amoe::AnyMoeTrainableLayer for GraniteMlp {}
+
+// ====================== MoE (Mixture of Experts) Implementation ======================
+
+/// Top-K gating router for sparse MoE
+struct GraniteTopKGating {
+    layer: candle_nn::Linear,
+    num_experts: usize,
+    top_k: usize,
+}
+
+impl GraniteTopKGating {
+    fn new(input_size: usize, num_experts: usize, top_k: usize, vb: ShardedVarBuilder) -> Result<Self> {
+        let weight = vb.pp("layer").get((num_experts, input_size), "weight")?;
+        let layer = candle_nn::Linear::new(weight, None);
+        Ok(Self {
+            layer,
+            num_experts,
+            top_k,
+        })
+    }
+
+    /// Routes tokens to experts
+    /// Returns (batch_index, batch_gates, expert_size)
+    /// - batch_index: indices of tokens assigned to each expert (sorted by expert)
+    /// - batch_gates: routing weights for each token-expert pair (sorted by expert)
+    /// - expert_size: number of tokens assigned to each expert
+    fn forward(&self, x: &Tensor) -> Result<(Tensor, Tensor, Vec<usize>)> {
+        let (num_tokens, _) = x.dims2()?;
+        let device = x.device();
+        let dtype = x.dtype();
+
+        // Compute routing logits: (num_tokens, num_experts)
+        let logits = self.layer.forward(x)?;
+
+        // Softmax over experts
+        let gates = candle_nn::ops::softmax(&logits, candle_core::D::Minus1)?;
+
+        // Get top-k expert indices and gates per token
+        let gates_vec: Vec<f32> = gates.to_dtype(candle_core::DType::F32)?.flatten_all()?.to_vec1()?;
+
+        // Collect (expert_idx, token_idx, gate) tuples
+        let mut expert_token_gates: Vec<(usize, usize, f32)> = Vec::new();
+        let mut expert_counts = vec![0usize; self.num_experts];
+
+        for token_idx in 0..num_tokens {
+            // Get gates for this token
+            let start = token_idx * self.num_experts;
+            let end = start + self.num_experts;
+            let token_gates: Vec<(usize, f32)> = gates_vec[start..end]
+                .iter()
+                .enumerate()
+                .map(|(i, &g)| (i, g))
+                .collect();
+
+            // Sort by gate value and take top-k
+            let mut sorted: Vec<(usize, f32)> = token_gates;
+            sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            let selected: Vec<(usize, f32)> = sorted.into_iter().take(self.top_k).collect();
+
+            // Normalize selected gates
+            let sum: f32 = selected.iter().map(|(_, g)| g).sum();
+            let normalized: Vec<(usize, f32)> = selected.iter()
+                .map(|(e, g)| (*e, if sum > 0.0 { g / sum } else { 0.0 }))
+                .collect();
+
+            for (expert_idx, gate) in normalized {
+                expert_token_gates.push((expert_idx, token_idx, gate));
+                expert_counts[expert_idx] += 1;
+            }
+        }
+
+        // Sort by expert index so tokens are grouped by expert
+        expert_token_gates.sort_by_key(|(expert_idx, _, _)| *expert_idx);
+
+        // Extract sorted batch_index and batch_gates
+        let all_batch_indices: Vec<u32> = expert_token_gates.iter()
+            .map(|(_, token_idx, _)| *token_idx as u32)
+            .collect();
+        let all_batch_gates: Vec<f32> = expert_token_gates.iter()
+            .map(|(_, _, gate)| *gate)
+            .collect();
+
+        let indices_len = all_batch_indices.len();
+        let gates_len = all_batch_gates.len();
+        let batch_index = Tensor::from_vec(all_batch_indices, (indices_len,), device)?;
+        let batch_gates = Tensor::from_vec(all_batch_gates, (gates_len,), device)?.to_dtype(dtype)?;
+
+        Ok((batch_index, batch_gates, expert_counts))
+    }
+}
+
+/// Parallel experts layer - processes all experts in a batched manner
+/// Uses separate weight tensors per expert (not fully parallelized, but correct)
+#[allow(dead_code)]
+struct GraniteParallelExperts {
+    weights: Vec<Tensor>, // num_experts x (input_size, output_size)
+    num_experts: usize,
+    input_size: usize,
+    output_size: usize,
+}
+
+impl GraniteParallelExperts {
+    fn new(
+        num_experts: usize,
+        input_size: usize,
+        output_size: usize,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
+        let mut weights = Vec::with_capacity(num_experts);
+        // The weight is stored as (num_experts, output_size, input_size)
+        // We'll load it as a 3D tensor and slice per expert
+        let all_weights = vb.get((num_experts, output_size, input_size), "weight")?;
+        for i in 0..num_experts {
+            let w = all_weights.i(i)?; // (output_size, input_size)
+            weights.push(w);
+        }
+        Ok(Self {
+            weights,
+            num_experts,
+            input_size,
+            output_size,
+        })
+    }
+
+    /// Forward pass: routes inputs through appropriate experts
+    /// x: flattened expert inputs grouped by expert
+    /// expert_size: number of tokens per expert
+    fn forward(&self, x: &Tensor, expert_size: &[usize]) -> Result<Tensor> {
+        let dtype = x.dtype();
+        let device = x.device();
+
+        let mut outputs = Vec::new();
+        let mut offset = 0;
+
+        for (expert_idx, &size) in expert_size.iter().enumerate() {
+            if size == 0 {
+                continue;
+            }
+            // Get inputs for this expert: (size, input_size)
+            let expert_input = x.narrow(0, offset, size)?;
+            // Weight: (output_size, input_size)
+            let weight = &self.weights[expert_idx];
+            // Output: (size, output_size) = (size, input_size) @ (input_size, output_size)
+            let expert_output = expert_input.matmul(&weight.t()?)?;
+            outputs.push(expert_output);
+            offset += size;
+        }
+
+        if outputs.is_empty() {
+            // No tokens routed to any expert - return zeros
+            Tensor::zeros((0, self.output_size), dtype, device)
+        } else {
+            Tensor::cat(&outputs, 0)
+        }
+    }
+}
+
+/// Sparse Mixture of Experts layer
+#[allow(dead_code)]
+struct GraniteMoE {
+    input_linear: GraniteParallelExperts,
+    output_linear: GraniteParallelExperts,
+    router: GraniteTopKGating,
+    input_size: usize,
+    hidden_size: usize,
+    num_experts: usize,
+    top_k: usize,
+}
+
+impl GraniteMoE {
+    fn new(cfg: &Config, vb: ShardedVarBuilder) -> Result<Self> {
+        let input_size = cfg.hidden_size;
+        let hidden_size = cfg.intermediate_size;
+        let num_experts = cfg.num_local_experts;
+        let top_k = cfg.num_experts_per_tok;
+
+        let input_linear = GraniteParallelExperts::new(
+            num_experts,
+            input_size,
+            hidden_size * 2, // Gated, so 2x
+            vb.pp("input_linear"),
+        )?;
+        let output_linear = GraniteParallelExperts::new(
+            num_experts,
+            hidden_size,
+            input_size,
+            vb.pp("output_linear"),
+        )?;
+        let router = GraniteTopKGating::new(input_size, num_experts, top_k, vb.pp("router"))?;
+
+        Ok(Self {
+            input_linear,
+            output_linear,
+            router,
+            input_size,
+            hidden_size,
+            num_experts,
+            top_k,
+        })
+    }
+
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let (batch_size, seq_len, emb_size) = x.dims3()?;
+        let dtype = x.dtype();
+        let device = x.device();
+
+        // Flatten to (batch * seq_len, emb_size)
+        let x_flat = x.reshape((batch_size * seq_len, emb_size))?;
+
+        // Route tokens to experts
+        let (batch_index, batch_gates, expert_size) = self.router.forward(&x_flat)?;
+
+        // If no tokens (edge case), return zeros
+        if batch_index.dim(0)? == 0 {
+            return Tensor::zeros((batch_size, seq_len, self.input_size), dtype, device);
+        }
+
+        // Gather inputs by routing: select tokens based on batch_index
+        let expert_inputs = x_flat.index_select(&batch_index, 0)?;
+
+        // Input projection (gated)
+        let hidden = self.input_linear.forward(&expert_inputs, &expert_size)?;
+
+        // Apply gated activation: silu(first_half) * second_half
+        let chunks = hidden.chunk(2, candle_core::D::Minus1)?;
+        let hidden = (candle_nn::ops::silu(&chunks[0])? * &chunks[1])?;
+
+        // Output projection
+        let expert_outputs = self.output_linear.forward(&hidden, &expert_size)?;
+
+        // Weight outputs by routing gates
+        let expert_outputs = expert_outputs.broadcast_mul(&batch_gates.unsqueeze(1)?)?;
+
+        // Scatter-add back to token positions
+        // We need to aggregate outputs back to their original token positions
+        let batch_index_i64 = batch_index.to_dtype(candle_core::DType::I64)?;
+        let batch_index_vec: Vec<i64> = batch_index_i64.to_vec1()?;
+
+        // Use index_add to accumulate expert outputs
+        // Since Candle's index_add expects specific dimensions, we'll do this manually
+        let expert_outputs_vec: Vec<Vec<f32>> = {
+            let eo = expert_outputs.to_dtype(candle_core::DType::F32)?;
+            let num_outputs = eo.dim(0)?;
+            let mut result = Vec::with_capacity(num_outputs);
+            for i in 0..num_outputs {
+                let row: Vec<f32> = eo.i(i)?.to_vec1()?;
+                result.push(row);
+            }
+            result
+        };
+
+        let mut output_vec = vec![vec![0.0f32; self.input_size]; batch_size * seq_len];
+        for (i, &token_idx) in batch_index_vec.iter().enumerate() {
+            let token_idx = token_idx as usize;
+            for (j, &val) in expert_outputs_vec[i].iter().enumerate() {
+                output_vec[token_idx][j] += val;
+            }
+        }
+
+        // Convert back to tensor
+        let flat_output: Vec<f32> = output_vec.into_iter().flatten().collect();
+        let output = Tensor::from_vec(flat_output, (batch_size * seq_len, self.input_size), device)?
+            .to_dtype(dtype)?;
+
+        // Reshape back to (batch, seq_len, emb_size)
+        output.reshape((batch_size, seq_len, self.input_size))
+    }
+}
 
 // ====================== Mamba Implementation ======================
 
@@ -413,8 +693,10 @@ impl MambaLayer {
             conv_kernel_size,
             n_groups,
             chunk_size: cfg.mamba_chunk_size,
-            time_step_min: 0.001,
-            time_step_max: 0.1,
+            // Match PyTorch defaults - essentially no clamping
+            // softplus output is already >= 0, and no upper bound needed
+            time_step_min: 0.0,
+            time_step_max: f64::MAX,
         })
     }
 
@@ -741,6 +1023,7 @@ struct MambaBlock {
     mamba: MambaLayer,
     rms_2: RmsNorm,
     mlp: Box<dyn MlpLayer>,
+    block_sparse_moe: Option<GraniteMoE>,
     residual_multiplier: f32,
 }
 
@@ -756,9 +1039,19 @@ impl MambaBlock {
         let mamba_out = scale_tensor(mamba_out, self.residual_multiplier)?;
         let x = (mamba_out + residual)?;
         let residual = &x;
-        let mlp_out = self.mlp.forward(&self.rms_2.forward(&x)?)?;
-        let mlp_out = scale_tensor(mlp_out, self.residual_multiplier)?;
-        mlp_out + residual
+        let normed = self.rms_2.forward(&x)?;
+
+        // Combine MoE and shared MLP outputs (if MoE present)
+        let ffn_out = if let Some(ref moe) = self.block_sparse_moe {
+            let moe_out = moe.forward(&normed)?;
+            let mlp_out = self.mlp.forward(&normed)?;
+            (moe_out + mlp_out)?
+        } else {
+            self.mlp.forward(&normed)?
+        };
+
+        let ffn_out = scale_tensor(ffn_out, self.residual_multiplier)?;
+        ffn_out + residual
     }
 
     fn load(
@@ -778,6 +1071,15 @@ impl MambaBlock {
             cfg,
             comm,
         )?;
+        // Load MoE if num_local_experts > 0
+        let block_sparse_moe = if cfg.num_local_experts > 0 {
+            Some(GraniteMoE::new(
+                cfg,
+                mapper.set_device(layer_idx, vb.pp("block_sparse_moe"), loading_isq),
+            )?)
+        } else {
+            None
+        };
         let rms_1 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -793,6 +1095,7 @@ impl MambaBlock {
             mamba,
             rms_2,
             mlp: Box::new(mlp),
+            block_sparse_moe,
             residual_multiplier: cfg.residual_multiplier,
         })
     }
@@ -821,7 +1124,7 @@ struct CausalSelfAttention {
     num_attention_heads: usize,
     num_key_value_heads: usize,
     head_dim: usize,
-    rotary_emb: Arc<RotaryEmbedding>,
+    rotary_emb: Option<Arc<RotaryEmbedding>>, // Optional - None when position_embedding_type == "nope"
     max_seq_len: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
@@ -872,7 +1175,12 @@ impl CausalSelfAttention {
             (q, k, v)
         };
 
-        (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        // Apply rotary embeddings only if position_embedding_type is not "nope"
+        (q, k) = if let Some(ref rotary_emb) = self.rotary_emb {
+            rotary_emb.forward(&q, &k, seqlen_offsets)?
+        } else {
+            (q, k)
+        };
 
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
@@ -935,7 +1243,7 @@ impl CausalSelfAttention {
     fn load(
         vb: ShardedVarBuilder,
         cfg: &Config,
-        rope: Arc<RotaryEmbedding>,
+        rope: Option<Arc<RotaryEmbedding>>,  // Optional - None when position_embedding_type == "nope"
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
@@ -986,7 +1294,7 @@ impl CausalSelfAttention {
             num_attention_heads: cfg.num_attention_heads / comm.world_size(),
             num_key_value_heads: (cfg.num_key_value_heads() / comm.world_size()).max(1),
             head_dim: cfg.head_dim(),
-            rotary_emb: rope,
+            rotary_emb: rope,  // Now optional
             max_seq_len: cfg.max_position_embeddings,
             paged_attn,
             sdpa_params: SdpaParams {
@@ -1009,6 +1317,7 @@ struct Block {
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
     mlp: Box<dyn MlpLayer>,
+    block_sparse_moe: Option<GraniteMoE>,
     residual_multiplier: f32,
 }
 
@@ -1037,10 +1346,20 @@ impl Block {
         let attn_out = scale_tensor(attn_out, self.residual_multiplier)?;
         let x = (attn_out + residual)?;
         let residual = &x;
-        let mlp_out = self.mlp.forward(&self.rms_2.forward(&x)?)?;
+        let normed = self.rms_2.forward(&x)?;
+
+        // Combine MoE and shared MLP outputs (if MoE present)
+        let ffn_out = if let Some(ref moe) = self.block_sparse_moe {
+            let moe_out = moe.forward(&normed)?;
+            let mlp_out = self.mlp.forward(&normed)?;
+            (moe_out + mlp_out)?
+        } else {
+            self.mlp.forward(&normed)?
+        };
+
         // Scale residual connection
-        let mlp_out = scale_tensor(mlp_out, self.residual_multiplier)?;
-        let x = (mlp_out + residual)?;
+        let ffn_out = scale_tensor(ffn_out, self.residual_multiplier)?;
+        let x = (ffn_out + residual)?;
         Ok(x)
     }
 
@@ -1051,14 +1370,14 @@ impl Block {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: Arc<RotaryEmbedding>,
+        rope: Option<Arc<RotaryEmbedding>>,  // Optional - None when position_embedding_type == "nope"
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let attn = CausalSelfAttention::load(
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
             cfg,
-            rope,
+            rope,  // Pass the optional RoPE
             paged_attn,
             comm,
         )?;
@@ -1067,6 +1386,15 @@ impl Block {
             cfg,
             comm,
         )?;
+        // Load MoE if num_local_experts > 0
+        let block_sparse_moe = if cfg.num_local_experts > 0 {
+            Some(GraniteMoE::new(
+                cfg,
+                mapper.set_device(layer_idx, vb.pp("block_sparse_moe"), loading_isq),
+            )?)
+        } else {
+            None
+        };
         let rms_1 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -1082,6 +1410,7 @@ impl Block {
             attn,
             rms_2,
             mlp: Box::new(mlp),
+            block_sparse_moe,
             residual_multiplier: cfg.residual_multiplier,
         })
     }
@@ -1231,33 +1560,44 @@ impl GraniteMoeHybrid {
 
         let head_dim = cfg.head_dim();
 
-        // Build RoPE embeddings per device
+        // Check if position embeddings should be used
+        let use_position_embeddings = cfg.position_embedding_type != "nope";
+
+        if !use_position_embeddings {
+            tracing::info!("GraniteMoeHybrid: position_embedding_type is 'nope', skipping RoPE");
+        }
+
+        // Build RoPE embeddings per device (only if position embeddings are used)
         // Note: granite rope_type scaling is not yet supported, using default rope
-        if let Some(GraniteRopeConfig {
-            rope_type: GraniteRopeType::Granite,
-            ..
-        }) = &cfg.rope_scaling
-        {
-            tracing::warn!(
-                "Granite-style rope scaling is not yet fully supported. Using default rope scaling."
-            );
+        if use_position_embeddings {
+            if let Some(GraniteRopeConfig {
+                rope_type: GraniteRopeType::Granite,
+                ..
+            }) = &cfg.rope_scaling
+            {
+                tracing::warn!(
+                    "Granite-style rope scaling is not yet fully supported. Using default rope scaling."
+                );
+            }
         }
 
         let mut ropes = HashMap::new();
-        for i in 0..cfg.num_hidden_layers {
-            let device = mapper
-                .device_for(i, false)
-                .unwrap_or(&normal_loading_metadata.real_device);
-            if let std::collections::hash_map::Entry::Vacant(e) = ropes.entry(device.location()) {
-                let rope = RotaryEmbedding::new(
-                    cfg.rope_theta,
-                    head_dim,
-                    cfg.max_position_embeddings,
-                    device,
-                    true, // is_gpt_neox style
-                    vb_m.dtype(),
-                )?;
-                e.insert(Arc::new(rope));
+        if use_position_embeddings {
+            for i in 0..cfg.num_hidden_layers {
+                let device = mapper
+                    .device_for(i, false)
+                    .unwrap_or(&normal_loading_metadata.real_device);
+                if let std::collections::hash_map::Entry::Vacant(e) = ropes.entry(device.location()) {
+                    let rope = RotaryEmbedding::new(
+                        cfg.rope_theta,
+                        head_dim,
+                        cfg.max_position_embeddings,
+                        device,
+                        true, // is_gpt_neox style
+                        vb_m.dtype(),
+                    )?;
+                    e.insert(Arc::new(rope));
+                }
             }
         }
 
@@ -1287,10 +1627,15 @@ impl GraniteMoeHybrid {
 
             let layer = match &layer_types[i] {
                 GraniteLayerType::Attention => {
-                    let rotary_emb = ropes
-                        .get(&device.location())
-                        .expect("No RoPE for device location!")
-                        .clone();
+                    // Get optional RoPE - None when position_embedding_type == "nope"
+                    let rotary_emb = if use_position_embeddings {
+                        Some(ropes
+                            .get(&device.location())
+                            .expect("No RoPE for device location!")
+                            .clone())
+                    } else {
+                        None
+                    };
                     let paged_attn = match &attention_mechanism {
                         AttentionImplementation::Eager => None,
                         AttentionImplementation::PagedAttention => {
@@ -1303,7 +1648,7 @@ impl GraniteMoeHybrid {
                         &*mapper,
                         i,
                         normal_loading_metadata.loading_isq,
-                        rotary_emb,
+                        rotary_emb,  // Now optional
                         paged_attn,
                         &comm,
                     )?)
@@ -1675,6 +2020,11 @@ impl AnyMoeBaseModelMixin for GraniteMoeHybrid {
                             mamba_chunk_size: 256,
                             mamba_conv_bias: true,
                             mamba_proj_bias: false,
+                            // MoE fields (not used for MLP but needed for struct)
+                            num_local_experts: 0,
+                            num_experts_per_tok: 2,
+                            // Position embedding type (not used for MLP)
+                            position_embedding_type: "rope".to_string(),
                         };
                         row.push(Box::new(GraniteMlp::new(
                             vb.pp(layer_idx).pp("mlp").set_dtype(dtype).set_device(device),
