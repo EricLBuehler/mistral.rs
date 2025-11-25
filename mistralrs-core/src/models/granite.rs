@@ -311,7 +311,7 @@ impl RmsNormGated {
         // Apply gating if provided
         if let Some(gate) = gate {
             let gate = candle_nn::ops::silu(&gate.to_dtype(candle_core::DType::F32)?)?;
-            hidden_states = (hidden_states * gate)?;
+            hidden_states = hidden_states.broadcast_mul(&gate)?;
         }
 
         // RMS normalization
@@ -319,7 +319,7 @@ impl RmsNormGated {
         let hidden_states = hidden_states.broadcast_div(&(variance + self.eps)?.sqrt()?)?;
 
         // Apply weight and convert back to original dtype
-        hidden_states.to_dtype(dtype)? * &self.weight
+        hidden_states.to_dtype(dtype)?.broadcast_mul(&self.weight.to_dtype(dtype)?)
     }
 }
 
@@ -520,7 +520,7 @@ impl MambaLayer {
 
         // dt with bias and softplus
         let dt_bias = self.dt_bias.unsqueeze(0)?.expand((batch_size, self.num_heads))?;
-        let dt = (dt + &dt_bias)?;
+        let dt = dt.broadcast_add(&dt_bias)?;
         let dt = softplus(&dt)?;
         // Clamp dt
         let dt = dt.clamp(self.time_step_min, self.time_step_max)?;
@@ -540,16 +540,19 @@ impl MambaLayer {
             .exp()?;
 
         // Reshape B: (batch, n_groups * state_size) -> (batch, num_heads, state_size)
-        let b = b.reshape((batch_size, self.n_groups, self.ssm_state_size))?;
+        let b = b.reshape((batch_size, self.n_groups, self.ssm_state_size))?
+            .to_dtype(candle_core::DType::F32)?;
         let b = b.unsqueeze(2)?
             .expand((batch_size, self.n_groups, self.num_heads / self.n_groups, self.ssm_state_size))?
             .reshape((batch_size, self.num_heads, self.ssm_state_size))?;
 
         // dB = dt * B: (batch, num_heads, head_dim, state_size)
-        let db = dt.unsqueeze(3)?.broadcast_mul(&b.unsqueeze(2)?)?;
+        let dt_f32 = dt.to_dtype(candle_core::DType::F32)?;
+        let db = dt_f32.unsqueeze(3)?.broadcast_mul(&b.unsqueeze(2)?)?;
 
         // hidden_states: (batch, intermediate_size) -> (batch, num_heads, head_dim)
-        let hidden_states = hidden_states.reshape((batch_size, self.num_heads, self.head_dim))?;
+        let hidden_states = hidden_states.reshape((batch_size, self.num_heads, self.head_dim))?
+            .to_dtype(candle_core::DType::F32)?;
 
         // dBx = dB * x: (batch, num_heads, head_dim, state_size)
         let dbx = db.broadcast_mul(&hidden_states.unsqueeze(3)?)?;
@@ -561,7 +564,8 @@ impl MambaLayer {
         cache.ssm_state = ssm_state.to_dtype(cache.ssm_state.dtype())?;
 
         // Reshape C: (batch, n_groups * state_size) -> (batch, num_heads, state_size)
-        let c = c.reshape((batch_size, self.n_groups, self.ssm_state_size))?;
+        let c = c.reshape((batch_size, self.n_groups, self.ssm_state_size))?
+            .to_dtype(candle_core::DType::F32)?;
         let c = c.unsqueeze(2)?
             .expand((batch_size, self.n_groups, self.num_heads / self.n_groups, self.ssm_state_size))?
             .reshape((batch_size, self.num_heads, self.ssm_state_size))?;
@@ -569,13 +573,14 @@ impl MambaLayer {
         // y = (state @ C^T): (batch, num_heads, head_dim)
         // state: (batch, num_heads, head_dim, state_size)
         // C: (batch, num_heads, state_size)
-        let y = cache.ssm_state.to_dtype(c.dtype())?.matmul(&c.unsqueeze(3)?)?
+        let y = cache.ssm_state.to_dtype(candle_core::DType::F32)?.matmul(&c.unsqueeze(3)?)?
             .squeeze(3)?;
 
         // D skip connection: y = y + x * D
-        let d = self.d.unsqueeze(0)?.unsqueeze(2)?
+        let d = self.d.to_dtype(candle_core::DType::F32)?
+            .unsqueeze(0)?.unsqueeze(2)?
             .expand((batch_size, self.num_heads, self.head_dim))?;
-        let y = (y + hidden_states * d)?;
+        let y = y.broadcast_add(&hidden_states.broadcast_mul(&d)?)?;
 
         // Reshape output: (batch, num_heads, head_dim) -> (batch, intermediate_size)
         let y = y.reshape((batch_size, self.intermediate_size))?;
@@ -662,9 +667,10 @@ impl MambaLayer {
         let a = self.a_log.to_dtype(candle_core::DType::F32)?.exp()?.neg()?;
 
         // dt with bias and softplus
-        let dt = (dt + &self.dt_bias.unsqueeze(0)?.unsqueeze(0)?)?;
+        let dt = dt.broadcast_add(&self.dt_bias.unsqueeze(0)?.unsqueeze(0)?)?;
         let dt = softplus(&dt)?;
-        let dt = dt.clamp(self.time_step_min, self.time_step_max)?;
+        let dt = dt.clamp(self.time_step_min, self.time_step_max)?
+            .to_dtype(candle_core::DType::F32)?;
 
         // Reshape for SSM
         let hidden_states = hidden_states.reshape((batch_size, seq_len, self.num_heads, self.head_dim))?
@@ -696,7 +702,7 @@ impl MambaLayer {
             // dA = exp(dt * A)
             let a_expanded = a.unsqueeze(0)?.unsqueeze(2)?.unsqueeze(3)?
                 .expand((batch_size, self.num_heads, self.head_dim, self.ssm_state_size))?;
-            let da = (dt_t.unsqueeze(3)? * a_expanded)?.exp()?;
+            let da = dt_t.unsqueeze(3)?.broadcast_mul(&a_expanded)?.exp()?;
 
             // dB = dt * B
             let db = dt_t.unsqueeze(3)?.broadcast_mul(&b_t.unsqueeze(2)?)?;
@@ -711,9 +717,10 @@ impl MambaLayer {
             let y_t = ssm_state.matmul(&c_t.unsqueeze(3)?)?.squeeze(3)?;
 
             // D skip connection
-            let d_expanded = self.d.unsqueeze(0)?.unsqueeze(2)?
+            let d_expanded = self.d.to_dtype(candle_core::DType::F32)?
+                .unsqueeze(0)?.unsqueeze(2)?
                 .expand((batch_size, self.num_heads, self.head_dim))?;
-            let y_t = (y_t + x_t * d_expanded)?;
+            let y_t = y_t.broadcast_add(&x_t.broadcast_mul(&d_expanded)?)?;
 
             outputs.push(y_t);
         }
