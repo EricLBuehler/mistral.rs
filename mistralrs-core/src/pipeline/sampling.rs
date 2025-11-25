@@ -78,9 +78,14 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 
         // let send = seq.get_toks().len() % 2 == 0 || is_done.is_some();
         let send = true;
-        if !tool_use_still_possible || tool_use_is_done {
+        // Send chunks when:
+        // 1. Tool call is not possible (!tool_use_still_possible) - normal streaming
+        // 2. Tool call is complete (tool_use_is_done) - send the tool call
+        // 3. Sequence is done (is_done.is_some()) - send buffered output as text since it wasn't a valid tool call
+        if !tool_use_still_possible || tool_use_is_done || is_done.is_some() {
             if send {
-                if let Some(delta) = crate::handle_seq_error_ok!(seq.get_delta(), seq.responder()) {
+                let delta_result = seq.get_delta();
+                if let Some(delta) = crate::handle_seq_error_ok!(delta_result, seq.responder()) {
                     if seq.get_mut_group().is_chat {
                         let (text_new, tool_calls) =
                             parse_text_tools(this, delta.as_str(), seq.tools.clone())
@@ -132,15 +137,6 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 }
             }
 
-            if let Some(reason) = is_done {
-                if use_prefix_cacher {
-                    prefix_cacher.add_sequence(seq);
-                    prefix_cacher.evict_caches()?;
-                }
-                seq.set_state(crate::sequence::SequenceState::Done(reason));
-                this.reset_non_granular_state();
-            }
-
             // Send usage on final chunk.
             let usage_opt = if is_done.is_some() {
                 let usage = seq.get_mut_group().get_usage();
@@ -163,6 +159,17 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 ));
                 this.reset_non_granular_state();
             }
+        }
+
+        // Handle Done state regardless of tool detection - must be outside the tool_use check
+        // to ensure sequence completes even when tool detection thinks output might be a tool call
+        if let Some(reason) = is_done {
+            if use_prefix_cacher {
+                prefix_cacher.add_sequence(seq);
+                prefix_cacher.evict_caches()?;
+            }
+            seq.set_state(crate::sequence::SequenceState::Done(reason));
+            this.reset_non_granular_state();
         }
     } else if let Some(mut reason) = is_done {
         /*

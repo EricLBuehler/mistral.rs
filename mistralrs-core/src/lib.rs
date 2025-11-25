@@ -12,6 +12,7 @@ pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::OnceLock;
 use std::time::Instant;
 use std::{
@@ -407,12 +408,14 @@ impl MistralRs {
             max_seq_len,
         };
 
+        let tx_for_engine = tx.clone();
         let engine_handler = thread::spawn(move || {
             #[cfg(feature = "metal")]
             objc::rc::autoreleasepool(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
                     let engine = Engine::new(
+                        tx_for_engine,
                         rx,
                         pipeline,
                         method,
@@ -436,6 +439,7 @@ impl MistralRs {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
                     let engine = Engine::new(
+                        tx_for_engine,
                         rx,
                         pipeline,
                         method,
@@ -484,6 +488,19 @@ impl MistralRs {
         mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
             get_mut_arcmutex!(pipeline).device(),
         );
+
+        // For hybrid models (Mamba-Attention), force batch_size=1 to prevent state bleeding
+        // Mamba's stateful nature makes batched inference complex; this ensures correctness
+        let method = if get_mut_arcmutex!(pipeline).cache().is_hybrid() {
+            info!(
+                "Hybrid model detected (Mamba-Attention), enforcing batch_size=1 for correctness"
+            );
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()),
+            }
+        } else {
+            method
+        };
 
         let no_kv_cache = no_kv_cache.unwrap_or(false);
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
@@ -828,6 +845,18 @@ impl MistralRs {
         method: SchedulerConfig,
         config: AddModelConfig,
     ) -> Result<(), String> {
+        // For hybrid models (Mamba-Attention), force batch_size=1 to prevent state bleeding
+        let method = if pipeline.try_lock().unwrap().cache().is_hybrid() {
+            info!(
+                "Hybrid model detected (Mamba-Attention), enforcing batch_size=1 for correctness"
+            );
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()),
+            }
+        } else {
+            method
+        };
+
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
             method: method.clone(),

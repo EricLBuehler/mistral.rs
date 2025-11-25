@@ -58,6 +58,9 @@ pub trait Scheduler: Send + Sync {
     fn add_seq(&mut self, seq: Sequence);
     /// This may do nothing. It depends on the implementation
     fn free_finished_sequence_groups(&mut self);
+    /// Get Mamba state pool indices of finished sequences for freeing.
+    /// Called before free_finished_sequence_groups to allow cleanup of hybrid cache slots.
+    fn get_finished_mamba_indices(&self) -> Vec<usize>;
 
     // PagedAttention metadata
     fn block_tables(&self) -> Option<BlockTables>;

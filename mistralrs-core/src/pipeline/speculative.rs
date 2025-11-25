@@ -435,6 +435,9 @@ impl Pipeline for SpeculativePipeline {
                         .map(|(k, _)| k.dims()[2])
                         .unwrap_or(0),
                     EitherCache::Normal(normal) => normal.lock().unwrap().0[0].current_seq_len(),
+                    EitherCache::Hybrid(_) => {
+                        unreachable!("Speculative decoding is not supported with hybrid caches")
+                    }
                 };
 
                 // ========= Run the model ============
@@ -503,6 +506,9 @@ impl Pipeline for SpeculativePipeline {
                                 .map_err(|_| candle_core::Error::msg("KV cache set_len failed."))?;
                         }
                     }
+                    EitherCache::Hybrid(_) => {
+                        unreachable!("Speculative decoding is not supported with hybrid caches")
+                    }
                 }
                 if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
                     match get_mut_arcmutex!(self.draft).cache() {
@@ -512,7 +518,7 @@ impl Pipeline for SpeculativePipeline {
                                 *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
                             }
                         }
-                        EitherCache::Normal(_) => {
+                        EitherCache::Normal(_) | EitherCache::Hybrid(_) => {
                             unreachable!()
                         }
                     }
@@ -531,6 +537,9 @@ impl Pipeline for SpeculativePipeline {
                                 .map_err(|_| candle_core::Error::msg("KV cache set_len failed."))?;
                         }
                     }
+                    EitherCache::Hybrid(_) => {
+                        unreachable!("Speculative decoding is not supported with hybrid caches")
+                    }
                 }
                 if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
                     match get_mut_arcmutex!(self.target).cache() {
@@ -540,7 +549,7 @@ impl Pipeline for SpeculativePipeline {
                                 *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
                             }
                         }
-                        EitherCache::Normal(_) => {
+                        EitherCache::Normal(_) | EitherCache::Hybrid(_) => {
                             unreachable!()
                         }
                     }

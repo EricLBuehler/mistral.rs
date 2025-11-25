@@ -31,6 +31,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 <details>
 <summary><b>Text Models</b></summary>
 
+- Granite 4.0
 - SmolLM 3
 - DeepSeek V3
 - DeepSeek V2
@@ -681,6 +682,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `qwen3`
 - `qwen3moe`
 - `smollm3`
+- `granitemoehybrid`
 
 </details>
 
@@ -782,6 +784,7 @@ Please submit more benchmarks via raising an issue!
 |Dia 1.6b| | |✅|
 |Gemma 3n| | |✅|
 |Qwen 3 VL | |✅|
+|Granite 4.0| | |✅|
 </details>
 
 <details>
@@ -830,6 +833,7 @@ Please submit more benchmarks via raising an issue!
 |SmolLM3|✅| | |
 |Gemma 3n| | | |
 |Qwen 3 VL | | |
+|Granite 4.0| | | |
 </details>
 
 <details>
@@ -866,6 +870,7 @@ Please submit more benchmarks via raising an issue!
 |SmolLM3|✅|
 |Gemma 3n| |
 |Qwen 3 VL | |
+|Granite 4.0| |
 </details>
 
 ### Using derivative and adapter models

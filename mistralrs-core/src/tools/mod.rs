@@ -142,12 +142,17 @@ where
 /// Fixup potentially broken JSON
 /// 1) allow/handle arguments as maps in quotations
 fn fix_broken_json(raw: &str) -> anyhow::Result<String> {
-    // 1) Delete the opening quote that shouldn’t be there
-    let tmp = raw.replacen(r#""arguments":"{"#, r#""arguments":{"#, 1);
-    // 2) Delete the closing quote that matches it
-    let fixed = tmp.replacen(r#"}"}"#, r#"}}"#, 1);
-
-    Ok(fixed)
+    // Only apply the fix if the first pattern matches - otherwise we might corrupt valid JSON
+    // where arguments is a properly escaped string containing `}`
+    if raw.contains(r#""arguments":"{"#) {
+        // 1) Delete the opening quote that shouldn't be there
+        let tmp = raw.replacen(r#""arguments":"{"#, r#""arguments":{"#, 1);
+        // 2) Delete the closing quote that matches it
+        let fixed = tmp.replacen(r#"}"}"#, r#"}}"#, 1);
+        Ok(fixed)
+    } else {
+        Ok(raw.to_string())
+    }
 }
 
 impl ToolCallingMatcher {
