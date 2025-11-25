@@ -7,6 +7,7 @@ use crate::{
     AudioInput, ChatCompletionResponse, Usage,
 };
 use crate::{
+    kv_cache::HybridLayerCache,
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
     pipeline::{DiffusionGenerationParams, KvCache},
     response::CompletionChoice,
@@ -413,6 +414,7 @@ pub struct Sequence {
     cache: LayerCaches,
     draft_cache: LayerCaches,
     xlora_cache: Option<LayerCaches>,
+    hybrid_cache: Option<Vec<HybridLayerCache>>,
 
     // Preallocated KV cache (k,v)
     seq_preallocated_cache: Option<(Tensor, Tensor)>,
@@ -556,6 +558,7 @@ impl Sequence {
             } else {
                 None
             },
+            hybrid_cache: None,
             seq_preallocated_cache,
             responder,
             sampler: sampler.into(),
@@ -793,6 +796,10 @@ impl Sequence {
 
     pub fn scaling_cache(&mut self) -> &mut Option<Tensor> {
         &mut self.scaling_cache
+    }
+
+    pub fn hybrid_cache(&mut self) -> &mut Option<Vec<HybridLayerCache>> {
+        &mut self.hybrid_cache
     }
 
     pub fn is_xlora(&self) -> bool {

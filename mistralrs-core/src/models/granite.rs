@@ -16,13 +16,14 @@ use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
     attention::SdpaParams,
     device_map::DeviceMapper,
+    kv_cache::{HybridCache, HybridCacheConfig, HybridLayerType, MambaLayerCache},
     layers::{embedding, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, KvCache, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -488,49 +489,23 @@ fn softplus(x: &Tensor) -> Result<Tensor> {
     (Tensor::ones_like(x)? + x.exp()?)?.log()
 }
 
-/// Cache for Mamba layers - stores conv state and SSM state
-#[derive(Clone)]
-pub struct MambaCache {
-    /// Convolution state: (batch, conv_dim, d_conv)
-    pub conv_state: Tensor,
-    /// SSM state: (batch, n_heads, head_dim, d_state)
-    pub ssm_state: Tensor,
-    pub seqlen_offset: usize,
-}
-
-impl MambaCache {
-    pub fn new(
-        batch_size: usize,
-        cfg: &Config,
-        dtype: candle_core::DType,
-        device: &Device,
-    ) -> Result<Self> {
-        let conv_dim = cfg.mamba_conv_dim();
-        let conv_state = Tensor::zeros((batch_size, conv_dim, cfg.mamba_d_conv), dtype, device)?;
-        let ssm_state = Tensor::zeros(
-            (
-                batch_size,
-                cfg.mamba_n_heads(),
-                cfg.mamba_d_head(),
-                cfg.mamba_d_state,
-            ),
-            dtype,
-            device,
-        )?;
-        Ok(Self {
-            conv_state,
-            ssm_state,
-            seqlen_offset: 0,
-        })
-    }
-
-    #[allow(dead_code)]
-    pub fn reset(&mut self) -> Result<()> {
-        self.conv_state = self.conv_state.zeros_like()?;
-        self.ssm_state = self.ssm_state.zeros_like()?;
-        self.seqlen_offset = 0;
-        Ok(())
-    }
+fn create_mamba_cache(
+    batch_size: usize,
+    cfg: &Config,
+    dtype: candle_core::DType,
+    device: &Device,
+) -> Result<MambaLayerCache> {
+    let conv_dim = cfg.mamba_conv_dim();
+    MambaLayerCache::new(
+        batch_size,
+        conv_dim,
+        cfg.mamba_d_conv,
+        cfg.mamba_n_heads(),
+        cfg.mamba_d_head(),
+        cfg.mamba_d_state,
+        dtype,
+        device,
+    )
 }
 
 /// RMSNorm with optional gating (for Mamba output)
@@ -649,7 +624,7 @@ impl MambaLayer {
         })
     }
 
-    fn forward(&self, x: &Tensor, cache: &mut MambaCache) -> Result<Tensor> {
+    fn forward(&self, x: &Tensor, cache: &mut MambaLayerCache) -> Result<Tensor> {
         let (batch_size, seq_len, _) = x.dims3()?;
         let dtype = x.dtype();
         let groups_time_state_size = self.n_groups * self.ssm_state_size;
@@ -696,7 +671,7 @@ impl MambaLayer {
         &self,
         hidden_states_b_c: &Tensor, // (batch, conv_dim)
         dt: &Tensor,                // (batch, num_heads)
-        cache: &mut MambaCache,
+        cache: &mut MambaLayerCache,
         batch_size: usize,
     ) -> Result<Tensor> {
         let groups_time_state_size = self.n_groups * self.ssm_state_size;
@@ -843,7 +818,7 @@ impl MambaLayer {
         &self,
         hidden_states_b_c: &Tensor, // (batch, seq_len, conv_dim)
         dt: &Tensor,                // (batch, seq_len, num_heads)
-        cache: &mut MambaCache,
+        cache: &mut MambaLayerCache,
         batch_size: usize,
         seq_len: usize,
     ) -> Result<Tensor> {
@@ -1026,7 +1001,7 @@ struct MambaBlock {
 }
 
 impl MambaBlock {
-    fn forward(&self, x: &Tensor, cache: &mut MambaCache) -> Result<Tensor> {
+    fn forward(&self, x: &Tensor, cache: &mut MambaLayerCache) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
         let mamba_out = self.mamba.forward(&x, cache)?;
@@ -1101,11 +1076,7 @@ enum DecoderLayer {
     Mamba(MambaBlock),
 }
 
-/// Enum to represent either a KV cache or Mamba cache for a layer
-pub enum LayerCache {
-    Attention(KvCache),
-    Mamba(MambaCache),
-}
+// Use HybridLayerCache from kv_cache instead of a local type alias
 
 // ====================== End Mamba Implementation ======================
 
@@ -1418,14 +1389,22 @@ fn scale_tensor(tensor: Tensor, scale: f32) -> Result<Tensor> {
     }
 }
 
+/// Local enum to represent either a KV cache or Mamba cache for a layer
+/// (used internally by GraniteMoeHybrid - not exported)
+enum GraniteLayerCache {
+    Attention(KvCache),
+    Mamba(MambaLayerCache),
+}
+
 /// Hybrid cache that can store either KV cache or Mamba cache per layer
+/// (local to granite model - wraps kv_cache::HybridCache for pipeline integration)
 #[allow(dead_code)]
-pub struct HybridCache {
-    pub caches: Vec<LayerCache>,
+struct GraniteHybridCache {
+    pub caches: Vec<GraniteLayerCache>,
     max_seq_len: usize,
 }
 
-impl HybridCache {
+impl GraniteHybridCache {
     pub fn new(
         layer_types: &[GraniteLayerType],
         cfg: &Config,
@@ -1436,14 +1415,16 @@ impl HybridCache {
         for layer_type in layer_types {
             match layer_type {
                 GraniteLayerType::Attention => {
-                    caches.push(LayerCache::Attention(KvCache::new_normal(
+                    caches.push(GraniteLayerCache::Attention(KvCache::new_normal(
                         2,
                         cfg.max_position_embeddings,
-                        cfg.max_position_embeddings,
+                        HybridCache::CACHE_GROW_SIZE,
                     )));
                 }
                 GraniteLayerType::Mamba => {
-                    caches.push(LayerCache::Mamba(MambaCache::new(1, cfg, dtype, device)?));
+                    caches.push(GraniteLayerCache::Mamba(create_mamba_cache(
+                        1, cfg, dtype, device,
+                    )?));
                 }
             }
         }
@@ -1456,7 +1437,7 @@ impl HybridCache {
     pub fn seqlen(&self) -> usize {
         // Return the seqlen from the first attention layer
         for cache in &self.caches {
-            if let LayerCache::Attention(kv) = cache {
+            if let GraniteLayerCache::Attention(kv) = cache {
                 return kv.current_seq_len();
             }
         }
@@ -1468,16 +1449,21 @@ impl HybridCache {
     pub fn reset(&mut self) {
         for cache in &mut self.caches {
             match cache {
-                LayerCache::Attention(kv) => kv.reset(),
-                LayerCache::Mamba(mamba) => {
+                GraniteLayerCache::Attention(kv) => kv.reset(),
+                GraniteLayerCache::Mamba(mamba) => {
                     let _ = mamba.reset();
                 }
             }
         }
     }
+
+    #[allow(dead_code)]
+    pub fn num_layers(&self) -> usize {
+        self.caches.len()
+    }
 }
 
-impl PastKvLenCache for HybridCache {
+impl PastKvLenCache for GraniteHybridCache {
     fn get_past_kv_len(&self) -> Result<usize> {
         Ok(self.seqlen())
     }
@@ -1490,8 +1476,8 @@ pub struct GraniteMoeHybrid {
     layer_types: Vec<GraniteLayerType>,
     ln_f: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
-    hybrid_cache: Arc<Mutex<HybridCache>>,
-    // Dummy EitherCache for NormalModel trait compliance - actual caching uses hybrid_cache
+    hybrid_cache: Arc<Mutex<GraniteHybridCache>>,
+    // EitherCache for pipeline integration
     kv_cache: EitherCache,
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -1679,13 +1665,43 @@ impl GraniteMoeHybrid {
             layers.push(layer);
         }
 
-        // Create hybrid cache
-        let hybrid_cache = Arc::new(Mutex::new(HybridCache::new(
+        // Create hybrid cache for internal use
+        let hybrid_cache = Arc::new(Mutex::new(GraniteHybridCache::new(
             &layer_types,
             cfg,
             &normal_loading_metadata.real_device,
             vb_m.dtype(),
         )?));
+
+        // Create pipeline-compatible hybrid cache config
+        let pipeline_layer_types: Vec<HybridLayerType> = layer_types
+            .iter()
+            .map(|lt| match lt {
+                GraniteLayerType::Attention => HybridLayerType::Attention,
+                GraniteLayerType::Mamba => HybridLayerType::Mamba,
+            })
+            .collect();
+
+        let hybrid_cache_config = HybridCacheConfig {
+            layer_types: pipeline_layer_types,
+            max_seq_len: cfg.max_position_embeddings,
+            mamba_conv_dim: cfg.mamba_conv_dim(),
+            mamba_d_conv: cfg.mamba_d_conv,
+            mamba_n_heads: cfg.mamba_n_heads(),
+            mamba_head_dim: cfg.mamba_d_head(),
+            mamba_d_state: cfg.mamba_d_state,
+        };
+
+        let pipeline_cache = Arc::new(Mutex::new(
+            HybridCache::new(
+                hybrid_cache_config,
+                vb_m.dtype(),
+                &normal_loading_metadata.real_device,
+            )
+            .map_err(|e| {
+                candle_core::Error::Msg(format!("Failed to create hybrid cache: {}", e))
+            })?,
+        ));
 
         let num_attention_heads = cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size();
 
@@ -1696,10 +1712,7 @@ impl GraniteMoeHybrid {
             ln_f,
             lm_head,
             hybrid_cache,
-            kv_cache: EitherCache::Normal(NormalCache::new(
-                cfg.num_hidden_layers,
-                cfg.max_position_embeddings,
-            )),
+            kv_cache: EitherCache::Hybrid(pipeline_cache),
             device: normal_loading_metadata.real_device,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
@@ -1762,7 +1775,7 @@ impl GraniteMoeHybrid {
             x = self.mapper.map(x, layer_idx)?;
 
             match (layer, &mut cache[layer_idx]) {
-                (DecoderLayer::Attention(block), LayerCache::Attention(kv_cache)) => {
+                (DecoderLayer::Attention(block), GraniteLayerCache::Attention(kv_cache)) => {
                     x = block.forward(
                         &x,
                         &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
@@ -1774,7 +1787,7 @@ impl GraniteMoeHybrid {
                         flash_params,
                     )?;
                 }
-                (DecoderLayer::Mamba(block), LayerCache::Mamba(mamba_cache)) => {
+                (DecoderLayer::Mamba(block), GraniteLayerCache::Mamba(mamba_cache)) => {
                     x = block.forward(&x, mamba_cache)?;
                 }
                 _ => {
