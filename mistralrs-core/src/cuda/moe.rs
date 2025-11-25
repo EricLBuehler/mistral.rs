@@ -111,8 +111,7 @@ pub fn moe_gemm(
         }
 
         let output = candle::CudaStorage::wrap_cuda_slice(output, dev.clone());
-        let output =
-            candle::from_storage_no_op(candle::Storage::Cuda(output), (size_m, size_n), false);
+        let output = Tensor::from((candle::Storage::Cuda(output), (size_m, size_n)));
 
         Ok(output)
     }
