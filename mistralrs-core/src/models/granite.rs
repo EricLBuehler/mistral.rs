@@ -1,13 +1,13 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{Device, Result, Tensor};
+use candle_core::{Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::{Arc, Mutex}};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
@@ -28,6 +28,13 @@ use crate::{
 serde_default_fn!(bool, word_emb_default, true);
 serde_default_fn!(f32, default_one, 1.0);
 serde_default_fn!(f32, default_rope_theta, 10_000.0);
+serde_default_fn!(usize, default_mamba_d_conv, 4);
+serde_default_fn!(usize, default_mamba_d_state, 256);
+serde_default_fn!(usize, default_mamba_expand, 2);
+serde_default_fn!(usize, default_mamba_n_groups, 1);
+serde_default_fn!(usize, default_mamba_chunk_size, 256);
+serde_default_fn!(bool, default_mamba_conv_bias, true);
+serde_default_fn!(bool, default_mamba_proj_bias, false);
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -82,6 +89,23 @@ pub struct Config {
     pub residual_multiplier: f32,
     #[serde(default = "default_one")]
     pub logits_scaling: f32,
+    // Mamba configuration
+    pub mamba_n_heads: Option<usize>,
+    #[serde(default = "default_mamba_n_groups")]
+    pub mamba_n_groups: usize,
+    #[serde(default = "default_mamba_d_state")]
+    pub mamba_d_state: usize,
+    pub mamba_d_head: Option<usize>,
+    #[serde(default = "default_mamba_d_conv")]
+    pub mamba_d_conv: usize,
+    #[serde(default = "default_mamba_expand")]
+    pub mamba_expand: usize,
+    #[serde(default = "default_mamba_chunk_size")]
+    pub mamba_chunk_size: usize,
+    #[serde(default = "default_mamba_conv_bias")]
+    pub mamba_conv_bias: bool,
+    #[serde(default = "default_mamba_proj_bias")]
+    pub mamba_proj_bias: bool,
 }
 
 impl Config {
@@ -104,6 +128,24 @@ impl Config {
         } else {
             self.layer_types.clone()
         }
+    }
+
+    // Mamba helper methods
+    pub fn mamba_intermediate_size(&self) -> usize {
+        self.mamba_expand * self.hidden_size
+    }
+
+    pub fn mamba_n_heads(&self) -> usize {
+        self.mamba_n_heads.unwrap_or(128)
+    }
+
+    pub fn mamba_d_head(&self) -> usize {
+        self.mamba_d_head
+            .unwrap_or(self.mamba_intermediate_size() / self.mamba_n_heads())
+    }
+
+    pub fn mamba_conv_dim(&self) -> usize {
+        self.mamba_intermediate_size() + 2 * self.mamba_n_groups * self.mamba_d_state
     }
 }
 
@@ -194,6 +236,576 @@ impl MlpLayer for GraniteMlp {
 
 impl crate::amoe::AnyMoeTrainableLayer for GraniteMlp {}
 
+// ====================== Mamba Implementation ======================
+
+/// Softplus activation: log(1 + exp(x))
+fn softplus(x: &Tensor) -> Result<Tensor> {
+    // For numerical stability: softplus(x) = x + log(1 + exp(-x)) for large x
+    // Using the simpler formula for now: log(1 + exp(x))
+    let one = Tensor::ones_like(x)?;
+    let exp_x = x.exp()?;
+    (&one + exp_x)?.log()
+}
+
+/// Cache for Mamba layers - stores conv state and SSM state
+#[derive(Clone)]
+pub struct MambaCache {
+    /// Convolution state: (batch, conv_dim, d_conv)
+    pub conv_state: Tensor,
+    /// SSM state: (batch, n_heads, head_dim, d_state)
+    pub ssm_state: Tensor,
+    pub seqlen_offset: usize,
+}
+
+impl MambaCache {
+    pub fn new(
+        batch_size: usize,
+        cfg: &Config,
+        dtype: candle_core::DType,
+        device: &Device,
+    ) -> Result<Self> {
+        let conv_dim = cfg.mamba_conv_dim();
+        let conv_state = Tensor::zeros((batch_size, conv_dim, cfg.mamba_d_conv), dtype, device)?;
+        let ssm_state = Tensor::zeros(
+            (
+                batch_size,
+                cfg.mamba_n_heads(),
+                cfg.mamba_d_head(),
+                cfg.mamba_d_state,
+            ),
+            dtype,
+            device,
+        )?;
+        Ok(Self {
+            conv_state,
+            ssm_state,
+            seqlen_offset: 0,
+        })
+    }
+
+    #[allow(dead_code)]
+    pub fn reset(&mut self) -> Result<()> {
+        self.conv_state = self.conv_state.zeros_like()?;
+        self.ssm_state = self.ssm_state.zeros_like()?;
+        self.seqlen_offset = 0;
+        Ok(())
+    }
+}
+
+/// RMSNorm with optional gating (for Mamba output)
+struct RmsNormGated {
+    weight: Tensor,
+    eps: f64,
+}
+
+impl RmsNormGated {
+    fn new(hidden_size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
+        let weight = vb.get((hidden_size,), "weight")?;
+        Ok(Self { weight, eps })
+    }
+
+    fn forward(&self, hidden_states: &Tensor, gate: Option<&Tensor>) -> Result<Tensor> {
+        let dtype = hidden_states.dtype();
+        let mut hidden_states = hidden_states.to_dtype(candle_core::DType::F32)?;
+
+        // Apply gating if provided
+        if let Some(gate) = gate {
+            let gate = candle_nn::ops::silu(&gate.to_dtype(candle_core::DType::F32)?)?;
+            hidden_states = (hidden_states * gate)?;
+        }
+
+        // RMS normalization
+        let variance = hidden_states.sqr()?.mean_keepdim(candle_core::D::Minus1)?;
+        let hidden_states = hidden_states.broadcast_div(&(variance + self.eps)?.sqrt()?)?;
+
+        // Apply weight and convert back to original dtype
+        hidden_states.to_dtype(dtype)? * &self.weight
+    }
+}
+
+/// Mamba2-style mixer layer
+#[allow(dead_code)]
+struct MambaLayer {
+    in_proj: candle_nn::Linear,
+    conv1d_weight: Tensor,
+    conv1d_bias: Option<Tensor>,
+    dt_bias: Tensor,
+    a_log: Tensor,
+    d: Tensor,
+    norm: RmsNormGated,
+    out_proj: candle_nn::Linear,
+    // Config params
+    num_heads: usize,
+    head_dim: usize,
+    intermediate_size: usize,
+    ssm_state_size: usize,
+    conv_kernel_size: usize,
+    n_groups: usize,
+    chunk_size: usize,
+    time_step_min: f64,
+    time_step_max: f64,
+}
+
+impl MambaLayer {
+    fn load(vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
+        let intermediate_size = cfg.mamba_intermediate_size();
+        let conv_dim = cfg.mamba_conv_dim();
+        let num_heads = cfg.mamba_n_heads();
+        let head_dim = cfg.mamba_d_head();
+        let ssm_state_size = cfg.mamba_d_state;
+        let conv_kernel_size = cfg.mamba_d_conv;
+        let n_groups = cfg.mamba_n_groups;
+
+        // Input projection: hidden_size -> (intermediate_size + conv_dim + num_heads)
+        let projection_size = intermediate_size + conv_dim + num_heads;
+        let in_proj_vb = vb.pp("in_proj");
+        let in_proj_weight = in_proj_vb.get((projection_size, cfg.hidden_size), "weight")?;
+        let in_proj_bias = if cfg.mamba_proj_bias {
+            Some(in_proj_vb.get(projection_size, "bias")?)
+        } else {
+            None
+        };
+        let in_proj = candle_nn::Linear::new(in_proj_weight, in_proj_bias);
+
+        // Conv1d weights: (conv_dim, 1, kernel_size) but stored as (conv_dim, kernel_size)
+        let conv1d_weight = vb.pp("conv1d").get((conv_dim, 1, conv_kernel_size), "weight")?;
+        let conv1d_bias = if cfg.mamba_conv_bias {
+            Some(vb.pp("conv1d").get(conv_dim, "bias")?)
+        } else {
+            None
+        };
+
+        // Time step bias
+        let dt_bias = vb.get(num_heads, "dt_bias")?;
+
+        // A_log for SSM
+        let a_log = vb.get(num_heads, "A_log")?;
+
+        // D skip connection
+        let d = vb.get(num_heads, "D")?;
+
+        // Gated RMSNorm
+        let norm = RmsNormGated::new(intermediate_size, cfg.rms_norm_eps, vb.pp("norm"))?;
+
+        // Output projection
+        let out_proj_vb = vb.pp("out_proj");
+        let out_proj_weight = out_proj_vb.get((cfg.hidden_size, intermediate_size), "weight")?;
+        let out_proj_bias = if cfg.mamba_proj_bias {
+            Some(out_proj_vb.get(cfg.hidden_size, "bias")?)
+        } else {
+            None
+        };
+        let out_proj = candle_nn::Linear::new(out_proj_weight, out_proj_bias);
+
+        Ok(Self {
+            in_proj,
+            conv1d_weight,
+            conv1d_bias,
+            dt_bias,
+            a_log,
+            d,
+            norm,
+            out_proj,
+            num_heads,
+            head_dim,
+            intermediate_size,
+            ssm_state_size,
+            conv_kernel_size,
+            n_groups,
+            chunk_size: cfg.mamba_chunk_size,
+            time_step_min: 0.001,
+            time_step_max: 0.1,
+        })
+    }
+
+    fn forward(&self, x: &Tensor, cache: &mut MambaCache) -> Result<Tensor> {
+        let (batch_size, seq_len, _) = x.dims3()?;
+        let dtype = x.dtype();
+        let groups_time_state_size = self.n_groups * self.ssm_state_size;
+
+        // 1. Input projection
+        let projected = self.in_proj.forward(x)?;
+        let gate = projected.narrow(
+            candle_core::D::Minus1,
+            0,
+            self.intermediate_size,
+        )?;
+        let hidden_states_b_c = projected.narrow(
+            candle_core::D::Minus1,
+            self.intermediate_size,
+            self.intermediate_size + 2 * groups_time_state_size,
+        )?;
+        let dt = projected.narrow(
+            candle_core::D::Minus1,
+            self.intermediate_size + self.intermediate_size + 2 * groups_time_state_size,
+            self.num_heads,
+        )?;
+
+        // Check if we're in cached single-token mode
+        let use_cache = cache.seqlen_offset > 0 && seq_len == 1;
+
+        let y = if use_cache {
+            // Cached single-token forward
+            self.forward_cached(
+                &hidden_states_b_c.squeeze(1)?,
+                &dt.squeeze(1)?,
+                cache,
+                batch_size,
+            )?
+            .unsqueeze(1)?
+        } else {
+            // Full sequence forward (no fast path, pure torch implementation)
+            self.forward_full(
+                &hidden_states_b_c,
+                &dt,
+                cache,
+                batch_size,
+                seq_len,
+            )?
+        };
+
+        // Apply gated normalization
+        let y = self.norm.forward(&y, Some(&gate))?;
+
+        // Output projection
+        self.out_proj.forward(&y.to_dtype(dtype)?)
+    }
+
+    fn forward_cached(
+        &self,
+        hidden_states_b_c: &Tensor,  // (batch, conv_dim)
+        dt: &Tensor,                  // (batch, num_heads)
+        cache: &mut MambaCache,
+        batch_size: usize,
+    ) -> Result<Tensor> {
+        let groups_time_state_size = self.n_groups * self.ssm_state_size;
+
+        // Update conv state: roll and insert new values
+        // conv_state: (batch, conv_dim, d_conv)
+        let conv_state = cache.conv_state.narrow(2, 1, self.conv_kernel_size - 1)?;
+        let new_col = hidden_states_b_c.unsqueeze(2)?;
+        cache.conv_state = Tensor::cat(&[conv_state, new_col], 2)?;
+
+        // Apply convolution: sum(conv_state * weight)
+        // weight: (conv_dim, 1, kernel_size) -> squeeze to (conv_dim, kernel_size)
+        let weight = self.conv1d_weight.squeeze(1)?;
+        let mut hidden_states_b_c = (cache.conv_state.clone() * weight.unsqueeze(0)?)?
+            .sum(candle_core::D::Minus1)?;
+
+        if let Some(ref bias) = self.conv1d_bias {
+            hidden_states_b_c = hidden_states_b_c.broadcast_add(bias)?;
+        }
+        let hidden_states_b_c = candle_nn::ops::silu(&hidden_states_b_c)?;
+
+        // Split into hidden_states, B, C
+        let hidden_states = hidden_states_b_c.narrow(
+            candle_core::D::Minus1,
+            0,
+            self.intermediate_size,
+        )?;
+        let b = hidden_states_b_c.narrow(
+            candle_core::D::Minus1,
+            self.intermediate_size,
+            groups_time_state_size,
+        )?;
+        let c = hidden_states_b_c.narrow(
+            candle_core::D::Minus1,
+            self.intermediate_size + groups_time_state_size,
+            groups_time_state_size,
+        )?;
+
+        // SSM computation for single token
+        // A = -exp(A_log)
+        let a = self.a_log.to_dtype(candle_core::DType::F32)?.exp()?.neg()?;
+
+        // dt with bias and softplus
+        let dt_bias = self.dt_bias.unsqueeze(0)?.expand((batch_size, self.num_heads))?;
+        let dt = (dt + &dt_bias)?;
+        let dt = softplus(&dt)?;
+        // Clamp dt
+        let dt = dt.clamp(self.time_step_min, self.time_step_max)?;
+
+        // Expand dimensions for broadcasting
+        // dt: (batch, num_heads) -> (batch, num_heads, head_dim)
+        let dt = dt.unsqueeze(2)?.expand((batch_size, self.num_heads, self.head_dim))?;
+
+        // a: (num_heads) -> (num_heads, head_dim, state_size)
+        let a = a.unsqueeze(1)?.unsqueeze(2)?
+            .expand((self.num_heads, self.head_dim, self.ssm_state_size))?
+            .to_dtype(candle_core::DType::F32)?;
+
+        // dA = exp(dt * A): (batch, num_heads, head_dim, state_size)
+        let da = dt.unsqueeze(3)?.to_dtype(candle_core::DType::F32)?
+            .broadcast_mul(&a.unsqueeze(0)?)?
+            .exp()?;
+
+        // Reshape B: (batch, n_groups * state_size) -> (batch, num_heads, state_size)
+        let b = b.reshape((batch_size, self.n_groups, self.ssm_state_size))?;
+        let b = b.unsqueeze(2)?
+            .expand((batch_size, self.n_groups, self.num_heads / self.n_groups, self.ssm_state_size))?
+            .reshape((batch_size, self.num_heads, self.ssm_state_size))?;
+
+        // dB = dt * B: (batch, num_heads, head_dim, state_size)
+        let db = dt.unsqueeze(3)?.broadcast_mul(&b.unsqueeze(2)?)?;
+
+        // hidden_states: (batch, intermediate_size) -> (batch, num_heads, head_dim)
+        let hidden_states = hidden_states.reshape((batch_size, self.num_heads, self.head_dim))?;
+
+        // dBx = dB * x: (batch, num_heads, head_dim, state_size)
+        let dbx = db.broadcast_mul(&hidden_states.unsqueeze(3)?)?;
+
+        // Update SSM state: state = state * dA + dBx
+        let ssm_state = cache.ssm_state.to_dtype(candle_core::DType::F32)?
+            .broadcast_mul(&da)?
+            .broadcast_add(&dbx)?;
+        cache.ssm_state = ssm_state.to_dtype(cache.ssm_state.dtype())?;
+
+        // Reshape C: (batch, n_groups * state_size) -> (batch, num_heads, state_size)
+        let c = c.reshape((batch_size, self.n_groups, self.ssm_state_size))?;
+        let c = c.unsqueeze(2)?
+            .expand((batch_size, self.n_groups, self.num_heads / self.n_groups, self.ssm_state_size))?
+            .reshape((batch_size, self.num_heads, self.ssm_state_size))?;
+
+        // y = (state @ C^T): (batch, num_heads, head_dim)
+        // state: (batch, num_heads, head_dim, state_size)
+        // C: (batch, num_heads, state_size)
+        let y = cache.ssm_state.to_dtype(c.dtype())?.matmul(&c.unsqueeze(3)?)?
+            .squeeze(3)?;
+
+        // D skip connection: y = y + x * D
+        let d = self.d.unsqueeze(0)?.unsqueeze(2)?
+            .expand((batch_size, self.num_heads, self.head_dim))?;
+        let y = (y + hidden_states * d)?;
+
+        // Reshape output: (batch, num_heads, head_dim) -> (batch, intermediate_size)
+        let y = y.reshape((batch_size, self.intermediate_size))?;
+
+        cache.seqlen_offset += 1;
+        Ok(y)
+    }
+
+    fn forward_full(
+        &self,
+        hidden_states_b_c: &Tensor,  // (batch, seq_len, conv_dim)
+        dt: &Tensor,                  // (batch, seq_len, num_heads)
+        cache: &mut MambaCache,
+        batch_size: usize,
+        seq_len: usize,
+    ) -> Result<Tensor> {
+        let groups_time_state_size = self.n_groups * self.ssm_state_size;
+
+        // Store conv state for future use
+        let hidden_states_b_c_t = hidden_states_b_c.transpose(1, 2)?;  // (batch, conv_dim, seq_len)
+        let pad_width = self.conv_kernel_size.saturating_sub(seq_len);
+        let conv_state = if pad_width > 0 {
+            let zeros = Tensor::zeros(
+                (batch_size, hidden_states_b_c_t.dim(1)?, pad_width),
+                hidden_states_b_c_t.dtype(),
+                hidden_states_b_c_t.device(),
+            )?;
+            Tensor::cat(&[zeros, hidden_states_b_c_t.clone()], 2)?
+        } else {
+            hidden_states_b_c_t.narrow(2, seq_len - self.conv_kernel_size, self.conv_kernel_size)?
+        };
+        cache.conv_state = conv_state;
+
+        // Apply conv1d
+        // Pad input for causal conv
+        let padded = Tensor::cat(
+            &[
+                Tensor::zeros(
+                    (batch_size, self.conv_kernel_size - 1, hidden_states_b_c.dim(2)?),
+                    hidden_states_b_c.dtype(),
+                    hidden_states_b_c.device(),
+                )?,
+                hidden_states_b_c.clone(),
+            ],
+            1,
+        )?;
+
+        // Manual grouped conv1d
+        let padded_t = padded.transpose(1, 2)?;  // (batch, conv_dim, seq_len + pad)
+        let weight = self.conv1d_weight.squeeze(1)?;  // (conv_dim, kernel_size)
+
+        // For each output position, compute the convolution
+        let mut conv_outputs = Vec::with_capacity(seq_len);
+        for i in 0..seq_len {
+            let window = padded_t.narrow(2, i, self.conv_kernel_size)?;
+            let out = (window * weight.unsqueeze(0)?)?.sum(candle_core::D::Minus1)?;
+            conv_outputs.push(out);
+        }
+        let mut hidden_states_b_c = Tensor::stack(&conv_outputs, 1)?;  // (batch, seq_len, conv_dim)
+
+        if let Some(ref bias) = self.conv1d_bias {
+            hidden_states_b_c = hidden_states_b_c.broadcast_add(&bias.unsqueeze(0)?.unsqueeze(0)?)?;
+        }
+        let hidden_states_b_c = candle_nn::ops::silu(&hidden_states_b_c)?;
+
+        // Split into hidden_states, B, C
+        let hidden_states = hidden_states_b_c.narrow(
+            candle_core::D::Minus1,
+            0,
+            self.intermediate_size,
+        )?;
+        let b = hidden_states_b_c.narrow(
+            candle_core::D::Minus1,
+            self.intermediate_size,
+            groups_time_state_size,
+        )?;
+        let c = hidden_states_b_c.narrow(
+            candle_core::D::Minus1,
+            self.intermediate_size + groups_time_state_size,
+            groups_time_state_size,
+        )?;
+
+        // SSM computation with chunking
+        let a = self.a_log.to_dtype(candle_core::DType::F32)?.exp()?.neg()?;
+
+        // dt with bias and softplus
+        let dt = (dt + &self.dt_bias.unsqueeze(0)?.unsqueeze(0)?)?;
+        let dt = softplus(&dt)?;
+        let dt = dt.clamp(self.time_step_min, self.time_step_max)?;
+
+        // Reshape for SSM
+        let hidden_states = hidden_states.reshape((batch_size, seq_len, self.num_heads, self.head_dim))?
+            .to_dtype(candle_core::DType::F32)?;
+        let b = b.reshape((batch_size, seq_len, self.n_groups, self.ssm_state_size))?
+            .to_dtype(candle_core::DType::F32)?;
+        let c = c.reshape((batch_size, seq_len, self.n_groups, self.ssm_state_size))?
+            .to_dtype(candle_core::DType::F32)?;
+
+        // Expand B and C to num_heads
+        let b = b.unsqueeze(3)?
+            .expand((batch_size, seq_len, self.n_groups, self.num_heads / self.n_groups, self.ssm_state_size))?
+            .reshape((batch_size, seq_len, self.num_heads, self.ssm_state_size))?;
+        let c = c.unsqueeze(3)?
+            .expand((batch_size, seq_len, self.n_groups, self.num_heads / self.n_groups, self.ssm_state_size))?
+            .reshape((batch_size, seq_len, self.num_heads, self.ssm_state_size))?;
+
+        // Simple sequential SSM (not chunked for now - can optimize later)
+        let mut ssm_state = cache.ssm_state.to_dtype(candle_core::DType::F32)?;
+        let mut outputs = Vec::with_capacity(seq_len);
+
+        for t in 0..seq_len {
+            let dt_t = dt.i((.., t, ..))?.unsqueeze(2)?
+                .expand((batch_size, self.num_heads, self.head_dim))?;
+            let x_t = hidden_states.i((.., t, .., ..))?;
+            let b_t = b.i((.., t, .., ..))?;
+            let c_t = c.i((.., t, .., ..))?;
+
+            // dA = exp(dt * A)
+            let a_expanded = a.unsqueeze(0)?.unsqueeze(2)?.unsqueeze(3)?
+                .expand((batch_size, self.num_heads, self.head_dim, self.ssm_state_size))?;
+            let da = (dt_t.unsqueeze(3)? * a_expanded)?.exp()?;
+
+            // dB = dt * B
+            let db = dt_t.unsqueeze(3)?.broadcast_mul(&b_t.unsqueeze(2)?)?;
+
+            // dBx = dB * x
+            let dbx = db.broadcast_mul(&x_t.unsqueeze(3)?)?;
+
+            // Update state: state = state * dA + dBx
+            ssm_state = ssm_state.broadcast_mul(&da)?.broadcast_add(&dbx)?;
+
+            // Output: y = state @ C^T
+            let y_t = ssm_state.matmul(&c_t.unsqueeze(3)?)?.squeeze(3)?;
+
+            // D skip connection
+            let d_expanded = self.d.unsqueeze(0)?.unsqueeze(2)?
+                .expand((batch_size, self.num_heads, self.head_dim))?;
+            let y_t = (y_t + x_t * d_expanded)?;
+
+            outputs.push(y_t);
+        }
+
+        // Store final state
+        cache.ssm_state = ssm_state.to_dtype(cache.ssm_state.dtype())?;
+        cache.seqlen_offset = seq_len;
+
+        // Stack outputs: (batch, seq_len, num_heads, head_dim) -> (batch, seq_len, intermediate_size)
+        let y = Tensor::stack(&outputs, 1)?;
+        y.reshape((batch_size, seq_len, self.intermediate_size))
+    }
+}
+
+/// Mamba decoder block (replaces attention block for Mamba layers)
+struct MambaBlock {
+    rms_1: RmsNorm,
+    mamba: MambaLayer,
+    rms_2: RmsNorm,
+    mlp: Box<dyn MlpLayer>,
+    residual_multiplier: f32,
+}
+
+impl MambaBlock {
+    fn forward(
+        &self,
+        x: &Tensor,
+        cache: &mut MambaCache,
+    ) -> Result<Tensor> {
+        let residual = x;
+        let x = self.rms_1.forward(x)?;
+        let mamba_out = self.mamba.forward(&x, cache)?;
+        let mamba_out = scale_tensor(mamba_out, self.residual_multiplier)?;
+        let x = (mamba_out + residual)?;
+        let residual = &x;
+        let mlp_out = self.mlp.forward(&self.rms_2.forward(&x)?)?;
+        let mlp_out = scale_tensor(mlp_out, self.residual_multiplier)?;
+        mlp_out + residual
+    }
+
+    fn load(
+        vb: ShardedVarBuilder,
+        cfg: &Config,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        let mamba = MambaLayer::load(
+            mapper.set_device(layer_idx, vb.pp("mamba"), loading_isq),
+            cfg,
+        )?;
+        let mlp = GraniteMlp::new(
+            mapper.set_device(layer_idx, vb.clone(), loading_isq),
+            cfg,
+            comm,
+        )?;
+        let rms_1 = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
+        )?;
+        let rms_2 = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
+        )?;
+        Ok(Self {
+            rms_1,
+            mamba,
+            rms_2,
+            mlp: Box::new(mlp),
+            residual_multiplier: cfg.residual_multiplier,
+        })
+    }
+}
+
+/// Enum to represent either an attention or mamba layer
+enum DecoderLayer {
+    Attention(Block),
+    Mamba(MambaBlock),
+}
+
+/// Enum to represent either a KV cache or Mamba cache for a layer
+pub enum LayerCache {
+    Attention(KvCache),
+    Mamba(MambaCache),
+}
+
+// ====================== End Mamba Implementation ======================
+
+#[allow(dead_code)]
 struct CausalSelfAttention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
@@ -476,17 +1088,77 @@ fn scale_tensor(tensor: Tensor, scale: f32) -> Result<Tensor> {
     }
 }
 
+/// Hybrid cache that can store either KV cache or Mamba cache per layer
+#[allow(dead_code)]
+pub struct HybridCache {
+    pub caches: Vec<LayerCache>,
+    max_seq_len: usize,
+}
+
+impl HybridCache {
+    pub fn new(layer_types: &[GraniteLayerType], cfg: &Config, device: &Device, dtype: candle_core::DType) -> Result<Self> {
+        let mut caches = Vec::with_capacity(layer_types.len());
+        for layer_type in layer_types {
+            match layer_type {
+                GraniteLayerType::Attention => {
+                    caches.push(LayerCache::Attention(KvCache::new_normal(2, cfg.max_position_embeddings, cfg.max_position_embeddings)));
+                }
+                GraniteLayerType::Mamba => {
+                    caches.push(LayerCache::Mamba(MambaCache::new(1, cfg, dtype, device)?));
+                }
+            }
+        }
+        Ok(Self {
+            caches,
+            max_seq_len: cfg.max_position_embeddings,
+        })
+    }
+
+    pub fn seqlen(&self) -> usize {
+        // Return the seqlen from the first attention layer
+        for cache in &self.caches {
+            if let LayerCache::Attention(kv) = cache {
+                return kv.current_seq_len();
+            }
+        }
+        // If no attention layers, return 0
+        0
+    }
+
+    #[allow(dead_code)]
+    pub fn reset(&mut self) {
+        for cache in &mut self.caches {
+            match cache {
+                LayerCache::Attention(kv) => kv.reset(),
+                LayerCache::Mamba(mamba) => { let _ = mamba.reset(); }
+            }
+        }
+    }
+}
+
+impl PastKvLenCache for HybridCache {
+    fn get_past_kv_len(&self) -> Result<usize> {
+        Ok(self.seqlen())
+    }
+}
+
+#[allow(dead_code)]
 pub struct GraniteMoeHybrid {
     wte: Embedding,
-    blocks: Vec<Block>,
+    layers: Vec<DecoderLayer>,
+    layer_types: Vec<GraniteLayerType>,
     ln_f: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
-    kv_cache: crate::pipeline::EitherCache,
+    hybrid_cache: Arc<Mutex<HybridCache>>,
+    // Dummy EitherCache for NormalModel trait compliance - actual caching uses hybrid_cache
+    kv_cache: EitherCache,
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
     embedding_multiplier: f32,
     logits_scaling: f32,
+    num_attention_heads: usize,
+    max_seq_len: usize,
 }
 
 impl GraniteMoeHybrid {
@@ -582,54 +1254,84 @@ impl GraniteMoeHybrid {
             }
         }
 
-        // Validate layer types - we only support attention layers for now
         let layer_types = cfg.layer_types();
-        for (idx, layer_type) in layer_types.iter().enumerate() {
-            if matches!(layer_type, GraniteLayerType::Mamba) {
-                candle_core::bail!(
-                    "Mamba layers are not yet supported in GraniteMoeHybrid inference (layer {})",
-                    idx
-                );
-            }
-        }
 
-        let blocks: Vec<_> = NiceProgressBar::<_, 'b'>(
+        // Log layer configuration
+        let num_mamba = layer_types.iter().filter(|t| matches!(t, GraniteLayerType::Mamba)).count();
+        let num_attn = layer_types.iter().filter(|t| matches!(t, GraniteLayerType::Attention)).count();
+        tracing::info!(
+            "GraniteMoeHybrid: {} attention layers, {} mamba layers",
+            num_attn,
+            num_mamba
+        );
+
+        // Build layers based on layer_types
+        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
+        for i in NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
-        )
-        .par_iter_if_isq(|i| {
+        ) {
             let device = mapper
                 .device_for(i, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
-            let rotary_emb = ropes
-                .get(&device.location())
-                .expect("No RoPE for device location!")
-                .clone();
-            let paged_attn = match &attention_mechanism {
-                AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => {
-                    Some(PagedAttention::new(head_dim, device, None)?)
+            let comm = mapper.get_comm_for(i)?;
+            let vb_layer = vb_m.pp(format!("layers.{i}"));
+
+            let layer = match &layer_types[i] {
+                GraniteLayerType::Attention => {
+                    let rotary_emb = ropes
+                        .get(&device.location())
+                        .expect("No RoPE for device location!")
+                        .clone();
+                    let paged_attn = match &attention_mechanism {
+                        AttentionImplementation::Eager => None,
+                        AttentionImplementation::PagedAttention => {
+                            Some(PagedAttention::new(head_dim, device, None)?)
+                        }
+                    };
+                    DecoderLayer::Attention(Block::load(
+                        vb_layer,
+                        cfg,
+                        &*mapper,
+                        i,
+                        normal_loading_metadata.loading_isq,
+                        rotary_emb,
+                        paged_attn,
+                        &comm,
+                    )?)
+                }
+                GraniteLayerType::Mamba => {
+                    DecoderLayer::Mamba(MambaBlock::load(
+                        vb_layer,
+                        cfg,
+                        &*mapper,
+                        i,
+                        normal_loading_metadata.loading_isq,
+                        &comm,
+                    )?)
                 }
             };
-            let comm = mapper.get_comm_for(i)?;
-            Block::load(
-                vb_m.pp(format!("layers.{i}")),
-                cfg,
-                &*mapper,
-                i,
-                normal_loading_metadata.loading_isq,
-                rotary_emb,
-                paged_attn,
-                &comm,
-            )
-        })?;
+            layers.push(layer);
+        }
+
+        // Create hybrid cache
+        let hybrid_cache = Arc::new(Mutex::new(HybridCache::new(
+            &layer_types,
+            cfg,
+            &normal_loading_metadata.real_device,
+            vb_m.dtype(),
+        )?));
+
+        let num_attention_heads = cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size();
 
         Ok(Self {
             wte,
-            blocks,
+            layers,
+            layer_types,
             ln_f,
             lm_head,
+            hybrid_cache,
             kv_cache: EitherCache::Normal(NormalCache::new(
                 cfg.num_hidden_layers,
                 cfg.max_position_embeddings,
@@ -641,7 +1343,7 @@ impl GraniteMoeHybrid {
                 hidden_size: cfg.hidden_size,
                 num_kv_heads: (cfg.num_key_value_heads() / mapper.get_comm_for(0)?.world_size())
                     .max(1),
-                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
+                num_attn_heads: num_attention_heads,
                 sliding_window: None,
                 k_head_dim: cfg.head_dim(),
                 v_head_dim: cfg.head_dim(),
@@ -653,6 +1355,8 @@ impl GraniteMoeHybrid {
             } else {
                 1.0 / cfg.logits_scaling
             },
+            num_attention_heads,
+            max_seq_len: cfg.max_position_embeddings,
         })
     }
 
@@ -668,15 +1372,18 @@ impl GraniteMoeHybrid {
         // Scale embeddings
         x = scale_tensor(x, self.embedding_multiplier)?;
 
-        let cache = &mut self.kv_cache.normal().0;
+        // Get cache lock for the entire forward pass
+        let mut hybrid_cache = self.hybrid_cache.lock().unwrap();
+
+        // Build attention mask - use seqlen_offsets for attention layers
         let mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             metadata
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(cache as &dyn PastKvLenCache),
+                .unwrap_or(&*hybrid_cache as &dyn PastKvLenCache),
             x.dtype(),
-            self.blocks[0].attn.num_attention_heads,
+            self.num_attention_heads,
         )?;
         // PagedAttention prompt chunking
         let mask = mask.filter(|_| {
@@ -686,18 +1393,30 @@ impl GraniteMoeHybrid {
                 .unwrap_or(true)
         });
 
-        for (block_idx, block) in self.blocks.iter().enumerate() {
-            x = self.mapper.map(x, block_idx)?;
-            x = block.forward(
-                &x,
-                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
-                seqlen_offsets,
-                &mut cache[block_idx],
-                metadata
-                    .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), *metadata)),
-                flash_params,
-            )?;
+        let cache = &mut hybrid_cache.caches;
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            x = self.mapper.map(x, layer_idx)?;
+
+            match (layer, &mut cache[layer_idx]) {
+                (DecoderLayer::Attention(block), LayerCache::Attention(kv_cache)) => {
+                    x = block.forward(
+                        &x,
+                        &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                        seqlen_offsets,
+                        kv_cache,
+                        metadata
+                            .as_ref()
+                            .map(|(kv_cache, metadata)| (kv_cache[layer_idx].clone(), *metadata)),
+                        flash_params,
+                    )?;
+                }
+                (DecoderLayer::Mamba(block), LayerCache::Mamba(mamba_cache)) => {
+                    x = block.forward(&x, mamba_cache)?;
+                }
+                _ => {
+                    candle_core::bail!("Layer type mismatch: layer and cache types don't match");
+                }
+            }
         }
 
         let x = x.to_device(&self.device)?;
@@ -718,10 +1437,18 @@ impl GraniteMoeHybrid {
         uvb_m.pp("embed_tokens").add(&self.wte);
         uvb_m.pp("norm").add(&self.ln_f);
 
-        for (layer_idx, layer) in self.blocks.iter().enumerate() {
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
             let uvb_l = uvb_m.pp("layers").pp(layer_idx);
-            uvb_l.pp("input_layernorm").add(&layer.rms_1);
-            uvb_l.pp("post_attention_layernorm").add(&layer.rms_2);
+            match layer {
+                DecoderLayer::Attention(block) => {
+                    uvb_l.pp("input_layernorm").add(&block.rms_1);
+                    uvb_l.pp("post_attention_layernorm").add(&block.rms_2);
+                }
+                DecoderLayer::Mamba(block) => {
+                    uvb_l.pp("input_layernorm").add(&block.rms_1);
+                    uvb_l.pp("post_attention_layernorm").add(&block.rms_2);
+                }
+            }
         }
 
         uvb_m.to_safetensors()
@@ -737,19 +1464,35 @@ impl IsqModel for GraniteMoeHybrid {
     ) {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.blocks.iter_mut().enumerate() {
-            tensors.push((&mut layer.attn.q_proj, Some(i)));
-            tensors.push((&mut layer.attn.k_proj, Some(i)));
-            tensors.push((&mut layer.attn.v_proj, Some(i)));
-            tensors.push((&mut layer.attn.o_proj, Some(i)));
-            tensors.extend(
-                layer
-                    .mlp
-                    .get_isq_layers()
-                    .into_iter()
-                    .map(|m| (m, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            match layer {
+                DecoderLayer::Attention(block) => {
+                    tensors.push((&mut block.attn.q_proj, Some(i)));
+                    tensors.push((&mut block.attn.k_proj, Some(i)));
+                    tensors.push((&mut block.attn.v_proj, Some(i)));
+                    tensors.push((&mut block.attn.o_proj, Some(i)));
+                    tensors.extend(
+                        block
+                            .mlp
+                            .get_isq_layers()
+                            .into_iter()
+                            .map(|m| (m, Some(i)))
+                            .collect::<Vec<_>>(),
+                    );
+                }
+                DecoderLayer::Mamba(block) => {
+                    // Mamba layers have MLP but no attention projections to quantize
+                    // The mamba in_proj/out_proj are candle_nn::Linear, not QuantMethod
+                    tensors.extend(
+                        block
+                            .mlp
+                            .get_isq_layers()
+                            .into_iter()
+                            .map(|m| (m, Some(i)))
+                            .collect::<Vec<_>>(),
+                    );
+                }
+            }
         }
         (tensors, &*self.mapper)
     }
@@ -763,14 +1506,23 @@ impl IsqModel for GraniteMoeHybrid {
         let mut names = Vec::new();
         // lm_head
         names.push(None);
-        for i in 0..self.blocks.len() {
-            names.push(Some(format!("blk.{i}.attn_q.weight")));
-            names.push(Some(format!("blk.{i}.attn_k.weight")));
-            names.push(Some(format!("blk.{i}.attn_v.weight")));
-            names.push(Some(format!("blk.{i}.attn_output.weight")));
-            // GraniteMlp has input_linear and output_linear
-            names.push(Some(format!("blk.{i}.ffn_input.weight")));
-            names.push(Some(format!("blk.{i}.ffn_output.weight")));
+        for (i, layer) in self.layers.iter().enumerate() {
+            match layer {
+                DecoderLayer::Attention(_) => {
+                    names.push(Some(format!("blk.{i}.attn_q.weight")));
+                    names.push(Some(format!("blk.{i}.attn_k.weight")));
+                    names.push(Some(format!("blk.{i}.attn_v.weight")));
+                    names.push(Some(format!("blk.{i}.attn_output.weight")));
+                    // GraniteMlp has input_linear and output_linear
+                    names.push(Some(format!("blk.{i}.ffn_input.weight")));
+                    names.push(Some(format!("blk.{i}.ffn_output.weight")));
+                }
+                DecoderLayer::Mamba(_) => {
+                    // Mamba layers only have MLP for ISQ
+                    names.push(Some(format!("blk.{i}.ffn_input.weight")));
+                    names.push(Some(format!("blk.{i}.ffn_output.weight")));
+                }
+            }
         }
         Ok(names)
     }
@@ -822,7 +1574,7 @@ impl NormalModel for GraniteMoeHybrid {
         false
     }
     fn max_seq_len(&self) -> usize {
-        self.blocks[0].attn.max_seq_len
+        self.max_seq_len
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
@@ -832,15 +1584,21 @@ impl NormalModel for GraniteMoeHybrid {
 impl AnyMoeBaseModelMixin for GraniteMoeHybrid {
     fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
         let mut mlps = Vec::new();
-        for layer in &self.blocks {
-            mlps.push(&*layer.mlp);
+        for layer in &self.layers {
+            match layer {
+                DecoderLayer::Attention(block) => mlps.push(&*block.mlp),
+                DecoderLayer::Mamba(block) => mlps.push(&*block.mlp),
+            }
         }
         mlps
     }
     fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
         let mut mlps = Vec::new();
-        for layer in &mut self.blocks {
-            mlps.push(&mut layer.mlp);
+        for layer in &mut self.layers {
+            match layer {
+                DecoderLayer::Attention(block) => mlps.push(&mut block.mlp),
+                DecoderLayer::Mamba(block) => mlps.push(&mut block.mlp),
+            }
         }
         mlps
     }
@@ -848,33 +1606,43 @@ impl AnyMoeBaseModelMixin for GraniteMoeHybrid {
         &mut self,
         additional_vbs: Vec<ShardedVarBuilder>,
         config: AnyMoeConfig,
-        (prefix, mlp): (String, String),
+        (prefix, _mlp): (String, String),
         mut layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
         gate_vb: Option<ShardedVarBuilder>,
     ) -> Result<()> {
         let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
         if layers.is_empty() {
-            layers = (0..self.blocks.len()).collect::<Vec<_>>();
+            layers = (0..self.layers.len()).collect::<Vec<_>>();
         }
         for _ in 0..layers.len() {
             experts.push(Vec::new());
         }
+
+        // Helper to get MLP from a layer
+        fn get_mlp(layer: &DecoderLayer) -> &dyn MlpLayer {
+            match layer {
+                DecoderLayer::Attention(block) => &*block.mlp,
+                DecoderLayer::Mamba(block) => &*block.mlp,
+            }
+        }
+
         for vb in additional_vbs {
             let vb = vb.pp(&prefix);
-            for (layer, row) in experts.iter_mut().enumerate() {
-                if !layers.contains(&layer) {
+            for (layer_idx, row) in experts.iter_mut().enumerate() {
+                if !layers.contains(&layer_idx) {
                     continue;
                 }
 
                 match expert_type {
                     AnyMoeExpertType::FineTuned => {
-                        let (dtype, device) = self.blocks[layer].mlp.dtype_device();
+                        let layer_mlp = get_mlp(&self.layers[layer_idx]);
+                        let (dtype, device) = layer_mlp.dtype_device();
                         // For GraniteMlp, we need custom handling
                         let cfg_for_layer = Config {
-                            hidden_size: self.blocks[layer].mlp.get_params()[0],
-                            shared_intermediate_size: Some(self.blocks[layer].mlp.get_params()[1]),
-                            intermediate_size: self.blocks[layer].mlp.get_params()[1],
+                            hidden_size: layer_mlp.get_params()[0],
+                            shared_intermediate_size: Some(layer_mlp.get_params()[1]),
+                            intermediate_size: layer_mlp.get_params()[1],
                             vocab_size: 0,
                             num_hidden_layers: 0,
                             num_attention_heads: 0,
@@ -890,11 +1658,21 @@ impl AnyMoeBaseModelMixin for GraniteMoeHybrid {
                             embedding_multiplier: 1.0,
                             residual_multiplier: 1.0,
                             logits_scaling: 1.0,
+                            // Mamba fields (not used for MLP but needed for struct)
+                            mamba_n_heads: None,
+                            mamba_n_groups: 1,
+                            mamba_d_state: 256,
+                            mamba_d_head: None,
+                            mamba_d_conv: 4,
+                            mamba_expand: 2,
+                            mamba_chunk_size: 256,
+                            mamba_conv_bias: true,
+                            mamba_proj_bias: false,
                         };
                         row.push(Box::new(GraniteMlp::new(
-                            vb.pp(layer).pp(&mlp).set_dtype(dtype).set_device(device),
+                            vb.pp(layer_idx).pp("mlp").set_dtype(dtype).set_device(device),
                             &cfg_for_layer,
-                            &self.mapper.get_comm_for(layer)?,
+                            &self.mapper.get_comm_for(layer_idx)?,
                         )?));
                     }
                     AnyMoeExpertType::LoraAdapter { .. } => {
@@ -903,16 +1681,20 @@ impl AnyMoeBaseModelMixin for GraniteMoeHybrid {
                 }
             }
         }
-        for (layer, expert) in layers.into_iter().zip(experts) {
-            let mut experts_all = vec![self.blocks[layer].mlp.clone()];
+        for (layer_idx, expert) in layers.into_iter().zip(experts) {
+            let mlp_box = match &mut self.layers[layer_idx] {
+                DecoderLayer::Attention(block) => &mut block.mlp,
+                DecoderLayer::Mamba(block) => &mut block.mlp,
+            };
+            let mut experts_all = vec![mlp_box.clone()];
             experts_all.extend(expert);
-            let (dtype, device) = self.blocks[layer].mlp.dtype_device();
-            self.blocks[layer].mlp = Box::new(MoeMlp::new(
+            let (dtype, device) = mlp_box.dtype_device();
+            *mlp_box = Box::new(MoeMlp::new(
                 experts_all,
                 config.clone(),
                 dtype,
                 &device,
-                layer,
+                layer_idx,
                 gate_vb.as_ref(),
             )?);
         }
