@@ -878,7 +878,7 @@ pub fn call_affine_quantize(
         get_2d_grid_dims(&grid_shape, input_strides)
     } else {
         MTLSize {
-            width: nthreads as usize,
+            width: nthreads,
             height: 1,
             depth: 1,
         }
@@ -962,9 +962,9 @@ pub fn call_afq_qmm(
                 depth: 1,
             };
             let grid_dims = MTLSize {
-                width: o.div_ceil(bo) as usize,
-                height: b as usize,
-                depth: n as usize,
+                width: o.div_ceil(bo),
+                height: b,
+                depth: n,
             };
             (group_dims, grid_dims)
         } else if b < 6 && o % 8 == 0 && d % 512 == 0 && d >= 512 {
@@ -977,9 +977,9 @@ pub fn call_afq_qmm(
                 depth: 1,
             };
             let grid_dims = MTLSize {
-                width: (o / bo) as usize,
-                height: b as usize,
-                depth: n as usize,
+                width: (o / bo),
+                height: b,
+                depth: n,
             };
             (group_dims, grid_dims)
         } else if b < 6 {
@@ -992,9 +992,9 @@ pub fn call_afq_qmm(
                 depth: 1,
             };
             let grid_dims = MTLSize {
-                width: o.div_ceil(bo) as usize,
-                height: b as usize,
-                depth: n as usize,
+                width: o.div_ceil(bo),
+                height: b,
+                depth: n,
             };
             (group_dims, grid_dims)
         } else {
@@ -1009,9 +1009,9 @@ pub fn call_afq_qmm(
                 depth: wm as usize,
             };
             let grid_dims = MTLSize {
-                width: o.div_ceil(bn) as usize,
-                height: b.div_ceil(bm) as usize,
-                depth: n as usize,
+                width: o.div_ceil(bn),
+                height: b.div_ceil(bm),
+                depth: n,
             };
             matrix = true;
             aligned = true;
@@ -1031,9 +1031,9 @@ pub fn call_afq_qmm(
                 depth: 1,
             };
             let grid_dims = MTLSize {
-                width: (o / bo) as usize,
-                height: b as usize,
-                depth: n as usize,
+                width: (o / bo),
+                height: b,
+                depth: n,
             };
             (group_dims, grid_dims)
         } else {
@@ -1048,9 +1048,9 @@ pub fn call_afq_qmm(
                 depth: wm as usize,
             };
             let grid_dims = MTLSize {
-                width: (o / bn) as usize,
-                height: b.div_ceil(bm) as usize,
-                depth: n as usize,
+                width: (o / bn),
+                height: b.div_ceil(bm),
+                depth: n,
             };
             matrix = true;
             if o % bn != 0 {
@@ -1094,7 +1094,7 @@ pub fn call_afq_qmm(
     encoder.set_buffer(0, Some(w), 0);
     encoder.set_buffer(1, Some(scales), 0);
     encoder.set_buffer(2, Some(biases), 0);
-    encoder.set_buffer(3, Some(x), x_offset as usize);
+    encoder.set_buffer(3, Some(x), x_offset);
     encoder.set_buffer(4, Some(out), 0);
     <i32 as EncoderParam>::set_param(encoder, 5, d as i32);
     <i32 as EncoderParam>::set_param(encoder, 6, o as i32);
@@ -1331,13 +1331,13 @@ pub fn call_scan(
     encoder.set_compute_pipeline_state(&pipeline);
 
     if contiguous {
-        encoder.set_buffer(0, Some(xs), xs_offset as usize);
+        encoder.set_buffer(0, Some(xs), xs_offset);
         encoder.set_buffer(1, Some(output), 0);
 
         let size = shape[axis];
         encoder.set_bytes_raw(
             2,
-            std::mem::size_of::<usize>() as usize,
+            std::mem::size_of::<usize>(),
             &size as *const usize as *const _,
         );
 
@@ -1345,23 +1345,22 @@ pub fn call_scan(
         let n_reads = if ty.size_in_bytes() <= 4 { 4 } else { 2 };
         let simd_size = 32;
         let elements_per_simd = n_reads * simd_size;
-        let mut thread_group_size = pipeline.max_total_threads_per_threadgroup() as usize;
+        let mut thread_group_size = pipeline.max_total_threads_per_threadgroup();
         if size <= n_reads * 1024 {
             thread_group_size = size.div_ceil(elements_per_simd) * simd_size;
         } else if size <= n_reads * 2048 {
             thread_group_size = (size / 2).div_ceil(elements_per_simd) * simd_size;
         }
-        thread_group_size =
-            thread_group_size.min(pipeline.max_total_threads_per_threadgroup() as usize);
+        thread_group_size = thread_group_size.min(pipeline.max_total_threads_per_threadgroup());
         let tmp_grid_dims = get_2d_grid_dims_divisor(shape, strides, size);
 
         let grid_dims = MTLSize {
-            width: thread_group_size as usize,
+            width: thread_group_size,
             height: tmp_grid_dims.width,
             depth: tmp_grid_dims.height,
         };
         let group_dims = MTLSize {
-            width: thread_group_size as usize,
+            width: thread_group_size,
             height: 1,
             depth: 1,
         };
@@ -1374,22 +1373,22 @@ pub fn call_scan(
         let bn = 32;
         let stride_blocks = stride.div_ceil(bn);
 
-        encoder.set_buffer(0, Some(xs), xs_offset as usize);
+        encoder.set_buffer(0, Some(xs), xs_offset);
         encoder.set_buffer(1, Some(output), 0);
 
         encoder.set_bytes_raw(
             2,
-            std::mem::size_of::<usize>() as usize,
+            std::mem::size_of::<usize>(),
             &size as *const usize as *const _,
         );
         encoder.set_bytes_raw(
             3,
-            std::mem::size_of::<usize>() as usize,
+            std::mem::size_of::<usize>(),
             &stride as *const usize as *const _,
         );
         encoder.set_bytes_raw(
             4,
-            std::mem::size_of::<usize>() as usize,
+            std::mem::size_of::<usize>(),
             &stride_blocks as *const usize as *const _,
         );
 
@@ -1398,19 +1397,19 @@ pub fn call_scan(
         let n_simdgroups = bn / n_reads;
         let thread_group_size = n_simdgroups * 32;
         let mut tmp_grid_dims = get_2d_grid_dims_divisor(shape, strides, size * stride);
-        if tmp_grid_dims.width <= (u32::MAX as usize) / (stride_blocks as usize) {
-            tmp_grid_dims.width *= stride_blocks as usize;
+        if tmp_grid_dims.width <= (u32::MAX as usize) / stride_blocks {
+            tmp_grid_dims.width *= stride_blocks;
         } else {
-            tmp_grid_dims.height *= stride_blocks as usize;
+            tmp_grid_dims.height *= stride_blocks;
         }
 
         let grid_dims = MTLSize {
-            width: thread_group_size as usize,
+            width: thread_group_size,
             height: tmp_grid_dims.width,
             depth: tmp_grid_dims.height,
         };
         let group_dims = MTLSize {
-            width: thread_group_size as usize,
+            width: thread_group_size,
             height: 1,
             depth: 1,
         };
@@ -1731,8 +1730,8 @@ fn call_copy_gpu_inplace(
     // === Buffers (slots 0/1) =================================================
     let byte_offset_src = src_offset * ty.size_in_bytes();
     let byte_offset_dst = dst_offset * ty.size_in_bytes();
-    encoder.set_buffer(0, Some(src), byte_offset_src as usize);
-    encoder.set_buffer(1, Some(dst), byte_offset_dst as usize);
+    encoder.set_buffer(0, Some(src), byte_offset_src);
+    encoder.set_buffer(1, Some(dst), byte_offset_dst);
 
     // === Specialisation for each CopyType ===================================
     match copy_type {
@@ -1747,11 +1746,11 @@ fn call_copy_gpu_inplace(
 
             // Grid
             let nthreads = ceil_div(elem_count, work_per_thread);
-            let tg_size = pipeline.max_total_threads_per_threadgroup() as usize;
+            let tg_size = pipeline.max_total_threads_per_threadgroup();
             let tg_size = tg_size.min(nthreads);
 
             let group_dims = MTLSize {
-                width: tg_size as usize,
+                width: tg_size,
                 height: 1,
                 depth: 1,
             };
@@ -1760,7 +1759,7 @@ fn call_copy_gpu_inplace(
                 get_2d_grid_dims_divisor(shape, dst_strides, work_per_thread)
             } else {
                 MTLSize {
-                    width: nthreads as usize,
+                    width: nthreads,
                     height: 1,
                     depth: 1,
                 }
@@ -1777,7 +1776,7 @@ fn call_copy_gpu_inplace(
                 let shape_i32: Vec<i32> = shape.iter().map(|&x| x as i32).collect();
                 encoder.set_bytes_raw(
                     2,
-                    (std::mem::size_of::<i32>() * shape_i32.len()) as usize,
+                    std::mem::size_of::<i32>() * shape_i32.len(),
                     shape_i32.as_ptr() as *const _,
                 );
             }
@@ -1785,7 +1784,7 @@ fn call_copy_gpu_inplace(
             let strides_in_i64: Vec<i64> = src_strides.iter().map(|&x| x as i64).collect();
             encoder.set_bytes_raw(
                 3,
-                (std::mem::size_of::<i64>() * strides_in_i64.len()) as usize,
+                std::mem::size_of::<i64>() * strides_in_i64.len(),
                 strides_in_i64.as_ptr() as *const _,
             );
 
@@ -1813,9 +1812,9 @@ fn call_copy_gpu_inplace(
             );
             let group_dims = get_block_dims(dim0, dim1, rest, 10);
             let grid_dims = MTLSize {
-                width: dim0 as usize,
-                height: dim1 as usize,
-                depth: rest as usize,
+                width: dim0,
+                height: dim1,
+                depth: rest,
             };
             encoder.dispatch_threads(grid_dims, group_dims);
         }
@@ -1900,7 +1899,7 @@ fn call_single_block_sort<'a>(
     encoder.set_compute_pipeline_state(&pipeline);
 
     // Buffers
-    encoder.set_buffer(0, Some(src), src_offset as usize);
+    encoder.set_buffer(0, Some(src), src_offset);
     encoder.set_buffer(1, Some(dst), 0);
 
     // Scalar params
@@ -1939,17 +1938,17 @@ fn call_single_block_sort<'a>(
         } else {
             encoder.set_bytes_raw(
                 6,
-                (std::mem::size_of::<i32>() * nc_shape.len()) as usize,
+                std::mem::size_of::<i32>() * nc_shape.len(),
                 nc_shape.as_ptr() as *const _,
             );
             encoder.set_bytes_raw(
                 7,
-                (std::mem::size_of::<i64>() * in_nc_str.len()) as usize,
+                std::mem::size_of::<i64>() * in_nc_str.len(),
                 in_nc_str.as_ptr() as *const _,
             );
             encoder.set_bytes_raw(
                 8,
-                (std::mem::size_of::<i64>() * out_nc_str.len()) as usize,
+                std::mem::size_of::<i64>() * out_nc_str.len(),
                 out_nc_str.as_ptr() as *const _,
             );
         }
@@ -1957,13 +1956,13 @@ fn call_single_block_sort<'a>(
 
     // Dispatch
     let group_dims = MTLSize {
-        width: bn as usize,
+        width: bn,
         height: 1,
         depth: 1,
     };
     let grid_dims = MTLSize {
         width: 1,
-        height: n_rows as usize,
+        height: n_rows,
         depth: 1,
     };
     encoder.dispatch_thread_groups(grid_dims, group_dims);
@@ -2035,7 +2034,7 @@ fn call_multi_block_sort<'a>(
         let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
         encoder.set_compute_pipeline_state(&pipeline);
 
-        encoder.set_buffer(0, Some(src), src_offset as usize);
+        encoder.set_buffer(0, Some(src), src_offset);
         encoder.set_buffer(1, Some(&*dev_vals_0), 0);
         encoder.set_buffer(2, Some(&*dev_idxs_0), 0);
         <i32 as EncoderParam>::set_param(encoder, 3, size_sorted_axis as i32);
@@ -2043,24 +2042,24 @@ fn call_multi_block_sort<'a>(
         <i32 as EncoderParam>::set_param(encoder, 5, nc_dim as i32);
         encoder.set_bytes_raw(
             6,
-            (std::mem::size_of::<i32>() * nc_shape.len()) as usize,
+            std::mem::size_of::<i32>() * nc_shape.len(),
             nc_shape.as_ptr() as *const _,
         );
         encoder.set_bytes_raw(
             7,
-            (std::mem::size_of::<i64>() * nc_str.len()) as usize,
+            std::mem::size_of::<i64>() * nc_str.len(),
             nc_str.as_ptr() as *const _,
         );
 
         // Dispatch
         let group_dims = MTLSize {
-            width: bn as usize,
+            width: bn,
             height: 1,
             depth: 1,
         };
         let grid_dims = MTLSize {
-            width: n_blocks as usize,
-            height: n_rows as usize,
+            width: n_blocks,
+            height: n_rows,
             depth: 1,
         };
         encoder.dispatch_thread_groups(grid_dims, group_dims);
@@ -2130,7 +2129,7 @@ fn call_multi_block_sort<'a>(
             };
             let grid_dims = MTLSize {
                 width: 1,
-                height: n_rows as usize,
+                height: n_rows,
                 depth: 1,
             };
             encoder.dispatch_thread_groups(grid_dims, group_dims);
@@ -2161,13 +2160,13 @@ fn call_multi_block_sort<'a>(
 
             // Dispatch
             let group_dims = MTLSize {
-                width: bn as usize,
+                width: bn,
                 height: 1,
                 depth: 1,
             };
             let grid_dims = MTLSize {
-                width: n_blocks as usize,
-                height: n_rows as usize,
+                width: n_blocks,
+                height: n_rows,
                 depth: 1,
             };
             encoder.dispatch_thread_groups(grid_dims, group_dims);
@@ -2267,7 +2266,7 @@ pub fn call_hqq_pack_8bit(
     let pipeline = kernels.load_pipeline(device, "pack_8bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, num_elements as usize));
+    set_params!(encoder, (input, output, num_elements));
 
     let grid_size = MTLSize {
         width: num_elements.div_ceil(256),
@@ -2298,7 +2297,7 @@ pub fn call_hqq_pack_4bit(
     let pipeline = kernels.load_pipeline(device, "pack_4bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, height as usize, width as usize));
+    set_params!(encoder, (input, output, height, width));
 
     let step = height / 2;
     let grid_size = MTLSize {
@@ -2331,7 +2330,7 @@ pub fn call_hqq_pack_2bit(
     let pipeline = kernels.load_pipeline(device, "pack_2bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, height as usize, width as usize));
+    set_params!(encoder, (input, output, height, width));
 
     let step = height / 4;
     let grid_size = MTLSize {
@@ -2364,7 +2363,7 @@ pub fn call_hqq_pack_3bit(
     let pipeline = kernels.load_pipeline(device, "pack_3bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, height as usize, width as usize));
+    set_params!(encoder, (input, output, height, width));
 
     let step = height / 10;
     let grid_size = MTLSize {
@@ -2397,7 +2396,7 @@ pub fn call_hqq_pack_1bit(
     let pipeline = kernels.load_pipeline(device, "pack_1bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, height as usize, width as usize));
+    set_params!(encoder, (input, output, height, width));
 
     let step = height / 8;
     let grid_size = MTLSize {

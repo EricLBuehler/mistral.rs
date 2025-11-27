@@ -418,14 +418,14 @@ pub fn call_reshape_and_cache(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_buffer(0, Some(key), key_offset as usize);
-    encoder.set_buffer(1, Some(value), value_offset as usize);
-    encoder.set_buffer(2, Some(key_cache), key_cache_offset as usize);
-    encoder.set_buffer(3, Some(value_cache), value_cache_offset as usize);
-    encoder.set_buffer(4, Some(slot_mapping), slot_mapping_offset as usize);
+    encoder.set_buffer(0, Some(key), key_offset);
+    encoder.set_buffer(1, Some(value), value_offset);
+    encoder.set_buffer(2, Some(key_cache), key_cache_offset);
+    encoder.set_buffer(3, Some(value_cache), value_cache_offset);
+    encoder.set_buffer(4, Some(slot_mapping), slot_mapping_offset);
     if let Some((k_scale, v_scale)) = k_v_scale {
-        encoder.set_buffer(5, Some(&k_scale), 0 as usize);
-        encoder.set_buffer(6, Some(&v_scale), 0 as usize);
+        encoder.set_buffer(5, Some(&k_scale), 0_usize);
+        encoder.set_buffer(6, Some(&v_scale), 0_usize);
     }
     encoder.set_bytes_raw(
         7,
@@ -535,13 +535,13 @@ pub fn call_paged_attention_v1(
     let shared_mem_size = logits_size.max(outputs_size);
     encoder.set_threadgroup_memory_length(0, shared_mem_size as usize);
 
-    encoder.set_buffer(2, Some(output), 0 as usize);
-    encoder.set_buffer(3, Some(q), q_offset as usize);
-    encoder.set_buffer(4, Some(k_cache), k_cache_offset as usize);
-    encoder.set_buffer(5, Some(v_cache), v_cache_offset as usize);
+    encoder.set_buffer(2, Some(output), 0_usize);
+    encoder.set_buffer(3, Some(q), q_offset);
+    encoder.set_buffer(4, Some(k_cache), k_cache_offset);
+    encoder.set_buffer(5, Some(v_cache), v_cache_offset);
     if let Some((k_scale, v_scale)) = &k_v_scale {
-        encoder.set_buffer(6, Some(k_scale), 0 as usize);
-        encoder.set_buffer(7, Some(v_scale), 0 as usize);
+        encoder.set_buffer(6, Some(k_scale), 0_usize);
+        encoder.set_buffer(7, Some(v_scale), 0_usize);
     }
     encoder.set_bytes_raw(
         8,
@@ -558,15 +558,15 @@ pub fn call_paged_attention_v1(
         core::mem::size_of_val(&softcapping),
         &softcapping as *const _ as *const c_void,
     );
-    encoder.set_buffer(11, Some(block_tables), block_tables_offset as usize);
-    encoder.set_buffer(12, Some(context_lens), context_lens_offset as usize);
+    encoder.set_buffer(11, Some(block_tables), block_tables_offset);
+    encoder.set_buffer(12, Some(context_lens), context_lens_offset);
     encoder.set_bytes_raw(
         13,
         core::mem::size_of_val(&max_num_blocks_per_seq),
         &max_num_blocks_per_seq as *const _ as *const c_void,
     );
     if let Some((alibi, alibi_offset)) = alibi_storage_and_offset {
-        encoder.set_buffer(14, Some(alibi.buffer()), alibi_offset as usize);
+        encoder.set_buffer(14, Some(alibi.buffer()), alibi_offset);
     }
     encoder.set_bytes_raw(
         15,
@@ -671,15 +671,15 @@ pub fn call_paged_attention_v2(
         let shared_mem_size = logits_size.max(outputs_size);
         encoder.set_threadgroup_memory_length(0, shared_mem_size as usize);
 
-        encoder.set_buffer(0, Some(exp_sums), 0 as usize);
-        encoder.set_buffer(1, Some(max_logits), 0 as usize);
-        encoder.set_buffer(2, Some(tmp_out), 0 as usize);
-        encoder.set_buffer(3, Some(q), q_offset as usize);
-        encoder.set_buffer(4, Some(k_cache), k_cache_offset as usize);
-        encoder.set_buffer(5, Some(v_cache), v_cache_offset as usize);
+        encoder.set_buffer(0, Some(exp_sums), 0_usize);
+        encoder.set_buffer(1, Some(max_logits), 0_usize);
+        encoder.set_buffer(2, Some(tmp_out), 0_usize);
+        encoder.set_buffer(3, Some(q), q_offset);
+        encoder.set_buffer(4, Some(k_cache), k_cache_offset);
+        encoder.set_buffer(5, Some(v_cache), v_cache_offset);
         if let Some((k_scale, v_scale)) = &k_v_scale {
-            encoder.set_buffer(6, Some(k_scale), 0 as usize);
-            encoder.set_buffer(7, Some(v_scale), 0 as usize);
+            encoder.set_buffer(6, Some(k_scale), 0_usize);
+            encoder.set_buffer(7, Some(v_scale), 0_usize);
         }
         encoder.set_bytes_raw(
             8,
@@ -696,15 +696,15 @@ pub fn call_paged_attention_v2(
             core::mem::size_of_val(&softcapping),
             &softcapping as *const _ as *const c_void,
         );
-        encoder.set_buffer(11, Some(block_tables), block_tables_offset as usize);
-        encoder.set_buffer(12, Some(context_lens), context_lens_offset as usize);
+        encoder.set_buffer(11, Some(block_tables), block_tables_offset);
+        encoder.set_buffer(12, Some(context_lens), context_lens_offset);
         encoder.set_bytes_raw(
             13,
             core::mem::size_of_val(&max_num_blocks_per_seq),
             &max_num_blocks_per_seq as *const _ as *const c_void,
         );
         if let Some((alibi, alibi_offset)) = alibi_storage_and_offset {
-            encoder.set_buffer(14, Some(alibi.buffer()), alibi_offset as usize);
+            encoder.set_buffer(14, Some(alibi.buffer()), alibi_offset);
         }
         encoder.set_bytes_raw(
             15,
@@ -765,11 +765,11 @@ pub fn call_paged_attention_v2(
         let reduce_shared_mem_size = 2 * max_num_partitions * std::mem::size_of::<f32>() as i32;
         encoder.set_threadgroup_memory_length(0, reduce_shared_mem_size as usize);
 
-        encoder.set_buffer(0, Some(output), 0 as usize);
-        encoder.set_buffer(1, Some(exp_sums), 0 as usize);
-        encoder.set_buffer(2, Some(max_logits), 0 as usize);
-        encoder.set_buffer(3, Some(tmp_out), 0 as usize);
-        encoder.set_buffer(4, Some(context_lens), context_lens_offset as usize);
+        encoder.set_buffer(0, Some(output), 0_usize);
+        encoder.set_buffer(1, Some(exp_sums), 0_usize);
+        encoder.set_buffer(2, Some(max_logits), 0_usize);
+        encoder.set_buffer(3, Some(tmp_out), 0_usize);
+        encoder.set_buffer(4, Some(context_lens), context_lens_offset);
         encoder.set_bytes_raw(
             5,
             core::mem::size_of_val(&max_num_partitions),
@@ -833,8 +833,9 @@ pub fn call_kv_scale_update(
     );
 
     const THREADS_PER_GROUP: usize = 512;
-    let num_groups =
-        ((num_elements as usize + THREADS_PER_GROUP - 1) / THREADS_PER_GROUP).min(65535);
+    let num_groups = (num_elements as usize)
+        .div_ceil(THREADS_PER_GROUP)
+        .min(65535);
 
     // Shared memory for reduction: THREADS_PER_GROUP floats each for k and v maxima
     encoder.set_threadgroup_memory_length(0, THREADS_PER_GROUP * std::mem::size_of::<f32>());
