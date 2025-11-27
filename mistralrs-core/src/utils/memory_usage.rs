@@ -34,7 +34,7 @@ impl MemoryUsage {
                 let avail = max.saturating_sub(alloc);
 
                 #[allow(clippy::cast_possible_truncation)]
-                Ok(avail as usize)
+                Ok(avail)
             }
             #[cfg(not(feature = "metal"))]
             Device::Metal(_) => {
@@ -104,7 +104,7 @@ impl MemoryUsage {
                     None => default_cap,
                 };
 
-                let device_max = dev.recommended_max_working_set_size() as usize;
+                let device_max = dev.recommended_max_working_set_size();
                 let metal_cap_bytes = metal_cap_mb * SIZE_IN_MB;
 
                 Ok(device_max.min(metal_cap_bytes))

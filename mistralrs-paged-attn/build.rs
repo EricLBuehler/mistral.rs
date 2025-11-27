@@ -135,7 +135,12 @@ fn main() -> Result<(), String> {
     use std::process::Command;
     use std::{env, str};
 
-    const METAL_SOURCES: [&str; 3] = ["copy_blocks", "pagedattention", "reshape_and_cache"];
+    const METAL_SOURCES: [&str; 4] = [
+        "copy_blocks",
+        "pagedattention",
+        "reshape_and_cache",
+        "kv_scale_update",
+    ];
     for src in METAL_SOURCES {
         println!("cargo::rerun-if-changed=src/metal/kernels/{src}.metal");
     }

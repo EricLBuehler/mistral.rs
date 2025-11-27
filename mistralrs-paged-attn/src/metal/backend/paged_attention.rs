@@ -16,7 +16,8 @@ struct PagedAttention {
     alibi_slopes: Option<Tensor>,
     max_context_len: usize,
 
-    k_v_scale: Option<(Tensor, Tensor)>,
+    k_scale: Option<Tensor>,
+    v_scale: Option<Tensor>,
 }
 
 impl candle_core::CustomOp1 for PagedAttention {
@@ -156,7 +157,7 @@ impl candle_core::CustomOp1 for PagedAttention {
             )
         }
 
-        let k_v_scale = if let Some((k_scale, v_scale)) = &self.k_v_scale {
+        let k_v_scale = if let (Some(k_scale), Some(v_scale)) = (&self.k_scale, &self.v_scale) {
             if k_scale.elem_count() != 1 || v_scale.elem_count() != 1 {
                 candle_core::bail!("k_scale and v_scale must be scalars");
             }
@@ -317,7 +318,8 @@ impl candle_core::CustomOp1 for PagedAttention {
 #[allow(clippy::too_many_arguments)]
 pub fn paged_attention(
     q: &Tensor,
-    k_v_scale: Option<&(Tensor, Tensor)>,
+    k_scale: Option<&Tensor>,
+    v_scale: Option<&Tensor>,
     key_cache: &Tensor,
     value_cache: &Tensor,
     block_tables: &Tensor,
@@ -336,7 +338,8 @@ pub fn paged_attention(
         max_context_len,
         softcapping,
         alibi_slopes: alibi_slopes.cloned(),
-        k_v_scale: k_v_scale.cloned(),
+        k_scale: k_scale.cloned(),
+        v_scale: v_scale.cloned(),
     };
     q.apply_op1(op)
 }
@@ -354,7 +357,8 @@ pub fn paged_attention(
 pub fn reshape_and_cache(
     key: &Tensor,
     value: &Tensor,
-    k_v_scale: Option<&(Tensor, Tensor)>,
+    k_scale: Option<&Tensor>,
+    v_scale: Option<&Tensor>,
     key_cache: &Tensor,
     value_cache: &Tensor,
     slot_mapping: &Tensor,
@@ -403,7 +407,7 @@ pub fn reshape_and_cache(
         _ => candle_core::bail!("slot_mapping must be a metal tensor"),
     };
 
-    let k_v_scale = if let Some((k_scale, v_scale)) = k_v_scale {
+    let k_v_scale = if let (Some(k_scale), Some(v_scale)) = (k_scale, v_scale) {
         if k_scale.elem_count() != 1 || v_scale.elem_count() != 1 {
             candle_core::bail!("k_scale and v_scale must be scalars");
         }
