@@ -34,7 +34,7 @@
 <a href=#34 id=34 data-nosnippet>34</a>                <span class="kw">let </span>avail = max.saturating_sub(alloc);
 <a href=#35 id=35 data-nosnippet>35</a>
 <a href=#36 id=36 data-nosnippet>36</a>                <span class="attr">#[allow(clippy::cast_possible_truncation)]
-<a href=#37 id=37 data-nosnippet>37</a>                </span><span class="prelude-val">Ok</span>(avail <span class="kw">as </span>usize)
+<a href=#37 id=37 data-nosnippet>37</a>                </span><span class="prelude-val">Ok</span>(avail)
 <a href=#38 id=38 data-nosnippet>38</a>            }
 <a href=#39 id=39 data-nosnippet>39</a>            <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
 <a href=#40 id=40 data-nosnippet>40</a>            </span>Device::Metal(<span class="kw">_</span>) =&gt; {
@@ -104,7 +104,7 @@
 <a href=#104 id=104 data-nosnippet>104</a>                    <span class="prelude-val">None </span>=&gt; default_cap,
 <a href=#105 id=105 data-nosnippet>105</a>                };
 <a href=#106 id=106 data-nosnippet>106</a>
-<a href=#107 id=107 data-nosnippet>107</a>                <span class="kw">let </span>device_max = dev.recommended_max_working_set_size() <span class="kw">as </span>usize;
+<a href=#107 id=107 data-nosnippet>107</a>                <span class="kw">let </span>device_max = dev.recommended_max_working_set_size();
 <a href=#108 id=108 data-nosnippet>108</a>                <span class="kw">let </span>metal_cap_bytes = metal_cap_mb * SIZE_IN_MB;
 <a href=#109 id=109 data-nosnippet>109</a>
 <a href=#110 id=110 data-nosnippet>110</a>                <span class="prelude-val">Ok</span>(device_max.min(metal_cap_bytes))
