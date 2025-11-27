@@ -2,7 +2,7 @@ use candle_core::{DType, MetalDevice};
 use candle_metal_kernels::metal::{
     Buffer, ComputeCommandEncoder, ComputePipeline, ConstantValues, Device, Function, Library,
 };
-use objc2_metal::{MTLCompileOptions, MTLMathMode, MTLSize};
+use objc2_metal::{MTLCompileOptions, MTLDevice, MTLMathMode, MTLSize};
 use std::os::raw::c_void;
 use std::sync::{Arc, RwLock};
 use std::{collections::HashMap, sync::OnceLock};
@@ -65,14 +65,43 @@ impl Kernels {
         Self { pipelines }
     }
 
-    /// Load the give library from its [`source`].
+    /// Load the library from precompiled metallib, falling back to runtime compilation if needed.
     /// If this has been previously loaded it will just fetch it from cache.
     pub fn load_library(&self, device: &Device) -> Result<Library, MetalKernelError> {
+        use objc2_foundation::{NSString, NSURL};
+
         if let Some(lib) = LIBRARY.get() {
             Ok(lib.clone())
         } else {
-            let _ = KERNELS; // keep artifact references even though we compile at runtime
-            let lib = self.compile_kernels_at_runtime(device)?;
+            // Try to load precompiled metallib first (faster startup)
+            let lib = if !KERNELS.is_empty() {
+                // Write precompiled metallib to a temp file and load via URL
+                // This avoids the complexity of creating DispatchData
+                let temp_dir = std::env::temp_dir();
+                let metallib_path = temp_dir.join("mistralrs_quant.metallib");
+                std::fs::write(&metallib_path, KERNELS).map_err(|e| {
+                    MetalKernelError::CompilationError(format!(
+                        "Failed to write metallib to temp file: {e}"
+                    ))
+                })?;
+
+                let url_string = format!("file://{}", metallib_path.display());
+                let ns_url_string = NSString::from_str(&url_string);
+                let url = NSURL::URLWithString(&ns_url_string).ok_or_else(|| {
+                    MetalKernelError::CompilationError("Failed to create NSURL".to_string())
+                })?;
+
+                let raw_lib = device.as_ref().newLibraryWithURL_error(&url).map_err(|e| {
+                    MetalKernelError::CompilationError(format!(
+                        "Failed to load precompiled metallib: {e}"
+                    ))
+                })?;
+                Library::new(raw_lib)
+            } else {
+                // Fall back to runtime compilation if precompiled lib is not available
+                // (e.g., when MISTRALRS_METAL_PRECOMPILE=0)
+                self.compile_kernels_at_runtime(device)?
+            };
             Ok(LIBRARY.get_or_init(|| lib).clone())
         }
     }

@@ -278,10 +278,15 @@ fn main() -> Result<(), String> {
             "copy",
         ];
         const HEADER_SOURCES: [&str; 5] = ["utils", "bf16", "scan_impl", "sort_impl", "copy_impl"];
+        // Include-only headers (not compiled directly, just tracked for changes)
+        const INCLUDE_ONLY: [&str; 2] = ["float8", "float4"];
         for src in METAL_SOURCES {
             println!("cargo::rerun-if-changed=src/metal_kernels/{src}.metal");
         }
         for src in HEADER_SOURCES {
+            println!("cargo::rerun-if-changed=src/metal_kernels/{src}.metal");
+        }
+        for src in INCLUDE_ONLY {
             println!("cargo::rerun-if-changed=src/metal_kernels/{src}.metal");
         }
         println!("cargo::rerun-if-changed=build.rs");

@@ -86,6 +86,7 @@ data-url = "0.3.1"
 float8 = "0.4.0"
 regex = "1.11.1"
 objc2-metal = "0.3.1"
+objc2-foundation = "0.3.1"
 safetensors = "0.6.0"
 toml = "0.8.22"
 hf-hub = { version = "0.4.2", default-features = false, features = [

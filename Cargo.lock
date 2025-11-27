@@ -3036,6 +3036,7 @@ dependencies = [
  "candle-metal-kernels",
  "float8 0.4.2",
  "half",
+ "objc2-foundation",
  "objc2-metal",
  "thiserror 2.0.17",
 ]
@@ -3080,6 +3081,7 @@ dependencies = [
  "hf-hub",
  "lazy_static",
  "memmap2",
+ "objc2-foundation",
  "objc2-metal",
  "paste",
  "rayon",
