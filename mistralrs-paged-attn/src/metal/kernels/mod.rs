@@ -91,6 +91,10 @@ impl Kernels {
             "reshape_and_cache.metal",
             include_str!("reshape_and_cache.metal"),
         );
+        file_system.insert(
+            "kv_scale_update.metal",
+            include_str!("kv_scale_update.metal"),
+        );
         file_system.insert("utils.metal", include_str!("utils.metal"));
         file_system.insert("float8.metal", include_str!("float8.metal"));
 
@@ -206,6 +210,7 @@ impl Kernels {
             "copy_blocks.metal", // Main implementations
             "pagedattention.metal",
             "reshape_and_cache.metal",
+            "kv_scale_update.metal",
         ];
 
         for file in main_files {
@@ -783,5 +788,68 @@ pub fn call_paged_attention_v2(
         };
         encoder.dispatch_thread_groups(thread_groups_count, thread_group_size);
     }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_kv_scale_update(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: PagedAttentionDType,
+    k: &Buffer,
+    k_offset: usize,
+    v: &Buffer,
+    v_offset: usize,
+    k_scale: &Buffer,
+    v_scale: &Buffer,
+    num_elements: i64,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        PagedAttentionDType::F32 => "kv_scale_update_float",
+        PagedAttentionDType::BF16 => "kv_scale_update_bfloat16_t",
+        PagedAttentionDType::F16 => "kv_scale_update_half",
+        PagedAttentionDType::F8E4M3 => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: DType::F8E4M3,
+            })
+        }
+    };
+
+    let pipeline = kernels.load_pipeline(device, name.to_string())?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_buffer(0, Some(k), k_offset);
+    encoder.set_buffer(1, Some(v), v_offset);
+    encoder.set_buffer(2, Some(k_scale), 0);
+    encoder.set_buffer(3, Some(v_scale), 0);
+    encoder.set_bytes_raw(
+        4,
+        core::mem::size_of_val(&num_elements),
+        &num_elements as *const _ as *const c_void,
+    );
+
+    const THREADS_PER_GROUP: usize = 512;
+    let num_groups =
+        ((num_elements as usize + THREADS_PER_GROUP - 1) / THREADS_PER_GROUP).min(65535);
+
+    // Shared memory for reduction: THREADS_PER_GROUP floats each for k and v maxima
+    encoder.set_threadgroup_memory_length(0, THREADS_PER_GROUP * std::mem::size_of::<f32>());
+    encoder.set_threadgroup_memory_length(1, THREADS_PER_GROUP * std::mem::size_of::<f32>());
+
+    let thread_groups_count = MTLSize {
+        width: num_groups,
+        height: 1,
+        depth: 1,
+    };
+    let thread_group_size = MTLSize {
+        width: THREADS_PER_GROUP,
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(thread_groups_count, thread_group_size);
     Ok(())
 }
