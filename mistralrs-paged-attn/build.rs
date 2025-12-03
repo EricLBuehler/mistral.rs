@@ -16,7 +16,7 @@ pub const USE_FP8: bool = false;
 mod backend;
 mod ffi;
 
-pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks, kv_scale_update};
+pub use backend::{copy_blocks, kv_scale_update, paged_attention, reshape_and_cache, swap_blocks};
     "#;
 
     println!("cargo:rerun-if-changed=build.rs");
