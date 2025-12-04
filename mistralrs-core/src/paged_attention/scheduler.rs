@@ -23,6 +23,11 @@ use crate::{
 
 use super::{block_engine::AllocStatus, BlockEngineSequence, BlockTables, CacheConfig};
 
+/// Bucket key: (sequence length, has_images && is_prompt, token_offset)
+/// We bucket sequences by these criteria to ensure all sequences in a batch have the same
+/// length, avoiding padding issues with flash attention varlen.
+type BucketKey = (usize, bool, usize);
+
 /// Allow sequences to wait for 64 scheduling passes before warning of deprivation.
 const WAITING_TIMEOUT: usize = 64;
 
@@ -56,6 +61,67 @@ impl PagedAttentionScheduler {
             ))),
             block_size: cache_config.block_size,
         }
+    }
+
+    /// Bucket sequences by (length, has_images && is_prompt, token_offset).
+    /// Returns the bucket with the shortest sequence length; sequences from other buckets
+    /// are preempted (blocks freed, state set to Waiting, added to waiting queue).
+    ///
+    /// This ensures all sequences in a batch have the same length, which is required for
+    /// correct flash attention varlen operation (avoiding soundness issues with padding).
+    ///
+    /// Also removes preempted sequences from self.running.
+    fn bucket_and_preempt_sequences(
+        &mut self,
+        sequences: VecDeque<Arc<Mutex<Sequence>>>,
+    ) -> VecDeque<Arc<Mutex<Sequence>>> {
+        if sequences.len() <= 1 {
+            return sequences;
+        }
+
+        let mut buckets: HashMap<BucketKey, VecDeque<Arc<Mutex<Sequence>>>> = HashMap::new();
+
+        for seq in sequences {
+            let seq_guard = get_mut_arcmutex!(seq);
+            let key: BucketKey = (
+                seq_guard.len(),
+                seq_guard.images().is_some() && seq_guard.is_prompt(),
+                seq_guard.token_offset(),
+            );
+            drop(seq_guard);
+
+            buckets.entry(key).or_default().push_back(seq);
+        }
+
+        if buckets.len() == 1 {
+            // All sequences are in the same bucket, return them all
+            return buckets.into_values().next().unwrap();
+        }
+
+        // Find the bucket with the shortest sequence length
+        let min_key = *buckets
+            .keys()
+            .min_by_key(|(len, _, _)| *len)
+            .expect("No sequence buckets");
+
+        let selected = buckets.remove(&min_key).unwrap();
+
+        // Collect IDs of sequences to preempt
+        let mut ids_to_preempt = Vec::new();
+
+        // Preempt sequences from other buckets (free blocks, set state to Waiting, add to waiting)
+        for (_, seqs) in buckets {
+            for seq in seqs.into_iter().rev() {
+                ids_to_preempt.push(get_mut_arcmutex!(seq).get_id());
+                self._preempt_by_recompute(seq);
+            }
+        }
+
+        // Remove preempted sequences from self.running
+        self.running
+            .retain(|seq| !ids_to_preempt.contains(&get_mut_arcmutex!(seq).get_id()));
+
+        selected
     }
 
     pub fn schedule(&mut self, logger: &IntervalLogger) -> PagedAttentionSchedulerOutput {
@@ -140,11 +206,15 @@ impl PagedAttentionScheduler {
         self.waiting.extend(for_waiting_again);
 
         if !scheduled.is_empty() || did_ignore {
+            // Bucket scheduled prompts by sequence length to ensure all sequences in a batch
+            // have the same length (required for correct flash attention varlen operation).
+            let scheduled = self.bucket_and_preempt_sequences(scheduled);
+
             logger.set_num_running(self.running.len());
             logger.set_num_waiting(self.waiting.len());
 
             return PagedAttentionSchedulerOutput {
-                scheduled: scheduled.into(),
+                scheduled: scheduled.into_iter().collect(),
                 blocks_to_copy: HashMap::new(),
             };
         }
@@ -199,6 +269,12 @@ impl PagedAttentionScheduler {
         }
         self.running = running;
 
+        // Bucket running completions by sequence length to ensure all sequences in a batch
+        // have the same length (required for correct flash attention varlen operation).
+        let running_for_bucket = std::mem::take(&mut self.running);
+        let bucketed = self.bucket_and_preempt_sequences(running_for_bucket);
+        self.running = bucketed;
+
         self.running
             .iter()
             .for_each(|seq| get_mut_arcmutex!(seq).set_state(SequenceState::RunningCompletion));
@@ -214,7 +290,7 @@ impl PagedAttentionScheduler {
         logger.set_num_waiting(self.waiting.len());
 
         PagedAttentionSchedulerOutput {
-            scheduled: self.running.clone().into(), // Clone should be cheap.
+            scheduled: self.running.clone().into_iter().collect(),
             blocks_to_copy,
         }
     }
