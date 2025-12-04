@@ -4,8 +4,7 @@ use std::{any::Any, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
-use text::Qwen3VLTextModel;
-use vision::Qwen3VLVisionModel;
+use text::Qwen3VLMoETextModel;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -17,18 +16,18 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
+    vision_models::qwen3_vl::{vision::Qwen3VLVisionModel, Qwen3VLVisionSpecificArgs},
 };
 
 pub(crate) mod config;
-pub(crate) mod inputs_processor;
 mod text;
-pub(crate) mod vision;
 
 pub(crate) use config::Config;
-pub(crate) use inputs_processor::Qwen3VLProcessor;
+// Re-export the processor from qwen3_vl since the input processing is identical
+pub(crate) use crate::vision_models::qwen3_vl::Qwen3VLProcessor as Qwen3VLMoEProcessor;
 
-pub struct Qwen3VLModel {
-    text: Qwen3VLTextModel,
+pub struct Qwen3VLMoEModel {
+    text: Qwen3VLMoETextModel,
     vision: Qwen3VLVisionModel,
     spatial_merge_size: usize,
     image_token_id: u32,
@@ -37,7 +36,7 @@ pub struct Qwen3VLModel {
     vision_end_token_id: u32,
 }
 
-impl Qwen3VLModel {
+impl Qwen3VLMoEModel {
     pub fn new(
         cfg: &Config,
         vb: ShardedVarBuilder,
@@ -56,7 +55,7 @@ impl Qwen3VLModel {
         if cfg.quantization_config.is_some() {
             text_config.quantization_config = cfg.quantization_config.clone();
         }
-        let text = Qwen3VLTextModel::new(
+        let text = Qwen3VLMoETextModel::new(
             &text_config,
             vb.clone(),
             cfg.tie_word_embeddings,
@@ -628,16 +627,7 @@ impl Qwen3VLModel {
     }
 }
 
-pub(crate) struct Qwen3VLVisionSpecificArgs {
-    pub input_ids_full: Tensor,
-    pub image_grid_thw: Option<Tensor>, // Some when pixel values are provided
-    pub video_grid_thw: Option<Tensor>, // Some when pixel values are provided
-    pub seqlens: Vec<usize>,
-    pub continuous_img_pad: Vec<Vec<(usize, usize)>>,
-    pub continuous_vid_pad: Vec<Vec<(usize, usize)>>,
-}
-
-impl VisionModel for Qwen3VLModel {
+impl VisionModel for Qwen3VLMoEModel {
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -711,7 +701,7 @@ impl VisionModel for Qwen3VLModel {
     }
 }
 
-impl IsqModel for Qwen3VLModel {
+impl IsqModel for Qwen3VLMoEModel {
     fn get_layers(
         &mut self,
     ) -> (
@@ -727,4 +717,4 @@ impl IsqModel for Qwen3VLModel {
     }
 }
 
-impl AnyMoeBaseModelMixin for Qwen3VLModel {}
+impl AnyMoeBaseModelMixin for Qwen3VLMoEModel {}
