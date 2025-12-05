@@ -611,7 +611,7 @@ impl DecoderLayer {
             if use_fast_moe {
                 MoeOrMlp::FastMoe(FastMoeMlp::new(cfg, vb, layer_device, comm)?)
             } else if cfg.quantization_config.is_none() && !loading_isq {
-                // Route unquantized model to fused moe impl
+                // Route unquantized model to fused moe impl (auto-detects stacked vs standard format)
                 MoeOrMlp::FusedMoe(FusedMoe::new(&moe_cfg, vb, layer_device, comm)?)
             } else {
                 MoeOrMlp::SlowMoe(SlowMoeMlp::new(vb, cfg, layer_device, comm)?)
