@@ -159,4 +159,169 @@
 <a href=#159 id=159 data-nosnippet>159</a>    <span class="kw">_</span>: bool,
 <a href=#160 id=160 data-nosnippet>160</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
 <a href=#161 id=161 data-nosnippet>161</a>    <span class="macro">candle_core::bail!</span>(<span class="string">"moe_gemm is not implemented on this platform!"</span>)
-<a href=#162 id=162 data-nosnippet>162</a>}</code></pre></div></section></main></body></html>
+<a href=#162 id=162 data-nosnippet>162</a>}
+<a href=#163 id=163 data-nosnippet>163</a>
+<a href=#164 id=164 data-nosnippet>164</a><span class="doccomment">/// MoE GEMM for transposed weight layout [num_experts, K, N] instead of [num_experts, N, K].
+<a href=#165 id=165 data-nosnippet>165</a>/// This is used for stacked weight format where gate_up_proj is [E, hidden, inter*2]
+<a href=#166 id=166 data-nosnippet>166</a>/// and down_proj is [E, inter, hidden].
+<a href=#167 id=167 data-nosnippet>167</a></span><span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
+<a href=#168 id=168 data-nosnippet>168</a></span><span class="kw">pub fn </span>moe_gemm_transposed(
+<a href=#169 id=169 data-nosnippet>169</a>    input: <span class="kw-2">&amp;</span>Tensor,
+<a href=#170 id=170 data-nosnippet>170</a>    weights: <span class="kw-2">&amp;</span>Tensor,
+<a href=#171 id=171 data-nosnippet>171</a>    topk_weights: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+<a href=#172 id=172 data-nosnippet>172</a>    sorted_token_ids: <span class="kw-2">&amp;</span>Tensor,
+<a href=#173 id=173 data-nosnippet>173</a>    experts_ids: <span class="kw-2">&amp;</span>Tensor,
+<a href=#174 id=174 data-nosnippet>174</a>    topk: usize,
+<a href=#175 id=175 data-nosnippet>175</a>    is_prefill: bool,
+<a href=#176 id=176 data-nosnippet>176</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#177 id=177 data-nosnippet>177</a>    <span class="kw">use </span>candle::cuda_backend::cudarc::driver::DevicePtr;
+<a href=#178 id=178 data-nosnippet>178</a>    <span class="kw">use </span>candle_core <span class="kw">as </span>candle;
+<a href=#179 id=179 data-nosnippet>179</a>    <span class="kw">use </span>candle_core::DType;
+<a href=#180 id=180 data-nosnippet>180</a>    <span class="kw">use </span>half::{bf16, f16};
+<a href=#181 id=181 data-nosnippet>181</a>
+<a href=#182 id=182 data-nosnippet>182</a>    <span class="kw">fn </span>cuda_fwd&lt;
+<a href=#183 id=183 data-nosnippet>183</a>        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+<a href=#184 id=184 data-nosnippet>184</a>    &gt;(
+<a href=#185 id=185 data-nosnippet>185</a>        input: <span class="kw-2">&amp;</span>Tensor,
+<a href=#186 id=186 data-nosnippet>186</a>        weights: <span class="kw-2">&amp;</span>Tensor,
+<a href=#187 id=187 data-nosnippet>187</a>        topk_weights: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+<a href=#188 id=188 data-nosnippet>188</a>        sorted_token_ids: <span class="kw-2">&amp;</span>Tensor,
+<a href=#189 id=189 data-nosnippet>189</a>        experts_ids: <span class="kw-2">&amp;</span>Tensor,
+<a href=#190 id=190 data-nosnippet>190</a>        topk: usize,
+<a href=#191 id=191 data-nosnippet>191</a>        is_prefill: bool,
+<a href=#192 id=192 data-nosnippet>192</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#193 id=193 data-nosnippet>193</a>        <span class="kw">let </span>(<span class="kw-2">mut </span>size_m, size_k1) = input.dims2()<span class="question-mark">?</span>;
+<a href=#194 id=194 data-nosnippet>194</a>        <span class="kw">if </span>topk_weights.is_none() {
+<a href=#195 id=195 data-nosnippet>195</a>            size_m <span class="kw-2">*</span>= topk;
+<a href=#196 id=196 data-nosnippet>196</a>        }
+<a href=#197 id=197 data-nosnippet>197</a>        <span class="comment">// For transposed layout: [num_experts, K, N]
+<a href=#198 id=198 data-nosnippet>198</a>        </span><span class="kw">let </span>(num_experts, size_k, size_n) = weights.dims3()<span class="question-mark">?</span>;
+<a href=#199 id=199 data-nosnippet>199</a>        <span class="macro">assert!</span>(
+<a href=#200 id=200 data-nosnippet>200</a>            size_k == size_k1,
+<a href=#201 id=201 data-nosnippet>201</a>            <span class="string">"input {:?} and weight {:?} K dim mismatch!"</span>,
+<a href=#202 id=202 data-nosnippet>202</a>            size_k1,
+<a href=#203 id=203 data-nosnippet>203</a>            size_k
+<a href=#204 id=204 data-nosnippet>204</a>        );
+<a href=#205 id=205 data-nosnippet>205</a>        <span class="kw">let </span>dev = input.device().as_cuda_device()<span class="question-mark">?</span>;
+<a href=#206 id=206 data-nosnippet>206</a>        <span class="kw">let </span>data_type = <span class="kw">match </span>input.dtype() {
+<a href=#207 id=207 data-nosnippet>207</a>            DType::F16 =&gt; <span class="number">0</span>,
+<a href=#208 id=208 data-nosnippet>208</a>            DType::BF16 =&gt; <span class="number">1</span>,
+<a href=#209 id=209 data-nosnippet>209</a>            <span class="kw">_ </span>=&gt; {
+<a href=#210 id=210 data-nosnippet>210</a>                <span class="macro">candle_core::bail!</span>(<span class="string">"moe_gemm_transposed only accept f16/bf16 inputs!"</span>)
+<a href=#211 id=211 data-nosnippet>211</a>            }
+<a href=#212 id=212 data-nosnippet>212</a>        };
+<a href=#213 id=213 data-nosnippet>213</a>
+<a href=#214 id=214 data-nosnippet>214</a>        <span class="kw">let </span>(input, <span class="kw">_</span>) = input.storage_and_layout();
+<a href=#215 id=215 data-nosnippet>215</a>        <span class="kw">let </span>input = <span class="kw">match </span><span class="kw-2">&amp;*</span>input {
+<a href=#216 id=216 data-nosnippet>216</a>            candle::Storage::Cuda(c) =&gt; c.as_cuda_slice::&lt;T&gt;()<span class="question-mark">?</span>,
+<a href=#217 id=217 data-nosnippet>217</a>            <span class="kw">_ </span>=&gt; <span class="macro">candle::bail!</span>(<span class="string">"input must be a cuda tensor"</span>),
+<a href=#218 id=218 data-nosnippet>218</a>        };
+<a href=#219 id=219 data-nosnippet>219</a>
+<a href=#220 id=220 data-nosnippet>220</a>        <span class="kw">let </span>(weights, <span class="kw">_</span>) = weights.storage_and_layout();
+<a href=#221 id=221 data-nosnippet>221</a>        <span class="kw">let </span>weights = <span class="kw">match </span><span class="kw-2">&amp;*</span>weights {
+<a href=#222 id=222 data-nosnippet>222</a>            candle::Storage::Cuda(c) =&gt; c.as_cuda_slice::&lt;T&gt;()<span class="question-mark">?</span>,
+<a href=#223 id=223 data-nosnippet>223</a>            <span class="kw">_ </span>=&gt; <span class="macro">candle::bail!</span>(<span class="string">"weight must be a cuda tensor"</span>),
+<a href=#224 id=224 data-nosnippet>224</a>        };
+<a href=#225 id=225 data-nosnippet>225</a>
+<a href=#226 id=226 data-nosnippet>226</a>        <span class="kw">let </span>(sorted_token_ids, <span class="kw">_</span>) = sorted_token_ids.storage_and_layout();
+<a href=#227 id=227 data-nosnippet>227</a>        <span class="kw">let </span>sorted_token_ids = <span class="kw">match </span><span class="kw-2">&amp;*</span>sorted_token_ids {
+<a href=#228 id=228 data-nosnippet>228</a>            candle::Storage::Cuda(c) =&gt; c.as_cuda_slice::&lt;u32&gt;()<span class="question-mark">?</span>,
+<a href=#229 id=229 data-nosnippet>229</a>            <span class="kw">_ </span>=&gt; <span class="macro">candle::bail!</span>(<span class="string">"sorted_token_ids must be a cuda tensor"</span>),
+<a href=#230 id=230 data-nosnippet>230</a>        };
+<a href=#231 id=231 data-nosnippet>231</a>
+<a href=#232 id=232 data-nosnippet>232</a>        <span class="kw">let </span>(experts_ids, <span class="kw">_</span>) = experts_ids.storage_and_layout();
+<a href=#233 id=233 data-nosnippet>233</a>        <span class="kw">let </span>experts_ids = <span class="kw">match </span><span class="kw-2">&amp;*</span>experts_ids {
+<a href=#234 id=234 data-nosnippet>234</a>            candle::Storage::Cuda(c) =&gt; c.as_cuda_slice::&lt;u32&gt;()<span class="question-mark">?</span>,
+<a href=#235 id=235 data-nosnippet>235</a>            <span class="kw">_ </span>=&gt; <span class="macro">candle::bail!</span>(<span class="string">"experts_ids must be a cuda tensor"</span>),
+<a href=#236 id=236 data-nosnippet>236</a>        };
+<a href=#237 id=237 data-nosnippet>237</a>
+<a href=#238 id=238 data-nosnippet>238</a>        <span class="kw">let </span>topk_weights_ptr = <span class="kw">if let </span><span class="prelude-val">Some</span>(topk_weights) = <span class="kw-2">&amp;</span>topk_weights {
+<a href=#239 id=239 data-nosnippet>239</a>            <span class="kw">let </span>(topk_weights, <span class="kw">_</span>) = topk_weights.storage_and_layout();
+<a href=#240 id=240 data-nosnippet>240</a>            <span class="kw">let </span>topk_weights = <span class="kw">match </span><span class="kw-2">&amp;*</span>topk_weights {
+<a href=#241 id=241 data-nosnippet>241</a>                candle::Storage::Cuda(c) =&gt; c.as_cuda_slice::&lt;f32&gt;()<span class="question-mark">?</span>,
+<a href=#242 id=242 data-nosnippet>242</a>                <span class="kw">_ </span>=&gt; <span class="macro">candle::bail!</span>(<span class="string">"topk_weights must be a cuda tensor"</span>),
+<a href=#243 id=243 data-nosnippet>243</a>            };
+<a href=#244 id=244 data-nosnippet>244</a>            <span class="kw">let </span>topk_w_ptr = topk_weights.device_ptr(topk_weights.stream()).<span class="number">0 </span><span class="kw">as </span><span class="kw-2">*const </span>f32;
+<a href=#245 id=245 data-nosnippet>245</a>            topk_w_ptr
+<a href=#246 id=246 data-nosnippet>246</a>        } <span class="kw">else </span>{
+<a href=#247 id=247 data-nosnippet>247</a>            std::ptr::null()
+<a href=#248 id=248 data-nosnippet>248</a>        };
+<a href=#249 id=249 data-nosnippet>249</a>
+<a href=#250 id=250 data-nosnippet>250</a>        <span class="kw">let </span>output = <span class="kw">unsafe </span>{ dev.alloc::&lt;T&gt;(size_m * size_n) }<span class="question-mark">?</span>;
+<a href=#251 id=251 data-nosnippet>251</a>
+<a href=#252 id=252 data-nosnippet>252</a>        <span class="kw">let </span>stream = dev.cuda_stream().cu_stream() <span class="kw">as </span>i64;
+<a href=#253 id=253 data-nosnippet>253</a>        <span class="kw">use </span>core::ffi::c_void;
+<a href=#254 id=254 data-nosnippet>254</a>
+<a href=#255 id=255 data-nosnippet>255</a>        <span class="kw">let </span>moe_func = <span class="kw">if </span>is_prefill {
+<a href=#256 id=256 data-nosnippet>256</a>            <span class="kw">crate</span>::cuda::ffi::moe_gemm_wmma_transposed
+<a href=#257 id=257 data-nosnippet>257</a>        } <span class="kw">else </span>{
+<a href=#258 id=258 data-nosnippet>258</a>            <span class="kw">crate</span>::cuda::ffi::moe_gemm_transposed
+<a href=#259 id=259 data-nosnippet>259</a>        };
+<a href=#260 id=260 data-nosnippet>260</a>        <span class="kw">let </span>num_experts_i32 = i32::try_from(num_experts).expect(<span class="string">"num_experts too large for i32"</span>);
+<a href=#261 id=261 data-nosnippet>261</a>        <span class="kw">let </span>topk_i32 = i32::try_from(topk).expect(<span class="string">"topk too large for i32"</span>);
+<a href=#262 id=262 data-nosnippet>262</a>        <span class="kw">let </span>size_m_i32 = i32::try_from(size_m).expect(<span class="string">"size_m too large for i32"</span>);
+<a href=#263 id=263 data-nosnippet>263</a>        <span class="kw">let </span>size_n_i32 = i32::try_from(size_n).expect(<span class="string">"size_n too large for i32"</span>);
+<a href=#264 id=264 data-nosnippet>264</a>        <span class="kw">let </span>size_k_i32 = i32::try_from(size_k).expect(<span class="string">"size_k too large for i32"</span>);
+<a href=#265 id=265 data-nosnippet>265</a>
+<a href=#266 id=266 data-nosnippet>266</a>        <span class="kw">unsafe </span>{
+<a href=#267 id=267 data-nosnippet>267</a>            moe_func(
+<a href=#268 id=268 data-nosnippet>268</a>                input.device_ptr(input.stream()).<span class="number">0 </span><span class="kw">as </span><span class="kw-2">*const </span>c_void, <span class="comment">// [size_m, size_k]
+<a href=#269 id=269 data-nosnippet>269</a>                </span>weights.device_ptr(weights.stream()).<span class="number">0 </span><span class="kw">as </span><span class="kw-2">*const </span>c_void, <span class="comment">// [num_experts, size_k, size_n]
+<a href=#270 id=270 data-nosnippet>270</a>                </span>sorted_token_ids.device_ptr(sorted_token_ids.stream()).<span class="number">0 </span><span class="kw">as </span><span class="kw-2">*const </span>i32,
+<a href=#271 id=271 data-nosnippet>271</a>                experts_ids.device_ptr(experts_ids.stream()).<span class="number">0 </span><span class="kw">as </span><span class="kw-2">*const </span>i32,
+<a href=#272 id=272 data-nosnippet>272</a>                topk_weights_ptr,
+<a href=#273 id=273 data-nosnippet>273</a>                output.device_ptr(output.stream()).<span class="number">0 </span><span class="kw">as </span><span class="kw-2">*mut </span>c_void, <span class="comment">// [size_m, size_n]
+<a href=#274 id=274 data-nosnippet>274</a>                </span>num_experts_i32,
+<a href=#275 id=275 data-nosnippet>275</a>                topk_i32,
+<a href=#276 id=276 data-nosnippet>276</a>                size_m_i32,
+<a href=#277 id=277 data-nosnippet>277</a>                size_n_i32,
+<a href=#278 id=278 data-nosnippet>278</a>                size_k_i32,
+<a href=#279 id=279 data-nosnippet>279</a>                data_type <span class="kw">as </span>i32, <span class="comment">// 0=float16, 1=bf16 (for input/output)
+<a href=#280 id=280 data-nosnippet>280</a>                </span>stream,
+<a href=#281 id=281 data-nosnippet>281</a>            );
+<a href=#282 id=282 data-nosnippet>282</a>        }
+<a href=#283 id=283 data-nosnippet>283</a>
+<a href=#284 id=284 data-nosnippet>284</a>        <span class="kw">let </span>output = candle::CudaStorage::wrap_cuda_slice(output, dev.clone());
+<a href=#285 id=285 data-nosnippet>285</a>        <span class="kw">let </span>output = Tensor::from((candle::Storage::Cuda(output), (size_m, size_n)));
+<a href=#286 id=286 data-nosnippet>286</a>
+<a href=#287 id=287 data-nosnippet>287</a>        <span class="prelude-val">Ok</span>(output)
+<a href=#288 id=288 data-nosnippet>288</a>    }
+<a href=#289 id=289 data-nosnippet>289</a>
+<a href=#290 id=290 data-nosnippet>290</a>    <span class="kw">match </span>input.dtype() {
+<a href=#291 id=291 data-nosnippet>291</a>        DType::F16 =&gt; cuda_fwd::&lt;f16&gt;(
+<a href=#292 id=292 data-nosnippet>292</a>            input,
+<a href=#293 id=293 data-nosnippet>293</a>            weights,
+<a href=#294 id=294 data-nosnippet>294</a>            topk_weights,
+<a href=#295 id=295 data-nosnippet>295</a>            sorted_token_ids,
+<a href=#296 id=296 data-nosnippet>296</a>            experts_ids,
+<a href=#297 id=297 data-nosnippet>297</a>            topk,
+<a href=#298 id=298 data-nosnippet>298</a>            is_prefill,
+<a href=#299 id=299 data-nosnippet>299</a>        ),
+<a href=#300 id=300 data-nosnippet>300</a>        DType::BF16 =&gt; cuda_fwd::&lt;bf16&gt;(
+<a href=#301 id=301 data-nosnippet>301</a>            input,
+<a href=#302 id=302 data-nosnippet>302</a>            weights,
+<a href=#303 id=303 data-nosnippet>303</a>            topk_weights,
+<a href=#304 id=304 data-nosnippet>304</a>            sorted_token_ids,
+<a href=#305 id=305 data-nosnippet>305</a>            experts_ids,
+<a href=#306 id=306 data-nosnippet>306</a>            topk,
+<a href=#307 id=307 data-nosnippet>307</a>            is_prefill,
+<a href=#308 id=308 data-nosnippet>308</a>        ),
+<a href=#309 id=309 data-nosnippet>309</a>        <span class="kw">_ </span>=&gt; {
+<a href=#310 id=310 data-nosnippet>310</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"moe_gemm_transposed only accept f16/bf16 inputs!"</span>)
+<a href=#311 id=311 data-nosnippet>311</a>        }
+<a href=#312 id=312 data-nosnippet>312</a>    }
+<a href=#313 id=313 data-nosnippet>313</a>}
+<a href=#314 id=314 data-nosnippet>314</a>
+<a href=#315 id=315 data-nosnippet>315</a><span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
+<a href=#316 id=316 data-nosnippet>316</a>#[allow(unused)]
+<a href=#317 id=317 data-nosnippet>317</a></span><span class="kw">pub fn </span>moe_gemm_transposed(
+<a href=#318 id=318 data-nosnippet>318</a>    <span class="kw">_</span>: <span class="kw-2">&amp;</span>Tensor,
+<a href=#319 id=319 data-nosnippet>319</a>    <span class="kw">_</span>: <span class="kw-2">&amp;</span>Tensor,
+<a href=#320 id=320 data-nosnippet>320</a>    <span class="kw">_</span>: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+<a href=#321 id=321 data-nosnippet>321</a>    <span class="kw">_</span>: <span class="kw-2">&amp;</span>Tensor,
+<a href=#322 id=322 data-nosnippet>322</a>    <span class="kw">_</span>: <span class="kw-2">&amp;</span>Tensor,
+<a href=#323 id=323 data-nosnippet>323</a>    <span class="kw">_</span>: usize,
+<a href=#324 id=324 data-nosnippet>324</a>    <span class="kw">_</span>: bool,
+<a href=#325 id=325 data-nosnippet>325</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#326 id=326 data-nosnippet>326</a>    <span class="macro">candle_core::bail!</span>(<span class="string">"moe_gemm_transposed is not implemented on this platform!"</span>)
+<a href=#327 id=327 data-nosnippet>327</a>}</code></pre></div></section></main></body></html>

@@ -148,4 +148,38 @@
 <a href=#148 id=148 data-nosnippet>148</a>        dtype: i32, <span class="comment">// 0=float16, 1=bf16 (for input/output)
 <a href=#149 id=149 data-nosnippet>149</a>        </span>stream: i64,
 <a href=#150 id=150 data-nosnippet>150</a>    );
-<a href=#151 id=151 data-nosnippet>151</a>}</code></pre></div></section></main></body></html>
+<a href=#151 id=151 data-nosnippet>151</a>
+<a href=#152 id=152 data-nosnippet>152</a>    <span class="comment">// for unquntized models (decoding) with transposed weights [num_experts, size_k, size_n]
+<a href=#153 id=153 data-nosnippet>153</a>    </span><span class="kw">pub fn </span>moe_gemm_transposed(
+<a href=#154 id=154 data-nosnippet>154</a>        input: <span class="kw-2">*const </span>c_void,   <span class="comment">// input [size_m, size_k]
+<a href=#155 id=155 data-nosnippet>155</a>        </span>weights: <span class="kw-2">*const </span>c_void, <span class="comment">// weights [num_experts, size_k, size_n] - transposed layout
+<a href=#156 id=156 data-nosnippet>156</a>        </span>sorted_token_ids: <span class="kw-2">*const </span>i32,
+<a href=#157 id=157 data-nosnippet>157</a>        expert_ids: <span class="kw-2">*const </span>i32,
+<a href=#158 id=158 data-nosnippet>158</a>        topk_weights: <span class="kw-2">*const </span>f32, <span class="comment">// device ptr or nullptr
+<a href=#159 id=159 data-nosnippet>159</a>        </span>output: <span class="kw-2">*mut </span>c_void,      <span class="comment">// output [size_m, size_n]
+<a href=#160 id=160 data-nosnippet>160</a>        </span>num_experts: i32,
+<a href=#161 id=161 data-nosnippet>161</a>        topk: i32,
+<a href=#162 id=162 data-nosnippet>162</a>        size_m: i32,
+<a href=#163 id=163 data-nosnippet>163</a>        size_n: i32,
+<a href=#164 id=164 data-nosnippet>164</a>        size_k: i32,
+<a href=#165 id=165 data-nosnippet>165</a>        dtype: i32, <span class="comment">// 0=float16, 1=bf16 (for input)
+<a href=#166 id=166 data-nosnippet>166</a>        </span>stream: i64,
+<a href=#167 id=167 data-nosnippet>167</a>    );
+<a href=#168 id=168 data-nosnippet>168</a>
+<a href=#169 id=169 data-nosnippet>169</a>    <span class="comment">// for unquntized models (prefill) with transposed weights [num_experts, size_k, size_n]
+<a href=#170 id=170 data-nosnippet>170</a>    </span><span class="kw">pub fn </span>moe_gemm_wmma_transposed(
+<a href=#171 id=171 data-nosnippet>171</a>        input: <span class="kw-2">*const </span>c_void,         <span class="comment">// device pointer [size_m, size_k]
+<a href=#172 id=172 data-nosnippet>172</a>        </span>weights: <span class="kw-2">*const </span>c_void, <span class="comment">// device pointer [num_experts, size_k, size_n] - transposed layout
+<a href=#173 id=173 data-nosnippet>173</a>        </span>sorted_token_ids: <span class="kw-2">*const </span>i32, <span class="comment">// device pointer [size_m]
+<a href=#174 id=174 data-nosnippet>174</a>        </span>expert_ids: <span class="kw-2">*const </span>i32, <span class="comment">// host array [size_m] (expert id per sorted token)
+<a href=#175 id=175 data-nosnippet>175</a>        </span>topk_weights: <span class="kw-2">*const </span>f32,
+<a href=#176 id=176 data-nosnippet>176</a>        output: <span class="kw-2">*mut </span>c_void, <span class="comment">// device pointer [size_m, size_n]
+<a href=#177 id=177 data-nosnippet>177</a>        </span>num_experts: i32,
+<a href=#178 id=178 data-nosnippet>178</a>        topk: i32,
+<a href=#179 id=179 data-nosnippet>179</a>        size_m: i32,
+<a href=#180 id=180 data-nosnippet>180</a>        size_n: i32,
+<a href=#181 id=181 data-nosnippet>181</a>        size_k: i32,
+<a href=#182 id=182 data-nosnippet>182</a>        dtype: i32, <span class="comment">// 0=float16, 1=bf16 (for input/output)
+<a href=#183 id=183 data-nosnippet>183</a>        </span>stream: i64,
+<a href=#184 id=184 data-nosnippet>184</a>    );
+<a href=#185 id=185 data-nosnippet>185</a>}</code></pre></div></section></main></body></html>
