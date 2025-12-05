@@ -1101,10 +1101,6 @@ impl FusedExperts {
         quantization_config: &Option<QuantizedConfig>,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
-        if !vb.device().is_metal() {
-            candle_core::bail!("FastMoeMlp requires Metal.");
-        }
-
         // Detect if weights are in stacked format (e.g., Qwen3 VL MoE):
         // - experts.gate_up_proj: (num_experts, hidden_size, intermediate_size * 2)
         // - experts.down_proj: (num_experts, intermediate_size, hidden_size)

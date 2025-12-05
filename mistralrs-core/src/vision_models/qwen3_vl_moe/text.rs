@@ -14,6 +14,7 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     layers::{self, Activation, RmsNorm, RotaryEmbedding, Sdpa},
+    moe::{FusedMoe, MoEConfig},
     ops::{TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -231,10 +232,6 @@ impl FastMoeMlp {
         layer_device: Device,
         _comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        if !vb.device().is_metal() {
-            candle_core::bail!("FastMoeMlp requires Metal.");
-        }
-
         let num_experts = cfg.num_experts;
         let gate = mistralrs_quant::linear_no_bias(
             cfg.hidden_size,
@@ -307,15 +304,17 @@ impl FastMoeMlp {
 }
 
 enum MoeOrMlp {
+    FusedMoe(FusedMoe),
     FastMoe(FastMoeMlp),
     SlowMoe(SlowMoeMlp),
     Mlp(Mlp),
 }
 
 impl MoeOrMlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, is_prefill: bool) -> Result<Tensor> {
         match self {
             Self::Mlp(m) => m.forward(xs),
+            Self::FusedMoe(m) => m.forward(xs, is_prefill),
             Self::FastMoe(m) => m.forward(xs),
             Self::SlowMoe(m) => m.forward(xs),
         }
@@ -572,6 +571,14 @@ impl DecoderLayer {
         let is_moe = !cfg.mlp_only_layers.contains(&layer_idx)
             && (cfg.num_experts > 0 && (layer_idx + 1) % cfg.decoder_sparse_step == 0);
 
+        let moe_cfg = MoEConfig {
+            num_experts: cfg.num_experts,
+            num_experts_per_tok: cfg.num_experts_per_tok,
+            hidden_size: cfg.hidden_size,
+            moe_intermediate_size: cfg.moe_intermediate_size,
+            norm_topk_prob: cfg.norm_topk_prob,
+        };
+
         let mlp = if is_moe {
             let vb = mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq);
             let layer_device = mapper
@@ -579,8 +586,14 @@ impl DecoderLayer {
                 .cloned()
                 .unwrap_or(real_device.clone());
 
-            if vb.device().is_metal() {
+            // Use FastMoe on Metal, or on CUDA when loading with ISQ
+            let use_fast_moe = vb.device().is_metal() || (vb.device().is_cuda() && loading_isq);
+
+            if use_fast_moe {
                 MoeOrMlp::FastMoe(FastMoeMlp::new(cfg, vb, layer_device, comm)?)
+            } else if cfg.quantization_config.is_none() && !loading_isq {
+                // Route unquantized model to fused moe impl
+                MoeOrMlp::FusedMoe(FusedMoe::new(&moe_cfg, vb, layer_device, comm)?)
             } else {
                 MoeOrMlp::SlowMoe(SlowMoeMlp::new(vb, cfg, layer_device, comm)?)
             }
@@ -633,9 +646,10 @@ impl DecoderLayer {
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let xs = self
-            .mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        let xs = self.mlp.forward(
+            &xs.apply(&self.post_attention_layernorm)?,
+            flash_params.causal,
+        )?;
         residual + xs
     }
 }
@@ -897,6 +911,9 @@ impl IsqModel for Qwen3VLMoETextModel {
                     tensors.push((&mut mlp.gate_proj, Some(i)));
                     tensors.push((&mut mlp.up_proj, Some(i)));
                     tensors.push((&mut mlp.down_proj, Some(i)));
+                }
+                MoeOrMlp::FusedMoe(_) => {
+                    // FusedMoe uses raw tensors, not Arc<dyn QuantMethod>
                 }
                 MoeOrMlp::FastMoe(moe) => {
                     tensors.push((&mut moe.fused_gate_proj, Some(i)));

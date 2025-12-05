@@ -379,10 +379,6 @@ impl FastMoeMlp {
         layer_device: Device,
         _comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        if !vb.device().is_metal() {
-            candle_core::bail!("FastMoeMlp requires Metal.");
-        }
-
         let num_experts = cfg.num_experts;
         let gate = mistralrs_quant::linear_no_bias(
             cfg.hidden_size,
@@ -615,7 +611,10 @@ impl DecoderLayer {
         {
             let vb = mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq);
 
-            if vb.device().is_metal() {
+            // Use FastMoe on Metal, or on CUDA when loading with ISQ
+            let use_fast_moe = vb.device().is_metal() || (vb.device().is_cuda() && loading_isq);
+
+            if use_fast_moe {
                 MoeOrMlp::FastMoe(FastMoeMlp::new(
                     cfg,
                     vb,
