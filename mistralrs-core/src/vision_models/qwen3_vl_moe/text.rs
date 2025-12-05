@@ -181,7 +181,9 @@ impl SlowMoeMlp {
                 Tensor::new(selected_experts[expert_idx].as_slice(), xs.device())?
                     .reshape(((), 1))?
                     .to_dtype(xs.dtype())?;
-            let current_state = xs.index_select(&top_x_tensor, 0)?.reshape(((), hidden_dim))?;
+            let current_state = xs
+                .index_select(&top_x_tensor, 0)?
+                .reshape(((), hidden_dim))?;
 
             // Forward through expert MLP
             let original_dtype = current_state.dtype();
@@ -192,9 +194,10 @@ impl SlowMoeMlp {
             let gate_out = MatMul
                 .qmethod_matmul(&expert_input, &*self.experts.gate_proj[expert_idx])?
                 .apply(&self.act_fn)?;
-            let up_out = MatMul.qmethod_matmul(&expert_input, &*self.experts.up_proj[expert_idx])?;
-            let mut current_hidden_states =
-                MatMul.qmethod_matmul(&(gate_out * up_out)?, &*self.experts.down_proj[expert_idx])?;
+            let up_out =
+                MatMul.qmethod_matmul(&expert_input, &*self.experts.up_proj[expert_idx])?;
+            let mut current_hidden_states = MatMul
+                .qmethod_matmul(&(gate_out * up_out)?, &*self.experts.down_proj[expert_idx])?;
             if self.experts.gate_proj[expert_idx]
                 .quantized_act_type()
                 .is_some()
@@ -901,12 +904,12 @@ impl IsqModel for Qwen3VLMoETextModel {
                     tensors.push((&mut moe.fused_down_proj, Some(i)));
                 }
                 MoeOrMlp::SlowMoe(moe) => {
-                    for (gate, (up, down)) in moe
-                        .experts
-                        .gate_proj
-                        .iter_mut()
-                        .zip(moe.experts.up_proj.iter_mut().zip(moe.experts.down_proj.iter_mut()))
-                    {
+                    for (gate, (up, down)) in moe.experts.gate_proj.iter_mut().zip(
+                        moe.experts
+                            .up_proj
+                            .iter_mut()
+                            .zip(moe.experts.down_proj.iter_mut()),
+                    ) {
                         tensors.push((gate, Some(i)));
                         tensors.push((up, Some(i)));
                         tensors.push((down, Some(i)));

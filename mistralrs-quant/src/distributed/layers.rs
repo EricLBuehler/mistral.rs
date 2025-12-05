@@ -1158,7 +1158,8 @@ impl FusedExperts {
 
                 // Split gate_up_proj into gate_proj and up_proj along the last dimension
                 let gate_proj = gate_up_proj.narrow(2, 0, moe_intermediate_size)?;
-                let up_proj = gate_up_proj.narrow(2, moe_intermediate_size, moe_intermediate_size)?;
+                let up_proj =
+                    gate_up_proj.narrow(2, moe_intermediate_size, moe_intermediate_size)?;
 
                 // Transpose to get proper weight shapes for linear layers:
                 // gate_proj/up_proj: (num_experts, intermediate_size, hidden_size)
@@ -1167,18 +1168,15 @@ impl FusedExperts {
                 let up_proj = up_proj.transpose(1, 2)?.contiguous()?;
                 let down_proj = down_proj_packed.transpose(1, 2)?.contiguous()?;
 
-                let mut fused_gate_proj: Arc<dyn QuantMethod> =
-                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                        Linear::new(gate_proj, None),
-                    ))?);
-                let mut fused_up_proj: Arc<dyn QuantMethod> =
-                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                        Linear::new(up_proj, None),
-                    ))?);
-                let mut fused_down_proj: Arc<dyn QuantMethod> =
-                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                        Linear::new(down_proj, None),
-                    ))?);
+                let mut fused_gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+                    QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
+                )?);
+                let mut fused_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+                    QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
+                )?);
+                let mut fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+                    QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
+                )?);
                 fused_gate_proj = apply_immediate_isq(fused_gate_proj, vb.pp("gate_proj"))?;
                 fused_up_proj = apply_immediate_isq(fused_up_proj, vb.pp("up_proj"))?;
                 fused_down_proj = apply_immediate_isq(fused_down_proj, vb.pp("down_proj"))?;
