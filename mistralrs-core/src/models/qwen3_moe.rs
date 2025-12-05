@@ -625,7 +625,7 @@ impl DecoderLayer {
                         .unwrap_or(real_device),
                     comm,
                 )?)
-            } else if cfg.quantization_config.is_none() {
+            } else if cfg.quantization_config.is_none() && !loading_isq {
                 // Router unquantized model to fused moe impl
                 MoeOrMlp::FusedMoe(FusedMoe::new(
                     &moe_cfg,
@@ -966,7 +966,7 @@ impl IsqModel for Model {
                     tensors.push((&mut layer.down_proj, Some(i)));
                 }
                 MoeOrMlp::FusedMoe(_) => {
-                    println!("Not implemented!")
+                    unreachable!();
                 }
                 MoeOrMlp::FastMoe(layer) => {
                     tensors.push((&mut layer.fused_gate_proj, Some(i)));
