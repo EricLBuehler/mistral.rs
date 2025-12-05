@@ -5880,9 +5880,10 @@ impl IsqModelLoader for Qwen3VLMoELoader {
             Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
             // MoE router
             Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.gate\.(weight|bias)$")?,
-            // MoE packed experts (gate_up_proj and down_proj are fused across all experts)
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.gate_up_proj$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.down_proj$")?,
+            // MoE experts - now unpacked into individual experts
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$")?,
         ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
