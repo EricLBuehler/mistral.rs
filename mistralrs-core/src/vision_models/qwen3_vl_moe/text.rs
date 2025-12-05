@@ -101,6 +101,8 @@ struct SlowMoeMlp {
     act_fn: Activation,
     norm_topk_prob: bool,
     num_experts_per_tok: usize,
+    all_reduce: mistralrs_quant::SumAllReduce,
+    world_size: usize,
 }
 
 impl SlowMoeMlp {
@@ -138,6 +140,8 @@ impl SlowMoeMlp {
             act_fn: cfg.hidden_act,
             norm_topk_prob: cfg.norm_topk_prob,
             num_experts_per_tok: cfg.num_experts_per_tok,
+            all_reduce: mistralrs_quant::SumAllReduce::new(comm),
+            world_size: comm.world_size(),
         })
     }
 
@@ -210,7 +214,15 @@ impl SlowMoeMlp {
                 current_hidden_states.broadcast_mul(&selected_experts_tensor)?;
             ys = ys.index_add(&top_x_tensor, &current_hidden_states, 0)?;
         }
-        let ys = ys.reshape((b_size, seq_len, hidden_dim))?;
+
+        // All-reduce for tensor parallelism
+        let mut ys = if self.world_size > 1 {
+            self.all_reduce.sum_all_reduce(&ys)?
+        } else {
+            ys
+        };
+
+        ys = ys.reshape((b_size, seq_len, hidden_dim))?;
         Ok(ys)
     }
 }
@@ -223,6 +235,8 @@ struct FastMoeMlp {
     act: Activation,
     norm_topk_prob: bool,
     num_experts_per_tok: usize,
+    all_reduce: mistralrs_quant::SumAllReduce,
+    world_size: usize,
 }
 
 impl FastMoeMlp {
@@ -230,7 +244,7 @@ impl FastMoeMlp {
         cfg: &TextConfig,
         vb: ShardedVarBuilder,
         layer_device: Device,
-        _comm: &Arc<mistralrs_quant::Comm>,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let num_experts = cfg.num_experts;
         let gate = mistralrs_quant::linear_no_bias(
@@ -260,6 +274,8 @@ impl FastMoeMlp {
             act: cfg.hidden_act,
             norm_topk_prob: cfg.norm_topk_prob,
             num_experts_per_tok: cfg.num_experts_per_tok,
+            all_reduce: mistralrs_quant::SumAllReduce::new(comm),
+            world_size: comm.world_size(),
         })
     }
 
@@ -314,11 +330,19 @@ impl FastMoeMlp {
                 .reshape((num_tokens, self.num_experts_per_tok, hidden_dim))?
         };
 
-        ys.to_dtype(DType::F32)?
+        let mut ys = ys
+            .to_dtype(DType::F32)?
             .broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
             .sum(D::Minus2)?
             .reshape((b_size, seq_len, hidden_dim))?
-            .to_dtype(original_dtype)
+            .to_dtype(original_dtype)?;
+
+        // All-reduce for tensor parallelism
+        if self.world_size > 1 {
+            ys = self.all_reduce.sum_all_reduce(&ys)?;
+        }
+
+        Ok(ys)
     }
 }
 
