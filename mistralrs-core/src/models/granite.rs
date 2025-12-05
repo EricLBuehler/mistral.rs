@@ -763,12 +763,14 @@ impl MambaLayer {
         let a = self.a_log.to_dtype(candle_core::DType::F32)?.exp()?.neg()?;
 
         // dt with bias and softplus
+        let dt_dtype = dt.dtype();
         let dt_bias = self
             .dt_bias
+            .to_dtype(dt_dtype)?
             .unsqueeze(0)?
             .expand((batch_size, self.num_heads))?;
         let dt = dt.broadcast_add(&dt_bias)?;
-        let dt = softplus(&dt)?;
+        let dt = softplus(&dt.to_dtype(candle_core::DType::F32)?)?;
         // Clamp dt
         let dt = dt.clamp(self.time_step_min, self.time_step_max)?;
 
@@ -945,11 +947,16 @@ impl MambaLayer {
         let a = self.a_log.to_dtype(candle_core::DType::F32)?.exp()?.neg()?;
 
         // dt with bias and softplus
-        let dt = dt.broadcast_add(&self.dt_bias.unsqueeze(0)?.unsqueeze(0)?)?;
-        let dt = softplus(&dt)?;
-        let dt = dt
-            .clamp(self.time_step_min, self.time_step_max)?
-            .to_dtype(candle_core::DType::F32)?;
+        let dt_dtype = dt.dtype();
+        let dt_bias = self
+            .dt_bias
+            .to_dtype(dt_dtype)?
+            .unsqueeze(0)?
+            .unsqueeze(0)?
+            .expand((batch_size, seq_len, self.num_heads))?;
+        let dt = dt.to_dtype(dt_dtype)?.broadcast_add(&dt_bias)?;
+        let dt = softplus(&dt.to_dtype(candle_core::DType::F32)?)?;
+        let dt = dt.clamp(self.time_step_min, self.time_step_max)?;
 
         // Reshape for SSM
         let hidden_states = hidden_states
