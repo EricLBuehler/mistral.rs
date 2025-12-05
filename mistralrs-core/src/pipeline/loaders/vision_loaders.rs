@@ -2133,14 +2133,16 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
 
         let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
 
+        // For images, grid_t=1. After spatial merging, grid_h and grid_w are reduced.
         let img_seq_len = {
             let cfg = &cfg.vision_config;
-            let grid_t = max_num_images / cfg.temporal_patch_size;
-            let grid_h = max_image_shape.0 / cfg.patch_size;
-            let grid_w = max_image_shape.1 / cfg.patch_size;
-            grid_t * grid_h * grid_w
+            // grid_t is 1 for images (temporal dimension is for video only)
+            let grid_t = 1;
+            // After patch embedding and spatial merge, the effective grid dimensions are reduced
+            let grid_h = (max_image_shape.0 / cfg.patch_size) / cfg.spatial_merge_size;
+            let grid_w = (max_image_shape.1 / cfg.patch_size) / cfg.spatial_merge_size;
+            grid_t * grid_h * grid_w * max_num_images
         };
-        let img_seq_len = img_seq_len * max_num_images;
 
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
@@ -2168,9 +2170,11 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
 
         let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
 
+        // For the vision encoder, before spatial merging
         let img_seq_len = {
             let cfg = &cfg.vision_config;
-            let grid_t = max_num_images / cfg.temporal_patch_size;
+            // grid_t is 1 for images
+            let grid_t = 1;
             let grid_h = max_image_shape.0 / cfg.patch_size;
             let grid_w = max_image_shape.1 / cfg.patch_size;
             grid_t * grid_h * grid_w
@@ -5602,14 +5606,16 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
 
         let cfg: Qwen3VLConfig = serde_json::from_str(config)?;
 
+        // For images, grid_t=1. After spatial merging, grid_h and grid_w are reduced.
         let img_seq_len = {
             let cfg = &cfg.vision_config;
-            let grid_t = max_num_images / cfg.temporal_patch_size;
-            let grid_h = max_image_shape.0 / cfg.patch_size;
-            let grid_w = max_image_shape.1 / cfg.patch_size;
-            grid_t * grid_h * grid_w
+            // grid_t is 1 for images (temporal dimension is for video only)
+            let grid_t = 1;
+            // After patch embedding and spatial merge, the effective grid dimensions are reduced
+            let grid_h = (max_image_shape.0 / cfg.patch_size) / cfg.spatial_merge_size;
+            let grid_w = (max_image_shape.1 / cfg.patch_size) / cfg.spatial_merge_size;
+            grid_t * grid_h * grid_w * max_num_images
         };
-        let img_seq_len = img_seq_len * max_num_images;
 
         let max_text_attn = {
             let cfg = &cfg.text_config;
@@ -5638,9 +5644,11 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
 
         let cfg: Qwen3VLConfig = serde_json::from_str(config)?;
 
+        // For the vision encoder, before spatial merging
         let img_seq_len = {
             let cfg = &cfg.vision_config;
-            let grid_t = max_num_images / cfg.temporal_patch_size;
+            // grid_t is 1 for images
+            let grid_t = 1;
             let grid_h = max_image_shape.0 / cfg.patch_size;
             let grid_w = max_image_shape.1 / cfg.patch_size;
             grid_t * grid_h * grid_w
@@ -5915,14 +5923,16 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
 
         let cfg: Qwen3VLMoEConfig = serde_json::from_str(config)?;
 
+        // For images, grid_t=1. After spatial merging, grid_h and grid_w are reduced.
         let img_seq_len = {
             let cfg = &cfg.vision_config;
-            let grid_t = max_num_images / cfg.temporal_patch_size;
-            let grid_h = max_image_shape.0 / cfg.patch_size;
-            let grid_w = max_image_shape.1 / cfg.patch_size;
-            grid_t * grid_h * grid_w
+            // grid_t is 1 for images (temporal dimension is for video only)
+            let grid_t = 1;
+            // After patch embedding and spatial merge, the effective grid dimensions are reduced
+            let grid_h = (max_image_shape.0 / cfg.patch_size) / cfg.spatial_merge_size;
+            let grid_w = (max_image_shape.1 / cfg.patch_size) / cfg.spatial_merge_size;
+            grid_t * grid_h * grid_w * max_num_images
         };
-        let img_seq_len = img_seq_len * max_num_images;
 
         let max_text_attn = {
             let cfg = &cfg.text_config;
@@ -5951,9 +5961,11 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
 
         let cfg: Qwen3VLMoEConfig = serde_json::from_str(config)?;
 
+        // For the vision encoder, before spatial merging
         let img_seq_len = {
             let cfg = &cfg.vision_config;
-            let grid_t = max_num_images / cfg.temporal_patch_size;
+            // grid_t is 1 for images
+            let grid_t = 1;
             let grid_h = max_image_shape.0 / cfg.patch_size;
             let grid_w = max_image_shape.1 / cfg.patch_size;
             grid_t * grid_h * grid_w
