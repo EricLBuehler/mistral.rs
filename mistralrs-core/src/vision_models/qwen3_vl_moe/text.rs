@@ -2,11 +2,11 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
-    ColumnParallelLayer, FusedExperts, MatMul, QuantMethod, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder,
+    distributed::layers::PackedExperts, linear_no_bias, ColumnParallelLayer, MatMul, QuantMethod,
+    ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, SumAllReduce,
 };
 
 use super::config::TextConfig;
@@ -14,8 +14,7 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     layers::{self, Activation, F32RmsNorm, RmsNorm, RotaryEmbedding, Sdpa},
-    moe::{FusedMoe, MoEConfig},
-    ops::{TopKLastDimOp, TopKOutput},
+    ops::TopKLastDimOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -94,200 +93,148 @@ impl Mlp {
     }
 }
 
-struct FastMoeMlp {
-    gate: Arc<dyn QuantMethod>,
-    fused_gate_proj: Arc<dyn QuantMethod>,
-    fused_up_proj: Arc<dyn QuantMethod>,
-    fused_down_proj: Arc<dyn QuantMethod>,
+// MoE experts using packed/fused weights (gate_up_proj, down_proj format)
+struct MoeExperts {
+    gate_proj: Vec<Arc<dyn QuantMethod>>,
+    up_proj: Vec<Arc<dyn QuantMethod>>,
+    down_proj: Vec<Arc<dyn QuantMethod>>,
     act: Activation,
-    norm_topk_prob: bool,
-    num_experts_per_tok: usize,
+    hidden_size: usize,
+    sum_all_reduce: SumAllReduce,
 }
 
-impl FastMoeMlp {
+impl MoeExperts {
     fn new(
-        cfg: &TextConfig,
         vb: ShardedVarBuilder,
-        layer_device: Device,
-        _comm: &Arc<mistralrs_quant::Comm>,
-    ) -> Result<Self> {
-        if !vb.device().is_metal() {
-            candle_core::bail!("FastMoeMlp requires Metal.");
-        }
-
-        let num_experts = cfg.num_experts;
-        let gate = mistralrs_quant::linear_no_bias(
-            cfg.hidden_size,
-            num_experts,
-            &cfg.quantization_config,
-            vb.pp("gate").set_device(layer_device),
-        )?;
-
-        let FusedExperts {
-            fused_gate_proj,
-            fused_up_proj,
-            fused_down_proj,
-        } = FusedExperts::new(
-            cfg.hidden_size,
-            cfg.moe_intermediate_size,
-            cfg.num_experts,
-            &cfg.quantization_config,
-            vb,
-        )?;
-
-        Ok(Self {
-            gate,
-            fused_gate_proj,
-            fused_up_proj,
-            fused_down_proj,
-            act: cfg.hidden_act,
-            norm_topk_prob: cfg.norm_topk_prob,
-            num_experts_per_tok: cfg.num_experts_per_tok,
-        })
-    }
-
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        use candle_core::D;
-
-        let original_dtype = xs.dtype();
-
-        let (b_size, seq_len, hidden_dim) = xs.dims3()?;
-
-        let router_logits = self.gate.forward_autocast(xs)?;
-        let routing_weights =
-            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
-
-        let indices = routing_weights.arg_sort_last_dim(false)?.narrow(
-            D::Minus1,
-            0,
-            self.num_experts_per_tok,
-        )?;
-        let mut scores = routing_weights.gather(&indices.contiguous()?, D::Minus1)?;
-
-        if self.norm_topk_prob {
-            scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
-        }
-
-        let ys = {
-            let xs = xs.reshape((b_size, seq_len, 1, 1, hidden_dim))?;
-            let gate = self
-                .fused_gate_proj
-                .gather_forward_autocast(&xs, &indices)?;
-            let up = self.fused_up_proj.gather_forward_autocast(&xs, &indices)?;
-            let xs = self
-                .fused_down_proj
-                .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, &indices)?;
-            xs.squeeze(D::Minus2)?
-        };
-
-        ys.to_dtype(DType::F32)?
-            .broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
-            .sum(D::Minus2)?
-            .reshape((b_size, seq_len, hidden_dim))?
-            .to_dtype(original_dtype)
-    }
-}
-
-struct SlowMoeMlp {
-    gate: candle_nn::Linear,
-    experts: Vec<Mlp>,
-    norm_topk_prob: bool,
-    num_experts_per_tok: usize,
-}
-
-impl SlowMoeMlp {
-    fn new(
         cfg: &TextConfig,
-        vb: ShardedVarBuilder,
-        layer_device: Device,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        let num_experts = cfg.num_experts;
-        let gate = layers::linear_no_bias(
+        let PackedExperts {
+            gate_proj,
+            up_proj,
+            down_proj,
+        } = PackedExperts::new(
+            cfg.num_experts,
             cfg.hidden_size,
-            num_experts,
-            vb.pp("gate").set_device(layer_device),
+            cfg.moe_intermediate_size,
+            &cfg.quantization_config,
+            false,
+            comm,
+            vb,
         )?;
-
-        let experts_vb = vb.pp("experts");
-        let mut experts = Vec::with_capacity(num_experts);
-        for i in 0..num_experts {
-            experts.push(Mlp::new(cfg, experts_vb.pp(i), comm, cfg.moe_intermediate_size)?);
-        }
-
         Ok(Self {
-            gate,
+            gate_proj,
+            up_proj,
+            down_proj,
+            act: cfg.hidden_act,
+            hidden_size: cfg.hidden_size,
+            sum_all_reduce: SumAllReduce::new(comm),
+        })
+    }
+
+    // xs: (bs * seq_len, hidden_size)
+    // expert indices: (bs * seq_len)
+    fn forward(&self, xs: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        let xs = xs.unsqueeze(1)?;
+
+        if self.gate_proj.len() == 1 {
+            let gate = self.gate_proj[0].gather_forward_autocast(&xs, indices)?;
+            let up = self.up_proj[0].gather_forward_autocast(&xs, indices)?;
+            let mut xs = self.down_proj[0]
+                .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, indices)?;
+            xs = self.sum_all_reduce.sum_all_reduce(&xs)?;
+            xs.reshape(((), self.hidden_size))
+        } else {
+            let indices = indices.to_vec1::<u32>()?;
+            let mut results = Vec::new();
+            for (tok, id) in indices.into_iter().enumerate() {
+                let xs = xs.i(tok)?.reshape((1, self.hidden_size))?;
+
+                let res = {
+                    let gate = self.gate_proj[id as usize].forward_autocast(&xs)?;
+                    let up = self.up_proj[id as usize].forward_autocast(&xs)?;
+                    self.down_proj[id as usize].forward_autocast(&(up * gate.apply(&self.act)?)?)?
+                };
+                results.push(res);
+            }
+            let mut xs = Tensor::cat(&results, 0)?;
+            xs = self.sum_all_reduce.sum_all_reduce(&xs)?;
+            xs.reshape(((), self.hidden_size))
+        }
+    }
+}
+
+struct MoeMlp {
+    experts: MoeExperts,
+    router: Arc<dyn QuantMethod>,
+    topk: usize,
+    norm_topk_prob: bool,
+}
+
+impl MoeMlp {
+    fn new(
+        vb: ShardedVarBuilder,
+        cfg: &TextConfig,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        let experts = MoeExperts::new(vb.pp("experts"), cfg, comm)?;
+        let router = linear_no_bias(
+            cfg.hidden_size,
+            cfg.num_experts,
+            &cfg.quantization_config,
+            vb.pp("gate"),
+        )?;
+        Ok(Self {
             experts,
+            router,
+            topk: cfg.num_experts_per_tok,
             norm_topk_prob: cfg.norm_topk_prob,
-            num_experts_per_tok: cfg.num_experts_per_tok,
         })
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
-        let xs = xs.reshape(((), hidden_dim))?;
-        let router_logits = xs.apply(&self.gate)?;
+        let xs = xs.reshape((b_size * seq_len, hidden_dim))?;
+
+        let router_logits = self.router.forward_autocast(&xs)?;
         let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
 
-        let TopKOutput {
-            values: routing_weights,
-            indices: experts_per_tok,
-        } = routing_weights.topk(self.num_experts_per_tok)?;
+        // Get top-k experts
+        let topk_result = routing_weights.topk(self.topk)?;
+        let mut expert_weights = topk_result.values;
+        let expert_indices = topk_result.indices;
 
-        let routing_weights = routing_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
-        let experts_per_tok = experts_per_tok.to_vec2::<u32>()?;
-        let mut top_x = vec![vec![]; self.experts.len()];
-        let mut selected_experts = vec![vec![]; self.experts.len()];
-        for (row_idx, (rw, expert_idxs)) in routing_weights
-            .iter()
-            .zip(experts_per_tok.iter())
-            .enumerate()
-        {
-            let sum_rw = rw.iter().sum::<f32>();
-            for (&rw, &expert_idx) in rw.iter().zip(expert_idxs.iter()) {
-                top_x[expert_idx as usize].push(row_idx as u32);
-                let rw = if self.norm_topk_prob { rw / sum_rw } else { rw };
-                selected_experts[expert_idx as usize].push(rw)
-            }
+        if self.norm_topk_prob {
+            expert_weights =
+                expert_weights.broadcast_div(&expert_weights.sum_keepdim(D::Minus1)?)?;
         }
 
-        let mut ys = xs.zeros_like()?;
-        for (expert_idx, expert_layer) in self.experts.iter().enumerate() {
-            let top_x = &top_x[expert_idx];
-            if top_x.is_empty() {
-                continue;
-            }
-            let top_x = Tensor::new(top_x.as_slice(), xs.device())?;
-            let selected_experts =
-                Tensor::new(selected_experts[expert_idx].as_slice(), xs.device())?
-                    .reshape(((), 1))?
-                    .to_dtype(xs.dtype())?;
-            let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden_dim))?;
-            let current_hidden_states = expert_layer
-                .forward(&current_state.unsqueeze(0)?)?
-                .squeeze(0)?;
-            let current_hidden_states = current_hidden_states.broadcast_mul(&selected_experts)?;
-            ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
+        // Process each expert
+        let mut final_output =
+            Tensor::zeros((b_size * seq_len, hidden_dim), xs.dtype(), xs.device())?;
+
+        for k in 0..self.topk {
+            let expert_idx = expert_indices.i((.., k))?;
+            let weight = expert_weights.i((.., k))?.unsqueeze(1)?;
+
+            let expert_output = self.experts.forward(&xs, &expert_idx)?;
+            final_output = (final_output + expert_output.broadcast_mul(&weight)?)?;
         }
-        let ys = ys.reshape((b_size, seq_len, hidden_dim))?;
-        Ok(ys)
+
+        final_output.reshape((b_size, seq_len, hidden_dim))
     }
 }
 
 enum MoeOrMlp {
-    FusedMoe(FusedMoe),
-    FastMoe(FastMoeMlp),
-    SlowMoe(SlowMoeMlp),
+    Moe(MoeMlp),
     Mlp(Mlp),
 }
 
 impl MoeOrMlp {
-    fn forward(&self, xs: &Tensor, is_prefill: bool) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::Mlp(m) => m.forward(xs),
-            Self::FusedMoe(m) => m.forward(xs, is_prefill),
-            Self::FastMoe(m) => m.forward(xs),
-            Self::SlowMoe(m) => m.forward(xs),
+            Self::Moe(m) => m.forward(xs),
         }
     }
 }
@@ -524,7 +471,6 @@ impl DecoderLayer {
         layer_idx: usize,
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
-        real_device: Device,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
@@ -538,50 +484,16 @@ impl DecoderLayer {
             comm,
         )?;
 
-        let moe_cfg = MoEConfig {
-            num_experts: cfg.num_experts,
-            num_experts_per_tok: cfg.num_experts_per_tok,
-            hidden_size: cfg.hidden_size,
-            moe_intermediate_size: cfg.moe_intermediate_size,
-            norm_topk_prob: cfg.norm_topk_prob,
-        };
+        // Check if this layer should be MoE or dense MLP
+        let is_moe = !cfg.mlp_only_layers.contains(&layer_idx)
+            && (cfg.num_experts > 0 && (layer_idx + 1) % cfg.decoder_sparse_step == 0);
 
-        let mlp = if !cfg.mlp_only_layers.contains(&layer_idx)
-            && (cfg.num_experts > 0 && (layer_idx + 1) % cfg.decoder_sparse_step == 0)
-        {
-            let vb = mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq);
-
-            if vb.device().is_metal() {
-                MoeOrMlp::FastMoe(FastMoeMlp::new(
-                    cfg,
-                    vb,
-                    mapper
-                        .device_for(layer_idx, false)
-                        .cloned()
-                        .unwrap_or(real_device),
-                    comm,
-                )?)
-            } else if cfg.quantization_config.is_none() {
-                MoeOrMlp::FusedMoe(FusedMoe::new(
-                    &moe_cfg,
-                    vb,
-                    mapper
-                        .device_for(layer_idx, false)
-                        .cloned()
-                        .unwrap_or(real_device),
-                    comm,
-                )?)
-            } else {
-                MoeOrMlp::SlowMoe(SlowMoeMlp::new(
-                    cfg,
-                    vb,
-                    mapper
-                        .device_for(layer_idx, false)
-                        .cloned()
-                        .unwrap_or(real_device),
-                    comm,
-                )?)
-            }
+        let mlp = if is_moe {
+            MoeOrMlp::Moe(MoeMlp::new(
+                mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+                cfg,
+                comm,
+            )?)
         } else {
             MoeOrMlp::Mlp(Mlp::new(
                 cfg,
@@ -633,7 +545,7 @@ impl DecoderLayer {
         let residual = &xs;
         let xs = self
             .mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?, flash_params.causal)?;
+            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
         residual + xs
     }
 }
@@ -715,7 +627,6 @@ impl Qwen3VLMoETextModel {
                 layer_idx,
                 normal_loading_metadata.loading_isq,
                 paged_attn,
-                normal_loading_metadata.real_device.clone(),
                 &comm,
             )
         })?;
@@ -896,19 +807,16 @@ impl IsqModel for Qwen3VLMoETextModel {
                     tensors.push((&mut mlp.up_proj, Some(i)));
                     tensors.push((&mut mlp.down_proj, Some(i)));
                 }
-                MoeOrMlp::FusedMoe(_) => {
-                    // FusedMoe ISQ not yet implemented
-                }
-                MoeOrMlp::FastMoe(moe) => {
-                    tensors.push((&mut moe.fused_gate_proj, Some(i)));
-                    tensors.push((&mut moe.fused_up_proj, Some(i)));
-                    tensors.push((&mut moe.fused_down_proj, Some(i)));
-                }
-                MoeOrMlp::SlowMoe(moe) => {
-                    for expert in &mut moe.experts {
-                        tensors.push((&mut expert.gate_proj, Some(i)));
-                        tensors.push((&mut expert.up_proj, Some(i)));
-                        tensors.push((&mut expert.down_proj, Some(i)));
+                MoeOrMlp::Moe(moe) => {
+                    tensors.push((&mut moe.router, Some(i)));
+                    for gate_proj in &mut moe.experts.gate_proj {
+                        tensors.push((gate_proj, Some(i)));
+                    }
+                    for up_proj in &mut moe.experts.up_proj {
+                        tensors.push((up_proj, Some(i)));
+                    }
+                    for down_proj in &mut moe.experts.down_proj {
+                        tensors.push((down_proj, Some(i)));
                     }
                 }
             }
@@ -938,12 +846,6 @@ impl IsqModel for Qwen3VLMoETextModel {
                 .pp("self_attn")
                 .pp("k_norm")
                 .add(&layer.self_attn.k_norm);
-
-            if let MoeOrMlp::FastMoe(moe) = &layer.mlp {
-                uvb_l.pp("mlp").pp("gate").add(&moe.gate);
-            } else if let MoeOrMlp::SlowMoe(moe) = &layer.mlp {
-                uvb_l.pp("mlp").pp("gate").add(&moe.gate);
-            }
         }
 
         uvb.to_safetensors()
