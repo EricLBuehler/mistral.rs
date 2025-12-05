@@ -525,6 +525,7 @@ impl MoEExperts {
             .enumerate()
         {
             for (&rw, &expert_idx) in rw.iter().zip(expert_idxs.iter()) {
+                #[allow(clippy::cast_possible_truncation)]
                 top_x[expert_idx as usize].push(row_idx as u32);
                 selected_experts[expert_idx as usize].push(rw)
             }
@@ -572,7 +573,7 @@ impl MoEExperts {
             ys = ys.index_add(&top_x_tensor, &current_hidden_states, 0)?;
         }
 
-        Ok(ys.reshape((b_size * seq_len, hidden_dim))?)
+        ys.reshape((b_size * seq_len, hidden_dim))
     }
 
     /// Get mutable references to quantizable layers for ISQ
