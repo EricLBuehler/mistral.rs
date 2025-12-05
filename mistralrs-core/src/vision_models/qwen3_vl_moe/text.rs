@@ -587,7 +587,7 @@ impl DecoderLayer {
                 .unwrap_or(real_device.clone());
 
             // Use FastMoe on Metal, or on CUDA when loading with ISQ
-            let use_fast_moe = vb.device().is_metal() || (vb.device().is_cuda() && loading_isq);
+            let use_fast_moe = vb.device().is_metal() || (real_device.is_cuda() && loading_isq);
 
             if use_fast_moe {
                 MoeOrMlp::FastMoe(FastMoeMlp::new(cfg, vb, layer_device, comm)?)
