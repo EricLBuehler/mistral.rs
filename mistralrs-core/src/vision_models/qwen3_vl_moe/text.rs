@@ -2,11 +2,12 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::{
-    apply_immediate_isq, should_apply_immediate_isq, ColumnParallelLayer, MatMul, QuantMethod,
-    QuantMethodConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, UnquantLinear,
+    apply_immediate_isq, should_apply_immediate_isq, ColumnParallelLayer, FusedExperts, MatMul,
+    QuantMethod, QuantMethodConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+    UnquantLinear,
 };
 
 use super::config::TextConfig;
@@ -292,7 +293,100 @@ impl SlowMoeMlp {
     }
 }
 
+struct FastMoeMlp {
+    gate: Arc<dyn QuantMethod>,
+    fused_gate_proj: Arc<dyn QuantMethod>,
+    fused_up_proj: Arc<dyn QuantMethod>,
+    fused_down_proj: Arc<dyn QuantMethod>,
+    act: Activation,
+    norm_topk_prob: bool,
+    num_experts_per_tok: usize,
+}
+
+impl FastMoeMlp {
+    fn new(
+        cfg: &TextConfig,
+        vb: ShardedVarBuilder,
+        layer_device: Device,
+        _comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        if !vb.device().is_metal() {
+            candle_core::bail!("FastMoeMlp requires Metal.");
+        }
+
+        let num_experts = cfg.num_experts;
+        let gate = mistralrs_quant::linear_no_bias(
+            cfg.hidden_size,
+            num_experts,
+            &cfg.quantization_config,
+            vb.pp("gate").set_device(layer_device),
+        )?;
+
+        let FusedExperts {
+            fused_gate_proj,
+            fused_up_proj,
+            fused_down_proj,
+        } = FusedExperts::new(
+            cfg.hidden_size,
+            cfg.moe_intermediate_size,
+            cfg.num_experts,
+            &cfg.quantization_config,
+            vb,
+        )?;
+
+        Ok(Self {
+            gate,
+            fused_gate_proj,
+            fused_up_proj,
+            fused_down_proj,
+            act: cfg.hidden_act,
+            norm_topk_prob: cfg.norm_topk_prob,
+            num_experts_per_tok: cfg.num_experts_per_tok,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let original_dtype = xs.dtype();
+
+        let (b_size, seq_len, hidden_dim) = xs.dims3()?;
+
+        let router_logits = self.gate.forward_autocast(xs)?;
+        let routing_weights =
+            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
+
+        let indices = routing_weights.arg_sort_last_dim(false)?.narrow(
+            D::Minus1,
+            0,
+            self.num_experts_per_tok,
+        )?;
+        let mut scores = routing_weights.gather(&indices.contiguous()?, D::Minus1)?;
+
+        if self.norm_topk_prob {
+            scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
+        }
+
+        let ys = {
+            let xs = xs.reshape((b_size, seq_len, 1, 1, hidden_dim))?;
+            let gate = self
+                .fused_gate_proj
+                .gather_forward_autocast(&xs, &indices)?;
+            let up = self.fused_up_proj.gather_forward_autocast(&xs, &indices)?;
+            let xs = self
+                .fused_down_proj
+                .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, &indices)?;
+            xs.squeeze(D::Minus2)?
+        };
+
+        ys.to_dtype(DType::F32)?
+            .broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
+            .sum(D::Minus2)?
+            .reshape((b_size, seq_len, hidden_dim))?
+            .to_dtype(original_dtype)
+    }
+}
+
 enum MoeOrMlp {
+    FastMoe(FastMoeMlp),
     SlowMoe(SlowMoeMlp),
     Mlp(Mlp),
 }
@@ -301,6 +395,7 @@ impl MoeOrMlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::Mlp(m) => m.forward(xs),
+            Self::FastMoe(m) => m.forward(xs),
             Self::SlowMoe(m) => m.forward(xs),
         }
     }
@@ -557,14 +652,17 @@ impl DecoderLayer {
             && (cfg.num_experts > 0 && (layer_idx + 1) % cfg.decoder_sparse_step == 0);
 
         let mlp = if is_moe {
-            MoeOrMlp::SlowMoe(SlowMoeMlp::new(
-                mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
-                cfg,
-                mapper
-                    .device_for(layer_idx, false)
-                    .cloned()
-                    .unwrap_or(real_device),
-            )?)
+            let vb = mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq);
+            let layer_device = mapper
+                .device_for(layer_idx, false)
+                .cloned()
+                .unwrap_or(real_device.clone());
+
+            if vb.device().is_metal() {
+                MoeOrMlp::FastMoe(FastMoeMlp::new(cfg, vb, layer_device, comm)?)
+            } else {
+                MoeOrMlp::SlowMoe(SlowMoeMlp::new(vb, cfg, layer_device)?)
+            }
         } else {
             MoeOrMlp::Mlp(Mlp::new(
                 cfg,
@@ -879,6 +977,11 @@ impl IsqModel for Qwen3VLMoETextModel {
                     tensors.push((&mut mlp.up_proj, Some(i)));
                     tensors.push((&mut mlp.down_proj, Some(i)));
                 }
+                MoeOrMlp::FastMoe(moe) => {
+                    tensors.push((&mut moe.fused_gate_proj, Some(i)));
+                    tensors.push((&mut moe.fused_up_proj, Some(i)));
+                    tensors.push((&mut moe.fused_down_proj, Some(i)));
+                }
                 MoeOrMlp::SlowMoe(moe) => {
                     for expert in &mut moe.experts {
                         tensors.push((&mut expert.gate_proj, Some(i)));
@@ -913,6 +1016,12 @@ impl IsqModel for Qwen3VLMoETextModel {
                 .pp("self_attn")
                 .pp("k_norm")
                 .add(&layer.self_attn.k_norm);
+
+            if let MoeOrMlp::FastMoe(moe) = &layer.mlp {
+                uvb_l.pp("mlp").pp("gate").add(&moe.gate);
+            } else if let MoeOrMlp::SlowMoe(moe) = &layer.mlp {
+                uvb_l.pp("mlp").pp("gate").add(&moe.gate);
+            }
         }
 
         uvb.to_safetensors()

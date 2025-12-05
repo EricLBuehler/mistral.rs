@@ -1105,6 +1105,14 @@ impl FusedExperts {
             candle_core::bail!("FastMoeMlp requires Metal.");
         }
 
+        // Detect if weights are in stacked format (e.g., Qwen3 VL MoE):
+        // - experts.gate_up_proj: (num_experts, hidden_size, intermediate_size * 2)
+        // - experts.down_proj: (num_experts, intermediate_size, hidden_size)
+        // Or per-expert format (e.g., Qwen3 MoE):
+        // - experts.{i}.gate_proj.weight, experts.{i}.up_proj.weight, experts.{i}.down_proj.weight
+        let experts_vb = vb.pp("experts");
+        let is_stacked_format = experts_vb.contains_tensor("gate_up_proj");
+
         let (fused_gate_proj, fused_up_proj, fused_down_proj) =
             if matches!(&quantization_config, Some(QuantizedConfig::Afq { .. })) {
                 let quantization_config = quantization_config.as_ref().unwrap();
@@ -1135,8 +1143,49 @@ impl FusedExperts {
                 )?;
 
                 (fused_gate_proj, fused_up_proj, fused_down_proj)
+            } else if is_stacked_format {
+                // Stacked format: experts.gate_up_proj and experts.down_proj are already stacked
+                // gate_up_proj: (num_experts, hidden_size, intermediate_size * 2)
+                // down_proj: (num_experts, intermediate_size, hidden_size)
+                let gate_up_proj = experts_vb.get(
+                    (num_experts, hidden_size, moe_intermediate_size * 2),
+                    "gate_up_proj",
+                )?;
+                let down_proj_packed = experts_vb.get(
+                    (num_experts, moe_intermediate_size, hidden_size),
+                    "down_proj",
+                )?;
+
+                // Split gate_up_proj into gate_proj and up_proj along the last dimension
+                let gate_proj = gate_up_proj.narrow(2, 0, moe_intermediate_size)?;
+                let up_proj = gate_up_proj.narrow(2, moe_intermediate_size, moe_intermediate_size)?;
+
+                // Transpose to get proper weight shapes for linear layers:
+                // gate_proj/up_proj: (num_experts, intermediate_size, hidden_size)
+                // down_proj: (num_experts, hidden_size, intermediate_size)
+                let gate_proj = gate_proj.transpose(1, 2)?.contiguous()?;
+                let up_proj = up_proj.transpose(1, 2)?.contiguous()?;
+                let down_proj = down_proj_packed.transpose(1, 2)?.contiguous()?;
+
+                let mut fused_gate_proj: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                        Linear::new(gate_proj, None),
+                    ))?);
+                let mut fused_up_proj: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                        Linear::new(up_proj, None),
+                    ))?);
+                let mut fused_down_proj: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                        Linear::new(down_proj, None),
+                    ))?);
+                fused_gate_proj = apply_immediate_isq(fused_gate_proj, vb.pp("gate_proj"))?;
+                fused_up_proj = apply_immediate_isq(fused_up_proj, vb.pp("up_proj"))?;
+                fused_down_proj = apply_immediate_isq(fused_down_proj, vb.pp("down_proj"))?;
+
+                (fused_gate_proj, fused_up_proj, fused_down_proj)
             } else if matches!(&quantization_config, Some(QuantizedConfig::Fp8 { .. })) {
-                let experts_vb = vb.pp("experts");
+                // Per-expert format with FP8 quantization
                 let mut gate_proj_vec = Vec::new();
                 let mut up_proj_vec = Vec::new();
                 let mut down_proj_vec = Vec::new();
@@ -1185,7 +1234,7 @@ impl FusedExperts {
 
                 (gate_proj, up_proj, down_proj)
             } else {
-                let experts_vb = vb.pp("experts");
+                // Per-expert format: load each expert individually and stack
                 let mut gate_proj_vec = Vec::new();
                 let mut up_proj_vec = Vec::new();
                 let mut down_proj_vec = Vec::new();
