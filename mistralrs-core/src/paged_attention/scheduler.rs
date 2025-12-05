@@ -53,7 +53,7 @@ pub struct PagedAttentionScheduler {
 impl PagedAttentionScheduler {
     pub fn new(config: PagedAttentionSchedulerConfig, cache_config: CacheConfig) -> Self {
         if config.prefix_caching_enabled {
-            info!("PagedAttention prefix caching is enabled. KV cache blocks will be reused across requests with matching prefixes.");
+            info!("PagedAttention prefix caching is enabled.");
         }
         Self {
             waiting: VecDeque::new(),

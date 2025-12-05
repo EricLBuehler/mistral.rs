@@ -71,7 +71,7 @@ impl GgufLoraModelBuilder {
                 SchedulerConfig::PagedAttentionMeta {
                     max_num_seqs: self.gguf_model.max_num_seqs,
                     config,
-                    prefix_caching_enabled: true, // Enable prefix caching by default
+                    prefix_caching_enabled: true,
                 }
             }
             None => SchedulerConfig::DefaultScheduler {

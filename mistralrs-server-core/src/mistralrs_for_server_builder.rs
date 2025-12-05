@@ -102,6 +102,7 @@ pub mod defaults {
     pub const SEARCH_CALLBACK: Option<Arc<mistralrs_core::SearchCallback>> = None;
     pub const PAGED_CACHE_TYPE: PagedCacheType = PagedCacheType::Auto;
     /// Enable PagedAttention prefix caching by default.
+    /// When enabled, KV cache blocks are hashed and reused across requests with matching prefixes.
     pub const PA_PREFIX_CACHING: bool = true;
 }
 
@@ -661,9 +662,13 @@ impl MistralRsForServerBuilder {
         )?;
         info!("Model loaded.");
 
-        let scheduler_config =
-            init_scheduler_config(&cache_config, &pipeline, self.max_seqs, self.pa_prefix_caching)
-                .await;
+        let scheduler_config = init_scheduler_config(
+            &cache_config,
+            &pipeline,
+            self.max_seqs,
+            self.pa_prefix_caching,
+        )
+        .await;
 
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
@@ -777,9 +782,13 @@ impl MistralRsForServerBuilder {
         );
         pipeline_names.push(first_pipeline_name);
 
-        let scheduler_config =
-            init_scheduler_config(&cache_config, &pipeline, self.max_seqs, self.pa_prefix_caching)
-                .await;
+        let scheduler_config = init_scheduler_config(
+            &cache_config,
+            &pipeline,
+            self.max_seqs,
+            self.pa_prefix_caching,
+        )
+        .await;
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
 

@@ -272,6 +272,7 @@ impl BlockEngine {
     pub fn allocate(&mut self, seq: &mut impl BlockEngineSequence) {
         let num_blocks_needed = seq.logical_token_blocks().len();
         let seq_id = seq.get_id();
+        let block_size = seq.block_size();
 
         // If there are prefill physical blocks, use those here.
         if let Some(physical_blocks_prefill) = seq.take_physical_blocks_prefill() {
@@ -282,6 +283,7 @@ impl BlockEngine {
             }
             self.block_tables.insert(seq_id, block_table);
             self.cached_blocks_per_seq.insert(seq_id, 0);
+            seq.set_prefix_cache_len(0);
             return;
         }
 
@@ -315,11 +317,15 @@ impl BlockEngine {
         self.cached_blocks_per_seq.insert(seq_id, num_cached);
         self.block_tables.insert(seq_id, block_table);
 
+        // Calculate number of cached tokens (full blocks only)
+        // num_cached is the number of full blocks that were cache hits
+        let cached_tokens = num_cached * block_size;
+        seq.set_prefix_cache_len(cached_tokens);
+
         if num_cached > 0 {
             info!(
-                "Prefix cache hit: reused {} blocks for sequence {}",
-                num_cached,
-                seq_id
+                "Prefix cache hit: reused {} blocks ({} tokens) for sequence {}",
+                num_cached, cached_tokens, seq_id
             );
         }
     }

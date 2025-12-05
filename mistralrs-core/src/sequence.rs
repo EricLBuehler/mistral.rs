@@ -412,6 +412,9 @@ pub struct Sequence {
 
     // Prefix caching
     prefill_prompt_toks: Option<Vec<u32>>,
+    /// Number of tokens at the start of the prompt that are cached (KV already computed).
+    /// These tokens should be skipped during prefill.
+    prefix_cache_len: usize,
 
     // Cache
     normal_cache: Vec<Option<KvCache>>,
@@ -498,6 +501,17 @@ impl BlockEngineSequence for Sequence {
         self.waitlisted_count += 1;
         prev
     }
+
+    fn set_prefix_cache_len(&mut self, len: usize) {
+        self.prefix_cache_len = len;
+    }
+
+    fn block_size(&self) -> usize {
+        match &self.custom_metadata {
+            SequenceCustomMetadata::PagedAttention { block_size, .. } => *block_size,
+            SequenceCustomMetadata::None => unreachable!(),
+        }
+    }
 }
 
 impl Sequence {
@@ -581,6 +595,7 @@ impl Sequence {
             creation_time,
             recognizer,
             prefill_prompt_toks: None,
+            prefix_cache_len: 0,
             suffix,
             prefix,
             cumulative_logprob: 0.,
@@ -742,6 +757,17 @@ impl Sequence {
 
     pub fn token_offset(&self) -> usize {
         self.token_offset
+    }
+
+    /// Get the number of prefix tokens that are cached (KV already computed).
+    /// These tokens should be skipped during prefill.
+    pub fn prefix_cache_len(&self) -> usize {
+        self.prefix_cache_len
+    }
+
+    /// Set the number of prefix tokens that are cached.
+    pub fn set_prefix_cache_len(&mut self, len: usize) {
+        self.prefix_cache_len = len;
     }
 
     /// This will also set prompt_len

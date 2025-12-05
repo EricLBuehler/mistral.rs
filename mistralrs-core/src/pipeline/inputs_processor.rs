@@ -135,11 +135,15 @@ pub mod text_models_inputs_processor {
 
     // chunk_offset_toks is the number of tokens by which the tokens are offset,
     // chunk_offset_toks / prompt_chunksize = number of batches
+    // prefix_cache_lens: for each sequence, the number of tokens whose KV cache is already computed
+    //                    from a prefix cache hit. These tokens are skipped in processing but their
+    //                    positions are accounted for in RoPE.
     #[allow(clippy::too_many_arguments)]
     pub fn make_prompt_chunk<T: WithDType + Debug>(
         chunk_offset_toks: usize,
         toks: Vec<&[T]>,
         seq_ids: &[usize],
+        prefix_cache_lens: &[usize],
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
@@ -163,12 +167,18 @@ pub mod text_models_inputs_processor {
         let flash_attn = crate::using_flash_attn();
         let mut seqlens_q = if flash_attn { vec![0] } else { Vec::new() };
         let mut seqlens_k = if flash_attn { vec![0] } else { Vec::new() };
-        for (seq_id, ctxt) in seq_ids.iter().zip(toks) {
+        for (seq_idx, (seq_id, ctxt)) in seq_ids.iter().zip(toks).enumerate() {
             let prompt_len = ctxt.len();
+            let prefix_cache_len = prefix_cache_lens.get(seq_idx).copied().unwrap_or(0);
             let offset = last_n_context_len.unwrap_or_default();
-            seqlen_offsets.push(offset.1 + chunk_offset_toks);
 
-            position_ids.push(ctxt.len() + chunk_offset_toks);
+            // For prefix caching: seqlen_offset should be prefix_cache_len so RoPE positions
+            // start at the correct offset. The tokens being processed are toks[prefix_cache_len..],
+            // so their positions should be [prefix_cache_len, prefix_cache_len+1, ...].
+            seqlen_offsets.push(offset.1 + chunk_offset_toks + prefix_cache_len);
+
+            // Total position including prefix cache
+            position_ids.push(ctxt.len() + chunk_offset_toks + prefix_cache_len);
             let mut ctxt = ctxt.to_vec();
             ctxt.extend(std::iter::repeat_n(
                 padding_tok,
@@ -191,7 +201,8 @@ pub mod text_models_inputs_processor {
 
             if flash_attn {
                 seqlens_q.push(ctxt.len() as u32);
-                seqlens_k.push((ctxt.len() + chunk_offset_toks) as u32);
+                // seqlens_k includes the full context: new tokens + cached prefix
+                seqlens_k.push((ctxt.len() + chunk_offset_toks + prefix_cache_len) as u32);
             }
 
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
@@ -219,8 +230,15 @@ pub mod text_models_inputs_processor {
 
                 let mut slot_mapping = Vec::new();
                 let mut ctxt_len = Vec::new();
-                for i in chunk_offset_toks..prompt_len + chunk_offset_toks {
-                    if i < start_idx {
+
+                // For prefix caching: we only need to compute slot mappings for the NEW tokens.
+                // The cached tokens (0..prefix_cache_len) already have their KV computed in the
+                // cached blocks. We start from prefix_cache_len for the actual token positions.
+                let slot_start = chunk_offset_toks + prefix_cache_len;
+                let slot_end = prompt_len + chunk_offset_toks + prefix_cache_len;
+
+                for i in slot_start..slot_end {
+                    if i < start_idx + prefix_cache_len {
                         // Pad [0,start_idx) with _PAD_TOKEN_ID
                         slot_mapping.push(_PAD_SLOT_ID);
                     }
@@ -228,10 +246,11 @@ pub mod text_models_inputs_processor {
 
                     let block_number = if i / paged_attn_metadata.block_size >= table.len() {
                         panic!(
-                            "Block table is too small (prompt)! i={} block_size={} table_len={}",
+                            "Block table is too small (prompt)! i={} block_size={} table_len={} prefix_cache_len={}",
                             i,
                             paged_attn_metadata.block_size,
-                            table.len()
+                            table.len(),
+                            prefix_cache_len
                         );
                     } else {
                         table.get(i / paged_attn_metadata.block_size).unwrap()
@@ -554,7 +573,7 @@ pub mod text_models_inputs_processor {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn get_prompt_input<T: WithDType + std::fmt::Debug>(
+    pub(crate) fn get_prompt_input<T: WithDType + std::fmt::Debug + Copy>(
         toks: Vec<&[T]>,
         input_seqs: &[&mut Sequence],
         device: &Device,
@@ -564,10 +583,32 @@ pub mod text_models_inputs_processor {
         mapper: Option<&dyn DeviceMapper>,
     ) -> Result<InnerInputProcessorOutput> {
         let offset = input_seqs[0].token_offset();
+
+        // For prefix caching: skip cached tokens and adjust offset
+        // Each sequence may have a different prefix_cache_len
+        let prefix_cache_lens: Vec<usize> =
+            input_seqs.iter().map(|s| s.prefix_cache_len()).collect();
+
+        // Slice tokens to skip cached prefix for each sequence
+        let adjusted_toks: Vec<Vec<T>> = toks
+            .iter()
+            .zip(prefix_cache_lens.iter())
+            .map(|(tok, &prefix_len)| {
+                if prefix_len > 0 && prefix_len < tok.len() {
+                    tok[prefix_len..].to_vec()
+                } else {
+                    tok.to_vec()
+                }
+            })
+            .collect();
+
+        let adjusted_toks_refs: Vec<&[T]> = adjusted_toks.iter().map(|v| v.as_slice()).collect();
+
         make_prompt_chunk(
             offset,
-            toks,
+            adjusted_toks_refs,
             &input_seqs.iter().map(|s| *s.id()).collect::<Vec<_>>(),
+            &prefix_cache_lens,
             device,
             last_n_context_len,
             return_raw_logits,
