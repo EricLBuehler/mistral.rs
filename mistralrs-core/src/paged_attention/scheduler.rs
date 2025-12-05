@@ -10,7 +10,7 @@ use std::{
     sync::{atomic::Ordering, Arc, Mutex},
 };
 
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     engine::IntervalLogger,
@@ -39,6 +39,7 @@ pub struct PagedAttentionSchedulerOutput {
 
 pub struct PagedAttentionSchedulerConfig {
     pub max_num_seqs: usize,
+    pub prefix_caching_enabled: bool,
 }
 
 pub struct PagedAttentionScheduler {
@@ -51,15 +52,19 @@ pub struct PagedAttentionScheduler {
 
 impl PagedAttentionScheduler {
     pub fn new(config: PagedAttentionSchedulerConfig, cache_config: CacheConfig) -> Self {
+        if config.prefix_caching_enabled {
+            info!("PagedAttention prefix caching is enabled. KV cache blocks will be reused across requests with matching prefixes.");
+        }
         Self {
             waiting: VecDeque::new(),
             running: VecDeque::new(),
-            config,
             block_engine: Arc::new(tokio::sync::Mutex::new(BlockEngine::new(
                 cache_config.block_size,
                 cache_config.num_gpu_blocks,
+                config.prefix_caching_enabled,
             ))),
             block_size: cache_config.block_size,
+            config,
         }
     }
 
@@ -296,18 +301,23 @@ impl PagedAttentionScheduler {
     }
 
     pub fn free_finished_sequence_groups(&mut self) {
-        let mut to_free_ids = Vec::new();
+        let mut to_free: Vec<(usize, Vec<super::LogicalTokenBlock>)> = Vec::new();
         self.running.retain(|seq| {
             if get_mut_arcmutex!(seq).is_finished_paged_attn() {
-                to_free_ids.push(get_mut_arcmutex!(seq).get_id());
+                let seq_guard = get_mut_arcmutex!(seq);
+                let id = seq_guard.get_id();
+                // Get logical blocks for caching (clone them since we're dropping the lock)
+                let logical_blocks = seq_guard.logical_token_blocks().to_vec();
+                drop(seq_guard);
+                to_free.push((id, logical_blocks));
                 false
             } else {
                 true
             }
         });
 
-        for id in to_free_ids {
-            self._free(id);
+        for (id, logical_blocks) in to_free {
+            self._free_with_caching(id, Some(&logical_blocks));
         }
     }
 }
@@ -372,6 +382,14 @@ impl PagedAttentionScheduler {
 
     fn _free(&mut self, seq_id: usize) {
         get_mut_arcmutex!(self.block_engine).free_sequence(seq_id);
+    }
+
+    fn _free_with_caching(
+        &mut self,
+        seq_id: usize,
+        logical_blocks: Option<&[super::LogicalTokenBlock]>,
+    ) {
+        get_mut_arcmutex!(self.block_engine).free_sequence_with_caching(seq_id, logical_blocks);
     }
 
     fn sort_running_by_priority_fcfs(&mut self) {

@@ -503,6 +503,7 @@ async fn main() -> anyhow::Result<()> {
             SchedulerConfig::PagedAttentionMeta {
                 max_num_seqs: *args.concurrency.as_ref().unwrap().iter().max().unwrap(),
                 config: cache_config.clone(),
+                prefix_caching_enabled: true, // Enable prefix caching by default
             }
         } else {
             SchedulerConfig::DefaultScheduler {

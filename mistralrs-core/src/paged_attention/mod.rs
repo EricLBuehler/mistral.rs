@@ -8,6 +8,8 @@ mod block_engine_sequence;
 mod cache_engine;
 mod config;
 mod layers;
+/// Prefix caching for KV cache reuse across requests with shared prefixes.
+mod prefix_cacher;
 mod scheduler;
 pub const _PAD_SLOT_ID: i64 = -1;
 

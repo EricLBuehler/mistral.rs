@@ -90,6 +90,7 @@ impl XLoraModelBuilder {
                 SchedulerConfig::PagedAttentionMeta {
                     max_num_seqs: self.text_model.max_num_seqs,
                     config,
+                    prefix_caching_enabled: true, // Enable prefix caching by default
                 }
             }
             None => SchedulerConfig::DefaultScheduler {

@@ -22,6 +22,7 @@ pub enum SchedulerConfig {
     PagedAttentionMeta {
         max_num_seqs: usize,
         config: CacheConfig,
+        prefix_caching_enabled: bool,
     },
 }
 
@@ -34,8 +35,12 @@ impl SchedulerConfig {
             Self::PagedAttentionMeta {
                 max_num_seqs,
                 config,
+                prefix_caching_enabled,
             } => Arc::new(Mutex::new(PagedAttentionScheduler::new(
-                PagedAttentionSchedulerConfig { max_num_seqs },
+                PagedAttentionSchedulerConfig {
+                    max_num_seqs,
+                    prefix_caching_enabled,
+                },
                 config,
             ))),
         }

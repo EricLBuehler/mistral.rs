@@ -101,6 +101,8 @@ pub mod defaults {
     pub const TOKEN_SOURCE: mistralrs_core::TokenSource = mistralrs_core::TokenSource::CacheToken;
     pub const SEARCH_CALLBACK: Option<Arc<mistralrs_core::SearchCallback>> = None;
     pub const PAGED_CACHE_TYPE: PagedCacheType = PagedCacheType::Auto;
+    /// Enable PagedAttention prefix caching by default.
+    pub const PA_PREFIX_CACHING: bool = true;
 }
 
 /// A builder for creating a mistral.rs instance with configured options for the mistral.rs server.
@@ -229,6 +231,11 @@ pub struct MistralRsForServerBuilder {
 
     /// PagedAttention KV cache type
     paged_cache_type: PagedCacheType,
+
+    /// Enable PagedAttention prefix caching for KV cache block reuse across requests.
+    /// When enabled, KV cache blocks are hashed and cached for reuse by requests
+    /// with matching prefixes (e.g., system prompts). This is enabled by default.
+    pa_prefix_caching: bool,
 }
 
 impl Default for MistralRsForServerBuilder {
@@ -261,6 +268,7 @@ impl Default for MistralRsForServerBuilder {
             search_callback: defaults::SEARCH_CALLBACK,
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
+            pa_prefix_caching: defaults::PA_PREFIX_CACHING,
         }
     }
 }
@@ -511,6 +519,14 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Enables or disables PagedAttention prefix caching.
+    /// When enabled (default), KV cache blocks are hashed and cached for reuse
+    /// by requests with matching prefixes (e.g., system prompts).
+    pub fn with_pa_prefix_caching(mut self, enabled: bool) -> Self {
+        self.pa_prefix_caching = enabled;
+        self
+    }
+
     /// Sets the block size for PagedAttention if provided.
     pub fn with_paged_attn_block_size_optional(
         mut self,
@@ -645,7 +661,9 @@ impl MistralRsForServerBuilder {
         )?;
         info!("Model loaded.");
 
-        let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
+        let scheduler_config =
+            init_scheduler_config(&cache_config, &pipeline, self.max_seqs, self.pa_prefix_caching)
+                .await;
 
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
@@ -759,7 +777,9 @@ impl MistralRsForServerBuilder {
         );
         pipeline_names.push(first_pipeline_name);
 
-        let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
+        let scheduler_config =
+            init_scheduler_config(&cache_config, &pipeline, self.max_seqs, self.pa_prefix_caching)
+                .await;
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
 
@@ -1073,6 +1093,7 @@ async fn init_scheduler_config(
     cache_config: &Option<PagedAttentionConfig>,
     pipeline: &LoadedPipeline,
     args_max_seqs: usize,
+    prefix_caching_enabled: bool,
 ) -> SchedulerConfig {
     if cache_config.is_some() {
         // Handle case where we may have device mapping
@@ -1080,6 +1101,7 @@ async fn init_scheduler_config(
             SchedulerConfig::PagedAttentionMeta {
                 max_num_seqs: args_max_seqs,
                 config: cache_config.clone(),
+                prefix_caching_enabled,
             }
         } else {
             SchedulerConfig::DefaultScheduler {
