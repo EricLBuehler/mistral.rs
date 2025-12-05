@@ -23,7 +23,6 @@ pub struct MoEExpertsConfig {
     pub num_experts_per_tok: usize,
     pub hidden_size: usize,
     pub moe_intermediate_size: usize,
-    pub norm_topk_prob: bool,
 }
 
 /// Backend selection for MoE experts
@@ -88,7 +87,6 @@ pub struct MoEExperts {
     backend: MoEExpertsBackendImpl,
     act: Activation,
     num_experts_per_tok: usize,
-    norm_topk_prob: bool,
     all_reduce: SumAllReduce,
     world_size: usize,
 }
@@ -175,7 +173,6 @@ impl MoEExperts {
             backend: backend_impl,
             act,
             num_experts_per_tok: cfg.num_experts_per_tok,
-            norm_topk_prob: cfg.norm_topk_prob,
             all_reduce: SumAllReduce::new(comm),
             world_size: comm.world_size(),
         })
@@ -349,13 +346,6 @@ impl MoEExperts {
         is_prefill: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
-
-        // Apply normalization to topk weights if configured
-        let topk_weights = if self.norm_topk_prob {
-            topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?
-        } else {
-            topk_weights
-        };
 
         let mut ys = match &self.backend {
             MoEExpertsBackendImpl::Fused(weights) => {

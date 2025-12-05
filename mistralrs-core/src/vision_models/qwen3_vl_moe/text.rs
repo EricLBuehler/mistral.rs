@@ -120,7 +120,6 @@ impl MoeMlp {
             num_experts_per_tok: cfg.num_experts_per_tok,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.moe_intermediate_size,
-            norm_topk_prob: cfg.norm_topk_prob,
         };
 
         // Load experts with automatic backend selection
