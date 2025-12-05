@@ -5,9 +5,8 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::{
-    apply_immediate_isq, should_apply_immediate_isq, ColumnParallelLayer, FusedExperts, MatMul,
-    QuantMethod, QuantMethodConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
-    UnquantLinear,
+    ColumnParallelLayer, FusedExperts, MatMul, PackedExperts, QuantMethod, ReplicatedLayer,
+    RowParallelLayer, ShardedVarBuilder,
 };
 
 use super::config::TextConfig;
@@ -94,80 +93,22 @@ impl Mlp {
     }
 }
 
-// MoE expert MLP - exactly matches Qwen3 MoE Mlp forward implementation
-#[derive(Clone)]
-struct MoeExpertMlp {
-    gate_proj: Arc<dyn QuantMethod>,
-    up_proj: Arc<dyn QuantMethod>,
-    down_proj: Arc<dyn QuantMethod>,
-    act_fn: Activation,
-}
-
-impl MoeExpertMlp {
-    fn new(
-        gate_proj_w: Tensor,
-        up_proj_w: Tensor,
-        down_proj_w: Tensor,
-        act_fn: Activation,
-        vb: ShardedVarBuilder,
-    ) -> Result<Self> {
-        let mut gate_proj: Arc<dyn QuantMethod> =
-            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                Linear::new(gate_proj_w, None),
-            ))?);
-        let mut up_proj: Arc<dyn QuantMethod> =
-            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                Linear::new(up_proj_w, None),
-            ))?);
-        let mut down_proj: Arc<dyn QuantMethod> =
-            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                Linear::new(down_proj_w, None),
-            ))?);
-
-        // Apply immediate ISQ if configured
-        gate_proj = apply_immediate_isq(gate_proj, vb.pp("gate_proj"))?;
-        up_proj = apply_immediate_isq(up_proj, vb.pp("up_proj"))?;
-        down_proj = apply_immediate_isq(down_proj, vb.pp("down_proj"))?;
-
-        Ok(Self {
-            gate_proj,
-            up_proj,
-            down_proj,
-            act_fn,
-        })
-    }
-
-    // Forward exactly matches Qwen3 MoE Mlp::forward
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut current_hidden_states = MatMul
-            .qmethod_matmul(&xs, &*self.gate_proj)?
-            .apply(&self.act_fn)?;
-        let rhs = MatMul.qmethod_matmul(&xs, &*self.up_proj)?;
-        current_hidden_states = current_hidden_states.broadcast_mul(&rhs)?;
-        let mut res = MatMul.qmethod_matmul(&current_hidden_states, &*self.down_proj)?;
-        if self.gate_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
-        Ok(res)
-    }
-}
-
-// SlowMoeMlp - same structure as Qwen3 MoE SlowMoeMlp
-// Loads from packed format and converts to unpacked per-expert format at load time
+// SlowMoeMlp - uses PackedExperts for weight loading
 struct SlowMoeMlp {
     gate: Linear,
-    experts: Vec<MoeExpertMlp>,
+    experts: PackedExperts,
+    act_fn: Activation,
     norm_topk_prob: bool,
     num_experts_per_tok: usize,
 }
 
 impl SlowMoeMlp {
-    fn new(vb: ShardedVarBuilder, cfg: &TextConfig, layer_device: Device) -> Result<Self> {
+    fn new(
+        vb: ShardedVarBuilder,
+        cfg: &TextConfig,
+        layer_device: Device,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
         let num_experts = cfg.num_experts;
         let hidden_size = cfg.hidden_size;
         let intermediate_size = cfg.moe_intermediate_size;
@@ -179,63 +120,21 @@ impl SlowMoeMlp {
             vb.pp("gate").set_device(layer_device),
         )?;
 
-        // For immediate ISQ, we need to load on CPU first
-        // Check if any expert layer should be ISQ'd by checking one of the expert prefixes
-        let experts_vb = vb.pp("experts");
-        let should_isq = should_apply_immediate_isq(&experts_vb.pp("0").pp("gate_proj"));
-        let experts_vb_load = if should_isq {
-            experts_vb.clone().set_device(Device::Cpu)
-        } else {
-            experts_vb.clone()
-        };
-
-        // Load packed tensors and convert to unpacked per-expert format:
-        // gate_up_proj: (num_experts, hidden_size, intermediate_size * 2)
-        // down_proj: (num_experts, intermediate_size, hidden_size)
-        let gate_up_proj = experts_vb_load.get(
-            (num_experts, hidden_size, intermediate_size * 2),
-            "gate_up_proj",
+        // Use PackedExperts to load the expert weights
+        let experts = PackedExperts::new(
+            num_experts,
+            hidden_size,
+            intermediate_size,
+            &cfg.quantization_config,
+            false,
+            comm,
+            vb.pp("experts"),
         )?;
-        let down_proj_packed = experts_vb_load.get(
-            (num_experts, intermediate_size, hidden_size),
-            "down_proj",
-        )?;
-
-        // Split gate_up_proj into gate_proj and up_proj along the last dimension
-        let gate_proj_packed = gate_up_proj.narrow(2, 0, intermediate_size)?;
-        let up_proj_packed = gate_up_proj.narrow(2, intermediate_size, intermediate_size)?;
-
-        // Transpose to get proper weight shapes for linear layers:
-        // gate_proj/up_proj: (num_experts, intermediate_size, hidden_size)
-        // down_proj: (num_experts, hidden_size, intermediate_size)
-        let gate_proj_packed = gate_proj_packed.transpose(1, 2)?.contiguous()?;
-        let up_proj_packed = up_proj_packed.transpose(1, 2)?.contiguous()?;
-        let down_proj_packed = down_proj_packed.transpose(1, 2)?.contiguous()?;
-
-        // Chunk into individual expert weights
-        let gate_chunks = gate_proj_packed.chunk(num_experts, 0)?;
-        let up_chunks = up_proj_packed.chunk(num_experts, 0)?;
-        let down_chunks = down_proj_packed.chunk(num_experts, 0)?;
-
-        let mut experts = Vec::with_capacity(num_experts);
-        for (i, ((g, u), d)) in gate_chunks
-            .into_iter()
-            .zip(up_chunks.into_iter())
-            .zip(down_chunks.into_iter())
-            .enumerate()
-        {
-            // Squeeze and ensure contiguous for optimal matmul performance
-            let g = g.squeeze(0)?.contiguous()?;
-            let u = u.squeeze(0)?.contiguous()?;
-            let d = d.squeeze(0)?.contiguous()?;
-
-            // Pass the vb with the expert index for correct ISQ prefix matching
-            experts.push(MoeExpertMlp::new(g, u, d, cfg.hidden_act, experts_vb.pp(i))?);
-        }
 
         Ok(Self {
             gate,
             experts,
+            act_fn: cfg.hidden_act,
             norm_topk_prob: cfg.norm_topk_prob,
             num_experts_per_tok: cfg.num_experts_per_tok,
         })
@@ -255,8 +154,9 @@ impl SlowMoeMlp {
 
         let routing_weights = routing_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
         let experts_per_tok = experts_per_tok.to_vec2::<u32>()?;
-        let mut top_x = vec![vec![]; self.experts.len()];
-        let mut selected_experts = vec![vec![]; self.experts.len()];
+        let num_experts = self.experts.gate_proj.len();
+        let mut top_x = vec![vec![]; num_experts];
+        let mut selected_experts = vec![vec![]; num_experts];
         for (row_idx, (rw, expert_idxs)) in routing_weights
             .iter()
             .zip(experts_per_tok.iter())
@@ -271,22 +171,40 @@ impl SlowMoeMlp {
         }
 
         let mut ys = xs.zeros_like()?;
-        for (expert_idx, expert_layer) in self.experts.iter().enumerate() {
-            let top_x = &top_x[expert_idx];
-            if top_x.is_empty() {
+        for expert_idx in 0..num_experts {
+            let top_x_expert = &top_x[expert_idx];
+            if top_x_expert.is_empty() {
                 continue;
             }
-            let top_x = Tensor::new(top_x.as_slice(), xs.device())?;
-            let selected_experts =
+            let top_x_tensor = Tensor::new(top_x_expert.as_slice(), xs.device())?;
+            let selected_experts_tensor =
                 Tensor::new(selected_experts[expert_idx].as_slice(), xs.device())?
                     .reshape(((), 1))?
                     .to_dtype(xs.dtype())?;
-            let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden_dim))?;
-            let current_hidden_states = expert_layer
-                .forward(&current_state.unsqueeze(0)?)?
-                .squeeze(0)?;
-            let current_hidden_states = current_hidden_states.broadcast_mul(&selected_experts)?;
-            ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
+            let current_state = xs.index_select(&top_x_tensor, 0)?.reshape(((), hidden_dim))?;
+
+            // Forward through expert MLP
+            let original_dtype = current_state.dtype();
+            let mut expert_input = current_state.clone();
+            if let Some(t) = self.experts.gate_proj[expert_idx].quantized_act_type() {
+                expert_input = expert_input.to_dtype(t)?;
+            }
+            let gate_out = MatMul
+                .qmethod_matmul(&expert_input, &*self.experts.gate_proj[expert_idx])?
+                .apply(&self.act_fn)?;
+            let up_out = MatMul.qmethod_matmul(&expert_input, &*self.experts.up_proj[expert_idx])?;
+            let mut current_hidden_states =
+                MatMul.qmethod_matmul(&(gate_out * up_out)?, &*self.experts.down_proj[expert_idx])?;
+            if self.experts.gate_proj[expert_idx]
+                .quantized_act_type()
+                .is_some()
+            {
+                current_hidden_states = current_hidden_states.to_dtype(original_dtype)?;
+            }
+
+            let current_hidden_states =
+                current_hidden_states.broadcast_mul(&selected_experts_tensor)?;
+            ys = ys.index_add(&top_x_tensor, &current_hidden_states, 0)?;
         }
         let ys = ys.reshape((b_size, seq_len, hidden_dim))?;
         Ok(ys)
@@ -661,7 +579,7 @@ impl DecoderLayer {
             if vb.device().is_metal() {
                 MoeOrMlp::FastMoe(FastMoeMlp::new(cfg, vb, layer_device, comm)?)
             } else {
-                MoeOrMlp::SlowMoe(SlowMoeMlp::new(vb, cfg, layer_device)?)
+                MoeOrMlp::SlowMoe(SlowMoeMlp::new(vb, cfg, layer_device, comm)?)
             }
         } else {
             MoeOrMlp::Mlp(Mlp::new(
@@ -983,10 +901,15 @@ impl IsqModel for Qwen3VLMoETextModel {
                     tensors.push((&mut moe.fused_down_proj, Some(i)));
                 }
                 MoeOrMlp::SlowMoe(moe) => {
-                    for expert in &mut moe.experts {
-                        tensors.push((&mut expert.gate_proj, Some(i)));
-                        tensors.push((&mut expert.up_proj, Some(i)));
-                        tensors.push((&mut expert.down_proj, Some(i)));
+                    for (gate, (up, down)) in moe
+                        .experts
+                        .gate_proj
+                        .iter_mut()
+                        .zip(moe.experts.up_proj.iter_mut().zip(moe.experts.down_proj.iter_mut()))
+                    {
+                        tensors.push((gate, Some(i)));
+                        tensors.push((up, Some(i)));
+                        tensors.push((down, Some(i)));
                     }
                 }
             }
