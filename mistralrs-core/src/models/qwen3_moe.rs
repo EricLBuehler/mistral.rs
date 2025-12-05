@@ -414,8 +414,12 @@ impl FastMoeMlp {
         let original_dtype = xs.dtype();
 
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
+        let num_tokens = b_size * seq_len;
 
-        let router_logits = self.gate.forward_autocast(xs)?;
+        // Flatten batch and seq dimensions for routing
+        let xs_flat = xs.reshape((num_tokens, hidden_dim))?;
+
+        let router_logits = self.gate.forward_autocast(&xs_flat)?;
         let routing_weights =
             candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
 
@@ -430,8 +434,22 @@ impl FastMoeMlp {
             scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
         }
 
-        let ys = {
+        // For CUDA with indexed_moe_forward: input is (num_tokens, 1, hidden_dim)
+        // For Metal with gather_forward: input is (b_size, seq_len, 1, 1, hidden_dim)
+        let ys = if xs.device().is_cuda() {
+            // CUDA path: use indexed_moe_forward compatible shapes
+            // xs: (num_tokens, 1, hidden_dim), indices: (num_tokens, num_experts_per_tok)
+            let xs = xs_flat.reshape((num_tokens, 1, hidden_dim))?;
+            let gate = self
+                .fused_gate_proj
+                .gather_forward_autocast(&xs, &indices)?;
+            let up = self.fused_up_proj.gather_forward_autocast(&xs, &indices)?;
+            self.fused_down_proj
+                .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, &indices)?
+        } else {
+            // Metal path: use broadcast gather shapes
             let xs = xs.reshape((b_size, seq_len, 1, 1, hidden_dim))?;
+            let indices = indices.reshape((b_size, seq_len, self.num_experts_per_tok))?;
             let gate = self
                 .fused_gate_proj
                 .gather_forward_autocast(&xs, &indices)?;
@@ -440,6 +458,7 @@ impl FastMoeMlp {
                 .fused_down_proj
                 .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, &indices)?;
             xs.squeeze(D::Minus2)?
+                .reshape((num_tokens, self.num_experts_per_tok, hidden_dim))?
         };
 
         ys.to_dtype(DType::F32)?
