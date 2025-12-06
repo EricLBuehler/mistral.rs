@@ -396,8 +396,15 @@ impl PagedAttentionScheduler {
     }
 
     fn _preempt_by_recompute(&mut self, seq: Arc<Mutex<Sequence>>) {
-        get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
-        self._free(get_mut_arcmutex!(seq).get_id());
+        let seq_guard = get_mut_arcmutex!(seq);
+        seq_guard.set_state(SequenceState::Waiting);
+        let seq_id = seq_guard.get_id();
+        // Get logical blocks for proper cache ref release
+        let logical_blocks = seq_guard.logical_token_blocks().to_vec();
+        drop(seq_guard);
+        // Use free_with_caching to properly release prefix cache refs
+        // (but don't add blocks to cache since we're preempting)
+        self._free_for_preemption(seq_id, &logical_blocks);
         self.waiting.push_front(seq);
     }
 
@@ -407,6 +414,10 @@ impl PagedAttentionScheduler {
 
     fn _free(&mut self, seq_id: usize) {
         get_mut_arcmutex!(self.block_engine).free_sequence(seq_id);
+    }
+
+    fn _free_for_preemption(&mut self, seq_id: usize, logical_blocks: &[super::LogicalTokenBlock]) {
+        get_mut_arcmutex!(self.block_engine).free_sequence_for_preemption(seq_id, logical_blocks);
     }
 
     fn _free_with_caching(

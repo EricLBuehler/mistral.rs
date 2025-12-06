@@ -410,16 +410,34 @@ impl BlockEngine {
     }
 
     pub fn free_sequence(&mut self, id: usize) {
-        // Free without caching (for preemption or when we don't have logical blocks)
+        // Free without caching (for aborted sequences or when we don't have logical blocks)
+        if let Some(block_table) = self.block_tables.remove(&id) {
+            self.cached_blocks_per_seq.remove(&id);
+            // Free all blocks
+            for block in block_table.iter() {
+                self.gpu_allocator.free_block(block.clone());
+            }
+        }
+    }
+
+    /// Free a sequence's blocks during preemption.
+    /// This properly releases prefix cache refs so cached blocks can be evicted.
+    pub fn free_sequence_for_preemption(
+        &mut self,
+        id: usize,
+        logical_blocks: &[LogicalTokenBlock],
+    ) {
         if let Some(block_table) = self.block_tables.remove(&id) {
             let num_cached = self.cached_blocks_per_seq.remove(&id).unwrap_or(0);
 
+            // Release cached blocks' reference counts in the prefix cache
+            if num_cached > 0 && self.prefix_cacher.is_enabled() {
+                let cached_logical = &logical_blocks[..num_cached.min(logical_blocks.len())];
+                self.prefix_cacher.release_blocks(cached_logical);
+            }
+
             // Free all blocks
-            for (idx, block) in block_table.iter().enumerate() {
-                if idx < num_cached {
-                    // This was a cached block - decrement cache refcount too
-                    // The block should already have been incremented by the cache
-                }
+            for block in block_table.iter() {
                 self.gpu_allocator.free_block(block.clone());
             }
         }
