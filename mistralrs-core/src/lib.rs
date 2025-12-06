@@ -492,7 +492,9 @@ impl MistralRs {
 
         // For hybrid models (Mamba-Attention), force batch_size=1 to prevent state bleeding
         // Mamba's stateful nature makes batched inference complex; this ensures correctness
-        let method = if get_mut_arcmutex!(pipeline).cache().is_hybrid() {
+        let method = if !get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache
+            && get_mut_arcmutex!(pipeline).cache().is_hybrid()
+        {
             info!(
                 "Hybrid model detected (Mamba-Attention), enforcing batch_size=1 for correctness"
             );
@@ -847,15 +849,18 @@ impl MistralRs {
         config: AddModelConfig,
     ) -> Result<(), String> {
         // For hybrid models (Mamba-Attention), force batch_size=1 to prevent state bleeding
-        let method = if pipeline.try_lock().unwrap().cache().is_hybrid() {
-            info!(
-                "Hybrid model detected (Mamba-Attention), enforcing batch_size=1 for correctness"
-            );
-            SchedulerConfig::DefaultScheduler {
-                method: DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()),
+        let method = {
+            let pipeline_guard = pipeline.try_lock().unwrap();
+            if !pipeline_guard.get_metadata().no_kv_cache && pipeline_guard.cache().is_hybrid() {
+                info!(
+                    "Hybrid model detected (Mamba-Attention), enforcing batch_size=1 for correctness"
+                );
+                SchedulerConfig::DefaultScheduler {
+                    method: DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()),
+                }
+            } else {
+                method
             }
-        } else {
-            method
         };
 
         let reboot_state = RebootState {
