@@ -937,6 +937,8 @@ If you want to add a new model, please contact us via an issue and we can coordi
     - By default, Metal kernels are precompiled during build time for better performance
     - To skip Metal kernel precompilation (useful for CI or when Metal is not needed), set `MISTRALRS_METAL_PRECOMPILE=0` or `MISTRALRS_METAL_PRECOMPILE=false`
     - Example: `MISTRALRS_METAL_PRECOMPILE=0 cargo build --release --features metal`
+- Disabling mmap loading
+  - Set `MISTRALRS_NO_MMAP=1` to disable mmap during loading.
   
 ## Credits
 This project would not be possible without the excellent work at [`candle`](https://github.com/huggingface/candle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.
