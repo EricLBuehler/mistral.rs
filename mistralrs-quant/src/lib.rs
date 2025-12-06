@@ -42,7 +42,7 @@ pub use afq::{AfqBits, AfqGroupSize, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParams, BnbQuantType};
 pub use blockwise_fp8::{
     blockwise_fp8_linear_b, blockwise_fp8_stacked_linear, fp8_blockwise_dequantize,
-    fp8_blockwise_quantize, BlockwiseFP8Linear, BlockwiseFP8Stacked,
+    fp8_blockwise_quantize, BlockwiseFP8Linear,
 };
 pub use distributed::{
     layers::{

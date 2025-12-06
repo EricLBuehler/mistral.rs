@@ -64,12 +64,37 @@ impl QuantMethod for BlockwiseFP8Linear {
         }
     }
     fn dequantize_w(&self) -> Result<candle_core::Tensor> {
-        ops::fp8_blockwise_dequantize(
-            &self.weight,
-            &self.weight_scale_inv,
-            self.weight_block_size.to_vec(),
-            self.dequant_dtype,
-        )
+        let weight_rank = self.weight.dims().len();
+        if weight_rank == 2 {
+            // Standard 2D weight: [N, K]
+            ops::fp8_blockwise_dequantize(
+                &self.weight,
+                &self.weight_scale_inv,
+                self.weight_block_size.to_vec(),
+                self.dequant_dtype,
+            )
+        } else if weight_rank == 3 {
+            // Stacked MoE weight: [E, N, K] - dequantize each expert
+            let num_experts = self.weight.dim(0)?;
+            let mut dequantized = Vec::with_capacity(num_experts);
+            for i in 0..num_experts {
+                let w = self.weight.i(i)?;
+                let s = self.weight_scale_inv.i(i)?;
+                let dq = ops::fp8_blockwise_dequantize(
+                    &w,
+                    &s,
+                    self.weight_block_size.clone(),
+                    self.dequant_dtype,
+                )?;
+                dequantized.push(dq);
+            }
+            Tensor::stack(&dequantized, 0)
+        } else {
+            candle_core::bail!(
+                "BlockwiseFP8Linear: expected weight rank 2 or 3, got {}",
+                weight_rank
+            )
+        }
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -360,118 +385,61 @@ pub fn blockwise_fp8_linear_b(
     }))
 }
 
-/// Stacked blockwise FP8 linear layer for MoE experts.
-/// Supports weights of shape [num_experts, N, K] with scales [num_experts, N/block_y, K/block_x].
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct BlockwiseFP8Stacked {
-    weight: Tensor,           // [num_experts, N, K]
-    weight_scale_inv: Tensor, // [num_experts, N/block_y, K/block_x]
-    dequant_dtype: DType,
-    weight_block_size: Vec<usize>,
-    num_experts: usize,
-    transposed: bool, // Whether weights are [E, K, N] instead of [E, N, K]
-}
+impl BlockwiseFP8Linear {
+    /// Create a BlockwiseFP8Linear from pre-loaded tensors.
+    /// Supports both 2D weights [N, K] and stacked 3D weights [E, N, K] for MoE.
+    pub fn from_tensors(
+        weight: Tensor,
+        weight_scale_inv: Tensor,
+        weight_block_size: Vec<usize>,
+        dequant_dtype: DType,
+    ) -> Result<Self> {
+        Ok(Self {
+            weight,
+            weight_scale_inv,
+            bias: None,
+            dequant_dtype,
+            weight_block_size,
+        })
+    }
 
-impl QuantMethod for BlockwiseFP8Stacked {
-    fn new(method: QuantMethodConfig) -> Result<Self>
-    where
-        Self: Sized,
-    {
-        match method {
-            QuantMethodConfig::Gguf { .. }
-            | QuantMethodConfig::GptqAwq { .. }
-            | QuantMethodConfig::Hqq { .. }
-            | QuantMethodConfig::Dummy
-            | QuantMethodConfig::Unquantized(_)
-            | QuantMethodConfig::Bnb { .. }
-            | QuantMethodConfig::FP8 { .. }
-            | QuantMethodConfig::Afq { .. }
-            | QuantMethodConfig::MXFP4 { .. }
-            | QuantMethodConfig::BlockwiseFP8 { .. } => {
-                candle_core::bail!(
-                    "BlockwiseFP8Stacked should be created via blockwise_fp8_stacked_linear"
-                )
-            }
+    /// Create a stacked BlockwiseFP8Linear by stacking per-expert FP8 weights.
+    /// Takes vectors of weight and scale tensors (one per expert) and stacks them.
+    pub fn from_per_expert(
+        weights: Vec<Tensor>,
+        scales: Vec<Tensor>,
+        weight_block_size: Vec<usize>,
+        dequant_dtype: DType,
+    ) -> Result<Self> {
+        let num_experts = weights.len();
+        if num_experts == 0 {
+            candle_core::bail!("Cannot create BlockwiseFP8Linear with 0 experts");
         }
-    }
-
-    fn dequantize_w(&self) -> Result<Tensor> {
-        // Dequantize all experts
-        let num_experts = self.weight.dim(0)?;
-        let mut dequantized = Vec::with_capacity(num_experts);
-        for i in 0..num_experts {
-            let w = self.weight.i(i)?;
-            let s = self.weight_scale_inv.i(i)?;
-            let dq = ops::fp8_blockwise_dequantize(
-                &w,
-                &s,
-                self.weight_block_size.clone(),
-                self.dequant_dtype,
-            )?;
-            dequantized.push(dq);
+        if weights.len() != scales.len() {
+            candle_core::bail!(
+                "Mismatch between weights ({}) and scales ({}) count",
+                weights.len(),
+                scales.len()
+            );
         }
-        Tensor::stack(&dequantized, 0)
-    }
 
-    fn forward(&self, _x: &Tensor) -> Result<Tensor> {
-        candle_core::bail!(
-            "BlockwiseFP8Stacked does not support forward - use gather_forward for MoE operations"
-        )
-    }
+        let weight = Tensor::stack(&weights, 0)?;
+        let weight_scale_inv = Tensor::stack(&scales, 0)?;
 
-    fn gather_forward(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        // Fallback: dequantize and use standard indexed gather matmul
-        // For a proper implementation, we would use the blockwise FP8 MoE GEMM kernel
-        // but this requires more careful integration with the MoE infrastructure
-        let dequantized = self.dequantize_w()?;
-
-        // Use UnquantLinear's gather_forward
-        let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
-            dequantized,
-            None,
-        )))?;
-        unquant.gather_forward(a, indices)
-    }
-
-    fn quantized_act_type(&self) -> Option<DType> {
-        None
-    }
-
-    fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("BlockwiseFP8Stacked does not support add_delta_w")
-    }
-
-    fn dtype_and_device(&self) -> (DType, Device) {
-        (DType::F8E4M3, self.weight.device().clone())
-    }
-
-    fn apply_isq(
-        self: Arc<Self>,
-        _dtype: Option<IsqType>,
-        _device: Device,
-        _n_quantized: &AtomicUsize,
-        _imatrix_weight: Option<Vec<f32>>,
-        _guard: QuantizeOntoGuard,
-    ) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!(
-            "BlockwiseFP8Stacked does not support apply_isq - it is already quantized"
-        )
-    }
-}
-
-impl QuantizedSerde for BlockwiseFP8Stacked {
-    fn isq_serde_supported(&self) -> bool {
-        false
-    }
-    fn name(&self) -> &'static str {
-        "blockwise-fp8-stacked"
+        Ok(Self {
+            weight,
+            weight_scale_inv,
+            bias: None,
+            dequant_dtype,
+            weight_block_size,
+        })
     }
 }
 
 /// Create a stacked blockwise FP8 linear layer for MoE experts.
 /// Loads weights of shape [num_experts, N, K] and scales [num_experts, N/block_y, K/block_x].
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 pub fn blockwise_fp8_stacked_linear(
     num_experts: usize,
     in_dim: usize,
@@ -513,12 +481,11 @@ pub fn blockwise_fp8_stacked_linear(
     let weight_scale_inv =
         vb.get_with_hints_dtype(scale_shape, scale_name, Default::default(), DType::F32)?;
 
-    Ok(Arc::new(BlockwiseFP8Stacked {
+    Ok(Arc::new(BlockwiseFP8Linear {
         weight,
         weight_scale_inv,
+        bias: None,
         dequant_dtype: vb.dtype(),
         weight_block_size: weight_block_size.to_vec(),
-        num_experts,
-        transposed,
     }))
 }

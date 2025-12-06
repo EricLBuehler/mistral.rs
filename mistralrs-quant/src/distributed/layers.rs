@@ -952,8 +952,211 @@ impl PackedExperts {
 
                     (vec![gate_proj], vec![up_proj], vec![down_proj])
                 }
+                QuantizedConfig::Fp8 { weight_block_size } => {
+                    // PackedExperts with FP8 quantization - use BlockwiseFP8Linear
+                    // Supports stacked format (gate_up_proj) or per-expert format
+                    if weight_block_size.len() != 2 {
+                        candle_core::bail!(
+                            "Expected weight_block_size to have length 2, got {weight_block_size:?}"
+                        );
+                    }
+
+                    // Check if we have stacked format with FP8 scales
+                    let has_stacked_fp8 = vb.contains_tensor("gate_up_proj")
+                        && vb.contains_tensor("gate_up_proj.weight_scale_inv");
+
+                    if has_stacked_fp8 {
+                        // Stacked format: gate_up_proj [num_experts, hidden, intermediate*2]
+                        let gate_up_shape = (num_local_experts, hidden_size, intermediate_size * 2);
+                        let gate_up_fp8 = vb.get_with_hints_dtype(
+                            gate_up_shape,
+                            "gate_up_proj",
+                            Default::default(),
+                            candle_core::DType::F8E4M3,
+                        )?;
+                        let gate_up_scale = vb.get_with_hints_dtype(
+                            (
+                                num_local_experts,
+                                hidden_size.div_ceil(weight_block_size[0]),
+                                (intermediate_size * 2).div_ceil(weight_block_size[1]),
+                            ),
+                            "gate_up_proj.weight_scale_inv",
+                            Default::default(),
+                            candle_core::DType::F32,
+                        )?;
+
+                        // Split gate_up into gate and up
+                        let gate_fp8 = gate_up_fp8.narrow(2, 0, intermediate_size)?;
+                        let up_fp8 = gate_up_fp8.narrow(2, intermediate_size, intermediate_size)?;
+
+                        // Split scales similarly
+                        let gate_scale = gate_up_scale.narrow(
+                            2,
+                            0,
+                            intermediate_size.div_ceil(weight_block_size[1]),
+                        )?;
+                        let up_scale = gate_up_scale.narrow(
+                            2,
+                            intermediate_size.div_ceil(weight_block_size[1]),
+                            intermediate_size.div_ceil(weight_block_size[1]),
+                        )?;
+
+                        // Transpose to [E, N, K] format
+                        let gate_fp8 = gate_fp8.transpose(1, 2)?.contiguous()?;
+                        let up_fp8 = up_fp8.transpose(1, 2)?.contiguous()?;
+                        let gate_scale = gate_scale.transpose(1, 2)?.contiguous()?;
+                        let up_scale = up_scale.transpose(1, 2)?.contiguous()?;
+
+                        let gate_proj: Arc<dyn QuantMethod> =
+                            Arc::new(crate::BlockwiseFP8Linear::from_tensors(
+                                gate_fp8,
+                                gate_scale,
+                                weight_block_size.clone(),
+                                vb.dtype(),
+                            )?);
+                        let up_proj: Arc<dyn QuantMethod> =
+                            Arc::new(crate::BlockwiseFP8Linear::from_tensors(
+                                up_fp8,
+                                up_scale,
+                                weight_block_size.clone(),
+                                vb.dtype(),
+                            )?);
+
+                        // Load down_proj
+                        let down_shape = (num_local_experts, intermediate_size, hidden_size);
+                        let down_fp8 = vb.get_with_hints_dtype(
+                            down_shape,
+                            "down_proj",
+                            Default::default(),
+                            candle_core::DType::F8E4M3,
+                        )?;
+                        let down_scale = vb.get_with_hints_dtype(
+                            (
+                                num_local_experts,
+                                intermediate_size.div_ceil(weight_block_size[0]),
+                                hidden_size.div_ceil(weight_block_size[1]),
+                            ),
+                            "down_proj.weight_scale_inv",
+                            Default::default(),
+                            candle_core::DType::F32,
+                        )?;
+
+                        // Transpose to [E, N, K] format
+                        let down_fp8 = down_fp8.transpose(1, 2)?.contiguous()?;
+                        let down_scale = down_scale.transpose(1, 2)?.contiguous()?;
+
+                        let down_proj: Arc<dyn QuantMethod> =
+                            Arc::new(crate::BlockwiseFP8Linear::from_tensors(
+                                down_fp8,
+                                down_scale,
+                                weight_block_size.clone(),
+                                vb.dtype(),
+                            )?);
+
+                        (vec![gate_proj], vec![up_proj], vec![down_proj])
+                    } else {
+                        // Per-expert format (e.g., Qwen3 MoE with experts.{i}.gate_proj etc.)
+                        // vb already points to the experts path, so we just index directly
+                        let mut gate_weights = Vec::new();
+                        let mut gate_scales = Vec::new();
+                        let mut up_weights = Vec::new();
+                        let mut up_scales = Vec::new();
+                        let mut down_weights = Vec::new();
+                        let mut down_scales = Vec::new();
+
+                        for i in 0..num_local_experts {
+                            let expert_vb = vb.pp(i);
+
+                            // Load gate_proj
+                            let gate_vb = expert_vb.pp("gate_proj");
+                            let gate_weight = gate_vb.get_with_hints_dtype(
+                                (intermediate_size, hidden_size),
+                                "weight",
+                                Default::default(),
+                                candle_core::DType::F8E4M3,
+                            )?;
+                            let gate_scale = gate_vb.get_with_hints_dtype(
+                                (
+                                    intermediate_size.div_ceil(weight_block_size[0]),
+                                    hidden_size.div_ceil(weight_block_size[1]),
+                                ),
+                                "weight_scale_inv",
+                                Default::default(),
+                                candle_core::DType::F32,
+                            )?;
+
+                            // Load up_proj
+                            let up_vb = expert_vb.pp("up_proj");
+                            let up_weight = up_vb.get_with_hints_dtype(
+                                (intermediate_size, hidden_size),
+                                "weight",
+                                Default::default(),
+                                candle_core::DType::F8E4M3,
+                            )?;
+                            let up_scale = up_vb.get_with_hints_dtype(
+                                (
+                                    intermediate_size.div_ceil(weight_block_size[0]),
+                                    hidden_size.div_ceil(weight_block_size[1]),
+                                ),
+                                "weight_scale_inv",
+                                Default::default(),
+                                candle_core::DType::F32,
+                            )?;
+
+                            // Load down_proj
+                            let down_vb = expert_vb.pp("down_proj");
+                            let down_weight = down_vb.get_with_hints_dtype(
+                                (hidden_size, intermediate_size),
+                                "weight",
+                                Default::default(),
+                                candle_core::DType::F8E4M3,
+                            )?;
+                            let down_scale = down_vb.get_with_hints_dtype(
+                                (
+                                    hidden_size.div_ceil(weight_block_size[0]),
+                                    intermediate_size.div_ceil(weight_block_size[1]),
+                                ),
+                                "weight_scale_inv",
+                                Default::default(),
+                                candle_core::DType::F32,
+                            )?;
+
+                            gate_weights.push(gate_weight);
+                            gate_scales.push(gate_scale);
+                            up_weights.push(up_weight);
+                            up_scales.push(up_scale);
+                            down_weights.push(down_weight);
+                            down_scales.push(down_scale);
+                        }
+
+                        // Stack into BlockwiseFP8Linear
+                        let gate_proj: Arc<dyn QuantMethod> =
+                            Arc::new(crate::BlockwiseFP8Linear::from_per_expert(
+                                gate_weights,
+                                gate_scales,
+                                weight_block_size.clone(),
+                                vb.dtype(),
+                            )?);
+                        let up_proj: Arc<dyn QuantMethod> =
+                            Arc::new(crate::BlockwiseFP8Linear::from_per_expert(
+                                up_weights,
+                                up_scales,
+                                weight_block_size.clone(),
+                                vb.dtype(),
+                            )?);
+                        let down_proj: Arc<dyn QuantMethod> =
+                            Arc::new(crate::BlockwiseFP8Linear::from_per_expert(
+                                down_weights,
+                                down_scales,
+                                weight_block_size.clone(),
+                                vb.dtype(),
+                            )?);
+
+                        (vec![gate_proj], vec![up_proj], vec![down_proj])
+                    }
+                }
                 _ => candle_core::bail!(
-                    "PackedExperts with quantization config only allows AFQ quantization"
+                    "PackedExperts with quantization config only allows AFQ or FP8 quantization"
                 ),
             }
         } else if !vb.contains_tensor("gate_up_proj") {
@@ -1145,10 +1348,10 @@ impl FusedExperts {
             && matches!(&quantization_config, Some(QuantizedConfig::Fp8 { .. }))
         {
             // Stacked format with FP8 quantization
-            // Check if we have FP8 scale tensors - if so, dequantize; otherwise fall back to unquantized
+            // Check if we have FP8 scale tensors - if so, use BlockwiseFP8Linear; otherwise fall back to unquantized
             let has_fp8_scales = experts_vb.contains_tensor("gate_up_proj.weight_scale_inv");
 
-            let (gate_up_proj, down_proj_packed) = if has_fp8_scales {
+            if has_fp8_scales {
                 let weight_block_size = match quantization_config {
                     Some(QuantizedConfig::Fp8 { weight_block_size }) => weight_block_size.clone(),
                     _ => unreachable!(),
@@ -1161,6 +1364,7 @@ impl FusedExperts {
                 }
 
                 // Load gate_up_proj FP8 tensor and scale
+                // Shape: [num_experts, hidden_size, intermediate_size * 2] - this is transposed format (K, N)
                 let gate_up_shape = (num_experts, hidden_size, moe_intermediate_size * 2);
                 let gate_up_fp8 = experts_vb.get_with_hints_dtype(
                     gate_up_shape,
@@ -1178,14 +1382,47 @@ impl FusedExperts {
                     Default::default(),
                     candle_core::DType::F32,
                 )?;
-                let gate_up_proj = crate::blockwise_fp8::fp8_blockwise_dequantize(
-                    &gate_up_fp8,
-                    &gate_up_scale,
-                    weight_block_size.clone(),
-                    vb.dtype(),
+
+                // Split gate_up into gate and up along the last dimension
+                let gate_fp8 = gate_up_fp8.narrow(2, 0, moe_intermediate_size)?;
+                let up_fp8 = gate_up_fp8.narrow(2, moe_intermediate_size, moe_intermediate_size)?;
+
+                // Split scales similarly
+                let gate_scale = gate_up_scale.narrow(
+                    2,
+                    0,
+                    moe_intermediate_size.div_ceil(weight_block_size[1]),
+                )?;
+                let up_scale = gate_up_scale.narrow(
+                    2,
+                    moe_intermediate_size.div_ceil(weight_block_size[1]),
+                    moe_intermediate_size.div_ceil(weight_block_size[1]),
                 )?;
 
+                // Transpose to [E, N, K] format for gather_forward
+                // Original: [E, K, N] -> transpose(1,2) -> [E, N, K]
+                let gate_fp8 = gate_fp8.transpose(1, 2)?.contiguous()?;
+                let up_fp8 = up_fp8.transpose(1, 2)?.contiguous()?;
+                let gate_scale = gate_scale.transpose(1, 2)?.contiguous()?;
+                let up_scale = up_scale.transpose(1, 2)?.contiguous()?;
+
+                let fused_gate_proj: Arc<dyn QuantMethod> =
+                    Arc::new(crate::BlockwiseFP8Linear::from_tensors(
+                        gate_fp8,
+                        gate_scale,
+                        weight_block_size.clone(),
+                        vb.dtype(), // not transposed - we already transposed to [E, N, K]
+                    )?);
+                let fused_up_proj: Arc<dyn QuantMethod> =
+                    Arc::new(crate::BlockwiseFP8Linear::from_tensors(
+                        up_fp8,
+                        up_scale,
+                        weight_block_size.clone(),
+                        vb.dtype(),
+                    )?);
+
                 // Load down_proj FP8 tensor and scale
+                // Shape: [num_experts, intermediate_size, hidden_size] - this is transposed format (K, N)
                 let down_shape = (num_experts, moe_intermediate_size, hidden_size);
                 let down_fp8 = experts_vb.get_with_hints_dtype(
                     down_shape,
@@ -1203,14 +1440,20 @@ impl FusedExperts {
                     Default::default(),
                     candle_core::DType::F32,
                 )?;
-                let down_proj_packed = crate::blockwise_fp8::fp8_blockwise_dequantize(
-                    &down_fp8,
-                    &down_scale,
-                    weight_block_size,
-                    vb.dtype(),
-                )?;
 
-                (gate_up_proj, down_proj_packed)
+                // Transpose to [E, N, K] format for gather_forward
+                let down_fp8 = down_fp8.transpose(1, 2)?.contiguous()?;
+                let down_scale = down_scale.transpose(1, 2)?.contiguous()?;
+
+                let fused_down_proj: Arc<dyn QuantMethod> =
+                    Arc::new(crate::BlockwiseFP8Linear::from_tensors(
+                        down_fp8,
+                        down_scale,
+                        weight_block_size,
+                        vb.dtype(),
+                    )?);
+
+                (fused_gate_proj, fused_up_proj, fused_down_proj)
             } else {
                 // FP8 config but no scale tensors - weights are actually unquantized
                 tracing::warn!(
@@ -1225,34 +1468,34 @@ impl FusedExperts {
                     (num_experts, moe_intermediate_size, hidden_size),
                     "down_proj",
                 )?;
-                (gate_up_proj, down_proj_packed)
-            };
 
-            // Split gate_up_proj into gate_proj and up_proj along the last dimension
-            let gate_proj = gate_up_proj.narrow(2, 0, moe_intermediate_size)?;
-            let up_proj = gate_up_proj.narrow(2, moe_intermediate_size, moe_intermediate_size)?;
+                // Split gate_up_proj into gate_proj and up_proj along the last dimension
+                let gate_proj = gate_up_proj.narrow(2, 0, moe_intermediate_size)?;
+                let up_proj =
+                    gate_up_proj.narrow(2, moe_intermediate_size, moe_intermediate_size)?;
 
-            // Transpose dims 1 and 2 to match GGUF format
-            let gate_proj = gate_proj.transpose(1, 2)?.contiguous()?;
-            let up_proj = up_proj.transpose(1, 2)?.contiguous()?;
-            let down_proj = down_proj_packed.transpose(1, 2)?.contiguous()?;
+                // Transpose dims 1 and 2 to match GGUF format
+                let gate_proj = gate_proj.transpose(1, 2)?.contiguous()?;
+                let up_proj = up_proj.transpose(1, 2)?.contiguous()?;
+                let down_proj = down_proj_packed.transpose(1, 2)?.contiguous()?;
 
-            let mut fused_gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(Linear::new(gate_proj.clone(), None)),
-            )?);
-            let mut fused_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(Linear::new(up_proj.clone(), None)),
-            )?);
-            let mut fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(Linear::new(down_proj.clone(), None)),
-            )?);
-            // Use apply_immediate_isq_always to ensure ISQ is applied to expert weights
-            let device = gate_proj.device();
-            fused_gate_proj = apply_immediate_isq_always(fused_gate_proj, device)?;
-            fused_up_proj = apply_immediate_isq_always(fused_up_proj, device)?;
-            fused_down_proj = apply_immediate_isq_always(fused_down_proj, device)?;
+                let mut fused_gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+                    QuantMethodConfig::Unquantized(Linear::new(gate_proj.clone(), None)),
+                )?);
+                let mut fused_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+                    QuantMethodConfig::Unquantized(Linear::new(up_proj.clone(), None)),
+                )?);
+                let mut fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+                    QuantMethodConfig::Unquantized(Linear::new(down_proj.clone(), None)),
+                )?);
+                // Use apply_immediate_isq_always to ensure ISQ is applied to expert weights
+                let device = gate_proj.device();
+                fused_gate_proj = apply_immediate_isq_always(fused_gate_proj, device)?;
+                fused_up_proj = apply_immediate_isq_always(fused_up_proj, device)?;
+                fused_down_proj = apply_immediate_isq_always(fused_down_proj, device)?;
 
-            (fused_gate_proj, fused_up_proj, fused_down_proj)
+                (fused_gate_proj, fused_up_proj, fused_down_proj)
+            }
         } else if is_stacked_format {
             // Stacked format from safetensors:
             // - gate_up_proj: [num_experts, hidden_size, intermediate_size * 2] = [128, 2048, 1536]
@@ -1301,52 +1544,113 @@ impl FusedExperts {
             (fused_gate_proj, fused_up_proj, fused_down_proj)
         } else if matches!(&quantization_config, Some(QuantizedConfig::Fp8 { .. })) {
             // Per-expert format with FP8 quantization
-            let mut gate_proj_vec = Vec::new();
-            let mut up_proj_vec = Vec::new();
-            let mut down_proj_vec = Vec::new();
-            for i in 0..num_experts {
-                let vb = experts_vb.pp(i);
+            // Load each expert's FP8 weights and scales, then stack into BlockwiseFP8Linear
+            let weight_block_size = match quantization_config {
+                Some(QuantizedConfig::Fp8 { weight_block_size }) => weight_block_size.clone(),
+                _ => unreachable!(),
+            };
 
-                let gate_proj = crate::linear_no_bias(
-                    hidden_size,
-                    moe_intermediate_size,
-                    quantization_config,
-                    vb.pp("gate_proj.weight"),
-                )?;
-                let up_proj = crate::linear_no_bias(
-                    hidden_size,
-                    moe_intermediate_size,
-                    quantization_config,
-                    vb.pp("up_proj.weight"),
-                )?;
-                let down_proj = crate::linear_no_bias(
-                    moe_intermediate_size,
-                    hidden_size,
-                    quantization_config,
-                    vb.pp("down_proj.weight"),
-                )?;
-
-                gate_proj_vec.push(gate_proj.dequantize_w()?);
-                up_proj_vec.push(up_proj.dequantize_w()?);
-                down_proj_vec.push(down_proj.dequantize_w()?);
+            if weight_block_size.len() != 2 {
+                candle_core::bail!(
+                    "Expected weight_block_size to have length 2, got {weight_block_size:?}"
+                );
             }
 
-            let mut gate_proj: Arc<dyn QuantMethod> =
-                Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                    Linear::new(Tensor::stack(&gate_proj_vec, 0)?, None),
-                ))?);
-            let mut up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(Linear::new(Tensor::stack(&up_proj_vec, 0)?, None)),
-            )?);
-            let mut down_proj: Arc<dyn QuantMethod> =
-                Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                    Linear::new(Tensor::stack(&down_proj_vec, 0)?, None),
-                ))?);
-            // Use experts.0.{proj} prefix to match the actual weight paths for ISQ predicate matching
-            let expert0_vb = experts_vb.pp("0");
-            gate_proj = apply_immediate_isq(gate_proj, expert0_vb.pp("gate_proj"))?;
-            up_proj = apply_immediate_isq(up_proj, expert0_vb.pp("up_proj"))?;
-            down_proj = apply_immediate_isq(down_proj, expert0_vb.pp("down_proj"))?;
+            let mut gate_weights = Vec::new();
+            let mut gate_scales = Vec::new();
+            let mut up_weights = Vec::new();
+            let mut up_scales = Vec::new();
+            let mut down_weights = Vec::new();
+            let mut down_scales = Vec::new();
+
+            for i in 0..num_experts {
+                let expert_vb = experts_vb.pp(i);
+
+                // Load gate_proj FP8 weight and scale
+                // Qwen3 format: experts.{i}.gate_proj.weight (shape: [N, K] = [intermediate, hidden])
+                let gate_vb = expert_vb.pp("gate_proj");
+                let gate_weight = gate_vb.get_with_hints_dtype(
+                    (moe_intermediate_size, hidden_size),
+                    "weight",
+                    Default::default(),
+                    candle_core::DType::F8E4M3,
+                )?;
+                let gate_scale = gate_vb.get_with_hints_dtype(
+                    (
+                        moe_intermediate_size.div_ceil(weight_block_size[0]),
+                        hidden_size.div_ceil(weight_block_size[1]),
+                    ),
+                    "weight_scale_inv",
+                    Default::default(),
+                    candle_core::DType::F32,
+                )?;
+
+                // Load up_proj FP8 weight and scale
+                let up_vb = expert_vb.pp("up_proj");
+                let up_weight = up_vb.get_with_hints_dtype(
+                    (moe_intermediate_size, hidden_size),
+                    "weight",
+                    Default::default(),
+                    candle_core::DType::F8E4M3,
+                )?;
+                let up_scale = up_vb.get_with_hints_dtype(
+                    (
+                        moe_intermediate_size.div_ceil(weight_block_size[0]),
+                        hidden_size.div_ceil(weight_block_size[1]),
+                    ),
+                    "weight_scale_inv",
+                    Default::default(),
+                    candle_core::DType::F32,
+                )?;
+
+                // Load down_proj FP8 weight and scale
+                let down_vb = expert_vb.pp("down_proj");
+                let down_weight = down_vb.get_with_hints_dtype(
+                    (hidden_size, moe_intermediate_size),
+                    "weight",
+                    Default::default(),
+                    candle_core::DType::F8E4M3,
+                )?;
+                let down_scale = down_vb.get_with_hints_dtype(
+                    (
+                        hidden_size.div_ceil(weight_block_size[0]),
+                        moe_intermediate_size.div_ceil(weight_block_size[1]),
+                    ),
+                    "weight_scale_inv",
+                    Default::default(),
+                    candle_core::DType::F32,
+                )?;
+
+                gate_weights.push(gate_weight);
+                gate_scales.push(gate_scale);
+                up_weights.push(up_weight);
+                up_scales.push(up_scale);
+                down_weights.push(down_weight);
+                down_scales.push(down_scale);
+            }
+
+            // Stack into BlockwiseFP8Linear - weights are already in [N, K] format per expert
+            let gate_proj: Arc<dyn QuantMethod> =
+                Arc::new(crate::BlockwiseFP8Linear::from_per_expert(
+                    gate_weights,
+                    gate_scales,
+                    weight_block_size.clone(),
+                    vb.dtype(), // not transposed - weights are [N, K]
+                )?);
+            let up_proj: Arc<dyn QuantMethod> =
+                Arc::new(crate::BlockwiseFP8Linear::from_per_expert(
+                    up_weights,
+                    up_scales,
+                    weight_block_size.clone(),
+                    vb.dtype(),
+                )?);
+            let down_proj: Arc<dyn QuantMethod> =
+                Arc::new(crate::BlockwiseFP8Linear::from_per_expert(
+                    down_weights,
+                    down_scales,
+                    weight_block_size,
+                    vb.dtype(),
+                )?);
 
             (gate_proj, up_proj, down_proj)
         } else {
