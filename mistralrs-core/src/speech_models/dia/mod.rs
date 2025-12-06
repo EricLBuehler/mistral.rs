@@ -382,13 +382,16 @@ impl DiaPipeline {
         text: &str,
         cfg: &SpeechGenerationConfig,
     ) -> Result<SpeechGenerationOutput> {
-        let SpeechGenerationConfig::Dia {
-            max_tokens,
-            cfg_scale,
-            temperature,
-            top_p,
-            top_k,
-        } = cfg;
+        let (max_tokens, cfg_scale, temperature, top_p, top_k) = match cfg {
+            SpeechGenerationConfig::Dia {
+                max_tokens,
+                cfg_scale,
+                temperature,
+                top_p,
+                top_k,
+            } => (*max_tokens, *cfg_scale, *temperature, *top_p, *top_k),
+            _ => panic!("Expected Dia config for Dia pipeline"),
+        };
 
         let audio_pad_value = self.cfg.data.audio_pad_value as u32;
         let audio_eos_value = self.cfg.data.audio_eos_value as u32;
@@ -440,10 +443,10 @@ impl DiaPipeline {
                 &dec_positions,
                 &mut decoder_self_attn_cache,
                 &mut decoder_cross_attn_cache,
-                *cfg_scale,
-                *temperature,
-                *top_p,
-                *top_k,
+                cfg_scale,
+                temperature,
+                top_p,
+                top_k,
                 &mut rng,
                 dec_step,
             )?;
