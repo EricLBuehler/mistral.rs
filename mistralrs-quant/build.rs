@@ -194,6 +194,8 @@ fn main() -> Result<(), String> {
             lib_files.push("kernels/marlin/marlin_matmul_awq_bf16.cu");
             lib_files.push("kernels/marlin/marlin_repack.cu");
             lib_files.push("kernels/blockwise_fp8/blockwise_fp8.cu");
+            lib_files.push("kernels/blockwise_fp8/blockwise_fp8_gemm.cu");
+            lib_files.push("kernels/blockwise_fp8/blockwise_fp8_moe_wmma.cu");
             lib_files.push("kernels/scalar_fp8/scalar_fp8.cu");
             lib_files.push("kernels/vector_fp8/vector_fp8.cu");
         } else {

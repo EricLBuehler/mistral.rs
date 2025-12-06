@@ -585,6 +585,536 @@ impl CustomOp1 for Fp8BlockwiseQuantize {
 /// - Returns a tuple of (quantized_weight, scales)
 /// - quantized_weight is fp8
 /// - scales is f32
+///
+/// Blockwise FP8 GEMM: output = input @ weight^T
+/// - input: [M, K] in f16/bf16/f32
+/// - weight: [N, K] in FP8
+/// - weight_scale: [N/block_y, K/block_x] in f32
+/// - output: [M, N] in same dtype as input
+#[cfg(feature = "cuda")]
+pub fn blockwise_fp8_gemm(
+    input: &Tensor,
+    weight: &Tensor,
+    weight_scale: &Tensor,
+    weight_block_size: &[usize],
+) -> Result<Tensor> {
+    use candle_core::{CudaStorage, Device, Storage};
+    use half::{bf16, f16};
+
+    use crate::{blockwise_fp8::ffi, utils::slice_ptr};
+
+    if !ffi::HAVE_BLOCKWISE_DEQUANT_KERNELS {
+        candle_core::bail!("Do not have blockwise FP8 GEMM kernels.");
+    }
+
+    if !matches!(input.device(), Device::Cuda(_)) {
+        candle_core::bail!("Blockwise FP8 GEMM only supported on CUDA");
+    }
+
+    let input = input.contiguous()?;
+    let weight = weight.contiguous()?;
+    let weight_scale = weight_scale.contiguous()?;
+
+    let input_l = input.layout();
+    let weight_l = weight.layout();
+    let scale_l = weight_scale.layout();
+
+    if input.dims().len() != 2 {
+        candle_core::bail!("Expected input to be rank 2, got {:?}", input.dims());
+    }
+    if weight.dims().len() != 2 {
+        candle_core::bail!("Expected weight to be rank 2, got {:?}", weight.dims());
+    }
+    if weight_block_size.len() != 2 {
+        candle_core::bail!("Expected weight_block_size to have length 2");
+    }
+
+    let m = input.dim(0)? as i32;
+    let k = input.dim(1)? as i32;
+    let n = weight.dim(0)? as i32;
+
+    if weight.dim(1)? as i32 != k {
+        candle_core::bail!(
+            "Weight K dimension {} doesn't match input K dimension {}",
+            weight.dim(1)?,
+            k
+        );
+    }
+
+    let weight_block_size_y = weight_block_size[0] as i32;
+    let weight_block_size_x = weight_block_size[1] as i32;
+    let scale_stride = scale_l.stride()[0] as i32;
+
+    let dev = match input.device() {
+        Device::Cuda(dev) => dev,
+        _ => unreachable!(),
+    };
+
+    let output_shape = candle_core::Shape::from_dims(&[m as usize, n as usize]);
+
+    // Get weight storage
+    let weight_storage = weight.storage_and_layout().0;
+    let weight_s = match &*weight_storage {
+        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<float8::F8E4M3>()?,
+        _ => candle_core::bail!("Expected CUDA storage for weight"),
+    };
+    let (weight_ptr, _weight_guard) = slice_ptr(weight_s, weight_l.start_offset());
+
+    // Get scale storage
+    let scale_storage = weight_scale.storage_and_layout().0;
+    let scale_s = match &*scale_storage {
+        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f32>()?,
+        _ => candle_core::bail!("Expected CUDA storage for scale"),
+    };
+    let (scale_ptr, _scale_guard) = slice_ptr(scale_s, scale_l.start_offset());
+
+    let output = match input.dtype() {
+        DType::F16 => {
+            let input_storage = input.storage_and_layout().0;
+            let input_s = match &*input_storage {
+                Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
+                _ => candle_core::bail!("Expected CUDA storage for input"),
+            };
+            let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
+
+            let output_buf = dev.alloc_zeros::<f16>(output_shape.elem_count())?;
+            let (output_ptr, _output_guard) = slice_ptr(&output_buf, 0);
+
+            unsafe {
+                ffi::launch_blockwise_fp8_gemm_f16(
+                    input_ptr as *const _,
+                    weight_ptr as *const _,
+                    scale_ptr as *const _,
+                    output_ptr as *mut _,
+                    m,
+                    n,
+                    k,
+                    weight_block_size_y,
+                    weight_block_size_x,
+                    scale_stride,
+                    dev.cuda_stream().cu_stream(),
+                );
+            }
+
+            drop(_output_guard);
+            CudaStorage::wrap_cuda_slice(output_buf, dev.clone())
+        }
+        DType::BF16 => {
+            let input_storage = input.storage_and_layout().0;
+            let input_s = match &*input_storage {
+                Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
+                _ => candle_core::bail!("Expected CUDA storage for input"),
+            };
+            let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
+
+            let output_buf = dev.alloc_zeros::<bf16>(output_shape.elem_count())?;
+            let (output_ptr, _output_guard) = slice_ptr(&output_buf, 0);
+
+            unsafe {
+                ffi::launch_blockwise_fp8_gemm_bf16(
+                    input_ptr as *const _,
+                    weight_ptr as *const _,
+                    scale_ptr as *const _,
+                    output_ptr as *mut _,
+                    m,
+                    n,
+                    k,
+                    weight_block_size_y,
+                    weight_block_size_x,
+                    scale_stride,
+                    dev.cuda_stream().cu_stream(),
+                );
+            }
+
+            drop(_output_guard);
+            CudaStorage::wrap_cuda_slice(output_buf, dev.clone())
+        }
+        DType::F32 => {
+            let input_storage = input.storage_and_layout().0;
+            let input_s = match &*input_storage {
+                Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f32>()?,
+                _ => candle_core::bail!("Expected CUDA storage for input"),
+            };
+            let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
+
+            let output_buf = dev.alloc_zeros::<f32>(output_shape.elem_count())?;
+            let (output_ptr, _output_guard) = slice_ptr(&output_buf, 0);
+
+            unsafe {
+                ffi::launch_blockwise_fp8_gemm_f32(
+                    input_ptr as *const _,
+                    weight_ptr as *const _,
+                    scale_ptr as *const _,
+                    output_ptr as *mut _,
+                    m,
+                    n,
+                    k,
+                    weight_block_size_y,
+                    weight_block_size_x,
+                    scale_stride,
+                    dev.cuda_stream().cu_stream(),
+                );
+            }
+
+            drop(_output_guard);
+            CudaStorage::wrap_cuda_slice(output_buf, dev.clone())
+        }
+        other => candle_core::bail!("Unexpected input dtype for blockwise FP8 GEMM: {other:?}"),
+    };
+
+    Ok(Tensor::from((Storage::Cuda(output), output_shape)))
+}
+
+/// Blockwise FP8 MoE GEMM
+/// - input: [M, K]
+/// - weights: [num_experts, N, K] in FP8
+/// - weight_scales: [num_experts, N/block_y, K/block_x]
+/// - sorted_token_ids: [M]
+/// - expert_ids: [M]
+/// - topk_weights: [M] optional
+/// - output: [M, N]
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
+pub fn blockwise_fp8_moe_gemm(
+    input: &Tensor,
+    weights: &Tensor,
+    weight_scales: &Tensor,
+    sorted_token_ids: &Tensor,
+    expert_ids: &Tensor,
+    topk_weights: Option<&Tensor>,
+    num_experts: usize,
+    topk: usize,
+    weight_block_size: &[usize],
+    use_wmma: bool,
+    transposed: bool,
+) -> Result<Tensor> {
+    use candle_core::{CudaStorage, Device, Storage};
+    use half::{bf16, f16};
+
+    use crate::{blockwise_fp8::ffi, utils::slice_ptr};
+
+    if !ffi::HAVE_BLOCKWISE_DEQUANT_KERNELS {
+        candle_core::bail!("Do not have blockwise FP8 MoE GEMM kernels.");
+    }
+
+    if !matches!(input.device(), Device::Cuda(_)) {
+        candle_core::bail!("Blockwise FP8 MoE GEMM only supported on CUDA");
+    }
+
+    let input = input.contiguous()?;
+    let weights = weights.contiguous()?;
+    let weight_scales = weight_scales.contiguous()?;
+    let sorted_token_ids = sorted_token_ids.contiguous()?;
+    let expert_ids = expert_ids.contiguous()?;
+
+    let input_l = input.layout();
+    let weights_l = weights.layout();
+    let scales_l = weight_scales.layout();
+
+    if input.dims().len() != 2 {
+        candle_core::bail!("Expected input to be rank 2");
+    }
+    if weights.dims().len() != 3 {
+        candle_core::bail!(
+            "Expected weights to be rank 3 [num_experts, N, K] or [num_experts, K, N]"
+        );
+    }
+    if weight_block_size.len() != 2 {
+        candle_core::bail!("Expected weight_block_size to have length 2");
+    }
+
+    let m = input.dim(0)? as i32;
+    let k = input.dim(1)? as i32;
+    let (n, weight_k) = if transposed {
+        (weights.dim(2)? as i32, weights.dim(1)? as i32)
+    } else {
+        (weights.dim(1)? as i32, weights.dim(2)? as i32)
+    };
+
+    if weight_k != k {
+        candle_core::bail!(
+            "Weight K dimension {} doesn't match input K dimension {}",
+            weight_k,
+            k
+        );
+    }
+
+    let weight_block_size_y = weight_block_size[0] as i32;
+    let weight_block_size_x = weight_block_size[1] as i32;
+
+    // Scale dimensions depend on weight layout
+    let (scale_n_blocks, scale_k_blocks) = if transposed {
+        (
+            (k as usize).div_ceil(weight_block_size[0]) as i32,
+            (n as usize).div_ceil(weight_block_size[1]) as i32,
+        )
+    } else {
+        (
+            (n as usize).div_ceil(weight_block_size[0]) as i32,
+            (k as usize).div_ceil(weight_block_size[1]) as i32,
+        )
+    };
+
+    let dev = match input.device() {
+        Device::Cuda(dev) => dev,
+        _ => unreachable!(),
+    };
+
+    let output_shape = candle_core::Shape::from_dims(&[m as usize, n as usize]);
+
+    // Get weight storage
+    let weight_storage = weights.storage_and_layout().0;
+    let weight_s = match &*weight_storage {
+        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<float8::F8E4M3>()?,
+        _ => candle_core::bail!("Expected CUDA storage for weights"),
+    };
+    let (weight_ptr, _weight_guard) = slice_ptr(weight_s, weights_l.start_offset());
+
+    // Get scale storage
+    let scale_storage = weight_scales.storage_and_layout().0;
+    let scale_s = match &*scale_storage {
+        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f32>()?,
+        _ => candle_core::bail!("Expected CUDA storage for scales"),
+    };
+    let (scale_ptr, _scale_guard) = slice_ptr(scale_s, scales_l.start_offset());
+
+    // Get sorted_token_ids storage
+    let token_storage = sorted_token_ids.storage_and_layout().0;
+    let token_s = match &*token_storage {
+        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<i32>()?,
+        _ => candle_core::bail!("Expected CUDA storage for sorted_token_ids"),
+    };
+    let (token_ptr, _token_guard) = slice_ptr(token_s, sorted_token_ids.layout().start_offset());
+
+    // Get expert_ids storage
+    let expert_storage = expert_ids.storage_and_layout().0;
+    let expert_s = match &*expert_storage {
+        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<i32>()?,
+        _ => candle_core::bail!("Expected CUDA storage for expert_ids"),
+    };
+    let (expert_ptr, _expert_guard) = slice_ptr(expert_s, expert_ids.layout().start_offset());
+
+    // Get topk_weights storage if present
+    let topk_ptr = if let Some(topk_w) = topk_weights {
+        let topk_storage = topk_w.storage_and_layout().0;
+        let topk_s = match &*topk_storage {
+            Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f32>()?,
+            _ => candle_core::bail!("Expected CUDA storage for topk_weights"),
+        };
+        let (ptr, _guard) = slice_ptr(topk_s, topk_w.layout().start_offset());
+        ptr as *const f32
+    } else {
+        std::ptr::null()
+    };
+
+    let output = match input.dtype() {
+        DType::F16 => {
+            let input_storage = input.storage_and_layout().0;
+            let input_s = match &*input_storage {
+                Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
+                _ => candle_core::bail!("Expected CUDA storage for input"),
+            };
+            let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
+
+            let output_buf = dev.alloc_zeros::<f16>(output_shape.elem_count())?;
+            let (output_ptr, _output_guard) = slice_ptr(&output_buf, 0);
+
+            unsafe {
+                if use_wmma {
+                    if transposed {
+                        ffi::launch_blockwise_fp8_moe_gemm_wmma_transposed_f16(
+                            input_ptr as *const _,
+                            weight_ptr as *const _,
+                            scale_ptr as *const _,
+                            token_ptr as *const _,
+                            expert_ptr as *const _,
+                            topk_ptr,
+                            output_ptr as *mut _,
+                            num_experts as i32,
+                            topk as i32,
+                            m,
+                            n,
+                            k,
+                            weight_block_size_y,
+                            weight_block_size_x,
+                            scale_n_blocks,
+                            scale_k_blocks,
+                            dev.cuda_stream().cu_stream(),
+                        );
+                    } else {
+                        ffi::launch_blockwise_fp8_moe_gemm_wmma_f16(
+                            input_ptr as *const _,
+                            weight_ptr as *const _,
+                            scale_ptr as *const _,
+                            token_ptr as *const _,
+                            expert_ptr as *const _,
+                            topk_ptr,
+                            output_ptr as *mut _,
+                            num_experts as i32,
+                            topk as i32,
+                            m,
+                            n,
+                            k,
+                            weight_block_size_y,
+                            weight_block_size_x,
+                            scale_n_blocks,
+                            scale_k_blocks,
+                            dev.cuda_stream().cu_stream(),
+                        );
+                    }
+                } else if transposed {
+                    ffi::launch_blockwise_fp8_moe_gemm_transposed_f16(
+                        input_ptr as *const _,
+                        weight_ptr as *const _,
+                        scale_ptr as *const _,
+                        token_ptr as *const _,
+                        expert_ptr as *const _,
+                        topk_ptr,
+                        output_ptr as *mut _,
+                        num_experts as i32,
+                        topk as i32,
+                        m,
+                        n,
+                        k,
+                        weight_block_size_y,
+                        weight_block_size_x,
+                        scale_n_blocks,
+                        scale_k_blocks,
+                        dev.cuda_stream().cu_stream(),
+                    );
+                } else {
+                    ffi::launch_blockwise_fp8_moe_gemm_f16(
+                        input_ptr as *const _,
+                        weight_ptr as *const _,
+                        scale_ptr as *const _,
+                        token_ptr as *const _,
+                        expert_ptr as *const _,
+                        topk_ptr,
+                        output_ptr as *mut _,
+                        num_experts as i32,
+                        topk as i32,
+                        m,
+                        n,
+                        k,
+                        weight_block_size_y,
+                        weight_block_size_x,
+                        scale_n_blocks,
+                        scale_k_blocks,
+                        dev.cuda_stream().cu_stream(),
+                    );
+                }
+            }
+
+            drop(_output_guard);
+            CudaStorage::wrap_cuda_slice(output_buf, dev.clone())
+        }
+        DType::BF16 => {
+            let input_storage = input.storage_and_layout().0;
+            let input_s = match &*input_storage {
+                Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
+                _ => candle_core::bail!("Expected CUDA storage for input"),
+            };
+            let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
+
+            let output_buf = dev.alloc_zeros::<bf16>(output_shape.elem_count())?;
+            let (output_ptr, _output_guard) = slice_ptr(&output_buf, 0);
+
+            unsafe {
+                if use_wmma {
+                    if transposed {
+                        ffi::launch_blockwise_fp8_moe_gemm_wmma_transposed_bf16(
+                            input_ptr as *const _,
+                            weight_ptr as *const _,
+                            scale_ptr as *const _,
+                            token_ptr as *const _,
+                            expert_ptr as *const _,
+                            topk_ptr,
+                            output_ptr as *mut _,
+                            num_experts as i32,
+                            topk as i32,
+                            m,
+                            n,
+                            k,
+                            weight_block_size_y,
+                            weight_block_size_x,
+                            scale_n_blocks,
+                            scale_k_blocks,
+                            dev.cuda_stream().cu_stream(),
+                        );
+                    } else {
+                        ffi::launch_blockwise_fp8_moe_gemm_wmma_bf16(
+                            input_ptr as *const _,
+                            weight_ptr as *const _,
+                            scale_ptr as *const _,
+                            token_ptr as *const _,
+                            expert_ptr as *const _,
+                            topk_ptr,
+                            output_ptr as *mut _,
+                            num_experts as i32,
+                            topk as i32,
+                            m,
+                            n,
+                            k,
+                            weight_block_size_y,
+                            weight_block_size_x,
+                            scale_n_blocks,
+                            scale_k_blocks,
+                            dev.cuda_stream().cu_stream(),
+                        );
+                    }
+                } else if transposed {
+                    ffi::launch_blockwise_fp8_moe_gemm_transposed_bf16(
+                        input_ptr as *const _,
+                        weight_ptr as *const _,
+                        scale_ptr as *const _,
+                        token_ptr as *const _,
+                        expert_ptr as *const _,
+                        topk_ptr,
+                        output_ptr as *mut _,
+                        num_experts as i32,
+                        topk as i32,
+                        m,
+                        n,
+                        k,
+                        weight_block_size_y,
+                        weight_block_size_x,
+                        scale_n_blocks,
+                        scale_k_blocks,
+                        dev.cuda_stream().cu_stream(),
+                    );
+                } else {
+                    ffi::launch_blockwise_fp8_moe_gemm_bf16(
+                        input_ptr as *const _,
+                        weight_ptr as *const _,
+                        scale_ptr as *const _,
+                        token_ptr as *const _,
+                        expert_ptr as *const _,
+                        topk_ptr,
+                        output_ptr as *mut _,
+                        num_experts as i32,
+                        topk as i32,
+                        m,
+                        n,
+                        k,
+                        weight_block_size_y,
+                        weight_block_size_x,
+                        scale_n_blocks,
+                        scale_k_blocks,
+                        dev.cuda_stream().cu_stream(),
+                    );
+                }
+            }
+
+            drop(_output_guard);
+            CudaStorage::wrap_cuda_slice(output_buf, dev.clone())
+        }
+        other => candle_core::bail!("Unexpected input dtype for blockwise FP8 MoE GEMM: {other:?}"),
+    };
+
+    Ok(Tensor::from((Storage::Cuda(output), output_shape)))
+}
+
 pub fn fp8_blockwise_quantize(
     #[allow(unused_variables)] input: &Tensor,
     #[allow(unused_variables)] weight_block_size: Vec<usize>,

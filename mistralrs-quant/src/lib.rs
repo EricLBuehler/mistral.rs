@@ -5,7 +5,6 @@ use std::{
     sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard},
 };
 
-use blockwise_fp8::blockwise_fp8_linear_b;
 use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
@@ -41,7 +40,10 @@ pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
 pub use afq::{AfqBits, AfqGroupSize, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParams, BnbQuantType};
-pub use blockwise_fp8::{fp8_blockwise_dequantize, fp8_blockwise_quantize};
+pub use blockwise_fp8::{
+    blockwise_fp8_linear_b, blockwise_fp8_stacked_linear, fp8_blockwise_dequantize,
+    fp8_blockwise_quantize, BlockwiseFP8Linear, BlockwiseFP8Stacked,
+};
 pub use distributed::{
     layers::{
         compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, FusedExperts, PackedExperts,
