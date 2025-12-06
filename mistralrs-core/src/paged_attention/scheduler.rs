@@ -220,6 +220,11 @@ impl PagedAttentionScheduler {
                 get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
                 let mut seq_handle = get_mut_arcmutex!(seq);
                 self._allocate(&mut seq_handle);
+                // Check for prefix cache hit and report to logger
+                let seq_id = seq_handle.get_id();
+                if get_mut_arcmutex!(self.block_engine).last_allocate_had_cache_hit(seq_id) > 0 {
+                    logger.add_prefix_cache_hit();
+                }
             }
 
             let seq = self.waiting.pop_front().unwrap();
