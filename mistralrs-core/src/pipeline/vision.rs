@@ -684,7 +684,6 @@ impl Loader for VisionLoader {
                     0,
                     vec![&chunk],
                     &[0],
-                    &[0], // No prefix caching for ISQ calibration
                     &load_device,
                     None,
                     false,
