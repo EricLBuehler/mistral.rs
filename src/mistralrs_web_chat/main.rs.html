@@ -15,7 +15,7 @@
 <a href=#15 id=15 data-nosnippet>15</a>    best_device, parse_isq_value, IsqType, SearchEmbeddingModel, SpeechLoaderType,
 <a href=#16 id=16 data-nosnippet>16</a>    SpeechModelBuilder, TextModelBuilder, VisionModelBuilder,
 <a href=#17 id=17 data-nosnippet>17</a>};
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>std::{net::SocketAddr, sync::Arc};
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>std::sync::Arc;
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>tokio::{fs, net::TcpListener};
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>tower_http::services::ServeDir;
 <a href=#21 id=21 data-nosnippet>21</a>
@@ -27,7 +27,7 @@
 <a href=#27 id=27 data-nosnippet>27</a>
 <a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>handlers::{api::<span class="kw-2">*</span>, websocket::ws_handler};
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>models::LoadedModel;
-<a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>types::{AppState, Cli};
+<a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>types::{AppState, Cli, GenerationParams};
 <a href=#31 id=31 data-nosnippet>31</a>
 <a href=#32 id=32 data-nosnippet>32</a><span class="kw">static </span>STATIC_DIR: Dir = <span class="macro">include_dir!</span>(<span class="string">"$CARGO_MANIFEST_DIR/static"</span>);
 <a href=#33 id=33 data-nosnippet>33</a>
@@ -156,41 +156,57 @@
 <a href=#156 id=156 data-nosnippet>156</a>        }
 <a href=#157 id=157 data-nosnippet>157</a>    }
 <a href=#158 id=158 data-nosnippet>158</a>
-<a href=#159 id=159 data-nosnippet>159</a>    <span class="kw">let </span>app_state = Arc::new(AppState {
-<a href=#160 id=160 data-nosnippet>160</a>        models,
-<a href=#161 id=161 data-nosnippet>161</a>        current: tokio::sync::RwLock::new(<span class="prelude-val">None</span>),
-<a href=#162 id=162 data-nosnippet>162</a>        chats_dir,
-<a href=#163 id=163 data-nosnippet>163</a>        speech_dir: speech_dir.clone(),
-<a href=#164 id=164 data-nosnippet>164</a>        current_chat: tokio::sync::RwLock::new(<span class="prelude-val">None</span>),
-<a href=#165 id=165 data-nosnippet>165</a>        next_chat_id: tokio::sync::RwLock::new(next_id),
-<a href=#166 id=166 data-nosnippet>166</a>    });
-<a href=#167 id=167 data-nosnippet>167</a>
-<a href=#168 id=168 data-nosnippet>168</a>    <span class="kw">let </span>app = Router::new()
-<a href=#169 id=169 data-nosnippet>169</a>        .route(<span class="string">"/ws"</span>, get(ws_handler))
-<a href=#170 id=170 data-nosnippet>170</a>        .route(<span class="string">"/api/upload_image"</span>, post(upload_image))
-<a href=#171 id=171 data-nosnippet>171</a>        .route(<span class="string">"/api/upload_text"</span>, post(upload_text))
-<a href=#172 id=172 data-nosnippet>172</a>        .route(<span class="string">"/api/upload_audio"</span>, post(upload_audio))
-<a href=#173 id=173 data-nosnippet>173</a>        .route(<span class="string">"/api/list_models"</span>, get(list_models))
-<a href=#174 id=174 data-nosnippet>174</a>        .route(<span class="string">"/api/select_model"</span>, post(select_model))
-<a href=#175 id=175 data-nosnippet>175</a>        .route(<span class="string">"/api/list_chats"</span>, get(list_chats))
-<a href=#176 id=176 data-nosnippet>176</a>        .route(<span class="string">"/api/new_chat"</span>, post(new_chat))
-<a href=#177 id=177 data-nosnippet>177</a>        .route(<span class="string">"/api/delete_chat"</span>, post(delete_chat))
-<a href=#178 id=178 data-nosnippet>178</a>        .route(<span class="string">"/api/load_chat"</span>, post(load_chat))
-<a href=#179 id=179 data-nosnippet>179</a>        .route(<span class="string">"/api/rename_chat"</span>, post(rename_chat))
-<a href=#180 id=180 data-nosnippet>180</a>        .route(<span class="string">"/api/append_message"</span>, post(append_message))
-<a href=#181 id=181 data-nosnippet>181</a>        <span class="comment">// Text-to-speech generation endpoint
-<a href=#182 id=182 data-nosnippet>182</a>        </span>.route(<span class="string">"/api/generate_speech"</span>, post(generate_speech))
-<a href=#183 id=183 data-nosnippet>183</a>        <span class="comment">// Serve generated speech files
-<a href=#184 id=184 data-nosnippet>184</a>        </span>.nest_service(<span class="string">"/speech"</span>, get_service(ServeDir::new(speech_dir.clone())))
-<a href=#185 id=185 data-nosnippet>185</a>        <span class="comment">// Serve embedded static assets for the root path
-<a href=#186 id=186 data-nosnippet>186</a>        </span>.route(<span class="string">"/"</span>, get(static_handler))
-<a href=#187 id=187 data-nosnippet>187</a>        .route(<span class="string">"/{*path}"</span>, get(static_handler))
-<a href=#188 id=188 data-nosnippet>188</a>        .layer(DefaultBodyLimit::max(<span class="number">50 </span>* <span class="number">1024 </span>* <span class="number">1024</span>))
-<a href=#189 id=189 data-nosnippet>189</a>        .with_state(app_state.clone());
-<a href=#190 id=190 data-nosnippet>190</a>
-<a href=#191 id=191 data-nosnippet>191</a>    <span class="kw">let </span>addr: SocketAddr = ([<span class="number">0</span>, <span class="number">0</span>, <span class="number">0</span>, <span class="number">0</span>], cli.port.unwrap_or(<span class="number">8080</span>)).into();
-<a href=#192 id=192 data-nosnippet>192</a>    <span class="kw">let </span>listener = TcpListener::bind(addr).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#193 id=193 data-nosnippet>193</a>    <span class="macro">println!</span>(<span class="string">"🔌 listening on http://{addr}"</span>);
-<a href=#194 id=194 data-nosnippet>194</a>    axum::serve(listener, app).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#195 id=195 data-nosnippet>195</a>    <span class="prelude-val">Ok</span>(())
-<a href=#196 id=196 data-nosnippet>196</a>}</code></pre></div></section></main></body></html>
+<a href=#159 id=159 data-nosnippet>159</a>    <span class="comment">// Build default generation parameters from CLI
+<a href=#160 id=160 data-nosnippet>160</a>    </span><span class="kw">let </span>default_params = GenerationParams {
+<a href=#161 id=161 data-nosnippet>161</a>        temperature: cli.temperature,
+<a href=#162 id=162 data-nosnippet>162</a>        top_p: cli.top_p,
+<a href=#163 id=163 data-nosnippet>163</a>        top_k: cli.top_k,
+<a href=#164 id=164 data-nosnippet>164</a>        max_tokens: cli.max_tokens,
+<a href=#165 id=165 data-nosnippet>165</a>        repetition_penalty: cli.repetition_penalty,
+<a href=#166 id=166 data-nosnippet>166</a>        system_prompt: cli.system_prompt.clone(),
+<a href=#167 id=167 data-nosnippet>167</a>    };
+<a href=#168 id=168 data-nosnippet>168</a>
+<a href=#169 id=169 data-nosnippet>169</a>    <span class="kw">let </span>app_state = Arc::new(AppState {
+<a href=#170 id=170 data-nosnippet>170</a>        models,
+<a href=#171 id=171 data-nosnippet>171</a>        current: tokio::sync::RwLock::new(<span class="prelude-val">None</span>),
+<a href=#172 id=172 data-nosnippet>172</a>        chats_dir,
+<a href=#173 id=173 data-nosnippet>173</a>        speech_dir: speech_dir.clone(),
+<a href=#174 id=174 data-nosnippet>174</a>        current_chat: tokio::sync::RwLock::new(<span class="prelude-val">None</span>),
+<a href=#175 id=175 data-nosnippet>175</a>        next_chat_id: tokio::sync::RwLock::new(next_id),
+<a href=#176 id=176 data-nosnippet>176</a>        default_params,
+<a href=#177 id=177 data-nosnippet>177</a>        search_enabled: cli.enable_search,
+<a href=#178 id=178 data-nosnippet>178</a>    });
+<a href=#179 id=179 data-nosnippet>179</a>
+<a href=#180 id=180 data-nosnippet>180</a>    <span class="kw">let </span>app = Router::new()
+<a href=#181 id=181 data-nosnippet>181</a>        .route(<span class="string">"/ws"</span>, get(ws_handler))
+<a href=#182 id=182 data-nosnippet>182</a>        .route(<span class="string">"/api/upload_image"</span>, post(upload_image))
+<a href=#183 id=183 data-nosnippet>183</a>        .route(<span class="string">"/api/upload_text"</span>, post(upload_text))
+<a href=#184 id=184 data-nosnippet>184</a>        .route(<span class="string">"/api/upload_audio"</span>, post(upload_audio))
+<a href=#185 id=185 data-nosnippet>185</a>        .route(<span class="string">"/api/list_models"</span>, get(list_models))
+<a href=#186 id=186 data-nosnippet>186</a>        .route(<span class="string">"/api/select_model"</span>, post(select_model))
+<a href=#187 id=187 data-nosnippet>187</a>        .route(<span class="string">"/api/list_chats"</span>, get(list_chats))
+<a href=#188 id=188 data-nosnippet>188</a>        .route(<span class="string">"/api/new_chat"</span>, post(new_chat))
+<a href=#189 id=189 data-nosnippet>189</a>        .route(<span class="string">"/api/delete_chat"</span>, post(delete_chat))
+<a href=#190 id=190 data-nosnippet>190</a>        .route(<span class="string">"/api/load_chat"</span>, post(load_chat))
+<a href=#191 id=191 data-nosnippet>191</a>        .route(<span class="string">"/api/rename_chat"</span>, post(rename_chat))
+<a href=#192 id=192 data-nosnippet>192</a>        .route(<span class="string">"/api/append_message"</span>, post(append_message))
+<a href=#193 id=193 data-nosnippet>193</a>        <span class="comment">// Generation settings endpoints
+<a href=#194 id=194 data-nosnippet>194</a>        </span>.route(<span class="string">"/api/settings"</span>, get(get_settings))
+<a href=#195 id=195 data-nosnippet>195</a>        <span class="comment">// Text-to-speech generation endpoint
+<a href=#196 id=196 data-nosnippet>196</a>        </span>.route(<span class="string">"/api/generate_speech"</span>, post(generate_speech))
+<a href=#197 id=197 data-nosnippet>197</a>        <span class="comment">// Serve generated speech files
+<a href=#198 id=198 data-nosnippet>198</a>        </span>.nest_service(<span class="string">"/speech"</span>, get_service(ServeDir::new(speech_dir.clone())))
+<a href=#199 id=199 data-nosnippet>199</a>        <span class="comment">// Serve embedded static assets for the root path
+<a href=#200 id=200 data-nosnippet>200</a>        </span>.route(<span class="string">"/"</span>, get(static_handler))
+<a href=#201 id=201 data-nosnippet>201</a>        .route(<span class="string">"/{*path}"</span>, get(static_handler))
+<a href=#202 id=202 data-nosnippet>202</a>        .layer(DefaultBodyLimit::max(<span class="number">50 </span>* <span class="number">1024 </span>* <span class="number">1024</span>))
+<a href=#203 id=203 data-nosnippet>203</a>        .with_state(app_state.clone());
+<a href=#204 id=204 data-nosnippet>204</a>
+<a href=#205 id=205 data-nosnippet>205</a>    <span class="kw">let </span>host = cli.host.as_deref().unwrap_or(<span class="string">"0.0.0.0"</span>);
+<a href=#206 id=206 data-nosnippet>206</a>    <span class="kw">let </span>port = cli.port.unwrap_or(<span class="number">8080</span>);
+<a href=#207 id=207 data-nosnippet>207</a>    <span class="kw">let </span>bind_addr = <span class="macro">format!</span>(<span class="string">"{}:{}"</span>, host, port);
+<a href=#208 id=208 data-nosnippet>208</a>    <span class="kw">let </span>listener = TcpListener::bind(<span class="kw-2">&amp;</span>bind_addr).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#209 id=209 data-nosnippet>209</a>    <span class="macro">println!</span>(<span class="string">"🔌 Listening on http://{}"</span>, bind_addr);
+<a href=#210 id=210 data-nosnippet>210</a>    axum::serve(listener, app).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#211 id=211 data-nosnippet>211</a>    <span class="prelude-val">Ok</span>(())
+<a href=#212 id=212 data-nosnippet>212</a>}</code></pre></div></section></main></body></html>
