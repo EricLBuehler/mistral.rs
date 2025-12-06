@@ -569,7 +569,7 @@
 <a href=#569 id=569 data-nosnippet>569</a>            <span class="comment">// Allocate Mamba state pool slot for hybrid models
 <a href=#570 id=570 data-nosnippet>570</a>            </span>{
 <a href=#571 id=571 data-nosnippet>571</a>                <span class="kw">let </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
-<a href=#572 id=572 data-nosnippet>572</a>                <span class="kw">if </span>pipeline.cache().is_hybrid() {
+<a href=#572 id=572 data-nosnippet>572</a>                <span class="kw">if </span>!pipeline.get_metadata().no_kv_cache &amp;&amp; pipeline.cache().is_hybrid() {
 <a href=#573 id=573 data-nosnippet>573</a>                    <span class="kw">let </span><span class="kw-2">mut </span>hybrid_cache = pipeline.cache().hybrid();
 <a href=#574 id=574 data-nosnippet>574</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(slot_idx) = hybrid_cache.allocate_seq() {
 <a href=#575 id=575 data-nosnippet>575</a>                        seq.set_mamba_state_idx(<span class="prelude-val">Some</span>(slot_idx));

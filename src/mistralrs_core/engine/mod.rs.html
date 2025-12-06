@@ -649,7 +649,7 @@
 <a href=#649 id=649 data-nosnippet>649</a>            <span class="comment">// Free Mamba state pool slots for finished sequences (hybrid models)
 <a href=#650 id=650 data-nosnippet>650</a>            </span>{
 <a href=#651 id=651 data-nosnippet>651</a>                <span class="kw">let </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
-<a href=#652 id=652 data-nosnippet>652</a>                <span class="kw">if </span>pipeline.cache().is_hybrid() {
+<a href=#652 id=652 data-nosnippet>652</a>                <span class="kw">if </span>!pipeline.get_metadata().no_kv_cache &amp;&amp; pipeline.cache().is_hybrid() {
 <a href=#653 id=653 data-nosnippet>653</a>                    <span class="kw">let </span>mamba_indices = scheduler.get_finished_mamba_indices();
 <a href=#654 id=654 data-nosnippet>654</a>                    <span class="kw">if </span>!mamba_indices.is_empty() {
 <a href=#655 id=655 data-nosnippet>655</a>                        <span class="kw">let </span><span class="kw-2">mut </span>hybrid_cache = pipeline.cache().hybrid();
