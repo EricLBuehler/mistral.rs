@@ -569,7 +569,7 @@ impl Engine {
             // Allocate Mamba state pool slot for hybrid models
             {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
-                if pipeline.cache().is_hybrid() {
+                if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
                     let mut hybrid_cache = pipeline.cache().hybrid();
                     if let Some(slot_idx) = hybrid_cache.allocate_seq() {
                         seq.set_mamba_state_idx(Some(slot_idx));

@@ -284,11 +284,18 @@ macro_rules! get_embedding_paths {
             None, // no xlora
         )?;
 
-        let modules_config = $crate::api_get_file!(api, "modules.json", model_id);
-        let modules: Vec<$crate::pipeline::EmbeddingModule> =
-            serde_json::from_str(&std::fs::read_to_string(modules_config)?)?;
         let mut parsed_modules = Vec::new();
-        for module in modules {
+        let is_local = std::path::Path::new(&$this.model_id).exists();
+        let modules_path = if is_local {
+            model_id.join("modules.json")
+        } else {
+            $crate::api_get_file!(api, "modules.json", model_id)
+        };
+        
+        if modules_path.exists() {
+            let modules: Vec<$crate::pipeline::EmbeddingModule> =
+                serde_json::from_str(&std::fs::read_to_string(&modules_path)?)?;
+            for module in modules {
             match module.ty {
                 $crate::pipeline::EmbeddingModuleType::Transformer => {
                     parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Transformer {
@@ -325,6 +332,7 @@ macro_rules! get_embedding_paths {
                         path: module.path.clone(),
                     });
                 }
+            }
             }
         }
 

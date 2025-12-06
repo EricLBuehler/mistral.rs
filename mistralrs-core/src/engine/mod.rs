@@ -644,7 +644,7 @@ impl Engine {
             // Free Mamba state pool slots for finished sequences (hybrid models)
             {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
-                if pipeline.cache().is_hybrid() {
+                if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
                     let mamba_indices = scheduler.get_finished_mamba_indices();
                     if !mamba_indices.is_empty() {
                         let mut hybrid_cache = pipeline.cache().hybrid();
