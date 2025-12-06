@@ -291,48 +291,48 @@ macro_rules! get_embedding_paths {
         } else {
             $crate::api_get_file!(api, "modules.json", model_id)
         };
-        
+
         if modules_path.exists() {
             let modules: Vec<$crate::pipeline::EmbeddingModule> =
                 serde_json::from_str(&std::fs::read_to_string(&modules_path)?)?;
             for module in modules {
-            match module.ty {
-                $crate::pipeline::EmbeddingModuleType::Transformer => {
-                    parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Transformer {
-                        path: module.path.clone(),
-                    });
+                match module.ty {
+                    $crate::pipeline::EmbeddingModuleType::Transformer => {
+                        parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Transformer {
+                            path: module.path.clone(),
+                        });
+                    }
+                    $crate::pipeline::EmbeddingModuleType::Pooling => {
+                        parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Pooling {
+                            path: module.path.clone(),
+                            config: $crate::api_get_file!(
+                                api,
+                                &format!("{}/config.json", module.path),
+                                model_id
+                            ),
+                        });
+                    }
+                    $crate::pipeline::EmbeddingModuleType::Dense => {
+                        parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Dense {
+                            path: module.path.clone(),
+                            config: $crate::api_get_file!(
+                                api,
+                                &format!("{}/config.json", module.path),
+                                model_id
+                            ),
+                            model: $crate::api_get_file!(
+                                api,
+                                &format!("{}/model.safetensors", module.path),
+                                model_id
+                            ),
+                        });
+                    }
+                    $crate::pipeline::EmbeddingModuleType::Normalize => {
+                        parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Normalize {
+                            path: module.path.clone(),
+                        });
+                    }
                 }
-                $crate::pipeline::EmbeddingModuleType::Pooling => {
-                    parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Pooling {
-                        path: module.path.clone(),
-                        config: $crate::api_get_file!(
-                            api,
-                            &format!("{}/config.json", module.path),
-                            model_id
-                        ),
-                    });
-                }
-                $crate::pipeline::EmbeddingModuleType::Dense => {
-                    parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Dense {
-                        path: module.path.clone(),
-                        config: $crate::api_get_file!(
-                            api,
-                            &format!("{}/config.json", module.path),
-                            model_id
-                        ),
-                        model: $crate::api_get_file!(
-                            api,
-                            &format!("{}/model.safetensors", module.path),
-                            model_id
-                        ),
-                    });
-                }
-                $crate::pipeline::EmbeddingModuleType::Normalize => {
-                    parsed_modules.push($crate::pipeline::EmbeddingModulePaths::Normalize {
-                        path: module.path.clone(),
-                    });
-                }
-            }
             }
         }
 
