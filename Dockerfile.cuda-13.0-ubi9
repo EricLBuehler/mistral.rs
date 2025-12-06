@@ -1,0 +1,28 @@
+FROM nvidia/cuda:13.0.2-cudnn-devel-ubi9 AS builder
+
+RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN rustup update nightly && rustup default nightly
+
+WORKDIR /mistralrs
+COPY . .
+
+# Rayon threads are limited to minimize memory requirements in CI, avoiding OOM
+# Rust threads are increased with a nightly feature for faster compilation (single-threaded by default)
+ARG CUDA_COMPUTE_CAP=80
+ARG RAYON_NUM_THREADS=4
+ARG RUST_NUM_THREADS=4
+ARG RUSTFLAGS="-Z threads=${RUST_NUM_THREADS}"
+ARG WITH_FEATURES="cuda,cudnn"
+RUN cargo build --release --workspace --exclude mistralrs-pyo3 --features "${WITH_FEATURES}"
+
+# Stage 2: Minimal runtime environment
+FROM nvidia/cuda:13.0.2-cudnn-runtime-ubi9
+
+COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-bench /usr/local/bin/mistralrs-bench
+COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-server /usr/local/bin/mistralrs-server
+COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-web-chat /usr/local/bin/mistralrs-web-chat
+# Copy chat templates for users running models which may not include them
+COPY --from=builder /mistralrs/chat_templates /chat_templates
+
+ENV HUGGINGFACE_HUB_CACHE=/data PORT=1234
