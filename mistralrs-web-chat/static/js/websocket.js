@@ -8,14 +8,58 @@ let assistantDiv = null;
 let currentSpinner = null;
 
 /**
- * Initialize WebSocket connection
+ * Initialize WebSocket connection with reconnection support
  */
 function initWebSocket() {
-  ws = new WebSocket(`ws://${location.host}/ws`);
-  
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+  ws.addEventListener('open', () => {
+    console.log('WebSocket connected');
+    // Re-send the current chat ID if we have one
+    if (typeof currentChatId !== 'undefined' && currentChatId) {
+      ws.send(JSON.stringify({ chat_id: currentChatId }));
+    }
+    // Send system prompt if set
+    if (typeof getSetting === 'function') {
+      const sysPrompt = getSetting('system_prompt');
+      if (sysPrompt) {
+        ws.send(JSON.stringify({ set_system_prompt: sysPrompt }));
+      }
+    }
+  });
+
   ws.addEventListener('message', handleWebSocketMessage);
-  
+
+  ws.addEventListener('error', (e) => {
+    console.error('WebSocket error:', e);
+  });
+
+  ws.addEventListener('close', (e) => {
+    console.log('WebSocket closed:', e.code, e.reason);
+    hideSpinner();
+    // Auto-reconnect after a delay (unless it was a clean close)
+    if (e.code !== 1000) {
+      setTimeout(() => {
+        console.log('Attempting to reconnect...');
+        initWebSocket();
+      }, 2000);
+    }
+  });
+
   return ws;
+}
+
+/**
+ * Show an error message in the chat log
+ */
+function showError(message) {
+  const logEl = document.getElementById('log');
+  const errorDiv = document.createElement('div');
+  errorDiv.className = 'msg error-msg';
+  errorDiv.innerHTML = `<strong>Error:</strong> ${message}`;
+  logEl.appendChild(errorDiv);
+  logEl.scrollTop = logEl.scrollHeight;
 }
 
 /**
@@ -52,33 +96,46 @@ function hideSpinner() {
  * Handle incoming WebSocket messages
  */
 function handleWebSocketMessage(ev) {
-  const log = document.getElementById('log');
-  
-  if (ev.data === '[Context cleared]') { 
-    pendingClear = false; 
+  const logEl = document.getElementById('log');
+
+  // Handle system messages
+  if (ev.data === '[Context cleared]') {
+    pendingClear = false;
     hideSpinner();
-    return; 
+    return;
   }
-  
-  if (ev.data === 'Cannot clear while assistant is replying.') { 
-    pendingClear = false; 
-    alert(ev.data); 
-    return; 
+
+  if (ev.data === '[System prompt updated]') {
+    console.log('System prompt updated on server');
+    return;
   }
-  
+
+  if (ev.data === 'Cannot clear while assistant is replying.') {
+    pendingClear = false;
+    alert(ev.data);
+    return;
+  }
+
+  // Handle error messages from server
+  if (ev.data.startsWith('Error:') || ev.data.startsWith('No model selected') || ev.data.startsWith('Selected model not found')) {
+    hideSpinner();
+    showError(ev.data);
+    return;
+  }
+
   if (!assistantDiv) {
     hideSpinner();
     assistantDiv = append('', 'assistant');
   }
-  
+
   assistantBuf += ev.data;
   assistantDiv.innerHTML = renderMarkdown(assistantBuf);
   addCopyBtns(assistantDiv);
   fixLinks(assistantDiv);
   // Auto-scroll only if the user is already near the bottom
   const threshold = 20;
-  if (log.scrollHeight - log.clientHeight - log.scrollTop < threshold) {
-    log.scrollTop = log.scrollHeight;
+  if (logEl.scrollHeight - logEl.clientHeight - logEl.scrollTop < threshold) {
+    logEl.scrollTop = logEl.scrollHeight;
   }
 }
 
@@ -246,21 +303,25 @@ ${content}
   
   showSpinner();
   
-  // Send message, optionally with web search options
+  // Build message payload with generation params
+  const payload = {
+    content: msg,
+    generation_params: getGenerationParams()
+  };
+
+  // Add web search options if enabled
   const enableSearch = document.getElementById('enableSearch')?.checked;
   if (enableSearch) {
     const opts = {};
-    // Include selected context size (default medium)
     const sizeSelect = document.getElementById('searchContextSize');
     if (sizeSelect) {
       const sizeValue = sizeSelect.value;
       if (sizeValue) opts.search_context_size = sizeValue;
     }
-    const payload = { content: msg, web_search_options: opts };
-    ws.send(JSON.stringify(payload));
-  } else {
-    ws.send(msg);
+    payload.web_search_options = opts;
   }
+
+  ws.send(JSON.stringify(payload));
   input.value = ''; 
   
   // Clear uploaded files after sending
@@ -279,12 +340,12 @@ ${content}
 function initMessageSending() {
   const form = document.getElementById('form');
   const input = document.getElementById('input');
-  
+
   form.addEventListener('submit', ev => {
     ev.preventDefault();
     sendMessage();
   });
-  
+
   input.addEventListener('keydown', ev => {
     if (ev.key === 'Enter' && !ev.shiftKey) {
       if (ev.ctrlKey || ev.metaKey) {
@@ -294,15 +355,5 @@ function initMessageSending() {
         ev.preventDefault();
       }
     }
-  });
-  
-  ws.addEventListener('close', () => {
-    hideSpinner();
-    console.warn('WebSocket connection closed');
-  });
-  
-  ws.addEventListener('error', (error) => {
-    hideSpinner();
-    console.error('WebSocket error:', error);
   });
 }

@@ -8,6 +8,7 @@ use futures_util::stream::StreamExt;
 use mistralrs::{
     Model, RequestBuilder, TextMessageRole, TextMessages, VisionMessages, WebSearchOptions,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::Cursor;
 use std::mem;
@@ -19,8 +20,23 @@ use mistralrs::AudioInput;
 
 use crate::chat::append_chat_message;
 use crate::models::LoadedModel;
-use crate::types::AppState;
+use crate::types::{AppState, GenerationParams};
 use crate::utils::get_cache_dir;
+
+/// Generation parameters that can be sent per-message from the frontend
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MessageGenerationParams {
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub top_p: Option<f64>,
+    #[serde(default)]
+    pub top_k: Option<usize>,
+    #[serde(default)]
+    pub max_tokens: Option<usize>,
+    #[serde(default)]
+    pub repetition_penalty: Option<f32>,
+}
 
 const CLEAR_CMD: &str = "__CLEAR__";
 /// Context for managing vision messages and image buffer.
@@ -30,13 +46,52 @@ pub struct VisionContext<'a> {
     pub audio_buffer: &'a mut Vec<AudioInput>,
 }
 
-/// Aggregates frequently used parameters so that helper functions stay below
-/// Clippy’s `too_many_arguments` threshold.
 pub struct HandlerParams<'a> {
     pub socket: &'a mut WebSocket,
     pub app: &'a Arc<AppState>,
     pub streaming: &'a mut bool,
     pub active_chat_id: &'a Option<String>,
+    pub gen_params: Option<MessageGenerationParams>,
+    #[allow(dead_code)] // Reserved for future use (e.g., per-request system prompt override)
+    pub system_prompt: &'a Option<String>,
+}
+
+/// Apply generation parameters to a RequestBuilder
+fn apply_gen_params(
+    mut builder: RequestBuilder,
+    params: &Option<MessageGenerationParams>,
+    defaults: &GenerationParams,
+) -> RequestBuilder {
+    // Use provided params or fall back to defaults
+    let temp = params
+        .as_ref()
+        .and_then(|p| p.temperature)
+        .unwrap_or(defaults.temperature);
+    let top_p = params
+        .as_ref()
+        .and_then(|p| p.top_p)
+        .unwrap_or(defaults.top_p);
+    let top_k = params
+        .as_ref()
+        .and_then(|p| p.top_k)
+        .unwrap_or(defaults.top_k);
+    let max_tokens = params
+        .as_ref()
+        .and_then(|p| p.max_tokens)
+        .unwrap_or(defaults.max_tokens);
+    let rep_penalty = params
+        .as_ref()
+        .and_then(|p| p.repetition_penalty)
+        .unwrap_or(defaults.repetition_penalty);
+
+    builder = builder
+        .set_sampler_temperature(temp)
+        .set_sampler_topp(top_p)
+        .set_sampler_topk(top_k)
+        .set_sampler_max_len(max_tokens)
+        .set_sampler_frequency_penalty(rep_penalty);
+
+    builder
 }
 
 /// Upgrades an HTTP request to a WebSocket connection.
@@ -157,6 +212,10 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
     let mut streaming = false;
     // Track per-connection chat ID; set by client via WebSocket control
     let mut active_chat_id: Option<String> = None;
+    // Per-connection system prompt (can be set via WebSocket message)
+    let mut system_prompt: Option<String> = app.default_params.system_prompt.clone();
+    // Track whether we've added the system prompt to the context
+    let mut system_prompt_added = false;
 
     while let Some(Ok(Message::Text(user_msg))) = socket.next().await {
         // Handle per-connection chat ID setting
@@ -167,7 +226,21 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                     text_msgs = TextMessages::new();
                     vision_msgs = VisionMessages::new();
                     image_buffer.clear();
+                    system_prompt_added = false;
                 }
+                continue;
+            }
+            // Handle system prompt updates
+            if let Some(prompt) = val.get("set_system_prompt") {
+                system_prompt = if prompt.is_null() {
+                    None
+                } else {
+                    prompt.as_str().map(|s| s.to_string())
+                };
+                system_prompt_added = false;
+                let _ = socket
+                    .send(Message::Text("[System prompt updated]".into()))
+                    .await;
                 continue;
             }
         }
@@ -183,6 +256,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 text_msgs = TextMessages::new();
                 vision_msgs = VisionMessages::new();
                 image_buffer.clear();
+                system_prompt_added = false;
                 let _ = socket.send(Message::Text("[Context cleared]".into())).await;
             }
             continue;
@@ -199,7 +273,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             .await;
             continue;
         }
-        // Handle chat messages with optional web search options provided as JSON
+        // Handle chat messages with optional web search options and generation params provided as JSON
         if let Ok(val) = serde_json::from_str::<Value>(&user_msg) {
             if let Some(content) = val.get("content").and_then(|v| v.as_str()) {
                 // Extract web search options if provided
@@ -218,6 +292,11 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 } else {
                     None
                 };
+                // Extract generation parameters if provided
+                let gen_params = val.get("generation_params").and_then(|v| {
+                    serde_json::from_value::<MessageGenerationParams>(v.clone()).ok()
+                });
+
                 // Determine selected model
                 let model_name_opt = { app.current.read().await.clone() };
                 let Some(model_name) = model_name_opt else {
@@ -234,6 +313,16 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                         .await;
                     continue;
                 };
+
+                // Add system prompt if not already added
+                if !system_prompt_added {
+                    if let Some(ref prompt) = system_prompt {
+                        text_msgs = text_msgs.add_message(TextMessageRole::System, prompt);
+                        vision_msgs = vision_msgs.add_message(TextMessageRole::System, prompt);
+                    }
+                    system_prompt_added = true;
+                }
+
                 match model_loaded {
                     LoadedModel::Text(model) => {
                         let mut params = HandlerParams {
@@ -241,6 +330,8 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                             app: &app,
                             streaming: &mut streaming,
                             active_chat_id: &active_chat_id,
+                            gen_params: gen_params.clone(),
+                            system_prompt: &system_prompt,
                         };
                         handle_text_model(
                             &model,
@@ -262,6 +353,8 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                             app: &app,
                             streaming: &mut streaming,
                             active_chat_id: &active_chat_id,
+                            gen_params: gen_params.clone(),
+                            system_prompt: &system_prompt,
                         };
                         handle_vision_model(
                             &model,
@@ -300,6 +393,15 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             continue;
         };
 
+        // Add system prompt if not already added
+        if !system_prompt_added {
+            if let Some(ref prompt) = system_prompt {
+                text_msgs = text_msgs.add_message(TextMessageRole::System, prompt);
+                vision_msgs = vision_msgs.add_message(TextMessageRole::System, prompt);
+            }
+            system_prompt_added = true;
+        }
+
         match model_loaded {
             LoadedModel::Text(model) => {
                 let mut params = HandlerParams {
@@ -307,6 +409,8 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                     app: &app,
                     streaming: &mut streaming,
                     active_chat_id: &active_chat_id,
+                    gen_params: None,
+                    system_prompt: &system_prompt,
                 };
                 handle_text_model(&model, &user_msg, None, &mut text_msgs, &mut params).await;
             }
@@ -321,6 +425,8 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                     app: &app,
                     streaming: &mut streaming,
                     active_chat_id: &active_chat_id,
+                    gen_params: None,
+                    system_prompt: &system_prompt,
                 };
                 handle_vision_model(&model, &user_msg, None, &mut vision_ctx, &mut params).await;
             }
@@ -449,6 +555,10 @@ async fn handle_text_model(
     let mut assistant_content = String::new();
     let msgs_snapshot = text_msgs.clone();
     let mut request_builder = RequestBuilder::from(msgs_snapshot);
+
+    // Apply generation parameters
+    request_builder = apply_gen_params(request_builder, &params.gen_params, &app.default_params);
+
     if let Some(opts) = web_search_opts {
         request_builder = request_builder.with_web_search_options(opts);
     }
@@ -647,6 +757,10 @@ async fn handle_vision_model(
 
     let msgs = msgs_for_stream.expect("msgs_for_stream must be set");
     let mut request_builder = RequestBuilder::from(msgs);
+
+    // Apply generation parameters
+    request_builder = apply_gen_params(request_builder, &params.gen_params, &app.default_params);
+
     if let Some(opts) = web_search_opts {
         request_builder = request_builder.with_web_search_options(opts);
     }

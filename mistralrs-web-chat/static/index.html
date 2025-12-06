@@ -8,14 +8,51 @@
 </head>
 <body>
   <div id="sidebar">
-    <h2>Control panel</h2>
+    <h2>Control Panel</h2>
     <select id="modelSelect"></select>
-    <button id="newChatBtn">➕ New chat</button>
-    <button id="clearBtn">🧹 Clear chat</button>
-    <button id="renameBtn">✏️ Rename chat</button>
-    <button id="deleteBtn">🗑️ Delete chat</button>
+    <button id="newChatBtn">New Chat</button>
+    <button id="clearBtn">Clear</button>
+    <button id="renameBtn">Rename</button>
+    <button id="deleteBtn">Delete</button>
     <hr />
+
+    <!-- Generation Settings -->
     <div class="sidebar-card">
+      <div class="sidebar-card-header" id="settingsBtn">
+        <h3>Generation Settings</h3>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div class="sidebar-card-content" id="settingsPanel">
+        <div class="setting-group">
+          <label for="settingTemperature">Temperature: <span id="temperatureValue">0.70</span></label>
+          <input type="range" id="settingTemperature" min="0" max="2" step="0.05" value="0.7" />
+        </div>
+        <div class="setting-group">
+          <label for="settingTopP">Top P: <span id="topPValue">0.90</span></label>
+          <input type="range" id="settingTopP" min="0" max="1" step="0.05" value="0.9" />
+        </div>
+        <div class="setting-group">
+          <label for="settingTopK">Top K:</label>
+          <input type="number" id="settingTopK" min="1" max="200" value="40" />
+        </div>
+        <div class="setting-group">
+          <label for="settingMaxTokens">Max Tokens:</label>
+          <input type="number" id="settingMaxTokens" min="1" max="32768" value="2048" />
+        </div>
+        <div class="setting-group">
+          <label for="settingRepetitionPenalty">Repetition Penalty: <span id="repetitionPenaltyValue">1.10</span></label>
+          <input type="range" id="settingRepetitionPenalty" min="1" max="2" step="0.05" value="1.1" />
+        </div>
+        <div class="setting-group">
+          <label for="settingSystemPrompt">System Prompt:</label>
+          <textarea id="settingSystemPrompt" rows="3" placeholder="Optional system instructions..."></textarea>
+        </div>
+        <button id="resetSettingsBtn" class="btn-secondary">Reset to Defaults</button>
+      </div>
+    </div>
+
+    <!-- Web Search -->
+    <div class="sidebar-card" id="webSearchCard">
       <h3>Web Search</h3>
       <div class="sidebar-card-content">
         <label class="toggle-label"><input type="checkbox" id="enableSearch" /> Enable web search</label>
@@ -29,6 +66,7 @@
         </div>
       </div>
     </div>
+
     <ul id="chatList"></ul>
   </div>
 
@@ -65,9 +103,10 @@
 
     <!-- External dependencies -->
     <script src="marked.min.js"></script>
-    
+
     <!-- Application scripts -->
     <script src="js/utils.js"></script>
+    <script src="js/settings.js"></script>
     <script src="js/chat.js"></script>
     <script src="js/models.js"></script>
     <script src="js/websocket.js"></script>

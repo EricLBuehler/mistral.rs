@@ -552,6 +552,21 @@ pub struct GenerateSpeechRequest {
     pub text: String,
 }
 
+/// Get current settings (default generation params and search status)
+pub async fn get_settings(State(app): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(json!({
+        "defaults": {
+            "temperature": app.default_params.temperature,
+            "top_p": app.default_params.top_p,
+            "top_k": app.default_params.top_k,
+            "max_tokens": app.default_params.max_tokens,
+            "repetition_penalty": app.default_params.repetition_penalty,
+            "system_prompt": app.default_params.system_prompt,
+        },
+        "search_enabled": app.search_enabled,
+    }))
+}
+
 /// Endpoint to generate speech (.wav) for a given prompt using a speech model
 pub async fn generate_speech(
     State(app): State<Arc<AppState>>,
