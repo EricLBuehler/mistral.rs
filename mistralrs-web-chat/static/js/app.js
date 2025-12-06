@@ -20,13 +20,16 @@ const mainArea = document.getElementById('main');
 async function initApp() {
   // Initialize WebSocket connection
   initWebSocket();
-  
+
+  // Initialize settings (loads from server and localStorage)
+  await initSettings();
+
   // Initialize all modules
   initModelSelection();
   initChatHandlers();
   initMessageSending();
   initUI();
-  
+
   // Load initial data
   await refreshModels();
 }
