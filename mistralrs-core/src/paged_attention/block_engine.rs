@@ -234,6 +234,11 @@ impl BlockEngine {
         self.prefix_cacher.is_enabled()
     }
 
+    /// Set whether prefix caching is enabled.
+    pub fn set_prefix_caching_enabled(&mut self, enabled: bool) {
+        self.prefix_cacher.set_enabled(enabled);
+    }
+
     pub fn block_size(&self) -> usize {
         self.block_size
     }

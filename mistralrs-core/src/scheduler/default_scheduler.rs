@@ -347,4 +347,7 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
     fn block_engine(&self) -> Option<Arc<tokio::sync::Mutex<BlockEngine>>> {
         None
     }
+    fn set_prefix_caching_enabled(&mut self, _enabled: bool) {
+        // DefaultScheduler doesn't use PagedAttention prefix caching
+    }
 }

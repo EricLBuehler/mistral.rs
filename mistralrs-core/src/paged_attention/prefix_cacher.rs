@@ -95,6 +95,11 @@ impl PrefixCacher {
         self.enabled
     }
 
+    /// Set whether prefix caching is enabled.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
     /// Compute block hashes for a sequence of logical token blocks.
     /// Returns a vector of hashes, one per block.
     pub fn compute_block_hashes(&self, logical_blocks: &[LogicalTokenBlock]) -> Vec<BlockHash> {

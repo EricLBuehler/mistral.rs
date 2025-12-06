@@ -57,11 +57,13 @@ Prefix caching is a technique to reuse computed KV cache blocks across requests 
 
 ### How It's Enabled
 
-Prefix caching is **enabled by default** when using PagedAttention. It can be controlled via:
+Prefix caching is **enabled by default** when using PagedAttention and controlled by the same `prefix_cache_n` setting that controls the sequence-level prefix cacher:
 
-- **CLI**: Enabled by default; prefix cache size controlled by `--prefix-cache-n <N>` (default 16 sequences)
-- **Python API**: `pa_prefix_caching=True` (default), disable with `pa_prefix_caching=False`
-- **Rust API**: Enabled by default in `SchedulerConfig::PagedAttentionMeta`
+- **CLI**: `--prefix-cache-n <N>` (default 16). Set to 0 to disable prefix caching.
+- **Python API**: `prefix_cache_n=<N>` (default 16). Set to `None` or `0` to disable.
+- **Rust API**: `.with_prefix_cache_n(Some(N))` (default 16). Pass `None` to disable.
+
+Both PagedAttention block-level prefix caching and the sequence-level prefix cacher are controlled by this single setting - users don't need to know which backend is being used.
 
 ### Implementation Details
 

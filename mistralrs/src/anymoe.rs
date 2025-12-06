@@ -105,7 +105,6 @@ impl AnyMoeModelBuilder {
                 SchedulerConfig::PagedAttentionMeta {
                     max_num_seqs: self.base.max_num_seqs,
                     config,
-                    prefix_caching_enabled: true,
                 }
             }
             None => SchedulerConfig::DefaultScheduler {

@@ -880,7 +880,6 @@ impl Runner {
                 SchedulerConfig::PagedAttentionMeta {
                     max_num_seqs: max_seqs,
                     config: cache_config.clone(),
-                    prefix_caching_enabled: true,
                 }
             } else {
                 SchedulerConfig::DefaultScheduler {

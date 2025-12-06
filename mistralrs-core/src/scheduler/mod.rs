@@ -22,7 +22,6 @@ pub enum SchedulerConfig {
     PagedAttentionMeta {
         max_num_seqs: usize,
         config: CacheConfig,
-        prefix_caching_enabled: bool,
     },
 }
 
@@ -35,12 +34,8 @@ impl SchedulerConfig {
             Self::PagedAttentionMeta {
                 max_num_seqs,
                 config,
-                prefix_caching_enabled,
             } => Arc::new(Mutex::new(PagedAttentionScheduler::new(
-                PagedAttentionSchedulerConfig {
-                    max_num_seqs,
-                    prefix_caching_enabled,
-                },
+                PagedAttentionSchedulerConfig { max_num_seqs },
                 config,
             ))),
         }
@@ -71,4 +66,8 @@ pub trait Scheduler: Send + Sync {
     fn block_tables(&self) -> Option<BlockTables>;
     fn block_size(&self) -> Option<usize>;
     fn block_engine(&self) -> Option<Arc<Mutex<BlockEngine>>>;
+
+    /// Set whether prefix caching is enabled. Called by Engine after creation
+    /// to synchronize with the global no_prefix_cache setting.
+    fn set_prefix_caching_enabled(&mut self, enabled: bool);
 }

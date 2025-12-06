@@ -39,7 +39,6 @@ pub struct PagedAttentionSchedulerOutput {
 
 pub struct PagedAttentionSchedulerConfig {
     pub max_num_seqs: usize,
-    pub prefix_caching_enabled: bool,
 }
 
 pub struct PagedAttentionScheduler {
@@ -48,24 +47,45 @@ pub struct PagedAttentionScheduler {
     config: PagedAttentionSchedulerConfig,
     pub block_engine: Arc<tokio::sync::Mutex<BlockEngine>>,
     block_size: usize,
+    prefix_caching_enabled: bool,
 }
 
 impl PagedAttentionScheduler {
     pub fn new(config: PagedAttentionSchedulerConfig, cache_config: CacheConfig) -> Self {
-        if config.prefix_caching_enabled {
-            info!("PagedAttention prefix caching is enabled.");
-        }
+        // Default to enabled, Engine::new will call set_prefix_caching_enabled
+        // based on the global no_prefix_cache flag
         Self {
             waiting: VecDeque::new(),
             running: VecDeque::new(),
             block_engine: Arc::new(tokio::sync::Mutex::new(BlockEngine::new(
                 cache_config.block_size,
                 cache_config.num_gpu_blocks,
-                config.prefix_caching_enabled,
+                true, // Default enabled, will be configured by Engine
             ))),
             block_size: cache_config.block_size,
             config,
+            prefix_caching_enabled: true,
         }
+    }
+
+    /// Set whether prefix caching is enabled. This also updates the block engine.
+    pub fn set_prefix_caching_enabled_sync(&mut self, enabled: bool) {
+        self.prefix_caching_enabled = enabled;
+        if enabled {
+            info!("PagedAttention prefix caching is enabled.");
+        }
+        // Update the block engine - we need to block on the async mutex
+        // This is called once at startup, so blocking is acceptable
+        let block_engine = self.block_engine.clone();
+        tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                block_engine
+                    .lock()
+                    .await
+                    .set_prefix_caching_enabled(enabled);
+            });
+        });
     }
 
     /// Bucket sequences by (length, has_images && is_prompt, token_offset).
@@ -433,5 +453,8 @@ impl Scheduler for PagedAttentionScheduler {
     }
     fn block_engine(&self) -> Option<Arc<tokio::sync::Mutex<BlockEngine>>> {
         Some(self.block_engine.clone())
+    }
+    fn set_prefix_caching_enabled(&mut self, enabled: bool) {
+        self.set_prefix_caching_enabled_sync(enabled);
     }
 }
