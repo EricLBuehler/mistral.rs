@@ -66,4 +66,8 @@ pub trait Scheduler: Send + Sync {
     fn block_tables(&self) -> Option<BlockTables>;
     fn block_size(&self) -> Option<usize>;
     fn block_engine(&self) -> Option<Arc<Mutex<BlockEngine>>>;
+
+    /// Set whether prefix caching is enabled. Called by Engine after creation
+    /// to synchronize with the global no_prefix_cache setting.
+    fn set_prefix_caching_enabled(&mut self, enabled: bool);
 }

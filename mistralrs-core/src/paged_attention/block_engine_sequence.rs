@@ -9,4 +9,8 @@ pub trait BlockEngineSequence {
     fn logical_token_blocks(&self) -> &[LogicalTokenBlock];
     /// Returns the previous count
     fn increment_waitlist_count(&mut self) -> usize;
+    /// Set the number of prefix tokens that are cached (KV already computed).
+    fn set_prefix_cache_len(&mut self, len: usize);
+    /// Get the block size for this sequence
+    fn block_size(&self) -> usize;
 }

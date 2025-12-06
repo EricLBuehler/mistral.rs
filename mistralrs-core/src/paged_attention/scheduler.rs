@@ -10,7 +10,7 @@ use std::{
     sync::{atomic::Ordering, Arc, Mutex},
 };
 
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     engine::IntervalLogger,
@@ -47,20 +47,45 @@ pub struct PagedAttentionScheduler {
     config: PagedAttentionSchedulerConfig,
     pub block_engine: Arc<tokio::sync::Mutex<BlockEngine>>,
     block_size: usize,
+    prefix_caching_enabled: bool,
 }
 
 impl PagedAttentionScheduler {
     pub fn new(config: PagedAttentionSchedulerConfig, cache_config: CacheConfig) -> Self {
+        // Default to enabled, Engine::new will call set_prefix_caching_enabled
+        // based on the global no_prefix_cache flag
         Self {
             waiting: VecDeque::new(),
             running: VecDeque::new(),
-            config,
             block_engine: Arc::new(tokio::sync::Mutex::new(BlockEngine::new(
                 cache_config.block_size,
                 cache_config.num_gpu_blocks,
+                true, // Default enabled, will be configured by Engine
             ))),
             block_size: cache_config.block_size,
+            config,
+            prefix_caching_enabled: true,
         }
+    }
+
+    /// Set whether prefix caching is enabled. This also updates the block engine.
+    pub fn set_prefix_caching_enabled_sync(&mut self, enabled: bool) {
+        self.prefix_caching_enabled = enabled;
+        if enabled {
+            info!("PagedAttention prefix caching is enabled.");
+        }
+        // Update the block engine - we need to block on the async mutex
+        // This is called once at startup, so blocking is acceptable
+        let block_engine = self.block_engine.clone();
+        tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                block_engine
+                    .lock()
+                    .await
+                    .set_prefix_caching_enabled(enabled);
+            });
+        });
     }
 
     /// Bucket sequences by (length, has_images && is_prompt, token_offset).
@@ -195,6 +220,11 @@ impl PagedAttentionScheduler {
                 get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
                 let mut seq_handle = get_mut_arcmutex!(seq);
                 self._allocate(&mut seq_handle);
+                // Check for prefix cache hit and report to logger
+                let seq_id = seq_handle.get_id();
+                if get_mut_arcmutex!(self.block_engine).last_allocate_had_cache_hit(seq_id) > 0 {
+                    logger.add_prefix_cache_hit();
+                }
             }
 
             let seq = self.waiting.pop_front().unwrap();
@@ -296,18 +326,23 @@ impl PagedAttentionScheduler {
     }
 
     pub fn free_finished_sequence_groups(&mut self) {
-        let mut to_free_ids = Vec::new();
+        let mut to_free: Vec<(usize, Vec<super::LogicalTokenBlock>)> = Vec::new();
         self.running.retain(|seq| {
             if get_mut_arcmutex!(seq).is_finished_paged_attn() {
-                to_free_ids.push(get_mut_arcmutex!(seq).get_id());
+                let seq_guard = get_mut_arcmutex!(seq);
+                let id = seq_guard.get_id();
+                // Get logical blocks for caching (clone them since we're dropping the lock)
+                let logical_blocks = seq_guard.logical_token_blocks().to_vec();
+                drop(seq_guard);
+                to_free.push((id, logical_blocks));
                 false
             } else {
                 true
             }
         });
 
-        for id in to_free_ids {
-            self._free(id);
+        for (id, logical_blocks) in to_free {
+            self._free_with_caching(id, Some(&logical_blocks));
         }
     }
 }
@@ -361,8 +396,15 @@ impl PagedAttentionScheduler {
     }
 
     fn _preempt_by_recompute(&mut self, seq: Arc<Mutex<Sequence>>) {
-        get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
-        self._free(get_mut_arcmutex!(seq).get_id());
+        let seq_guard = get_mut_arcmutex!(seq);
+        seq_guard.set_state(SequenceState::Waiting);
+        let seq_id = seq_guard.get_id();
+        // Get logical blocks for proper cache ref release
+        let logical_blocks = seq_guard.logical_token_blocks().to_vec();
+        drop(seq_guard);
+        // Use free_with_caching to properly release prefix cache refs
+        // (but don't add blocks to cache since we're preempting)
+        self._free_for_preemption(seq_id, &logical_blocks);
         self.waiting.push_front(seq);
     }
 
@@ -372,6 +414,18 @@ impl PagedAttentionScheduler {
 
     fn _free(&mut self, seq_id: usize) {
         get_mut_arcmutex!(self.block_engine).free_sequence(seq_id);
+    }
+
+    fn _free_for_preemption(&mut self, seq_id: usize, logical_blocks: &[super::LogicalTokenBlock]) {
+        get_mut_arcmutex!(self.block_engine).free_sequence_for_preemption(seq_id, logical_blocks);
+    }
+
+    fn _free_with_caching(
+        &mut self,
+        seq_id: usize,
+        logical_blocks: Option<&[super::LogicalTokenBlock]>,
+    ) {
+        get_mut_arcmutex!(self.block_engine).free_sequence_with_caching(seq_id, logical_blocks);
     }
 
     fn sort_running_by_priority_fcfs(&mut self) {
@@ -415,5 +469,8 @@ impl Scheduler for PagedAttentionScheduler {
     }
     fn block_engine(&self) -> Option<Arc<tokio::sync::Mutex<BlockEngine>>> {
         Some(self.block_engine.clone())
+    }
+    fn set_prefix_caching_enabled(&mut self, enabled: bool) {
+        self.set_prefix_caching_enabled_sync(enabled);
     }
 }

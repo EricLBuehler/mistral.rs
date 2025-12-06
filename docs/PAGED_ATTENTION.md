@@ -31,6 +31,58 @@ When using FP8 quantization, the memory usage for KV cache is approximately halv
 
 **Prefix caching is now supported with PagedAttention.** PagedAttention can leverage the prefix cacher to cache KV prefix states across iterations for faster multi-turn inference.
 
+## Block-Level Prefix Caching
+
+Prefix caching is a technique to reuse computed KV cache blocks across requests that share common prefixes (like system prompts). This can significantly speed up inference when multiple requests use the same prefix.
+
+### How It Works
+
+1. **Block Hashing**: Each block of tokens is assigned a unique hash based on its contents and the hash of its parent block:
+   ```
+   hash(block) = hash(parent_hash, block_tokens)
+   ```
+   This creates a hash chain that uniquely identifies any prefix sequence.
+
+2. **Cache Lookup**: When allocating blocks for a new request, the scheduler checks if any full blocks match existing cached blocks by comparing hashes.
+
+3. **Block Reuse**: Matched blocks are reused directly - their pre-computed KV cache values are used without recomputation. Only the non-matching suffix tokens need to be processed.
+
+4. **LRU Eviction**: When memory is needed, least recently used cached blocks are evicted first.
+
+### Benefits
+
+- **Multi-turn conversations**: System prompts and conversation history are cached and reused
+- **Batched requests**: Multiple requests with shared prefixes (e.g., same system prompt) benefit from caching
+- **Reduced TTFT**: Time-to-first-token is reduced by skipping prefix computation
+
+### How It's Enabled
+
+Prefix caching is **enabled by default** when using PagedAttention and controlled by the same `prefix_cache_n` setting that controls the sequence-level prefix cacher:
+
+- **CLI**: `--prefix-cache-n <N>` (default 16). Set to 0 to disable prefix caching.
+- **Python API**: `prefix_cache_n=<N>` (default 16). Set to `None` or `0` to disable.
+- **Rust API**: `.with_prefix_cache_n(Some(N))` (default 16). Pass `None` to disable.
+
+Both PagedAttention block-level prefix caching and the sequence-level prefix cacher are controlled by this single setting - users don't need to know which backend is being used.
+
+### Implementation Details
+
+The prefix cache operates at the block level (not token level) for efficiency:
+
+1. **Full blocks only**: Only complete blocks (block_size tokens) are cached. Partial blocks at the end of a sequence are not cached.
+
+2. **Hash chain**: The hash for each block depends on all preceding blocks, ensuring the entire prefix matches.
+
+3. **Copy-on-Write**: Cached blocks use reference counting. When a cached block needs modification, it's copied first (CoW).
+
+4. **Memory management**: The cache uses LRU eviction when allocating new blocks. Evicted blocks are returned to the free pool.
+
+### Performance Considerations
+
+- Block size affects cache granularity: larger blocks = fewer cache entries but coarser matching
+- Cache hit rate improves with more repeated prefixes
+- Memory overhead is minimal (just hash-to-block mappings)
+
 **Supported models:**
 - Normal models
 - GGUF models
