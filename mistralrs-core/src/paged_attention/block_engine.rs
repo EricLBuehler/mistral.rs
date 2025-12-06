@@ -329,7 +329,10 @@ impl BlockEngine {
     /// Check if the last allocate() call resulted in a prefix cache hit.
     /// Returns the number of blocks that were reused from cache.
     pub fn last_allocate_had_cache_hit(&self, seq_id: usize) -> usize {
-        self.cached_blocks_per_seq.get(&seq_id).copied().unwrap_or(0)
+        self.cached_blocks_per_seq
+            .get(&seq_id)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Allocate a block, evicting from prefix cache if necessary.
