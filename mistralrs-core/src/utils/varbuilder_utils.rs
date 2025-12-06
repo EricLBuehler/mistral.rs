@@ -15,6 +15,8 @@ use crate::lora::LoraConfig;
 use crate::utils::progress::IterWithProgress;
 use derive_new::new;
 
+const MISTRALRS_NO_MMAP: &str = "MISTRALRS_NO_MMAP";
+
 trait TensorLoaderBackend {
     fn get_names(&self) -> Vec<String>;
     fn load_name(&self, name: &str, device: &Device, dtype: Option<DType>) -> Result<Tensor>;
@@ -74,8 +76,8 @@ pub(crate) fn from_mmaped_safetensors(
     predicate: impl Fn(String) -> bool + Send + Sync + Clone + 'static,
     get_device_for_tensor: Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>,
 ) -> Result<ShardedVarBuilder> {
-    // No mmap for cuda.
-    if xlora_paths.is_empty() && !base_device.is_cuda() || cfg!(feature = "ring") {
+    let use_no_mmap = std::env::var(MISTRALRS_NO_MMAP).is_ok_and(|x| x == "1");
+    if xlora_paths.is_empty() && !use_no_mmap {
         if !silent {
             tracing::info!("Loading model using mmap strategy.");
         }
