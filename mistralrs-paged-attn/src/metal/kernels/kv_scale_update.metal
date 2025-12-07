@@ -6,18 +6,18 @@ using namespace metal;
 #define DIV_CONST 240.0f
 
 template <typename T>
-[[kernel]] void kv_scale_update(
-    const device T *k [[buffer(0)]],
-    const device T *v [[buffer(1)]],
-    device atomic<float> *k_scale [[buffer(2)]],
-    device atomic<float> *v_scale [[buffer(3)]],
-    constant long &num_elements [[buffer(4)]],
-    uint gid [[thread_position_in_grid]],
-    uint grid_size [[threads_per_grid]],
-    uint tid [[thread_position_in_threadgroup]],
-    uint tg_size [[threads_per_threadgroup]],
-    threadgroup float *shared_k [[threadgroup(0)]],
-    threadgroup float *shared_v [[threadgroup(1)]]) {
+[[kernel]] void kv_scale_update(const device T *k [[buffer(0)]],
+                                const device T *v [[buffer(1)]],
+                                device atomic<float> *k_scale [[buffer(2)]],
+                                device atomic<float> *v_scale [[buffer(3)]],
+                                constant long &num_elements [[buffer(4)]],
+                                uint gid [[thread_position_in_grid]],
+                                uint grid_size [[threads_per_grid]],
+                                uint tid [[thread_position_in_threadgroup]],
+                                uint tg_size [[threads_per_threadgroup]],
+                                threadgroup float *shared_k [[threadgroup(0)]],
+                                threadgroup float *shared_v
+                                [[threadgroup(1)]]) {
 
   // Per-thread local maxima
   float local_max_k = 0.0f;
@@ -78,18 +78,17 @@ template <typename T>
 
 #define instantiate_kv_scale_update(type)                                      \
   template [[host_name("kv_scale_update_" #type)]] [[kernel]] void             \
-  kv_scale_update<type>(                                                       \
-      const device type *k [[buffer(0)]],                                      \
-      const device type *v [[buffer(1)]],                                      \
-      device atomic<float> *k_scale [[buffer(2)]],                             \
-      device atomic<float> *v_scale [[buffer(3)]],                             \
-      constant long &num_elements [[buffer(4)]],                               \
-      uint gid [[thread_position_in_grid]],                                    \
-      uint grid_size [[threads_per_grid]],                                     \
-      uint tid [[thread_position_in_threadgroup]],                             \
-      uint tg_size [[threads_per_threadgroup]],                                \
-      threadgroup float *shared_k [[threadgroup(0)]],                          \
-      threadgroup float *shared_v [[threadgroup(1)]]);
+  kv_scale_update<type>(const device type *k [[buffer(0)]],                    \
+                        const device type *v [[buffer(1)]],                    \
+                        device atomic<float> *k_scale [[buffer(2)]],           \
+                        device atomic<float> *v_scale [[buffer(3)]],           \
+                        constant long &num_elements [[buffer(4)]],             \
+                        uint gid [[thread_position_in_grid]],                  \
+                        uint grid_size [[threads_per_grid]],                   \
+                        uint tid [[thread_position_in_threadgroup]],           \
+                        uint tg_size [[threads_per_threadgroup]],              \
+                        threadgroup float *shared_k [[threadgroup(0)]],        \
+                        threadgroup float *shared_v [[threadgroup(1)]]);
 
 instantiate_kv_scale_update(float);
 instantiate_kv_scale_update(bfloat16_t);

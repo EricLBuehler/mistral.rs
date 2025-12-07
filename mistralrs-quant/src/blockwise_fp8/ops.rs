@@ -733,6 +733,358 @@ pub fn fp8_blockwise_quantize(
     }
 }
 
+/// FP8 blockwise matmul.
+/// Computes output = input @ weight.T where weight is FP8 blockwise quantized.
+/// - input: [M, K] in fp16/bf16
+/// - weight: [N, K] in FP8 with blockwise scales
+/// - scales: [N/block_y, K/block_x] in f32
+/// - output: [M, N] in fp16/bf16
+#[cfg(feature = "cuda")]
+pub fn fp8_blockwise_matmul(
+    input: &Tensor,
+    weight: &Tensor,
+    scales: &Tensor,
+    weight_block_size: &[usize],
+) -> Result<Tensor> {
+    use candle_core::{CudaStorage, Device, Storage};
+    use half::{bf16, f16};
+
+    use crate::{blockwise_fp8::ffi, utils::slice_ptr};
+
+    if !ffi::HAVE_BLOCKWISE_GEMM_KERNELS {
+        candle_core::bail!("Do not have blockwise FP8 GEMM kernels.");
+    }
+
+    if !matches!(input.device(), Device::Cuda(_)) {
+        candle_core::bail!("FP8 blockwise matmul only supported on CUDA");
+    }
+
+    let input = input.contiguous()?;
+    let weight = weight.contiguous()?;
+    let scales = scales.contiguous()?;
+
+    if input.dims().len() != 2 {
+        candle_core::bail!("Expected input to be rank 2, got {:?}", input.dims());
+    }
+    if weight.dims().len() != 2 {
+        candle_core::bail!("Expected weight to be rank 2, got {:?}", weight.dims());
+    }
+    if weight.dtype() != DType::F8E4M3 {
+        candle_core::bail!("Expected FP8 weight, got {:?}", weight.dtype());
+    }
+
+    let m = input.dim(0)? as i32;
+    let k = input.dim(1)? as i32;
+    let n = weight.dim(0)? as i32;
+
+    if weight.dim(1)? as i32 != k {
+        candle_core::bail!(
+            "Weight K dimension {} doesn't match input K dimension {}",
+            weight.dim(1)?,
+            k
+        );
+    }
+
+    let dev = match input.device() {
+        Device::Cuda(dev) => dev,
+        _ => unreachable!(),
+    };
+
+    let block_size_y = weight_block_size[0] as i32;
+    let block_size_x = weight_block_size[1] as i32;
+    let scale_row_stride = scales.dim(1)? as i32;
+
+    let input_l = input.layout();
+    let weight_l = weight.layout();
+    let scales_l = scales.layout();
+
+    let input_storage = input.storage_and_layout().0;
+    let weight_storage = weight.storage_and_layout().0;
+    let scales_storage = scales.storage_and_layout().0;
+
+    let weight_s = match &*weight_storage {
+        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<F8E4M3>()?,
+        _ => candle_core::bail!("Expected CUDA storage for weight"),
+    };
+    let scales_s = match &*scales_storage {
+        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f32>()?,
+        _ => candle_core::bail!("Expected CUDA storage for scales"),
+    };
+
+    let (weight_ptr, _weight_guard) = slice_ptr(weight_s, weight_l.start_offset());
+    let (scales_ptr, _scales_guard) = slice_ptr(scales_s, scales_l.start_offset());
+
+    match input.dtype() {
+        DType::F16 => {
+            let output = dev.alloc_zeros::<f16>((m * n) as usize)?;
+
+            let input_s = match &*input_storage {
+                Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
+                _ => candle_core::bail!("Expected CUDA storage for input"),
+            };
+
+            {
+                let (output_ptr, _output_guard) = slice_ptr(&output, 0);
+                let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
+
+                unsafe {
+                    ffi::launch_fp8_matmul_f16(
+                        input_ptr as *const _,
+                        weight_ptr as *const _,
+                        scales_ptr as *const _,
+                        output_ptr as *mut _,
+                        m,
+                        n,
+                        k,
+                        scale_row_stride,
+                        block_size_y,
+                        block_size_x,
+                        dev.cuda_stream().cu_stream(),
+                    )
+                };
+            }
+
+            let output_storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
+            Ok(Tensor::from((
+                Storage::Cuda(output_storage),
+                candle_core::Shape::from_dims(&[m as usize, n as usize]),
+            )))
+        }
+        DType::BF16 => {
+            let output = dev.alloc_zeros::<bf16>((m * n) as usize)?;
+
+            let input_s = match &*input_storage {
+                Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
+                _ => candle_core::bail!("Expected CUDA storage for input"),
+            };
+
+            {
+                let (output_ptr, _output_guard) = slice_ptr(&output, 0);
+                let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
+
+                unsafe {
+                    ffi::launch_fp8_matmul_bf16(
+                        input_ptr as *const _,
+                        weight_ptr as *const _,
+                        scales_ptr as *const _,
+                        output_ptr as *mut _,
+                        m,
+                        n,
+                        k,
+                        scale_row_stride,
+                        block_size_y,
+                        block_size_x,
+                        dev.cuda_stream().cu_stream(),
+                    )
+                };
+            }
+
+            let output_storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
+            Ok(Tensor::from((
+                Storage::Cuda(output_storage),
+                candle_core::Shape::from_dims(&[m as usize, n as usize]),
+            )))
+        }
+        other => candle_core::bail!("Unsupported input dtype for FP8 matmul: {:?}", other),
+    }
+}
+
+/// FP8 indexed MoE GEMM for gather_forward.
+/// Computes indexed matmul for MoE where each token selects specific experts.
+/// - input: [num_tokens, 1, K] or [num_tokens, topk, K] in fp16/bf16
+/// - weights: [num_experts, N, K] in FP8 with blockwise scales
+/// - scales: [num_experts, N/block_y, K/block_x] in f32
+/// - indices: [num_tokens, topk] in i32
+/// - output: [num_tokens, topk, N] in fp16/bf16
+#[cfg(feature = "cuda")]
+pub fn fp8_indexed_moe_gemm(
+    input: &Tensor,
+    weights: &Tensor,
+    scales: &Tensor,
+    indices: &Tensor,
+    weight_block_size: &[usize],
+) -> Result<Tensor> {
+    use candle_core::{CudaStorage, Device, Storage};
+    use half::{bf16, f16};
+
+    use crate::{blockwise_fp8::ffi, utils::slice_ptr};
+
+    if !ffi::HAVE_BLOCKWISE_GEMM_KERNELS {
+        candle_core::bail!("Do not have blockwise FP8 GEMM kernels.");
+    }
+
+    if !matches!(input.device(), Device::Cuda(_)) {
+        candle_core::bail!("FP8 indexed MoE GEMM only supported on CUDA");
+    }
+
+    let input = input.contiguous()?;
+    let weights = weights.contiguous()?;
+    let scales = scales.contiguous()?;
+    let indices = indices.contiguous()?;
+
+    // Determine input shape
+    // Input can be [num_tokens, 1, K] or [num_tokens, topk, K]
+    let (num_tokens, input_has_topk_dim, k) = if input.dims().len() == 3 {
+        let dims = input.dims3()?;
+        (dims.0, dims.1 > 1, dims.2)
+    } else if input.dims().len() == 2 {
+        let dims = input.dims2()?;
+        (dims.0, false, dims.1)
+    } else {
+        candle_core::bail!("Expected input to be rank 2 or 3, got {:?}", input.dims());
+    };
+
+    // Get topk from indices
+    let (indices_tokens, topk) = indices.dims2()?;
+    if indices_tokens != num_tokens {
+        candle_core::bail!(
+            "Indices num_tokens {} doesn't match input num_tokens {}",
+            indices_tokens,
+            num_tokens
+        );
+    }
+
+    // Weights shape: [num_experts, N, K]
+    if weights.dims().len() != 3 {
+        candle_core::bail!("Expected weights to be rank 3, got {:?}", weights.dims());
+    }
+    let (num_experts, n, weight_k) = weights.dims3()?;
+    if weight_k != k {
+        candle_core::bail!(
+            "Weights K dimension {} doesn't match input K dimension {}",
+            weight_k,
+            k
+        );
+    }
+
+    if weights.dtype() != DType::F8E4M3 {
+        candle_core::bail!("Expected FP8 weights, got {:?}", weights.dtype());
+    }
+
+    let dev = match input.device() {
+        Device::Cuda(dev) => dev,
+        _ => unreachable!(),
+    };
+
+    let block_size_y = weight_block_size[0] as i32;
+    let block_size_x = weight_block_size[1] as i32;
+
+    // Scales shape should be [num_experts, N/block_y, K/block_x]
+    let scale_row_stride = scales.dim(2)? as i32; // K/block_x
+
+    let input_l = input.layout();
+    let weights_l = weights.layout();
+    let scales_l = scales.layout();
+    let indices_l = indices.layout();
+
+    let input_storage = input.storage_and_layout().0;
+    let weights_storage = weights.storage_and_layout().0;
+    let scales_storage = scales.storage_and_layout().0;
+    let indices_storage = indices.storage_and_layout().0;
+
+    let weights_s = match &*weights_storage {
+        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<F8E4M3>()?,
+        _ => candle_core::bail!("Expected CUDA storage for weights"),
+    };
+    let scales_s = match &*scales_storage {
+        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f32>()?,
+        _ => candle_core::bail!("Expected CUDA storage for scales"),
+    };
+    let indices_s = match &*indices_storage {
+        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<u32>()?,
+        _ => candle_core::bail!("Expected CUDA storage for indices"),
+    };
+
+    let (weights_ptr, _weights_guard) = slice_ptr(weights_s, weights_l.start_offset());
+    let (scales_ptr, _scales_guard) = slice_ptr(scales_s, scales_l.start_offset());
+    let (indices_ptr, _indices_guard) = slice_ptr(indices_s, indices_l.start_offset());
+
+    match input.dtype() {
+        DType::F16 => {
+            let output = dev.alloc_zeros::<f16>(num_tokens * topk * n)?;
+
+            let input_s = match &*input_storage {
+                Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
+                _ => candle_core::bail!("Expected CUDA storage for input"),
+            };
+
+            {
+                let (output_ptr, _output_guard) = slice_ptr(&output, 0);
+                let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
+
+                unsafe {
+                    ffi::launch_fp8_indexed_moe_gemm_f16(
+                        input_ptr as *const _,
+                        weights_ptr as *const _,
+                        scales_ptr as *const _,
+                        indices_ptr as *const _,
+                        output_ptr as *mut _,
+                        num_tokens as i32,
+                        topk as i32,
+                        num_experts as i32,
+                        n as i32,
+                        k as i32,
+                        scale_row_stride,
+                        block_size_y,
+                        block_size_x,
+                        input_has_topk_dim,
+                        dev.cuda_stream().cu_stream(),
+                    )
+                };
+            }
+
+            let output_storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
+            Ok(Tensor::from((
+                Storage::Cuda(output_storage),
+                candle_core::Shape::from_dims(&[num_tokens, topk, n]),
+            )))
+        }
+        DType::BF16 => {
+            let output = dev.alloc_zeros::<bf16>(num_tokens * topk * n)?;
+
+            let input_s = match &*input_storage {
+                Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
+                _ => candle_core::bail!("Expected CUDA storage for input"),
+            };
+
+            {
+                let (output_ptr, _output_guard) = slice_ptr(&output, 0);
+                let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
+
+                unsafe {
+                    ffi::launch_fp8_indexed_moe_gemm_bf16(
+                        input_ptr as *const _,
+                        weights_ptr as *const _,
+                        scales_ptr as *const _,
+                        indices_ptr as *const _,
+                        output_ptr as *mut _,
+                        num_tokens as i32,
+                        topk as i32,
+                        num_experts as i32,
+                        n as i32,
+                        k as i32,
+                        scale_row_stride,
+                        block_size_y,
+                        block_size_x,
+                        input_has_topk_dim,
+                        dev.cuda_stream().cu_stream(),
+                    )
+                };
+            }
+
+            let output_storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
+            Ok(Tensor::from((
+                Storage::Cuda(output_storage),
+                candle_core::Shape::from_dims(&[num_tokens, topk, n]),
+            )))
+        }
+        other => candle_core::bail!(
+            "Unsupported input dtype for FP8 indexed MoE GEMM: {:?}",
+            other
+        ),
+    }
+}
+
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {

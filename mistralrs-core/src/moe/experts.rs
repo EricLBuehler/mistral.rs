@@ -42,7 +42,8 @@ impl MoEExpertsBackend {
         loading_isq: bool,
         quantization_config: &Option<QuantizedConfig>,
     ) -> Self {
-        let use_fast = device.is_metal() || (device.is_cuda() && loading_isq);
+        let use_fast = device.is_metal()
+            || (device.is_cuda() && (loading_isq || quantization_config.is_some()));
 
         if use_fast {
             Self::Fast
