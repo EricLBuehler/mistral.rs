@@ -639,7 +639,7 @@ impl Attention {
         // Debug: save attention weights (before mask)
         debug_tensors::save_tensor(&format!("layer_{}_attn_weights_raw", layer_idx), &attn_weights)?;
 
-        // Apply attention mask (causal) - convert mask to match attn_weights dtype
+        // Apply attention mask (causal or sliding window - already computed in inner_forward)
         let attn_weights = if let Some(mask) = attention_mask {
             // The mask might have shape [b, 1, q_len, total_len] or [b, 1, 1, total_len]
             // We need to narrow the last dim to k_len, but only if it's larger than k_len
@@ -655,37 +655,11 @@ impl Attention {
             attn_weights
         };
 
-        // Apply sliding window mask if configured for this layer
-        let attn_weights = if let Some(window) = self.sdpa_params.sliding_window {
-            // For sliding window attention, mask positions outside the window
-            // Query at absolute position q_abs can only attend to keys where:
-            // k_pos >= q_abs - window
-            // Since k_pos ranges from 0 to k_len-1 and q_abs = seqlen_offset + q_idx
-            let seqlen_offset = seqlen_offsets.first().copied().unwrap_or(0);
-
-            // Create sliding window mask: [q_len, k_len]
-            // For each (q_idx, k_idx), mask if k_idx < seqlen_offset + q_idx - window
-            let mut mask_data = vec![0.0f32; q_len * k_len];
-            for q_idx in 0..q_len {
-                let q_abs = seqlen_offset + q_idx;
-                let min_k = q_abs.saturating_sub(window);
-                for k_idx in 0..k_len {
-                    if k_idx < min_k {
-                        mask_data[q_idx * k_len + k_idx] = f32::NEG_INFINITY;
-                    }
-                }
-            }
-
-            let sliding_mask = Tensor::from_vec(mask_data, (q_len, k_len), q.device())?
-                .to_dtype(attn_weights.dtype())?
-                .reshape((1, 1, q_len, k_len))?;
-
-            attn_weights.broadcast_add(&sliding_mask)?
-        } else {
-            attn_weights
-        };
-
         // Add sinks: reshape [num_heads] -> [1, num_heads, 1, 1] and concat along last dim
+        // Debug: save sinks for layer 0
+        if layer_idx == 0 {
+            debug_tensors::save_tensor("layer_0_sinks", &self.sinks)?;
+        }
         let sinks_expanded = self
             .sinks
             .reshape((1, num_heads, 1, 1))?
@@ -695,9 +669,19 @@ impl Attention {
         // Concatenate sinks to attention logits: [b, heads, q_len, k_len + 1]
         let combined_logits = Tensor::cat(&[&attn_weights, &sinks_expanded], D::Minus1)?;
 
+        // Debug: save combined logits before max subtraction
+        if layer_idx == 0 {
+            debug_tensors::save_tensor("layer_0_combined_logits_pre_max", &combined_logits)?;
+        }
+
         // Subtract max for numerical stability
         let max_logits = combined_logits.max_keepdim(D::Minus1)?;
         let combined_logits = combined_logits.broadcast_sub(&max_logits)?;
+
+        // Debug: save combined logits after max subtraction
+        if layer_idx == 0 {
+            debug_tensors::save_tensor("layer_0_combined_logits_post_max", &combined_logits)?;
+        }
 
         // Softmax
         let probs = candle_nn::ops::softmax_last_dim(&combined_logits)?;
@@ -975,6 +959,10 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        // Disable cuBLASLt to match PyTorch's numerical behavior more closely
+        #[cfg(feature = "cuda")]
+        mistralrs_quant::cublaslt::CUBLASLT_CONTROLLER.set_inhibit(true);
+
         let vb_m = vb.pp("model");
         let mapper = normal_loading_metadata.mapper;
 
@@ -1138,22 +1126,83 @@ impl Model {
         debug_tensors::save_tensor("embed_output", &xs)?;
 
         let cache = &mut self.cache.normal().0;
-        let attention_mask = CausalMasker.make_causal_mask_matrix(
-            input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(cache as &dyn PastKvLenCache),
-            xs.dtype(),
-            self.layers[0].self_attn.num_heads,
-        )?;
-        // PagedAttention prompt chunking
-        let attention_mask = attention_mask.filter(|_| {
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-        });
+
+        // GPT-OSS uses custom attention with sinks, which requires the full causal mask
+        // Don't use CausalMasker which shortcuts to (1,1) when flash-attn is enabled
+        let (_b_sz, tgt_len) = input_ids.dims2()?;
+        let past_kv_len = if cache.is_empty() { 0 } else { cache[0].current_seq_len() };
+        let sliding_window = self.cfg.sliding_window;
+
+        // Create both masks: normal causal and sliding window causal
+        // During generation (tgt_len == 1), we still need sliding mask for sliding window layers
+        let kv_len = tgt_len + past_kv_len;
+
+        // Normal causal mask: 0.0 for positions to attend, -inf for positions to mask
+        // During generation (tgt_len == 1), full attention doesn't need a mask
+        let causal_mask = if tgt_len == 1 {
+            None
+        } else {
+            let causal_data: Vec<f32> = (0..tgt_len)
+                .flat_map(|i| {
+                    (0..kv_len).map(move |j| {
+                        if j <= i + past_kv_len {
+                            0.0f32
+                        } else {
+                            f32::NEG_INFINITY
+                        }
+                    })
+                })
+                .collect();
+            Some(
+                Tensor::from_vec(causal_data, (tgt_len, kv_len), input_ids.device())?
+                    .to_dtype(xs.dtype())?
+                    .unsqueeze(0)?
+                    .unsqueeze(0)?,
+            )
+        };
+
+        // Sliding window mask: ALWAYS needed for sliding window layers, even during generation
+        // This is critical - without it, sliding window layers attend to all positions
+        let sliding_mask = if let Some(window) = sliding_window {
+            let sliding_data: Vec<f32> = (0..tgt_len)
+                .flat_map(|i| {
+                    (0..kv_len).map(move |j| {
+                        let q_abs = past_kv_len + i;
+                        let min_k = q_abs.saturating_sub(window);
+                        // Sliding window: can attend if j <= q_abs AND j >= min_k
+                        if j <= i + past_kv_len && j >= min_k {
+                            0.0f32
+                        } else {
+                            f32::NEG_INFINITY
+                        }
+                    })
+                })
+                .collect();
+            Some(
+                Tensor::from_vec(sliding_data, (tgt_len, kv_len), input_ids.device())?
+                    .to_dtype(xs.dtype())?
+                    .unsqueeze(0)?
+                    .unsqueeze(0)?,
+            )
+        } else {
+            None
+        };
+
+        // PagedAttention prompt chunking filter
+        let should_use_mask = metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(true);
+        let causal_mask = if should_use_mask { causal_mask } else { None };
+        let sliding_mask = if should_use_mask { sliding_mask } else { None };
+
+        // Debug: save attention masks
+        if let Some(ref mask) = causal_mask {
+            debug_tensors::save_tensor("attention_mask", mask)?;
+        }
+        if let Some(ref mask) = sliding_mask {
+            debug_tensors::save_tensor("sliding_attention_mask", mask)?;
+        }
 
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
@@ -1161,10 +1210,16 @@ impl Model {
             // Debug: save layer input
             debug_tensors::save_tensor(&format!("layer_{}_input", i), &xs)?;
 
+            // Select appropriate mask based on layer type (sliding vs full attention)
+            let layer_mask = if layer.self_attn.is_sliding {
+                sliding_mask.as_ref().or(causal_mask.as_ref())
+            } else {
+                causal_mask.as_ref()
+            };
+
             xs = layer.forward(
                 &xs,
-                attention_mask
-                    .as_ref()
+                layer_mask
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
@@ -1179,10 +1234,19 @@ impl Model {
             // Debug: save layer output
             debug_tensors::save_tensor(&format!("layer_{}_output", i), &xs)?;
         }
-        // panic!();
+
         let xs = xs.to_device(&self.device)?;
         let xs = self.norm.forward(&xs)?;
-        extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
+
+        // Debug: save pre-lm_head hidden state
+        debug_tensors::save_tensor("pre_lm_head", &xs)?;
+
+        let logits = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
+
+        // Debug: save raw logits
+        debug_tensors::save_tensor("logits", &logits)?;
+
+        extract_logits(&logits, context_lens)
     }
 }
 

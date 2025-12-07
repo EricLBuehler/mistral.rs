@@ -915,6 +915,7 @@ impl Sampler {
         for processor in &self.logits_processors {
             logits = processor.apply(&logits, context)?;
         }
+        return self.sample_argmax(logits, return_logprobs);
         let next_token = if sample_speculative {
             match self.temperature {
                 None => self.sample_speculative_top_kp_min_p(
