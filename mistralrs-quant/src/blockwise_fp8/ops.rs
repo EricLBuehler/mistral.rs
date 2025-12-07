@@ -991,7 +991,7 @@ pub fn fp8_indexed_moe_gemm(
         _ => candle_core::bail!("Expected CUDA storage for scales"),
     };
     let indices_s = match &*indices_storage {
-        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<i32>()?,
+        Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<u32>()?,
         _ => candle_core::bail!("Expected CUDA storage for indices"),
     };
 

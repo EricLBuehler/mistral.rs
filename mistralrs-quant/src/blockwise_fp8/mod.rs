@@ -72,7 +72,8 @@ impl QuantMethod for BlockwiseFP8Linear {
         // Try to use native FP8 GEMM kernel on CUDA
         #[cfg(feature = "cuda")]
         {
-            if matches!(x.device(), candle_core::Device::Cuda(_)) && ffi::HAVE_BLOCKWISE_GEMM_KERNELS
+            if matches!(x.device(), candle_core::Device::Cuda(_))
+                && ffi::HAVE_BLOCKWISE_GEMM_KERNELS
             {
                 // Handle batched inputs by flattening to 2D
                 let orig_dims = x.dims().to_vec();
@@ -86,8 +87,12 @@ impl QuantMethod for BlockwiseFP8Linear {
                 };
 
                 // Use native FP8 GEMM kernel
-                let result =
-                    ops::fp8_blockwise_matmul(&x_2d, &self.weight, &self.weight_scale_inv, &self.weight_block_size)?;
+                let result = ops::fp8_blockwise_matmul(
+                    &x_2d,
+                    &self.weight,
+                    &self.weight_scale_inv,
+                    &self.weight_block_size,
+                )?;
 
                 // Reshape back to original batch dimensions
                 let result = if orig_dims.len() > 2 {
@@ -125,17 +130,17 @@ impl QuantMethod for BlockwiseFP8Linear {
         // Try to use native FP8 indexed MoE GEMM kernel on CUDA
         #[cfg(feature = "cuda")]
         {
-            if matches!(x.device(), candle_core::Device::Cuda(_)) && ffi::HAVE_BLOCKWISE_GEMM_KERNELS
+            if matches!(x.device(), candle_core::Device::Cuda(_))
+                && ffi::HAVE_BLOCKWISE_GEMM_KERNELS
             {
-                // Convert indices to I32 if needed (kernel expects I32)
-                let indices_i32 = if indices.dtype() == DType::U32 {
-                    indices.to_dtype(DType::I32)?
-                } else {
-                    indices.clone()
-                };
-                // Use native FP8 indexed MoE GEMM kernel
-                let result =
-                    ops::fp8_indexed_moe_gemm(x, &self.weight, &self.weight_scale_inv, &indices_i32, &self.weight_block_size)?;
+                // Use native FP8 indexed MoE GEMM kernel (expects U32 indices)
+                let result = ops::fp8_indexed_moe_gemm(
+                    x,
+                    &self.weight,
+                    &self.weight_scale_inv,
+                    indices,
+                    &self.weight_block_size,
+                )?;
                 // Apply bias if present (broadcast over tokens and topk)
                 if let Some(ref bias) = self.bias {
                     return result.broadcast_add(bias);

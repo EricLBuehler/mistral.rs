@@ -206,7 +206,7 @@ __global__ void fp8_indexed_moe_gemm_kernel(
     const T* __restrict__ input,               // [num_tokens, K] or [num_tokens, topk, K]
     const __nv_fp8_e4m3* __restrict__ weights, // [num_experts, N, K]
     const float* __restrict__ weight_scales,   // [num_experts, N/block_y, K/block_x]
-    const int32_t* __restrict__ indices,       // [num_tokens, topk]
+    const uint32_t* __restrict__ indices,       // [num_tokens, topk]
     T* __restrict__ output,                    // [num_tokens, topk, N]
     int num_tokens,
     int topk,
@@ -230,8 +230,8 @@ __global__ void fp8_indexed_moe_gemm_kernel(
     if (n_global >= N) return;
 
     // Get expert index for this token and slot
-    int expert_idx = indices[token_idx * topk + expert_slot];
-    if (expert_idx < 0 || expert_idx >= num_experts) return;
+    uint32_t expert_idx = indices[token_idx * topk + expert_slot];
+    if (expert_idx >= (uint32_t)num_experts) return;
 
     // Pointer to expert's weights [N, K]
     const __nv_fp8_e4m3* expert_w = weights + (size_t)expert_idx * N * K;
@@ -286,7 +286,7 @@ __global__ void fp8_indexed_moe_gemm_tiled_kernel(
     const T* __restrict__ input,               // [num_tokens, K] or [num_tokens, topk, K]
     const __nv_fp8_e4m3* __restrict__ weights, // [num_experts, N, K]
     const float* __restrict__ weight_scales,   // [num_experts, N/block_y, K/block_x]
-    const int32_t* __restrict__ indices,       // [num_tokens, topk]
+    const uint32_t* __restrict__ indices,       // [num_tokens, topk]
     T* __restrict__ output,                    // [num_tokens, topk, N]
     int num_tokens,
     int topk,
@@ -311,8 +311,8 @@ __global__ void fp8_indexed_moe_gemm_tiled_kernel(
     int n_global = n_start + tid;
 
     // Get expert index
-    int expert_idx = indices[token_idx * topk + expert_slot];
-    if (expert_idx < 0 || expert_idx >= num_experts) return;
+    uint32_t expert_idx = indices[token_idx * topk + expert_slot];
+    if (expert_idx >= (uint32_t)num_experts) return;
 
     const __nv_fp8_e4m3* expert_w = weights + (size_t)expert_idx * N * K;
     int scale_expert_stride = CEILDIV(N, block_size_y) * scale_row_stride;
@@ -437,7 +437,7 @@ extern "C" void launch_fp8_indexed_moe_gemm_f16(
     const __half* input,
     const __nv_fp8_e4m3* weights,
     const float* weight_scales,
-    const int32_t* indices,
+    const uint32_t* indices,
     __half* output,
     int num_tokens,
     int topk,
@@ -467,7 +467,7 @@ extern "C" void launch_fp8_indexed_moe_gemm_bf16(
     const __nv_bfloat16* input,
     const __nv_fp8_e4m3* weights,
     const float* weight_scales,
-    const int32_t* indices,
+    const uint32_t* indices,
     __nv_bfloat16* output,
     int num_tokens,
     int topk,
