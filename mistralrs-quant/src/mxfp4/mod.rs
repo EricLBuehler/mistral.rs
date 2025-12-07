@@ -1,6 +1,6 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
 
 use crate::{
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
@@ -286,6 +286,191 @@ impl MXFP4Layer {
             scales,
             bias,
         }))
+    }
+
+    /// Load GPT-OSS style MXFP4 experts (combined gate_up_proj format).
+    ///
+    /// GPT-OSS stores tensors as:
+    /// - `{name}_blocks`: [num_experts, out_dim, num_blocks, 16] where 16 bytes = 32 FP4 values
+    /// - `{name}_scales`: [num_experts, out_dim, num_blocks]
+    /// - `{name}_bias`: [num_experts, out_dim]
+    ///
+    /// This function loads and reshapes the 4D blocks tensor to 3D [num_experts, out_dim, in_dim/2].
+    pub fn packed_gptoss_linear(
+        num_local_experts: usize,
+        in_dim: usize,
+        out_dim: usize,
+        bias: bool,
+        name: &str,
+        vb: ShardedVarBuilder,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        if !Self::device_supported(vb.device()) {
+            candle_core::bail!("MXFP4Layer requires CUDA or Metal device.");
+        }
+
+        let num_blocks = in_dim / MXFP4_BLOCK_SIZE;
+
+        // Load 4D blocks tensor: [num_experts, out_dim, num_blocks, 16]
+        let blocks_4d = vb.get_with_hints_dtype(
+            (num_local_experts, out_dim, num_blocks, 16),
+            &format!("{name}_blocks"),
+            Default::default(),
+            DType::U8,
+        )?;
+
+        // Reshape to 3D: [num_experts, out_dim, num_blocks * 16] = [num_experts, out_dim, in_dim/2]
+        let blocks = blocks_4d.reshape((num_local_experts, out_dim, num_blocks * 16))?;
+
+        // Load scales: [num_experts, out_dim, num_blocks]
+        let scales = vb.get_with_hints_dtype(
+            (num_local_experts, out_dim, num_blocks),
+            &format!("{name}_scales"),
+            Default::default(),
+            DType::U8,
+        )?;
+
+        // Load bias if present
+        let bias = if bias {
+            Some(vb.get((num_local_experts, out_dim), &format!("{name}_bias"))?)
+        } else {
+            None
+        };
+
+        Ok(Arc::new(Self {
+            blocks,
+            scales,
+            bias,
+        }))
+    }
+
+    /// FP4 E2M1 lookup table for dequantization
+    const FP4_LUT: [f32; 16] = [
+        0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+        -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
+    ];
+
+    /// Dequantize MXFP4 weights to f32
+    /// blocks: [num_experts, N, K/2] packed bytes
+    /// scales: [num_experts, N, K/32] E8M0 scales
+    /// Returns: [num_experts, N, K] f32 weights
+    fn dequantize_weights(&self) -> Result<Tensor> {
+        let blocks_dims = self.blocks.dims();
+        let scales_dims = self.scales.dims();
+
+        let (num_experts, n, k_half) = if blocks_dims.len() == 3 {
+            (blocks_dims[0], blocks_dims[1], blocks_dims[2])
+        } else {
+            (1, blocks_dims[0], blocks_dims[1])
+        };
+        let k = k_half * 2;
+
+        let blocks_cpu = self.blocks.to_device(&Device::Cpu)?;
+        let scales_cpu = self.scales.to_device(&Device::Cpu)?;
+
+        let blocks_data: Vec<u8> = blocks_cpu.flatten_all()?.to_vec1()?;
+        let scales_data: Vec<u8> = scales_cpu.flatten_all()?.to_vec1()?;
+
+        let num_scale_blocks = scales_dims[scales_dims.len() - 1];
+        let mut weights = vec![0f32; num_experts * n * k];
+
+        for expert in 0..num_experts {
+            for n_idx in 0..n {
+                for k_idx in 0..k {
+                    let byte_idx = k_idx / 2;
+                    let block_idx = k_idx / MXFP4_BLOCK_SIZE;
+
+                    let blocks_offset = expert * n * k_half + n_idx * k_half + byte_idx;
+                    let scales_offset = expert * n * num_scale_blocks + n_idx * num_scale_blocks + block_idx;
+
+                    let packed = blocks_data[blocks_offset];
+                    let scale = scales_data[scales_offset];
+
+                    let nibble = if k_idx % 2 == 0 {
+                        packed & 0x0F
+                    } else {
+                        (packed >> 4) & 0x0F
+                    };
+
+                    let base = Self::FP4_LUT[nibble as usize];
+                    let scale_factor = 2f32.powi(scale as i32 - 127);
+                    let value = base * scale_factor;
+
+                    let weight_idx = expert * n * k + n_idx * k + k_idx;
+                    weights[weight_idx] = value;
+                }
+            }
+        }
+
+        let shape = if blocks_dims.len() == 3 {
+            vec![num_experts, n, k]
+        } else {
+            vec![n, k]
+        };
+
+        Tensor::from_vec(weights, shape.as_slice(), &Device::Cpu)?
+            .to_device(self.blocks.device())?
+            .to_dtype(DType::BF16)
+    }
+
+    /// Fallback gather_forward using dequantized weights
+    /// x: [num_tokens, K] or [num_tokens, topk, K]
+    /// indices: [num_tokens, topk]
+    /// Returns: [num_tokens, topk, N]
+    fn gather_forward_dequantize(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        let x_dims = x.dims();
+        let indices_dims = indices.dims();
+
+        let (num_tokens, topk, k, x_has_topk) = if x_dims.len() == 2 {
+            (x_dims[0], indices_dims[1], x_dims[1], false)
+        } else {
+            (x_dims[0], x_dims[1], x_dims[2], true)
+        };
+
+        // Dequantize weights: [num_experts, N, K]
+        let weights = self.dequantize_weights()?;
+        let weight_dims = weights.dims();
+        let n = weight_dims[1];
+
+        // Convert indices to vec for iteration
+        let indices_cpu = indices.to_device(&Device::Cpu)?.to_dtype(DType::U32)?;
+        let indices_data: Vec<u32> = indices_cpu.flatten_all()?.to_vec1()?;
+
+        // Compute output for each (token, expert_slot)
+        let mut outputs = Vec::with_capacity(num_tokens * topk);
+
+        for token_idx in 0..num_tokens {
+            for slot_idx in 0..topk {
+                let expert_idx = indices_data[token_idx * topk + slot_idx] as usize;
+
+                // Get input for this token/slot
+                let input = if x_has_topk {
+                    x.i((token_idx, slot_idx))? // [K]
+                } else {
+                    x.i(token_idx)? // [K]
+                };
+
+                // Get weight for this expert: [N, K]
+                let weight = weights.i(expert_idx)?;
+
+                // Compute: input @ weight.T = [K] @ [K, N] = [N]
+                // weight is [N, K], so weight.T is [K, N]
+                let input_2d = input.unsqueeze(0)?; // [1, K]
+                let weight_t = weight.t()?; // [K, N]
+                let mut output = input_2d.matmul(&weight_t)?.squeeze(0)?; // [N]
+
+                // Add bias if present
+                if let Some(bias) = &self.bias {
+                    let expert_bias = bias.i(expert_idx)?; // [N]
+                    output = output.broadcast_add(&expert_bias)?;
+                }
+
+                outputs.push(output);
+            }
+        }
+
+        // Stack outputs: [num_tokens * topk, N] -> [num_tokens, topk, N]
+        let stacked = Tensor::stack(&outputs, 0)?;
+        stacked.reshape((num_tokens, topk, n))
     }
 }
 

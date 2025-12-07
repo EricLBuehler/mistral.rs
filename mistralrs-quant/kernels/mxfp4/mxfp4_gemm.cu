@@ -46,7 +46,8 @@ __constant__ float FP4_LUT[16] = {
 // ============================================================================
 
 // Dequantize a single FP4 nibble with scale
-__device__ __forceinline__ float mxfp4_to_float(uint8_t nibble, int8_t scale_exp) {
+// scale_exp is E8M0 format: unsigned 8-bit exponent with bias 127
+__device__ __forceinline__ float mxfp4_to_float(uint8_t nibble, uint8_t scale_exp) {
     float base = FP4_LUT[nibble & 0xF];
     // ldexp(base, scale_exp - 127) = base * 2^(scale_exp - 127)
     return ldexpf(base, (int)scale_exp - 127);
@@ -127,9 +128,9 @@ __global__ void mxfp4_matmul_tiled(
                 int byte_idx = gk / 2;
                 uint8_t packed = __ldg(&weight[gn * (K / 2) + byte_idx]);
 
-                // Get scale for this block
+                // Get scale for this block (E8M0 format: unsigned exponent)
                 int scale_idx = gk / MXFP4_BLOCK_SIZE;
-                int8_t scale_exp = (int8_t)__ldg(&weight_scale[gn * scale_stride + scale_idx]);
+                uint8_t scale_exp = __ldg(&weight_scale[gn * scale_stride + scale_idx]);
 
                 // Extract correct nibble
                 uint8_t nibble = (gk & 1) ? high_nibble(packed) : low_nibble(packed);
@@ -253,8 +254,9 @@ __global__ void mxfp4_moe_gemm(
         uint8_t byte1 = (packed2 >> 8) & 0xFF;
 
         // Get scale (all 4 values likely share the same scale within block of 32)
+        // E8M0 format: unsigned 8-bit exponent
         int scale_idx = k / MXFP4_BLOCK_SIZE;
-        int8_t scale_exp = (int8_t)__ldg(&scale_row[scale_idx]);
+        uint8_t scale_exp = __ldg(&scale_row[scale_idx]);
 
         // Dequantize 4 values
         float w0 = mxfp4_to_float(low_nibble(byte0), scale_exp);
@@ -279,7 +281,7 @@ __global__ void mxfp4_moe_gemm(
         uint8_t nibble = (k & 1) ? high_nibble(packed) : low_nibble(packed);
 
         int scale_idx = k / MXFP4_BLOCK_SIZE;
-        int8_t scale_exp = (int8_t)__ldg(&scale_row[scale_idx]);
+        uint8_t scale_exp = __ldg(&scale_row[scale_idx]);
 
         float w_val = mxfp4_to_float(nibble, scale_exp);
         acc += in_val * w_val;
