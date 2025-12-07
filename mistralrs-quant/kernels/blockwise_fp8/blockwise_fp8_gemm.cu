@@ -131,6 +131,7 @@ __global__ void fp8_matmul_tiled(
 // ============================================================================
 // FP8 MoE GEMM - Warp-parallel kernel with vectorized loads
 // Each warp (32 threads) computes one output element collaboratively
+// Uses 4-wide vectorized loads for better memory throughput
 // ============================================================================
 
 template<typename T>
@@ -182,9 +183,53 @@ __global__ void fp8_moe_gemm(
 
     float acc = 0.0f;
 
-    // Each thread processes K/32 elements with stride 32
-    // This gives coalesced access when warps read consecutive positions
-    for (int k = lane_id; k < K; k += 32) {
+    // Process 4 elements per thread per iteration using vectorized loads
+    // Each warp processes 32*4 = 128 elements per iteration
+    const int K_aligned = (K / 128) * 128;
+
+    for (int k_base = 0; k_base < K_aligned; k_base += 128) {
+        int k = k_base + lane_id * 4;
+
+        // Load 4 FP8 weights at once (32-bit load)
+        uint32_t w4 = __ldg(reinterpret_cast<const uint32_t*>(&w_row[k]));
+
+        // Load 4 input values
+        float i0, i1, i2, i3;
+        if constexpr (std::is_same_v<T, half>) {
+            // Load as half2 for better memory efficiency
+            half2 h01 = __ldg(reinterpret_cast<const half2*>(&in_row[k]));
+            half2 h23 = __ldg(reinterpret_cast<const half2*>(&in_row[k + 2]));
+            i0 = __half2float(h01.x);
+            i1 = __half2float(h01.y);
+            i2 = __half2float(h23.x);
+            i3 = __half2float(h23.y);
+        } else {
+            __nv_bfloat162 b01 = __ldg(reinterpret_cast<const __nv_bfloat162*>(&in_row[k]));
+            __nv_bfloat162 b23 = __ldg(reinterpret_cast<const __nv_bfloat162*>(&in_row[k + 2]));
+            i0 = __bfloat162float(b01.x);
+            i1 = __bfloat162float(b01.y);
+            i2 = __bfloat162float(b23.x);
+            i3 = __bfloat162float(b23.y);
+        }
+
+        // Extract 4 FP8 values and convert
+        __nv_fp8_e4m3 w0, w1, w2, w3;
+        w0.__x = (w4 >> 0) & 0xFF;
+        w1.__x = (w4 >> 8) & 0xFF;
+        w2.__x = (w4 >> 16) & 0xFF;
+        w3.__x = (w4 >> 24) & 0xFF;
+
+        // Get scale (same for all 4 if within same block)
+        int scale_col = k / block_size_x;
+        float scale = __ldg(&expert_scale[scale_row_offset + scale_col]);
+
+        // Accumulate
+        acc += scale * (i0 * fp8_to_float(w0) + i1 * fp8_to_float(w1) +
+                       i2 * fp8_to_float(w2) + i3 * fp8_to_float(w3));
+    }
+
+    // Handle remainder
+    for (int k = K_aligned + lane_id; k < K; k += 32) {
         float in_val;
         if constexpr (std::is_same_v<T, half>) {
             in_val = __half2float(__ldg(&in_row[k]));
