@@ -1054,7 +1054,9 @@ impl MambaLayer {
 
         for t in 0..seq_len {
             let dt_t = dt.i((.., t, ..))?.unsqueeze(2)?.expand((
-                batch_size, self.num_heads, self.head_dim
+                batch_size,
+                self.num_heads,
+                self.head_dim,
             ))?;
             let x_t = hidden_states.i((.., t, .., ..))?;
             let b_t = b.i((.., t, .., ..))?;
