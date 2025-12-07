@@ -127,9 +127,15 @@ impl QuantMethod for BlockwiseFP8Linear {
         {
             if matches!(x.device(), candle_core::Device::Cuda(_)) && ffi::HAVE_BLOCKWISE_GEMM_KERNELS
             {
+                // Convert indices to I32 if needed (kernel expects I32)
+                let indices_i32 = if indices.dtype() == DType::U32 {
+                    indices.to_dtype(DType::I32)?
+                } else {
+                    indices.clone()
+                };
                 // Use native FP8 indexed MoE GEMM kernel
                 let result =
-                    ops::fp8_indexed_moe_gemm(x, &self.weight, &self.weight_scale_inv, indices, &self.weight_block_size)?;
+                    ops::fp8_indexed_moe_gemm(x, &self.weight, &self.weight_scale_inv, &indices_i32, &self.weight_block_size)?;
                 // Apply bias if present (broadcast over tokens and topk)
                 if let Some(ref bias) = self.bias {
                     return result.broadcast_add(bias);
