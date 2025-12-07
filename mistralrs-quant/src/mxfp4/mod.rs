@@ -345,8 +345,7 @@ impl MXFP4Layer {
 
     /// FP4 E2M1 lookup table for dequantization
     const FP4_LUT: [f32; 16] = [
-        0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
-        -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
+        0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
     ];
 
     /// Dequantize MXFP4 weights to f32
@@ -380,7 +379,8 @@ impl MXFP4Layer {
                     let block_idx = k_idx / MXFP4_BLOCK_SIZE;
 
                     let blocks_offset = expert * n * k_half + n_idx * k_half + byte_idx;
-                    let scales_offset = expert * n * num_scale_blocks + n_idx * num_scale_blocks + block_idx;
+                    let scales_offset =
+                        expert * n * num_scale_blocks + n_idx * num_scale_blocks + block_idx;
 
                     let packed = blocks_data[blocks_offset];
                     let scale = scales_data[scales_offset];

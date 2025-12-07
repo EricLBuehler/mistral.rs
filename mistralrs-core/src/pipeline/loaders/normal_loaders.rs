@@ -4135,14 +4135,14 @@ impl DeviceMappedModelLoader for GptOssLoader {
             let head_dim = cfg.head_dim();
             let size_q = head_dim * cfg.num_attention_heads;
             let size_kv = head_dim * cfg.num_key_value_heads;
-            let q_proj = size_in * size_q / weight_pack_factor
-                + bias_if!(cfg.attention_bias, size_q);
-            let k_proj = size_in * size_kv / weight_pack_factor
-                + bias_if!(cfg.attention_bias, size_kv);
-            let v_proj = size_in * size_kv / weight_pack_factor
-                + bias_if!(cfg.attention_bias, size_kv);
-            let o_proj = size_q * size_in / weight_pack_factor
-                + bias_if!(cfg.attention_bias, size_in);
+            let q_proj =
+                size_in * size_q / weight_pack_factor + bias_if!(cfg.attention_bias, size_q);
+            let k_proj =
+                size_in * size_kv / weight_pack_factor + bias_if!(cfg.attention_bias, size_kv);
+            let v_proj =
+                size_in * size_kv / weight_pack_factor + bias_if!(cfg.attention_bias, size_kv);
+            let o_proj =
+                size_q * size_in / weight_pack_factor + bias_if!(cfg.attention_bias, size_in);
 
             // MoE experts - MXFP4 quantized, so very compact
             // gate_up_proj: [num_experts, intermediate_size * 2, hidden_size/2] packed
@@ -4156,8 +4156,7 @@ impl DeviceMappedModelLoader for GptOssLoader {
             // Plus scales at 1 byte per 32 elements
             let gate_up_scales =
                 cfg.num_local_experts * cfg.intermediate_size * 2 * cfg.hidden_size / 32;
-            let down_scales =
-                cfg.num_local_experts * cfg.hidden_size * cfg.intermediate_size / 32;
+            let down_scales = cfg.num_local_experts * cfg.hidden_size * cfg.intermediate_size / 32;
             // Plus biases
             let gate_up_bias = cfg.num_local_experts * cfg.intermediate_size * 2;
             let down_bias = cfg.num_local_experts * cfg.hidden_size;

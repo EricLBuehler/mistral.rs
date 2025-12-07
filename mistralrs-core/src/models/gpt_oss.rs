@@ -12,8 +12,8 @@
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder, MXFP4Layer,
+    ColumnParallelLayer, MXFP4Layer, QuantMethod, QuantizedConfig, ReplicatedLayer,
+    RowParallelLayer, ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -23,11 +23,13 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     layers::{self, embedding, MatMul, RmsNorm, RotaryEmbedding},
+    ops::TopKLastDimOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalCacheType, NormalLoadingMetadata,
+        NormalModel,
     },
     serde_default_fn,
     utils::progress::NiceProgressBar,
@@ -104,7 +106,9 @@ impl Config {
 /// YARN rotary embedding implementation
 /// Based on HuggingFace transformers YARN implementation
 pub struct YarnRotaryEmbedding {
+    /// Pre-expanded cos with shape [1, 1, max_position_embeddings, half_dim]
     cos: Tensor,
+    /// Pre-expanded sin with shape [1, 1, max_position_embeddings, half_dim]
     sin: Tensor,
     #[allow(dead_code)]
     attention_scale: f32,
@@ -132,7 +136,8 @@ impl YarnRotaryEmbedding {
         // Helper: find correction dimension based on number of rotations
         // HF: (dim * log(max_pos / (num_rotations * 2 * pi))) / (2 * log(base))
         let find_correction_dim = |num_rotations: f64| -> f64 {
-            (dim as f64 * (original_max_pos as f64 / (num_rotations * 2.0 * std::f64::consts::PI)).ln())
+            (dim as f64
+                * (original_max_pos as f64 / (num_rotations * 2.0 * std::f64::consts::PI)).ln())
                 / (2.0 * base.ln())
         };
 
@@ -155,10 +160,8 @@ impl YarnRotaryEmbedding {
             .step_by(2)
             .map(|i| 1.0 / base.powf(i as f64 / dim as f64))
             .collect();
-        let inv_freq_interpolation: Vec<f64> = inv_freq_extrapolation
-            .iter()
-            .map(|f| f / factor)
-            .collect();
+        let inv_freq_interpolation: Vec<f64> =
+            inv_freq_extrapolation.iter().map(|f| f / factor).collect();
 
         // Linear ramp factor over dimension indices
         // HF: linear_func = (arange(dim//2) - low) / (high - low); clamp(0, 1)
@@ -167,7 +170,11 @@ impl YarnRotaryEmbedding {
         //          = interp * ramp + extrap * (1 - ramp)
         let inv_freq: Vec<f64> = (0..half_dim)
             .map(|i| {
-                let range = if (high - low).abs() < 0.001 { 0.001 } else { high - low };
+                let range = if (high - low).abs() < 0.001 {
+                    0.001
+                } else {
+                    high - low
+                };
                 let linear = (i as f64 - low) / range;
                 let ramp = linear.clamp(0.0, 1.0);
                 // extrapolation_factor = 1 - ramp
@@ -193,8 +200,15 @@ impl YarnRotaryEmbedding {
         // Apply attention scale to sin/cos (matches HF transformers behavior)
         // When applied to both Q and K, the effect on scores is scale^2, but this
         // matches how the model was trained with HF transformers
-        let sin = (freqs.sin()? * attention_scale as f64)?.to_dtype(dtype)?;
-        let cos = (freqs.cos()? * attention_scale as f64)?.to_dtype(dtype)?;
+        // Pre-expand to [1, 1, max_position_embeddings, half_dim] to avoid unsqueeze in forward
+        let sin = (freqs.sin()? * attention_scale as f64)?
+            .to_dtype(dtype)?
+            .unsqueeze(0)?
+            .unsqueeze(0)?;
+        let cos = (freqs.cos()? * attention_scale as f64)?
+            .to_dtype(dtype)?
+            .unsqueeze(0)?
+            .unsqueeze(0)?;
 
         Ok(Self {
             cos,
@@ -208,6 +222,8 @@ impl YarnRotaryEmbedding {
     ///   first_half, second_half = torch.chunk(x, 2, dim=-1)
     ///   first_ = first_half * cos - second_half * sin
     ///   second_ = second_half * cos + first_half * sin
+    ///
+    /// cos and sin are pre-expanded to [1, 1, seq_len, half] to avoid unsqueeze overhead
     fn apply_rotary_emb_chunked(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
         let (_b, _h, _seq, n_embd) = x.dims4()?;
         let half = n_embd / 2;
@@ -216,13 +232,10 @@ impl YarnRotaryEmbedding {
         let first_half = x.narrow(D::Minus1, 0, half)?;
         let second_half = x.narrow(D::Minus1, half, half)?;
 
-        // cos and sin have shape [seq_len, half] - need to broadcast to [1, 1, seq_len, half]
-        let cos = cos.unsqueeze(0)?.unsqueeze(0)?;
-        let sin = sin.unsqueeze(0)?.unsqueeze(0)?;
-
+        // cos and sin already have shape [1, 1, seq_len, half] - no unsqueeze needed
         // Apply rotation
-        let first_out = (first_half.broadcast_mul(&cos)? - second_half.broadcast_mul(&sin)?)?;
-        let second_out = (second_half.broadcast_mul(&cos)? + first_half.broadcast_mul(&sin)?)?;
+        let first_out = (first_half.broadcast_mul(cos)? - second_half.broadcast_mul(sin)?)?;
+        let second_out = (second_half.broadcast_mul(cos)? + first_half.broadcast_mul(sin)?)?;
 
         // Concatenate back
         Tensor::cat(&[&first_out, &second_out], D::Minus1)
@@ -237,8 +250,9 @@ impl YarnRotaryEmbedding {
         let (_b_sz, _qh, seq_len, _n_embd) = q.dims4()?;
 
         if seqlen_offsets.len() == 1 {
-            let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
-            let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
+            // Narrow along dim 2 (sequence dimension) since cos/sin are [1, 1, max_pos, half]
+            let cos = self.cos.narrow(2, seqlen_offsets[0], seq_len)?;
+            let sin = self.sin.narrow(2, seqlen_offsets[0], seq_len)?;
             let q_embed = Self::apply_rotary_emb_chunked(&q.contiguous()?, &cos, &sin)?;
             let k_embed = Self::apply_rotary_emb_chunked(&k.contiguous()?, &cos, &sin)?;
             Ok((q_embed, k_embed))
@@ -246,10 +260,19 @@ impl YarnRotaryEmbedding {
             let mut q_embeds = Vec::new();
             let mut k_embeds = Vec::new();
             for (i, offset) in seqlen_offsets.iter().enumerate() {
-                let cos = self.cos.narrow(0, *offset, seq_len)?;
-                let sin = self.sin.narrow(0, *offset, seq_len)?;
-                let q_embed = Self::apply_rotary_emb_chunked(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                let k_embed = Self::apply_rotary_emb_chunked(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                // Narrow along dim 2 (sequence dimension)
+                let cos = self.cos.narrow(2, *offset, seq_len)?;
+                let sin = self.sin.narrow(2, *offset, seq_len)?;
+                let q_embed = Self::apply_rotary_emb_chunked(
+                    &q.i(i)?.unsqueeze(0)?.contiguous()?,
+                    &cos,
+                    &sin,
+                )?;
+                let k_embed = Self::apply_rotary_emb_chunked(
+                    &k.i(i)?.unsqueeze(0)?.contiguous()?,
+                    &cos,
+                    &sin,
+                )?;
                 q_embeds.push(q_embed);
                 k_embeds.push(k_embed);
             }
@@ -288,7 +311,8 @@ fn gptoss_swiglu(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -> Result<T
 
     // Clamp gate to max=limit only (no min bound), up to [-limit, limit]
     // HF: gate.clamp(min=None, max=self.limit)
-    let gate_clamped = gate.minimum(&Tensor::full(limit_d, gate.shape(), gate.device())?.to_dtype(dtype)?)?;
+    let gate_clamped =
+        gate.minimum(&Tensor::full(limit_d, gate.shape(), gate.device())?.to_dtype(dtype)?)?;
     let up_clamped = up.clamp(-limit_d, limit_d)?;
 
     // glu = gate * sigmoid(gate * alpha)
@@ -383,11 +407,7 @@ impl Attention {
             cfg.layer_types.get(layer_idx),
             Some(LayerType::SlidingAttention)
         );
-        let sliding_window = if is_sliding {
-            cfg.sliding_window
-        } else {
-            None
-        };
+        let sliding_window = if is_sliding { cfg.sliding_window } else { None };
 
         Ok(Self {
             q_proj,
@@ -495,7 +515,15 @@ impl Attention {
                 let (k, v) = kv_cache.append(&k, &v)?;
 
                 // Custom attention with sinks for non-paged attention
-                self.attention_with_sinks(&q, &k, &v, attention_mask, seqlen_offsets, flash_params, layer_idx)?
+                self.attention_with_sinks(
+                    &q,
+                    &k,
+                    &v,
+                    attention_mask,
+                    seqlen_offsets,
+                    flash_params,
+                    layer_idx,
+                )?
             }
         };
 
@@ -531,20 +559,21 @@ impl Attention {
         let (b_sz, num_heads, q_len, _head_dim) = q.dims4()?;
         let (_, _, k_len, _) = k.dims4()?;
 
-        // Repeat KV for grouped query attention
-        let k = if self.sdpa_params.n_kv_groups > 1 {
-            crate::layers::repeat_kv(k.clone(), self.sdpa_params.n_kv_groups)?
+        // Repeat KV for grouped query attention - only clone if needed
+        let k_expanded;
+        let v_expanded;
+        let (k_ref, v_ref): (&Tensor, &Tensor) = if self.sdpa_params.n_kv_groups > 1 {
+            k_expanded = crate::layers::repeat_kv(k.clone(), self.sdpa_params.n_kv_groups)?;
+            v_expanded = crate::layers::repeat_kv(v.clone(), self.sdpa_params.n_kv_groups)?;
+            (&k_expanded, &v_expanded)
         } else {
-            k.clone()
-        };
-        let v = if self.sdpa_params.n_kv_groups > 1 {
-            crate::layers::repeat_kv(v.clone(), self.sdpa_params.n_kv_groups)?
-        } else {
-            v.clone()
+            // No GQA expansion needed - use original references without cloning
+            (k, v)
         };
 
         // Compute attention scores: [b, heads, q_len, k_len]
-        let attn_weights = (q.matmul(&k.transpose(D::Minus2, D::Minus1)?)? * self.sdpa_params.softmax_scale as f64)?;
+        let attn_weights = (q.matmul(&k_ref.transpose(D::Minus2, D::Minus1)?)?
+            * self.sdpa_params.softmax_scale as f64)?;
 
         // Apply attention mask (causal or sliding window - already computed in inner_forward)
         let attn_weights = if let Some(mask) = attention_mask {
@@ -552,7 +581,8 @@ impl Attention {
             // We need to narrow the last dim to k_len, but only if it's larger than k_len
             let mask_last_dim = mask.dim(D::Minus1)?;
             let causal_mask = if mask_last_dim > k_len {
-                mask.narrow(D::Minus1, 0, k_len)?.to_dtype(attn_weights.dtype())?
+                mask.narrow(D::Minus1, 0, k_len)?
+                    .to_dtype(attn_weights.dtype())?
             } else {
                 // Mask is already the right size or smaller (will broadcast)
                 mask.to_dtype(attn_weights.dtype())?
@@ -584,7 +614,7 @@ impl Attention {
         let scores = probs.narrow(D::Minus1, 0, k_len)?.contiguous()?;
 
         // Compute output
-        scores.matmul(&v)
+        scores.matmul(v_ref)
     }
 }
 
@@ -648,23 +678,15 @@ impl GptOssMoE {
     fn forward(&self, xs: &Tensor, _layer_idx: usize) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
-        let _num_tokens = xs_flat.dim(0)?;
 
         // Compute routing logits
         let router_logits = self.gate.forward(&xs_flat)?.to_dtype(DType::F32)?;
 
-        // HF: Select top-k from raw logits FIRST, then softmax only on selected values
-        // router_top_value, router_indices = torch.topk(router_logits, self.top_k, dim=-1)
-        // router_scores = softmax(router_top_value, dim=1)
-        let topk_ids_i64 = router_logits
-            .arg_sort_last_dim(false)?
-            .narrow(D::Minus1, 0, self.num_experts_per_tok)?
-            .contiguous()?;
-
-        let topk_logits = router_logits.gather(&topk_ids_i64, D::Minus1)?;
-
-        // Convert to U32 for the CUDA kernel
-        let topk_ids = topk_ids_i64.to_dtype(DType::U32)?;
+        // Use optimized topk operation instead of arg_sort + narrow + gather
+        // This is more efficient as topk can use partial sorting
+        let topk_result = router_logits.topk(self.num_experts_per_tok)?;
+        let topk_logits = topk_result.values;
+        let topk_ids = topk_result.indices; // Already U32
 
         // Softmax only on the top-k logits (not all logits)
         let topk_weights = candle_nn::ops::softmax_last_dim(&topk_logits)?;
@@ -678,9 +700,14 @@ impl GptOssMoE {
         // gate_up shape: [num_tokens, topk, intermediate_size * 2]
         // Reshape to [num_tokens, topk, intermediate_size, 2] then select
         let (num_tokens, topk_dim, _) = gate_up.dims3()?;
-        let gate_up_reshaped = gate_up.reshape((num_tokens, topk_dim, self.intermediate_size, 2))?;
-        let gate = gate_up_reshaped.narrow(D::Minus1, 0, 1)?.squeeze(D::Minus1)?;
-        let up = gate_up_reshaped.narrow(D::Minus1, 1, 1)?.squeeze(D::Minus1)?;
+        let gate_up_reshaped =
+            gate_up.reshape((num_tokens, topk_dim, self.intermediate_size, 2))?;
+        let gate = gate_up_reshaped
+            .narrow(D::Minus1, 0, 1)?
+            .squeeze(D::Minus1)?;
+        let up = gate_up_reshaped
+            .narrow(D::Minus1, 1, 1)?
+            .squeeze(D::Minus1)?;
 
         // Apply GPT-OSS SwiGLU activation
         let activated = gptoss_swiglu(&gate, &up, self.alpha, self.limit)?;
@@ -942,16 +969,35 @@ impl Model {
             v_head_dim: head_dim,
         };
 
+        // Create hybrid cache: RotatingCache for sliding_attention layers, NormalCache for full_attention
+        // This allows sliding window layers to automatically truncate old tokens in the KV cache,
+        // eliminating the need for sliding window masks during decode
+        let cache_types: Vec<NormalCacheType> = (0..cfg.num_hidden_layers)
+            .map(|layer_idx| {
+                match cfg.layer_types.get(layer_idx) {
+                    Some(LayerType::SlidingAttention) => {
+                        // Use rotating cache for sliding window layers
+                        NormalCacheType::SlidingWindow {
+                            window: cfg.sliding_window.unwrap_or(cfg.max_position_embeddings),
+                        }
+                    }
+                    _ => {
+                        // Use normal cache for full attention layers
+                        NormalCacheType::Normal {
+                            max_seq_len: cfg.max_position_embeddings,
+                        }
+                    }
+                }
+            })
+            .collect();
+
         Ok(Self {
             embed_tokens,
             layers,
             norm,
             lm_head,
             device: normal_loading_metadata.real_device,
-            cache: EitherCache::Normal(NormalCache::new(
-                cfg.num_hidden_layers,
-                cfg.max_position_embeddings,
-            )),
+            cache: EitherCache::Normal(NormalCache::from_types(cache_types)),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
             cfg: cfg.clone(),
@@ -974,62 +1020,72 @@ impl Model {
         // GPT-OSS uses custom attention with sinks, which requires the full causal mask
         // Don't use CausalMasker which shortcuts to (1,1) when flash-attn is enabled
         let (_b_sz, tgt_len) = input_ids.dims2()?;
-        let past_kv_len = if cache.is_empty() { 0 } else { cache[0].current_seq_len() };
         let sliding_window = self.cfg.sliding_window;
 
-        // Create both masks: normal causal and sliding window causal
-        // During generation (tgt_len == 1), we still need sliding mask for sliding window layers
-        let kv_len = tgt_len + past_kv_len;
-
-        // Normal causal mask: 0.0 for positions to attend, -inf for positions to mask
-        // During generation (tgt_len == 1), full attention doesn't need a mask
-        let causal_mask = if tgt_len == 1 {
-            None
+        // During decode (tgt_len == 1), no masks are needed:
+        // - Full attention layers: single query can attend to all cached positions
+        // - Sliding attention layers: RotatingCache automatically truncates to window size
+        //
+        // During prefill (tgt_len > 1), we need masks:
+        // - Causal mask for full attention layers
+        // - Sliding window mask for sliding attention layers
+        let (causal_mask, sliding_mask) = if tgt_len == 1 {
+            (None, None)
         } else {
-            let causal_data: Vec<f32> = (0..tgt_len)
-                .flat_map(|i| {
-                    (0..kv_len).map(move |j| {
-                        if j <= i + past_kv_len {
-                            0.0f32
-                        } else {
-                            f32::NEG_INFINITY
-                        }
-                    })
-                })
-                .collect();
-            Some(
-                Tensor::from_vec(causal_data, (tgt_len, kv_len), input_ids.device())?
-                    .to_dtype(xs.dtype())?
+            // Get past_kv_len from first full attention layer (they all have same seq len during prefill)
+            let past_kv_len = cache[0].current_seq_len();
+            let kv_len = tgt_len + past_kv_len;
+
+            // Create causal mask using tensor operations for better performance
+            let q_pos = Tensor::arange(
+                past_kv_len as u32,
+                (past_kv_len + tgt_len) as u32,
+                input_ids.device(),
+            )?
+            .to_dtype(DType::I64)?
+            .reshape((tgt_len, 1))?;
+            let k_pos = Tensor::arange(0u32, kv_len as u32, input_ids.device())?
+                .to_dtype(DType::I64)?
+                .reshape((1, kv_len))?;
+
+            // Causal mask: attend where k <= q
+            let causal_mask_bool = k_pos.broadcast_gt(&q_pos)?;
+            let zeros = Tensor::zeros((tgt_len, kv_len), xs.dtype(), input_ids.device())?;
+            let neg_inf = Tensor::full(f32::NEG_INFINITY, (tgt_len, kv_len), input_ids.device())?
+                .to_dtype(xs.dtype())?;
+            let causal_mask = Some(
+                causal_mask_bool
+                    .where_cond(&neg_inf, &zeros)?
                     .unsqueeze(0)?
                     .unsqueeze(0)?,
-            )
-        };
+            );
 
-        // Sliding window mask: ALWAYS needed for sliding window layers, even during generation
-        // This is critical - without it, sliding window layers attend to all positions
-        let sliding_mask = if let Some(window) = sliding_window {
-            let sliding_data: Vec<f32> = (0..tgt_len)
-                .flat_map(|i| {
-                    (0..kv_len).map(move |j| {
-                        let q_abs = past_kv_len + i;
-                        let min_k = q_abs.saturating_sub(window);
-                        // Sliding window: can attend if j <= q_abs AND j >= min_k
-                        if j <= i + past_kv_len && j >= min_k {
-                            0.0f32
-                        } else {
-                            f32::NEG_INFINITY
-                        }
-                    })
-                })
-                .collect();
-            Some(
-                Tensor::from_vec(sliding_data, (tgt_len, kv_len), input_ids.device())?
-                    .to_dtype(xs.dtype())?
-                    .unsqueeze(0)?
-                    .unsqueeze(0)?,
-            )
-        } else {
-            None
+            // Sliding window mask (only if sliding_window is configured)
+            let sliding_mask = if let Some(window) = sliding_window {
+                // min_k = max(0, q_pos - window)
+                let window_tensor = Tensor::full(window as i64, q_pos.shape(), input_ids.device())?;
+                let min_k = q_pos.sub(&window_tensor)?.maximum(0i64)?;
+
+                // Attend where k >= min_k AND k <= q_pos
+                let too_far_left = k_pos.broadcast_lt(&min_k)?;
+                let too_far_right = k_pos.broadcast_gt(&q_pos)?;
+                // Combine: mask out if either condition is true
+                let sliding_mask_bool = too_far_left
+                    .to_dtype(DType::U8)?
+                    .add(&too_far_right.to_dtype(DType::U8)?)?
+                    .gt(0u8)?;
+
+                Some(
+                    sliding_mask_bool
+                        .where_cond(&neg_inf, &zeros)?
+                        .unsqueeze(0)?
+                        .unsqueeze(0)?,
+                )
+            } else {
+                None
+            };
+
+            (causal_mask, sliding_mask)
         };
 
         // PagedAttention prompt chunking filter
@@ -1057,9 +1113,7 @@ impl Model {
                     .as_ref(),
                 seqlen_offsets,
                 &mut cache[i],
-                metadata
-                    .as_ref()
-                    .map(|(kv, m)| (kv[i].clone(), *m)),
+                metadata.as_ref().map(|(kv, m)| (kv[i].clone(), *m)),
                 flash_params,
                 i,
             )?;
@@ -1107,7 +1161,13 @@ impl NormalModel for Model {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        self.inner_forward(input_ids, seqlen_offsets, context_lens, metadata, flash_params)
+        self.inner_forward(
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            metadata,
+            flash_params,
+        )
     }
 
     fn xlora_forward(
