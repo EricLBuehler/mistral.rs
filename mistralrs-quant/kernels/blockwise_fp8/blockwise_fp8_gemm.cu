@@ -131,7 +131,6 @@ __global__ void fp8_matmul_tiled(
 // ============================================================================
 // FP8 MoE GEMM - Warp-parallel kernel with vectorized loads
 // Each warp (32 threads) computes one output element collaboratively
-// Uses 4-wide vectorized loads for better memory throughput
 // ============================================================================
 
 template<typename T>
@@ -196,7 +195,6 @@ __global__ void fp8_moe_gemm(
         // Load 4 input values
         float i0, i1, i2, i3;
         if constexpr (std::is_same_v<T, half>) {
-            // Load as half2 for better memory efficiency
             half2 h01 = __ldg(reinterpret_cast<const half2*>(&in_row[k]));
             half2 h23 = __ldg(reinterpret_cast<const half2*>(&in_row[k + 2]));
             i0 = __half2float(h01.x);
@@ -219,7 +217,7 @@ __global__ void fp8_moe_gemm(
         w2.__x = (w4 >> 16) & 0xFF;
         w3.__x = (w4 >> 24) & 0xFF;
 
-        // Get scale (same for all 4 if within same block)
+        // Get scale
         int scale_col = k / block_size_x;
         float scale = __ldg(&expert_scale[scale_row_offset + scale_col]);
 
@@ -333,9 +331,8 @@ extern "C" void launch_fp8_indexed_moe_gemm_f16(
     cudaStream_t stream
 ) {
     // Each warp (32 threads) computes one output element
-    // Total output elements = num_tokens * topk * N
-    // Total warps needed = num_tokens * topk * N
-    constexpr int THREADS_PER_BLOCK = 256;  // 8 warps per block
+    // Use 512 threads per block (16 warps) for better occupancy
+    constexpr int THREADS_PER_BLOCK = 512;
     constexpr int WARPS_PER_BLOCK = THREADS_PER_BLOCK / 32;
 
     int total_outputs = num_tokens * topk * N;
@@ -370,9 +367,8 @@ extern "C" void launch_fp8_indexed_moe_gemm_bf16(
     cudaStream_t stream
 ) {
     // Each warp (32 threads) computes one output element
-    // Total output elements = num_tokens * topk * N
-    // Total warps needed = num_tokens * topk * N
-    constexpr int THREADS_PER_BLOCK = 256;  // 8 warps per block
+    // Use 512 threads per block (16 warps) for better occupancy
+    constexpr int THREADS_PER_BLOCK = 512;
     constexpr int WARPS_PER_BLOCK = THREADS_PER_BLOCK / 32;
 
     int total_outputs = num_tokens * topk * N;
