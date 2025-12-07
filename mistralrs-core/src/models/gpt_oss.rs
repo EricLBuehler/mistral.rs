@@ -179,7 +179,9 @@ impl YarnRotaryEmbedding {
 
         let freqs = t.matmul(&inv_freq_tensor)?;
 
-        // Apply attention scale to sin/cos
+        // Apply attention scale to sin/cos (matches HF transformers behavior)
+        // When applied to both Q and K, the effect on scores is scale^2, but this
+        // matches how the model was trained with HF transformers
         let sin = (freqs.sin()? * attention_scale as f64)?.to_dtype(dtype)?;
         let cos = (freqs.cos()? * attention_scale as f64)?.to_dtype(dtype)?;
 
@@ -498,7 +500,7 @@ impl Attention {
                 let (k, v) = kv_cache.append(&k, &v)?;
 
                 // Custom attention with sinks for non-paged attention
-                self.attention_with_sinks(&q, &k, &v, attention_mask, flash_params)?
+                self.attention_with_sinks(&q, &k, &v, attention_mask, seqlen_offsets, flash_params)?
             }
         };
 
@@ -525,21 +527,9 @@ impl Attention {
         k: &Tensor,
         v: &Tensor,
         attention_mask: Option<&Tensor>,
+        seqlen_offsets: &[usize],
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        // For efficiency, if sinks are all zeros, use standard SDPA
-        let sinks_sum = self.sinks.abs()?.sum_all()?.to_dtype(DType::F32)?.to_scalar::<f32>()?;
-        if sinks_sum < 1e-6 {
-            return Sdpa.run_attention(
-                q,
-                k,
-                v,
-                attention_mask,
-                Some(flash_params),
-                &self.sdpa_params,
-            );
-        }
-
         // Manual attention with sinks
         let (b_sz, num_heads, q_len, _head_dim) = q.dims4()?;
         let (_, _, k_len, _) = k.dims4()?;
@@ -575,12 +565,35 @@ impl Attention {
             attn_weights
         };
 
-        // Apply sliding window mask if configured
-        // Note: For sliding window with sinks, we rely on the causal mask which should
-        // already handle sliding window constraints. The SDPA path handles this correctly,
-        // and for now we skip additional sliding window masking here as it requires
-        // knowing the absolute sequence position which we don't have access to here.
-        // TODO: Pass seqlen_offset to properly compute sliding window mask for generation
+        // Apply sliding window mask if configured for this layer
+        let attn_weights = if let Some(window) = self.sdpa_params.sliding_window {
+            // For sliding window attention, mask positions outside the window
+            // Query at absolute position q_abs can only attend to keys where:
+            // k_pos >= q_abs - window
+            // Since k_pos ranges from 0 to k_len-1 and q_abs = seqlen_offset + q_idx
+            let seqlen_offset = seqlen_offsets.first().copied().unwrap_or(0);
+
+            // Create sliding window mask: [q_len, k_len]
+            // For each (q_idx, k_idx), mask if k_idx < seqlen_offset + q_idx - window
+            let mut mask_data = vec![0.0f32; q_len * k_len];
+            for q_idx in 0..q_len {
+                let q_abs = seqlen_offset + q_idx;
+                let min_k = q_abs.saturating_sub(window);
+                for k_idx in 0..k_len {
+                    if k_idx < min_k {
+                        mask_data[q_idx * k_len + k_idx] = f32::NEG_INFINITY;
+                    }
+                }
+            }
+
+            let sliding_mask = Tensor::from_vec(mask_data, (q_len, k_len), q.device())?
+                .to_dtype(attn_weights.dtype())?
+                .reshape((1, 1, q_len, k_len))?;
+
+            attn_weights.broadcast_add(&sliding_mask)?
+        } else {
+            attn_weights
+        };
 
         // Add sinks: reshape [num_heads] -> [1, num_heads, 1, 1] and concat along last dim
         let sinks_expanded = self
