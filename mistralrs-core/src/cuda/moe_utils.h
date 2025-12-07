@@ -1,14 +1,14 @@
 #undef __CUDA_FP8_TYPES_EXIST__
+#include <cstdint>
+#include <cstdio>
 #include <cuda.h>
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <thrust/device_ptr.h>
-#include <thrust/scan.h>
 #include <thrust/execution_policy.h>
-#include <cstdio>
-#include <cstdint>
+#include <thrust/scan.h>
 #include <type_traits>
-#include <cuda_fp16.h>
-#include <cuda_bf16.h>
 
 namespace vllm {
 
@@ -35,11 +35,11 @@ inline __device__ float half_to_float(uint16_t h) {
   return f;
 }
 
-inline __device__ void from_float(half& dst, float src) {
+inline __device__ void from_float(half &dst, float src) {
   dst = static_cast<half>(float_to_half(src));
 }
 
-inline __device__ void from_float(__nv_bfloat16& dst, float src) {
+inline __device__ void from_float(__nv_bfloat16 &dst, float src) {
   dst = __float2bfloat16(src);
 }
 
@@ -51,15 +51,14 @@ inline __device__ float to_float(__nv_bfloat16 u) {
   return __bfloat162float(u);
 }
 
-}
+} // namespace vllm
 
-
-#define ASSERT_THROW(cond, msg) \
-    do { \
-        if (!(cond)) { \
-            throw std::runtime_error(msg); \
-        } \
-    } while (0)
+#define ASSERT_THROW(cond, msg)                                                \
+  do {                                                                         \
+    if (!(cond)) {                                                             \
+      throw std::runtime_error(msg);                                           \
+    }                                                                          \
+  } while (0)
 
 /**
  * @brief Counts the number of tokens assigned to each expert.
@@ -69,18 +68,16 @@ inline __device__ float to_float(__nv_bfloat16 u) {
  * (must be pre-initialized to zero).
  * @param size_m         Total number of tokens.
  */
-static __global__ void count_tokens_per_expert_kernel(
-    const int32_t* expert_ids, 
-    int32_t* expert_counts, 
-    int size_m) 
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < size_m) {
-        int32_t expert_id = expert_ids[i];
-        // expert_id is from a sorted list, so we assume it's valid
-        // (i.e., 0 <= expert_id < num_experts)
-        atomicAdd(&expert_counts[expert_id], 1);
-    }
+static __global__ void count_tokens_per_expert_kernel(const int32_t *expert_ids,
+                                                      int32_t *expert_counts,
+                                                      int size_m) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < size_m) {
+    int32_t expert_id = expert_ids[i];
+    // expert_id is from a sorted list, so we assume it's valid
+    // (i.e., 0 <= expert_id < num_experts)
+    atomicAdd(&expert_counts[expert_id], 1);
+  }
 }
 
 /**
@@ -92,49 +89,44 @@ static __global__ void count_tokens_per_expert_kernel(
  * @param num_experts      Number of experts.
  * @param stream           CUDA stream.
  */
-static void calculate_expert_offsets(
-    const int32_t* d_expert_ids,
-    int size_m,
-    int32_t* d_expert_offsets,
-    int num_experts,
-    cudaStream_t stream
-) {
-    // We need a temporary buffer for counts
-    int32_t* d_expert_counts;
-    cudaMallocAsync(&d_expert_counts, num_experts * sizeof(int32_t), stream);
+static void calculate_expert_offsets(const int32_t *d_expert_ids, int size_m,
+                                     int32_t *d_expert_offsets, int num_experts,
+                                     cudaStream_t stream) {
+  // We need a temporary buffer for counts
+  int32_t *d_expert_counts;
+  cudaMallocAsync(&d_expert_counts, num_experts * sizeof(int32_t), stream);
 
-    // 1. Zero-initialize the counts buffer
-    cudaMemsetAsync(d_expert_counts, 0, num_experts * sizeof(int32_t), stream);
+  // 1. Zero-initialize the counts buffer
+  cudaMemsetAsync(d_expert_counts, 0, num_experts * sizeof(int32_t), stream);
 
-    // 2. Launch kernel to count tokens per expert
-    int threads = 256;
-    int blocks = (size_m + threads - 1) / threads;
-    count_tokens_per_expert_kernel<<<blocks, threads, 0, stream>>>(
-        d_expert_ids, d_expert_counts, size_m
-    );
+  // 2. Launch kernel to count tokens per expert
+  int threads = 256;
+  int blocks = (size_m + threads - 1) / threads;
+  count_tokens_per_expert_kernel<<<blocks, threads, 0, stream>>>(
+      d_expert_ids, d_expert_counts, size_m);
 
-    // 3. Perform prefix sum (scan)
-    // We will use inclusive_scan on [counts] and store results in [offsets + 1]
-    // This is a common and efficient pattern.
+  // 3. Perform prefix sum (scan)
+  // We will use inclusive_scan on [counts] and store results in [offsets + 1]
+  // This is a common and efficient pattern.
 
-    // Wrap raw pointers for Thrust
-    thrust::device_ptr<const int32_t> d_counts_ptr(d_expert_counts);
-    thrust::device_ptr<int32_t> d_offsets_ptr(d_expert_offsets);
+  // Wrap raw pointers for Thrust
+  thrust::device_ptr<const int32_t> d_counts_ptr(d_expert_counts);
+  thrust::device_ptr<int32_t> d_offsets_ptr(d_expert_offsets);
 
-    // Run inclusive scan.
-    // Input:  [c0, c1, c2, ...] (size num_experts)
-    // Output: [c0, c0+c1, c0+c1+c2, ...] (stored at offsets[1])
-    thrust::inclusive_scan(
-        thrust::cuda::par.on(stream), // Execute on the specified stream
-        d_counts_ptr,                 // Input start
-        d_counts_ptr + num_experts,   // Input end
-        d_offsets_ptr + 1             // Output start (shifted by 1)
-    );
+  // Run inclusive scan.
+  // Input:  [c0, c1, c2, ...] (size num_experts)
+  // Output: [c0, c0+c1, c0+c1+c2, ...] (stored at offsets[1])
+  thrust::inclusive_scan(
+      thrust::cuda::par.on(stream), // Execute on the specified stream
+      d_counts_ptr,                 // Input start
+      d_counts_ptr + num_experts,   // Input end
+      d_offsets_ptr + 1             // Output start (shifted by 1)
+  );
 
-    // 4. Set the first offset (offsets[0]) to 0
-    // This completes the exclusive scan.
-    cudaMemsetAsync(d_expert_offsets, 0, sizeof(int32_t), stream);
+  // 4. Set the first offset (offsets[0]) to 0
+  // This completes the exclusive scan.
+  cudaMemsetAsync(d_expert_offsets, 0, sizeof(int32_t), stream);
 
-    // 5. Clean up temporary buffer
-    cudaFreeAsync(d_expert_counts, stream);
+  // 5. Clean up temporary buffer
+  cudaFreeAsync(d_expert_counts, stream);
 }
