@@ -1581,6 +1581,136 @@ impl CumSumOp for Tensor {
     }
 }
 
+/// Fused GPT-OSS SwiGLU activation
+/// Formula: output = (clamp(up, -limit, limit) + 1) * gate_clamped * sigmoid(gate_clamped * alpha)
+/// where gate_clamped = min(gate, limit)
+#[cfg(feature = "cuda")]
+pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -> Result<Tensor> {
+    use candle_core::cuda::CudaStorageSlice;
+    use half::{bf16, f16};
+
+    let gate = gate.contiguous()?;
+    let up = up.contiguous()?;
+
+    if gate.shape() != up.shape() {
+        candle_core::bail!(
+            "gptoss_swiglu: gate and up must have same shape, got {:?} vs {:?}",
+            gate.shape(),
+            up.shape()
+        );
+    }
+
+    let device = match gate.device() {
+        candle_core::Device::Cuda(dev) => dev,
+        _ => candle_core::bail!("gptoss_swiglu requires CUDA device"),
+    };
+
+    let n_elements = gate.elem_count();
+    let dtype = gate.dtype();
+
+    let gate_storage = gate.storage_and_layout().0;
+    let up_storage = up.storage_and_layout().0;
+
+    let gate_cuda = match &*gate_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("Expected CUDA storage for gate"),
+    };
+    let up_cuda = match &*up_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("Expected CUDA storage for up"),
+    };
+
+    let stream = device.cuda_stream().cu_stream();
+
+    match dtype {
+        DType::F16 => {
+            let output = device.alloc_zeros::<f16>(n_elements)?;
+            let gate_slice = gate_cuda.as_cuda_slice::<f16>()?;
+            let up_slice = up_cuda.as_cuda_slice::<f16>()?;
+
+            let (gate_ptr, _g_guard) = slice_ptr(gate_slice, 0);
+            let (up_ptr, _u_guard) = slice_ptr(up_slice, 0);
+            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+            unsafe {
+                ffi::gptoss_swiglu_f16(
+                    gate_ptr as *const c_void,
+                    up_ptr as *const c_void,
+                    out_ptr as *mut c_void,
+                    n_elements as u32,
+                    alpha,
+                    limit,
+                    stream,
+                );
+            }
+
+            drop(_o_guard);
+            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                gate.shape().clone(),
+            )))
+        }
+        DType::BF16 => {
+            let output = device.alloc_zeros::<bf16>(n_elements)?;
+            let gate_slice = gate_cuda.as_cuda_slice::<bf16>()?;
+            let up_slice = up_cuda.as_cuda_slice::<bf16>()?;
+
+            let (gate_ptr, _g_guard) = slice_ptr(gate_slice, 0);
+            let (up_ptr, _u_guard) = slice_ptr(up_slice, 0);
+            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+            unsafe {
+                ffi::gptoss_swiglu_bf16(
+                    gate_ptr as *const c_void,
+                    up_ptr as *const c_void,
+                    out_ptr as *mut c_void,
+                    n_elements as u32,
+                    alpha,
+                    limit,
+                    stream,
+                );
+            }
+
+            drop(_o_guard);
+            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                gate.shape().clone(),
+            )))
+        }
+        DType::F32 => {
+            let output = device.alloc_zeros::<f32>(n_elements)?;
+            let gate_slice = gate_cuda.as_cuda_slice::<f32>()?;
+            let up_slice = up_cuda.as_cuda_slice::<f32>()?;
+
+            let (gate_ptr, _g_guard) = slice_ptr(gate_slice, 0);
+            let (up_ptr, _u_guard) = slice_ptr(up_slice, 0);
+            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+            unsafe {
+                ffi::gptoss_swiglu_f32(
+                    gate_ptr as *const c_void,
+                    up_ptr as *const c_void,
+                    out_ptr as *mut c_void,
+                    n_elements as u32,
+                    alpha,
+                    limit,
+                    stream,
+                );
+            }
+
+            drop(_o_guard);
+            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                gate.shape().clone(),
+            )))
+        }
+        _ => candle_core::bail!("gptoss_swiglu: unsupported dtype {:?}", dtype),
+    }
+}
+
 mod tests {
     #[test]
     fn test_cumsum_exclusive_forward_cpu() {

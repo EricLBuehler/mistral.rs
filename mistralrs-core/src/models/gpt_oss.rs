@@ -306,6 +306,13 @@ impl GptOssRotaryEmbedding {
 /// Formula: (up + 1) * gate * sigmoid(gate * alpha)
 /// With clamping: gate clamped to max=limit (no min), up clamped to [-limit, limit]
 fn gptoss_swiglu(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -> Result<Tensor> {
+    // Use fused CUDA kernel when available for better performance
+    #[cfg(feature = "cuda")]
+    if gate.device().is_cuda() {
+        return mistralrs_quant::gptoss_swiglu_fused(gate, up, alpha, limit);
+    }
+
+    // CPU fallback
     let dtype = gate.dtype();
     let limit_d = limit as f64;
 

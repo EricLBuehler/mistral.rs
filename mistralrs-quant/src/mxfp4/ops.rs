@@ -281,6 +281,9 @@ pub fn mxfp4_indexed_moe_gemm(
             };
 
             unsafe {
+                // Unified kernel handles both cases with adaptive grid dimensions:
+                // - input_has_topk_dim=false: Fewer blocks, quantize input once per token
+                // - input_has_topk_dim=true: Standard per-expert-slot processing
                 ffi::launch_mxfp4_indexed_moe_gemm_f16(
                     input_ptr as *const f16,
                     weight_ptr as *const u8,
@@ -330,6 +333,7 @@ pub fn mxfp4_indexed_moe_gemm(
             };
 
             unsafe {
+                // Unified kernel handles both cases with adaptive grid dimensions
                 ffi::launch_mxfp4_indexed_moe_gemm_bf16(
                     input_ptr as *const bf16,
                     weight_ptr as *const u8,

@@ -172,4 +172,33 @@ extern "C" {
     pub(crate) fn leftshift_u32(d_in1: *const c_void, d_out: *mut c_void, N: u32, k: i32);
     pub(crate) fn leftshift_i64(d_in1: *const c_void, d_out: *mut c_void, N: u32, k: i32);
     pub(crate) fn leftshift_i32(d_in1: *const c_void, d_out: *mut c_void, N: u32, k: i32);
+
+    // Fused GPT-OSS SwiGLU kernel
+    pub fn gptoss_swiglu_f16(
+        gate: *const c_void,
+        up: *const c_void,
+        output: *mut c_void,
+        N: u32,
+        alpha: f32,
+        limit: f32,
+        stream: CUstream,
+    );
+    pub fn gptoss_swiglu_bf16(
+        gate: *const c_void,
+        up: *const c_void,
+        output: *mut c_void,
+        N: u32,
+        alpha: f32,
+        limit: f32,
+        stream: CUstream,
+    );
+    pub fn gptoss_swiglu_f32(
+        gate: *const c_void,
+        up: *const c_void,
+        output: *mut c_void,
+        N: u32,
+        alpha: f32,
+        limit: f32,
+        stream: CUstream,
+    );
 }

@@ -41,16 +41,37 @@ __constant__ float FP4_LUT[16] = {
     -0.0f, -0.5f, -1.0f, -1.5f, -2.0f, -3.0f, -4.0f, -6.0f
 };
 
+// INT8 lookup table for dp4a optimization (values scaled by 2x to allow integer representation)
+// Same as llama.cpp: {0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12}
+// Final result needs to be multiplied by 0.5 to compensate
+__constant__ int8_t FP4_LUT_INT8[16] = {
+    0, 1, 2, 3, 4, 6, 8, 12,
+    0, -1, -2, -3, -4, -6, -8, -12
+};
+
 // ============================================================================
 // Helper functions
 // ============================================================================
 
-// Dequantize a single FP4 nibble with scale
-// scale_exp is E8M0 format: unsigned 8-bit exponent with bias 127
+// Fast E8M0 to float conversion using bit manipulation
+// E8M0 format: unsigned 8-bit exponent with bias 127
+// Result: 2^(e - 127)
+// This is ~2 cycles vs ~20 cycles for ldexpf
+__device__ __forceinline__ float e8m0_to_float(uint8_t e) {
+    // IEEE 754 float: sign(1) | exponent(8) | mantissa(23)
+    // For 2^(e-127), we set exponent field = e, mantissa = 0
+    // The IEEE bias is 127, so exponent field e gives 2^(e-127)
+    return __uint_as_float((uint32_t)e << 23);
+}
+
+// Fast dequantization: LUT lookup + scale multiply (no ldexpf!)
+__device__ __forceinline__ float mxfp4_to_float_fast(uint8_t nibble, float scale) {
+    return FP4_LUT[nibble & 0xF] * scale;
+}
+
+// Legacy function for compatibility - AVOID using this, it's slow!
 __device__ __forceinline__ float mxfp4_to_float(uint8_t nibble, uint8_t scale_exp) {
-    float base = FP4_LUT[nibble & 0xF];
-    // ldexp(base, scale_exp - 127) = base * 2^(scale_exp - 127)
-    return ldexpf(base, (int)scale_exp - 127);
+    return FP4_LUT[nibble & 0xF] * e8m0_to_float(scale_exp);
 }
 
 // Extract low nibble (bits 0-3)
@@ -61,6 +82,24 @@ __device__ __forceinline__ uint8_t low_nibble(uint8_t byte) {
 // Extract high nibble (bits 4-7)
 __device__ __forceinline__ uint8_t high_nibble(uint8_t byte) {
     return (byte >> 4) & 0x0F;
+}
+
+// Pack 4 int8 values into int32 for dp4a
+__device__ __forceinline__ int pack_int8x4(int8_t a, int8_t b, int8_t c, int8_t d) {
+    return (int)(uint8_t)a | ((int)(uint8_t)b << 8) | ((int)(uint8_t)c << 16) | ((int)(uint8_t)d << 24);
+}
+
+// dp4a: dot product of 4 int8 pairs + accumulate
+// result = a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3] + c
+__device__ __forceinline__ int dp4a(int a, int b, int c) {
+#if __CUDA_ARCH__ >= 610
+    return __dp4a(a, b, c);
+#else
+    // Fallback for older architectures
+    int8_t *a8 = (int8_t*)&a;
+    int8_t *b8 = (int8_t*)&b;
+    return c + a8[0]*b8[0] + a8[1]*b8[1] + a8[2]*b8[2] + a8[3]*b8[3];
+#endif
 }
 
 // ============================================================================
@@ -115,7 +154,7 @@ __global__ void mxfp4_matmul_tiled(
             s_input[lm][lk] = val;
         }
 
-        // Load weight tile with dequantization
+        // Load weight tile with dequantization (using fast e8m0_to_float)
         for (int i = tid; i < BLOCK_N * BLOCK_K; i += num_threads) {
             int ln = i / BLOCK_K;
             int lk = i % BLOCK_K;
@@ -128,13 +167,14 @@ __global__ void mxfp4_matmul_tiled(
                 int byte_idx = gk / 2;
                 uint8_t packed = __ldg(&weight[gn * (K / 2) + byte_idx]);
 
-                // Get scale for this block (E8M0 format: unsigned exponent)
+                // Get scale for this block and convert to float ONCE (fast bit manipulation)
                 int scale_idx = gk / MXFP4_BLOCK_SIZE;
                 uint8_t scale_exp = __ldg(&weight_scale[gn * scale_stride + scale_idx]);
+                float scale = e8m0_to_float(scale_exp);
 
-                // Extract correct nibble
+                // Extract correct nibble and dequantize (no ldexpf!)
                 uint8_t nibble = (gk & 1) ? high_nibble(packed) : low_nibble(packed);
-                val = mxfp4_to_float(nibble, scale_exp);
+                val = mxfp4_to_float_fast(nibble, scale);
             }
             s_weight[ln][lk] = val;
         }
@@ -170,18 +210,32 @@ __global__ void mxfp4_matmul_tiled(
 }
 
 // ============================================================================
-// MXFP4 MoE GEMM - Warp-parallel kernel with vectorized loads
-// Each warp (32 threads) computes one output element collaboratively
+// MXFP4 MoE GEMM - Unified Optimized Kernel
+//
+// Key optimizations:
+// 1. Shared memory caching of input row (load ONCE, reuse for all experts)
+// 2. Fast e8m0_to_float (bit manipulation instead of ldexpf)
+// 3. LUT-based FP4 dequantization
+// 4. Adaptive block organization based on input layout:
+//    - input_has_topk_dim=false: Process ALL expert_slots per token in one block
+//    - input_has_topk_dim=true: Process one expert_slot per block
+// 5. Coalesced memory access patterns
 // ============================================================================
 
+// Number of N values processed per block (32 warps × 32 threads = 1024 threads max)
+#define MOE_BLOCK_N 32
+
+// Unified MXFP4 MoE GEMM Kernel
+// When input_has_topk_dim=false: Each block handles ALL topk experts for one (token, n_chunk)
+// When input_has_topk_dim=true: Each block handles ONE (token, expert_slot, n_chunk)
 template <typename T>
 __global__ void mxfp4_moe_gemm(
     const T *__restrict__ input,
     const uint8_t *__restrict__ weights,      // [num_experts, N, K/2]
     const uint8_t *__restrict__ weight_scales, // [num_experts, N, K/32]
     const T *__restrict__ biases,              // [num_experts, N] or nullptr
-    const uint32_t *__restrict__ indices,
-    T *__restrict__ output,
+    const uint32_t *__restrict__ indices,      // [num_tokens, topk]
+    T *__restrict__ output,                    // [num_tokens, topk, N]
     int num_tokens,
     int topk,
     int num_experts,
@@ -189,127 +243,110 @@ __global__ void mxfp4_moe_gemm(
     bool has_bias,
     bool input_has_topk_dim
 ) {
-    // Each warp computes one output element
-    const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
-    const int lane_id = threadIdx.x % 32;
+    // Shared memory for cached input row (as floats)
+    extern __shared__ float s_input[];
 
-    // Decode warp_id to (token, expert_slot, n_idx)
-    const int n_idx = warp_id % N;
-    const int temp = warp_id / N;
-    const int expert_slot = temp % topk;
-    const int token_idx = temp / topk;
+    const int tid = threadIdx.x;
+    const int block_size = blockDim.x;
+    const int n_chunks = CEILDIV(N, MOE_BLOCK_N);
+    const int warp_id = tid / 32;
+    const int lane_id = tid % 32;
+    const int weight_row_stride = K / 2;
+    const int scale_stride = CEILDIV(K, MXFP4_BLOCK_SIZE);
+
+    // Decode block indices based on input layout
+    int token_idx, expert_slot_start, expert_slot_end, n_base;
+
+    if (!input_has_topk_dim) {
+        // Block layout: (token_idx, n_chunk) - process ALL experts per block
+        n_base = (blockIdx.x % n_chunks) * MOE_BLOCK_N;
+        token_idx = blockIdx.x / n_chunks;
+        expert_slot_start = 0;
+        expert_slot_end = topk;
+    } else {
+        // Block layout: (token_idx, expert_slot, n_chunk) - one expert per block
+        n_base = (blockIdx.x % n_chunks) * MOE_BLOCK_N;
+        int temp = blockIdx.x / n_chunks;
+        expert_slot_start = temp % topk;
+        expert_slot_end = expert_slot_start + 1;
+        token_idx = temp / topk;
+    }
 
     if (token_idx >= num_tokens) return;
 
-    const uint32_t expert_idx = __ldg(&indices[token_idx * topk + expert_slot]);
-    if (expert_idx >= (uint32_t)num_experts) return;
+    const int n_idx = n_base + warp_id;
+    if (n_idx >= N) return;
 
-    // Weight layout: [num_experts, N, K/2] for packed bytes
-    const int weight_row_stride = K / 2;
-    const uint8_t *w_row = weights + (size_t)expert_idx * N * weight_row_stride + (size_t)n_idx * weight_row_stride;
-
-    // Scale layout: [num_experts, N, K/32]
-    const int scale_stride = CEILDIV(K, MXFP4_BLOCK_SIZE);
-    const uint8_t *scale_row = weight_scales + (size_t)expert_idx * N * scale_stride + (size_t)n_idx * scale_stride;
-
-    // Input pointer
+    // Get input row pointer
     const T *in_row;
-    if (input_has_topk_dim) {
-        in_row = input + (size_t)token_idx * topk * K + (size_t)expert_slot * K;
-    } else {
+    if (!input_has_topk_dim) {
         in_row = input + (size_t)token_idx * K;
+    } else {
+        in_row = input + (size_t)token_idx * topk * K + (size_t)expert_slot_start * K;
     }
 
-    float acc = 0.0f;
-
-    // Process 4 elements per thread per iteration
-    // Each warp processes 32*4 = 128 elements per iteration
-    const int K_aligned = (K / 128) * 128;
-
-    for (int k_base = 0; k_base < K_aligned; k_base += 128) {
-        int k = k_base + lane_id * 4;
-
-        // Load 4 input values
-        float i0, i1, i2, i3;
+    // Load input row to shared memory (coalesced load)
+    for (int k = tid; k < K; k += block_size) {
         if constexpr (std::is_same_v<T, half>) {
-            half2 h01 = __ldg(reinterpret_cast<const half2 *>(&in_row[k]));
-            half2 h23 = __ldg(reinterpret_cast<const half2 *>(&in_row[k + 2]));
-            i0 = __half2float(h01.x);
-            i1 = __half2float(h01.y);
-            i2 = __half2float(h23.x);
-            i3 = __half2float(h23.y);
+            s_input[k] = __half2float(__ldg(&in_row[k]));
         } else {
-            __nv_bfloat162 b01 = __ldg(reinterpret_cast<const __nv_bfloat162 *>(&in_row[k]));
-            __nv_bfloat162 b23 = __ldg(reinterpret_cast<const __nv_bfloat162 *>(&in_row[k + 2]));
-            i0 = __bfloat162float(b01.x);
-            i1 = __bfloat162float(b01.y);
-            i2 = __bfloat162float(b23.x);
-            i3 = __bfloat162float(b23.y);
+            s_input[k] = __bfloat162float(__ldg(&in_row[k]));
+        }
+    }
+    __syncthreads();
+
+    // Process expert_slots
+    for (int expert_slot = expert_slot_start; expert_slot < expert_slot_end; expert_slot++) {
+        const uint32_t expert_idx = __ldg(&indices[token_idx * topk + expert_slot]);
+        if (expert_idx >= (uint32_t)num_experts) continue;
+
+        const uint8_t *w_row = weights + (size_t)expert_idx * N * weight_row_stride
+                             + (size_t)n_idx * weight_row_stride;
+        const uint8_t *w_scale_row = weight_scales + (size_t)expert_idx * N * scale_stride
+                                   + (size_t)n_idx * scale_stride;
+
+        // Compute dot product: input[K] · weight[K] using warp-level parallelism
+        float acc = 0.0f;
+
+        // Each lane processes K/32 elements
+        for (int k = lane_id; k < K; k += 32) {
+            float in_val = s_input[k];
+
+            // Dequantize MXFP4 weight
+            int byte_idx = k / 2;
+            uint8_t packed = __ldg(&w_row[byte_idx]);
+            uint8_t nibble = (k & 1) ? high_nibble(packed) : low_nibble(packed);
+
+            int scale_idx = k / MXFP4_BLOCK_SIZE;
+            float w_scale = e8m0_to_float(__ldg(&w_scale_row[scale_idx]));
+            float w_val = FP4_LUT[nibble] * w_scale;
+
+            acc = fmaf(in_val, w_val, acc);
         }
 
-        // Load 2 packed bytes (4 FP4 values) - 16-bit load
-        int byte_idx = k / 2;
-        uint16_t packed2 = __ldg(reinterpret_cast<const uint16_t *>(&w_row[byte_idx]));
-        uint8_t byte0 = packed2 & 0xFF;
-        uint8_t byte1 = (packed2 >> 8) & 0xFF;
-
-        // Get scale (all 4 values likely share the same scale within block of 32)
-        // E8M0 format: unsigned 8-bit exponent
-        int scale_idx = k / MXFP4_BLOCK_SIZE;
-        uint8_t scale_exp = __ldg(&scale_row[scale_idx]);
-
-        // Dequantize 4 values
-        float w0 = mxfp4_to_float(low_nibble(byte0), scale_exp);
-        float w1 = mxfp4_to_float(high_nibble(byte0), scale_exp);
-        float w2 = mxfp4_to_float(low_nibble(byte1), scale_exp);
-        float w3 = mxfp4_to_float(high_nibble(byte1), scale_exp);
-
-        acc += i0 * w0 + i1 * w1 + i2 * w2 + i3 * w3;
-    }
-
-    // Handle remainder
-    for (int k = K_aligned + lane_id; k < K; k += 32) {
-        float in_val;
-        if constexpr (std::is_same_v<T, half>) {
-            in_val = __half2float(__ldg(&in_row[k]));
-        } else {
-            in_val = __bfloat162float(__ldg(&in_row[k]));
+        // Warp reduction
+        #pragma unroll
+        for (int offset = 16; offset > 0; offset /= 2) {
+            acc += __shfl_down_sync(0xffffffff, acc, offset);
         }
 
-        int byte_idx = k / 2;
-        uint8_t packed = __ldg(&w_row[byte_idx]);
-        uint8_t nibble = (k & 1) ? high_nibble(packed) : low_nibble(packed);
-
-        int scale_idx = k / MXFP4_BLOCK_SIZE;
-        uint8_t scale_exp = __ldg(&scale_row[scale_idx]);
-
-        float w_val = mxfp4_to_float(nibble, scale_exp);
-        acc += in_val * w_val;
-    }
-
-    // Warp reduction using shuffle
-    #pragma unroll
-    for (int offset = 16; offset > 0; offset /= 2) {
-        acc += __shfl_down_sync(0xffffffff, acc, offset);
-    }
-
-    // Lane 0 writes the result
-    if (lane_id == 0) {
-        // Add bias if present
-        if (has_bias && biases != nullptr) {
-            const T *bias_row = biases + (size_t)expert_idx * N;
-            if constexpr (std::is_same_v<T, half>) {
-                acc += __half2float(__ldg(&bias_row[n_idx]));
-            } else {
-                acc += __bfloat162float(__ldg(&bias_row[n_idx]));
+        // Lane 0 writes result
+        if (lane_id == 0) {
+            if (has_bias && biases) {
+                const T *bias_row = biases + (size_t)expert_idx * N;
+                if constexpr (std::is_same_v<T, half>) {
+                    acc += __half2float(__ldg(&bias_row[n_idx]));
+                } else {
+                    acc += __bfloat162float(__ldg(&bias_row[n_idx]));
+                }
             }
-        }
 
-        size_t out_idx = (size_t)token_idx * topk * N + (size_t)expert_slot * N + n_idx;
-        if constexpr (std::is_same_v<T, half>) {
-            output[out_idx] = __float2half(acc);
-        } else {
-            output[out_idx] = __float2bfloat16(acc);
+            size_t out_idx = (size_t)token_idx * topk * N + (size_t)expert_slot * N + n_idx;
+            if constexpr (std::is_same_v<T, half>) {
+                output[out_idx] = __float2half(acc);
+            } else {
+                output[out_idx] = __float2bfloat16(acc);
+            }
         }
     }
 }
@@ -383,17 +420,23 @@ extern "C" void launch_mxfp4_indexed_moe_gemm_f16(
     bool input_has_topk_dim,
     cudaStream_t stream
 ) {
-    constexpr int THREADS_PER_BLOCK = 512;
-    constexpr int WARPS_PER_BLOCK = THREADS_PER_BLOCK / 32;
+    constexpr int THREADS_PER_BLOCK = MOE_BLOCK_N * 32;  // 32 warps = 1024 threads
+    int n_chunks = CEILDIV(N, MOE_BLOCK_N);
 
-    int total_outputs = num_tokens * topk * N;
-    int total_warps = total_outputs;
-    int num_blocks = CEILDIV(total_warps, WARPS_PER_BLOCK);
+    // Adaptive grid dimensions based on input layout:
+    // - input_has_topk_dim=false: (token, n_chunk) - processes all experts per block
+    // - input_has_topk_dim=true: (token, expert_slot, n_chunk) - one expert per block
+    int total_blocks = input_has_topk_dim
+        ? num_tokens * topk * n_chunks
+        : num_tokens * n_chunks;
 
     dim3 block(THREADS_PER_BLOCK);
-    dim3 grid(num_blocks);
+    dim3 grid(total_blocks);
 
-    mxfp4_gemm::mxfp4_moe_gemm<half><<<grid, block, 0, stream>>>(
+    // Shared memory: K floats for input caching
+    size_t shared_mem_size = K * sizeof(float);
+
+    mxfp4_gemm::mxfp4_moe_gemm<half><<<grid, block, shared_mem_size, stream>>>(
         input, weights, weight_scales, biases, indices, output,
         num_tokens, topk, num_experts, N, K,
         has_bias, input_has_topk_dim
@@ -416,17 +459,21 @@ extern "C" void launch_mxfp4_indexed_moe_gemm_bf16(
     bool input_has_topk_dim,
     cudaStream_t stream
 ) {
-    constexpr int THREADS_PER_BLOCK = 512;
-    constexpr int WARPS_PER_BLOCK = THREADS_PER_BLOCK / 32;
+    constexpr int THREADS_PER_BLOCK = MOE_BLOCK_N * 32;  // 32 warps = 1024 threads
+    int n_chunks = CEILDIV(N, MOE_BLOCK_N);
 
-    int total_outputs = num_tokens * topk * N;
-    int total_warps = total_outputs;
-    int num_blocks = CEILDIV(total_warps, WARPS_PER_BLOCK);
+    // Adaptive grid dimensions based on input layout
+    int total_blocks = input_has_topk_dim
+        ? num_tokens * topk * n_chunks
+        : num_tokens * n_chunks;
 
     dim3 block(THREADS_PER_BLOCK);
-    dim3 grid(num_blocks);
+    dim3 grid(total_blocks);
 
-    mxfp4_gemm::mxfp4_moe_gemm<__nv_bfloat16><<<grid, block, 0, stream>>>(
+    // Shared memory: K floats for input caching
+    size_t shared_mem_size = K * sizeof(float);
+
+    mxfp4_gemm::mxfp4_moe_gemm<__nv_bfloat16><<<grid, block, shared_mem_size, stream>>>(
         input, weights, weight_scales, biases, indices, output,
         num_tokens, topk, num_experts, N, K,
         has_bias, input_has_topk_dim

@@ -5,6 +5,8 @@ pub mod log;
 mod ops;
 mod uqff;
 
+#[cfg(feature = "cuda")]
+pub use ops::gptoss_swiglu_fused;
 pub use ops::{BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
 pub use uqff::UQFF_QUANT_TYPE_OFFSET;
 pub(crate) use uqff::{
