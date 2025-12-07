@@ -18,11 +18,83 @@ use mistralrs_quant::{
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
+// Debug tensor saving module
+mod debug_tensors {
+    use candle_core::{DType, Result, Tensor};
+    use std::fs::File;
+    use std::io::Write;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
+    static DEBUG_INITIALIZED: AtomicBool = AtomicBool::new(false);
+    static DEBUG_DIR: &str = "/tmp/mistralrs_debug";
+
+    fn init_debug() {
+        if DEBUG_INITIALIZED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // Check environment variable MISTRALRS_DEBUG_TENSORS=1
+        if std::env::var("MISTRALRS_DEBUG_TENSORS").map(|v| v == "1").unwrap_or(false) {
+            DEBUG_ENABLED.store(true, Ordering::SeqCst);
+            std::fs::create_dir_all(DEBUG_DIR).ok();
+            eprintln!("[DEBUG] Tensor saving enabled via MISTRALRS_DEBUG_TENSORS=1, output dir: {}", DEBUG_DIR);
+        }
+    }
+
+    pub fn is_enabled() -> bool {
+        init_debug();
+        DEBUG_ENABLED.load(Ordering::SeqCst)
+    }
+
+    /// Save tensor as numpy .npy file (f32)
+    pub fn save_tensor(name: &str, tensor: &Tensor) -> Result<()> {
+        if !is_enabled() {
+            return Ok(());
+        }
+
+        let path = format!("{}/{}.npy", DEBUG_DIR, name);
+
+        // Convert to f32 and flatten to CPU
+        let tensor_f32 = tensor.to_dtype(DType::F32)?.to_device(&candle_core::Device::Cpu)?;
+        let shape = tensor_f32.dims().to_vec();
+        let data: Vec<f32> = tensor_f32.flatten_all()?.to_vec1()?;
+
+        // Write numpy format
+        write_npy(&path, &shape, &data)?;
+        eprintln!("[DEBUG] Saved {} shape {:?}", name, shape);
+        Ok(())
+    }
+
+    fn write_npy(path: &str, shape: &[usize], data: &[f32]) -> Result<()> {
+        let mut file = File::create(path).map_err(|e| candle_core::Error::Msg(format!("Failed to create {}: {}", path, e)))?;
+
+        // Numpy header
+        let shape_str = shape.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", ");
+        let header = format!("{{'descr': '<f4', 'fortran_order': False, 'shape': ({},), }}", shape_str);
+        let header_len = header.len();
+        let padding = (64 - ((10 + header_len) % 64)) % 64;
+        let padded_header = format!("{}{}", header, " ".repeat(padding));
+
+        // Magic number + version
+        file.write_all(&[0x93, b'N', b'U', b'M', b'P', b'Y', 0x01, 0x00]).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        // Header length (little endian u16)
+        let header_bytes = (padded_header.len() as u16).to_le_bytes();
+        file.write_all(&header_bytes).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        // Header
+        file.write_all(padded_header.as_bytes()).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        // Data
+        let bytes: Vec<u8> = data.iter().flat_map(|f| f.to_le_bytes()).collect();
+        file.write_all(&bytes).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+
+        Ok(())
+    }
+}
+
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{self, embedding, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{self, embedding, CausalMasker, MatMul, RmsNorm, RotaryEmbedding},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -125,44 +197,56 @@ impl YarnRotaryEmbedding {
         let beta_fast = rope_scaling.beta_fast;
         let beta_slow = rope_scaling.beta_slow;
         let original_max_pos = rope_scaling.original_max_position_embeddings;
+        let truncate = rope_scaling.truncate;
 
         // Compute attention scale: 0.1 * ln(factor) + 1.0 for YARN
         let attention_scale = (0.1 * factor.ln() + 1.0) as f32;
 
-        // Compute base inverse frequencies (extrapolation)
+        // Helper: find correction dimension based on number of rotations
+        // HF: (dim * log(max_pos / (num_rotations * 2 * pi))) / (2 * log(base))
+        let find_correction_dim = |num_rotations: f64| -> f64 {
+            (dim as f64 * (original_max_pos as f64 / (num_rotations * 2.0 * std::f64::consts::PI)).ln())
+                / (2.0 * base.ln())
+        };
+
+        // Find correction range based on beta_fast and beta_slow
+        let mut low = find_correction_dim(beta_fast);
+        let mut high = find_correction_dim(beta_slow);
+        if truncate {
+            low = low.floor();
+            high = high.ceil();
+        }
+        low = low.max(0.0);
+        high = high.min((dim - 1) as f64);
+
+        // Compute base inverse frequencies
+        // pos_freqs = base^(arange(0, dim, 2) / dim)
+        // inv_freq_extrapolation = 1 / pos_freqs
+        // inv_freq_interpolation = 1 / (factor * pos_freqs)
+        let half_dim = dim / 2;
         let inv_freq_extrapolation: Vec<f64> = (0..dim)
             .step_by(2)
             .map(|i| 1.0 / base.powf(i as f64 / dim as f64))
             .collect();
-
-        // Compute interpolation frequencies
         let inv_freq_interpolation: Vec<f64> = inv_freq_extrapolation
             .iter()
             .map(|f| f / factor)
             .collect();
 
-        // Compute low and high frequency bounds for the ramp
-        let low_freq_wavelen = original_max_pos as f64 / beta_slow;
-        let high_freq_wavelen = original_max_pos as f64 / beta_fast;
-
-        // Compute the linear ramp factor for each frequency
-        let inv_freq: Vec<f64> = inv_freq_extrapolation
-            .iter()
-            .zip(inv_freq_interpolation.iter())
-            .map(|(&freq_extra, &freq_inter)| {
-                let wavelen = 2.0 * std::f64::consts::PI / freq_extra;
-
-                if wavelen < high_freq_wavelen {
-                    // High frequency: use extrapolation (original)
-                    freq_extra
-                } else if wavelen > low_freq_wavelen {
-                    // Low frequency: use interpolation (scaled)
-                    freq_inter
-                } else {
-                    // Mid frequency: blend between interpolation and extrapolation
-                    let ramp = (wavelen - high_freq_wavelen) / (low_freq_wavelen - high_freq_wavelen);
-                    freq_inter * ramp + freq_extra * (1.0 - ramp)
-                }
+        // Linear ramp factor over dimension indices
+        // HF: linear_func = (arange(dim//2) - low) / (high - low); clamp(0, 1)
+        // inv_freq_extrapolation_factor = 1 - ramp
+        // inv_freq = interp * (1 - extrap_factor) + extrap * extrap_factor
+        //          = interp * ramp + extrap * (1 - ramp)
+        let inv_freq: Vec<f64> = (0..half_dim)
+            .map(|i| {
+                let range = if (high - low).abs() < 0.001 { 0.001 } else { high - low };
+                let linear = (i as f64 - low) / range;
+                let ramp = linear.clamp(0.0, 1.0);
+                // extrapolation_factor = 1 - ramp
+                // inv_freq = interp * (1 - extrap_factor) + extrap * extrap_factor
+                //          = interp * ramp + extrap * (1 - ramp)
+                inv_freq_interpolation[i] * ramp + inv_freq_extrapolation[i] * (1.0 - ramp)
             })
             .collect();
 
@@ -192,58 +276,49 @@ impl YarnRotaryEmbedding {
         })
     }
 
+    /// Apply GPT-OSS style RoPE (chunked, not interleaved)
+    /// HF implementation:
+    ///   first_half, second_half = torch.chunk(x, 2, dim=-1)
+    ///   first_ = first_half * cos - second_half * sin
+    ///   second_ = second_half * cos + first_half * sin
+    fn apply_rotary_emb_chunked(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+        let (_b, _h, _seq, n_embd) = x.dims4()?;
+        let half = n_embd / 2;
+
+        // Split into first and second half along last dimension
+        let first_half = x.narrow(D::Minus1, 0, half)?;
+        let second_half = x.narrow(D::Minus1, half, half)?;
+
+        // cos and sin have shape [seq_len, half] - need to broadcast to [1, 1, seq_len, half]
+        let cos = cos.unsqueeze(0)?.unsqueeze(0)?;
+        let sin = sin.unsqueeze(0)?.unsqueeze(0)?;
+
+        // Apply rotation
+        let first_out = (first_half.broadcast_mul(&cos)? - second_half.broadcast_mul(&sin)?)?;
+        let second_out = (second_half.broadcast_mul(&cos)? + first_half.broadcast_mul(&sin)?)?;
+
+        // Concatenate back
+        Tensor::cat(&[&first_out, &second_out], D::Minus1)
+    }
+
     pub fn forward(
         &self,
         q: &Tensor,
         k: &Tensor,
         seqlen_offsets: &[usize],
     ) -> Result<(Tensor, Tensor)> {
-        let (b_sz, qh, seq_len, n_embd) = q.dims4()?;
-        let (_b_sz, kh, _seq_len, _n_embd) = k.dims4()?;
+        let (_b_sz, _qh, seq_len, _n_embd) = q.dims4()?;
 
-        let rope = candle_nn::rotary_emb::rope;
-
-        if cfg!(feature = "cuda") && qh == kh {
-            let (cos, sin) = if seqlen_offsets.len() == 1 {
-                (
-                    self.cos.narrow(0, seqlen_offsets[0], seq_len)?,
-                    self.sin.narrow(0, seqlen_offsets[0], seq_len)?,
-                )
-            } else {
-                let mut cos_s = Vec::new();
-                let mut sin_s = Vec::new();
-                for offset in seqlen_offsets {
-                    cos_s.push(self.cos.narrow(0, *offset, seq_len)?);
-                    sin_s.push(self.sin.narrow(0, *offset, seq_len)?);
-                }
-                (Tensor::cat(&cos_s, 0)?, Tensor::cat(&sin_s, 0)?)
-            };
-
-            let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
-            let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
-            mistralrs_quant::rotary::apply_rotary_inplace(
-                &q_embed,
-                &k_embed,
-                &cos,
-                &sin,
-                true, // is_gpt_neox style
-            )?;
-            let mut q = q_embed
-                .reshape((b_sz, seq_len, qh, n_embd))?
-                .transpose(1, 2)?;
-            let mut k = k_embed
-                .reshape((b_sz, seq_len, kh, n_embd))?
-                .transpose(1, 2)?;
-            if !(cfg!(feature = "flash-attn") || cfg!(feature = "flash-attn-v3")) {
-                q = q.contiguous()?;
-                k = k.contiguous()?;
-            }
-            Ok((q, k))
-        } else if seqlen_offsets.len() == 1 {
+        if seqlen_offsets.len() == 1 {
             let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
             let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let q_embed = rope(&q.contiguous()?, &cos, &sin)?;
-            let k_embed = rope(&k.contiguous()?, &cos, &sin)?;
+
+            // Debug: save cos/sin
+            debug_tensors::save_tensor("rope_cos", &cos)?;
+            debug_tensors::save_tensor("rope_sin", &sin)?;
+
+            let q_embed = Self::apply_rotary_emb_chunked(&q.contiguous()?, &cos, &sin)?;
+            let k_embed = Self::apply_rotary_emb_chunked(&k.contiguous()?, &cos, &sin)?;
             Ok((q_embed, k_embed))
         } else {
             let mut q_embeds = Vec::new();
@@ -251,8 +326,8 @@ impl YarnRotaryEmbedding {
             for (i, offset) in seqlen_offsets.iter().enumerate() {
                 let cos = self.cos.narrow(0, *offset, seq_len)?;
                 let sin = self.sin.narrow(0, *offset, seq_len)?;
-                let q_embed = rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                let k_embed = rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                let q_embed = Self::apply_rotary_emb_chunked(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                let k_embed = Self::apply_rotary_emb_chunked(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
                 q_embeds.push(q_embed);
                 k_embeds.push(k_embed);
             }
@@ -428,6 +503,7 @@ impl Attention {
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -463,7 +539,16 @@ impl Attention {
             (q, k, v)
         };
 
+        // Debug: save Q, K, V BEFORE RoPE
+        debug_tensors::save_tensor(&format!("layer_{}_attn_q_pre_rope", layer_idx), &q)?;
+        debug_tensors::save_tensor(&format!("layer_{}_attn_k_pre_rope", layer_idx), &k)?;
+
         (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+
+        // Debug: save Q, K, V after RoPE
+        debug_tensors::save_tensor(&format!("layer_{}_attn_q", layer_idx), &q)?;
+        debug_tensors::save_tensor(&format!("layer_{}_attn_k", layer_idx), &k)?;
+        debug_tensors::save_tensor(&format!("layer_{}_attn_v", layer_idx), &v)?;
 
         // For now, use standard SDPA without sinks modification
         // TODO: Implement custom attention kernel with sinks support
@@ -500,7 +585,7 @@ impl Attention {
                 let (k, v) = kv_cache.append(&k, &v)?;
 
                 // Custom attention with sinks for non-paged attention
-                self.attention_with_sinks(&q, &k, &v, attention_mask, seqlen_offsets, flash_params)?
+                self.attention_with_sinks(&q, &k, &v, attention_mask, seqlen_offsets, flash_params, layer_idx)?
             }
         };
 
@@ -521,6 +606,7 @@ impl Attention {
 
     /// Attention computation with sinks
     /// Sinks are added as extra logits, go through softmax, then are dropped
+    #[allow(clippy::too_many_arguments)]
     fn attention_with_sinks(
         &self,
         q: &Tensor,
@@ -528,7 +614,8 @@ impl Attention {
         v: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        flash_params: &FlashParams,
+        _flash_params: &FlashParams,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         // Manual attention with sinks
         let (b_sz, num_heads, q_len, _head_dim) = q.dims4()?;
@@ -548,6 +635,9 @@ impl Attention {
 
         // Compute attention scores: [b, heads, q_len, k_len]
         let attn_weights = (q.matmul(&k.transpose(D::Minus2, D::Minus1)?)? * self.sdpa_params.softmax_scale as f64)?;
+
+        // Debug: save attention weights (before mask)
+        debug_tensors::save_tensor(&format!("layer_{}_attn_weights_raw", layer_idx), &attn_weights)?;
 
         // Apply attention mask (causal) - convert mask to match attn_weights dtype
         let attn_weights = if let Some(mask) = attention_mask {
@@ -616,6 +706,9 @@ impl Attention {
         // narrow creates a non-contiguous view, matmul requires contiguous tensors
         let scores = probs.narrow(D::Minus1, 0, k_len)?.contiguous()?;
 
+        // Debug: save attention scores (after softmax, after dropping sink)
+        debug_tensors::save_tensor(&format!("layer_{}_attn_scores", layer_idx), &scores)?;
+
         // Compute output
         scores.matmul(&v)
     }
@@ -678,13 +771,16 @@ impl GptOssMoE {
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, layer_idx: usize) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
         let _num_tokens = xs_flat.dim(0)?;
 
         // Compute routing logits
         let router_logits = self.gate.forward(&xs_flat)?.to_dtype(DType::F32)?;
+
+        // Debug: save router logits
+        debug_tensors::save_tensor(&format!("layer_{}_moe_router_logits", layer_idx), &router_logits)?;
 
         // HF: Select top-k from raw logits FIRST, then softmax only on selected values
         // router_top_value, router_indices = torch.topk(router_logits, self.top_k, dim=-1)
@@ -702,9 +798,16 @@ impl GptOssMoE {
         // Softmax only on the top-k logits (not all logits)
         let topk_weights = candle_nn::ops::softmax_last_dim(&topk_logits)?;
 
+        // Debug: save topk weights and indices
+        debug_tensors::save_tensor(&format!("layer_{}_moe_topk_weights", layer_idx), &topk_weights)?;
+        debug_tensors::save_tensor(&format!("layer_{}_moe_topk_ids", layer_idx), &topk_ids.to_dtype(DType::F32)?)?;
+
         // Forward through experts using gather_forward
         // gate_up_proj output: [num_tokens, topk, intermediate_size * 2]
         let gate_up = self.gate_up_proj.gather_forward(&xs_flat, &topk_ids)?;
+
+        // Debug: save gate_up output
+        debug_tensors::save_tensor(&format!("layer_{}_moe_gate_up", layer_idx), &gate_up)?;
 
         // Split gate and up - they are INTERLEAVED (gate at even indices, up at odd indices)
         // HF: gate = gate_up[..., ::2], up = gate_up[..., 1::2]
@@ -715,11 +818,21 @@ impl GptOssMoE {
         let gate = gate_up_reshaped.narrow(D::Minus1, 0, 1)?.squeeze(D::Minus1)?;
         let up = gate_up_reshaped.narrow(D::Minus1, 1, 1)?.squeeze(D::Minus1)?;
 
+        // Debug: save gate and up
+        debug_tensors::save_tensor(&format!("layer_{}_moe_gate", layer_idx), &gate)?;
+        debug_tensors::save_tensor(&format!("layer_{}_moe_up", layer_idx), &up)?;
+
         // Apply GPT-OSS SwiGLU activation
         let activated = gptoss_swiglu(&gate, &up, self.alpha, self.limit)?;
 
+        // Debug: save activated output
+        debug_tensors::save_tensor(&format!("layer_{}_moe_activated", layer_idx), &activated)?;
+
         // down_proj: [num_tokens, topk, hidden_size]
         let expert_out = self.down_proj.gather_forward(&activated, &topk_ids)?;
+
+        // Debug: save expert output
+        debug_tensors::save_tensor(&format!("layer_{}_moe_expert_out", layer_idx), &expert_out)?;
 
         // Weight and sum expert outputs
         // topk_weights: [num_tokens, topk] -> [num_tokens, topk, 1]
@@ -728,6 +841,9 @@ impl GptOssMoE {
             .unsqueeze(D::Minus1)?;
         let weighted = expert_out.broadcast_mul(&topk_weights)?;
         let output = weighted.sum(D::Minus2)?;
+
+        // Debug: save final MoE output
+        debug_tensors::save_tensor(&format!("layer_{}_moe_output", layer_idx), &output)?;
 
         output.reshape((b_size, seq_len, hidden_dim))
     }
@@ -798,9 +914,14 @@ impl DecoderLayer {
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
+
+        // Debug: save attention input (after layernorm)
+        debug_tensors::save_tensor(&format!("layer_{}_attn_input", layer_idx), &xs)?;
+
         let xs = self.self_attn.forward(
             &xs,
             attention_mask,
@@ -808,12 +929,25 @@ impl DecoderLayer {
             kv_cache,
             metadata,
             flash_params,
+            layer_idx,
         )?;
+
+        // Debug: save attention output (before residual)
+        debug_tensors::save_tensor(&format!("layer_{}_attn_output", layer_idx), &xs)?;
+
         let xs = (residual + xs)?;
 
         let residual = &xs;
         let xs = self.post_attention_layernorm.forward(&xs)?;
-        let xs = self.mlp.forward(&xs)?;
+
+        // Debug: save MLP input (after layernorm)
+        debug_tensors::save_tensor(&format!("layer_{}_mlp_input", layer_idx), &xs)?;
+
+        let xs = self.mlp.forward(&xs, layer_idx)?;
+
+        // Debug: save MLP output (before residual)
+        debug_tensors::save_tensor(&format!("layer_{}_mlp_output", layer_idx), &xs)?;
+
         residual + xs
     }
 }
@@ -1000,6 +1134,9 @@ impl Model {
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
 
+        // Debug: save embeddings
+        debug_tensors::save_tensor("embed_output", &xs)?;
+
         let cache = &mut self.cache.normal().0;
         let attention_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
@@ -1020,6 +1157,10 @@ impl Model {
 
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
+
+            // Debug: save layer input
+            debug_tensors::save_tensor(&format!("layer_{}_input", i), &xs)?;
+
             xs = layer.forward(
                 &xs,
                 attention_mask
@@ -1032,9 +1173,13 @@ impl Model {
                     .as_ref()
                     .map(|(kv, m)| (kv[i].clone(), *m)),
                 flash_params,
+                i, // Pass layer index for debug
             )?;
-        }
 
+            // Debug: save layer output
+            debug_tensors::save_tensor(&format!("layer_{}_output", i), &xs)?;
+        }
+        // panic!();
         let xs = xs.to_device(&self.device)?;
         let xs = self.norm.forward(&xs)?;
         extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
