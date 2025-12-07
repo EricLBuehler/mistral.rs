@@ -18,84 +18,11 @@ use mistralrs_quant::{
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
-// Debug tensor saving module
-mod debug_tensors {
-    use candle_core::{DType, Result, Tensor};
-    use std::fs::File;
-    use std::io::Write;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    static DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
-    static DEBUG_INITIALIZED: AtomicBool = AtomicBool::new(false);
-    static DEBUG_DIR: &str = "/tmp/mistralrs_debug";
-
-    fn init_debug() {
-        if DEBUG_INITIALIZED.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        // Check environment variable MISTRALRS_DEBUG_TENSORS=1
-        if std::env::var("MISTRALRS_DEBUG_TENSORS").map(|v| v == "1").unwrap_or(false) {
-            DEBUG_ENABLED.store(true, Ordering::SeqCst);
-            std::fs::create_dir_all(DEBUG_DIR).ok();
-            eprintln!("[DEBUG] Tensor saving enabled via MISTRALRS_DEBUG_TENSORS=1, output dir: {}", DEBUG_DIR);
-        }
-    }
-
-    pub fn is_enabled() -> bool {
-        init_debug();
-        DEBUG_ENABLED.load(Ordering::SeqCst)
-    }
-
-    /// Save tensor as numpy .npy file (f32)
-    pub fn save_tensor(name: &str, tensor: &Tensor) -> Result<()> {
-        if !is_enabled() {
-            return Ok(());
-        }
-
-        let path = format!("{}/{}.npy", DEBUG_DIR, name);
-
-        // Convert to f32 and flatten to CPU
-        let tensor_f32 = tensor.to_dtype(DType::F32)?.to_device(&candle_core::Device::Cpu)?;
-        let shape = tensor_f32.dims().to_vec();
-        let data: Vec<f32> = tensor_f32.flatten_all()?.to_vec1()?;
-
-        // Write numpy format
-        write_npy(&path, &shape, &data)?;
-        eprintln!("[DEBUG] Saved {} shape {:?}", name, shape);
-        Ok(())
-    }
-
-    fn write_npy(path: &str, shape: &[usize], data: &[f32]) -> Result<()> {
-        let mut file = File::create(path).map_err(|e| candle_core::Error::Msg(format!("Failed to create {}: {}", path, e)))?;
-
-        // Numpy header
-        let shape_str = shape.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", ");
-        let header = format!("{{'descr': '<f4', 'fortran_order': False, 'shape': ({},), }}", shape_str);
-        let header_len = header.len();
-        let padding = (64 - ((10 + header_len) % 64)) % 64;
-        let padded_header = format!("{}{}", header, " ".repeat(padding));
-
-        // Magic number + version
-        file.write_all(&[0x93, b'N', b'U', b'M', b'P', b'Y', 0x01, 0x00]).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-        // Header length (little endian u16)
-        let header_bytes = (padded_header.len() as u16).to_le_bytes();
-        file.write_all(&header_bytes).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-        // Header
-        file.write_all(padded_header.as_bytes()).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-        // Data
-        let bytes: Vec<u8> = data.iter().flat_map(|f| f.to_le_bytes()).collect();
-        file.write_all(&bytes).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-
-        Ok(())
-    }
-}
-
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{self, embedding, CausalMasker, MatMul, RmsNorm, RotaryEmbedding},
-    layers_masker::PastKvLenCache,
+    layers::{self, embedding, MatMul, RmsNorm, RotaryEmbedding},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -312,11 +239,6 @@ impl YarnRotaryEmbedding {
         if seqlen_offsets.len() == 1 {
             let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
             let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
-
-            // Debug: save cos/sin
-            debug_tensors::save_tensor("rope_cos", &cos)?;
-            debug_tensors::save_tensor("rope_sin", &sin)?;
-
             let q_embed = Self::apply_rotary_emb_chunked(&q.contiguous()?, &cos, &sin)?;
             let k_embed = Self::apply_rotary_emb_chunked(&k.contiguous()?, &cos, &sin)?;
             Ok((q_embed, k_embed))
@@ -539,19 +461,7 @@ impl Attention {
             (q, k, v)
         };
 
-        // Debug: save Q, K, V BEFORE RoPE
-        debug_tensors::save_tensor(&format!("layer_{}_attn_q_pre_rope", layer_idx), &q)?;
-        debug_tensors::save_tensor(&format!("layer_{}_attn_k_pre_rope", layer_idx), &k)?;
-
         (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
-
-        // Debug: save Q, K, V after RoPE
-        debug_tensors::save_tensor(&format!("layer_{}_attn_q", layer_idx), &q)?;
-        debug_tensors::save_tensor(&format!("layer_{}_attn_k", layer_idx), &k)?;
-        debug_tensors::save_tensor(&format!("layer_{}_attn_v", layer_idx), &v)?;
-
-        // For now, use standard SDPA without sinks modification
-        // TODO: Implement custom attention kernel with sinks support
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
@@ -613,9 +523,9 @@ impl Attention {
         k: &Tensor,
         v: &Tensor,
         attention_mask: Option<&Tensor>,
-        seqlen_offsets: &[usize],
+        _seqlen_offsets: &[usize],
         _flash_params: &FlashParams,
-        layer_idx: usize,
+        _layer_idx: usize,
     ) -> Result<Tensor> {
         // Manual attention with sinks
         let (b_sz, num_heads, q_len, _head_dim) = q.dims4()?;
@@ -636,9 +546,6 @@ impl Attention {
         // Compute attention scores: [b, heads, q_len, k_len]
         let attn_weights = (q.matmul(&k.transpose(D::Minus2, D::Minus1)?)? * self.sdpa_params.softmax_scale as f64)?;
 
-        // Debug: save attention weights (before mask)
-        debug_tensors::save_tensor(&format!("layer_{}_attn_weights_raw", layer_idx), &attn_weights)?;
-
         // Apply attention mask (causal or sliding window - already computed in inner_forward)
         let attn_weights = if let Some(mask) = attention_mask {
             // The mask might have shape [b, 1, q_len, total_len] or [b, 1, 1, total_len]
@@ -656,10 +563,6 @@ impl Attention {
         };
 
         // Add sinks: reshape [num_heads] -> [1, num_heads, 1, 1] and concat along last dim
-        // Debug: save sinks for layer 0
-        if layer_idx == 0 {
-            debug_tensors::save_tensor("layer_0_sinks", &self.sinks)?;
-        }
         let sinks_expanded = self
             .sinks
             .reshape((1, num_heads, 1, 1))?
@@ -669,19 +572,9 @@ impl Attention {
         // Concatenate sinks to attention logits: [b, heads, q_len, k_len + 1]
         let combined_logits = Tensor::cat(&[&attn_weights, &sinks_expanded], D::Minus1)?;
 
-        // Debug: save combined logits before max subtraction
-        if layer_idx == 0 {
-            debug_tensors::save_tensor("layer_0_combined_logits_pre_max", &combined_logits)?;
-        }
-
         // Subtract max for numerical stability
         let max_logits = combined_logits.max_keepdim(D::Minus1)?;
         let combined_logits = combined_logits.broadcast_sub(&max_logits)?;
-
-        // Debug: save combined logits after max subtraction
-        if layer_idx == 0 {
-            debug_tensors::save_tensor("layer_0_combined_logits_post_max", &combined_logits)?;
-        }
 
         // Softmax
         let probs = candle_nn::ops::softmax_last_dim(&combined_logits)?;
@@ -689,9 +582,6 @@ impl Attention {
         // Drop the sink probability (take all but last)
         // narrow creates a non-contiguous view, matmul requires contiguous tensors
         let scores = probs.narrow(D::Minus1, 0, k_len)?.contiguous()?;
-
-        // Debug: save attention scores (after softmax, after dropping sink)
-        debug_tensors::save_tensor(&format!("layer_{}_attn_scores", layer_idx), &scores)?;
 
         // Compute output
         scores.matmul(&v)
@@ -755,16 +645,13 @@ impl GptOssMoE {
         })
     }
 
-    fn forward(&self, xs: &Tensor, layer_idx: usize) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, _layer_idx: usize) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
         let _num_tokens = xs_flat.dim(0)?;
 
         // Compute routing logits
         let router_logits = self.gate.forward(&xs_flat)?.to_dtype(DType::F32)?;
-
-        // Debug: save router logits
-        debug_tensors::save_tensor(&format!("layer_{}_moe_router_logits", layer_idx), &router_logits)?;
 
         // HF: Select top-k from raw logits FIRST, then softmax only on selected values
         // router_top_value, router_indices = torch.topk(router_logits, self.top_k, dim=-1)
@@ -782,16 +669,9 @@ impl GptOssMoE {
         // Softmax only on the top-k logits (not all logits)
         let topk_weights = candle_nn::ops::softmax_last_dim(&topk_logits)?;
 
-        // Debug: save topk weights and indices
-        debug_tensors::save_tensor(&format!("layer_{}_moe_topk_weights", layer_idx), &topk_weights)?;
-        debug_tensors::save_tensor(&format!("layer_{}_moe_topk_ids", layer_idx), &topk_ids.to_dtype(DType::F32)?)?;
-
         // Forward through experts using gather_forward
         // gate_up_proj output: [num_tokens, topk, intermediate_size * 2]
         let gate_up = self.gate_up_proj.gather_forward(&xs_flat, &topk_ids)?;
-
-        // Debug: save gate_up output
-        debug_tensors::save_tensor(&format!("layer_{}_moe_gate_up", layer_idx), &gate_up)?;
 
         // Split gate and up - they are INTERLEAVED (gate at even indices, up at odd indices)
         // HF: gate = gate_up[..., ::2], up = gate_up[..., 1::2]
@@ -802,21 +682,11 @@ impl GptOssMoE {
         let gate = gate_up_reshaped.narrow(D::Minus1, 0, 1)?.squeeze(D::Minus1)?;
         let up = gate_up_reshaped.narrow(D::Minus1, 1, 1)?.squeeze(D::Minus1)?;
 
-        // Debug: save gate and up
-        debug_tensors::save_tensor(&format!("layer_{}_moe_gate", layer_idx), &gate)?;
-        debug_tensors::save_tensor(&format!("layer_{}_moe_up", layer_idx), &up)?;
-
         // Apply GPT-OSS SwiGLU activation
         let activated = gptoss_swiglu(&gate, &up, self.alpha, self.limit)?;
 
-        // Debug: save activated output
-        debug_tensors::save_tensor(&format!("layer_{}_moe_activated", layer_idx), &activated)?;
-
         // down_proj: [num_tokens, topk, hidden_size]
         let expert_out = self.down_proj.gather_forward(&activated, &topk_ids)?;
-
-        // Debug: save expert output
-        debug_tensors::save_tensor(&format!("layer_{}_moe_expert_out", layer_idx), &expert_out)?;
 
         // Weight and sum expert outputs
         // topk_weights: [num_tokens, topk] -> [num_tokens, topk, 1]
@@ -825,9 +695,6 @@ impl GptOssMoE {
             .unsqueeze(D::Minus1)?;
         let weighted = expert_out.broadcast_mul(&topk_weights)?;
         let output = weighted.sum(D::Minus2)?;
-
-        // Debug: save final MoE output
-        debug_tensors::save_tensor(&format!("layer_{}_moe_output", layer_idx), &output)?;
 
         output.reshape((b_size, seq_len, hidden_dim))
     }
@@ -902,10 +769,6 @@ impl DecoderLayer {
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-
-        // Debug: save attention input (after layernorm)
-        debug_tensors::save_tensor(&format!("layer_{}_attn_input", layer_idx), &xs)?;
-
         let xs = self.self_attn.forward(
             &xs,
             attention_mask,
@@ -915,22 +778,11 @@ impl DecoderLayer {
             flash_params,
             layer_idx,
         )?;
-
-        // Debug: save attention output (before residual)
-        debug_tensors::save_tensor(&format!("layer_{}_attn_output", layer_idx), &xs)?;
-
         let xs = (residual + xs)?;
 
         let residual = &xs;
         let xs = self.post_attention_layernorm.forward(&xs)?;
-
-        // Debug: save MLP input (after layernorm)
-        debug_tensors::save_tensor(&format!("layer_{}_mlp_input", layer_idx), &xs)?;
-
         let xs = self.mlp.forward(&xs, layer_idx)?;
-
-        // Debug: save MLP output (before residual)
-        debug_tensors::save_tensor(&format!("layer_{}_mlp_output", layer_idx), &xs)?;
 
         residual + xs
     }
@@ -959,10 +811,6 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        // Disable cuBLASLt to match PyTorch's numerical behavior more closely
-        #[cfg(feature = "cuda")]
-        mistralrs_quant::cublaslt::CUBLASLT_CONTROLLER.set_inhibit(true);
-
         let vb_m = vb.pp("model");
         let mapper = normal_loading_metadata.mapper;
 
@@ -1121,10 +969,6 @@ impl Model {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
-
-        // Debug: save embeddings
-        debug_tensors::save_tensor("embed_output", &xs)?;
-
         let cache = &mut self.cache.normal().0;
 
         // GPT-OSS uses custom attention with sinks, which requires the full causal mask
@@ -1196,19 +1040,8 @@ impl Model {
         let causal_mask = if should_use_mask { causal_mask } else { None };
         let sliding_mask = if should_use_mask { sliding_mask } else { None };
 
-        // Debug: save attention masks
-        if let Some(ref mask) = causal_mask {
-            debug_tensors::save_tensor("attention_mask", mask)?;
-        }
-        if let Some(ref mask) = sliding_mask {
-            debug_tensors::save_tensor("sliding_attention_mask", mask)?;
-        }
-
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
-
-            // Debug: save layer input
-            debug_tensors::save_tensor(&format!("layer_{}_input", i), &xs)?;
 
             // Select appropriate mask based on layer type (sliding vs full attention)
             let layer_mask = if layer.self_attn.is_sliding {
@@ -1228,23 +1061,13 @@ impl Model {
                     .as_ref()
                     .map(|(kv, m)| (kv[i].clone(), *m)),
                 flash_params,
-                i, // Pass layer index for debug
+                i,
             )?;
-
-            // Debug: save layer output
-            debug_tensors::save_tensor(&format!("layer_{}_output", i), &xs)?;
         }
 
         let xs = xs.to_device(&self.device)?;
         let xs = self.norm.forward(&xs)?;
-
-        // Debug: save pre-lm_head hidden state
-        debug_tensors::save_tensor("pre_lm_head", &xs)?;
-
         let logits = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
-
-        // Debug: save raw logits
-        debug_tensors::save_tensor("logits", &logits)?;
 
         extract_logits(&logits, context_lens)
     }
