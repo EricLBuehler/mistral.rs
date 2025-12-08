@@ -53,12 +53,6 @@ pub enum LayerType {
     FullAttention,
 }
 
-impl Default for LayerType {
-    fn default() -> Self {
-        LayerType::FullAttention
-    }
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     pub vocab_size: usize,

@@ -2361,13 +2361,15 @@ impl GptOssRotaryEmbedding {
         k: &Tensor,
         seqlen_offsets: &[usize],
     ) -> Result<(Tensor, Tensor)> {
+        #[allow(unused_variables)]
         let (b_sz, qh, seq_len, n_embd) = q.dims4()?;
+        #[allow(unused_variables)]
         let (_b_sz, kh, _seq_len, _n_embd) = k.dims4()?;
 
         // Use CUDA optimized kernel when available and q/k have same number of heads
         // The CUDA kernel uses is_neox=true for chunked/GPT-NeoX style rotary
         #[cfg(feature = "cuda")]
-        if q.device().is_cuda() && qh == kh {
+        if q.device().is_cuda() && qh == k.dim(1)? {
             let (cos, sin) = if seqlen_offsets.len() == 1 {
                 (
                     self.cos.narrow(0, seqlen_offsets[0], seq_len)?,

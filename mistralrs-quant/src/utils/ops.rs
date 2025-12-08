@@ -1586,7 +1586,6 @@ impl CumSumOp for Tensor {
 /// where gate_clamped = min(gate, limit)
 #[cfg(feature = "cuda")]
 pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -> Result<Tensor> {
-    use candle_core::cuda::CudaStorageSlice;
     use half::{bf16, f16};
 
     let gate = gate.contiguous()?;

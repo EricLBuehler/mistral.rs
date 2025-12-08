@@ -21,11 +21,13 @@ pub(crate) const N_BITS: usize = 4;
 pub struct MXFP4Layer {
     /// Packed FP4 weights: [N, K/2] or [num_experts, N, K/2]
     /// Each byte contains 2 FP4 values (low nibble = k, high nibble = k+1)
+    #[allow(dead_code)]
     blocks: Tensor,
     /// E8M0 scales: [N, K/32] or [num_experts, N, K/32]
     /// Each byte is an 8-bit exponent with bias 127
     scales: Tensor,
     /// Optional bias: [N] or [num_experts, N]
+    #[allow(dead_code)]
     bias: Option<Tensor>,
 }
 
@@ -76,6 +78,7 @@ impl QuantMethod for MXFP4Layer {
         }
     }
 
+    #[allow(unused_variables)]
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         if matches!(x.device(), Device::Cuda(_)) && ffi::HAVE_MXFP4_GEMM_KERNELS {
@@ -125,6 +128,7 @@ impl QuantMethod for MXFP4Layer {
         candle_core::bail!("MXFP4 forward requires CUDA or Metal backend")
     }
 
+    #[allow(unused_variables)]
     fn gather_forward(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         if matches!(x.device(), Device::Cuda(_)) && ffi::HAVE_MXFP4_GEMM_KERNELS {
@@ -189,13 +193,13 @@ impl QuantMethod for MXFP4Layer {
 
 impl MXFP4Layer {
     /// Check if the device supports MXFP4 operations
-    fn device_supported(device: &Device) -> bool {
+    fn device_supported(_device: &Device) -> bool {
         #[cfg(feature = "cuda")]
-        if matches!(device, Device::Cuda(_)) {
+        if matches!(_device, Device::Cuda(_)) {
             return ffi::HAVE_MXFP4_GEMM_KERNELS;
         }
         #[cfg(feature = "metal")]
-        if device.is_metal() {
+        if _device.is_metal() {
             return true;
         }
         false
@@ -344,6 +348,7 @@ impl MXFP4Layer {
     }
 
     /// FP4 E2M1 lookup table for dequantization
+    #[allow(dead_code)]
     const FP4_LUT: [f32; 16] = [
         0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
     ];
@@ -352,6 +357,7 @@ impl MXFP4Layer {
     /// blocks: [num_experts, N, K/2] packed bytes
     /// scales: [num_experts, N, K/32] E8M0 scales
     /// Returns: [num_experts, N, K] f32 weights
+    #[allow(dead_code)]
     fn dequantize_weights(&self) -> Result<Tensor> {
         let blocks_dims = self.blocks.dims();
         let scales_dims = self.scales.dims();
@@ -416,11 +422,12 @@ impl MXFP4Layer {
     /// x: [num_tokens, K] or [num_tokens, topk, K]
     /// indices: [num_tokens, topk]
     /// Returns: [num_tokens, topk, N]
+    #[allow(dead_code)]
     fn gather_forward_dequantize(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
         let x_dims = x.dims();
         let indices_dims = indices.dims();
 
-        let (num_tokens, topk, k, x_has_topk) = if x_dims.len() == 2 {
+        let (num_tokens, topk, _k, x_has_topk) = if x_dims.len() == 2 {
             (x_dims[0], indices_dims[1], x_dims[1], false)
         } else {
             (x_dims[0], x_dims[1], x_dims[2], true)
