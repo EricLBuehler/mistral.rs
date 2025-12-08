@@ -1,15 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-//! GPT-OSS Model Implementation
-//!
-//! Key features:
-//! - Attention with per-head "sinks" (attention bias that goes through softmax)
-//! - Layer types: alternating "sliding_attention" and "full_attention"
-//! - MoE with 32 experts, 4 active per token
-//! - Special SwiGLU activation: (up + 1) * gate * sigmoid(gate * alpha), with clamping
-//! - MXFP4 quantized expert weights with combined gate_up_proj format
-
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
     ColumnParallelLayer, MXFP4Layer, QuantMethod, QuantizedConfig, ReplicatedLayer,
@@ -22,7 +13,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{self, embedding, MatMul, RmsNorm, RotaryEmbedding},
+    layers::{self, embedding, GptOssRotaryEmbedding, MatMul, RmsNorm, RotaryEmbedding},
     ops::TopKLastDimOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -103,192 +94,14 @@ impl Config {
     }
 }
 
-/// YARN rotary embedding implementation
-/// Based on HuggingFace transformers YARN implementation
-pub struct YarnRotaryEmbedding {
-    /// Pre-expanded cos with shape [1, 1, max_position_embeddings, half_dim]
-    cos: Tensor,
-    /// Pre-expanded sin with shape [1, 1, max_position_embeddings, half_dim]
-    sin: Tensor,
-    #[allow(dead_code)]
-    attention_scale: f32,
-}
-
-impl YarnRotaryEmbedding {
-    pub fn new(
-        base: f64,
-        head_dim: usize,
-        max_position_embeddings: usize,
-        rope_scaling: &RopeScaling,
-        device: &Device,
-        dtype: DType,
-    ) -> Result<Self> {
-        let dim = head_dim;
-        let factor = rope_scaling.factor;
-        let beta_fast = rope_scaling.beta_fast;
-        let beta_slow = rope_scaling.beta_slow;
-        let original_max_pos = rope_scaling.original_max_position_embeddings;
-        let truncate = rope_scaling.truncate;
-
-        // Compute attention scale: 0.1 * ln(factor) + 1.0 for YARN
-        let attention_scale = (0.1 * factor.ln() + 1.0) as f32;
-
-        // Helper: find correction dimension based on number of rotations
-        // HF: (dim * log(max_pos / (num_rotations * 2 * pi))) / (2 * log(base))
-        let find_correction_dim = |num_rotations: f64| -> f64 {
-            (dim as f64
-                * (original_max_pos as f64 / (num_rotations * 2.0 * std::f64::consts::PI)).ln())
-                / (2.0 * base.ln())
-        };
-
-        // Find correction range based on beta_fast and beta_slow
-        let mut low = find_correction_dim(beta_fast);
-        let mut high = find_correction_dim(beta_slow);
-        if truncate {
-            low = low.floor();
-            high = high.ceil();
-        }
-        low = low.max(0.0);
-        high = high.min((dim - 1) as f64);
-
-        // Compute base inverse frequencies
-        // pos_freqs = base^(arange(0, dim, 2) / dim)
-        // inv_freq_extrapolation = 1 / pos_freqs
-        // inv_freq_interpolation = 1 / (factor * pos_freqs)
-        let half_dim = dim / 2;
-        let inv_freq_extrapolation: Vec<f64> = (0..dim)
-            .step_by(2)
-            .map(|i| 1.0 / base.powf(i as f64 / dim as f64))
-            .collect();
-        let inv_freq_interpolation: Vec<f64> =
-            inv_freq_extrapolation.iter().map(|f| f / factor).collect();
-
-        // Linear ramp factor over dimension indices
-        // HF: linear_func = (arange(dim//2) - low) / (high - low); clamp(0, 1)
-        // inv_freq_extrapolation_factor = 1 - ramp
-        // inv_freq = interp * (1 - extrap_factor) + extrap * extrap_factor
-        //          = interp * ramp + extrap * (1 - ramp)
-        let inv_freq: Vec<f64> = (0..half_dim)
-            .map(|i| {
-                let range = if (high - low).abs() < 0.001 {
-                    0.001
-                } else {
-                    high - low
-                };
-                let linear = (i as f64 - low) / range;
-                let ramp = linear.clamp(0.0, 1.0);
-                // extrapolation_factor = 1 - ramp
-                // inv_freq = interp * (1 - extrap_factor) + extrap * extrap_factor
-                //          = interp * ramp + extrap * (1 - ramp)
-                inv_freq_interpolation[i] * ramp + inv_freq_extrapolation[i] * (1.0 - ramp)
-            })
-            .collect();
-
-        let inv_freq_len = inv_freq.len();
-        let inv_freq_tensor = Tensor::from_vec(
-            inv_freq.iter().map(|&x| x as f32).collect::<Vec<_>>(),
-            (1, inv_freq_len),
-            device,
-        )?;
-
-        let t = Tensor::arange(0u32, max_position_embeddings as u32, device)?
-            .to_dtype(DType::F32)?
-            .reshape((max_position_embeddings, 1))?;
-
-        let freqs = t.matmul(&inv_freq_tensor)?;
-
-        // Apply attention scale to sin/cos (matches HF transformers behavior)
-        // When applied to both Q and K, the effect on scores is scale^2, but this
-        // matches how the model was trained with HF transformers
-        // Pre-expand to [1, 1, max_position_embeddings, half_dim] to avoid unsqueeze in forward
-        let sin = (freqs.sin()? * attention_scale as f64)?
-            .to_dtype(dtype)?
-            .unsqueeze(0)?
-            .unsqueeze(0)?;
-        let cos = (freqs.cos()? * attention_scale as f64)?
-            .to_dtype(dtype)?
-            .unsqueeze(0)?
-            .unsqueeze(0)?;
-
-        Ok(Self {
-            cos,
-            sin,
-            attention_scale,
-        })
-    }
-
-    /// Apply GPT-OSS style RoPE (chunked, not interleaved)
-    /// HF implementation:
-    ///   first_half, second_half = torch.chunk(x, 2, dim=-1)
-    ///   first_ = first_half * cos - second_half * sin
-    ///   second_ = second_half * cos + first_half * sin
-    ///
-    /// cos and sin are pre-expanded to [1, 1, seq_len, half] to avoid unsqueeze overhead
-    fn apply_rotary_emb_chunked(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
-        let (_b, _h, _seq, n_embd) = x.dims4()?;
-        let half = n_embd / 2;
-
-        // Split into first and second half along last dimension
-        let first_half = x.narrow(D::Minus1, 0, half)?;
-        let second_half = x.narrow(D::Minus1, half, half)?;
-
-        // cos and sin already have shape [1, 1, seq_len, half] - no unsqueeze needed
-        // Apply rotation
-        let first_out = (first_half.broadcast_mul(cos)? - second_half.broadcast_mul(sin)?)?;
-        let second_out = (second_half.broadcast_mul(cos)? + first_half.broadcast_mul(sin)?)?;
-
-        // Concatenate back
-        Tensor::cat(&[&first_out, &second_out], D::Minus1)
-    }
-
-    pub fn forward(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        seqlen_offsets: &[usize],
-    ) -> Result<(Tensor, Tensor)> {
-        let (_b_sz, _qh, seq_len, _n_embd) = q.dims4()?;
-
-        if seqlen_offsets.len() == 1 {
-            // Narrow along dim 2 (sequence dimension) since cos/sin are [1, 1, max_pos, half]
-            let cos = self.cos.narrow(2, seqlen_offsets[0], seq_len)?;
-            let sin = self.sin.narrow(2, seqlen_offsets[0], seq_len)?;
-            let q_embed = Self::apply_rotary_emb_chunked(&q.contiguous()?, &cos, &sin)?;
-            let k_embed = Self::apply_rotary_emb_chunked(&k.contiguous()?, &cos, &sin)?;
-            Ok((q_embed, k_embed))
-        } else {
-            let mut q_embeds = Vec::new();
-            let mut k_embeds = Vec::new();
-            for (i, offset) in seqlen_offsets.iter().enumerate() {
-                // Narrow along dim 2 (sequence dimension)
-                let cos = self.cos.narrow(2, *offset, seq_len)?;
-                let sin = self.sin.narrow(2, *offset, seq_len)?;
-                let q_embed = Self::apply_rotary_emb_chunked(
-                    &q.i(i)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?;
-                let k_embed = Self::apply_rotary_emb_chunked(
-                    &k.i(i)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?;
-                q_embeds.push(q_embed);
-                k_embeds.push(k_embed);
-            }
-            Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
-        }
-    }
-}
-
-/// Wrapper enum for both standard and YARN rotary embeddings
+/// Wrapper enum for both standard and GPT-OSS YARN rotary embeddings
 #[derive(Clone)]
-pub enum GptOssRotaryEmbedding {
+pub enum GptOssRotaryEmbeddingVariant {
     Standard(Arc<RotaryEmbedding>),
-    Yarn(Arc<YarnRotaryEmbedding>),
+    Yarn(Arc<GptOssRotaryEmbedding>),
 }
 
-impl GptOssRotaryEmbedding {
+impl GptOssRotaryEmbeddingVariant {
     pub fn forward(
         &self,
         q: &Tensor,
@@ -342,7 +155,7 @@ struct Attention {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
-    rotary_emb: GptOssRotaryEmbedding,
+    rotary_emb: GptOssRotaryEmbeddingVariant,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     #[allow(dead_code)]
@@ -352,7 +165,7 @@ struct Attention {
 impl Attention {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        rotary_emb: GptOssRotaryEmbedding,
+        rotary_emb: GptOssRotaryEmbeddingVariant,
         cfg: &Config,
         vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
@@ -744,7 +557,7 @@ struct DecoderLayer {
 impl DecoderLayer {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        rotary_emb: GptOssRotaryEmbedding,
+        rotary_emb: GptOssRotaryEmbeddingVariant,
         cfg: &Config,
         vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
@@ -856,7 +669,7 @@ impl Model {
             &None, // Not quantized
         )?;
 
-        let mut ropes: HashMap<_, GptOssRotaryEmbedding> = HashMap::new();
+        let mut ropes: HashMap<_, GptOssRotaryEmbeddingVariant> = HashMap::new();
         for layer_idx in 0..cfg.num_hidden_layers {
             let device = mapper
                 .device_for(layer_idx, false)
@@ -865,17 +678,21 @@ impl Model {
             // Use YARN RoPE if configured, otherwise standard RoPE
             let rope = if let Some(rope_scaling) = &cfg.rope_scaling {
                 if rope_scaling.rope_type == "yarn" {
-                    GptOssRotaryEmbedding::Yarn(Arc::new(YarnRotaryEmbedding::new(
+                    GptOssRotaryEmbeddingVariant::Yarn(Arc::new(GptOssRotaryEmbedding::new(
                         cfg.rope_theta,
                         cfg.head_dim(),
                         cfg.max_position_embeddings,
-                        rope_scaling,
+                        rope_scaling.factor,
+                        rope_scaling.original_max_position_embeddings,
+                        rope_scaling.beta_fast,
+                        rope_scaling.beta_slow,
+                        rope_scaling.truncate,
                         device,
                         vb_m.dtype(),
                     )?))
                 } else {
                     // Fallback to standard RoPE for unknown types
-                    GptOssRotaryEmbedding::Standard(Arc::new(RotaryEmbedding::new(
+                    GptOssRotaryEmbeddingVariant::Standard(Arc::new(RotaryEmbedding::new(
                         cfg.rope_theta as f32,
                         cfg.head_dim(),
                         cfg.max_position_embeddings,
@@ -885,7 +702,7 @@ impl Model {
                     )?))
                 }
             } else {
-                GptOssRotaryEmbedding::Standard(Arc::new(RotaryEmbedding::new(
+                GptOssRotaryEmbeddingVariant::Standard(Arc::new(RotaryEmbedding::new(
                     cfg.rope_theta as f32,
                     cfg.head_dim(),
                     cfg.max_position_embeddings,
