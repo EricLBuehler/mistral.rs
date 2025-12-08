@@ -221,7 +221,9 @@ impl Attention {
         )?;
 
         // Load sinks: [num_heads]
-        let sinks = vb.get((num_heads,), "sinks")?;
+        let sinks = mapper
+            .set_device(layer_idx, vb.clone(), false)
+            .get((num_heads,), "sinks")?;
 
         let is_sliding = matches!(
             cfg.layer_types.get(layer_idx),
@@ -580,7 +582,7 @@ impl DecoderLayer {
 
         let mlp = GptOssMoE::new(
             cfg,
-            mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("mlp"), false),
             real_device,
         )?;
 
@@ -943,11 +945,14 @@ impl Model {
             )?;
         }
 
-        let xs = xs.to_device(&self.device)?;
-        let xs = self.norm.forward(&xs)?;
-        let logits = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
+        xs = xs.to_device(&self.device)?;
+        xs = self.norm.forward(&xs)?;
 
-        extract_logits(&logits, context_lens)
+        if let Some(t) = self.lm_head.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
+        xs = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
+        extract_logits(&xs, context_lens)
     }
 }
 
