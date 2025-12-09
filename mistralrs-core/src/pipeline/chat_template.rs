@@ -354,6 +354,29 @@ pub fn apply_chat_template_to(
     // Convert reasoning effort to string for template
     let reasoning_effort_str = reasoning_effort.map(|r| r.as_str()).unwrap_or("medium");
 
+    // Detect builtin tools from the tools list
+    // Known builtin tools for GPT-OSS/Harmony format: "browser", "python"
+    // Known builtin tools for Llama 3.x: "wolfram_alpha", "web_search", "brave_search", "python", "code_interpreter"
+    let builtin_tool_names = [
+        "browser",
+        "python",
+        "code_interpreter",
+        "web_search",
+        "brave_search",
+        "wolfram_alpha",
+    ];
+    let builtin_tools: Vec<&str> = tools
+        .iter()
+        .filter_map(|t| {
+            let name = t.function.name.as_str();
+            if builtin_tool_names.contains(&name) {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+
     if tools.is_empty() {
         Ok(tmpl.render(context! {
             messages => new_messages,
@@ -374,6 +397,7 @@ pub fn apply_chat_template_to(
             unk_token => unk_tok,
             xml_tools => tools.clone(), // SmolLM3
             tools => tools,
+            builtin_tools => builtin_tools,
             date_string => date_string,
             enable_thinking => enable_thinking.unwrap_or(true),
             reasoning_effort => reasoning_effort_str,
