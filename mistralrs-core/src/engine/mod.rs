@@ -167,7 +167,6 @@ pub struct Engine {
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
     
-    #[cfg(not(feature = "parking-lot-scheduler"))]
     scheduler: Arc<Mutex<dyn Scheduler>>,
     
     #[cfg(feature = "parking-lot-scheduler")]
@@ -208,6 +207,9 @@ impl Engine {
         search_callback: Option<Arc<search::SearchCallback>>,
         tool_callbacks: tools::ToolCallbacks,
         tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+        #[cfg(feature = "parking-lot-scheduler")] scheduler_config: Option<
+            crate::parking_lot::ParkingLotSchedulerConfig,
+        >,
     ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
@@ -224,7 +226,6 @@ impl Engine {
             None => None,
         };
 
-        #[cfg(not(feature = "parking-lot-scheduler"))]
         let scheduler = {
             let scheduler = config.into_scheduler();
             // Configure prefix caching on the scheduler based on the global no_prefix_cache flag
@@ -233,14 +234,50 @@ impl Engine {
             scheduler
         };
 
-        #[cfg(feature = "parking-lot-scheduler")]
-        let worker_pool = None; // Will be initialized when using parking-lot scheduler
-
-        #[cfg(not(feature = "parking-lot-scheduler"))]
         let block_engine = get_mut_arcmutex!(scheduler).block_engine();
-        
+
         #[cfg(feature = "parking-lot-scheduler")]
-        let block_engine = None; // TODO: Get from worker pool
+        let worker_pool = {
+            use crate::parking_lot::{InferenceWorkerPool, InferenceWorkerPoolConfig, StreamingRegistry};
+            use tracing::info;
+            
+            info!("🚀 Initializing prometheus_parking_lot WorkerPool for inference");
+            
+            // Create executor with the pipeline
+            let executor = LlmExecutor::new(pipeline.clone());
+            
+            // Create streaming registry
+            let streaming_registry = StreamingRegistry::with_default_retention();
+            
+            // Create worker pool config from scheduler_config or defaults
+            let pool_config = if let Some(sched_config) = scheduler_config {
+                info!("📋 Using scheduler configuration from YAML/CLI");
+                InferenceWorkerPoolConfig::from_scheduler_config(sched_config)
+            } else {
+                info!("📋 Using default scheduler configuration");
+                InferenceWorkerPoolConfig::default()
+            };
+            
+            info!("🔧 WorkerPool settings:");
+            info!("   Worker threads: {}", pool_config.worker_count);
+            if let Some(stack_size) = pool_config.thread_stack_size {
+                info!("   Thread stack size: {} bytes", stack_size);
+            }
+            info!("   Max units: {}", pool_config.max_units);
+            info!("   Max queue depth: {}", pool_config.max_queue_depth);
+            info!("   Timeout: {}s", pool_config.timeout_secs);
+            
+            match InferenceWorkerPool::new(executor, streaming_registry, pool_config) {
+                Ok(pool) => {
+                    info!("✅ WorkerPool initialized successfully");
+                    Some(Arc::new(pool))
+                }
+                Err(e) => {
+                    tracing::error!("❌ Failed to initialize WorkerPool: {:?}", e);
+                    None
+                }
+            }
+        };
 
         Ok(Self {
             tx,
@@ -250,8 +287,6 @@ impl Engine {
             search_callback,
             tool_callbacks,
             tool_callbacks_with_tools,
-            
-            #[cfg(not(feature = "parking-lot-scheduler"))]
             scheduler: scheduler.clone(),
             
             #[cfg(feature = "parking-lot-scheduler")]
@@ -336,15 +371,10 @@ impl Engine {
                 break 'lp;
             }
 
-            #[cfg(not(feature = "parking-lot-scheduler"))]
             let (waiting_len, running_len) = {
                 let scheduler = get_mut_arcmutex!(self.scheduler);
                 (scheduler.waiting_len(), scheduler.running_len())
             };
-            
-            #[cfg(feature = "parking-lot-scheduler")]
-            let (waiting_len, running_len) = (0, 0); // TODO: Get from worker pool stats
-            
             let scheduler_idle = waiting_len == 0 && running_len == 0;
 
             if scheduler_idle {
@@ -389,16 +419,10 @@ impl Engine {
                 self.replicate_request_to_daemons(&Request::TerminateAllSeqsNextStep);
             }
 
-            #[cfg(not(feature = "parking-lot-scheduler"))]
             let run_start = Instant::now();
-            
-            #[cfg(not(feature = "parking-lot-scheduler"))]
             let mut scheduler = get_mut_arcmutex!(self.scheduler);
-            
-            #[cfg(not(feature = "parking-lot-scheduler"))]
             let scheduled = scheduler.schedule(&self.logger);
 
-            #[cfg(not(feature = "parking-lot-scheduler"))]
             match scheduled {
                 SchedulerOutput::DefaultScheduler {
                     output: mut scheduled,
@@ -685,29 +709,20 @@ impl Engine {
                 }
             }
 
-            #[cfg(not(feature = "parking-lot-scheduler"))]
+            // Free Mamba state pool slots for finished sequences (hybrid models)
             {
-                // Free Mamba state pool slots for finished sequences (hybrid models)
-                {
-                    let pipeline = get_mut_arcmutex!(self.pipeline);
-                    if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
-                        let mamba_indices = scheduler.get_finished_mamba_indices();
-                        if !mamba_indices.is_empty() {
-                            let mut hybrid_cache = pipeline.cache().hybrid();
-                            for idx in mamba_indices {
-                                hybrid_cache.free_seq(idx);
-                            }
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
+                    let mamba_indices = scheduler.get_finished_mamba_indices();
+                    if !mamba_indices.is_empty() {
+                        let mut hybrid_cache = pipeline.cache().hybrid();
+                        for idx in mamba_indices {
+                            hybrid_cache.free_seq(idx);
                         }
                     }
                 }
-                scheduler.free_finished_sequence_groups();
             }
-            
-            #[cfg(feature = "parking-lot-scheduler")]
-            {
-                // TODO: Implement worker pool scheduling loop
-                // For now, the parking-lot-scheduler feature is a no-op
-            }
+            scheduler.free_finished_sequence_groups();
         }
     }
 

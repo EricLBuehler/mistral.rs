@@ -229,6 +229,10 @@ pub struct MistralRsForServerBuilder {
 
     /// PagedAttention KV cache type
     paged_cache_type: PagedCacheType,
+
+    /// Parking lot scheduler configuration (requires parking-lot-scheduler feature)
+    #[cfg(feature = "parking-lot-scheduler")]
+    scheduler_config: Option<mistralrs_core::parking_lot::ParkingLotSchedulerConfig>,
 }
 
 impl Default for MistralRsForServerBuilder {
@@ -261,6 +265,8 @@ impl Default for MistralRsForServerBuilder {
             search_callback: defaults::SEARCH_CALLBACK,
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
+            #[cfg(feature = "parking-lot-scheduler")]
+            scheduler_config: None,
         }
     }
 }
@@ -563,6 +569,28 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Sets the parking lot scheduler configuration (requires parking-lot-scheduler feature).
+    #[cfg(feature = "parking-lot-scheduler")]
+    pub fn with_scheduler_config(
+        mut self,
+        scheduler_config: mistralrs_core::parking_lot::ParkingLotSchedulerConfig,
+    ) -> Self {
+        self.scheduler_config = Some(scheduler_config);
+        self
+    }
+
+    /// Sets the parking lot scheduler configuration if provided (requires parking-lot-scheduler feature).
+    #[cfg(feature = "parking-lot-scheduler")]
+    pub fn with_scheduler_config_optional(
+        mut self,
+        scheduler_config: Option<mistralrs_core::parking_lot::ParkingLotSchedulerConfig>,
+    ) -> Self {
+        if let Some(scheduler_config) = scheduler_config {
+            self = self.with_scheduler_config(scheduler_config);
+        }
+        self
+    }
+
     /// Builds the configured mistral.rs instance.
     ///
     /// ### Examples
@@ -856,6 +884,8 @@ impl MistralRsForServerBuilder {
                 search_callback: self.search_callback.clone(),
                 tool_callbacks: HashMap::new(),
                 tool_callbacks_with_tools: HashMap::new(),
+                #[cfg(feature = "parking-lot-scheduler")]
+                scheduler_config: self.scheduler_config.clone(),
             };
 
             let mut add_model_config = mistralrs_core::AddModelConfig::new(engine_config);

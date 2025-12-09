@@ -27,10 +27,12 @@ regex.workspace = true
 rustyline.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 rust-mcp-sdk.workspace = true
 async-trait.workspace = true
+num_cpus = "1.16"
 
 [features]
 cuda = ["mistralrs-core/cuda", "mistralrs-server-core/cuda"]
@@ -46,3 +48,4 @@ mkl = ["mistralrs-core/mkl", "mistralrs-server-core/mkl"]
 nccl = ["mistralrs-core/nccl", "mistralrs-server-core/nccl"]
 ring = ["mistralrs-core/ring", "mistralrs-server-core/ring"]
 mcp-server = ["rust-mcp-sdk/server", "rust-mcp-sdk/hyper-server"]
+parking-lot-scheduler = ["mistralrs-core/parking-lot-scheduler", "mistralrs-server-core/parking-lot-scheduler"]

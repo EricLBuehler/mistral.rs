@@ -9,7 +9,7 @@ use tokio::sync::Mutex as TokioMutex;
 use tracing::{debug, error, info};
 
 use super::job::{InferenceJob, InferenceResult, StreamingTokenResult};
-use super::types::{TaskExecutor, TaskMetadata};
+use super::types::{ParkingLotTaskMetadata, PrometheusWorkerExecutor, TaskExecutor, TaskMetadata};
 use crate::pipeline::Pipeline;
 use crate::response::Response;
 
@@ -146,6 +146,40 @@ impl LlmExecutor {
     }
 }
 
+// Implement prometheus_parking_lot's WorkerExecutor trait
+#[async_trait]
+impl PrometheusWorkerExecutor<InferenceJob, InferenceResult> for LlmExecutor {
+    async fn execute(
+        &self,
+        payload: InferenceJob,
+        meta: ParkingLotTaskMetadata,
+    ) -> InferenceResult {
+        // Convert ParkingLotTaskMetadata to our local TaskMetadata
+        let local_meta = TaskMetadata {
+            id: meta.id,
+            priority: meta.priority,
+            cost: meta.cost,
+            created_at_ms: meta.created_at_ms,
+            deadline_ms: meta.deadline_ms,
+            mailbox: meta.mailbox,
+        };
+
+        info!(
+            task_id = %local_meta.id,
+            request_id = %payload.request_id,
+            is_streaming = payload.is_streaming,
+            "Executing inference job via WorkerPool"
+        );
+
+        if payload.is_streaming {
+            self.process_streaming(&payload, &local_meta).await
+        } else {
+            self.process_completion(&payload, &local_meta).await
+        }
+    }
+}
+
+// Also implement our local TaskExecutor trait for backward compatibility
 #[async_trait]
 impl TaskExecutor<InferenceJob, InferenceResult> for LlmExecutor {
     async fn execute(&self, payload: InferenceJob, meta: TaskMetadata) -> InferenceResult {

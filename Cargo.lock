@@ -3126,11 +3126,13 @@ dependencies = [
  "indexmap",
  "mistralrs-core",
  "mistralrs-server-core",
+ "num_cpus",
  "regex",
  "rust-mcp-sdk",
  "rustyline",
  "serde",
  "serde_json",
+ "serde_yaml",
  "tokio",
  "tracing",
 ]

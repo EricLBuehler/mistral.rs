@@ -413,6 +413,49 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
    - [UQFF format](docs/UQFF.md) for custom quantization
    - Speculative decoding across models
    - ⭐ Agentic [web search integration](docs/WEB_SEARCH.md)
+   - ⭐ **Parking Lot Scheduler**: Configurable thread pool and resource management for optimal throughput
+
+### Parking Lot Scheduler Configuration
+
+When using the `parking-lot-scheduler` feature, you can configure the thread pool and resource limits via YAML configuration file.
+
+**Configuration File Locations (priority order):**
+1. `--scheduler-config <path>` CLI flag
+2. `MISTRALRS_SCHEDULER_CONFIG` environment variable
+3. `~/.mistralrs-server/scheduler.yaml` (default location)
+4. Built-in defaults if no config found
+
+**CLI Override Flags:**
+- `--worker-threads <n>`: Number of worker threads
+- `--thread-stack-size <bytes>`: Thread stack size
+- `--scheduler-max-units <n>`: Maximum KV cache blocks
+- `--scheduler-max-queue <n>`: Maximum queue depth
+- `--scheduler-timeout <secs>`: Request timeout
+
+CLI flags take precedence over YAML configuration.
+
+**Example Usage:**
+
+```bash
+# Use default config location
+cargo run --release --features parking-lot-scheduler -- plain ...
+
+# Use custom config file
+cargo run --release --features parking-lot-scheduler -- \
+  --scheduler-config ./my-scheduler.yaml plain ...
+
+# Override specific settings via CLI
+cargo run --release --features parking-lot-scheduler -- \
+  --worker-threads 8 \
+  --scheduler-max-units 8192 \
+  plain ...
+
+# Use environment variable
+export MISTRALRS_SCHEDULER_CONFIG=~/configs/scheduler.yaml
+cargo run --release --features parking-lot-scheduler -- plain ...
+```
+
+See [`examples/scheduler-config.yaml`](examples/scheduler-config.yaml) for full configuration documentation and hardware-specific profiles.
 
 ## APIs and Integrations
 
@@ -513,7 +556,15 @@ cargo build --release --features "cuda flash-attn cudnn"
     cd mistral.rs
     ```
 
-5) Build or install `mistralrs-server`:
+5) <b>*Optional:*</b> Configure environment variables (see [`env.example`](env.example) for all available options)
+    ```bash
+    cp env.example .env
+    # Edit .env to set your HF_TOKEN, MISTRALRS_SCHEDULER_CONFIG, etc.
+    ```
+
+6) Build or install `mistralrs-server`:
+    ```bash
+6) Build or install `mistralrs-server`:
     - Build the `mistralrs-server` binary, which can be found at `target/release/mistralrs-server`.
         ```bash
         cargo build --release --features <specify feature(s) here>
@@ -525,14 +576,14 @@ cargo build --release --features "cuda flash-attn cudnn"
         cargo install --path mistralrs-server --features <specify feature(s) here>
         ```
 
-6) (*If you used `cargo build`*) The build process will output a binary `mistralrs-server` at `./target/release/mistralrs-server`. We can switch to that directory so that the binary can be accessed as `./mistralrs-server` with the following command:
+7) (*If you used `cargo build`*) The build process will output a binary `mistralrs-server` at `./target/release/mistralrs-server`. We can switch to that directory so that the binary can be accessed as `./mistralrs-server` with the following command:
 
     *Example on Ubuntu:*
     ```
     cd target/release
     ```
 
-7) Use our APIs and integrations: 
+8) Use our APIs and integrations: 
     
     [APIs and integrations list](#apis-and-integrations)
 

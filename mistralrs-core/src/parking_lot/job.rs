@@ -138,17 +138,21 @@ pub struct StreamingTokenResult {
 #[derive(Debug)]
 pub enum InferenceResult {
     /// Complete chat completion response
-    ChatCompletion(ChatCompletionResponse),
+    ChatCompletion {
+        response: ChatCompletionResponse,
+    },
 
     /// Complete text completion response  
-    Completion(CompletionResponse),
+    Completion {
+        response: CompletionResponse,
+    },
 
     /// Streaming response - contains a receiver for tokens
     Streaming {
         /// Request ID for correlation
         request_id: String,
         /// Receiver for streaming chunks
-        chunk_rx: flume::Receiver<Result<StreamingTokenResult, String>>,
+        token_rx: flume::Receiver<Result<StreamingTokenResult, String>>,
     },
 
     /// Error during inference
@@ -162,24 +166,24 @@ impl InferenceResult {
     /// Create a chat completion result
     #[must_use]
     pub fn chat_completion(response: ChatCompletionResponse) -> Self {
-        Self::ChatCompletion(response)
+        Self::ChatCompletion { response }
     }
 
     /// Create a completion result
     #[must_use]
     pub fn completion(response: CompletionResponse) -> Self {
-        Self::Completion(response)
+        Self::Completion { response }
     }
 
     /// Create a streaming result with the given chunk receiver
     #[must_use]
     pub fn streaming(
         request_id: String,
-        chunk_rx: flume::Receiver<Result<StreamingTokenResult, String>>,
+        token_rx: flume::Receiver<Result<StreamingTokenResult, String>>,
     ) -> Self {
         Self::Streaming {
             request_id,
-            chunk_rx,
+            token_rx,
         }
     }
 
@@ -232,6 +236,18 @@ pub enum SerializableInferenceResult {
 }
 
 impl SerializableInferenceResult {
+    /// Create a chat completion result
+    #[must_use]
+    pub fn chat_completion(response: ChatCompletionResponse) -> Self {
+        Self::ChatCompletion(response)
+    }
+
+    /// Create a completion result
+    #[must_use]
+    pub fn completion(response: CompletionResponse) -> Self {
+        Self::Completion(response)
+    }
+
     /// Create a streaming channel result
     #[must_use]
     pub fn streaming_channel(request_id: String, channel_key: String) -> Self {

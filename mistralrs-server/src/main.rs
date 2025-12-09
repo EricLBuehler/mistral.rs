@@ -21,6 +21,11 @@ mod interactive_mode;
 use interactive_mode::interactive_mode;
 mod mcp_server;
 
+#[cfg(feature = "parking-lot-scheduler")]
+mod scheduler_config;
+#[cfg(feature = "parking-lot-scheduler")]
+use scheduler_config::{load_scheduler_config, merge_configs, CliSchedulerConfig};
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -155,6 +160,39 @@ struct Args {
     /// MCP client configuration file path
     #[arg(long)]
     mcp_config: Option<String>,
+
+    // ============================================================================
+    // Parking Lot Scheduler Configuration (requires parking-lot-scheduler feature)
+    // ============================================================================
+    /// Path to scheduler configuration file (YAML).
+    /// Overrides: env var MISTRALRS_SCHEDULER_CONFIG > ~/.mistralrs-server/scheduler.yaml
+    #[arg(long = "scheduler-config")]
+    scheduler_config: Option<String>,
+
+    /// Number of worker threads for inference pool.
+    /// Overrides YAML config value.
+    #[arg(long = "worker-threads")]
+    worker_threads: Option<usize>,
+
+    /// Thread stack size in bytes.
+    /// Overrides YAML config value.
+    #[arg(long = "thread-stack-size")]
+    thread_stack_size: Option<usize>,
+
+    /// Maximum resource units (KV cache blocks).
+    /// Overrides YAML config value.
+    #[arg(long = "scheduler-max-units")]
+    scheduler_max_units: Option<u32>,
+
+    /// Maximum queue depth before rejection.
+    /// Overrides YAML config value.
+    #[arg(long = "scheduler-max-queue")]
+    scheduler_max_queue: Option<usize>,
+
+    /// Request timeout in seconds.
+    /// Overrides YAML config value.
+    #[arg(long = "scheduler-timeout")]
+    scheduler_timeout: Option<u64>,
 }
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
@@ -332,6 +370,49 @@ async fn main() -> Result<()> {
     // Load MCP configuration if provided
     let mcp_config = load_mcp_config(args.mcp_config.as_deref())?;
 
+    // Load scheduler configuration (only with parking-lot-scheduler feature)
+    #[cfg(feature = "parking-lot-scheduler")]
+    let scheduler_config = {
+        let yaml_config = load_scheduler_config(args.scheduler_config.as_deref())?;
+
+        let cli_overrides = CliSchedulerConfig {
+            worker_threads: args.worker_threads,
+            thread_stack_size: args.thread_stack_size,
+            max_units: args.scheduler_max_units,
+            max_queue_depth: args.scheduler_max_queue,
+            timeout_secs: args.scheduler_timeout,
+        };
+
+        let merged = merge_configs(yaml_config, cli_overrides);
+
+        // Log final configuration
+        info!("🔧 Scheduler Configuration:");
+        info!(
+            "   Worker threads: {}",
+            merged
+                .pool
+                .worker_threads
+                .unwrap_or_else(num_cpus::get)
+        );
+        if let Some(stack_size) = merged.pool.thread_stack_size {
+            info!("   Thread stack size: {} bytes", stack_size);
+        }
+        info!(
+            "   Max units: {}",
+            merged.limits.max_units.unwrap_or(16384)
+        );
+        info!(
+            "   Max queue depth: {}",
+            merged.limits.max_queue_depth.unwrap_or(1000)
+        );
+        info!(
+            "   Timeout: {}s",
+            merged.limits.timeout_secs.unwrap_or(120)
+        );
+
+        Some(merged)
+    };
+
     let paged_attn = configure_paged_attn_from_flags(args.paged_attn, args.no_paged_attn)?;
 
     let mistralrs = match args.model {
@@ -355,6 +436,11 @@ async fn main() -> Result<()> {
                 .with_log_optional(args.log)
                 .with_mcp_config_optional(mcp_config)
                 .with_paged_attn_cache_type(args.cache_type.unwrap_or_default());
+
+            #[cfg(feature = "parking-lot-scheduler")]
+            {
+                builder = builder.with_scheduler_config_optional(scheduler_config.clone());
+            }
 
             // Add models to builder
             for config in model_configs {
@@ -396,6 +482,11 @@ async fn main() -> Result<()> {
                 .with_paged_attn_block_size_optional(args.paged_attn_block_size)
                 .with_mcp_config_optional(mcp_config)
                 .with_paged_attn_cache_type(args.cache_type.unwrap_or_default());
+
+            #[cfg(feature = "parking-lot-scheduler")]
+            {
+                builder = builder.with_scheduler_config_optional(scheduler_config);
+            }
 
             if let Some(model) = args.search_embedding_model {
                 builder = builder.with_search_embedding_model(model);

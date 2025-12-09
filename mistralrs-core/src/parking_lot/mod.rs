@@ -20,6 +20,7 @@
 //! for type compatibility and resource tracking. The executor integrates with
 //! mistral.rs's existing Pipeline trait.
 
+pub mod config;
 pub mod executor;
 pub mod job;
 pub mod resource_adapter;
@@ -29,6 +30,9 @@ pub mod worker_pool;
 
 #[cfg(test)]
 mod tests;
+
+// Re-export config types
+pub use config::{LimitsConfig, ParkingLotSchedulerConfig, PoolConfig};
 
 // Re-export executor
 pub use executor::LlmExecutor;
