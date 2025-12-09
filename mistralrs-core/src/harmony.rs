@@ -370,6 +370,8 @@ impl HarmonyContext {
 
     /// Finalize any pending tool call and return all tool calls.
     /// This should be called when the sequence is done.
+    /// Note: This takes ownership of the tool calls, so calling it twice
+    /// will return an empty vector the second time.
     pub fn finalize_tool_calls(&mut self) -> Vec<HarmonyToolCall> {
         // Finalize any pending tool call
         if let Some((recipient, args)) = self.current_tool_call.take() {
@@ -380,7 +382,8 @@ impl HarmonyContext {
                 arguments: args,
             });
         }
-        self.tool_calls.clone()
+        // Take ownership to prevent duplicate returns if called multiple times
+        std::mem::take(&mut self.tool_calls)
     }
 }
 
