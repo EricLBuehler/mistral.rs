@@ -156,7 +156,7 @@ impl PagedAttentionScheduler {
         while !self.waiting.is_empty() {
             let seq = self.waiting.front().unwrap().clone();
 
-            if self.config.max_num_seqs == self.running.len() + 1 {
+            if self.running.len() >= self.config.max_num_seqs {
                 break;
             }
 
