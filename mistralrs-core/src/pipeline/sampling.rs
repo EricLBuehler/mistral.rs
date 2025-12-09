@@ -104,13 +104,29 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 
                         // Detect tool calls
                         let tool_calls = if seq.is_harmony_mode() {
-                            // In Harmony mode, check if there's a tool call in progress
-                            if seq.has_harmony_tool_calls() {
+                            // In Harmony mode, only finalize tool calls when the sequence is done
+                            // (EOS token or stop string), not when we first detect a tool call.
+                            // This ensures tool call arguments are fully generated.
+                            if is_done.is_some() && seq.has_harmony_tool_calls() {
+                                // Sequence is done and has tool calls - finalize and send them
                                 is_done = Some(StopReason::ToolCalls);
+                                let harmony_tool_calls = seq.get_harmony_tool_calls();
+                                harmony_tool_calls
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(i, tc)| ToolCallResponse {
+                                        index: i,
+                                        id: tc.id,
+                                        tp: ToolCallType::Function,
+                                        function: CalledFunction {
+                                            name: tc.name,
+                                            arguments: tc.arguments,
+                                        },
+                                    })
+                                    .collect()
+                            } else {
+                                vec![]
                             }
-                            // For streaming, we don't send partial tool calls
-                            // Tool calls will be sent when the sequence finishes
-                            vec![]
                         } else {
                             // Not in Harmony mode - parse text for tool calls
                             let (_, tool_calls) =

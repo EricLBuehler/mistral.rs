@@ -253,16 +253,16 @@ impl HarmonyContext {
                         self.last_commentary_len = content.len();
                     }
                 }
-                Some(HarmonyChannel::Final) => {
+                Some(HarmonyChannel::Final) | None => {
+                    // Final channel OR no channel marker - treat content as final.
+                    // This handles cases where the model responds without Harmony
+                    // channel markers (e.g., after tool call results).
                     if content.len() > self.last_final_len {
                         let new_content = content[self.last_final_len..].to_string();
                         self.accumulated.final_content.push_str(&new_content);
                         delta.final_delta = Some(new_content);
                         self.last_final_len = content.len();
                     }
-                }
-                None => {
-                    // No channel yet - this might be before the first channel marker
                 }
             }
         }
