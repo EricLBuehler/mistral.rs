@@ -78,7 +78,7 @@ functions = {
 messages = [
     {
         "role": "user",
-        "content": "Please compute using any available tools the are of a circle with radius 4?",
+        "content": "Please write and run a python script to do a matmul. Then tell me JUST the result of the matmul.",
     }
 ]
 
@@ -90,26 +90,46 @@ completion = client.chat.completions.create(
 )
 
 # print(completion.usage)
-# print(completion.choices[0].message)
+print(completion.choices[0].message)
 
-tool_called = completion.choices[0].message.tool_calls[0].function
+tool_call = completion.choices[0].message.tool_calls[0]
+tool_called = tool_call.function
 
 if tool_called.name in functions:
     args = json.loads(tool_called.arguments)
     result = functions[tool_called.name](**args)
     print(f"Called tool `{tool_called.name}`")
 
+    # Append the assistant message with tool_calls (must include the original message)
     messages.append(
         {
             "role": "assistant",
-            "content": json.dumps({"name": tool_called.name, "parameters": args}),
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": tool_call.id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_called.name,
+                        "arguments": tool_called.arguments,
+                    },
+                }
+            ],
         }
     )
 
-    messages.append({"role": "tool", "content": result})
+    # Append the tool response with tool_call_id
+    messages.append(
+        {
+            "role": "tool",
+            "tool_call_id": tool_call.id,
+            "name": tool_called.name,
+            "content": result,
+        }
+    )
 
     completion = client.chat.completions.create(
         model="default", messages=messages, tools=tools, tool_choice="auto"
     )
     # print(completion.usage)
-    print(completion.choices[0].message.content)
+    print(completion.choices[0].message)

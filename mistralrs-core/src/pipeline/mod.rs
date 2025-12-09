@@ -911,6 +911,7 @@ mod tests {
                 },
                 true,
                 None,
+                None, // reasoning_effort
                 &ChatTemplateValue(Either::Left(template.to_string())),
                 Some(bos.to_string()),
                 Some(eos.to_string()),

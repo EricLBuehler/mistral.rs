@@ -109,6 +109,7 @@ impl RequestLike for TextMessages {
         RequestMessage::Chat {
             messages: other,
             enable_thinking: self.enable_thinking,
+            reasoning_effort: None,
         }
     }
     fn enable_search(&self) -> Option<bool> {
@@ -282,6 +283,7 @@ impl RequestLike for VisionMessages {
             messages: other_messages,
             audios: other_audios,
             enable_thinking: self.enable_thinking,
+            reasoning_effort: None,
         }
     }
     fn enable_search(&self) -> Option<bool> {
@@ -677,6 +679,7 @@ impl RequestLike for RequestBuilder {
             RequestMessage::Chat {
                 messages: other,
                 enable_thinking: self.enable_thinking,
+                reasoning_effort: None,
             }
         } else {
             let mut other_messages = Vec::new();
@@ -690,6 +693,7 @@ impl RequestLike for RequestBuilder {
                 messages: other_messages,
                 audios: other_audios,
                 enable_thinking: self.enable_thinking,
+                reasoning_effort: None,
             }
         }
     }

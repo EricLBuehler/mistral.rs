@@ -77,6 +77,24 @@ impl ChatTemplate {
         self.chat_template.is_some()
     }
 
+    /// Check if this chat template uses OpenAI Harmony format.
+    pub fn is_harmony_format(&self) -> bool {
+        if let Some(ref template_value) = self.chat_template {
+            let template_str = match &template_value.0 {
+                Either::Left(s) => s.as_str(),
+                Either::Right(vec) => {
+                    // For multi-template format, check if any template contains Harmony markers
+                    return vec
+                        .iter()
+                        .any(|t| t.values().any(|v| crate::harmony::is_harmony_template(v)));
+                }
+            };
+            crate::harmony::is_harmony_template(template_str)
+        } else {
+            false
+        }
+    }
+
     pub fn eos_tok(&self) -> Option<String> {
         match self.eos_token.as_ref()?.0 {
             Either::Left(ref lit) => Some(lit.clone()),
@@ -228,11 +246,14 @@ fn strftime_now(fmt: String) -> Result<String, minijinja::Error> {
     Ok(date_string)
 }
 
+use crate::request::ReasoningEffort;
+
 #[allow(clippy::too_many_arguments)]
 pub fn apply_chat_template_to(
     messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
     enable_thinking: Option<bool>,
+    reasoning_effort: Option<ReasoningEffort>,
     template: &ChatTemplateValue,
     bos_tok: Option<String>,
     eos_tok: Option<String>,
@@ -330,6 +351,9 @@ pub fn apply_chat_template_to(
     let date = chrono::Utc::now();
     let date_string = date.format("%d, %B, %Y").to_string();
 
+    // Convert reasoning effort to string for template
+    let reasoning_effort_str = reasoning_effort.map(|r| r.as_str()).unwrap_or("medium");
+
     if tools.is_empty() {
         Ok(tmpl.render(context! {
             messages => new_messages,
@@ -339,6 +363,7 @@ pub fn apply_chat_template_to(
             unk_token => unk_tok,
             date_string => date_string,
             enable_thinking => enable_thinking.unwrap_or(true),
+            reasoning_effort => reasoning_effort_str,
         })?)
     } else {
         Ok(tmpl.render(context! {
@@ -351,6 +376,7 @@ pub fn apply_chat_template_to(
             tools => tools,
             date_string => date_string,
             enable_thinking => enable_thinking.unwrap_or(true),
+            reasoning_effort => reasoning_effort_str,
         })?)
     }
 }

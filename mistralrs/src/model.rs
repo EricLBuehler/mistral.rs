@@ -389,6 +389,7 @@ impl Model {
             add_generation_prompt,
             response: tx,
             enable_thinking,
+            reasoning_effort: None,
         });
         self.runner.get_sender(None)?.send(request).await?;
 
