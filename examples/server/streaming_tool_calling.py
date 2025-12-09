@@ -26,7 +26,7 @@ from openai import OpenAI
 
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
-MAX_TOOL_ROUNDS = 5
+MAX_TOOL_ROUNDS = 10
 
 tools = [
     {
@@ -93,10 +93,19 @@ def do_streaming_request(messages, tools, round_num):
     finish_reason = None
 
     print("Assistant: ", end="", flush=True)
+    collected_reasoning = ""
 
     for chunk in stream:
         choice = chunk.choices[0]
         delta = choice.delta
+
+        # Print reasoning content in gray (if present)
+        # The field may be 'reasoning_content' or accessible via getattr
+        reasoning = getattr(delta, 'reasoning_content', None)
+        if reasoning:
+            # Print reasoning in gray/dim
+            print(f"\033[90m{reasoning}\033[0m", end="", flush=True)
+            collected_reasoning += reasoning
 
         # Print and collect content as it streams
         if delta.content:
@@ -126,8 +135,10 @@ def do_streaming_request(messages, tools, round_num):
 
     print()  # newline after streaming
     print(f"[Finish reason: {finish_reason}]")
+    if collected_reasoning:
+        print(f"[Reasoning: {len(collected_reasoning)} chars]")
 
-    return collected_content, collected_tool_calls, finish_reason
+    return collected_content, collected_tool_calls, finish_reason, collected_reasoning
 
 
 def execute_tool_calls(tool_calls):
@@ -168,7 +179,7 @@ def main():
     print("User: Please write and run a python script to do a matmul of 2 random integer matrices. Then tell me JUST the result of the matmul.")
 
     for round_num in range(1, MAX_TOOL_ROUNDS + 1):
-        content, tool_calls, finish_reason = do_streaming_request(messages, tools, round_num)
+        content, tool_calls, finish_reason, reasoning = do_streaming_request(messages, tools, round_num)
 
         if finish_reason == "tool_calls" and tool_calls:
             print(f"\nTool calls detected ({len(tool_calls)}):")
