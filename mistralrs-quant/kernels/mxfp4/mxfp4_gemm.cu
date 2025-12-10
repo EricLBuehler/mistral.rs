@@ -30,16 +30,10 @@
 
 namespace mxfp4_gemm {
 
-// FP4 E2M1 lookup table: [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0]
+// FP4 E2M1 lookup table
 __constant__ float FP4_LUT[16] = {
     0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f,
     -0.0f, -0.5f, -1.0f, -1.5f, -2.0f, -3.0f, -4.0f, -6.0f
-};
-
-// INT8 lookup table for vectorized dequantization (values scaled by 2x)
-__constant__ int8_t FP4_LUT_INT8[16] = {
-    0, 1, 2, 3, 4, 6, 8, 12,
-    0, -1, -2, -3, -4, -6, -8, -12
 };
 
 // E8M0 to float: 2^(e - 127) via IEEE 754 bit manipulation
@@ -57,16 +51,20 @@ __device__ __forceinline__ uint8_t high_nibble(uint8_t byte) {
 
 // Fast vectorized LUT lookup using __byte_perm instruction
 // Converts 8 FP4 nibbles (packed in int32) to 8 int8 values
-__device__ __forceinline__ int2 get_int_from_table_16(const int q4, const int8_t* table) {
-    const uint32_t* table32 = (const uint32_t*)table;
+// table32: LUT packed as 4 uint32 (16 int8 values)
+__device__ __forceinline__ int2 get_int_from_table_16(
+    const int q4,
+    const uint32_t table0, const uint32_t table1,
+    const uint32_t table2, const uint32_t table3
+) {
     uint32_t tmp[2];
     const uint32_t low_high_selection = 0x32103210 | ((q4 & 0x88888888) >> 1);
 
     #pragma unroll
     for (uint32_t i = 0; i < 2; ++i) {
         const uint32_t shift = 16 * i;
-        const uint32_t low  = __byte_perm(table32[0], table32[1], q4 >> shift);
-        const uint32_t high = __byte_perm(table32[2], table32[3], q4 >> shift);
+        const uint32_t low  = __byte_perm(table0, table1, q4 >> shift);
+        const uint32_t high = __byte_perm(table2, table3, q4 >> shift);
         tmp[i] = __byte_perm(low, high, low_high_selection >> shift);
     }
 
@@ -168,7 +166,12 @@ __global__ void mxfp4_matmul_tiled(
 }
 
 // ============================================================================
-// MXFP4 MoE GEMM Kernel (vectorized with __byte_perm LUT lookup)
+// Optimized MXFP4 MoE GEMM Kernel
+// Key optimizations:
+// 1. Process 32 elements per iteration (matches scale block size)
+// 2. Inline LUT in registers (no constant memory latency)
+// 3. Dual accumulators to hide FMA latency
+// 4. Vectorized uint4 weight loads (16 bytes = 32 weights)
 // ============================================================================
 
 template <typename T>
@@ -187,6 +190,12 @@ __global__ void mxfp4_moe_gemm(
     bool input_has_topk_dim
 ) {
     extern __shared__ float s_input[];
+
+    // LUT packed in registers (values scaled by 2x, divide by 2 at end)
+    const uint32_t LUT0 = 0x03020100;  // 0, 1, 2, 3
+    const uint32_t LUT1 = 0x0C080604;  // 4, 6, 8, 12
+    const uint32_t LUT2 = 0xFDFEFF00;  // 0, -1, -2, -3
+    const uint32_t LUT3 = 0xF4F8FAFC;  // -4, -6, -8, -12
 
     const int tid = threadIdx.x;
     const int block_size = blockDim.x;
@@ -223,6 +232,7 @@ __global__ void mxfp4_moe_gemm(
         in_row = input + (size_t)token_idx * topk * K + (size_t)expert_slot_start * K;
     }
 
+    // Load input to shared memory
     for (int k = tid; k < K; k += block_size) {
         if constexpr (std::is_same_v<T, half>) {
             s_input[k] = __half2float(in_row[k]);
@@ -241,29 +251,88 @@ __global__ void mxfp4_moe_gemm(
         const uint8_t *w_scale_row = weight_scales + (size_t)expert_idx * N * scale_stride
                                    + (size_t)n_idx * scale_stride;
 
-        float acc = 0.0f;
+        // Dual accumulators to hide FMA latency
+        float acc0 = 0.0f;
+        float acc1 = 0.0f;
 
-        // Process 8 elements per iteration using vectorized LUT lookup
-        for (int k = lane_id * 8; k < K; k += 32 * 8) {
-            int scale_idx = k / MXFP4_BLOCK_SIZE;
-            float w_scale = e8m0_to_float(w_scale_row[scale_idx]) * 0.5f;
+        // Process 32 elements per iteration (one full scale block)
+        // Each lane handles K/32 iterations with stride 1024
+        for (int k = lane_id * 32; k < K; k += 32 * 32) {
+            // Load scale once for entire 32-element block
+            float w_scale = e8m0_to_float(w_scale_row[k / MXFP4_BLOCK_SIZE]) * 0.5f;
 
-            uint32_t w_packed = *((uint32_t*)(w_row + k / 2));
-            int2 w_int8 = get_int_from_table_16(w_packed, FP4_LUT_INT8);
+            // Load 16 bytes = 32 nibbles = 32 weights
+            uint4 w_vec = *((uint4*)(w_row + k / 2));
 
-            int8_t* w_even = (int8_t*)&w_int8.x;
-            int8_t* w_odd = (int8_t*)&w_int8.y;
+            // Process first 8 elements (w_vec.x)
+            {
+                int2 w_int8 = get_int_from_table_16(w_vec.x, LUT0, LUT1, LUT2, LUT3);
+                int8_t* w_even = (int8_t*)&w_int8.x;
+                int8_t* w_odd = (int8_t*)&w_int8.y;
 
-            acc = fmaf(s_input[k+0], (float)w_even[0] * w_scale, acc);
-            acc = fmaf(s_input[k+1], (float)w_odd[0] * w_scale, acc);
-            acc = fmaf(s_input[k+2], (float)w_even[1] * w_scale, acc);
-            acc = fmaf(s_input[k+3], (float)w_odd[1] * w_scale, acc);
-            acc = fmaf(s_input[k+4], (float)w_even[2] * w_scale, acc);
-            acc = fmaf(s_input[k+5], (float)w_odd[2] * w_scale, acc);
-            acc = fmaf(s_input[k+6], (float)w_even[3] * w_scale, acc);
-            acc = fmaf(s_input[k+7], (float)w_odd[3] * w_scale, acc);
+                acc0 = fmaf(s_input[k+0], (float)w_even[0] * w_scale, acc0);
+                acc1 = fmaf(s_input[k+1], (float)w_odd[0] * w_scale, acc1);
+                acc0 = fmaf(s_input[k+2], (float)w_even[1] * w_scale, acc0);
+                acc1 = fmaf(s_input[k+3], (float)w_odd[1] * w_scale, acc1);
+                acc0 = fmaf(s_input[k+4], (float)w_even[2] * w_scale, acc0);
+                acc1 = fmaf(s_input[k+5], (float)w_odd[2] * w_scale, acc1);
+                acc0 = fmaf(s_input[k+6], (float)w_even[3] * w_scale, acc0);
+                acc1 = fmaf(s_input[k+7], (float)w_odd[3] * w_scale, acc1);
+            }
+
+            // Process second 8 elements (w_vec.y)
+            {
+                int2 w_int8 = get_int_from_table_16(w_vec.y, LUT0, LUT1, LUT2, LUT3);
+                int8_t* w_even = (int8_t*)&w_int8.x;
+                int8_t* w_odd = (int8_t*)&w_int8.y;
+
+                acc0 = fmaf(s_input[k+8], (float)w_even[0] * w_scale, acc0);
+                acc1 = fmaf(s_input[k+9], (float)w_odd[0] * w_scale, acc1);
+                acc0 = fmaf(s_input[k+10], (float)w_even[1] * w_scale, acc0);
+                acc1 = fmaf(s_input[k+11], (float)w_odd[1] * w_scale, acc1);
+                acc0 = fmaf(s_input[k+12], (float)w_even[2] * w_scale, acc0);
+                acc1 = fmaf(s_input[k+13], (float)w_odd[2] * w_scale, acc1);
+                acc0 = fmaf(s_input[k+14], (float)w_even[3] * w_scale, acc0);
+                acc1 = fmaf(s_input[k+15], (float)w_odd[3] * w_scale, acc1);
+            }
+
+            // Process third 8 elements (w_vec.z)
+            {
+                int2 w_int8 = get_int_from_table_16(w_vec.z, LUT0, LUT1, LUT2, LUT3);
+                int8_t* w_even = (int8_t*)&w_int8.x;
+                int8_t* w_odd = (int8_t*)&w_int8.y;
+
+                acc0 = fmaf(s_input[k+16], (float)w_even[0] * w_scale, acc0);
+                acc1 = fmaf(s_input[k+17], (float)w_odd[0] * w_scale, acc1);
+                acc0 = fmaf(s_input[k+18], (float)w_even[1] * w_scale, acc0);
+                acc1 = fmaf(s_input[k+19], (float)w_odd[1] * w_scale, acc1);
+                acc0 = fmaf(s_input[k+20], (float)w_even[2] * w_scale, acc0);
+                acc1 = fmaf(s_input[k+21], (float)w_odd[2] * w_scale, acc1);
+                acc0 = fmaf(s_input[k+22], (float)w_even[3] * w_scale, acc0);
+                acc1 = fmaf(s_input[k+23], (float)w_odd[3] * w_scale, acc1);
+            }
+
+            // Process fourth 8 elements (w_vec.w)
+            {
+                int2 w_int8 = get_int_from_table_16(w_vec.w, LUT0, LUT1, LUT2, LUT3);
+                int8_t* w_even = (int8_t*)&w_int8.x;
+                int8_t* w_odd = (int8_t*)&w_int8.y;
+
+                acc0 = fmaf(s_input[k+24], (float)w_even[0] * w_scale, acc0);
+                acc1 = fmaf(s_input[k+25], (float)w_odd[0] * w_scale, acc1);
+                acc0 = fmaf(s_input[k+26], (float)w_even[1] * w_scale, acc0);
+                acc1 = fmaf(s_input[k+27], (float)w_odd[1] * w_scale, acc1);
+                acc0 = fmaf(s_input[k+28], (float)w_even[2] * w_scale, acc0);
+                acc1 = fmaf(s_input[k+29], (float)w_odd[2] * w_scale, acc1);
+                acc0 = fmaf(s_input[k+30], (float)w_even[3] * w_scale, acc0);
+                acc1 = fmaf(s_input[k+31], (float)w_odd[3] * w_scale, acc1);
+            }
         }
 
+        // Merge accumulators
+        float acc = acc0 + acc1;
+
+        // Warp reduction
         #pragma unroll
         for (int offset = 16; offset > 0; offset /= 2) {
             acc += __shfl_down_sync(0xffffffff, acc, offset);
