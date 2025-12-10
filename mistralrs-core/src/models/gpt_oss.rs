@@ -14,7 +14,6 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     layers::{self, embedding, GptOssRotaryEmbedding, MatMul, RmsNorm, RotaryEmbedding},
-    ops::TopKLastDimOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -112,6 +111,7 @@ impl GptOssRotaryEmbeddingVariant {
 /// Custom SwiGLU activation with clamping as used in GPT-OSS
 /// Formula: (up + 1) * gate * sigmoid(gate * alpha)
 /// With clamping: gate clamped to max=limit (no min), up clamped to [-limit, limit]
+#[allow(dead_code)]
 fn gptoss_swiglu(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -> Result<Tensor> {
     // Use fused CUDA kernel when available for better performance
     #[cfg(feature = "cuda")]
@@ -391,43 +391,72 @@ impl Attention {
         let attn_weights = (q.matmul(&k_ref.transpose(D::Minus2, D::Minus1)?)?
             * self.sdpa_params.softmax_scale as f64)?;
 
-        // Apply attention mask (causal or sliding window - already computed in inner_forward)
-        let attn_weights = if let Some(mask) = attention_mask {
-            // The mask might have shape [b, 1, q_len, total_len] or [b, 1, 1, total_len]
-            // We need to narrow the last dim to k_len, but only if it's larger than k_len
+        // Use fused softmax with sinks kernel on CUDA when no mask (common during decode)
+        // Fall back to original implementation when mask is present to avoid preparation overhead
+        #[cfg(feature = "cuda")]
+        let scores = if attention_mask.is_none() {
+            // Fast path: no mask, use fused kernel
+            let sinks = self.sinks.to_dtype(attn_weights.dtype())?;
+            mistralrs_quant::softmax_with_sinks(&attn_weights, &sinks, None)?
+        } else {
+            // Slow path: mask present, use original implementation
+            let mask = attention_mask.unwrap();
             let mask_last_dim = mask.dim(D::Minus1)?;
             let causal_mask = if mask_last_dim > k_len {
                 mask.narrow(D::Minus1, 0, k_len)?
                     .to_dtype(attn_weights.dtype())?
             } else {
-                // Mask is already the right size or smaller (will broadcast)
                 mask.to_dtype(attn_weights.dtype())?
             };
-            attn_weights.broadcast_add(&causal_mask)?
-        } else {
-            attn_weights
+            let attn_weights = attn_weights.broadcast_add(&causal_mask)?;
+
+            // Add sinks
+            let sinks_expanded = self
+                .sinks
+                .reshape((1, num_heads, 1, 1))?
+                .broadcast_as((b_sz, num_heads, q_len, 1))?
+                .to_dtype(attn_weights.dtype())?;
+            let combined_logits = Tensor::cat(&[&attn_weights, &sinks_expanded], D::Minus1)?;
+
+            // Softmax with numerical stability
+            let max_logits = combined_logits.max_keepdim(D::Minus1)?;
+            let combined_logits = combined_logits.broadcast_sub(&max_logits)?;
+            let probs = candle_nn::ops::softmax_last_dim(&combined_logits)?;
+
+            // Drop sink probability
+            probs.narrow(D::Minus1, 0, k_len)?.contiguous()?
         };
 
-        // Add sinks: reshape [num_heads] -> [1, num_heads, 1, 1] and concat along last dim
-        let sinks_expanded = self
-            .sinks
-            .reshape((1, num_heads, 1, 1))?
-            .broadcast_as((b_sz, num_heads, q_len, 1))?
-            .to_dtype(attn_weights.dtype())?;
+        // Fallback for non-CUDA (shouldn't happen in practice for GPT-OSS)
+        #[cfg(not(feature = "cuda"))]
+        let scores = {
+            // Apply attention mask
+            let attn_weights = if let Some(mask) = mask_for_kernel {
+                attn_weights.broadcast_add(&mask.unsqueeze(1)?)?
+            } else {
+                attn_weights
+            };
 
-        // Concatenate sinks to attention logits: [b, heads, q_len, k_len + 1]
-        let combined_logits = Tensor::cat(&[&attn_weights, &sinks_expanded], D::Minus1)?;
+            // Add sinks: reshape [num_heads] -> [1, num_heads, 1, 1] and concat along last dim
+            let sinks_expanded = self
+                .sinks
+                .reshape((1, num_heads, 1, 1))?
+                .broadcast_as((b_sz, num_heads, q_len, 1))?
+                .to_dtype(attn_weights.dtype())?;
 
-        // Subtract max for numerical stability
-        let max_logits = combined_logits.max_keepdim(D::Minus1)?;
-        let combined_logits = combined_logits.broadcast_sub(&max_logits)?;
+            // Concatenate sinks to attention logits
+            let combined_logits = Tensor::cat(&[&attn_weights, &sinks_expanded], D::Minus1)?;
 
-        // Softmax
-        let probs = candle_nn::ops::softmax_last_dim(&combined_logits)?;
+            // Subtract max for numerical stability
+            let max_logits = combined_logits.max_keepdim(D::Minus1)?;
+            let combined_logits = combined_logits.broadcast_sub(&max_logits)?;
 
-        // Drop the sink probability (take all but last)
-        // narrow creates a non-contiguous view, matmul requires contiguous tensors
-        let scores = probs.narrow(D::Minus1, 0, k_len)?.contiguous()?;
+            // Softmax
+            let probs = candle_nn::ops::softmax_last_dim(&combined_logits)?;
+
+            // Drop the sink probability
+            probs.narrow(D::Minus1, 0, k_len)?.contiguous()?
+        };
 
         // Compute output
         scores.matmul(v_ref)
@@ -496,43 +525,57 @@ impl GptOssMoE {
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
         // Compute routing logits
-        let router_logits = self.gate.forward(&xs_flat)?.to_dtype(DType::F32)?;
+        let router_logits = self.gate.forward(&xs_flat)?;
 
-        // Use optimized topk operation instead of arg_sort + narrow + gather
-        // This is more efficient as topk can use partial sorting
-        let topk_result = router_logits.topk(self.num_experts_per_tok)?;
-        let topk_logits = topk_result.values;
-        let topk_ids = topk_result.indices; // Already U32
+        #[cfg(feature = "cuda")]
+        let (topk_weights, topk_ids) = {
+            let result = crate::ops::cuda_topk_softmax(&router_logits, self.num_experts_per_tok)?;
+            (result.values, result.indices)
+        };
+        #[cfg(not(feature = "cuda"))]
+        let (topk_weights, topk_ids) = {
+            use crate::ops::TopKLastDimOp;
+            let router_f32 = router_logits.to_dtype(DType::F32)?;
+            let topk_result = router_f32.topk(self.num_experts_per_tok)?;
+            let topk_weights = candle_nn::ops::softmax_last_dim(&topk_result.values)?;
+            (topk_weights, topk_result.indices)
+        };
 
-        // Softmax only on the top-k logits (not all logits)
-        let topk_weights = candle_nn::ops::softmax_last_dim(&topk_logits)?;
-
-        // Forward through experts using gather_forward
-        // gate_up_proj output: [num_tokens, topk, intermediate_size * 2]
         let gate_up = self.gate_up_proj.gather_forward(&xs_flat, &topk_ids)?;
 
-        // Split gate and up - they are INTERLEAVED (gate at even indices, up at odd indices)
-        // HF: gate = gate_up[..., ::2], up = gate_up[..., 1::2]
-        // gate_up shape: [num_tokens, topk, intermediate_size * 2]
-        // Reshape to [num_tokens, topk, intermediate_size, 2] then select
         let (num_tokens, topk_dim, _) = gate_up.dims3()?;
-        let gate_up_reshaped =
-            gate_up.reshape((num_tokens, topk_dim, self.intermediate_size, 2))?;
-        let gate = gate_up_reshaped
-            .narrow(D::Minus1, 0, 1)?
-            .squeeze(D::Minus1)?;
-        let up = gate_up_reshaped
-            .narrow(D::Minus1, 1, 1)?
-            .squeeze(D::Minus1)?;
 
-        // Apply GPT-OSS SwiGLU activation
-        let activated = gptoss_swiglu(&gate, &up, self.alpha, self.limit)?;
+        // Use fused interleaved swiglu kernel on CUDA
+        #[cfg(feature = "cuda")]
+        let activated = {
+            let gate_up_for_kernel =
+                gate_up.reshape((num_tokens * topk_dim, self.intermediate_size, 2))?;
+            let result = mistralrs_quant::gptoss_swiglu_interleaved(
+                &gate_up_for_kernel,
+                self.intermediate_size,
+                self.alpha,
+                self.limit,
+            )?;
+            result.reshape((num_tokens, topk_dim, self.intermediate_size))?
+        };
+
+        #[cfg(not(feature = "cuda"))]
+        let activated = {
+            let gate_up_reshaped =
+                gate_up.reshape((num_tokens, topk_dim, self.intermediate_size, 2))?;
+            let gate = gate_up_reshaped
+                .narrow(D::Minus1, 0, 1)?
+                .squeeze(D::Minus1)?;
+            let up = gate_up_reshaped
+                .narrow(D::Minus1, 1, 1)?
+                .squeeze(D::Minus1)?;
+            gptoss_swiglu(&gate, &up, self.alpha, self.limit)?
+        };
 
         // down_proj: [num_tokens, topk, hidden_size]
         let expert_out = self.down_proj.gather_forward(&activated, &topk_ids)?;
 
         // Weight and sum expert outputs
-        // topk_weights: [num_tokens, topk] -> [num_tokens, topk, 1]
         let topk_weights = topk_weights
             .to_dtype(expert_out.dtype())?
             .unsqueeze(D::Minus1)?;

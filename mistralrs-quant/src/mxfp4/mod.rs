@@ -141,7 +141,6 @@ impl QuantMethod for MXFP4Layer {
             );
         }
 
-        // Metal fallback
         #[cfg(feature = "metal")]
         {
             use crate::afq::ops;

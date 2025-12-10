@@ -1,5 +1,3 @@
-//! CUDA operations for MXFP4 GEMM kernels.
-
 use candle_core::{CudaStorage, Device, Result, Shape, Storage, Tensor};
 use half::{bf16, f16};
 
@@ -40,7 +38,6 @@ pub fn mxfp4_matmul(
     let k = input_dims[1];
     let n = weight_dims[0];
 
-    // Validate shapes
     if weight_dims[1] != k / 2 {
         candle_core::bail!(
             "Weight shape mismatch: expected [N, K/2] = [{}, {}], got {:?}",
@@ -193,16 +190,31 @@ pub fn mxfp4_indexed_moe_gemm(
         candle_core::bail!("MXFP4 GEMM kernels not available");
     }
 
-    let input = input.contiguous()?;
-    let weight = weight.contiguous()?;
-    let scale = scale.contiguous()?;
-    let indices = indices.contiguous()?;
+    let input = if input.is_contiguous() {
+        input.clone()
+    } else {
+        input.contiguous()?
+    };
+    let weight = if weight.is_contiguous() {
+        weight.clone()
+    } else {
+        weight.contiguous()?
+    };
+    let scale = if scale.is_contiguous() {
+        scale.clone()
+    } else {
+        scale.contiguous()?
+    };
+    let indices = if indices.is_contiguous() {
+        indices.clone()
+    } else {
+        indices.contiguous()?
+    };
 
     let input_dims = input.dims();
     let weight_dims = weight.dims();
     let indices_dims = indices.dims();
 
-    // Determine if input has topk dimension
     let (num_tokens, topk, k, input_has_topk_dim) = if input_dims.len() == 2 {
         (input_dims[0], indices_dims[1], input_dims[1], false)
     } else if input_dims.len() == 3 {
@@ -214,7 +226,6 @@ pub fn mxfp4_indexed_moe_gemm(
     let num_experts = weight_dims[0];
     let n = weight_dims[1];
 
-    // Validate shapes
     if weight_dims[2] != k / 2 {
         candle_core::bail!(
             "Weight shape mismatch: expected [num_experts, N, K/2], got {:?}",
@@ -281,9 +292,6 @@ pub fn mxfp4_indexed_moe_gemm(
             };
 
             unsafe {
-                // Unified kernel handles both cases with adaptive grid dimensions:
-                // - input_has_topk_dim=false: Fewer blocks, quantize input once per token
-                // - input_has_topk_dim=true: Standard per-expert-slot processing
                 ffi::launch_mxfp4_indexed_moe_gemm_f16(
                     input_ptr as *const f16,
                     weight_ptr as *const u8,
@@ -301,8 +309,8 @@ pub fn mxfp4_indexed_moe_gemm(
                     dev.cuda_stream().cu_stream(),
                 );
             }
-
             drop(_output_guard);
+
             let output_storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
             Ok(Tensor::from((
                 Storage::Cuda(output_storage),
@@ -333,7 +341,6 @@ pub fn mxfp4_indexed_moe_gemm(
             };
 
             unsafe {
-                // Unified kernel handles both cases with adaptive grid dimensions
                 ffi::launch_mxfp4_indexed_moe_gemm_bf16(
                     input_ptr as *const bf16,
                     weight_ptr as *const u8,
@@ -351,8 +358,8 @@ pub fn mxfp4_indexed_moe_gemm(
                     dev.cuda_stream().cu_stream(),
                 );
             }
-
             drop(_output_guard);
+
             let output_storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
             Ok(Tensor::from((
                 Storage::Cuda(output_storage),

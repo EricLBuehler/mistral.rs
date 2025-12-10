@@ -201,4 +201,71 @@ extern "C" {
         limit: f32,
         stream: CUstream,
     );
+
+    // Fused GPT-OSS SwiGLU for interleaved gate/up data
+    pub fn gptoss_swiglu_interleaved_f16(
+        gate_up: *const c_void,
+        output: *mut c_void,
+        N: u32,
+        intermediate_size: u32,
+        alpha: f32,
+        limit: f32,
+        stream: CUstream,
+    );
+    pub fn gptoss_swiglu_interleaved_bf16(
+        gate_up: *const c_void,
+        output: *mut c_void,
+        N: u32,
+        intermediate_size: u32,
+        alpha: f32,
+        limit: f32,
+        stream: CUstream,
+    );
+    pub fn gptoss_swiglu_interleaved_f32(
+        gate_up: *const c_void,
+        output: *mut c_void,
+        N: u32,
+        intermediate_size: u32,
+        alpha: f32,
+        limit: f32,
+        stream: CUstream,
+    );
+
+    // Fused softmax with sinks for GPT-OSS attention
+    pub fn softmax_with_sinks_f16(
+        logits: *const c_void,
+        sinks: *const c_void,
+        mask: *const c_void,
+        output: *mut c_void,
+        batch_size: i32,
+        num_heads: i32,
+        q_len: i32,
+        k_len: i32,
+        scale: f32,
+        stream: CUstream,
+    );
+    pub fn softmax_with_sinks_bf16(
+        logits: *const c_void,
+        sinks: *const c_void,
+        mask: *const c_void,
+        output: *mut c_void,
+        batch_size: i32,
+        num_heads: i32,
+        q_len: i32,
+        k_len: i32,
+        scale: f32,
+        stream: CUstream,
+    );
+    pub fn softmax_with_sinks_f32(
+        logits: *const c_void,
+        sinks: *const c_void,
+        mask: *const c_void,
+        output: *mut c_void,
+        batch_size: i32,
+        num_heads: i32,
+        q_len: i32,
+        k_len: i32,
+        scale: f32,
+        stream: CUstream,
+    );
 }

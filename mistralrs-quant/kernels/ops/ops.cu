@@ -489,3 +489,352 @@ extern "C" void gptoss_swiglu_f32(
     }
     CUDA_CHECK(cudaGetLastError());
 }
+
+// ============================================================================
+// Fused GPT-OSS SwiGLU kernel for INTERLEAVED gate/up data
+//
+// This kernel handles interleaved gate/up format: [..., intermediate_size, 2]
+// where gate = data[..., :, 0] and up = data[..., :, 1]
+//
+// Avoids 2 tensor copies from narrow().squeeze().contiguous()
+// ============================================================================
+
+template <typename T>
+__global__ void gptoss_swiglu_interleaved_kernel(
+    const T *__restrict__ gate_up,  // [N, intermediate_size, 2] interleaved
+    T *__restrict__ output,         // [N, intermediate_size]
+    const uint32_t N,               // num_tokens * topk
+    const uint32_t intermediate_size,
+    const float alpha,
+    const float limit
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const uint32_t total_elements = N * intermediate_size;
+    if (idx >= total_elements) return;
+
+    // Decode position
+    const int n = idx / intermediate_size;
+    const int i = idx % intermediate_size;
+
+    // Read interleaved values: gate at offset 0, up at offset 1
+    const int base_idx = (n * intermediate_size + i) * 2;
+    float g = (float)gate_up[base_idx];      // gate
+    float u = (float)gate_up[base_idx + 1];  // up
+
+    // Clamp gate (max only) and up (both min and max)
+    float gate_clamped = fminf(g, limit);
+    float up_clamped = fmaxf(fminf(u, limit), -limit);
+
+    // glu = gate_clamped * sigmoid(gate_clamped * alpha)
+    float glu = gate_clamped * fast_sigmoid(gate_clamped * alpha);
+
+    // output = (up_clamped + 1) * glu
+    float result = (up_clamped + 1.0f) * glu;
+
+    output[idx] = (T)result;
+}
+
+extern "C" void gptoss_swiglu_interleaved_f16(
+    const __half *gate_up,
+    __half *output,
+    uint32_t N,
+    uint32_t intermediate_size,
+    float alpha,
+    float limit,
+    cudaStream_t stream
+) {
+    const uint32_t total = N * intermediate_size;
+    const int nthreads = 256;
+    const int nblocks = (total + nthreads - 1) / nthreads;
+    gptoss_swiglu_interleaved_kernel<<<nblocks, nthreads, 0, stream>>>(
+        gate_up, output, N, intermediate_size, alpha, limit
+    );
+    CUDA_CHECK(cudaGetLastError());
+}
+
+extern "C" void gptoss_swiglu_interleaved_bf16(
+    const __nv_bfloat16 *gate_up,
+    __nv_bfloat16 *output,
+    uint32_t N,
+    uint32_t intermediate_size,
+    float alpha,
+    float limit,
+    cudaStream_t stream
+) {
+    const uint32_t total = N * intermediate_size;
+    const int nthreads = 256;
+    const int nblocks = (total + nthreads - 1) / nthreads;
+    gptoss_swiglu_interleaved_kernel<<<nblocks, nthreads, 0, stream>>>(
+        gate_up, output, N, intermediate_size, alpha, limit
+    );
+    CUDA_CHECK(cudaGetLastError());
+}
+
+extern "C" void gptoss_swiglu_interleaved_f32(
+    const float *gate_up,
+    float *output,
+    uint32_t N,
+    uint32_t intermediate_size,
+    float alpha,
+    float limit,
+    cudaStream_t stream
+) {
+    const uint32_t total = N * intermediate_size;
+    const int nthreads = 256;
+    const int nblocks = (total + nthreads - 1) / nthreads;
+    gptoss_swiglu_interleaved_kernel<<<nblocks, nthreads, 0, stream>>>(
+        gate_up, output, N, intermediate_size, alpha, limit
+    );
+    CUDA_CHECK(cudaGetLastError());
+}
+
+// ============================================================================
+// Fused Softmax with Sinks kernel for GPT-OSS attention
+//
+// This kernel computes softmax over attention logits while including a per-head
+// "sink" value in the normalization, then drops the sink from the output.
+//
+// This avoids:
+// 1. Tensor concatenation to add sinks
+// 2. Broadcast operations for max subtraction
+// 3. narrow().contiguous() copy to drop sinks
+//
+// Input:
+//   logits: [batch, heads, q_len, k_len] - attention scores after q@k.T * scale
+//   sinks: [heads] - per-head sink values
+//   mask: [batch, 1, q_len, k_len] or nullptr - attention mask (0 = attend, -inf = mask)
+//
+// Output:
+//   scores: [batch, heads, q_len, k_len] - softmax probabilities (sink dropped)
+// ============================================================================
+
+// Warp-level reduction for max
+__device__ __forceinline__ float warp_reduce_max(float val) {
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2) {
+        val = fmaxf(val, __shfl_down_sync(0xffffffff, val, offset));
+    }
+    return val;
+}
+
+// Warp-level reduction for sum
+__device__ __forceinline__ float warp_reduce_sum(float val) {
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2) {
+        val += __shfl_down_sync(0xffffffff, val, offset);
+    }
+    return val;
+}
+
+// Fused softmax with sinks - one block per (batch, head, query) position
+// Each block processes one row of the attention matrix
+template <typename T>
+__global__ void softmax_with_sinks_kernel(
+    const T *__restrict__ logits,      // [batch, heads, q_len, k_len]
+    const T *__restrict__ sinks,       // [heads]
+    const T *__restrict__ mask,        // [batch, 1, q_len, k_len] or nullptr
+    T *__restrict__ output,            // [batch, heads, q_len, k_len]
+    const int batch_size,
+    const int num_heads,
+    const int q_len,
+    const int k_len,
+    const float scale                  // softmax scale (usually 1.0, already applied)
+) {
+    // Each block handles one (batch, head, query) = one row of length k_len
+    const int row_idx = blockIdx.x;
+    const int total_rows = batch_size * num_heads * q_len;
+    if (row_idx >= total_rows) return;
+
+    // Decode indices
+    const int b = row_idx / (num_heads * q_len);
+    const int h = (row_idx / q_len) % num_heads;
+    const int q = row_idx % q_len;
+
+    // Pointers to this row
+    const int logits_offset = ((b * num_heads + h) * q_len + q) * k_len;
+    const T* row_logits = logits + logits_offset;
+    T* row_output = output + logits_offset;
+
+    // Get sink value for this head
+    const float sink_val = (float)sinks[h];
+
+    // Mask offset (mask has shape [batch, 1, q_len, k_len])
+    const int mask_offset = (b * q_len + q) * k_len;
+    const T* row_mask = mask ? (mask + mask_offset) : nullptr;
+
+    // Shared memory for reductions
+    __shared__ float s_max;
+    __shared__ float s_sum;
+
+    const int tid = threadIdx.x;
+    const int block_size = blockDim.x;
+
+    // Step 1: Find max (including sink)
+    float local_max = -INFINITY;
+    for (int k = tid; k < k_len; k += block_size) {
+        float val = (float)row_logits[k];
+        if (row_mask) {
+            val += (float)row_mask[k];  // mask is 0 or -inf
+        }
+        local_max = fmaxf(local_max, val);
+    }
+    // Include sink in max computation
+    if (tid == 0) {
+        local_max = fmaxf(local_max, sink_val);
+    }
+
+    // Warp reduction for max
+    local_max = warp_reduce_max(local_max);
+
+    // Block reduction for max (if more than 1 warp)
+    if (block_size > 32) {
+        __shared__ float warp_maxes[32];
+        const int warp_id = tid / 32;
+        const int lane_id = tid % 32;
+        if (lane_id == 0) {
+            warp_maxes[warp_id] = local_max;
+        }
+        __syncthreads();
+        if (tid < 32) {
+            local_max = (tid < (block_size + 31) / 32) ? warp_maxes[tid] : -INFINITY;
+            local_max = warp_reduce_max(local_max);
+        }
+    }
+    if (tid == 0) {
+        s_max = local_max;
+    }
+    __syncthreads();
+    const float row_max = s_max;
+
+    // Step 2: Compute exp(x - max) and sum (including sink)
+    float local_sum = 0.0f;
+    for (int k = tid; k < k_len; k += block_size) {
+        float val = (float)row_logits[k];
+        if (row_mask) {
+            val += (float)row_mask[k];
+        }
+        local_sum += expf(val - row_max);
+    }
+    // Include sink in sum computation
+    if (tid == 0) {
+        local_sum += expf(sink_val - row_max);
+    }
+
+    // Warp reduction for sum
+    local_sum = warp_reduce_sum(local_sum);
+
+    // Block reduction for sum
+    if (block_size > 32) {
+        __shared__ float warp_sums[32];
+        const int warp_id = tid / 32;
+        const int lane_id = tid % 32;
+        if (lane_id == 0) {
+            warp_sums[warp_id] = local_sum;
+        }
+        __syncthreads();
+        if (tid < 32) {
+            local_sum = (tid < (block_size + 31) / 32) ? warp_sums[tid] : 0.0f;
+            local_sum = warp_reduce_sum(local_sum);
+        }
+    }
+    if (tid == 0) {
+        s_sum = local_sum;
+    }
+    __syncthreads();
+    const float row_sum = s_sum;
+
+    // Step 3: Write normalized outputs (sink is NOT written - it's dropped)
+    const float inv_sum = 1.0f / row_sum;
+    for (int k = tid; k < k_len; k += block_size) {
+        float val = (float)row_logits[k];
+        if (row_mask) {
+            val += (float)row_mask[k];
+        }
+        row_output[k] = (T)(expf(val - row_max) * inv_sum);
+    }
+}
+
+// Launch wrapper for f16
+extern "C" void softmax_with_sinks_f16(
+    const __half *logits,
+    const __half *sinks,
+    const __half *mask,
+    __half *output,
+    int batch_size,
+    int num_heads,
+    int q_len,
+    int k_len,
+    float scale,
+    cudaStream_t stream
+) {
+    const int total_rows = batch_size * num_heads * q_len;
+    // Choose block size based on k_len
+    int block_size = 256;
+    if (k_len <= 64) block_size = 64;
+    else if (k_len <= 128) block_size = 128;
+    else if (k_len <= 256) block_size = 256;
+    else if (k_len <= 512) block_size = 512;
+    else block_size = 1024;
+
+    softmax_with_sinks_kernel<<<total_rows, block_size, 0, stream>>>(
+        logits, sinks, mask, output,
+        batch_size, num_heads, q_len, k_len, scale
+    );
+    CUDA_CHECK(cudaGetLastError());
+}
+
+// Launch wrapper for bf16
+extern "C" void softmax_with_sinks_bf16(
+    const __nv_bfloat16 *logits,
+    const __nv_bfloat16 *sinks,
+    const __nv_bfloat16 *mask,
+    __nv_bfloat16 *output,
+    int batch_size,
+    int num_heads,
+    int q_len,
+    int k_len,
+    float scale,
+    cudaStream_t stream
+) {
+    const int total_rows = batch_size * num_heads * q_len;
+    int block_size = 256;
+    if (k_len <= 64) block_size = 64;
+    else if (k_len <= 128) block_size = 128;
+    else if (k_len <= 256) block_size = 256;
+    else if (k_len <= 512) block_size = 512;
+    else block_size = 1024;
+
+    softmax_with_sinks_kernel<<<total_rows, block_size, 0, stream>>>(
+        logits, sinks, mask, output,
+        batch_size, num_heads, q_len, k_len, scale
+    );
+    CUDA_CHECK(cudaGetLastError());
+}
+
+// Launch wrapper for f32
+extern "C" void softmax_with_sinks_f32(
+    const float *logits,
+    const float *sinks,
+    const float *mask,
+    float *output,
+    int batch_size,
+    int num_heads,
+    int q_len,
+    int k_len,
+    float scale,
+    cudaStream_t stream
+) {
+    const int total_rows = batch_size * num_heads * q_len;
+    int block_size = 256;
+    if (k_len <= 64) block_size = 64;
+    else if (k_len <= 128) block_size = 128;
+    else if (k_len <= 256) block_size = 256;
+    else if (k_len <= 512) block_size = 512;
+    else block_size = 1024;
+
+    softmax_with_sinks_kernel<<<total_rows, block_size, 0, stream>>>(
+        logits, sinks, mask, output,
+        batch_size, num_heads, q_len, k_len, scale
+    );
+    CUDA_CHECK(cudaGetLastError());
+}

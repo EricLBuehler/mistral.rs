@@ -3,7 +3,6 @@ use half::{bf16, f16};
 pub(crate) const HAVE_MXFP4_GEMM_KERNELS: bool = true;
 
 extern "C" {
-    // MXFP4 Matmul kernels (for forward method)
     pub(crate) fn launch_mxfp4_matmul_f16(
         input: *const f16,
         weight: *const u8,
@@ -30,7 +29,6 @@ extern "C" {
         stream: candle_core::cuda::cudarc::driver::sys::CUstream,
     );
 
-    // MXFP4 Indexed MoE GEMM kernels (for gather_forward method)
     pub(crate) fn launch_mxfp4_indexed_moe_gemm_f16(
         input: *const f16,
         weights: *const u8,

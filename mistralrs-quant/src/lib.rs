@@ -66,7 +66,11 @@ pub use mxfp4::MXFP4Layer;
 pub use unquantized::UnquantLinear;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_fused;
+#[cfg(feature = "cuda")]
+pub use utils::gptoss_swiglu_interleaved;
 pub use utils::isq::apply_immediate_isq;
+#[cfg(feature = "cuda")]
+pub use utils::softmax_with_sinks;
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
 pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 
