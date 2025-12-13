@@ -44,11 +44,15 @@ impl Qwen3VLMoEModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        // Support both original HuggingFace naming (model.visual.*) and MLX naming (vision_tower.*)
+        let vision_vb = if vb.contains_tensor("vision_tower.patch_embed.proj.weight") {
+            vb.pp("vision_tower")
+        } else {
+            vb.pp("model").pp("visual")
+        };
         let vision = Qwen3VLVisionModel::new(
             &cfg.vision_config,
-            vb.pp("model")
-                .pp("visual")
-                .set_device(normal_loading_metadata.real_device.clone()),
+            vision_vb.set_device(normal_loading_metadata.real_device.clone()),
         )?;
         // Use top-level quantization_config if present, otherwise fall back to text_config's
         let mut text_config = cfg.text_config.clone();

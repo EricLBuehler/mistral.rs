@@ -2349,16 +2349,35 @@ impl Conv3dNoBias {
         cfg: Conv3dConfig,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
-        let ws = vb.get(
-            (
-                out_channels,
-                in_channels / cfg.groups,
-                kernel_sizes[0],
-                kernel_sizes[1],
-                kernel_sizes[2],
-            ),
-            "weight",
-        )?;
+        let expected_shape = (
+            out_channels,
+            in_channels / cfg.groups,
+            kernel_sizes[0],
+            kernel_sizes[1],
+            kernel_sizes[2],
+        );
+        // MLX format has channels-last: (out, temporal, h, w, in)
+        // PyTorch format has channels-first: (out, in, temporal, h, w)
+        let mlx_shape = (
+            out_channels,
+            kernel_sizes[0],
+            kernel_sizes[1],
+            kernel_sizes[2],
+            in_channels / cfg.groups,
+        );
+        let ws = if vb.contains_tensor("weight") {
+            // Try to load with expected shape first, if it fails try MLX shape and permute
+            match vb.get(expected_shape, "weight") {
+                Ok(ws) => ws,
+                Err(_) => {
+                    // Try MLX format and permute from (out, t, h, w, in) to (out, in, t, h, w)
+                    let ws = vb.get(mlx_shape, "weight")?;
+                    ws.permute((0, 4, 1, 2, 3))?
+                }
+            }
+        } else {
+            vb.get(expected_shape, "weight")?
+        };
 
         // Split on temporal dimension
         // https://github.com/pytorch/pytorch/issues/139066
