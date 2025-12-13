@@ -331,13 +331,40 @@ impl Gemma3nAudioRelativePositionEmbedding {
             .squeeze(0)?;
 
         // term_ac: Query-Key content interaction
+        // queries: [B, U, W, N, H] -> transpose to [B, N, U, W, H]
+        // keys: [B, U, C, N, H] -> transpose to [B, N, U, H, C]
+        // Reshape to 3D for CUDA matmul compatibility, then reshape back
         let queries_p = queries.transpose(1, 3)?.transpose(2, 3)?.contiguous()?;
         let keys_p_t = keys
             .transpose(1, 3)?
             .transpose(2, 3)?
             .transpose(3, 4)?
             .contiguous()?;
-        let term_ac = queries_p.matmul(&keys_p_t)?;
+
+        // Reshape to 3D: [B, N, U, W, H] -> [B*N*U, W, H]
+        let queries_3d = queries_p.reshape((
+            batch_size * num_heads * num_query_blocks,
+            query_block_size,
+            head_dim,
+        ))?;
+        // [B, N, U, H, C] -> [B*N*U, H, C]
+        let keys_3d = keys_p_t.reshape((
+            batch_size * num_heads * num_query_blocks,
+            head_dim,
+            key_context_size,
+        ))?;
+
+        // Batched matmul: [B*N*U, W, H] @ [B*N*U, H, C] -> [B*N*U, W, C]
+        let term_ac_3d = queries_3d.matmul(&keys_3d)?;
+
+        // Reshape back to 5D: [B*N*U, W, C] -> [B, N, U, W, C]
+        let term_ac = term_ac_3d.reshape((
+            batch_size,
+            num_heads,
+            num_query_blocks,
+            query_block_size,
+            key_context_size,
+        ))?;
 
         // term_bd: Query-Position interaction
         let q_transposed = queries.transpose(1, 3)?.transpose(2, 3)?;
