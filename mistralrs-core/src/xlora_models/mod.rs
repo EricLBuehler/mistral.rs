@@ -8,7 +8,6 @@ mod mixtral;
 mod phi2;
 mod phi3;
 mod quantized_llama;
-mod quantized_mistral;
 mod quantized_phi3;
 mod starcoder2;
 
@@ -28,7 +27,6 @@ pub(crate) use mixtral::XLoraModel as XLoraMixtral;
 pub(crate) use phi2::Model as XLoraPhi2;
 pub(crate) use phi3::Model as XLoraPhi3;
 pub(crate) use quantized_llama::ModelWeights as XLoraQLlama;
-pub(crate) use quantized_mistral::ModelWeights as XLoraQMistral3;
 pub(crate) use quantized_phi3::ModelWeights as XLoraQPhi3;
 pub(crate) use starcoder2::Model as XLoraStarcoder2;
 use tokio::sync::Mutex;

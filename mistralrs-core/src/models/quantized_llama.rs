@@ -352,9 +352,9 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             .get("general.architecture")
             .and_then(|v| v.to_string().ok().cloned())
             .unwrap_or_default();
-        
-        if actual_arch != "llama" {
-            anyhow::bail!("Expected `llama` architecture, got `{actual_arch}`.");
+
+        if actual_arch != "llama" && actual_arch != "mistral3" {
+            anyhow::bail!("Expected `llama` or `mistral3` architecture, got `{actual_arch}`.");
         }
 
         let required = [
@@ -411,8 +411,14 @@ impl ModelConfig::FromGGUF for ModelWeights {
         attention_mechanism: AttentionImplementation,
         dtype: DType,
     ) -> Result<Self> {
-        let path_prefix = "llama";
-        
+        // Choose GGUF path prefix based on architecture so tensor names resolve.
+        let actual_arch: String = ct
+            .get_metadata()
+            .get("general.architecture")
+            .and_then(|v| v.to_string().ok().cloned())
+            .unwrap_or_else(|| "llama".to_string());
+        let path_prefix = if actual_arch == "mistral3" { "mistral3" } else { "llama" };
+
         let metadata = ContentMetadata {
             path_prefix,
             metadata: ct.get_metadata(),
