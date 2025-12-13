@@ -444,7 +444,7 @@ impl Loader for GGUFLoader {
         // Config into model:
         let model = match self.kind {
             ModelKind::GgufQuantized { .. } => match arch {
-                GGUFArchitecture::Llama => Model::Llama(QLlama::try_from(model_config)?),
+                GGUFArchitecture::Llama | GGUFArchitecture::Mistral3 => Model::Llama(QLlama::try_from(model_config)?),
                 GGUFArchitecture::Phi2 => Model::Phi2(QPhi::try_from(model_config)?),
                 GGUFArchitecture::Phi3 => Model::Phi3(QPhi3::try_from(model_config)?),
                 GGUFArchitecture::Starcoder2 => {
@@ -456,7 +456,7 @@ impl Loader for GGUFLoader {
                 a => bail!("Unsupported architecture `{a:?}` for GGUF"),
             },
             ModelKind::GgufAdapter { adapter, .. } => match arch {
-                GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
+                GGUFArchitecture::Llama | GGUFArchitecture::Mistral3 => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
                 GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::try_from(model_config)?),
                 a => bail!(
                     "Unsupported architecture `{a:?}` for GGUF {kind}",
