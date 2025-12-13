@@ -232,11 +232,16 @@ impl Gemma3nAudioRelativePositionEmbedding {
         })
     }
 
-    fn get_timing_signal_1d_pos(&self, position: &Tensor, dtype: DType) -> Result<Tensor> {
+    fn get_timing_signal_1d_pos(
+        &self,
+        position: &Tensor,
+        inv_timescales: &Tensor,
+        dtype: DType,
+    ) -> Result<Tensor> {
         // position: [1, F_span]
         let position = position.to_dtype(DType::F32)?.unsqueeze(D::Minus1)?;
 
-        let scaled_time = position.broadcast_mul(&self.inv_timescales)?;
+        let scaled_time = position.broadcast_mul(inv_timescales)?;
         let sin_emb = scaled_time.sin()?;
         let cos_emb = scaled_time.cos()?;
 
@@ -310,11 +315,14 @@ impl Gemma3nAudioRelativePositionEmbedding {
 
         let key_context_size = keys.dim(2)?;
 
-        // Use pre-computed position indices
-        let pos_indices = &self.pos_indices;
+        // Move pre-computed tensors to input device for Metal compatibility
+        let input_device = queries.device();
+        let pos_indices = self.pos_indices.to_device(input_device)?;
+        let inv_timescales = self.inv_timescales.to_device(input_device)?;
         let max_span_plus_1 = pos_indices.dim(1)?;
 
-        let sin_emb_timing_signal = self.get_timing_signal_1d_pos(pos_indices, queries.dtype())?;
+        let sin_emb_timing_signal =
+            self.get_timing_signal_1d_pos(&pos_indices, &inv_timescales, queries.dtype())?;
 
         // Project sinusoidal embeddings
         let projected_sin_emb = self.pos_proj.forward_autocast(&sin_emb_timing_signal)?;
@@ -563,9 +571,14 @@ impl Gemma3nAudioAttention {
         let key_states = key_states.reshape((b, t, self.num_heads, self.head_dim))?;
         let value_states = value_states.reshape((b, t, self.num_heads, self.head_dim))?;
 
+        // Move pre-computed tensors to input device for Metal compatibility
+        let input_device = x.device();
+        let per_dim_scale_softplus = self.per_dim_scale_softplus.to_device(input_device)?;
+        let local_causal_valid_mask = self.local_causal_valid_mask.to_device(input_device)?;
+        let invalid_logits_tensor = self.invalid_logits_tensor.to_device(input_device)?;
+
         // Use pre-computed softplus and reshape for broadcasting
-        let per_dim_scale_sp_broadcast = self
-            .per_dim_scale_softplus
+        let per_dim_scale_sp_broadcast = per_dim_scale_softplus
             .reshape((1, 1, 1, self.head_dim))?
             .to_dtype(query_states.dtype())?;
 
@@ -682,8 +695,7 @@ impl Gemma3nAudioAttention {
 
         // local_causal_valid_mask: [chunk_size, context_size]
         // Expand to: [1, 1, 1, chunk_size, context_size]
-        let condition_from_causality = self
-            .local_causal_valid_mask
+        let condition_from_causality = local_causal_valid_mask
             .unsqueeze(0)?
             .unsqueeze(0)?
             .unsqueeze(0)?;
@@ -756,8 +768,7 @@ impl Gemma3nAudioAttention {
             final_condition_for_where
         };
 
-        let invalid_value = self
-            .invalid_logits_tensor
+        let invalid_value = invalid_logits_tensor
             .broadcast_as(logits.dims())?
             .to_dtype(logits.dtype())?;
         let logits = final_condition_for_where.where_cond(&logits, &invalid_value)?;
