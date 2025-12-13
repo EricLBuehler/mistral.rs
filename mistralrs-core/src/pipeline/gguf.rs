@@ -37,6 +37,7 @@ use crate::{
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
+    models::quantized_mistral::ModelWeights as QMistral3,
     models::quantized_phi2::ModelWeights as QPhi,
     models::quantized_phi3::ModelWeights as QPhi3,
     models::quantized_qwen::ModelWeights as QQwen,
@@ -44,7 +45,7 @@ use crate::{
     models::quantized_qwen3_moe::ModelWeights as QQwen3MoE,
     models::quantized_starcoder2::ModelWeights as QStarcoder2,
     utils::tokens::get_token,
-    xlora_models::{XLoraQLlama, XLoraQPhi3},
+    xlora_models::{XLoraQLlama, XLoraQMistral3, XLoraQPhi3},
 };
 use anyhow::{bail, Result};
 use candle_core::{Device, Tensor};
@@ -63,8 +64,10 @@ use tracing::{info, warn};
 
 enum Model {
     Llama(QLlama),
+    Mistral3(QMistral3),
     Phi2(QPhi),
     XLoraLlama(XLoraQLlama),
+    XLoraQMistral3(XLoraQMistral3),
     XLoraPhi3(XLoraQPhi3),
     Phi3(QPhi3),
     Starcoder2(QStarcoder2),
@@ -444,7 +447,8 @@ impl Loader for GGUFLoader {
         // Config into model:
         let model = match self.kind {
             ModelKind::GgufQuantized { .. } => match arch {
-                GGUFArchitecture::Llama | GGUFArchitecture::Mistral3 => Model::Llama(QLlama::try_from(model_config)?),
+                GGUFArchitecture::Llama => Model::Llama(QLlama::try_from(model_config)?),
+                GGUFArchitecture::Mistral3 => Model::Mistral3(QMistral3::try_from(model_config)?),
                 GGUFArchitecture::Phi2 => Model::Phi2(QPhi::try_from(model_config)?),
                 GGUFArchitecture::Phi3 => Model::Phi3(QPhi3::try_from(model_config)?),
                 GGUFArchitecture::Starcoder2 => {
@@ -456,7 +460,8 @@ impl Loader for GGUFLoader {
                 a => bail!("Unsupported architecture `{a:?}` for GGUF"),
             },
             ModelKind::GgufAdapter { adapter, .. } => match arch {
-                GGUFArchitecture::Llama | GGUFArchitecture::Mistral3 => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
+                GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
+                GGUFArchitecture::Mistral3 => Model::XLoraQMistral3(XLoraQMistral3::try_from(model_config)?),
                 GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::try_from(model_config)?),
                 a => bail!(
                     "Unsupported architecture `{a:?}` for GGUF {kind}",
@@ -507,8 +512,10 @@ impl Loader for GGUFLoader {
 
         let max_seq_len = match model {
             Model::Llama(ref l) => l.max_seq_len,
+            Model::Mistral3(ref l) => l.max_seq_len,
             Model::Phi2(ref p) => p.max_seq_len,
             Model::XLoraLlama(ref xl) => xl.max_seq_len,
+            Model::XLoraQMistral3(ref xl) => xl.max_seq_len,
             Model::Phi3(ref p) => p.max_seq_len,
             Model::XLoraPhi3(ref p) => p.max_seq_len,
             Model::Starcoder2(ref p) => p.max_seq_len,
@@ -519,8 +526,10 @@ impl Loader for GGUFLoader {
         let llg_factory = build_llg_factory(tokenizer.clone())?;
         let num_hidden_layers = match model {
             Model::Llama(ref model) => model.cache.normal().0.len(),
+            Model::Mistral3(ref model) => model.cache.normal().0.len(),
             Model::Phi2(ref model) => model.cache.normal().0.len(),
             Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
+            Model::XLoraQMistral3(ref model) => model.cache.full().lock().len(),
             Model::Phi3(ref model) => model.cache.normal().0.len(),
             Model::XLoraPhi3(ref model) => model.cache.full().lock().len(),
             Model::Starcoder2(ref model) => model.cache.normal().0.len(),
@@ -652,8 +661,10 @@ impl CacheManagerMixin for GGUFPipeline {
     fn cache(&self) -> &EitherCache {
         match self.model {
             Model::Llama(ref model) => &model.cache,
+            Model::Mistral3(ref model) => &model.cache,
             Model::Phi2(ref model) => &model.cache,
             Model::XLoraLlama(ref model) => &model.cache,
+            Model::XLoraQMistral3(ref model) => &model.cache,
             Model::Phi3(ref model) => &model.cache,
             Model::XLoraPhi3(ref model) => &model.cache,
             Model::Starcoder2(ref model) => &model.cache,
@@ -668,8 +679,10 @@ impl MetadataMixin for GGUFPipeline {
     fn device(&self) -> Device {
         match self.model {
             Model::Llama(ref model) => model.device.clone(),
+            Model::Mistral3(ref model) => model.device.clone(),
             Model::Phi2(ref model) => model.device.clone(),
             Model::XLoraLlama(ref model) => model.device.clone(),
+            Model::XLoraQMistral3(ref model) => model.device.clone(),
             Model::Phi3(ref model) => model.device.clone(),
             Model::XLoraPhi3(ref model) => model.device.clone(),
             Model::Starcoder2(ref model) => model.device.clone(),
@@ -733,10 +746,24 @@ impl Pipeline for GGUFPipeline {
             Model::Llama(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
+            Model::Mistral3(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
+            }
             Model::Phi2(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
             Model::XLoraLlama(ref model) => model.forward(
+                &input_ids,
+                input_ids_full.as_ref().unwrap_or(&input_ids),
+                &seqlen_offsets,
+                seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
+                self.no_kv_cache,
+                &self.non_granular_state,
+                context_lens,
+                &flash_meta,
+                flash_meta_full.as_ref().unwrap_or(&flash_meta),
+            )?,
+            Model::XLoraQMistral3(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,

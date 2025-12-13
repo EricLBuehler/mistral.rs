@@ -325,7 +325,7 @@ impl ModelConfig::FromGGML for ModelWeights {
     }
 }
 
-// llama `llm` fields:
+// mistral `llm` fields:
 // https://github.com/ggerganov/ggml/blob/master/docs/gguf.md#llm
 // NOTE: Types here do not match spec
 pub(crate) struct PropsGGUF {
@@ -353,8 +353,8 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             .and_then(|v| v.to_string().ok().cloned())
             .unwrap_or_default();
         
-        if actual_arch != "llama" {
-            anyhow::bail!("Expected `llama` architecture, got `{actual_arch}`.");
+        if actual_arch != "mistral3" {
+            anyhow::bail!("Expected `mistral3` architecture, got `{actual_arch}`.");
         }
 
         let required = [
@@ -411,7 +411,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         attention_mechanism: AttentionImplementation,
         dtype: DType,
     ) -> Result<Self> {
-        let path_prefix = "llama";
+        let path_prefix = "mistral3";
         
         let metadata = ContentMetadata {
             path_prefix,

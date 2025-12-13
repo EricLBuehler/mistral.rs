@@ -296,13 +296,14 @@ impl<R: std::io::Seek + std::io::Read> Config<ParamsGGUF<'_, R>, Adapter<'_>> {
 
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
+    models::quantized_mistral::ModelWeights as QMistral3,
     models::quantized_phi2::ModelWeights as QPhi,
     models::quantized_phi3::ModelWeights as QPhi3,
     models::quantized_qwen::ModelWeights as QQwen,
     models::quantized_qwen3::ModelWeights as QQwen3,
     models::quantized_qwen3_moe::ModelWeights as QQwen3MoE,
     models::quantized_starcoder2::ModelWeights as QStarcoder2,
-    xlora_models::{XLoraQLlama, XLoraQPhi3},
+    xlora_models::{XLoraQLlama, XLoraQMistral3, XLoraQPhi3},
 };
 use akin::akin;
 
@@ -325,7 +326,7 @@ impl TryFrom<ModelParams<'_, ParamsGGML>> for XLoraQLlama {
 }
 
 akin! {
-    let &models_gguf = [QLlama, QPhi, QPhi3, QStarcoder2, QQwen, QQwen3, QQwen3MoE];
+    let &models_gguf = [QLlama, QMistral3, QPhi, QPhi3, QStarcoder2, QQwen, QQwen3, QQwen3MoE];
 
     impl<R: std::io::Seek + std::io::Read> TryFrom<ModelParams<'_, ParamsGGUF<'_, R>>> for *models_gguf {
         type Error = candle_core::Error;
@@ -338,7 +339,7 @@ akin! {
 }
 
 akin! {
-    let &models_gguf_a = [XLoraQLlama, XLoraQPhi3];
+    let &models_gguf_a = [XLoraQLlama, XLoraQMistral3, XLoraQPhi3];
 
     impl<R: std::io::Seek + std::io::Read> TryFrom<ModelParams<'_, ParamsGGUF<'_, R>>> for *models_gguf_a {
         type Error = candle_core::Error;
