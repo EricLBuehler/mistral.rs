@@ -31,6 +31,16 @@ fn main() {
             .arg("--compiler-options")
             .arg("-fPIC");
 
+        // Check if CUDA_COMPUTE_CAP < 80 and disable bf16 kernels if so.
+        // bf16 WMMA operations and certain bf16 intrinsics are only available on sm_80+.
+        if let Ok(compute_cap) = std::env::var("CUDA_COMPUTE_CAP") {
+            if let Ok(cap) = compute_cap.parse::<u32>() {
+                if cap < 80 {
+                    builder = builder.arg("-DNO_BF16_KERNEL");
+                }
+            }
+        }
+
         // https://github.com/EricLBuehler/mistral.rs/issues/286
         if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
             builder = builder.arg("--compiler-options");
