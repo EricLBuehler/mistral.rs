@@ -212,38 +212,53 @@ impl VisionMessages {
 
         // Images
         let n_added_images = images.len();
-        let prefixed = prefixer.prefix_image(
-            (self.images.len()..self.images.len() + n_added_images).collect(),
-            &text.to_string(),
-        );
+        let image_indexes: Vec<usize> =
+            (self.images.len()..self.images.len() + n_added_images).collect();
         self.images.extend(images);
 
         // Audios
         let n_added_audios = audios.len();
-        let prefixed = prefixer.prefix_audio(
-            (self.audios.len()..self.audios.len() + n_added_audios).collect(),
-            &prefixed,
-        );
+        let audio_indexes: Vec<usize> =
+            (self.audios.len()..self.audios.len() + n_added_audios).collect();
         self.audios.extend(audios);
 
-        if n_added_images > 0 {
+        if n_added_images > 0 || n_added_audios > 0 {
+            // Build mixed content parts
+            let mut content_vec: Vec<IndexMap<String, Value>> = Vec::new();
+            for _ in 0..n_added_images {
+                content_vec.push(IndexMap::from([(
+                    "type".to_string(),
+                    Value::String("image".to_string()),
+                )]));
+            }
+            for _ in 0..n_added_audios {
+                content_vec.push(IndexMap::from([(
+                    "type".to_string(),
+                    Value::String("audio".to_string()),
+                )]));
+            }
+            // Prefix the text with any media context
+            let mut prefixed_text = text.to_string();
+            if !image_indexes.is_empty() {
+                prefixed_text = prefixer.prefix_image(image_indexes, &prefixed_text);
+            }
+            if !audio_indexes.is_empty() {
+                prefixed_text = prefixer.prefix_audio(audio_indexes, &prefixed_text);
+            }
+            // Add the final text part
+            content_vec.push(IndexMap::from([
+                ("type".to_string(), Value::String("text".to_string())),
+                ("text".to_string(), Value::String(prefixed_text)),
+            ]));
+
             self.messages.push(IndexMap::from([
                 ("role".to_string(), Either::Left(role.to_string())),
-                (
-                    "content".to_string(),
-                    Either::Right(vec![
-                        IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
-                        IndexMap::from([
-                            ("type".to_string(), Value::String("text".to_string())),
-                            ("text".to_string(), Value::String(prefixed)),
-                        ]),
-                    ]),
-                ),
+                ("content".to_string(), Either::Right(content_vec)),
             ]));
         } else {
             self.messages.push(IndexMap::from([
                 ("role".to_string(), Either::Left(role.to_string())),
-                ("content".to_string(), Either::Left(prefixed)),
+                ("content".to_string(), Either::Left(text.to_string())),
             ]));
         }
         Ok(self)
@@ -487,6 +502,7 @@ impl RequestBuilder {
         self.add_multimodal_message(role, text, vec![], audios, model)
     }
 
+    /// By convention, all images are added before all audios.
     pub fn add_multimodal_message(
         mut self,
         role: TextMessageRole,
@@ -505,38 +521,53 @@ impl RequestBuilder {
 
         // Images
         let n_added_images = images.len();
-        let prefixed = prefixer.prefix_image(
-            (self.images.len()..self.images.len() + n_added_images).collect(),
-            &text.to_string(),
-        );
+        let image_indexes: Vec<usize> =
+            (self.images.len()..self.images.len() + n_added_images).collect();
         self.images.extend(images);
 
         // Audios
         let n_added_audios = audios.len();
-        let prefixed = prefixer.prefix_audio(
-            (self.audios.len()..self.audios.len() + n_added_audios).collect(),
-            &prefixed,
-        );
+        let audio_indexes: Vec<usize> =
+            (self.audios.len()..self.audios.len() + n_added_audios).collect();
         self.audios.extend(audios);
 
-        if n_added_images > 0 {
+        if n_added_images > 0 || n_added_audios > 0 {
+            // Build mixed content parts
+            let mut content_vec: Vec<IndexMap<String, Value>> = Vec::new();
+            for _ in 0..n_added_images {
+                content_vec.push(IndexMap::from([(
+                    "type".to_string(),
+                    Value::String("image".to_string()),
+                )]));
+            }
+            for _ in 0..n_added_audios {
+                content_vec.push(IndexMap::from([(
+                    "type".to_string(),
+                    Value::String("audio".to_string()),
+                )]));
+            }
+            // Prefix the text with any media context
+            let mut prefixed_text = text.to_string();
+            if !image_indexes.is_empty() {
+                prefixed_text = prefixer.prefix_image(image_indexes, &prefixed_text);
+            }
+            if !audio_indexes.is_empty() {
+                prefixed_text = prefixer.prefix_audio(audio_indexes, &prefixed_text);
+            }
+            // Add the final text part
+            content_vec.push(IndexMap::from([
+                ("type".to_string(), Value::String("text".to_string())),
+                ("text".to_string(), Value::String(prefixed_text)),
+            ]));
+
             self.messages.push(IndexMap::from([
                 ("role".to_string(), Either::Left(role.to_string())),
-                (
-                    "content".to_string(),
-                    Either::Right(vec![
-                        IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
-                        IndexMap::from([
-                            ("type".to_string(), Value::String("text".to_string())),
-                            ("text".to_string(), Value::String(prefixed)),
-                        ]),
-                    ]),
-                ),
+                ("content".to_string(), Either::Right(content_vec)),
             ]));
         } else {
             self.messages.push(IndexMap::from([
                 ("role".to_string(), Either::Left(role.to_string())),
-                ("content".to_string(), Either::Left(prefixed)),
+                ("content".to_string(), Either::Left(text.to_string())),
             ]));
         }
         Ok(self)
