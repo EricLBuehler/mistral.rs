@@ -591,6 +591,45 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
 
                 attn_norm + ffn_norm + attn_q + attn_k + attn_v + attn_output + ffn_up + ffn_down
             }
+            GGUFArchitecture::Mistral3 => {
+                let attn_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("blk.0.attn_norm.weight")?,
+                    DType::F32
+                );
+
+                let attn_q =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_q.weight")?);
+                let attn_k =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_k.weight")?);
+                let attn_v =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_v.weight")?);
+
+                let attn_output = tensor_info_size_in_bytes!(self
+                    .model
+                    .tensor_info("blk.0.attn_output.weight")?);
+
+                let ffn_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("blk.0.ffn_norm.weight")?,
+                    DType::F32
+                );
+                let ffn_up =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.ffn_up.weight")?);
+                let ffn_down =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.ffn_down.weight")?);
+                let ffn_gate =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.ffn_gate.weight")?);
+
+                attn_norm
+                    + attn_q
+                    + attn_k
+                    + attn_v
+                    + attn_output
+                    + ffn_norm
+                    + ffn_up
+                    + ffn_down
+                    + ffn_gate
+            }
+
             _ => unimplemented!(),
         };
         Ok(vec![size_in_bytes; self.num_layers(config)?])
