@@ -1,8 +1,6 @@
 #![allow(unused)]
 
-use candle_core::{
-    backend::BackendStorage, DType, Result, Shape, Storage, Tensor, D,
-};
+use candle_core::{backend::BackendStorage, DType, Result, Shape, Storage, Tensor, D};
 
 #[cfg(feature = "metal")]
 use candle_core::MetalStorage;
@@ -789,9 +787,7 @@ mod cpu_backend {
 mod cuda_backend {
     use super::*;
     use crate::afq::ffi;
-    use candle_core::{
-        cuda::cudarc::driver::DevicePtr, CudaStorage, DType, Result, Tensor, D,
-    };
+    use candle_core::{cuda::cudarc::driver::DevicePtr, CudaStorage, DType, Result, Tensor, D};
     use half::{bf16, f16};
 
     /// CUDA-accelerated AFQ quantization
@@ -842,10 +838,8 @@ mod cuda_backend {
                 let Storage::Cuda(w_s) = &*w_s else {
                     candle_core::bail!("Expected CUDA storage");
                 };
-                let (w_ptr, _w_guard) = crate::utils::slice_ptr(
-                    w_s.as_cuda_slice::<f16>()?,
-                    w.layout().start_offset(),
-                );
+                let (w_ptr, _w_guard) =
+                    crate::utils::slice_ptr(w_s.as_cuda_slice::<f16>()?, w.layout().start_offset());
                 let (wq_ptr, wq_guard) = w_q_buf.device_ptr(w_q_buf.stream());
                 let (s_ptr, s_guard) = scales_buf.device_ptr(scales_buf.stream());
                 let (b_ptr, b_guard) = biases_buf.device_ptr(biases_buf.stream());
@@ -962,10 +956,8 @@ mod cuda_backend {
                 let Storage::Cuda(w_s) = &*w_s else {
                     candle_core::bail!("Expected CUDA storage");
                 };
-                let (w_ptr, _w_guard) = crate::utils::slice_ptr(
-                    w_s.as_cuda_slice::<f32>()?,
-                    w.layout().start_offset(),
-                );
+                let (w_ptr, _w_guard) =
+                    crate::utils::slice_ptr(w_s.as_cuda_slice::<f32>()?, w.layout().start_offset());
                 let (wq_ptr, wq_guard) = w_q_buf.device_ptr(w_q_buf.stream());
                 let (s_ptr, s_guard) = scales_buf.device_ptr(scales_buf.stream());
                 let (b_ptr, b_guard) = biases_buf.device_ptr(biases_buf.stream());
@@ -2132,8 +2124,10 @@ mod cuda_backend {
             }
             DType::BF16 => {
                 let output_buf = unsafe { dev.alloc::<bf16>(m * n)? };
-                let (x_ptr, _x_guard) =
-                    crate::utils::slice_ptr(x_s.as_cuda_slice::<bf16>()?, x.layout().start_offset());
+                let (x_ptr, _x_guard) = crate::utils::slice_ptr(
+                    x_s.as_cuda_slice::<bf16>()?,
+                    x.layout().start_offset(),
+                );
                 let (s_ptr, _s_guard) = crate::utils::slice_ptr(
                     s_s.as_cuda_slice::<bf16>()?,
                     scales.layout().start_offset(),
