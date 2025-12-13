@@ -431,7 +431,7 @@ impl Attention {
         #[cfg(not(feature = "cuda"))]
         let scores = {
             // Apply attention mask
-            let attn_weights = if let Some(mask) = mask_for_kernel {
+            let attn_weights = if let Some(mask) = attention_mask {
                 attn_weights.broadcast_add(&mask.unsqueeze(1)?)?
             } else {
                 attn_weights

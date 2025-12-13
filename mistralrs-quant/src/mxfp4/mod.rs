@@ -11,6 +11,8 @@ use crate::{
 pub(crate) mod ffi;
 #[cfg(feature = "cuda")]
 pub(crate) mod ops;
+#[cfg(feature = "metal")]
+pub(crate) mod metal_ops;
 
 /// MXFP4 block size (32 elements per scale)
 pub const MXFP4_BLOCK_SIZE: usize = 32;
@@ -103,26 +105,34 @@ impl QuantMethod for MXFP4Layer {
             return Ok(result);
         }
 
-        // Metal fallback
         #[cfg(feature = "metal")]
         {
-            use crate::afq::ops;
-            use crate::{AfqBits, AfqGroupSize};
-            let mut result = ops::afq_mm_op(
-                x,
-                &self.blocks,
-                &self.scales,
-                &self.scales.clone(),
-                None,
-                None,
-                AfqGroupSize::Low,
-                AfqBits::Mxfp4,
-                true,
-            )?;
-            if let Some(bias) = &self.bias {
-                result = result.broadcast_add(bias)?;
+            if x.device().is_metal() {
+                // Handle batched inputs by flattening to 2D.
+                let orig_dims = x.dims().to_vec();
+                let x_2d = if orig_dims.len() > 2 {
+                    let features = orig_dims[orig_dims.len() - 1];
+                    let batch_size: usize = orig_dims[..orig_dims.len() - 1].iter().product();
+                    x.reshape((batch_size, features))?
+                } else {
+                    x.clone()
+                };
+
+                let result = metal_ops::mxfp4_matmul(
+                    &x_2d,
+                    &self.blocks,
+                    &self.scales,
+                    self.bias.as_ref(),
+                )?;
+
+                // Reshape back if needed.
+                if orig_dims.len() > 2 {
+                    let mut new_dims = orig_dims[..orig_dims.len() - 1].to_vec();
+                    new_dims.push(result.dim(1)?);
+                    return result.reshape(new_dims);
+                }
+                return Ok(result);
             }
-            return Ok(result);
         }
 
         candle_core::bail!("MXFP4 forward requires CUDA or Metal backend")
@@ -143,23 +153,15 @@ impl QuantMethod for MXFP4Layer {
 
         #[cfg(feature = "metal")]
         {
-            use crate::afq::ops;
-            use crate::{AfqBits, AfqGroupSize};
-            let mut result = ops::afq_mm_op(
-                x,
-                &self.blocks,
-                &self.scales,
-                &self.scales.clone(),
-                None,
-                Some(indices),
-                AfqGroupSize::Low,
-                AfqBits::Mxfp4,
-                true,
-            )?;
-            if let Some(bias) = &self.bias {
-                result = result.broadcast_add(bias)?;
+            if x.device().is_metal() {
+                return metal_ops::mxfp4_indexed_moe_gemm(
+                    x,
+                    &self.blocks,
+                    &self.scales,
+                    self.bias.as_ref(),
+                    indices,
+                );
             }
-            return Ok(result);
         }
 
         candle_core::bail!("MXFP4 gather_forward requires CUDA or Metal backend")
