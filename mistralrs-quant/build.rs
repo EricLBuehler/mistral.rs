@@ -200,6 +200,8 @@ fn main() -> Result<(), String> {
             "kernels/ops/ops.cu",
             "kernels/bitsandbytes/dequant.cu",
             "kernels/rotary/rotary.cu",
+            "kernels/afq/afq.cu",
+            "kernels/afq/afq_gemm.cu",
         ];
         if cc_over_800 {
             lib_files.push("kernels/marlin/marlin_matmul_f16.cu");

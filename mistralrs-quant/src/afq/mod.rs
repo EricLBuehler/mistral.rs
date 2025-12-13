@@ -18,6 +18,9 @@ use crate::{
 
 pub(crate) mod ops;
 
+#[cfg(feature = "cuda")]
+pub(crate) mod ffi;
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum AfqBits {
