@@ -320,6 +320,7 @@ async fn parse_responses_request(
         dry_sequence_breakers: oairequest.dry_sequence_breakers,
         enable_thinking: oairequest.enable_thinking,
         truncate_sequence: oairequest.truncate_sequence,
+        reasoning_effort: oairequest.reasoning_effort,
     };
 
     // Prepend previous messages if available
@@ -339,6 +340,7 @@ async fn parse_responses_request(
                     role: "user".to_string(),
                     name: None,
                     tool_calls: None,
+                    tool_call_id: None,
                 });
                 chat_request.messages = Either::Left(combined);
             }
@@ -353,6 +355,7 @@ async fn parse_responses_request(
             role: "user".to_string(),
             name: None,
             tool_calls: None,
+            tool_call_id: None,
         }],
     };
 
@@ -445,6 +448,7 @@ pub async fn create_response(
                             role: "assistant".to_string(),
                             name: None,
                             tool_calls: None,
+                            tool_call_id: None,
                         });
                     }
 
@@ -478,6 +482,7 @@ pub async fn create_response(
                                     role: choice.message.role.clone(),
                                     name: None,
                                     tool_calls: None, // TODO: Convert ToolCallResponse to ToolCall if needed
+                                    tool_call_id: None,
                                 });
                             }
                         }
@@ -510,6 +515,7 @@ pub async fn create_response(
                                     role: choice.message.role.clone(),
                                     name: None,
                                     tool_calls: None, // TODO: Convert ToolCallResponse to ToolCall if needed
+                                    tool_call_id: None,
                                 });
                             }
                         }

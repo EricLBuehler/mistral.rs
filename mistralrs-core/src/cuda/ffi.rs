@@ -182,4 +182,63 @@ extern "C" {
         dtype: i32, // 0=float16, 1=bf16 (for input/output)
         stream: i64,
     );
+
+    // Optimized parallel topk for small k (MoE routing)
+    // Single kernel call writes to both values and indices buffers
+    pub(crate) fn topk_f32(
+        input: *const c_void,
+        values_out: *mut c_void,  // [nrows, k]
+        indices_out: *mut c_void, // [nrows, k] as u32
+        nrows: i32,
+        ncols: i32,
+        k: i32,
+        stream: i64,
+    );
+    pub(crate) fn topk_bf16(
+        input: *const c_void,
+        values_out: *mut c_void,  // [nrows, k]
+        indices_out: *mut c_void, // [nrows, k] as u32
+        nrows: i32,
+        ncols: i32,
+        k: i32,
+        stream: i64,
+    );
+    pub(crate) fn topk_f16(
+        input: *const c_void,
+        values_out: *mut c_void,  // [nrows, k]
+        indices_out: *mut c_void, // [nrows, k] as u32
+        nrows: i32,
+        ncols: i32,
+        k: i32,
+        stream: i64,
+    );
+
+    // Fused topk + softmax - returns softmax weights directly (not raw logits)
+    pub(crate) fn topk_softmax_f32(
+        input: *const c_void,
+        weights_out: *mut c_void, // [nrows, k] - softmax weights
+        indices_out: *mut c_void, // [nrows, k] as u32
+        nrows: i32,
+        ncols: i32,
+        k: i32,
+        stream: i64,
+    );
+    pub(crate) fn topk_softmax_bf16(
+        input: *const c_void,
+        weights_out: *mut c_void,
+        indices_out: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        k: i32,
+        stream: i64,
+    );
+    pub(crate) fn topk_softmax_f16(
+        input: *const c_void,
+        weights_out: *mut c_void,
+        indices_out: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        k: i32,
+        stream: i64,
+    );
 }

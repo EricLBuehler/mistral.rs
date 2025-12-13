@@ -53,5 +53,5 @@ while True:
         temperature=0,
     )
     resp = completion.choices[0].message.content
-    print(resp)
+    print(completion.choices[0].message)
     messages.append({"role": "assistant", "content": resp})

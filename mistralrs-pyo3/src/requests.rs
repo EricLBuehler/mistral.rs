@@ -260,6 +260,9 @@ pub struct ChatCompletionRequest {
     pub(crate) web_search_options: Option<WebSearchOptions>,
     pub(crate) enable_thinking: Option<bool>,
     pub(crate) truncate_sequence: bool,
+    /// Reasoning effort level for models that support extended thinking.
+    /// Valid values: "low", "medium", "high"
+    pub(crate) reasoning_effort: Option<String>,
 }
 
 #[pymethods]
@@ -293,6 +296,7 @@ impl ChatCompletionRequest {
         web_search_options=None,
         enable_thinking=false,
         truncate_sequence=false,
+        reasoning_effort=None,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -322,6 +326,7 @@ impl ChatCompletionRequest {
         web_search_options: Option<WebSearchOptions>,
         enable_thinking: Option<bool>,
         truncate_sequence: Option<bool>,
+        reasoning_effort: Option<String>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -399,6 +404,7 @@ impl ChatCompletionRequest {
             web_search_options,
             enable_thinking,
             truncate_sequence: truncate_sequence.unwrap_or(false),
+            reasoning_effort,
         })
     }
 }

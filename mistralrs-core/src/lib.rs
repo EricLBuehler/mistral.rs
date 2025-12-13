@@ -51,6 +51,7 @@ mod attention;
 mod diffusion_models;
 pub mod distributed;
 mod gguf;
+pub mod harmony;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;
@@ -102,8 +103,8 @@ pub use pipeline::{
 };
 pub use request::{
     ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
-    LlguidanceGrammar, MessageContent, NormalRequest, Request, RequestMessage, SearchContextSize,
-    TokenizationRequest, WebSearchOptions, WebSearchUserLocation,
+    LlguidanceGrammar, MessageContent, NormalRequest, ReasoningEffort, Request, RequestMessage,
+    SearchContextSize, TokenizationRequest, WebSearchOptions, WebSearchUserLocation,
 };
 pub use response::*;
 pub use sampler::{
