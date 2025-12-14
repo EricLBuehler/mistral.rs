@@ -9,10 +9,10 @@ use crate::{
 
 #[cfg(feature = "cuda")]
 pub(crate) mod ffi;
-#[cfg(feature = "cuda")]
-pub(crate) mod ops;
 #[cfg(feature = "metal")]
 pub(crate) mod metal_ops;
+#[cfg(feature = "cuda")]
+pub(crate) mod ops;
 
 /// MXFP4 block size (32 elements per scale)
 pub const MXFP4_BLOCK_SIZE: usize = 32;
@@ -118,12 +118,8 @@ impl QuantMethod for MXFP4Layer {
                     x.clone()
                 };
 
-                let result = metal_ops::mxfp4_matmul(
-                    &x_2d,
-                    &self.blocks,
-                    &self.scales,
-                    self.bias.as_ref(),
-                )?;
+                let result =
+                    metal_ops::mxfp4_matmul(&x_2d, &self.blocks, &self.scales, self.bias.as_ref())?;
 
                 // Reshape back if needed.
                 if orig_dims.len() > 2 {

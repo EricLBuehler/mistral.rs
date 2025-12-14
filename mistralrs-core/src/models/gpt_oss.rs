@@ -126,7 +126,7 @@ fn gptoss_swiglu(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -> Result<T
     // Clamp gate to max=limit only (no min bound), up to [-limit, limit]
     // HF: gate.clamp(min=None, max=self.limit)
     let gate_clamped =
-        gate.minimum(&Tensor::full(limit_d, gate.shape(), gate.device())?.to_dtype(dtype)?)?;
+        gate.minimum(&Tensor::full(limit_d as f32, gate.shape(), gate.device())?.to_dtype(dtype)?)?;
     let up_clamped = up.clamp(-limit_d, limit_d)?;
 
     // glu = gate * sigmoid(gate * alpha)
@@ -432,7 +432,7 @@ impl Attention {
         let scores = {
             // Apply attention mask
             let attn_weights = if let Some(mask) = attention_mask {
-                attn_weights.broadcast_add(&mask.unsqueeze(1)?)?
+                attn_weights.broadcast_add(&mask)?
             } else {
                 attn_weights
             };

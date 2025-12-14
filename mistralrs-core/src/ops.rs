@@ -1,8 +1,10 @@
-use candle_core::{shape::Dim, DType, Result, Shape, Tensor, D};
+use candle_core::{shape::Dim, DType, Result, Tensor, D};
 
 #[cfg(feature = "cuda")]
 use crate::cuda::ffi;
 use crate::layers::Activation;
+#[cfg(feature = "cuda")]
+use candle_core::Shape;
 
 // ============================================================================
 // Optimized parallel topk for CUDA

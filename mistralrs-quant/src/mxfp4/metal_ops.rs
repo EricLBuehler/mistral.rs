@@ -1,6 +1,4 @@
-use candle_core::{
-    backend::BackendStorage, MetalStorage, Result, Shape, Storage, Tensor,
-};
+use candle_core::{backend::BackendStorage, MetalStorage, Result, Shape, Storage, Tensor};
 
 use super::MXFP4_BLOCK_SIZE;
 
@@ -155,7 +153,12 @@ pub fn mxfp4_matmul(
     }
 
     Ok(Tensor::from((
-        Storage::Metal(MetalStorage::new(output, device.clone(), m * n, input.dtype())),
+        Storage::Metal(MetalStorage::new(
+            output,
+            device.clone(),
+            m * n,
+            input.dtype(),
+        )),
         Shape::from((m, n)),
     )))
 }
@@ -204,10 +207,7 @@ pub fn mxfp4_indexed_moe_gemm(
             }
             (*kk, true)
         }
-        _ => candle_core::bail!(
-            "Expected input to be rank 2 or 3, got {:?}",
-            input_dims
-        ),
+        _ => candle_core::bail!("Expected input to be rank 2 or 3, got {:?}", input_dims),
     };
 
     if k % MXFP4_BLOCK_SIZE != 0 {
