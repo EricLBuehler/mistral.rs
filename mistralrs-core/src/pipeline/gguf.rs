@@ -320,9 +320,9 @@ impl Loader for GGUFLoader {
         for filename in paths.get_weight_filenames() {
             readers.push(std::fs::File::open(filename)?);
         }
-        let mut readers = readers.iter_mut().collect::<Vec<_>>();     
+        let mut readers = readers.iter_mut().collect::<Vec<_>>();
         let model = Content::from_readers(&mut readers)?;
-       
+
         if !silent {
             model.print_metadata()?;
         }
@@ -332,7 +332,6 @@ impl Loader for GGUFLoader {
         // If auto, convert to Map
         let num_layers = model.get_metadata()[&format!("{arch}.block_count")].to_u32()? as usize;
 
-        
         if let DeviceMapSetting::Auto(params) = mapper.clone() {
             let devices = device_map::get_all_similar_devices(device)?;
             // Initial dtype

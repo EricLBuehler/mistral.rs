@@ -4,7 +4,7 @@ use anyhow::Context;
 use candle_core::{
     quantized::{
         gguf_file::{self, TensorInfo, Value},
-        QTensor,
+        GgmlDType, QTensor,
     },
     Device, Result,
 };
@@ -14,6 +14,40 @@ use tracing::info;
 use crate::DEBUG;
 
 use super::GGUFArchitecture;
+
+/// List of all GgmlDType variants from Candle.
+/// This should be kept in sync with candle_core::quantized::GgmlDType.
+/// If Candle adds new dtype variants, add them here to include in error messages.
+/// Reference: candle-core/src/quantized/mod.rs in the Candle repository.
+macro_rules! all_ggml_dtypes {
+    () => {
+        [
+            GgmlDType::F32,
+            GgmlDType::F16,
+            GgmlDType::BF16,
+            GgmlDType::Q4_0,
+            GgmlDType::Q4_1,
+            GgmlDType::Q5_0,
+            GgmlDType::Q5_1,
+            GgmlDType::Q8_0,
+            GgmlDType::Q8_1,
+            GgmlDType::Q2K,
+            GgmlDType::Q3K,
+            GgmlDType::Q4K,
+            GgmlDType::Q5K,
+            GgmlDType::Q6K,
+            GgmlDType::Q8K,
+        ]
+    };
+}
+
+fn get_supported_gguf_dtypes() -> String {
+    all_ggml_dtypes!()
+        .iter()
+        .map(|dtype| format!("{:?}", dtype))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 fn parse_gguf_value(value: &Value) -> String {
     match value {
@@ -52,13 +86,31 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
         let mut contents = Vec::new();
         let n_readers = readers.len();
         for (i, reader) in readers.iter_mut().enumerate() {
-            // 1. Capture the Result directly
             match gguf_file::Content::read(reader) {
                 Ok(c) => {
                     contents.push(c);
                 }
                 Err(e) => {
-                    candle_core::bail!("Critical failure loading model part {}: {}\n Check whether your current quantization format is supported.", i, e);
+                    let error_msg = format!("{}", e);
+                    if error_msg.contains("unknown dtype for tensor") {
+                        {
+                            candle_core::bail!(
+                                "Critical failure loading model part {}\n\
+                                Verify you are using a supported quantization type.
+                                Supported types: {}\n\
+                                Candle error: {}",
+                                i,
+                                get_supported_gguf_dtypes(),
+                                e
+                            );
+                        }
+                    }
+                    candle_core::bail!(
+                        "Critical failure loading model part {}!\n\
+                        Check whether your current quantization format is supported: {}",
+                        i,
+                        e
+                    );
                 }
             }
         }
