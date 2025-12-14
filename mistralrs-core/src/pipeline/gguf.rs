@@ -442,7 +442,7 @@ impl Loader for GGUFLoader {
         };
 
         // Config into model:
-let model = match self.kind {
+        let model = match self.kind {
             ModelKind::GgufQuantized { .. } => match arch {
                 GGUFArchitecture::Llama | GGUFArchitecture::Mistral3 => {
                     Model::Llama(QLlama::try_from(model_config)?)
@@ -509,7 +509,7 @@ let model = match self.kind {
             gguf_chat_template,
         );
 
-let max_seq_len = match model {
+        let max_seq_len = match model {
             Model::Llama(ref l) => l.max_seq_len,
             Model::Phi2(ref p) => p.max_seq_len,
             Model::XLoraLlama(ref xl) => xl.max_seq_len,
@@ -521,7 +521,7 @@ let max_seq_len = match model {
             Model::Qwen3MoE(ref p) => p.max_seq_len,
         };
         let llg_factory = build_llg_factory(tokenizer.clone())?;
-let num_hidden_layers = match model {
+        let num_hidden_layers = match model {
             Model::Llama(ref model) => model.cache.normal().0.len(),
             Model::Phi2(ref model) => model.cache.normal().0.len(),
             Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
@@ -653,8 +653,8 @@ impl CacheManagerMixin for GGUFPipeline {
             self.reset_non_granular_state()
         }
     }
-fn cache(&self) -> &EitherCache {
-match self.model {
+    fn cache(&self) -> &EitherCache {
+        match self.model {
             Model::Llama(ref model) => &model.cache,
             Model::Phi2(ref model) => &model.cache,
             Model::XLoraLlama(ref model) => &model.cache,
@@ -670,7 +670,7 @@ match self.model {
 
 impl MetadataMixin for GGUFPipeline {
     fn device(&self) -> Device {
-match self.model {
+        match self.model {
             Model::Llama(ref model) => model.device.clone(),
             Model::Phi2(ref model) => model.device.clone(),
             Model::XLoraLlama(ref model) => model.device.clone(),
@@ -733,7 +733,7 @@ impl Pipeline for GGUFPipeline {
             }
             (None, None) => None,
         };
-let logits = match self.model {
+        let logits = match self.model {
             Model::Llama(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
@@ -754,7 +754,7 @@ let logits = match self.model {
             Model::Phi3(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, paged_attn_meta)?
             }
-Model::XLoraPhi3(ref model) => model.forward(
+            Model::XLoraPhi3(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,

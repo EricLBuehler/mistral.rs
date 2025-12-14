@@ -417,7 +417,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
             .get("general.architecture")
             .and_then(|v| v.to_string().ok().cloned())
             .unwrap_or_else(|| "llama".to_string());
-        let path_prefix = if actual_arch == "mistral3" { "mistral3" } else { "llama" };
+        let path_prefix = if actual_arch == "mistral3" {
+            "mistral3"
+        } else {
+            "llama"
+        };
 
         let metadata = ContentMetadata {
             path_prefix,
