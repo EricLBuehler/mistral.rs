@@ -96,7 +96,7 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
                         {
                             candle_core::bail!(
                                 "Critical failure loading model part {}\n\
-                                Verify you are using a supported quantization type.
+                                Verify you are using a supported quantization type\n\
                                 Supported types: {}\n\
                                 Candle error: {}",
                                 i,
