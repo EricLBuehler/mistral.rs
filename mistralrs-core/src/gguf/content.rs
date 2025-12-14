@@ -19,32 +19,29 @@ use super::GGUFArchitecture;
 /// This should be kept in sync with candle_core::quantized::GgmlDType.
 /// If Candle adds new dtype variants, add them here to include in error messages.
 /// Reference: candle-core/src/quantized/mod.rs in the Candle repository.
-macro_rules! all_ggml_dtypes {
-    () => {
-        [
-            GgmlDType::F32,
-            GgmlDType::F16,
-            GgmlDType::BF16,
-            GgmlDType::Q4_0,
-            GgmlDType::Q4_1,
-            GgmlDType::Q5_0,
-            GgmlDType::Q5_1,
-            GgmlDType::Q8_0,
-            GgmlDType::Q8_1,
-            GgmlDType::Q2K,
-            GgmlDType::Q3K,
-            GgmlDType::Q4K,
-            GgmlDType::Q5K,
-            GgmlDType::Q6K,
-            GgmlDType::Q8K,
-        ]
-    };
-}
+const KNOWN_DTYPES: &[GgmlDType] = &[
+    GgmlDType::F32,
+    GgmlDType::F16,
+    GgmlDType::BF16,
+    GgmlDType::Q4_0,
+    GgmlDType::Q4_1,
+    GgmlDType::Q5_0,
+    GgmlDType::Q5_1,
+    GgmlDType::Q8_0,
+    GgmlDType::Q8_1,
+    GgmlDType::Q2K,
+    GgmlDType::Q3K,
+    GgmlDType::Q4K,
+    GgmlDType::Q5K,
+    GgmlDType::Q6K,
+    GgmlDType::Q8K,
+    // Add newer ones here if Candle adds more
+];
 
 fn get_supported_gguf_dtypes() -> String {
-    all_ggml_dtypes!()
+    KNOWN_DTYPES
         .iter()
-        .map(|dtype| format!("{:?}", dtype))
+        .map(|dt| format!("{:?}", dt))
         .collect::<Vec<_>>()
         .join(", ")
 }
