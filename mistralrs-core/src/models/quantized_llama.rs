@@ -347,16 +347,6 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
     type Error = anyhow::Error;
 
     fn try_from(c: ContentMetadata) -> std::result::Result<Self, Self::Error> {
-        let actual_arch: String = c
-            .metadata
-            .get("general.architecture")
-            .and_then(|v| v.to_string().ok().cloned())
-            .unwrap_or_default();
-
-        if actual_arch != "llama" && actual_arch != "mistral3" {
-            anyhow::bail!("Expected `llama` or `mistral3` architecture, got `{actual_arch}`.");
-        }
-
         let required = [
             "attention.head_count",
             "attention.head_count_kv",
