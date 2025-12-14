@@ -51,8 +51,16 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
     pub fn from_readers(readers: &'a mut [&'a mut R]) -> Result<Self> {
         let mut contents = Vec::new();
         let n_readers = readers.len();
-        for reader in readers.iter_mut() {
-            contents.push(gguf_file::Content::read(reader)?);
+        for (i, reader) in readers.iter_mut().enumerate() {
+            // 1. Capture the Result directly
+            match gguf_file::Content::read(reader) {
+                Ok(c) => {
+                    contents.push(c);
+                }
+                Err(e) => {
+                    candle_core::bail!("Critical failure loading model part {}: {}\n Check whether your current quantization format is supported.", i, e);
+                }
+            }
         }
         let n_splits = contents
             .iter()
