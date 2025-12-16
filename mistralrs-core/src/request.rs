@@ -229,6 +229,10 @@ pub enum Request {
     // and then Engine will be dropped.
     Terminate,
     TerminateAllSeqsNextStep,
+    Cancel {
+        id: usize,
+        model_id: Option<String>,
+    },
 }
 
 impl Debug for Request {
@@ -258,6 +262,7 @@ impl Debug for Request {
             }
             Request::Terminate => write!(f, "Termination Request"),
             Request::TerminateAllSeqsNextStep => write!(f, "Terminate All Seqs Next Step"),
+            Request::Cancel { id, model_id } => write!(f, "Cancel Request {id} for model {model_id:?}"),
         }
     }
 }

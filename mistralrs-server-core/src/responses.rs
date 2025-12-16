@@ -196,6 +196,7 @@ fn chat_response_to_responses_object(
     chat_resp: &ChatCompletionResponse,
     request_id: String,
     metadata: Option<Value>,
+    instructions: Option<String>,
 ) -> ResponsesObject {
     let mut outputs = Vec::new();
     let mut output_text_parts = Vec::new();
@@ -264,7 +265,7 @@ fn chat_response_to_responses_object(
         }),
         error: None,
         metadata,
-        instructions: None,
+        instructions,
         incomplete_details: None,
     }
 }
@@ -274,16 +275,111 @@ async fn parse_responses_request(
     oairequest: ResponsesCreateRequest,
     state: SharedMistralRsState,
     tx: Sender<Response>,
-) -> Result<(Request, bool, Option<Vec<Message>>)> {
-    if oairequest.instructions.is_some() {
-        return Err(anyhow::anyhow!(
-            "The 'instructions' field is not supported in the Responses API"
-        ));
+) -> Result<(Request, bool, Option<Vec<Message>>, Option<String>)> {
+    // Validate modalities
+    if let Some(modalities) = &oairequest.modalities {
+        for modality in modalities {
+            if modality != "text" {
+                anyhow::bail!("Modality '{modality}' is not currently supported. Only 'text' is supported.");
+            }
+        }
     }
+
+    let instructions = oairequest.instructions.clone();
     // If previous_response_id is provided, get the full conversation history from cache
     let previous_messages = if let Some(prev_id) = &oairequest.previous_response_id {
         let cache = get_response_cache();
-        cache.get_conversation_history(prev_id)?
+        let mut history = cache.get_conversation_history(prev_id)?;
+
+        // Handle compacting
+        if oairequest.compact_history_with_summary.unwrap_or(false) {
+            if let Some(msgs) = &history {
+                // Construct prompt
+                let mut conversation_text = String::new();
+                for msg in msgs {
+                    let role = &msg.role;
+                    let content = msg
+                        .content
+                        .as_ref()
+                        .and_then(|c| c.to_text())
+                        .unwrap_or_default();
+                    conversation_text.push_str(&format!("{role}: {content}\n"));
+                }
+
+                let summary_prompt = format!("Summarize the following conversation history into a concise paragraph to serve as context for future interactions:\n\n{conversation_text}");
+
+                let (sum_tx, mut sum_rx) = create_response_channel(None);
+
+                let summary_messages = vec![Message {
+                    content: Some(MessageContent::from_text(summary_prompt)),
+                    role: "user".to_string(),
+                    name: None,
+                    tool_calls: None,
+                }];
+
+                let summary_request = ChatCompletionRequest {
+                    messages: Either::Left(summary_messages),
+                    model: oairequest.model.clone(),
+                    logit_bias: None,
+                    logprobs: false,
+                    top_logprobs: None,
+                    max_tokens: Some(512), // Limit summary length
+                    n_choices: 1,
+                    presence_penalty: None,
+                    frequency_penalty: None,
+                    repetition_penalty: None,
+                    stop_seqs: None,
+                    temperature: None,
+                    top_p: None,
+                    stream: Some(false),
+                    tools: None,
+                    tool_choice: None,
+                    response_format: None,
+                    web_search_options: None,
+                    top_k: None,
+                    grammar: None,
+                    min_p: None,
+                    dry_multiplier: None,
+                    dry_base: None,
+                    dry_allowed_length: None,
+                    dry_sequence_breakers: None,
+                    enable_thinking: None,
+                    truncate_sequence: None,
+                };
+
+                // Extract model_id for routing
+                let model_id = if oairequest.model == "default" {
+                    None
+                } else {
+                    Some(oairequest.model.clone())
+                };
+
+                let (req, _) = parse_chat_request(summary_request, state.clone(), sum_tx).await?;
+                send_request_with_model(&state, req, model_id.as_deref()).await?;
+
+                // Wait for response
+                let summary = match sum_rx.recv().await {
+                    Some(Response::Done(resp)) => {
+                        resp.choices[0].message.content.clone().unwrap_or_default()
+                    }
+                    Some(Response::ModelError(msg, _)) => {
+                        anyhow::bail!("Model error during summarization: {}", msg);
+                    }
+                    _ => anyhow::bail!("Failed to get summary response"),
+                };
+
+                // Replace history with summary
+                history = Some(vec![Message {
+                    content: Some(MessageContent::from_text(format!(
+                        "Here is a summary of the previous conversation: {summary}"
+                    ))),
+                    role: "system".to_string(),
+                    name: None,
+                    tool_calls: None,
+                }]);
+            }
+        }
+        history
     } else {
         None
     };
@@ -345,6 +441,32 @@ async fn parse_responses_request(
         }
     }
 
+    // Add instructions as system message if provided
+    if let Some(instructions) = instructions.clone() {
+        let system_msg = Message {
+            content: Some(MessageContent::from_text(instructions)),
+            role: "system".to_string(),
+            name: None,
+            tool_calls: None,
+        };
+
+        match &mut chat_request.messages {
+            Either::Left(msgs) => {
+                msgs.insert(0, system_msg);
+            }
+            Either::Right(prompt) => {
+                let mut msgs = vec![system_msg];
+                msgs.push(Message {
+                    content: Some(MessageContent::from_text(prompt.clone())),
+                    role: "user".to_string(),
+                    name: None,
+                    tool_calls: None,
+                });
+                chat_request.messages = Either::Left(msgs);
+            }
+        }
+    }
+
     // Get all messages for prompt_details
     let all_messages = match &chat_request.messages {
         Either::Left(msgs) => msgs.clone(),
@@ -357,7 +479,7 @@ async fn parse_responses_request(
     };
 
     let (request, is_streaming) = parse_chat_request(chat_request, state, tx).await?;
-    Ok((request, is_streaming, Some(all_messages)))
+    Ok((request, is_streaming, Some(all_messages), instructions))
 }
 
 /// Create response endpoint
@@ -384,7 +506,7 @@ pub async fn create_response(
         Some(oairequest.model.clone())
     };
 
-    let (request, is_streaming, conversation_history) =
+    let (request, is_streaming, conversation_history, instructions) =
         match parse_responses_request(oairequest, state.clone(), tx).await {
             Ok(x) => x,
             Err(e) => return handle_error(state, e.into()),
@@ -414,6 +536,7 @@ pub async fn create_response(
             // Create a wrapper that stores chunks and conversation history
             let history_for_streaming = conversation_history.clone();
             let on_done: OnDoneCallback<ResponsesChunk> = Box::new(move |chunks| {
+                let _ = chunks_cache.remove_active_request(&id);
                 let _ = chunks_cache.store_chunks(id.clone(), chunks.to_vec());
 
                 // Reconstruct the assistant's message from chunks and store conversation history
@@ -454,14 +577,28 @@ pub async fn create_response(
 
             ResponsesResponder::Sse(create_streamer(streamer, Some(on_done)))
         } else {
-            ResponsesResponder::Sse(create_streamer(streamer, None))
+            // Even if not storing, we should remove the active request when done
+            // But we don't have a callback for "non-stored" streamer in the current API.
+            // We can wrap it.
+            // For now, let's assume we only track active requests if we can hook into completion.
+            // Actually, `create_streamer` takes `on_done`. We can always pass a cleanup callback.
+            let cache = get_response_cache();
+            let id = request_id.clone();
+            let on_done: OnDoneCallback<ResponsesChunk> = Box::new(move |_| {
+                let _ = cache.remove_active_request(&id);
+            });
+            ResponsesResponder::Sse(create_streamer(streamer, Some(on_done)))
         }
     } else {
         // Non-streaming response
-        match rx.recv().await {
+        let result = match rx.recv().await {
             Some(Response::Done(chat_resp)) => {
-                let response_obj =
-                    chat_response_to_responses_object(&chat_resp, request_id.clone(), metadata);
+                let response_obj = chat_response_to_responses_object(
+                    &chat_resp,
+                    request_id.clone(),
+                    metadata,
+                    instructions.clone(),
+                );
 
                 // Store if requested
                 if store {
@@ -481,15 +618,19 @@ pub async fn create_response(
                                 });
                             }
                         }
-                        let _ = cache.store_conversation_history(request_id, history);
+                        let _ = cache.store_conversation_history(request_id.clone(), history);
                     }
                 }
 
                 ResponsesResponder::Json(response_obj)
             }
             Some(Response::ModelError(msg, partial_resp)) => {
-                let mut response_obj =
-                    chat_response_to_responses_object(&partial_resp, request_id.clone(), metadata);
+                let mut response_obj = chat_response_to_responses_object(
+                    &partial_resp,
+                    request_id.clone(),
+                    metadata,
+                    instructions.clone(),
+                );
                 response_obj.error = Some(ResponsesError {
                     error_type: "model_error".to_string(),
                     message: msg.to_string(),
@@ -513,7 +654,7 @@ pub async fn create_response(
                                 });
                             }
                         }
-                        let _ = cache.store_conversation_history(request_id, history);
+                        let _ = cache.store_conversation_history(request_id.clone(), history);
                     }
                 }
                 ResponsesResponder::ModelError(msg.to_string(), response_obj)
@@ -523,7 +664,37 @@ pub async fn create_response(
             _ => ResponsesResponder::InternalError(
                 anyhow::anyhow!("Unexpected response type").into(),
             ),
-        }
+        };
+        // Remove active request mapping
+        let _ = get_response_cache().remove_active_request(&request_id);
+        result
+    }
+}
+
+/// List all responses endpoint
+#[utoipa::path(
+    get,
+    tag = "Mistral.rs",
+    path = "/v1/responses",
+    responses((status = 200, description = "List of responses"))
+)]
+pub async fn list_responses(State(_state): ExtractedMistralRsState) -> impl IntoResponse {
+    let cache = get_response_cache();
+
+    match cache.get_all_responses() {
+        Ok(responses) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "object": "list",
+                "data": responses
+            })),
+        )
+            .into_response(),
+        Err(e) => JsonError::new(format!(
+            "Error retrieving responses: {}",
+            sanitize_error_message(&*e)
+        ))
+        .to_response(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
 
@@ -587,6 +758,73 @@ pub async fn delete_response(
     }
 }
 
+/// Cancel response by ID endpoint
+#[utoipa::path(
+    post,
+    tag = "Mistral.rs",
+    path = "/v1/responses/{response_id}/cancel",
+    params(("response_id" = String, Path, description = "The ID of the response to cancel")),
+    responses((status = 200, description = "Response canceled"))
+)]
+pub async fn cancel_response(
+    State(state): ExtractedMistralRsState,
+    Path(response_id): Path<String>,
+) -> impl IntoResponse {
+    let cache = get_response_cache();
+
+    match cache.get_active_request_id(&response_id) {
+        Ok(Some((engine_id, model_id))) => {
+            let sender = match state.get_sender(model_id.as_deref()) {
+                Ok(s) => s,
+                Err(e) => {
+                    return JsonError::new(format!("Failed to get engine sender: {e:?}"))
+                        .to_response(StatusCode::INTERNAL_SERVER_ERROR);
+                }
+            };
+
+            if let Err(e) = sender
+                .send(Request::Cancel {
+                    id: engine_id,
+                    model_id: model_id.clone(),
+                })
+                .await
+            {
+                return JsonError::new(format!("Failed to send cancel request: {e}"))
+                    .to_response(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+
+            // Also remove from active requests immediately?
+            // The engine might take a moment to abort.
+            // But from API perspective, we submitted the cancel.
+            // We can leave it to the completion callback to cleanup, or do it here.
+            // If we do it here, we might get a "completion" later that tries to remove it again (harmless).
+            // But the response object might be updated to "cancelled" status by the engine response?
+            // If we abort, the engine sends a chunk with StopReason::Canceled.
+            // That chunk/response will trigger the cleanup logic.
+            // So we just send the signal.
+
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "canceled": true,
+                    "id": response_id,
+                    "object": "response.canceled"
+                })),
+            )
+                .into_response()
+        }
+        Ok(None) => JsonError::new(format!(
+            "Active response with ID '{response_id}' not found or already completed"
+        ))
+        .to_response(StatusCode::NOT_FOUND),
+        Err(e) => JsonError::new(format!(
+            "Error retrieving active request: {}",
+            sanitize_error_message(&*e)
+        ))
+        .to_response(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
 /// Handle errors
 fn handle_error(
     state: SharedMistralRsState,
@@ -609,4 +847,39 @@ fn create_streamer(
 
     Sse::new(streamer_with_callback)
         .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval)))
+}
+
+/// Get input items for a response
+#[utoipa::path(
+    get,
+    tag = "Mistral.rs",
+    path = "/v1/responses/{response_id}/input_items",
+    params(("response_id" = String, Path, description = "The ID of the response to retrieve input items for")),
+    responses((status = 200, description = "List of input messages"))
+)]
+pub async fn get_input_items(
+    State(_state): ExtractedMistralRsState,
+    Path(response_id): Path<String>,
+) -> impl IntoResponse {
+    let cache = get_response_cache();
+
+    match cache.get_conversation_history(&response_id) {
+        Ok(Some(history)) => {
+            // Filter for 'user' and 'system' messages as input items
+            let input_messages: Vec<Message> = history
+                .into_iter()
+                .filter(|msg| msg.role == "user" || msg.role == "system")
+                .collect();
+            (StatusCode::OK, Json(input_messages)).into_response()
+        }
+        Ok(None) => JsonError::new(format!(
+            "Conversation history for response ID '{response_id}' not found"
+        ))
+        .to_response(StatusCode::NOT_FOUND),
+        Err(e) => JsonError::new(format!(
+            "Error retrieving conversation history: {}",
+            sanitize_error_message(&*e)
+        ))
+        .to_response(StatusCode::INTERNAL_SERVER_ERROR),
+    }
 }

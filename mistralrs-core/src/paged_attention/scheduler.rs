@@ -473,4 +473,27 @@ impl Scheduler for PagedAttentionScheduler {
     fn set_prefix_caching_enabled(&mut self, enabled: bool) {
         self.set_prefix_caching_enabled_sync(enabled);
     }
+
+    fn abort_seq(&mut self, id: usize) {
+        if let Some(idx) = self
+            .waiting
+            .iter()
+            .position(|other| get_mut_arcmutex!(other).get_id() == id)
+        {
+            let seq = self.waiting.remove(idx).unwrap();
+            get_mut_arcmutex!(seq).set_state(SequenceState::Done(StopReason::Canceled));
+            self._free(id);
+            return;
+        };
+
+        if let Some(idx) = self
+            .running
+            .iter()
+            .position(|other| get_mut_arcmutex!(other).get_id() == id)
+        {
+            let seq = self.running.remove(idx).unwrap();
+            get_mut_arcmutex!(seq).set_state(SequenceState::Done(StopReason::Canceled));
+            self._free(id);
+        };
+    }
 }

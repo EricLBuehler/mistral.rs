@@ -350,4 +350,17 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
     fn set_prefix_caching_enabled(&mut self, _enabled: bool) {
         // DefaultScheduler doesn't use PagedAttention prefix caching
     }
+
+    fn abort_seq(&mut self, id: usize) {
+        if let Some(pos) = self.running.iter().position(|seq| *seq.id() == id) {
+            let seq = self.running.remove(pos);
+            seq.set_state(SequenceState::Done(StopReason::Canceled));
+            return;
+        }
+
+        if let Some(pos) = self.waiting.iter().position(|seq| *seq.id() == id) {
+            let seq = self.waiting.remove(pos).unwrap();
+            seq.set_state(SequenceState::Done(StopReason::Canceled));
+        }
+    }
 }

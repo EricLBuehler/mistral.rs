@@ -17,7 +17,10 @@ use crate::{
     handlers::{health, models, re_isq},
     image_generation::image_generation,
     openapi_doc::get_openapi_doc,
-    responses::{create_response, delete_response, get_response},
+    responses::{
+        cancel_response, create_response, delete_response, get_input_items, get_response,
+        list_responses,
+    },
     speech_generation::speech_generation,
     types::SharedMistralRsState,
 };
@@ -204,11 +207,13 @@ fn init_router(
         .route("/re_isq", post(re_isq))
         .route("/v1/images/generations", post(image_generation))
         .route("/v1/audio/speech", post(speech_generation))
-        .route("/v1/responses", post(create_response))
+        .route("/v1/responses", post(create_response).get(list_responses))
         .route(
             "/v1/responses/{response_id}",
             get(get_response).delete(delete_response),
         )
+        .route("/v1/responses/{response_id}/input_items", get(get_input_items))
+        .route("/v1/responses/{response_id}/cancel", post(cancel_response))
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .with_state(state);

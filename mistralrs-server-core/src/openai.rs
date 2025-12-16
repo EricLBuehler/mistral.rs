@@ -16,7 +16,7 @@ use utoipa::{
 /// Inner content structure for messages that can be either a string or key-value pairs
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MessageInnerContent(
-    #[serde(with = "either::serde_untagged")] pub Either<String, HashMap<String, String>>,
+    #[serde(with = "either::serde_untagged")] pub Either<String, HashMap<String, Value>>,
 );
 
 // The impl Deref was preventing the Derive ToSchema and #[schema] macros from
@@ -42,7 +42,7 @@ impl ToSchema for MessageInnerContent {
 }
 
 impl Deref for MessageInnerContent {
-    type Target = Either<String, HashMap<String, String>>;
+    type Target = Either<String, HashMap<String, Value>>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -58,14 +58,12 @@ fn message_inner_content_schema() -> Schema {
                     .schema_type(SchemaType::Type(Type::String))
                     .build(),
             ))
-            // Either::Right - object with string values
+            // Either::Right - object with arbitrary values
             .item(Schema::Object(
                 ObjectBuilder::new()
                     .schema_type(SchemaType::Type(Type::Object))
                     .additional_properties(Some(RefOr::T(Schema::Object(
-                        ObjectBuilder::new()
-                            .schema_type(SchemaType::Type(Type::String))
-                            .build(),
+                        ObjectBuilder::new().build(),
                     ))))
                     .build(),
             ))
@@ -1034,6 +1032,8 @@ pub struct ResponsesCreateRequest {
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,
+    #[schema(example = json!(Option::None::<bool>))]
+    pub compact_history_with_summary: Option<bool>,
 }
 
 /// Response object

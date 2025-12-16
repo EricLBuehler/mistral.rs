@@ -70,4 +70,7 @@ pub trait Scheduler: Send + Sync {
     /// Set whether prefix caching is enabled. Called by Engine after creation
     /// to synchronize with the global no_prefix_cache setting.
     fn set_prefix_caching_enabled(&mut self, enabled: bool);
+
+    /// Abort a sequence by ID.
+    fn abort_seq(&mut self, id: usize);
 }

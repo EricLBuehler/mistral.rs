@@ -974,6 +974,7 @@ impl MistralRs {
     pub fn send_request(&self, mut request: Request) -> Result<(), MistralRsError> {
         let model_id = match &mut request {
             Request::Normal(normal_req) => normal_req.model_id.as_deref(),
+            Request::Cancel { model_id, .. } => model_id.as_deref(),
             _ => None, // Other request types don't specify model_id
         };
 

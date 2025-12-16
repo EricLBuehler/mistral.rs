@@ -54,6 +54,9 @@ impl Engine {
             Request::TerminateAllSeqsNextStep => {
                 TERMINATE_ALL_NEXT_STEP.store(true, Ordering::SeqCst)
             }
+            Request::Cancel { id, .. } => {
+                get_mut_arcmutex!(self.scheduler).abort_seq(id);
+            }
         }
     }
 

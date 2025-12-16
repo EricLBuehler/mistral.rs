@@ -302,7 +302,9 @@ pub async fn parse_request(
                                             .context("Image sub-content `image_url` key must be an object.")?
                                             .get("url")
                                             .context("Image sub-content `image_url` object must have a `url` key.")?
-                                            .clone(),
+                                            .as_str()
+                                            .context("Image sub-content `image_url` object `url` key must be a string.")?
+                                            .to_string(),
                                     });
                                 }
                                 Some(MessageInnerContent(Either::Left(x))) if x == "audio_url" => {
@@ -316,7 +318,9 @@ pub async fn parse_request(
                                             .context("Audio sub-content `audio_url` key must be an object.")?
                                             .get("url")
                                             .context("Audio sub-content `audio_url` object must have a `url` key.")?
-                                            .clone(),
+                                            .as_str()
+                                            .context("Audio sub-content `audio_url` object `url` key must be a string.")?
+                                            .to_string(),
                                     });
                                 }
                                 _ => anyhow::bail!("Expected array content sub-content to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}")
