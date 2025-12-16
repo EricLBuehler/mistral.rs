@@ -39,6 +39,7 @@ uuid.workspace = true
 
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
+lru = "0.16.2"
 
 [features]
 cuda = ["mistralrs-core/cuda"]

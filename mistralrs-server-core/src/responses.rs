@@ -1,6 +1,6 @@
 //! ## Responses API functionality and route handlers.
 
-use std::{pin::Pin, task::Poll, time::Duration};
+use std::{pin::Pin, sync::Arc, task::Poll, time::Duration};
 
 use anyhow::Result;
 use axum::{
@@ -18,7 +18,7 @@ use tokio::sync::mpsc::Sender;
 use uuid::Uuid;
 
 use crate::{
-    cached_responses::get_response_cache,
+    cached_responses::ResponseCache,
     chat_completion::parse_request as parse_chat_request,
     completion_core::{handle_completion_error, BaseCompletionResponder},
     handler_core::{
@@ -31,7 +31,10 @@ use crate::{
         ResponsesError, ResponsesObject, ResponsesOutput, ResponsesUsage,
     },
     streaming::{get_keep_alive_interval, BaseStreamer, DoneState},
-    types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
+    types::{
+        ExtractedMistralRsState, ExtractedResponseCache, OnChunkCallback, OnDoneCallback,
+        SharedMistralRsState,
+    },
     util::sanitize_error_message,
 };
 
@@ -275,6 +278,7 @@ async fn parse_responses_request(
     oairequest: ResponsesCreateRequest,
     state: SharedMistralRsState,
     tx: Sender<Response>,
+    cache: Arc<dyn ResponseCache>,
 ) -> Result<(Request, bool, Option<Vec<Message>>, Option<String>)> {
     // Validate modalities
     if let Some(modalities) = &oairequest.modalities {
@@ -288,7 +292,6 @@ async fn parse_responses_request(
     let instructions = oairequest.instructions.clone();
     // If previous_response_id is provided, get the full conversation history from cache
     let previous_messages = if let Some(prev_id) = &oairequest.previous_response_id {
-        let cache = get_response_cache();
         let mut history = cache.get_conversation_history(prev_id)?;
 
         // Handle compacting
@@ -492,6 +495,7 @@ async fn parse_responses_request(
 )]
 pub async fn create_response(
     State(state): ExtractedMistralRsState,
+    State(cache): ExtractedResponseCache,
     Json(oairequest): Json<ResponsesCreateRequest>,
 ) -> ResponsesResponder {
     let (tx, mut rx) = create_response_channel(None);
@@ -506,11 +510,17 @@ pub async fn create_response(
         Some(oairequest.model.clone())
     };
 
-    let (request, is_streaming, conversation_history, instructions) =
-        match parse_responses_request(oairequest, state.clone(), tx).await {
-            Ok(x) => x,
-            Err(e) => return handle_error(state, e.into()),
-        };
+    let (request, is_streaming, conversation_history, instructions) = match parse_responses_request(
+        oairequest,
+        state.clone(),
+        tx,
+        cache.clone(),
+    )
+    .await
+    {
+        Ok(x) => x,
+        Err(e) => return handle_error(state, e.into()),
+    };
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
         return handle_error(state, e.into());
@@ -529,7 +539,6 @@ pub async fn create_response(
 
         // Store chunks for later retrieval if requested
         if store {
-            let cache = get_response_cache();
             let id = request_id.clone();
             let chunks_cache = cache.clone();
 
@@ -582,10 +591,10 @@ pub async fn create_response(
             // We can wrap it.
             // For now, let's assume we only track active requests if we can hook into completion.
             // Actually, `create_streamer` takes `on_done`. We can always pass a cleanup callback.
-            let cache = get_response_cache();
             let id = request_id.clone();
+            let cleanup_cache = cache.clone();
             let on_done: OnDoneCallback<ResponsesChunk> = Box::new(move |_| {
-                let _ = cache.remove_active_request(&id);
+                let _ = cleanup_cache.remove_active_request(&id);
             });
             ResponsesResponder::Sse(create_streamer(streamer, Some(on_done)))
         }
@@ -602,7 +611,6 @@ pub async fn create_response(
 
                 // Store if requested
                 if store {
-                    let cache = get_response_cache();
                     let _ = cache.store_response(request_id.clone(), response_obj.clone());
 
                     // Create complete conversation history including the assistant's response
@@ -638,7 +646,6 @@ pub async fn create_response(
                 response_obj.status = "failed".to_string();
 
                 if store {
-                    let cache = get_response_cache();
                     let _ = cache.store_response(request_id.clone(), response_obj.clone());
 
                     // Even on error, store conversation history with partial response
@@ -666,7 +673,7 @@ pub async fn create_response(
             ),
         };
         // Remove active request mapping
-        let _ = get_response_cache().remove_active_request(&request_id);
+        let _ = cache.remove_active_request(&request_id);
         result
     }
 }
@@ -678,9 +685,7 @@ pub async fn create_response(
     path = "/v1/responses",
     responses((status = 200, description = "List of responses"))
 )]
-pub async fn list_responses(State(_state): ExtractedMistralRsState) -> impl IntoResponse {
-    let cache = get_response_cache();
-
+pub async fn list_responses(State(cache): ExtractedResponseCache) -> impl IntoResponse {
     match cache.get_all_responses() {
         Ok(responses) => (
             StatusCode::OK,
@@ -707,11 +712,9 @@ pub async fn list_responses(State(_state): ExtractedMistralRsState) -> impl Into
     responses((status = 200, description = "Response object"))
 )]
 pub async fn get_response(
-    State(_state): ExtractedMistralRsState,
+    State(cache): ExtractedResponseCache,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
-    let cache = get_response_cache();
-
     match cache.get_response(&response_id) {
         Ok(Some(response)) => (StatusCode::OK, Json(response)).into_response(),
         Ok(None) => JsonError::new(format!("Response with ID '{response_id}' not found"))
@@ -733,11 +736,9 @@ pub async fn get_response(
     responses((status = 200, description = "Response deleted"))
 )]
 pub async fn delete_response(
-    State(_state): ExtractedMistralRsState,
+    State(cache): ExtractedResponseCache,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
-    let cache = get_response_cache();
-
     match cache.delete_response(&response_id) {
         Ok(true) => (
             StatusCode::OK,
@@ -768,10 +769,9 @@ pub async fn delete_response(
 )]
 pub async fn cancel_response(
     State(state): ExtractedMistralRsState,
+    State(cache): ExtractedResponseCache,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
-    let cache = get_response_cache();
-
     match cache.get_active_request_id(&response_id) {
         Ok(Some((engine_id, model_id))) => {
             let sender = match state.get_sender(model_id.as_deref()) {
@@ -858,11 +858,9 @@ fn create_streamer(
     responses((status = 200, description = "List of input messages"))
 )]
 pub async fn get_input_items(
-    State(_state): ExtractedMistralRsState,
+    State(cache): ExtractedResponseCache,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
-    let cache = get_response_cache();
-
     match cache.get_conversation_history(&response_id) {
         Ok(Some(history)) => {
             // Filter for 'user' and 'system' messages as input items

@@ -1,5 +1,7 @@
 //! ## mistral.rs server router builder.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use axum::{
     extract::DefaultBodyLimit,
@@ -11,6 +13,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::{
+    cached_responses::InMemoryResponseCache,
     chat_completion::chatcompletions,
     completions::completions,
     embeddings::embeddings,
@@ -22,7 +25,7 @@ use crate::{
         list_responses,
     },
     speech_generation::speech_generation,
-    types::SharedMistralRsState,
+    types::{ServerState, SharedMistralRsState},
 };
 
 // NOTE(EricLBuehler): Accept up to 50mb input
@@ -197,6 +200,16 @@ fn init_router(
     // Use the provided base path or default to ""
     let prefix = base_path.unwrap_or("");
 
+    // Initialize the response cache with default capacity (e.g. 1000)
+    // In a future update, this could be configurable via builder
+    let response_cache = Arc::new(InMemoryResponseCache::new(1000));
+
+    // Create the server state
+    let server_state = ServerState {
+        mistralrs: state,
+        response_cache,
+    };
+
     let mut router = Router::new()
         .route("/v1/chat/completions", post(chatcompletions))
         .route("/v1/completions", post(completions))
@@ -216,7 +229,7 @@ fn init_router(
         .route("/v1/responses/{response_id}/cancel", post(cancel_response))
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
-        .with_state(state);
+        .with_state(server_state);
 
     if include_swagger_routes {
         let doc = get_openapi_doc(None);

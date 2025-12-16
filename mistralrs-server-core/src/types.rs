@@ -2,14 +2,38 @@
 
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{FromRef, State};
 use mistralrs_core::{MistralRs, Pipeline};
+
+use crate::cached_responses::ResponseCache;
 
 /// This is the underlying instance of mistral.rs.
 pub type SharedMistralRsState = Arc<MistralRs>;
 
 /// This is the `SharedMistralRsState` that has been extracted for an axum handler.
 pub type ExtractedMistralRsState = State<SharedMistralRsState>;
+
+/// This is the `ResponseCache` that has been extracted for an axum handler.
+pub type ExtractedResponseCache = State<Arc<dyn ResponseCache>>;
+
+/// The application state sharing mistral.rs and the response cache.
+#[derive(Clone)]
+pub struct ServerState {
+    pub mistralrs: SharedMistralRsState,
+    pub response_cache: Arc<dyn ResponseCache>,
+}
+
+impl FromRef<ServerState> for SharedMistralRsState {
+    fn from_ref(state: &ServerState) -> SharedMistralRsState {
+        state.mistralrs.clone()
+    }
+}
+
+impl FromRef<ServerState> for Arc<dyn ResponseCache> {
+    fn from_ref(state: &ServerState) -> Arc<dyn ResponseCache> {
+        state.response_cache.clone()
+    }
+}
 
 pub(crate) type LoadedPipeline = Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>;
 
