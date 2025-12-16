@@ -333,19 +333,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
-name = "bigdecimal"
-version = "0.4.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "560f42649de9fa436b73517378a147ec21f6c997a546581df4b4b31677828934"
-dependencies = [
- "autocfg",
- "libm",
- "num-bigint",
- "num-integer",
- "num-traits",
-]
-
-[[package]]
 name = "bindgen_cuda"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -661,12 +648,24 @@ dependencies = [
 
 [[package]]
 name = "chrono-tz"
-version = "0.10.4"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
+checksum = "d59ae0466b83e838b81a54256c39d5d7c20b9d7daa10510a242d9b75abd5936e"
 dependencies = [
  "chrono",
- "phf 0.12.1",
+ "chrono-tz-build",
+ "phf",
+]
+
+[[package]]
+name = "chrono-tz-build"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "433e39f13c9a060046954e0592a8d0a4bcb1040125cbf91cb8ee58964cfb350f"
+dependencies = [
+ "parse-zoneinfo",
+ "phf",
+ "phf_codegen",
 ]
 
 [[package]]
@@ -698,7 +697,7 @@ version = "4.5.49"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a0b5487afeab2deb2ff4e03a807ad1a03ac532ff5a2cee5d86884440c7f7671"
 dependencies = [
- "heck",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.111",
@@ -931,7 +930,7 @@ dependencies = [
  "cssparser-macros",
  "dtoa-short",
  "itoa",
- "phf 0.11.3",
+ "phf",
  "smallvec",
 ]
 
@@ -1387,7 +1386,7 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1e6a265c649f3f5979b601d26f1d05ada116434c87741c9493cb56218f76cbc"
 dependencies = [
- "heck",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.111",
@@ -1564,6 +1563,12 @@ name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
+
+[[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "foreign-types"
@@ -1964,13 +1969,23 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
+version = "0.14.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
+dependencies = [
+ "ahash",
+ "allocator-api2",
+]
+
+[[package]]
+name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
  "allocator-api2",
  "equivalent",
- "foldhash",
+ "foldhash 0.1.5",
 ]
 
 [[package]]
@@ -1978,6 +1993,17 @@ name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash 0.2.0",
+]
+
+[[package]]
+name = "heck"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
 
 [[package]]
 name = "heck"
@@ -2594,6 +2620,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lru"
+version = "0.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96051b46fc183dc9cd4a223960ef37b9af631b55191852a8274bfef064cda20f"
+dependencies = [
+ "hashbrown 0.16.1",
+]
+
+[[package]]
 name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2637,7 +2672,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7a7213d12e1864c0f002f52c2923d4556935a43dec5e71355c2760e0f6e7a18"
 dependencies = [
  "log",
- "phf 0.11.3",
+ "phf",
  "phf_codegen",
  "string_cache",
  "string_cache_codegen",
@@ -2993,7 +3028,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-pyo3"
-version = "0.6.0"
+version = "0.1.1"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3009,7 +3044,7 @@ dependencies = [
  "mistralrs-core",
  "mistralrs-mcp",
  "pyo3",
- "pyo3-build-config",
+ "pyo3-build-config 0.25.1",
  "reqwest",
  "serde",
  "serde_json",
@@ -3084,6 +3119,7 @@ dependencies = [
  "indexmap",
  "intel-mkl-src",
  "itertools",
+ "lru",
  "mistralrs-core",
  "reqwest",
  "serde",
@@ -3559,6 +3595,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "parse-zoneinfo"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f2a05b18d44e2957b88f96ba460715e295bc1d7510468a2f3d3b44535d26c24"
+dependencies = [
+ "regex",
+]
+
+[[package]]
 name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3577,16 +3622,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd6780a80ae0c52cc120a26a1a42c1ae51b247a253e4e06113d23d2c2edd078"
 dependencies = [
  "phf_macros",
- "phf_shared 0.11.3",
-]
-
-[[package]]
-name = "phf"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "913273894cec178f401a31ec4b656318d95473527be05c0752cc41cdc32be8b7"
-dependencies = [
- "phf_shared 0.12.1",
+ "phf_shared",
 ]
 
 [[package]]
@@ -3596,7 +3632,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aef8048c789fa5e851558d709946d6d79a8ff88c0440c587967f8e94bfb1216a"
 dependencies = [
  "phf_generator",
- "phf_shared 0.11.3",
+ "phf_shared",
 ]
 
 [[package]]
@@ -3605,7 +3641,7 @@ version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c80231409c20246a13fddb31776fb942c38553c51e871f8cbd687a4cfb5843d"
 dependencies = [
- "phf_shared 0.11.3",
+ "phf_shared",
  "rand 0.8.5",
 ]
 
@@ -3616,7 +3652,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f84ac04429c13a7ff43785d75ad27569f2951ce0ffd30a3321230db2fc727216"
 dependencies = [
  "phf_generator",
- "phf_shared 0.11.3",
+ "phf_shared",
  "proc-macro2",
  "quote",
  "syn 2.0.111",
@@ -3627,15 +3663,6 @@ name = "phf_shared"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5"
-dependencies = [
- "siphasher",
-]
-
-[[package]]
-name = "phf_shared"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06005508882fb681fd97892ecff4b7fd0fee13ef1aa569f8695dae7ab9099981"
 dependencies = [
  "siphasher",
 ]
@@ -3791,38 +3818,42 @@ dependencies = [
 
 [[package]]
 name = "pyo3"
-version = "0.25.1"
+version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8970a78afe0628a3e3430376fc5fd76b6b45c4d43360ffd6cdd40bdde72b682a"
+checksum = "a5e00b96a521718e08e03b1a622f01c8a8deb50719335de3f60b3b3950f069d8"
 dependencies = [
  "anyhow",
- "bigdecimal",
+ "cfg-if",
  "chrono",
  "chrono-tz",
  "either",
  "eyre",
- "hashbrown 0.15.5",
- "iana-time-zone",
+ "hashbrown 0.14.5",
  "indexmap",
  "indoc",
  "libc",
- "lock_api",
  "memoffset",
  "num-bigint",
  "num-complex",
- "num-rational",
- "once_cell",
- "ordered-float",
  "parking_lot",
  "portable-atomic",
- "pyo3-build-config",
+ "pyo3-build-config 0.21.2",
  "pyo3-ffi",
  "pyo3-macros",
  "rust_decimal",
  "serde",
  "smallvec",
  "unindent",
- "uuid 1.19.0",
+]
+
+[[package]]
+name = "pyo3-build-config"
+version = "0.21.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7883df5835fafdad87c0d888b266c8ec0f4c9ca48a5bed6bbb592e8dedee1b50"
+dependencies = [
+ "once_cell",
+ "target-lexicon 0.12.16",
 ]
 
 [[package]]
@@ -3832,24 +3863,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "458eb0c55e7ece017adeba38f2248ff3ac615e53660d7c71a238d7d2a01c7598"
 dependencies = [
  "once_cell",
- "target-lexicon",
+ "target-lexicon 0.13.3",
 ]
 
 [[package]]
 name = "pyo3-ffi"
-version = "0.25.1"
+version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7114fe5457c61b276ab77c5055f206295b812608083644a5c5b2640c3102565c"
+checksum = "01be5843dc60b916ab4dad1dca6d20b9b4e6ddc8e15f50c47fe6d85f1fb97403"
 dependencies = [
  "libc",
- "pyo3-build-config",
+ "pyo3-build-config 0.21.2",
 ]
 
 [[package]]
 name = "pyo3-macros"
-version = "0.25.1"
+version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8725c0a622b374d6cb051d11a0983786448f7785336139c3c94f5aa6bef7e50"
+checksum = "77b34069fc0682e11b31dbd10321cbf94808394c56fd996796ce45217dfac53c"
 dependencies = [
  "proc-macro2",
  "pyo3-macros-backend",
@@ -3859,13 +3890,13 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros-backend"
-version = "0.25.1"
+version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4109984c22491085343c05b0dbc54ddc405c3cf7b4374fc533f5c3313a572ccc"
+checksum = "08260721f32db5e1a5beae69a55553f56b99bd0e1c3e6e0a5e8851a9d0f5a85c"
 dependencies = [
- "heck",
+ "heck 0.4.1",
  "proc-macro2",
- "pyo3-build-config",
+ "pyo3-build-config 0.21.2",
  "quote",
  "syn 2.0.111",
 ]
@@ -4594,7 +4625,7 @@ dependencies = [
  "fxhash",
  "log",
  "new_debug_unreachable",
- "phf 0.11.3",
+ "phf",
  "phf_codegen",
  "precomputed-hash",
  "servo_arc",
@@ -4942,7 +4973,7 @@ checksum = "bf776ba3fa74f83bf4b63c3dcbbf82173db2632ed8452cb2d891d33f459de70f"
 dependencies = [
  "new_debug_unreachable",
  "parking_lot",
- "phf_shared 0.11.3",
+ "phf_shared",
  "precomputed-hash",
  "serde",
 ]
@@ -4954,7 +4985,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c711928715f1fe0fe509c53b43e993a9a557babc2d0a3567d0a3006f1ac931a0"
 dependencies = [
  "phf_generator",
- "phf_shared 0.11.3",
+ "phf_shared",
  "proc-macro2",
  "quote",
 ]
@@ -4992,7 +5023,7 @@ version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
 dependencies = [
- "heck",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "rustversion",
@@ -5005,7 +5036,7 @@ version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7"
 dependencies = [
- "heck",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.111",
@@ -5254,6 +5285,12 @@ dependencies = [
  "libc",
  "xattr",
 ]
+
+[[package]]
+name = "target-lexicon"
+version = "0.12.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
 name = "target-lexicon"
@@ -6232,7 +6269,7 @@ version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57ffde1dc01240bdf9992e3205668b235e59421fd085e8a317ed98da0178d414"
 dependencies = [
- "phf 0.11.3",
+ "phf",
  "phf_codegen",
  "string_cache",
  "string_cache_codegen",

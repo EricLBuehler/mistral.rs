@@ -522,6 +522,12 @@ pub async fn create_response(
         Err(e) => return handle_error(state, e.into()),
     };
 
+    // Store active request mapping if it's a normal request
+    if let Request::Normal(ref nr) = request {
+        // We ignore errors here as it's just for cancellation support
+        let _ = cache.add_active_request(request_id.clone(), nr.id, model_id.clone());
+    }
+
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
         return handle_error(state, e.into());
     }
@@ -545,43 +551,50 @@ pub async fn create_response(
             // Create a wrapper that stores chunks and conversation history
             let history_for_streaming = conversation_history.clone();
             let on_done: OnDoneCallback<ResponsesChunk> = Box::new(move |chunks| {
-                let _ = chunks_cache.remove_active_request(&id);
-                let _ = chunks_cache.store_chunks(id.clone(), chunks.to_vec());
+                let id = id.clone();
+                let chunks_cache = chunks_cache.clone();
+                let history_for_streaming = history_for_streaming.clone();
+                let chunks = chunks.to_vec();
 
-                // Reconstruct the assistant's message from chunks and store conversation history
-                if let Some(history) = history_for_streaming.clone() {
-                    let mut history = history;
-                    let mut assistant_message = String::new();
+                tokio::spawn(async move {
+                    let _ = chunks_cache.remove_active_request(&id);
+                    let _ = chunks_cache.store_chunks(id.clone(), chunks.clone());
 
-                    // Collect all text from chunks
-                    for chunk in chunks {
-                        if let Some(delta) = &chunk.delta {
-                            if let Some(outputs) = &delta.output {
-                                for output in outputs {
-                                    if let Some(contents) = &output.content {
-                                        for content in contents {
-                                            if let Some(text) = &content.text {
-                                                assistant_message.push_str(text);
+                    // Reconstruct the assistant's message from chunks and store conversation history
+                    if let Some(history) = history_for_streaming {
+                        let mut history = history;
+                        let mut assistant_message = String::new();
+
+                        // Collect all text from chunks
+                        for chunk in chunks {
+                            if let Some(delta) = &chunk.delta {
+                                if let Some(outputs) = &delta.output {
+                                    for output in outputs {
+                                        if let Some(contents) = &output.content {
+                                            for content in contents {
+                                                if let Some(text) = &content.text {
+                                                    assistant_message.push_str(text);
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    // Add the complete assistant message to history
-                    if !assistant_message.is_empty() {
-                        history.push(Message {
-                            content: Some(MessageContent::from_text(assistant_message)),
-                            role: "assistant".to_string(),
-                            name: None,
-                            tool_calls: None,
-                        });
-                    }
+                        // Add the complete assistant message to history
+                        if !assistant_message.is_empty() {
+                            history.push(Message {
+                                content: Some(MessageContent::from_text(assistant_message)),
+                                role: "assistant".to_string(),
+                                name: None,
+                                tool_calls: None,
+                            });
+                        }
 
-                    let _ = chunks_cache.store_conversation_history(id.clone(), history);
-                }
+                        let _ = chunks_cache.store_conversation_history(id, history);
+                    }
+                });
             });
 
             ResponsesResponder::Sse(create_streamer(streamer, Some(on_done)))
@@ -594,7 +607,11 @@ pub async fn create_response(
             let id = request_id.clone();
             let cleanup_cache = cache.clone();
             let on_done: OnDoneCallback<ResponsesChunk> = Box::new(move |_| {
-                let _ = cleanup_cache.remove_active_request(&id);
+                let id = id.clone();
+                let cleanup_cache = cleanup_cache.clone();
+                tokio::spawn(async move {
+                    let _ = cleanup_cache.remove_active_request(&id);
+                });
             });
             ResponsesResponder::Sse(create_streamer(streamer, Some(on_done)))
         }
