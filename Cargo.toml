@@ -16,7 +16,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "Fast and easy LLM serving."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -179,14 +179,14 @@ hound = "3.5.1"
 apodize = "1.0.0"
 statrs = "0.18.0"
 
-mistralrs-core = { path = "mistralrs-core" }
-mistralrs-paged-attn = { path = "mistralrs-paged-attn" }
-mistralrs-quant = { path = "mistralrs-quant" }
-mistralrs-vision = { path = "mistralrs-vision" }
-mistralrs-server-core = { path = "mistralrs-server-core" }
-mistralrs = { path = "mistralrs" }
-mistralrs-audio = { path = "mistralrs-audio" }
-mistralrs-mcp = { path = "mistralrs-mcp" }
+mistralrs-core = { path = "mistralrs-core", version = "0.7.0" }
+mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.7.0" }
+mistralrs-quant = { path = "mistralrs-quant", version = "0.7.0" }
+mistralrs-vision = { path = "mistralrs-vision", version = "0.7.0" }
+mistralrs-server-core = { path = "mistralrs-server-core", version = "0.7.0" }
+mistralrs = { path = "mistralrs", version = "0.7.0" }
+mistralrs-audio = { path = "mistralrs-audio", version = "0.7.0" }
+mistralrs-mcp = { path = "mistralrs-mcp", version = "0.7.0" }
 
 [profile.release-with-debug]
 inherits = "release"

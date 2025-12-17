@@ -2814,7 +2814,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2837,7 +2837,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-audio"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "apodize",
@@ -2847,7 +2847,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-bench"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2862,7 +2862,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -2963,7 +2963,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-mcp"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2984,7 +2984,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-paged-attn"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "bindgen_cuda",
@@ -2999,7 +2999,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-pyo3"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3025,7 +3025,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-quant"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bindgen_cuda",
  "byteorder",
@@ -3053,7 +3053,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-server"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3076,7 +3076,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-server-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3105,7 +3105,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-vision"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "candle-core",
  "image",
@@ -3114,7 +3114,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-web-chat"
-version = "0.1.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "axum",
