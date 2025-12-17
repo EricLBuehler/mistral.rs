@@ -506,8 +506,9 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 
 [[package]]
 name = "candle-core"
-version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=d91be02#d91be02fc02396b006f8b41f0addb5def0b1ce13"
+version = "0.9.2-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eddd07d779675094f961f3673cadf685691e1cf8de96d69b52f1742b5d837491"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -539,8 +540,9 @@ dependencies = [
 
 [[package]]
 name = "candle-flash-attn"
-version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=d91be02#d91be02fc02396b006f8b41f0addb5def0b1ce13"
+version = "0.9.2-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fda174bb1d158fe6c99c891e959af732db0b4d1af388533998bcd40287f8ec90"
 dependencies = [
  "anyhow",
  "bindgen_cuda",
@@ -550,8 +552,9 @@ dependencies = [
 
 [[package]]
 name = "candle-flash-attn-v3"
-version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=d91be02#d91be02fc02396b006f8b41f0addb5def0b1ce13"
+version = "0.9.2-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8aa26878a1006ca888e5415013bd062f6d30735856b1f86452e92def0de4068d"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -562,16 +565,18 @@ dependencies = [
 
 [[package]]
 name = "candle-kernels"
-version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=d91be02#d91be02fc02396b006f8b41f0addb5def0b1ce13"
+version = "0.9.2-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b6ffae183265c13c198b20fd8f338691fbb1f8624448801472c8442f2338f48"
 dependencies = [
  "bindgen_cuda",
 ]
 
 [[package]]
 name = "candle-metal-kernels"
-version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=d91be02#d91be02fc02396b006f8b41f0addb5def0b1ce13"
+version = "0.9.2-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c901593e7863cd4cf5d3cd9da6d531b181ed24b7753fda471ee7456c600ad84d"
 dependencies = [
  "half",
  "objc2",
@@ -584,8 +589,9 @@ dependencies = [
 
 [[package]]
 name = "candle-nn"
-version = "0.9.2-alpha.1"
-source = "git+https://github.com/huggingface/candle.git?rev=d91be02#d91be02fc02396b006f8b41f0addb5def0b1ce13"
+version = "0.9.2-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11559908c283e60435f34762a06e46880c06e769b9cb82bbbf739eabb4b60f1e"
 dependencies = [
  "accelerate-src",
  "candle-core",
