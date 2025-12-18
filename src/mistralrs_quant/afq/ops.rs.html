@@ -105,7 +105,7 @@
 <a href=#105 id=105 data-nosnippet>105</a>            Shape::from(s_shape),
 <a href=#106 id=106 data-nosnippet>106</a>        ));
 <a href=#107 id=107 data-nosnippet>107</a>
-<a href=#108 id=108 data-nosnippet>108</a>        <span class="prelude-val">Ok</span>((output, scales, biases))
+<a href=#108 id=108 data-nosnippet>108</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>((output, scales, biases));
 <a href=#109 id=109 data-nosnippet>109</a>    }
 <a href=#110 id=110 data-nosnippet>110</a>    <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
 <a href=#111 id=111 data-nosnippet>111</a>    </span><span class="kw">if </span>w.device().is_cuda() {
@@ -200,7 +200,7 @@
 <a href=#200 id=200 data-nosnippet>200</a>            Shape::from(w_shape),
 <a href=#201 id=201 data-nosnippet>201</a>        ));
 <a href=#202 id=202 data-nosnippet>202</a>
-<a href=#203 id=203 data-nosnippet>203</a>        <span class="prelude-val">Ok</span>(output)
+<a href=#203 id=203 data-nosnippet>203</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(output);
 <a href=#204 id=204 data-nosnippet>204</a>    }
 <a href=#205 id=205 data-nosnippet>205</a>    <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
 <a href=#206 id=206 data-nosnippet>206</a>    </span><span class="kw">if </span>w_q.device().is_cuda() {
@@ -426,7 +426,7 @@
 <a href=#426 id=426 data-nosnippet>426</a>            Shape::from(out_shape),
 <a href=#427 id=427 data-nosnippet>427</a>        ));
 <a href=#428 id=428 data-nosnippet>428</a>
-<a href=#429 id=429 data-nosnippet>429</a>        <span class="prelude-val">Ok</span>(output)
+<a href=#429 id=429 data-nosnippet>429</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(output);
 <a href=#430 id=430 data-nosnippet>430</a>    }
 <a href=#431 id=431 data-nosnippet>431</a>    <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
 <a href=#432 id=432 data-nosnippet>432</a>    </span><span class="kw">if </span>x.device().is_cuda() {
