@@ -317,20 +317,20 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let attention_bk = ct.tensor(&format!("{prefix}.attn_k.bias"), device);
             let attention_bv = ct.tensor(&format!("{prefix}.attn_v.bias"), device);
 
-            let attention_bq = if attention_bq.is_ok() {
-                Some(attention_bq.unwrap().dequantize(device)?)
+            let attention_bq = if let Ok(bq) = attention_bq {
+                Some(bq.dequantize(device)?)
             } else {
                 None
             };
 
-            let attention_bk = if attention_bk.is_ok() {
-                Some(attention_bk.unwrap().dequantize(device)?)
+            let attention_bk = if let Ok(bk) = attention_bk {
+                Some(bk.dequantize(device)?)
             } else {
                 None
             };
 
-            let attention_bv = if attention_bv.is_ok() {
-                Some(attention_bv.unwrap().dequantize(device)?)
+            let attention_bv = if let Ok(bv) = attention_bv {
+                Some(bv.dequantize(device)?)
             } else {
                 None
             };
@@ -358,12 +358,13 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let q_norm = ct.tensor(&format!("{prefix}.attn_q_norm.weight"), device);
             let k_norm = ct.tensor(&format!("{prefix}.attn_k_norm.weight"), device);
 
-            let (q_norm, k_norm) = if q_norm.is_ok() && k_norm.is_ok() {
-                let q_norm = QRmsNorm::new(q_norm.unwrap(), rms_norm_eps)?;
-                let k_norm = QRmsNorm::new(k_norm.unwrap(), rms_norm_eps)?;
-                (Some(q_norm), Some(k_norm))
-            } else {
-                (None, None)
+            let (q_norm, k_norm) = match (q_norm, k_norm) {
+                (Ok(q), Ok(k)) => {
+                    let q_norm = QRmsNorm::new(q, rms_norm_eps)?;
+                    let k_norm = QRmsNorm::new(k, rms_norm_eps)?;
+                    (Some(q_norm), Some(k_norm))
+                }
+                _ => (None, None),
             };
 
             let attention_norm = ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?;

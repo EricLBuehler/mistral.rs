@@ -210,6 +210,8 @@ fn main() -> Result<(), String> {
             "kernels/ops/ops.cu",
             "kernels/bitsandbytes/dequant.cu",
             "kernels/rotary/rotary.cu",
+            "kernels/afq/afq.cu",
+            "kernels/afq/afq_gemm.cu",
             "kernels/mxfp4/mxfp4_gemm.cu", // MXFP4 works on all compute caps
         ];
         if cc_over_800 {

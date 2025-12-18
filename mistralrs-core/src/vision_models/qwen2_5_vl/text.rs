@@ -337,7 +337,12 @@ impl Qwen2_5VLTextModel {
             candle_core::bail!("Expected eager attention implementation");
         }
         let mapper = normal_loading_metadata.mapper;
-        let vb_m = vb.pp("model");
+        // Support both HuggingFace naming (model.*) and MLX naming (language_model.model.*)
+        let vb_m = if vb.contains_tensor("language_model.model.embed_tokens.weight") {
+            vb.pp("language_model").pp("model")
+        } else {
+            vb.pp("model")
+        };
 
         let embed_tokens = layers::embedding(
             cfg.vocab_size,
