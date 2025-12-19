@@ -24,29 +24,40 @@ impl ChatCompletionStreamer {
         if this.is_done {
             return None;
         }
-        match this.rx.blocking_recv() {
-            Some(resp) => match resp {
-                Response::ModelError(msg, _) => Some(Err(PyValueError::new_err(msg.to_string()))),
-                Response::ValidationError(e) => Some(Err(PyValueError::new_err(e.to_string()))),
-                Response::InternalError(e) => Some(Err(PyValueError::new_err(e.to_string()))),
-                Response::Chunk(response) => {
-                    if response.choices.iter().all(|x| x.finish_reason.is_some()) {
-                        this.is_done = true;
+        loop {
+            match this.rx.blocking_recv() {
+                Some(resp) => match resp {
+                    Response::ModelError(msg, _) => {
+                        return Some(Err(PyValueError::new_err(msg.to_string())))
                     }
-                    Some(Ok(response))
+                    Response::ValidationError(e) => {
+                        return Some(Err(PyValueError::new_err(e.to_string())))
+                    }
+                    Response::InternalError(e) => {
+                        return Some(Err(PyValueError::new_err(e.to_string())))
+                    }
+                    Response::WebSearchCall { .. } => continue,
+                    Response::Chunk(response) => {
+                        if response.choices.iter().all(|x| x.finish_reason.is_some()) {
+                            this.is_done = true;
+                        }
+                        return Some(Ok(response));
+                    }
+                    Response::Done(_) => unreachable!(),
+                    Response::CompletionDone(_) => unreachable!(),
+                    Response::CompletionModelError(_, _) => unreachable!(),
+                    Response::CompletionChunk(_) => unreachable!(),
+                    Response::ImageGeneration(_) => unreachable!(),
+                    Response::Speech { .. } => unreachable!(),
+                    Response::Raw { .. } => unreachable!(),
+                    Response::Embeddings { .. } => unreachable!(),
+                },
+                None => {
+                    return Some(Err(PyValueError::new_err(
+                        "Received none in ChatCompletionStreamer".to_string(),
+                    )))
                 }
-                Response::Done(_) => unreachable!(),
-                Response::CompletionDone(_) => unreachable!(),
-                Response::CompletionModelError(_, _) => unreachable!(),
-                Response::CompletionChunk(_) => unreachable!(),
-                Response::ImageGeneration(_) => unreachable!(),
-                Response::Speech { .. } => unreachable!(),
-                Response::Raw { .. } => unreachable!(),
-                Response::Embeddings { .. } => unreachable!(),
-            },
-            None => Some(Err(PyValueError::new_err(
-                "Received none in ChatCompletionStreamer".to_string(),
-            ))),
+            }
         }
     }
 }

@@ -8,6 +8,7 @@ use serde::Deserialize;
 use tracing::info;
 
 #[derive(Clone, Copy, Default, Debug, Deserialize, PartialEq)]
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
 /// DType for the model.
 ///
 /// If the model is quantized, this is ignored so it is reasonable to use the [`Default`] impl.

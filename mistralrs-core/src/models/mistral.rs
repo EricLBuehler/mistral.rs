@@ -589,17 +589,14 @@ impl Model {
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
             let loc = device.location();
-            if !ropes.contains_key(&loc) {
-                ropes.insert(
-                    loc,
-                    Arc::new(MistralRotaryEmbedding::new(
-                        cfg,
-                        head_dim,
-                        device,
-                        is_gptx,
-                        vb_m.dtype(),
-                    )?),
-                );
+            if let std::collections::hash_map::Entry::Vacant(entry) = ropes.entry(loc) {
+                entry.insert(Arc::new(MistralRotaryEmbedding::new(
+                    cfg,
+                    head_dim,
+                    device,
+                    is_gptx,
+                    vb_m.dtype(),
+                )?));
             }
         }
 

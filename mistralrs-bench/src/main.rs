@@ -122,6 +122,7 @@ async fn run_bench(
                     Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
                     Response::Embeddings { .. } => unreachable!(),
+                    Response::WebSearchCall { .. } => unreachable!(),
                 },
                 None => unreachable!("Expected a Done response, got None",),
             }

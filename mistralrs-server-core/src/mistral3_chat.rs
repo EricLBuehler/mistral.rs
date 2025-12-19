@@ -345,7 +345,7 @@ fn violates_mistral3_alternation(messages: &[Message]) -> bool {
     }
 
     // If there are no counted messages at all, no alternation constraint to violate.
-    !started && false
+    !started
 }
 
 fn enforce_mistral3_alternation_by_insertion(mut messages: Vec<Message>) -> Vec<Message> {
@@ -790,7 +790,7 @@ mod tests {
         let tool_calls = assistant.tool_calls.as_ref().unwrap();
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].function.name, "shell");
-        let params: Value = serde_json::from_str(&tool_calls[0].function.parameters).unwrap();
+        let params: Value = serde_json::from_str(&tool_calls[0].function.arguments).unwrap();
         assert_eq!(params["command"][2], "find . -name '.md' -type f");
         assert_eq!(params["workdir"], ".");
         assert!(!violates_mistral3_alternation(&out));
@@ -820,7 +820,7 @@ mod tests {
         let out = canonicalize_messages_for_mistral3_template(msgs);
         let assistant = out.iter().find(|m| m.role == "assistant").unwrap();
         let tool_calls = assistant.tool_calls.as_ref().unwrap();
-        let params: Value = serde_json::from_str(&tool_calls[0].function.parameters).unwrap();
+        let params: Value = serde_json::from_str(&tool_calls[0].function.arguments).unwrap();
         assert_eq!(params["command"][0], "bash");
         assert_eq!(params["command"][1], "-lc");
         assert_eq!(params["command"][2], "ls -la");

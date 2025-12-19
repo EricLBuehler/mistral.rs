@@ -1287,14 +1287,15 @@ impl futures::Stream for ResponsesStreamer {
                                 if !delta.is_empty() {
                                     if let Some(fc) = self.function_calls.get_mut(&item_id) {
                                         fc.name = name;
-                                        fc.arguments = if new_args.starts_with(&fc.arguments) {
-                                            new_args.clone()
-                                        } else if fc.arguments.is_empty() {
-                                            new_args.clone()
-                                        } else {
-                                            // Fallback: append
-                                            format!("{}{}", fc.arguments, delta)
-                                        };
+                                        fc.arguments =
+                                            if new_args.starts_with(&fc.arguments)
+                                                || fc.arguments.is_empty()
+                                            {
+                                                new_args.clone()
+                                            } else {
+                                                // Fallback: append
+                                                format!("{}{}", fc.arguments, delta)
+                                            };
                                     }
 
                                     let payload = FunctionCallArgumentsDeltaEvent {
@@ -1422,6 +1423,7 @@ impl IntoResponse for ResponsesResponder {
 }
 
 /// Convert chat completion response to responses object
+#[allow(clippy::too_many_arguments)]
 fn chat_response_to_responses_object(
     chat_resp: &ChatCompletionResponse,
     response_id: String,
@@ -2849,7 +2851,7 @@ mod tests {
         let parsed = parse_tool_calls_if_complete(complete).expect("should parse");
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].name, "shell");
-        assert_eq!(parsed[0].arguments["workdir"], "/tmp");
+        assert_eq!(parsed[0].parameters["workdir"], "/tmp");
     }
 
     #[test]
@@ -2871,10 +2873,18 @@ mod tests {
             },
         ];
         let out = canonicalize_messages_for_mistral3_template(msgs);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].role, "user");
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].role, "system");
+        assert!(out[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .to_text()
+            .unwrap()
+            .contains("Tool-call formatting requirements"));
+        assert_eq!(out[1].role, "user");
         assert_eq!(
-            out[0].content.as_ref().unwrap().to_text().unwrap(),
+            out[1].content.as_ref().unwrap().to_text().unwrap(),
             "a\n\nb"
         );
     }
@@ -2900,7 +2910,9 @@ mod tests {
         let out = canonicalize_messages_for_mistral3_template(msgs);
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].role, "system");
-        assert_eq!(out[0].content.as_ref().unwrap().to_text().unwrap(), "dev");
+        let system_text = out[0].content.as_ref().unwrap().to_text().unwrap();
+        assert!(system_text.contains("dev"));
+        assert!(system_text.contains("Tool-call formatting requirements"));
         assert_eq!(out[1].role, "user");
         assert_eq!(out[1].content.as_ref().unwrap().to_text().unwrap(), "hi");
     }
@@ -2954,9 +2966,10 @@ mod tests {
             tool_calls: None,
         }];
         let out = canonicalize_messages_for_mistral3_template(msgs);
-        assert_eq!(out.len(), 2);
-        assert_eq!(out[0].role, "user");
-        assert_eq!(out[1].role, "assistant");
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].role, "system");
+        assert_eq!(out[1].role, "user");
+        assert_eq!(out[2].role, "assistant");
     }
 
     #[test]

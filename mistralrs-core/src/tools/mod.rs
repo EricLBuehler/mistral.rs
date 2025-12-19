@@ -282,7 +282,7 @@ fn process_model_specific_message(message: &str) -> Result<String> {
             rest = rest.trim_start();
         }
         if !calls.is_empty() {
-            return Ok(serde_json::to_string(&calls).map_err(candle_core::Error::msg)?);
+            return serde_json::to_string(&calls).map_err(candle_core::Error::msg);
         }
         Ok(message.to_string())
     } else if deepseek_regex.find(message).is_some() {

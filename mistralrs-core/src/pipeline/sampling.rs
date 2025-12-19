@@ -178,18 +178,16 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             };
 
                             (content, tool_calls)
+                        } else if let Some(tool_calls) = token_tool_calls {
+                            (None, tool_calls)
                         } else {
-                            if let Some(tool_calls) = token_tool_calls {
-                                (None, tool_calls)
-                            } else {
-                                let (text_new, tool_calls) =
-                                    parse_text_tools(this, delta.as_str(), seq.tools.clone())
-                                        .map_err(candle_core::Error::msg)?;
-                                if !tool_calls.is_empty() {
-                                    is_done = Some(StopReason::ToolCalls);
-                                }
-                                (text_new.map(ToString::to_string), tool_calls)
+                            let (text_new, tool_calls) =
+                                parse_text_tools(this, delta.as_str(), seq.tools.clone())
+                                    .map_err(candle_core::Error::msg)?;
+                            if !tool_calls.is_empty() {
+                                is_done = Some(StopReason::ToolCalls);
                             }
+                            (text_new.map(ToString::to_string), tool_calls)
                         };
 
                         seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {

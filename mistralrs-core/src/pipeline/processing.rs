@@ -140,7 +140,7 @@ pub(crate) fn apply_chat_template(
     let eos_tok = chat_template.eos_token.as_ref().map(extract_token_string);
     let unk_tok = chat_template.unk_token.as_ref().map(extract_token_string);
 
-    let render_result = apply_chat_template_to(
+    apply_chat_template_to(
         messages,
         add_generation_prompt,
         enable_thinking,
@@ -150,9 +150,7 @@ pub(crate) fn apply_chat_template(
         eos_tok,
         unk_tok,
         tools,
-    );
-
-    render_result
+    )
 }
 
 pub struct BasicProcessor;

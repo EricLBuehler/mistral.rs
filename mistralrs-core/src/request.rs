@@ -25,6 +25,7 @@ pub enum Constraint {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 /// Image generation response format
 pub enum ImageGenerationResponseFormat {

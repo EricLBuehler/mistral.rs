@@ -9,8 +9,6 @@ use candle_core::{Device, Tensor};
 
 use hf_hub::api::sync::ApiRepo;
 use mistralrs_quant::ShardedVarBuilder;
-#[cfg(feature = "pyo3_macros")]
-use pyo3::pyclass;
 
 use regex::Regex;
 use serde::Deserialize;

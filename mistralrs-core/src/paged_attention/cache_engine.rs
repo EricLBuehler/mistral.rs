@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::config::ModelConfigLike;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
 pub enum PagedCacheType {
     #[default]
     Auto,

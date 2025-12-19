@@ -15,7 +15,8 @@ impl std::fmt::Display for ToolCallType {
 #[cfg(feature = "pyo3_macros")]
 mod pyo3_impls {
     use super::ToolCallType;
-    use pyo3::{conversion::IntoPy, prelude::*};
+    use pyo3::prelude::*;
+    use std::convert::Infallible;
 
     impl<'py> FromPyObject<'py> for ToolCallType {
         fn extract_bound(obj: &Bound<'py, PyAny>) -> PyResult<Self> {
@@ -29,9 +30,13 @@ mod pyo3_impls {
         }
     }
 
-    impl IntoPy<PyObject> for ToolCallType {
-        fn into_py(self, py: Python<'_>) -> PyObject {
-            self.to_string().into_py(py)
+    impl<'py> IntoPyObject<'py> for ToolCallType {
+        type Target = pyo3::types::PyString;
+        type Output = Bound<'py, Self::Target>;
+        type Error = Infallible;
+
+        fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+            Ok(pyo3::types::PyString::new(py, &self.to_string()))
         }
     }
 }
