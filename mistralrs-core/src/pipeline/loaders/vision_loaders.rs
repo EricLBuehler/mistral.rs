@@ -48,7 +48,10 @@ use crate::vision_models::llava15::Model as LLaVA;
 use crate::vision_models::llava_inputs_processor::{self, LLaVAProcessor};
 use crate::vision_models::llava_next::Model as LLaVANext;
 use crate::vision_models::llava_next_inputs_processor::{self, LLaVANextProcessor};
-use crate::vision_models::mistral3::{Mistral3Config, Mistral3Model, Mistral3Processor};
+use crate::vision_models::mistral3::{
+    is_vision_disabled as mistral3_vision_disabled, Mistral3Config, Mistral3Model,
+    Mistral3Processor,
+};
 use crate::vision_models::mllama::{MLlamaConfig, MLlamaModel, MLlamaProcessor};
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3, PHI3V_CLIP_CONFIG};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
@@ -751,7 +754,11 @@ impl DeviceMappedModelLoader for Phi3VLoader {
     }
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
-        Some(vec![NonMappedSubModel::Vision])
+        if mistral3_vision_disabled() {
+            None
+        } else {
+            Some(vec![NonMappedSubModel::Vision])
+        }
     }
 }
 
@@ -3951,10 +3958,17 @@ impl VisionModelLoader for Mistral3Loader {
         Arc::new(Mistral3Prefixer)
     }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
-        Ok(Modalities {
-            input: vec![SupportedModality::Text, SupportedModality::Vision],
-            output: vec![SupportedModality::Text],
-        })
+        if mistral3_vision_disabled() {
+            Ok(Modalities {
+                input: vec![SupportedModality::Text],
+                output: vec![SupportedModality::Text],
+            })
+        } else {
+            Ok(Modalities {
+                input: vec![SupportedModality::Text, SupportedModality::Vision],
+                output: vec![SupportedModality::Text],
+            })
+        }
     }
 }
 
@@ -3997,7 +4011,6 @@ impl DeviceMappedModelLoader for Mistral3Loader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         let cfg: Mistral3Config = serde_json::from_str(config)?;
-        let vcfg = &cfg.vision_config;
         let tcfg = &cfg.text_config;
 
         let AutoDeviceMapParams::Vision {
@@ -4010,6 +4023,15 @@ impl DeviceMappedModelLoader for Mistral3Loader {
             anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
+        if mistral3_vision_disabled() {
+            return Ok(
+                max_batch_size
+                    * tcfg.num_attention_heads
+                    * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+            );
+        }
+
+        let vcfg = &cfg.vision_config;
         let img_seq_len = {
             // Reshaping algorithm
 
@@ -4043,6 +4065,9 @@ impl DeviceMappedModelLoader for Mistral3Loader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
+        if mistral3_vision_disabled() {
+            return Ok(0);
+        }
         let cfg: Mistral3Config = serde_json::from_str(config)?;
         let cfg = &cfg.vision_config;
 
@@ -4105,7 +4130,9 @@ impl DeviceMappedModelLoader for Mistral3Loader {
             embed_tokens + lm_head + norm
         };
 
-        let vision_elems = {
+        let vision_elems = if mistral3_vision_disabled() {
+            0
+        } else {
             let cfg = &cfg.vision_config;
 
             let patch_embed = {
