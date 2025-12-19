@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::{
@@ -27,6 +28,16 @@ use vision::Mistral3VisionModel;
 mod config;
 mod inputs_processor;
 mod vision;
+
+static MISTRAL3_VISION_DISABLED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_vision_disabled(disabled: bool) {
+    MISTRAL3_VISION_DISABLED.store(disabled, Ordering::Relaxed);
+}
+
+pub fn is_vision_disabled() -> bool {
+    MISTRAL3_VISION_DISABLED.load(Ordering::Relaxed)
+}
 
 struct Mistral3PatchMerger {
     merging_layer: Linear,
@@ -162,8 +173,8 @@ impl Mistral3MultiModalProjector {
 
 pub struct Mistral3Model {
     text_model: Mistral,
-    vision_model: Mistral3VisionModel,
-    mmproj: Mistral3MultiModalProjector,
+    vision_model: Option<Mistral3VisionModel>,
+    mmproj: Option<Mistral3MultiModalProjector>,
     cfg: Mistral3Config,
 }
 
@@ -175,16 +186,22 @@ impl Mistral3Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        let vision_model = Mistral3VisionModel::new(
-            &cfg.vision_config,
-            vb.pp("vision_tower"),
-            &normal_loading_metadata,
-        )?;
-        let mmproj = Mistral3MultiModalProjector::new(
-            cfg,
-            vb.pp("multi_modal_projector")
-                .set_device(normal_loading_metadata.real_device.clone()),
-        )?;
+        let vision_enabled = !is_vision_disabled();
+        let (vision_model, mmproj) = if vision_enabled {
+            let vision_model = Mistral3VisionModel::new(
+                &cfg.vision_config,
+                vb.pp("vision_tower"),
+                &normal_loading_metadata,
+            )?;
+            let mmproj = Mistral3MultiModalProjector::new(
+                cfg,
+                vb.pp("multi_modal_projector")
+                    .set_device(normal_loading_metadata.real_device.clone()),
+            )?;
+            (Some(vision_model), Some(mmproj))
+        } else {
+            (None, None)
+        };
         let text_model = Mistral::new(
             &cfg.text_config,
             vb.pp("language_model"),
@@ -194,7 +211,9 @@ impl Mistral3Model {
         )?;
 
         // For get_image_features, assuming this for best efficiency.
-        assert_eq!(cfg.vision_feature_layer, -1);
+        if vision_enabled {
+            assert_eq!(cfg.vision_feature_layer, -1);
+        }
 
         Ok(Self {
             vision_model,
@@ -209,12 +228,18 @@ impl Mistral3Model {
         image_features: &Tensor,
         image_sizes: Vec<(u32, u32)>,
     ) -> Result<Tensor> {
-        let image_outputs = self
+        let vision_model = self
             .vision_model
-            .forward(image_features, image_sizes.clone())?;
+            .as_ref()
+            .ok_or_else(|| candle_core::Error::Msg("Vision is disabled for this model.".into()))?;
+        let mmproj = self
+            .mmproj
+            .as_ref()
+            .ok_or_else(|| candle_core::Error::Msg("Vision is disabled for this model.".into()))?;
+
+        let image_outputs = vision_model.forward(image_features, image_sizes.clone())?;
         let selected_image_feature = image_outputs;
-        self.mmproj
-            .forward(&selected_image_feature.squeeze(0)?, image_sizes)
+        mmproj.forward(&selected_image_feature.squeeze(0)?, image_sizes)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -231,6 +256,9 @@ impl Mistral3Model {
         let mut input_embeds = self.text_model.get_input_embeddings(input_ids)?;
 
         if let Some(pixel_values) = pixel_values {
+            if self.vision_model.is_none() {
+                candle_core::bail!("Vision inputs were provided but vision is disabled.");
+            }
             let special_image_mask = input_ids
                 .eq(self.cfg.image_token_index as f64)?
                 .unsqueeze(D::Minus1)?
@@ -241,10 +269,13 @@ impl Mistral3Model {
             let indices = mask_flat.nonzero()?.squeeze(1)?;
 
             let image_sizes = image_sizes.unwrap();
-            let image_features = self.get_image_features(
-                &pixel_values.to_dtype(self.vision_model.dtype())?,
-                image_sizes,
-            )?;
+            let vision_dtype = self
+                .vision_model
+                .as_ref()
+                .expect("checked above")
+                .dtype();
+            let image_features =
+                self.get_image_features(&pixel_values.to_dtype(vision_dtype)?, image_sizes)?;
 
             let mut x_flat = input_embeds.flatten_all()?;
             let src_flat = image_features.flatten_all()?;
@@ -275,16 +306,22 @@ impl IsqModel for Mistral3Model {
         &dyn DeviceMapper,
     ) {
         let (mut tensors, mapper) = self.text_model.get_layers();
-        tensors.extend(self.vision_model.get_layers());
+        if let Some(ref mut vision_model) = self.vision_model {
+            tensors.extend(vision_model.get_layers());
+        }
         (tensors, mapper)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
-        uvb.pp("multi_modal_projector")
-            .extend(self.mmproj.residual_tensors());
-        uvb.pp("vision_tower")
-            .extend(self.vision_model.residual_tensors());
+        if let Some(ref mmproj) = self.mmproj {
+            uvb.pp("multi_modal_projector")
+                .extend(mmproj.residual_tensors());
+        }
+        if let Some(ref vision_model) = self.vision_model {
+            uvb.pp("vision_tower")
+                .extend(vision_model.residual_tensors());
+        }
         uvb.pp("language_model")
             .extend(self.text_model.residual_tensors());
 

@@ -953,6 +953,7 @@ fn loader_from_selected(
                         .map(|x| x.unwrap())
                         .collect::<Vec<_>>()
                 }),
+                disable_vision: false,
                 max_edge,
                 calibration_file,
                 imatrix,
