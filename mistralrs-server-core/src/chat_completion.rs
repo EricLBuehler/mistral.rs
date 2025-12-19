@@ -41,10 +41,7 @@ use crate::{
         ExtractedMistralRsState, ExtractedSamplingDefaults, OnChunkCallback, OnDoneCallback,
         SamplingDefaults, SharedMistralRsState,
     },
-    util::{
-        maybe_dump_prompt_json, maybe_dump_request_json, parse_audio_url, parse_image_url,
-        sanitize_error_message, validate_model_name,
-    },
+    util::{parse_audio_url, parse_image_url, sanitize_error_message, validate_model_name},
 };
 
 /// A callback function that processes streaming response chunks before they are sent to the client.
@@ -620,7 +617,6 @@ pub async fn chatcompletions(
     }
 
     let debug_id = format!("chatcmpl_{}", Uuid::new_v4());
-    maybe_dump_request_json("chat_completions", &debug_id, &oairequest).await;
     tracing::info!(
         "chat_completions {} params: temperature={:?} top_p={:?} top_k={:?} min_p={:?} max_tokens={:?} n_choices={:?} presence_penalty={:?} frequency_penalty={:?} repetition_penalty={:?}",
         debug_id,
@@ -647,8 +643,6 @@ pub async fn chatcompletions(
             Ok(x) => x,
             Err(e) => return handle_error(state, e.into()),
         };
-
-    maybe_dump_prompt_json("chat_completions_parsed", &debug_id, &request).await;
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
         return handle_error(state, e.into());

@@ -50,10 +50,7 @@ use crate::{
         ExtractedMistralRsState, ExtractedResponseCache, ExtractedSamplingDefaults,
         SamplingDefaults, SharedMistralRsState,
     },
-    util::{
-        maybe_dump_model_output_json, maybe_dump_prompt_json, maybe_dump_request_json,
-        sanitize_error_message,
-    },
+    util::sanitize_error_message,
 };
 
 #[derive(Clone)]
@@ -231,17 +228,6 @@ struct FunctionCallState {
     arguments: String,
 }
 
-#[derive(serde::Serialize)]
-struct DebugResponsesModelOutputDump {
-    response_id: String,
-    created_at: i64,
-    model: String,
-    status: String,
-    message_text: String,
-    output_items: Vec<ResponsesOutput>,
-    usage: Option<ResponsesUsage>,
-}
-
 pub struct ResponsesStreamer {
     rx: tokio::sync::mpsc::Receiver<Response>,
     state: SharedMistralRsState,
@@ -315,32 +301,6 @@ impl Drop for ResponsesStreamer {
 }
 
 impl ResponsesStreamer {
-    fn maybe_dump_model_output(&self, status: &str) {
-        let enabled = std::env::var("MISTRALRS_DEBUG_DUMP_MODEL_OUTPUT")
-            .ok()
-            .as_deref()
-            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
-        if !enabled {
-            return;
-        }
-
-        let dump = DebugResponsesModelOutputDump {
-            response_id: self.response_id.clone(),
-            created_at: self.created_at,
-            model: self.model.clone(),
-            status: status.to_string(),
-            message_text: self.message_text.clone(),
-            output_items: self.output_items.clone(),
-            usage: self.usage.clone(),
-        };
-
-        let response_id = self.response_id.clone();
-        tokio::spawn(async move {
-            let _ =
-                maybe_dump_model_output_json("responses_model_output", &response_id, &dump).await;
-        });
-    }
-
     fn push_json_event<T: serde::Serialize>(
         &mut self,
         event_name: &'static str,
@@ -793,8 +753,6 @@ impl ResponsesStreamer {
             }
         }
 
-        self.maybe_dump_model_output("completed");
-
         let seq = self.next_seq();
         self.push_json_event(
             "response.completed",
@@ -904,8 +862,6 @@ impl ResponsesStreamer {
             },
         )?;
 
-        self.maybe_dump_model_output("failed");
-
         self.done_state = DoneState::Done;
         Ok(())
     }
@@ -988,8 +944,6 @@ impl ResponsesStreamer {
                 response,
             },
         )?;
-
-        self.maybe_dump_model_output("incomplete");
 
         self.done_state = DoneState::Done;
         Ok(())
@@ -2194,7 +2148,6 @@ pub async fn create_response(
         .and_then(|tc| serde_json::to_value(tc).ok());
     let truncation = oairequest.truncation.clone();
 
-    maybe_dump_request_json("responses", &response_id, &oairequest).await;
     tracing::info!(
         "responses {} params: temperature={:?} top_p={:?} top_k={:?} min_p={:?} max_output_tokens={:?} max_tool_calls={:?} parallel_tool_calls={:?} truncation={:?}",
         response_id,
@@ -2234,8 +2187,6 @@ pub async fn create_response(
         Ok(x) => x,
         Err(e) => return handle_error(state, e.into()),
     };
-
-    maybe_dump_prompt_json("responses_parsed", &response_id, &request).await;
 
     if store {
         let _ = cache.store_input_items(response_id.clone(), input_items.clone());
