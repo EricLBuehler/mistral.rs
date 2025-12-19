@@ -277,7 +277,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tokenizer_json,
             dtype: _,
             topology,
-            no_vision,
             organization,
             write_uqff,
             from_uqff,
@@ -318,7 +317,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                             .map(|x| x.unwrap())
                             .collect::<Vec<_>>()
                     }),
-                    disable_vision: no_vision,
                     max_edge,
                     calibration_file,
                     imatrix,
@@ -369,21 +367,20 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             matformer_config_path,
             matformer_slice_name,
         } => VisionLoaderBuilder::new(
-                VisionSpecificConfig {
-                    topology: Topology::from_option_path(topology)?,
-                    write_uqff,
-                    from_uqff: from_uqff.map(|x| {
-                        x.split(UQFF_MULTI_FILE_DELIMITER)
-                            .map(PathBuf::from_str)
-                            .map(|x| x.unwrap())
-                            .collect::<Vec<_>>()
-                    }),
-                    disable_vision: false,
-                    max_edge,
-                    calibration_file,
-                    imatrix,
-                    hf_cache_path,
-                    matformer_config_path,
+            VisionSpecificConfig {
+                topology: Topology::from_option_path(topology)?,
+                write_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.split(UQFF_MULTI_FILE_DELIMITER)
+                        .map(PathBuf::from_str)
+                        .map(|x| x.unwrap())
+                        .collect::<Vec<_>>()
+                }),
+                max_edge,
+                calibration_file,
+                imatrix,
+                hf_cache_path,
+                matformer_config_path,
                 matformer_slice_name,
             },
             args.chat_template,

@@ -121,7 +121,6 @@ pub struct VisionSpecificConfig {
     pub topology: Option<Topology>,
     pub write_uqff: Option<PathBuf>,
     pub from_uqff: Option<Vec<PathBuf>>,
-    pub disable_vision: bool,
     pub max_edge: Option<u32>,
     pub imatrix: Option<PathBuf>,
     pub calibration_file: Option<PathBuf>,
@@ -265,7 +264,6 @@ impl Loader for VisionLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         let config = std::fs::read_to_string(paths.get_config_filename())?;
-        crate::vision_models::mistral3::set_vision_disabled(self.config.disable_vision);
 
         if !self.inner.supports_paged_attention(&config) {
             paged_attn_config = None;
