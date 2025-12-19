@@ -1180,8 +1180,39 @@ impl PackedExperts {
                         (gs, us, ds)
                     }
                 }
+                QuantizedConfig::MXFP4 {} => {
+                    // MXFP4 quantization for PackedExperts
+                    // Keep weights as MXFP4 using MXFP4Layer to leverage native MXFP4 GEMM
+                    // Note: MXFP4 models use stacked format, so we load directly as packed experts
+                    let gate_proj = MXFP4Layer::packed_linear_b(
+                        num_local_experts,
+                        hidden_size,
+                        intermediate_size,
+                        quant_conf,
+                        bias,
+                        vb.pp("gate_proj"),
+                    )?;
+                    let up_proj = MXFP4Layer::packed_linear_b(
+                        num_local_experts,
+                        hidden_size,
+                        intermediate_size,
+                        quant_conf,
+                        bias,
+                        vb.pp("up_proj"),
+                    )?;
+                    let down_proj = MXFP4Layer::packed_linear_b(
+                        num_local_experts,
+                        intermediate_size,
+                        hidden_size,
+                        quant_conf,
+                        bias,
+                        vb.pp("down_proj"),
+                    )?;
+
+                    (vec![gate_proj], vec![up_proj], vec![down_proj])
+                }
                 _ => candle_core::bail!(
-                    "PackedExperts with quantization config only allows AFQ or FP8 quantization"
+                    "PackedExperts with quantization config only allows AFQ, FP8, or MXFP4 quantization"
                 ),
             }
         } else if !vb.contains_tensor("gate_up_proj") {
@@ -1505,6 +1536,44 @@ impl FusedExperts {
 
                 (fused_gate_proj, fused_up_proj, fused_down_proj)
             }
+        } else if is_stacked_format
+            && matches!(&quantization_config, Some(QuantizedConfig::MXFP4 {}))
+        {
+            // Stacked format with MXFP4 quantization
+            // For MXFP4, weights are stored as packed FP4 (2 values per byte)
+            // with E8M0 scales
+            let quantization_config = quantization_config.as_ref().unwrap();
+
+            // Load MXFP4 packed experts using MXFP4Layer::packed_linear_b
+            // The tensors are expected at:
+            //   gate_proj.blocks: [num_experts, intermediate_size, hidden_size/2]
+            //   gate_proj.scales: [num_experts, intermediate_size, hidden_size/32]
+            let fused_gate_proj = MXFP4Layer::packed_linear_b(
+                num_experts,
+                hidden_size,
+                moe_intermediate_size,
+                quantization_config,
+                false,
+                experts_vb.pp("gate_proj"),
+            )?;
+            let fused_up_proj = MXFP4Layer::packed_linear_b(
+                num_experts,
+                hidden_size,
+                moe_intermediate_size,
+                quantization_config,
+                false,
+                experts_vb.pp("up_proj"),
+            )?;
+            let fused_down_proj = MXFP4Layer::packed_linear_b(
+                num_experts,
+                moe_intermediate_size,
+                hidden_size,
+                quantization_config,
+                false,
+                experts_vb.pp("down_proj"),
+            )?;
+
+            (fused_gate_proj, fused_up_proj, fused_down_proj)
         } else if is_stacked_format {
             // Stacked format from safetensors:
             // - gate_up_proj: [num_experts, hidden_size, intermediate_size * 2] = [128, 2048, 1536]

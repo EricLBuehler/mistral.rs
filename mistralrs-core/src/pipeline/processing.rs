@@ -144,6 +144,7 @@ pub(crate) fn apply_chat_template(
         messages,
         add_generation_prompt,
         enable_thinking,
+        None, // reasoning_effort - passed through from request when needed
         template,
         bos_tok,
         eos_tok,

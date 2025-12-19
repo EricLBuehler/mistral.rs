@@ -171,9 +171,9 @@ fn message_content_schema() -> Schema {
 pub struct FunctionCalled {
     /// The name of the function to call
     pub name: String,
-    /// The function arguments
-    #[serde(alias = "arguments")]
-    pub parameters: String,
+    /// The function arguments (JSON string)
+    #[serde(alias = "parameters")]
+    pub arguments: String,
 }
 
 /// Represents a tool call made by the assistant
@@ -181,6 +181,9 @@ pub struct FunctionCalled {
 /// This structure wraps a function call with its type information.
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, ToSchema)]
 pub struct ToolCall {
+    /// Unique identifier for this tool call
+    #[serde(default)]
+    pub id: Option<String>,
     /// The type of tool being called
     #[serde(rename = "type")]
     pub tp: ToolType,
@@ -219,8 +222,10 @@ pub struct Message {
     /// The role of the message sender ("user", "assistant", "system", "tool", etc.)
     pub role: String,
     pub name: Option<String>,
-    /// Optional list of tool calls
+    /// Optional list of tool calls (for assistant messages)
     pub tool_calls: Option<Vec<ToolCall>>,
+    /// Tool call ID this message is responding to (for tool messages)
+    pub tool_call_id: Option<String>,
 }
 
 /// Stop token configuration for generation
@@ -540,6 +545,10 @@ pub struct ChatCompletionRequest {
     pub dry_sequence_breakers: Option<Vec<String>>,
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
+    /// Reasoning effort level for Harmony-format models (GPT-OSS).
+    /// Controls the depth of reasoning/analysis: "low", "medium", or "high".
+    #[schema(example = json!(Option::None::<String>))]
+    pub reasoning_effort: Option<String>,
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,
@@ -1034,6 +1043,10 @@ pub struct ResponsesCreateRequest {
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,
+    /// Reasoning effort level for models that support extended thinking.
+    /// Valid values: "low", "medium", "high"
+    #[schema(example = json!(Option::None::<String>))]
+    pub reasoning_effort: Option<String>,
 }
 
 /// Response object

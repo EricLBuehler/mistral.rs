@@ -1,3 +1,13 @@
+"""
+Example of using GPT-OSS model via the HTTP API.
+
+Start the server first:
+    ./mistralrs-server --port 1234 plain -m openai/gpt-oss-20b -a gpt_oss
+
+GPT-OSS is a Mixture of Experts model with MXFP4 quantized experts
+and custom attention with per-head sinks.
+"""
+
 from openai import OpenAI
 import httpx
 import textwrap
@@ -35,23 +45,41 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 #     event_hooks={"request": [print], "response": [log_response]}
 # )
 
-messages = []
-prompt = input("Enter system prompt >>> ")
-if len(prompt) > 0:
-    messages.append({"role": "system", "content": prompt})
+messages = [
+    {
+        "role": "user",
+        "content": "Hello! What is the capital of France?",
+    },
+]
 
+completion = client.chat.completions.create(
+    model="default",
+    messages=messages,
+    max_tokens=256,
+    frequency_penalty=1.0,
+    top_p=0.1,
+    temperature=0,
+)
+resp = completion.choices[0].message.content
+print(resp)
 
-while True:
-    prompt = input(">>> ")
-    messages.append({"role": "user", "content": prompt})
-    completion = client.chat.completions.create(
-        model="default",
-        messages=messages,
-        max_tokens=256,
-        frequency_penalty=1.0,
-        top_p=0.1,
-        temperature=0,
-    )
-    resp = completion.choices[0].message.content
-    print(completion.choices[0].message)
-    messages.append({"role": "assistant", "content": resp})
+messages.append({"role": "assistant", "content": completion.choices[0].message.content})
+
+# Follow-up question
+messages.append(
+    {
+        "role": "user",
+        "content": "What is its population?",
+    }
+)
+
+completion = client.chat.completions.create(
+    model="default",
+    messages=messages,
+    max_tokens=256,
+    frequency_penalty=1.0,
+    top_p=0.1,
+    temperature=0,
+)
+resp = completion.choices[0].message.content
+print(resp)

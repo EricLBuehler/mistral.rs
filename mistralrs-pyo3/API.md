@@ -33,6 +33,8 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Qwen3`
 - `Qwen3Moe`
 - `SmolLm3`
+- `GraniteMoeHybrid`
+- `GptOss`
 
 ### ISQ Organization
 - `Default`
