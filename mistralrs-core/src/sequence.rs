@@ -1,5 +1,6 @@
 use crate::{
     get_mut_arcmutex, get_mut_group,
+    harmony::HarmonyContext,
     paged_attention::PhysicalTokenBlock,
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
@@ -454,6 +455,9 @@ pub struct Sequence {
 
     // Tool calls
     pub tools: Option<Arc<ToolCallingMatcher>>,
+
+    // Harmony format parsing context (for GPT-OSS models)
+    harmony_context: Option<HarmonyContext>,
 }
 
 impl BlockEngineSequence for Sequence {
@@ -621,6 +625,7 @@ impl Sequence {
             eos_tokens,
             total_prompt_time: None,
             waitlisted_count: 0,
+            harmony_context: None,
         }
     }
 
@@ -896,6 +901,11 @@ impl Sequence {
         self.custom_metadata
             .append_token_to_blocks(tok.token as usize);
 
+        // Process token through Harmony parser if in Harmony mode
+        if let Some(ref mut harmony_ctx) = self.harmony_context {
+            let _ = harmony_ctx.process_token(tok.token);
+        }
+
         self.cumulative_logprob += tok.logprob;
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
@@ -1154,6 +1164,84 @@ impl Sequence {
 
     pub fn eos_tokens(&self) -> &[u32] {
         &self.eos_tokens
+    }
+
+    // === Harmony Format Support ===
+
+    /// Enable Harmony format parsing for this sequence.
+    /// Should be called when the model uses Harmony format (GPT-OSS models).
+    pub fn enable_harmony_mode(&mut self) -> Result<(), anyhow::Error> {
+        if self.harmony_context.is_none() {
+            self.harmony_context = Some(HarmonyContext::new()?);
+        }
+        Ok(())
+    }
+
+    /// Check if this sequence is in Harmony mode
+    pub fn is_harmony_mode(&self) -> bool {
+        self.harmony_context.is_some()
+    }
+
+    /// Process a token through the Harmony parser (if enabled).
+    /// Returns the Harmony delta if in Harmony mode.
+    pub fn process_harmony_token(&mut self, token_id: u32) -> Option<crate::harmony::HarmonyDelta> {
+        self.harmony_context
+            .as_mut()
+            .map(|ctx| ctx.process_token(token_id))
+    }
+
+    /// Get the latest Harmony reasoning delta (for streaming).
+    /// Returns None if not in Harmony mode or no new reasoning content.
+    pub fn get_harmony_reasoning_delta(&mut self) -> Option<String> {
+        self.harmony_context
+            .as_mut()
+            .and_then(|ctx| ctx.get_reasoning_delta())
+    }
+
+    /// Get the latest Harmony final content delta (for streaming).
+    /// Returns None if not in Harmony mode or no new final content.
+    pub fn get_harmony_final_delta(&mut self) -> Option<String> {
+        self.harmony_context
+            .as_mut()
+            .and_then(|ctx| ctx.get_final_delta())
+    }
+
+    /// Get accumulated Harmony reasoning content (for non-streaming).
+    /// Returns None if not in Harmony mode or no reasoning content.
+    pub fn get_harmony_reasoning_content(&self) -> Option<String> {
+        self.harmony_context
+            .as_ref()
+            .and_then(|ctx| ctx.reasoning_content())
+    }
+
+    /// Get accumulated Harmony final content.
+    /// Returns None if not in Harmony mode or no final content.
+    pub fn get_harmony_final_content(&self) -> Option<String> {
+        self.harmony_context
+            .as_ref()
+            .and_then(|ctx| ctx.final_content())
+    }
+
+    /// Signal end of stream to the Harmony parser
+    pub fn harmony_process_eos(&mut self) {
+        if let Some(ref mut ctx) = self.harmony_context {
+            ctx.process_eos();
+        }
+    }
+
+    /// Check if Harmony mode has detected any tool calls
+    pub fn has_harmony_tool_calls(&self) -> bool {
+        self.harmony_context
+            .as_ref()
+            .is_some_and(|ctx| ctx.has_tool_call())
+    }
+
+    /// Get all Harmony tool calls (finalizes any pending tool call)
+    pub fn get_harmony_tool_calls(&mut self) -> Vec<crate::harmony::HarmonyToolCall> {
+        self.harmony_context
+            .as_mut()
+            .map(|ctx| ctx.finalize_tool_calls())
+            .unwrap_or_default()
     }
 }
 

@@ -128,22 +128,12 @@ impl Engine {
         }
 
         let images = match request.messages {
-            RequestMessage::VisionChat {
-                ref images,
-                messages: _,
-                enable_thinking: _,
-                audios: _,
-            } => Some(images.clone()),
+            RequestMessage::VisionChat { ref images, .. } => Some(images.clone()),
             _ => None,
         };
 
         let audios = match request.messages {
-            RequestMessage::VisionChat {
-                images: _,
-                messages: _,
-                enable_thinking: _,
-                ref audios,
-            } => Some(audios.clone()),
+            RequestMessage::VisionChat { ref audios, .. } => Some(audios.clone()),
             _ => None,
         };
 
@@ -177,12 +167,14 @@ impl Engine {
             RequestMessage::Chat {
                 messages,
                 enable_thinking,
+                reasoning_effort: _,
             }
             | RequestMessage::VisionChat {
                 images: _,
                 audios: _,
                 messages,
                 enable_thinking,
+                reasoning_effort: _,
             } => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
                 let tools = request.tools.unwrap_or_default();
@@ -564,6 +556,29 @@ impl Engine {
             // Only "track" a new sequence if it is a traditional one
             if matches!(seq_step_type, SeqStepType::PromptAndDecode) {
                 self.logger.add_new_sequence();
+            }
+
+            // Enable Harmony mode if the chat template uses Harmony format
+            {
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                if let Some(chat_template) = pipeline.get_chat_template() {
+                    if chat_template.is_harmony_format() {
+                        // Pre-warm the Harmony encoding if not already done.
+                        // This must be done in a blocking context because openai-harmony
+                        // uses reqwest::blocking which creates its own tokio runtime.
+                        if !crate::harmony::is_harmony_encoding_ready() {
+                            if let Err(e) = tokio::task::block_in_place(|| {
+                                crate::harmony::prewarm_harmony_encoding();
+                                Ok::<(), anyhow::Error>(())
+                            }) {
+                                warn!("Failed to initialize Harmony encoding: {e}");
+                            }
+                        }
+                        if let Err(e) = seq.enable_harmony_mode() {
+                            warn!("Failed to enable Harmony mode: {e}");
+                        }
+                    }
+                }
             }
 
             // Allocate Mamba state pool slot for hybrid models
