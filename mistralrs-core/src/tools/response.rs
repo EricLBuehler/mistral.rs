@@ -15,7 +15,7 @@ impl std::fmt::Display for ToolCallType {
 #[cfg(feature = "pyo3_macros")]
 mod pyo3_impls {
     use super::ToolCallType;
-    use pyo3::{prelude::*, IntoPy};
+    use pyo3::{conversion::IntoPy, prelude::*};
 
     impl<'py> FromPyObject<'py> for ToolCallType {
         fn extract_bound(obj: &Bound<'py, PyAny>) -> PyResult<Self> {
