@@ -408,7 +408,7 @@ impl Attention {
         #[cfg(not(feature = "cuda"))]
         let scores = {
             let attn_weights = if let Some(mask) = attention_mask {
-                attn_weights.broadcast_add(&mask)?
+                attn_weights.broadcast_add(mask)?
             } else {
                 attn_weights
             };
